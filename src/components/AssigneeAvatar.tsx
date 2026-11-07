@@ -24,9 +24,9 @@ import {
 import { LIMITS } from '../../convex/lib/limits'
 import { nameKey } from '../../convex/lib/nameKey'
 import { allWordsMatcher } from '../../convex/lib/search'
-import { keepOwnerName, useOwnerNames } from './ownerNames'
 import { CommandChoiceEnd } from './pickerParts'
 import { ESCAPE_CLEARS, escapeClearsFirst, OWNER_WORDS, REVIEWER_WORDS } from './pickerWords'
+import { useOrgPeople, usePeople } from './usePeople'
 
 export type OwnerField = 'assignee' | 'reviewer'
 
@@ -45,14 +45,6 @@ const MOVE_KEYS = new Set(['ArrowUp', 'ArrowDown', 'Home', 'End'])
     the one the task window shows from its own answer. */
 const liveTask = (id: string) => P.anyTask(id) ?? P.taskShown(id)
 
-/** The 28 px face of person `id` beside their name. It is the store's
-    portrait, or a plain square while the store does not hold them, which
-    never reads as Unassigned. */
-function OwnerFace({ id }: { id: string }) {
-  if (P.user(id)) return <Avatar id={id} size={28} />
-  return <span aria-hidden="true" className="size-7 shrink-0 rounded-[5px] bg-surface-3" />
-}
-
 /** The people behind every owner control, as a list the server answers.
  * It holds the people who could become the task's assignee or reviewer
  * (pickers.taskOwners through P.ownerChoices), 25 a batch, read once each
@@ -64,7 +56,7 @@ function OwnerFace({ id }: { id: string }) {
  * never counted in the cap; under a search it shows only when its own
  * label holds every typed word. The current holder comes next, checked,
  * named by a batch's row, by the one pickers.canOwn check the list sends
- * with its first batch, or by the store's or useOwnerNames' name, and
+ * with its first batch, or by P.person, and
  * shown under a search only when that name holds every typed word. A
  * holder the check answers not eligible, or as a person the organization
  * does not hold, reads disabled with a note; a check that failed or could
@@ -100,9 +92,11 @@ function OwnerFace({ id }: { id: string }) {
  * person, then calls `onPick` once the server saves it. Without `field`
  * it writes the live task's owner field, re-read at the pick, since a
  * status move while the list was open can hand the task between assignee
- * and reviewer, which also lists that field's people. A picked batch row
- * keeps its name for the task's fields (keepOwnerName), as the server
- * answered it. `onClose` runs on every accepted pick, changed or not, and
+ * and reviewer, which also lists that field's people. The list names the
+ * holder and its batches' people while open (usePeople), and keeps the
+ * check's row and a picked batch row as names for the task's fields
+ * (P.takePeople), as the server answered them. `onClose` runs on every
+ * accepted pick, changed or not, and
  * is handed the write as `then`, to run once the list has closed (see
  * useMenuBackLayer). `off` says why the list may no longer write, such as
  * Team sync's stale meeting. Given it, its rows, Load more and Try again
@@ -170,13 +164,22 @@ export function OwnerPickList({
     asked.current.add(checkKey)
     void P.ownerChecks({ task, field: shown, ids: [holder] }).then((answer) => {
       if (answer?.state === 'ready')
-        for (const row of answer.rows) if (row.person) keepOwnerName(issue.org, row.person)
+        P.takePeople(
+          issue.org,
+          answer.rows.flatMap((row) => (row.person ? [row.person] : [])),
+        )
       setChecks((was) => new Map(was).set(checkKey, answer))
     })
   }, [checkKey])
   const checkAnswer = checkKey === null ? undefined : checks.get(checkKey)
   const checkRow = checkAnswer?.state === 'ready' ? checkAnswer.rows[0] : undefined
-  const [holderName] = useOwnerNames(issue.org, holder ? [holder] : [])
+  // the holder and the batches' people, named while the list is open, so
+  // their faces and pictures load in the list's order
+  const shownPeople = usePeople([
+    ...(holder ? [{ org: issue.org, id: holder }] : []),
+    ...list.rows.map((row) => ({ org: issue.org, id: row.id })),
+  ])
+  const holderName = holder ? shownPeople[0] : undefined
   const batchHolder = holder ? list.rows.find((row) => row.id === holder) : undefined
   const holderLabel =
     batchHolder?.name ??
@@ -347,7 +350,7 @@ export function OwnerPickList({
             {holderLabel === null && holderName?.state === 'gone' ? (
               <Avatar id={null} size={28} />
             ) : (
-              <OwnerFace id={holder} />
+              <Avatar id={holder} size={28} />
             )}
             <span className="min-w-0 flex-1">
               <span className="block truncate">
@@ -378,12 +381,12 @@ export function OwnerPickList({
             title={off}
             onSelect={() => {
               // a name the server answered, kept for the task's fields
-              keepOwnerName(issue.org, person)
+              P.takePeople(issue.org, [person])
               pick(person.id)
             }}
             className={rowClass}
           >
-            <OwnerFace id={person.id} />
+            <Avatar id={person.id} size={28} />
             <span className="min-w-0 flex-1 truncate">{person.name}</span>
           </CommandItem>
         ))}
@@ -406,7 +409,7 @@ export function OwnerPickList({
  * popover. Its accessible name holds the field and what it shows, such as
  * "Assignee, Leo Park" or "Reviewer, No reviewer", as the menu it replaced
  * gave its value to a screen reader. It names the holder by face and name
- * through useOwnerNames, "Loading…" while the name is on its way, "Couldn't
+ * through usePeople, "Loading…" while the name is on its way, "Couldn't
  * load this person" after a failed read (the list still opens), and
  * "Unassigned" or "No reviewer" only with no holder or for an answer that
  * says the organization does not hold them, so a holder not loaded never
@@ -426,7 +429,7 @@ export function OwnerField({
 }) {
   const holder = issue[field] || null
   const none = field === 'reviewer' ? 'No reviewer' : 'Unassigned'
-  const [name] = useOwnerNames(issue.org, holder ? [holder] : [])
+  const [name] = useOrgPeople(issue.org, [holder])
   const label =
     holder === null || name?.state === 'gone'
       ? none
@@ -461,7 +464,7 @@ export function OwnerField({
         >
           <span className="flex min-w-0 items-center gap-2">
             {holder && name?.state !== 'gone' ? (
-              <OwnerFace id={holder} />
+              <Avatar id={holder} size={28} />
             ) : (
               <Avatar id={null} size={28} />
             )}

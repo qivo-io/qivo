@@ -14,11 +14,16 @@ export type AvatarImageCacheStore = {
 }
 
 export type AvatarImageCache = {
-  /** Return bytes only when the key is in the current authorized roster. */
+  /** Return bytes only when the key is one the store knows now. */
   read(key: string): Promise<Blob | null>
-  /** Replace the authorized roster and prune entries outside it. */
-  sync(keys: Iterable<string>): void
-  /** Queue valid bytes for an authorized key. */
+  /** Replace the keys the store knows, `keys`, the current picture of
+      every profile it knows with one, and `without`, the profiles it knows
+      with none. An entry goes only on such definite knowledge: its profile
+      is known with another picture or none. An entry of a profile the
+      store merely does not know stays, unread, for a later page that
+      shows that person (profileOf). */
+  sync(keys: Iterable<string>, without?: Iterable<string>): void
+  /** Queue valid bytes for a key the store knows. */
   put(key: string, blob: Blob): void
   /** Remove one key from memory and persistence. */
   remove(key: string): void
@@ -68,6 +73,11 @@ function bounded<T>(work: Promise<T>, timeout = AVATAR_IMAGE_STORAGE_TIMEOUT_MS)
     )
   })
 }
+
+/** The profile a picture's key `avatar:<profile id>:<storage id>` belongs
+    to, or the key itself for any other key. */
+export const profileOf = (key: string) =>
+  key.startsWith('avatar:') ? (key.split(':')[1] ?? key) : key
 
 export function avatarCacheScope(deployment: string, accountId: string) {
   return JSON.stringify([deployment, accountId])
@@ -213,7 +223,10 @@ export function createAvatarImageCache(
   const entries = new Map<string, Blob>()
   const touched = new Set<string>()
   let persisted: Map<string, Blob> | null = null
+  // the keys the store knows now, and every profile it knows, with or
+  // without a picture
   let roster: Set<string> | undefined
+  let knownProfiles = new Set<string>()
   let disposed = false
   let revision = 0
   let readEpoch = 0
@@ -231,13 +244,17 @@ export function createAvatarImageCache(
     })
     .catch(() => {})
 
+  /* Whether `key` is stale: its profile is known with another picture or
+     none. */
+  const stale = (key: string) => !roster?.has(key) && knownProfiles.has(profileOf(key))
+
   function applyPersisted() {
     if (!roster || !persisted) return
     for (const [key, blob] of persisted) {
-      if (roster.has(key) && !touched.has(key) && !entries.has(key)) entries.set(key, blob)
+      if (!stale(key) && !touched.has(key) && !entries.has(key)) entries.set(key, blob)
     }
     for (const key of persisted.keys()) {
-      if (!roster.has(key)) persisted.delete(key)
+      if (stale(key)) persisted.delete(key)
     }
     boundedBlobEntries(entries)
     for (const key of persisted.keys()) {
@@ -280,21 +297,29 @@ export function createAvatarImageCache(
       return entries.get(key) ?? null
     },
 
-    sync(keys) {
+    sync(keys, without = []) {
       if (disposed) return
       const next = new Set<string>()
       for (const key of keys) if (validKey(key)) next.add(key)
+      const profiles = new Set<string>()
+      for (const key of next) profiles.add(profileOf(key))
+      for (const id of without) if (validKey(id)) profiles.add(id)
       const changed =
-        !roster || roster.size !== next.size || [...roster].some((key) => !next.has(key))
+        !roster ||
+        roster.size !== next.size ||
+        [...roster].some((key) => !next.has(key)) ||
+        profiles.size !== knownProfiles.size ||
+        [...profiles].some((id) => !knownProfiles.has(id))
       roster = next
+      knownProfiles = profiles
       if (!changed) {
         applyPersisted()
         return
       }
       revision += 1
-      for (const key of entries.keys()) if (!next.has(key)) entries.delete(key)
+      for (const key of entries.keys()) if (stale(key)) entries.delete(key)
       if (persisted) {
-        for (const key of persisted.keys()) if (!next.has(key)) persisted.delete(key)
+        for (const key of persisted.keys()) if (stale(key)) persisted.delete(key)
       }
       applyPersisted()
       save()
@@ -331,6 +356,7 @@ export function createAvatarImageCache(
       revision += 1
       readEpoch += 1
       roster = undefined
+      knownProfiles = new Set()
       entries.clear()
       persisted = null
       touched.clear()
@@ -345,6 +371,7 @@ export function createAvatarImageCache(
       revision += 1
       readEpoch += 1
       roster = undefined
+      knownProfiles = new Set()
       entries.clear()
       persisted = null
       touched.clear()

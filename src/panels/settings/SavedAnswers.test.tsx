@@ -317,6 +317,8 @@ describe('create forms', () => {
     await render(() => <pages.labels.OrgLabelsPage />)
     const field = input('input[placeholder="New label name"]')
     await type(field, 'Firmware')
+    // Add waits for the name's check, which answers once typing rests
+    await act(() => new Promise((resolve) => setTimeout(resolve, 300)))
     await act(async () => button('Add label')?.click())
     expect(field?.value).toBe('Firmware')
     expect(toasts()).toEqual([])
@@ -495,14 +497,14 @@ describe('rename toasts', () => {
 
   it('warns of a refused number until it is put back or saved', async () => {
     const { hasUnsaved } = await import('../../lib/leaveGuard')
-    const { P } = await import('../../store/planner')
+    const { P, personShownOf } = await import('../../store/planner')
     const { PlannableHoursInput } = await import('./UserControls')
     const me = P.users[0]
     await render(() => (
       <>
         <pages.general.OrgGeneralPage setPage={vi.fn()} />
         <pages.project.ProjectPage projectId="sensor" setPage={vi.fn()} />
-        <PlannableHoursInput user={me} canEdit />
+        <PlannableHoursInput user={{ id: me.id, ...personShownOf(me) }} canEdit />
       </>
     ))
     /* Leaves the field with `value` typed, once its blur check has run. */

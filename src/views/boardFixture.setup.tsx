@@ -53,7 +53,11 @@ import { type ForcedSync, type SyncArgs, teamSyncStandIn } from '../store/teamSy
    (store/ownerPickersStandIn.setup.ts, `server.owners`), and people:byIds
    through store/peopleSettingsStandIn.setup.ts, so the owner lists and
    Team sync's Mention window list people; every other one-shot read
-   answers null. */
+   answers null. The people of `server.people.unheld` stay out of the
+   workspace's people part while the views' answers and people:byIds
+   name them, as once the part no longer sends every profile, and
+   `server.people` holds back, fails or empties people:byIds' answers, so
+   a test reaches a person who is loading, failed or gone. */
 
 type Network = {
   mutation: ReturnType<typeof vi.fn>
@@ -235,6 +239,16 @@ export async function loadBoard(
         canOwn) and people:byIds: `force` answers the stand-in's states,
         `asked` is every read's name and arguments, oldest first */
     owners: { force: Set<string>; asked: { name: string; args: unknown }[] }
+    /** the people the workspace's people part leaves out (`unheld`), and
+        people.byIds' answers: `hold` keeps them back until `answer()`,
+        `force` answers every read failed (`error`) or without any asked
+        id (`gone`), and `open` holds the reads open now */
+    people: {
+      unheld: Set<string>
+      hold: boolean
+      force: 'error' | 'gone' | null
+      open: Set<{ args: unknown; next: (value: unknown) => void; fail?: (e: unknown) => void }>
+    }
     /** the milestone reads: `hold` keeps their answers back, `force`
         answers states the workspace cannot reach, `asked` is every
         subscription's query and arguments, newest last, and `open` those
@@ -281,7 +295,33 @@ export async function loadBoard(
     sync: { hold: false, force: {}, fail: undefined, edit: null, asked: [], open: new Set() },
     comments: new Set(),
     owners: { force: new Set(), asked: [] },
+    people: { unheld: new Set(), hold: false, force: null, open: new Set() },
     milestones: { hold: false, force: {}, asked: [], open: new Set() },
+  }
+  /** `snap` as the workspace's parts send it, without the unheld people. */
+  const held = (snap: Snapshot): Snapshot =>
+    server.people.unheld.size === 0
+      ? snap
+      : { ...snap, profiles: snap.profiles.filter((p) => !server.people.unheld.has(p.id)) }
+  /** Answers people:byIds read `read` from the snapshot as it is now, with
+      the state the test forces. */
+  const answerPeople = (read: {
+    args: unknown
+    next: (value: unknown) => void
+    fail?: (e: unknown) => void
+  }) => {
+    try {
+      read.next(
+        peopleSettingsStandIn(
+          snapshot,
+          'people:byIds',
+          read.args as Record<string, unknown>,
+          server.people.force ? { byIds: server.people.force } : {},
+        ),
+      )
+    } catch (e) {
+      read.fail?.(e)
+    }
   }
   // the store's canSee and canWrite, once the store loaded
   let sees: (id: string) => boolean = () => true
@@ -369,6 +409,7 @@ export async function loadBoard(
     for (const sub of server.sync.open) answerSync(sub)
     for (const sub of server.roadmap.open) answerRoadmapSub(sub)
     if (!server.milestones.hold) for (const sub of server.milestones.open) answerMilestoneSub(sub)
+    if (!server.people.hold) for (const read of server.people.open) answerPeople(read)
   }
   // a task's people pickers answer through their stand-in, and every other
   // one-shot read with nothing
@@ -382,15 +423,13 @@ export async function loadBoard(
     const name = getFunctionName(ref)
     if (name === 'people:byIds') {
       server.owners.asked.push({ name, args })
-      try {
-        next(peopleSettingsStandIn(snapshot, name, args))
-      } catch (e) {
-        fail?.(e)
-      }
-      return () => {}
+      const read = { args, next, fail }
+      server.people.open.add(read)
+      if (!server.people.hold) answerPeople(read)
+      return () => server.people.open.delete(read)
     }
     if (name === 'workspace:whole') {
-      deliver = (snap) => next(structuredClone(snap))
+      deliver = (snap) => next(structuredClone(held(snap)))
       deliver(snapshot)
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name === 'tasks:board') {

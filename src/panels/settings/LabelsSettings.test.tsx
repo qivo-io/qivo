@@ -5,7 +5,11 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../../components/ui/tooltip'
-import { answerLabelPages, type ForcedLabelPage } from '../../store/labelPagesStandIn.setup'
+import {
+  answerLabelPages,
+  type ForcedLabelPage,
+  labelPickerStandIn,
+} from '../../store/labelPagesStandIn.setup'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 
 /* Settings › Labels on the real store, its batches answered by the label
@@ -55,6 +59,10 @@ let server: {
   reads: Set<Read>
   publish: (snap: Snapshot) => void
   hold: boolean
+  /** New label's checks of a typed name (labels.picker), each search, and
+      whether they fail */
+  checks: string[]
+  checkFails: boolean
 }
 
 const org = () => server.snap.orgs[0].id
@@ -98,8 +106,22 @@ async function load(shape?: (snap: Snapshot) => void) {
   })
   shape?.(snap)
   requests = []
-  server = { snap, force: {}, reads: new Set(), publish: () => {}, hold: false }
-  network.query.mockResolvedValue(null)
+  server = {
+    snap,
+    force: {},
+    reads: new Set(),
+    publish: () => {},
+    hold: false,
+    checks: [],
+    checkFails: false,
+  }
+  network.query.mockImplementation(async (ref, args) => {
+    // New label's check of the typed name, one read, never subscribed
+    if (getFunctionName(ref) !== 'labels:picker') return null
+    server.checks.push(String(args.search ?? ''))
+    if (server.checkFails) throw new Error('the check failed')
+    return labelPickerStandIn(server.snap, args, { force: server.force })
+  })
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'labels:settingsPage') {
@@ -540,8 +562,10 @@ describe('Settings › Labels', () => {
     await load(many(30))
     await render()
     await type(find<HTMLInputElement>('input[placeholder="New label name"]'), 'Zeta release')
+    // the name's check answers once typing rests
+    await rest()
+    await settle()
     await click(button('Add label'))
-    // a name another label holds is refused on the whole catalogue
     expect(requests.map((r) => r.name)).toEqual(['labels:create'])
     const id = requests[0]?.args.id as string
     await answer('labels:create', 'accept')
@@ -554,22 +578,100 @@ describe('Settings › Labels', () => {
     await click(find('[data-labels-more]'))
     expect(rows().at(-1)).toEqual({ id, name: 'Zeta release', count: '0 active tasks' })
     expect(document.querySelector('[data-label-kept]')).toBeNull()
-    // the catalogue holds every name, loaded or not
+    // the server's `exact` knows every name, loaded or not, in any case
     await type(find<HTMLInputElement>('input[placeholder="New label name"]'), 'label 03')
+    await rest()
+    await settle()
     expect(button('Add label')?.disabled).toBe(true)
+    expect(find('[data-label-name-check]').textContent).toBe(
+      'A label with that name already exists',
+    )
   })
 
-  it('shows the answer’s name with its controls waiting while the store does not hold the label', async () => {
+  it('checks a new name once on the server’s exact, and keeps Add off until the answer for the text on screen is free', async () => {
+    await load((snap) => labelRow(snap, 'fw', 'Firmware'))
+    await render()
+    const input = find<HTMLInputElement>('input[placeholder="New label name"]')
+    await type(input, 'FIRMWARE')
+    // on its way: Add off, and the page says so beside it
+    expect(button('Add label')?.disabled).toBe(true)
+    expect(find('[data-label-name-check]').textContent).toBe('Checking the name…')
+    await rest()
+    await settle()
+    expect(server.checks).toEqual(['FIRMWARE'])
+    expect(button('Add label')?.disabled).toBe(true)
+    expect(find('[data-label-name-check="taken"]').textContent).toBe(
+      'A label with that name already exists',
+    )
+    // a free name turns Add on once its answer is in, and only then
+    await type(input, 'Firmware 2')
+    expect(button('Add label')?.disabled).toBe(true)
+    await rest()
+    await settle()
+    expect(server.checks).toEqual(['FIRMWARE', 'Firmware 2'])
+    expect(button('Add label')?.disabled).toBe(false)
+    expect(document.querySelector('[data-label-name-check]')).toBeNull()
+    await click(button('Add label'))
+    // the create carries a palette color picked from its id
+    const { labelColorFor } = await import('../../lib/labelColors')
+    const sent = requests.find((r) => r.name === 'labels:create')
+    expect(sent?.args).toMatchObject({ name: 'Firmware 2' })
+    expect(sent?.args.color).toBe(labelColorFor(String(sent?.args.id)))
+  })
+
+  it('leaves the name to the server after a failed check, its refusal toasted with the typed name kept', async () => {
+    await load((snap) => labelRow(snap, 'fw', 'Firmware'))
+    await render()
+    server.checkFails = true
+    const input = find<HTMLInputElement>('input[placeholder="New label name"]')
+    await type(input, 'firmware')
+    await rest()
+    await settle()
+    // a failed check never says the name is free or taken; Add stays on
+    expect(button('Add label')?.disabled).toBe(false)
+    expect(document.querySelector('[data-label-name-check]')).toBeNull()
+    await click(button('Add label'))
+    await answer(
+      'labels:create',
+      new ConvexError({ code: 'rule', message: 'a label with that name already exists' }),
+    )
+    expect(toasts().some((t) => t.startsWith('A label with that name already exists'))).toBe(true)
+    expect(input.value).toBe('firmware')
+  })
+
+  it('shows and writes a label the store does not hold from the page’s answer, sending what the row showed', async () => {
     await load((snap) => labelRow(snap, 'fw', 'Firmware'))
     // another admin's new label reaches the answer before the catalogue
-    labelRow(server.snap, 'new', 'New from elsewhere')
+    labelRow(server.snap, 'new', 'New from elsewhere', '#0891B2')
     await render()
     expect(names()).toEqual(['Firmware', 'New from elsewhere'])
-    expect(nameField('new').disabled).toBe(true)
-    expect(find('[data-label-row="new"]').dataset.labelWaiting).toBe('')
-    expect(find('[data-label-row="fw"]').dataset.labelWaiting).toBeUndefined()
-    expect(find<HTMLButtonElement>('[data-delete-label="new"]').disabled).toBe(true)
-    expect(nameField('fw').disabled).toBe(false)
+    // nothing waits for the store
+    expect(nameField('new').disabled).toBe(false)
+    expect(document.querySelector('[data-label-waiting]')).toBeNull()
+    expect(find<HTMLButtonElement>('[data-delete-label="new"]').disabled).toBe(false)
+    await rename('new', 'Renamed elsewhere')
+    expect(requests.at(-1)).toMatchObject({
+      name: 'labels:update',
+      args: {
+        org_id: org(),
+        id: 'new',
+        patch: { name: 'Renamed elsewhere' },
+        expected: { name: 'New from elsewhere' },
+      },
+    })
+    await answer('labels:update', 'accept')
+    // the row shows what the page saved until the answer holds it
+    expect(nameField('new').value).toBe('Renamed elsewhere')
+    await click(find<HTMLButtonElement>('[data-delete-label="new"]'))
+    await click(button('Delete', find('[data-modal-shell]')))
+    expect(requests.at(-1)).toMatchObject({
+      name: 'labels:remove',
+      args: {
+        org_id: org(),
+        id: 'new',
+        expected: { name: 'Renamed elsewhere', color: '#0891B2' },
+      },
+    })
   })
 })
 
@@ -640,7 +742,9 @@ describe('a label name on the draft model', () => {
     expect(field().value).toBe('Firmware E')
   })
 
-  it('keeps a name over the cap, and one the catalogue holds, typed and unsent with the sentence', async () => {
+  // Changed with the roster cache stage: a rename to a name another label
+  // holds goes to the server, which refuses it, and the text stays
+  it('keeps a name over the cap unsent, and one another label holds typed after the server refuses it', async () => {
     await load((snap) => {
       labelRow(snap, 'fw', 'Firmware')
       labelRow(snap, 'hw', 'Hardware')
@@ -649,11 +753,15 @@ describe('a label name on the draft model', () => {
     await rename('fw', 'f'.repeat(41))
     expect(field().value).toHaveLength(41)
     expect(toasts()).toEqual(['A label name must be at most 40 characters. Shorten it.'])
-    await rename('fw', 'hardware')
-    expect(field().value).toBe('hardware')
-    expect(toasts().at(-1)).toBe('A label with that name already exists')
-    expect(toasts().filter((t) => t === 'A label with that name already exists')).toHaveLength(1)
     expect(requests).toEqual([])
+    await rename('fw', 'hardware')
+    expect(requests.map((r) => r.name)).toEqual(['labels:update'])
+    await answer(
+      'labels:update',
+      new ConvexError({ code: 'rule', message: 'a label with that name already exists' }),
+    )
+    expect(field().value).toBe('hardware')
+    expect(toasts().some((t) => t.startsWith('A label with that name already exists'))).toBe(true)
     const { hasUnsaved } = await import('../../lib/leaveGuard')
     expect(hasUnsaved()).toBe(true)
   })

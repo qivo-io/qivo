@@ -120,9 +120,10 @@ async function myLabel(ctx: MeCtx, id: string): Promise<Doc<'labels'>> {
 }
 
 /* ----------------------------------------------------------------- create
- * P.addLabel. The client's predictive dup toast stays client-side; the
- * server refusal in model/labels.ts createLabelCore is what REST and MCP
- * read too. */
+ * P.addLabel, which the label picker and Settings › Labels call once
+ * labels.picker's `exact` said no label of that name exists, or after that
+ * read failed. The refusal in model/labels.ts createLabelCore is the one
+ * duplicate check, which REST and MCP read too. */
 export const create = orgMutation({
   args: { id: v.string(), name: v.string(), color: v.string() },
   handler: async (ctx, { id, name, color }) => {

@@ -15,15 +15,19 @@
    did not reach.
 
    A row paints the store's team, person and membership while the store
-   holds them, so this session's writes show at once and give the writes
-   their `expected`; until then it shows the answer's, and the controls
-   that write through those rows wait. Delete, Remove and Add wait for the
-   store's team, as the removal and the add take its organization from it.
-   The pages keep, for this visit, the teams created here, the members
-   added here and the member rows that hold unsaved hours or an hours save
-   the server has not answered, beside the loaded rows in one keyed list,
-   so a search never drops typed hours, nor the field a refused save
-   brings them back in. */
+   holds them, so this session's writes show at once, else the answer's.
+   Every control follows the answer and the caller's rights from it
+   (can_manage, can_manage_members) and writes with what the row showed,
+   to the page's organization, with `expected` from it where the write
+   takes one (store/planner.ts TeamShown, MemberShown, PersonShown), so no
+   control waits for the store. A removal or a deletion names the member
+   or the team as the row showed them (teamRemoval). The pages name the
+   people their rows show (usePeople). They keep, for this visit, the
+   teams created here, the members added here until a loaded batch holds
+   them or the add was refused, and the member rows that hold unsaved
+   hours or an hours save the server has not answered, beside the loaded
+   rows in one keyed list, so a search never drops typed hours, nor the
+   field a refused save brings them back in. */
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -41,6 +45,7 @@ import {
   SettingsGroup,
   SettingsSection,
 } from '../../components/settingsPage'
+import { usePeople } from '../../components/usePeople'
 import { TEAM_CAPS } from '../../lib/accessCaps'
 import { DEMO_MODE } from '../../lib/demoMode'
 import { limitSentence, overLimit, sentence } from '../../lib/fieldLimits'
@@ -60,10 +65,12 @@ import { useConfirmArm } from '../../lib/useConfirmArm'
 import { useViewVisibility } from '../../lib/viewVisibility'
 import {
   P,
+  personShownOf,
   REMOVAL_CHECKING,
   type TeamChoices,
   type TeamListAnswer,
   type TeamMembersAnswer,
+  teamRemoval,
 } from '../../store/planner'
 import { useAccessRemoval } from '../useAccessRemoval'
 import { BackLink, TextField } from './controls'
@@ -105,9 +112,6 @@ const storePerson = (id: string) => {
   const user = P.user(id)
   return user && user.org === P.homeOrg ? user : null
 }
-
-/** The title of a control that waits for the store's team. */
-const WAITING = 'Loading this team…'
 
 /** "12 members", "1 member", or "Not counted yet" for a count the server
     does not have. */
@@ -429,7 +433,6 @@ function TeamFields({
 }) {
   const org = P.homeOrg
   const team = storeTeam(teamId)
-  const teamHeld = team !== null
   const name = team?.name ?? answer.team.name
   const blocked = read.afterFailure || read.state === 'unavailable'
   const canManage = answer.can_manage
@@ -442,7 +445,7 @@ function TeamFields({
      the server accepts it: the next member's Remove, the previous one's,
      the empty list's line or the member picker. */
   const removal = useAccessRemoval()
-  const removing = (id: string) => P.removingAccess({ kind: 'teamMember', teamId, userId: id })
+  const removing = (id: string) => P.removingAccess(teamRemoval(teamId, id, org, ''))
 
   const [text, setText] = useState('')
   const search = useSettledSearch(text, LIMITS.search)
@@ -458,6 +461,9 @@ function TeamFields({
     most: TEAM_CAPS.members,
   })
   const loaded = new Map(list.rows.map((row) => [row.id, row]))
+  // the answer row each member last showed with, for the rows kept
+  const known = useRef(new Map<string, MemberRowAnswer>())
+  for (const row of list.rows) known.current.set(row.id, row)
   // the members this visit added, by id with their names and whether the
   // server added them yet, and the rows holding unsaved hours or an hours
   // save on its way (PlannableHoursInput)
@@ -468,27 +474,29 @@ function TeamFields({
   }, [])
   const current = useListCurrent(list)
   // an added member goes from the kept rows once a loaded batch holds them,
-  // or the store holds no such membership, as after a refusal. Until the
-  // server added them every answer is from before the add, so only once it
-  // did, and the answers are current, may the list tell that it does not
-  // hold them, as when someone removed them meanwhile.
+  // or once the add was refused (addMember). Until the server added them
+  // every answer is from before the add, so only once it did, and the
+  // answers are current, may the list tell that it does not hold them, as
+  // when someone removed them meanwhile. None of it needs the store.
   useEffect(() => {
     setAdded((m) =>
-      without(m, (id, entry) => {
-        const person = storePerson(id)
-        return (
+      without(
+        m,
+        (id, entry) =>
           loaded.has(id) ||
-          !person?.teams.includes(teamId) ||
-          (entry.saved &&
-            current &&
-            listPassed(list, search.settled, person.name || entry.name, id))
-        )
-      }),
+          (entry.saved && current && listPassed(list, search.settled, entry.name, id)),
+      ),
     )
   })
   const kept = [...new Set([...added.keys(), ...drafts])].filter(
-    (id) => !loaded.has(id) && !removing(id) && storePerson(id) !== null,
+    (id) => !loaded.has(id) && !removing(id) && (added.has(id) || known.current.has(id)),
   )
+  // forget the answers of rows neither a batch nor a kept row shows
+  for (const id of known.current.keys())
+    if (!loaded.has(id) && !kept.includes(id)) known.current.delete(id)
+  // the people the page shows, named while it shows: the kept rows, then
+  // the loaded batches' members
+  usePeople([...kept, ...list.rows.map((row) => row.id)].map((id) => ({ org, id })))
 
   const searchBox = useRef<HTMLInputElement>(null)
   const { end, more } = useListMore(
@@ -505,26 +513,25 @@ function TeamFields({
   const row = (id: string, member: MemberRowAnswer | null, note: string | null) => (
     <MemberRow
       key={id}
+      org={org}
       teamId={teamId}
       id={id}
       answer={member}
+      addedName={added.get(id)?.name ?? null}
       note={note}
       canManage={canManage}
       canManageMembers={canManageMembers}
-      teamHeld={teamHeld}
       blocked={blocked}
       armed={confirm.armed === `m:${id}`}
-      checking={removal.checking({ kind: 'teamMember', teamId, userId: id })}
-      onRemove={(at) =>
-        confirm.press(`m:${id}`, () =>
-          removal.press({ kind: 'teamMember', teamId, userId: id }, at),
-        )
+      checking={removal.checking(teamRemoval(teamId, id, org, ''))}
+      onRemove={(shownName, at) =>
+        confirm.press(`m:${id}`, () => removal.press(teamRemoval(teamId, id, org, shownName), at))
       }
       onUnsaved={onUnsaved}
     />
   )
   const items: ReactNode[] = kept.map((id) =>
-    row(id, null, added.has(id) ? 'Added' : 'Not in this list'),
+    row(id, known.current.get(id) ?? null, added.has(id) ? 'Added' : 'Not in this list'),
   )
   list.batches.forEach((batch, i) => {
     for (const member of batch.rows)
@@ -544,14 +551,17 @@ function TeamFields({
   const shown = list.rows.some((r) => !removing(r.id)) || kept.length > 0
   const state = listState(list)
   const addMember = (person: { id: string; name: string }) => {
+    const again = added.has(person.id)
     setAdded((m) => new Map(m).set(person.id, { name: person.name, saved: false }))
-    void P.addTeamMember(teamId, person.id).then((saved) => {
-      // a refusal, or an add the store did not send, leaves no membership
-      // in the store, which drops the row. A second add of someone whose
-      // first add waits answers false at once and keeps the row.
+    void P.addTeamMember(teamId, person.id, { orgId: org }).then((saved) => {
+      // a refusal, or an add the store did not send, drops the row; a
+      // second add of someone whose first add waits answers false at once
+      // and keeps the row
       setAdded((m) => {
         const entry = m.get(person.id)
-        return entry && saved ? new Map(m).set(person.id, { ...entry, saved: true }) : m
+        if (!entry) return m
+        if (saved) return new Map(m).set(person.id, { ...entry, saved: true })
+        return again ? m : without(m, (id) => id === person.id)
       })
     })
   }
@@ -564,7 +574,7 @@ function TeamFields({
           canManage ? undefined : 'Only team leaders and organization admins can edit this team.'
         }
       >
-        {canManage && teamHeld ? (
+        {canManage ? (
           <TextField
             label="Team name"
             record={teamId}
@@ -573,9 +583,11 @@ function TeamFields({
             readOnly={blocked}
             onCommit={(v, save) => {
               // the toast waits for the server, so a refusal never reads as done
-              void P.updateTeam(teamId, { name: v }, save.as('name')).then((saved) => {
-                if (saved) window.showToast?.('Team renamed')
-              })
+              void P.updateTeam(teamId, { name: v }, save.as('name'), { orgId: org, name }).then(
+                (saved) => {
+                  if (saved) window.showToast?.('Team renamed')
+                },
+              )
             }}
           />
         ) : (
@@ -583,7 +595,6 @@ function TeamFields({
             <Input
               value={name}
               disabled
-              title={canManage ? WAITING : undefined}
               aria-label="Team name"
               className="h-control bg-surface-1 px-2.5 text-base font-sans opacity-55"
             />
@@ -630,7 +641,6 @@ function TeamFields({
         <div
           data-team-members=""
           data-team-members-state={state}
-          data-team-waiting={teamHeld ? undefined : ''}
           aria-busy={state === 'loading' || state === 'refreshing' || undefined}
           className="[display:flex] [flex-direction:column] [gap:6px]"
         >
@@ -660,13 +670,7 @@ function TeamFields({
         </div>
         {removal.window}
         {canManageMembers && (
-          <AddMember
-            org={org}
-            teamId={teamId}
-            disabled={!teamHeld || blocked}
-            waiting={teamHeld ? undefined : WAITING}
-            onAdd={addMember}
-          />
+          <AddMember org={org} teamId={teamId} disabled={blocked} onAdd={addMember} />
         )}
         <FieldHint>
           Removing a member leaves their other team and individual project access intact.
@@ -677,54 +681,76 @@ function TeamFields({
 }
 
 /* One member of a team's page. It paints the store's person and membership
-   while the store holds them, else the answer's; the Leader box waits for
-   the store's membership and team, the hours for the store's person, and
-   Remove for the store's team. A kept row says why it shows (`note`). The
-   avatar comes first and the name block second, which the phone layout
-   stacks (mobile-settings.css). */
+   while the store holds them, else the answer's, and writes with what it
+   showed: the hours through P.updateUser (PersonShown), the Leader box
+   through P.setTeamLeader (MemberShown) and Remove through the removal
+   window, each to the page's organization `org`. A member the page added
+   whose row no batch holds yet shows by the name the picker gave
+   (`addedName`), with Remove and no other control. A kept row says why it
+   shows (`note`). The avatar comes first and the name block second, which
+   the phone layout stacks (mobile-settings.css). */
 function MemberRow({
+  org,
   teamId,
   id,
   answer,
+  addedName,
   note,
   canManage,
   canManageMembers,
-  teamHeld,
   blocked,
   armed,
   checking,
   onRemove,
   onUnsaved,
 }: {
+  org: string
   teamId: string
   id: string
-  /** the answer's row, null for a kept row no loaded batch holds */
+  /** the answer's row, null for a kept row no loaded batch held */
   answer: MemberRowAnswer | null
+  /** the name the Add member picker gave, for a member added here */
+  addedName: string | null
   note: string | null
   canManage: boolean
   canManageMembers: boolean
-  teamHeld: boolean
   blocked: boolean
   armed: boolean
   checking: boolean
-  /** presses Remove, with where focus goes once the row has left */
-  onRemove: (focusAfter: () => HTMLElement | null) => void
+  /** presses Remove with the name the row shows, and where focus goes once
+      the row has left */
+  onRemove: (name: string, focusAfter: () => HTMLElement | null) => void
   onUnsaved: (id: string, unsaved: boolean) => void
 }) {
   const user = storePerson(id)
-  const name = user?.name ?? answer?.name ?? ''
+  const name = user?.name ?? answer?.name ?? addedName ?? ''
   const role = user?.orgRole ?? answer?.org_role
   const isAgent = user ? user.isAgent : answer?.kind === 'agent'
   const memberHeld = !!user && user.teams.includes(teamId)
   const isLeader = memberHeld ? user.teamLeads.includes(teamId) : (answer?.is_leader ?? false)
+  // the person as the row shows them, for the hours write; none for a
+  // member known only by the picker's name
+  const shown = user
+    ? { id, ...personShownOf(user), orgId: org }
+    : answer
+      ? {
+          id,
+          orgId: org,
+          name: answer.name,
+          isAgent: answer.kind === 'agent',
+          pending: answer.pending,
+          orgRole: answer.org_role,
+          active: answer.active,
+          plannableHours: answer.plannable_hours,
+        }
+      : null
   // Viewers and agents never lead; an old agent leader row can still be cleared.
   const leaderLocked = role === 'viewer' || (isAgent && !isLeader)
-  const leaderReady = memberHeld && teamHeld
+  const leaderReady = memberHeld || answer !== null
   const leaderOn = canManageMembers && leaderReady && !blocked && !leaderLocked
   return (
     <div
       data-settings-team-member={id}
-      data-team-member-waiting={user ? undefined : ''}
       className="[display:flex] [align-items:center] [gap:8px] [padding:8px] [border-radius:var(--r-md)] [border:1px_solid_var(--border)] [background:var(--surface-1)]"
     >
       <Avatar id={id} size={28} />
@@ -748,11 +774,7 @@ function MemberRow({
         )}
       </div>
       {/* Leaders can edit the personal capacity they plan against. */}
-      <PlannableHoursInput
-        user={user ?? { id, name, isAgent, plannableHours: answer?.plannable_hours ?? null }}
-        canEdit={canManage && user !== null}
-        onUnsaved={onUnsaved}
-      />
+      {shown && <PlannableHoursInput user={shown} canEdit={canManage} onUnsaved={onUnsaved} />}
       {/* Team leadership controls this team's roster only. Project
           leads are assigned from each project's access settings. */}
       <HoverTooltip
@@ -763,9 +785,7 @@ function MemberRow({
               ? 'Organization viewers cannot lead a team.'
               : !canManageMembers
                 ? 'Only team leaders and organization admins can change leaders.'
-                : leaderReady
-                  ? 'Manage this team’s members and settings.'
-                  : WAITING
+                : 'Manage this team’s members and settings.'
         }
       >
         <label
@@ -779,7 +799,9 @@ function MemberRow({
             type="checkbox"
             checked={isLeader}
             disabled={!leaderOn}
-            onChange={(e) => P.setTeamLeader(teamId, id, e.target.checked)}
+            onChange={(e) =>
+              P.setTeamLeader(teamId, id, e.target.checked, { orgId: org, isLeader })
+            }
             className="[accent-color:var(--primary)]"
           />
           Leader
@@ -794,19 +816,18 @@ function MemberRow({
           className="w-control-sm h-control-sm"
           aria-label={armed ? 'Click again to confirm' : `Remove ${name} from this team`}
           aria-busy={checking || undefined}
-          disabled={checking || !teamHeld || blocked}
+          disabled={checking || blocked}
           title={
-            !teamHeld
-              ? WAITING
-              : checking
-                ? REMOVAL_CHECKING
-                : armed
-                  ? 'Click again to confirm'
-                  : `Remove ${name} from this team`
+            checking
+              ? REMOVAL_CHECKING
+              : armed
+                ? 'Click again to confirm'
+                : `Remove ${name} from this team`
           }
           data-team-member-remove
           onClick={() =>
             onRemove(
+              name,
               focusAround(
                 'data-settings-team-member',
                 id,
@@ -834,13 +855,11 @@ function AddMember({
   org,
   teamId,
   disabled,
-  waiting,
   onAdd,
 }: {
   org: string
   teamId: string
   disabled: boolean
-  waiting: string | undefined
   onAdd: (person: { id: string; name: string }) => void
 }) {
   const [target, setTarget] = useState<{ id: string; name: string } | null>(null)
@@ -862,7 +881,6 @@ function AddMember({
               data-on={open ? '' : undefined}
               aria-label={`Add member: ${target ? target.name : 'none chosen'}`}
               disabled={disabled}
-              title={waiting}
               onClick={toggle}
               className="h-control w-full justify-between gap-2 bg-surface-1 px-2.5 text-base font-normal text-text-1"
             >
@@ -889,7 +907,6 @@ function AddMember({
           type="button"
           data-team-member-add=""
           disabled={!target || disabled}
-          title={waiting}
           onClick={() => {
             if (!target) return
             onAdd(target)
@@ -930,6 +947,8 @@ function MemberChoiceList({
     most: TEAM_CAPS.choices,
   })
   const end = listEnd(list, query !== '')
+  // the picker's people, named while it is open
+  usePeople(list.rows.map((person) => ({ org, id: person.id })))
   return (
     <div data-team-member-choices="" className="flex flex-col gap-1">
       <PickerSearch
@@ -991,7 +1010,7 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
     id: (row: TeamRowAnswer) => row.id,
     most: TEAM_CAPS.teams,
   })
-  const removing = (id: string) => P.removingAccess({ kind: 'deleteTeam', teamId: id })
+  const removing = (id: string) => P.removingAccess(teamRemoval(id, null, org, ''))
   const loaded = new Map(list.rows.map((row) => [row.id, row]))
   // the teams this visit created, by id with their names, which show above
   // the list until a loaded batch holds them, the store no longer holds
@@ -1072,12 +1091,12 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
       admin={admin}
       last={last}
       armed={confirm.armed === `t:${id}`}
-      checking={removal.checking({ kind: 'deleteTeam', teamId: id })}
+      checking={removal.checking(teamRemoval(id, null, org, ''))}
       onOpen={() => setPage(`team:${id}`)}
-      onDelete={(at) =>
+      onDelete={(shownName, at) =>
         confirm.press(`t:${id}`, () => {
           setDeleted((s) => toggled(s, id, true))
-          removal.press({ kind: 'deleteTeam', teamId: id }, at)
+          removal.press(teamRemoval(id, null, org, shownName), at)
         })
       }
     />
@@ -1217,17 +1236,16 @@ function TeamRow({
   armed: boolean
   checking: boolean
   onOpen: () => void
-  /** presses Delete, with where focus goes once the row has left */
-  onDelete: (focusAfter: () => HTMLElement | null) => void
+  /** presses Delete with the name the row shows, and where focus goes once
+      the row has left */
+  onDelete: (name: string, focusAfter: () => HTMLElement | null) => void
 }) {
   const team = storeTeam(id)
   const name = team?.name ?? answer?.name ?? ''
-  const held = team !== null
   const lastLine = "The last team can't be deleted. Create another team first."
   return (
     <div
       data-team-row={id}
-      data-team-waiting={held ? undefined : ''}
       className="[display:flex] [align-items:center] [gap:8px] [padding:8px] [border-radius:var(--r-md)] [border:1px_solid_var(--border)] [background:var(--surface-1)]"
     >
       <Button
@@ -1255,25 +1273,24 @@ function TeamRow({
           type="button"
           variant="ghost"
           size={armed ? 'sm' : 'icon-sm'}
-          disabled={last || checking || !held}
+          disabled={last || checking}
           aria-busy={checking || undefined}
           style={{ opacity: last ? 0.35 : 1, color: armed ? 'var(--danger)' : undefined }}
           aria-label={last ? lastLine : armed ? 'Click again to delete this team' : 'Delete team'}
           title={
             last
               ? lastLine
-              : !held
-                ? WAITING
-                : checking
-                  ? REMOVAL_CHECKING
-                  : armed
-                    ? 'Click again to delete this team'
-                    : 'Delete team'
+              : checking
+                ? REMOVAL_CHECKING
+                : armed
+                  ? 'Click again to delete this team'
+                  : 'Delete team'
           }
           data-team-delete
           onClick={() => {
             if (last) return
             onDelete(
+              name,
               focusAround(
                 'data-team-row',
                 id,

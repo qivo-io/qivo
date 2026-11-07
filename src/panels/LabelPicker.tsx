@@ -24,7 +24,12 @@
      name has arrived and says no label of that name exists in any case
      (`exact` null) and the person may create labels (`can_create`), in
      the home organization, on a task that is not full. A check that could
-     not finish says so in its place (LABEL_RIGHTS_UNCHECKED).
+     not finish says so in its place (LABEL_RIGHTS_UNCHECKED). After a
+     failed read of the typed name it shows too, as Settings › Labels'
+     Add stays on then, and the server refuses a name another label holds
+     or a person who may not create labels. The new label takes its color
+     from its id (P.addLabel) and its chip shows its name at once
+     (keepNamed).
    - Enter acts only on the answer for the typed text: it picks `exact`
      once that answer is in, and otherwise, once the list has ended
      without a stop, picks the one row shown, or creates when no row shows
@@ -153,9 +158,16 @@ export function LabelPickerPopup({
   const full = labelBlock(it.labels ?? [])
   // creating one lands in the home organization, so it is offered only
   // there, and only from the answer for the typed name
-  const mayCreate = typed !== '' && !full && it.org === P.homeOrg && !!ready && ready.exact === null
-  const createOn = mayCreate && ready?.can_create === true
-  const unchecked = mayCreate && ready?.can_create === null
+  // a failed read of the typed name offers the create too, and the server
+  // decides, as Settings › Labels does
+  const readFailed = answered && !ready && list.phase === 'failed' && list.answers.length === 0
+  const mayCreate =
+    typed !== '' &&
+    !full &&
+    it.org === P.homeOrg &&
+    ((!!ready && ready.exact === null) || readFailed)
+  const createOn = mayCreate && (readFailed || ready?.can_create === true)
+  const unchecked = mayCreate && !readFailed && ready?.can_create === null
   const nameTooLong = overLimit(LIMITS.labelName, typed)
   const end: ListEnd = answered ? listEnd(list, query !== '') : 'loading'
   const ended = end === 'end' || end === 'none'
@@ -174,6 +186,8 @@ export function LabelPickerPopup({
     const name = typed
     const made = P.addLabel({ name })
     if (!made) return
+    // its chip names it at once, whether or not the catalogue holds it
+    keepNamed(it.org, { id: made.id, name: name.trim(), color: made.color })
     if (!onTask.has(made.id)) P.toggleIssueLabel(it.id, made.id, made.saved)
     setText('')
     void made.saved.then((saved) => {

@@ -61,6 +61,7 @@ import { resolveReviewHours, reviewStamp, taskOwnerId } from '../../convex/lib/r
 import type { DependencyAnswer, DependencyRow, RoadmapAnswer } from '../../convex/lib/roadmap'
 import { firstSittingDay, nextSyncStamp, SYNC_OWNERS_MAX } from '../../convex/lib/teamSync'
 import type { AgendaAnswer } from '../../convex/lib/teamSyncAgenda'
+import type { PersonRow } from '../../convex/model/projectSettings'
 import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
 import { NO_QUERY, SignOutFailed } from '../lib/authSession'
 import { avatarCacheScope, createAvatarImageCache } from '../lib/avatarImageCache'
@@ -141,7 +142,7 @@ import { AVATAR_TYPES, avatarImage, compressImage } from '../lib/images'
 import { nameInitials } from '../lib/initials'
 import { createInlineImages } from '../lib/inlineImages'
 import { groupProgress, groupSpan, isIssueDone, isIssueGroup } from '../lib/issueGroups'
-import { LABEL_COLORS } from '../lib/labelColors'
+import { labelColorFor } from '../lib/labelColors'
 import { hasUnsaved, holdUnsaved, leaveDeliberately } from '../lib/leaveGuard'
 import { watchLive } from '../lib/liveView'
 import { loadFailureText } from '../lib/loadFailure'
@@ -208,6 +209,7 @@ import {
 } from './overviewLists'
 import { createOwnerLoadCache, type OwnerLoad, type OwnerNeed } from './ownerLoadCache'
 import { createPreferences } from './preferences'
+import { createProfileCache, type NamedPerson } from './profileCache'
 import { createWorkspaceRows, RowMap, rowCopies } from './rowMap'
 import { keep, keepItems, sameData } from './stable'
 import {
@@ -274,7 +276,13 @@ import {
   type MilestoneVM,
   type OrgRefVM,
   type OrgVM,
+  type PersonOk,
+  type PersonShown,
+  type PersonView,
   type ProjectVM,
+  personOfFace,
+  personOfName,
+  personOfUser,
   shapeActivity,
   shapeArchivedListRow,
   shapeArchivedProject,
@@ -296,6 +304,7 @@ import {
 import { createViewRows, type ViewSlot } from './viewRows'
 import { createWorkspaceBase, deepFreeze } from './workspaceBase'
 
+export type { NamedPerson } from './profileCache'
 export type { TaskDetailState, TaskDetailVM } from './taskDetail'
 export type {
   ActivityVM,
@@ -312,10 +321,14 @@ export type {
   MilestoneVM,
   OrgRefVM,
   OrgVM,
+  PersonOk,
+  PersonShown,
+  PersonView,
   ProjectVM,
   TeamVM,
   UserVM,
 } from './viewModels'
+export { personShownOf } from './viewModels'
 
 /* Personal theme and Canvas background, exactly as appearance:get returns them. */
 export type AppearancePreferences = FunctionReturnType<typeof api.appearance.get>
@@ -5350,7 +5363,15 @@ const viewDelayCtx: ViewDelayCtx = {
     return (person && plannableHoursOf(person)) || DEFAULT_PLANNABLE_HOURS
   },
   projectLive: (id) => !!PLANNER.project(id),
-  orgOf: (id) => rows.profiles.get(id)?.org_id,
+  // the people part's organization, else the profile cache's, '' for a
+  // person the server's answer leaves out, undefined while it cannot tell
+  orgOf: (id) => {
+    const held = rows.profiles.get(id)?.org_id
+    if (held) return held
+    const known = profileCache.look(id)
+    if (known.state === 'face' || known.state === 'name') return known.org
+    return known.state === 'gone' ? '' : undefined
+  },
 }
 
 /* What reconciling a person's work for Team utilization and the planning
@@ -7028,6 +7049,14 @@ let fieldNoticeSeq = 0
 // layer id of a refused edit to its notice line
 const refusedLines = new Map<number, FieldNoticeLine>()
 
+/* Person `id`'s name as the store knows it now, from the people part or
+   the profile cache (P.person), or undefined while it does not, for a
+   sentence that names them with its own words in the name's place. */
+const knownName = (id: string | null | undefined): string | undefined => {
+  const person = PLANNER.person(id)
+  return person?.state === 'ok' ? person.name : undefined
+}
+
 /* How a notice names the record a change is about, from the rows on
    screen, and who wrote it. */
 const fieldLookup = {
@@ -7048,8 +7077,7 @@ const fieldLookup = {
       case 'project':
         return named(rows.projects.get(change.id)?.name, 'a project')
       case 'grant': {
-        const who =
-          rows.profiles.get(change.of ?? '')?.name ?? rows.teams.get(change.of ?? '')?.name
+        const who = knownName(change.of) ?? rows.teams.get(change.of ?? '')?.name
         const where = rows.projects.get(change.id)?.name
         return who && where ? `${who}'s access to ${where}` : 'an access level'
       }
@@ -7060,7 +7088,7 @@ const fieldLookup = {
         return name ? `label “${name}”` : 'a label'
       }
       case 'profile':
-        return named(rows.profiles.get(change.id)?.name, 'a person')
+        return named(knownName(change.id), 'a person')
       case 'organization':
         return 'the organization'
       case 'link':
@@ -7069,7 +7097,7 @@ const fieldLookup = {
   },
   writer(profileId: string): Writer {
     if ([...myProfiles.values()].includes(profileId)) return 'you'
-    const name = rows.profiles.get(profileId)?.name
+    const name = knownName(profileId)
     return name ? { name } : null
   },
 }
@@ -8079,8 +8107,13 @@ async function mintCredential(scheme: 'qva' | 'qvt') {
    (/files/<uuid>, /avatars/<uuid> on the Convex site origin); the URLs come
    from files.mintUrls and live ~10 minutes.
    Attachments keep their signed URL; portraits prepare one decoded blob URL
-   per `avatar:<profileId>:<storageId>`. Renewing an unchanged portrait checks
-   access without dropping its source or downloading its bytes again.
+   per `avatar:<profileId>:<storageId>`, the version from the people part's
+   profile or the profile cache's face (pictureKey). Renewing an unchanged
+   portrait checks access without dropping its source or downloading its
+   bytes again. The store mints, renews and downloads only the pictures of
+   the people its open pages, pickers and views name (wantPictures), in
+   their order; a held picture nobody names keeps its bytes within the
+   budget and shows again on one renewal (lib/avatarSources.ts).
 
    Every mint of the store goes through one queue (lib/mintQueue.ts): at
    most 100 ids a call, two calls at once, attachments and pictures never
@@ -8095,10 +8128,10 @@ async function mintCredential(scheme: 'qva' | 'qvt') {
    mintUrls is a QUERY but must be consumed ONE-SHOT (convex.query), never
    subscribed: exp comes from Date.now(), which is not a reactive dependency —
    a subscription would pin a stale exp forever. THIS cache owns refresh
-   timing: rebuild() re-primes anything expiring within the skew, a sweep
-   covers idle tabs (avatars only; an inline image renews when it shows
-   again), and expiry is re-checked here with the same skew the server's
-   TTL was designed against. */
+   timing: rebuild() re-primes the named pictures expiring within the skew,
+   a sweep covers idle tabs (avatars only; an inline image renews when it
+   shows again), and expiry is re-checked here with the same skew the
+   server's TTL was designed against. */
 const MINT_SKEW = 120_000 // treat as stale this long before expiry
 const MINT_SWEEP = 30_000 // access renewal, retry and stale-byte cleanup (avatars)
 /** The attachment leases minted keeps, oldest first out. */
@@ -8114,6 +8147,33 @@ const mintQueue = createMintQueue(
 )
 // a picture that waited for room and started by itself repaints as any does
 const avatarSources = createAvatarSources({ changed: () => showPortraits() })
+
+/* The people the open views name that the workspace's people part does not
+   hold, read by id and kept within PROFILE_CACHE.most (store/profileCache.ts).
+   An answer repaints once a frame, as a picture does, and a change of the
+   named people moves the wanted pictures (wantPictures). No right reads it:
+   P.user and the rights helpers stay on the people part. */
+const profileCache = createProfileCache({
+  // read at each call, so a module that never names a person needs no live
+  // transport
+  live: {
+    watch: (ref, args) => live.watch(ref, args),
+    read: (token) => live.read(token),
+    onTransition: (fn, options) => live.onTransition(fn, options),
+  },
+  held: (org, id) => rows.profiles.get(id)?.org_id === org,
+  changed: () => showPortraits(),
+  namedChanged: () => wantPictures(),
+  watchVisibility,
+})
+
+/* The person views P.person answers, by id, shaped in rebuild beside
+   P.users from the people part and the cache, each keeping its identity
+   while it is unchanged. */
+let personViews: ReadonlyMap<string, PersonOk> = new Map()
+/* The views of people the store cannot name yet, kept by state and id so
+   each keeps its identity. */
+const personStates = new Map<string, PersonView>()
 const inlineImages = createInlineImages({
   held: (id) => attachmentHeld(id),
   mint: (id, fresh) => attachmentLease(id, fresh),
@@ -8132,13 +8192,18 @@ const portraitFrame = frameBatch(() => {
 })
 
 /* Clears every file URL and byte the store holds: the mint queue, the
-   minted attachment leases, the inline images and the pictures, for
-   sign-out, a demo's end and reinitialization. */
+   minted attachment leases, the inline images and the pictures, with the
+   people the profile cache read, for sign-out, a demo's end and
+   reinitialization. */
 function clearAvatarSources() {
   mintQueue.clear()
   mintingKeys.clear()
   minted.clear()
   inlineImages.clear()
+  profileCache.clear()
+  personViews = new Map()
+  personStates.clear()
+  namedPictures = []
   avatarSources.clear()
   avatarSources.setPersistent(null)
   portraitFrame.cancel()
@@ -8266,9 +8331,8 @@ async function primeMint(items: MintItem[]): Promise<boolean> {
     }
     // avatars are answered across every org I hold a seat in, so they go
     // through the home seat (or any seat, for a guest-only login)
-    const prof = rows.profiles.get(it.id)
-    if (!prof?.avatar_storage_id) continue
-    const key = `avatar:${it.id}:${prof.avatar_storage_id}`
+    const key = pictureKey(it.id)
+    if (!key) continue
     const org = HOME_ORG || myProfiles.keys().next().value || ''
     if (!org || mintingKeys.has(key) || !avatarSources.needsRefresh(key)) continue
     const ticket = avatarSources.ticket(key)
@@ -8319,13 +8383,50 @@ function showPortraits() {
   portraitFrame.schedule()
 }
 
-/* The pictures the store holds that need a mint now. */
+/* The key of person `id`'s uploaded picture, `avatar:<profile id>:<storage
+   id>`, from the people part's profile or the cache's face, or null for a
+   person without one or not known. */
+function pictureKey(id: string): string | null {
+  const version =
+    rows.profiles.get(id)?.avatar_storage_id ??
+    (() => {
+      const known = profileCache.look(id)
+      return known.state === 'face' ? known.face.avatar : null
+    })()
+  return version ? `avatar:${id}:${version}` : null
+}
+
+/* The picture keys of the people the open views name, in their order
+   (profileCache named), the only ones the store mints, renews and
+   downloads. */
+let namedPictures: { id: string; key: string }[] = []
+
+/* Follows the people the open views name with the wanted pictures: hands
+   their keys to the picture source in order and mints the due ones. */
+function wantPictures() {
+  const next: { id: string; key: string }[] = []
+  for (const person of profileCache.named()) {
+    const key = pictureKey(person.id)
+    if (key) next.push({ id: person.id, key })
+  }
+  const same =
+    next.length === namedPictures.length && next.every((p, i) => p.key === namedPictures[i]?.key)
+  namedPictures = next
+  if (!same) avatarSources.named(next.map((p) => p.key))
+  if (next.length > 0) startMintSweep()
+  const need = picturesDue()
+  if (need.length)
+    void primeMint(need).then((grew) => {
+      if (grew) showPortraits()
+    })
+}
+
+/* The named pictures that need a mint now, in the named order. */
 function picturesDue(): MintItem[] {
+  if (filesHidden) return []
   const need: MintItem[] = []
-  rows.profiles.forEach((u) => {
-    if (u.avatar_storage_id && avatarSources.needsRefresh(`avatar:${u.id}:${u.avatar_storage_id}`))
-      need.push({ kind: 'avatar', id: u.id })
-  })
+  for (const { id, key } of namedPictures)
+    if (avatarSources.needsRefresh(key)) need.push({ kind: 'avatar', id })
   return need
 }
 
@@ -8580,11 +8681,10 @@ function rebuild(now = new Date(), full = false) {
   const P = PLANNER
   const gridBefore = P.TIMELINE_START?.getTime()
   const todayBefore = P.TODAY_ISO
-  avatarSources.sync(
-    [...rows.profiles.values()]
-      .filter((profile) => profile.avatar_storage_id)
-      .map((profile) => `avatar:${profile.id}:${profile.avatar_storage_id}`),
-  )
+  // the people the workspace holds now are read by id no more, and those
+  // it stopped holding are
+  profileCache.sync()
+  syncPictureKeys()
 
   // week grid first: the org's week settings re-anchor TIMELINE_START, and
   // every isoToWeek below depends on it (dates.ts exports a live binding;
@@ -8644,6 +8744,7 @@ function rebuild(now = new Date(), full = false) {
         ),
       ),
   )
+  personViews = shapePersonViews(personViews)
 
   // org — P.org IS the home org (the one whose settings the app runs on);
   // identity is the HOME org's (empty for a guest-only login), the display
@@ -8879,6 +8980,8 @@ function rebuild(now = new Date(), full = false) {
     P.gridEpoch,
     P.TODAY_ISO,
     P.TODAY_POS,
+    // the people the cache names and paints beside the people part
+    personViews,
   ]
   // a Team sync stamp (UserVM.sync) gives P.users a new identity, but no row
   // that compares contextVersion reads it; Team sync compares its own since
@@ -8901,28 +9004,67 @@ function rebuild(now = new Date(), full = false) {
   // land through a REBUILD or the freshly-minted URL sits in the cache
   // unread. The second pass finds nothing left to mint and stops there. Only
   // avatars pre-mint: attachment URLs are minted on demand (attachmentUrl),
-  // because only the open issue's inline images ever render eagerly — avatars
-  // render by the dozen per board.
-  // While the page is hidden the pictures hold and nothing primes.
-  if (P.users.some((u) => u.avatarPath)) startMintSweep()
-  const needAvatars = filesHidden
-    ? []
-    : P.users
-        .filter((u) => u.avatarPath && avatarSources.needsRefresh(`avatar:${u.id}:${u.avatarPath}`))
-        .map((u) => ({ kind: 'avatar' as const, id: u.id }))
-  if (needAvatars.length) {
-    void primeMint(needAvatars).then((grew) => {
-      if (grew) showPortraits()
-    })
-  }
+  // because only the open issue's inline images ever render eagerly, while
+  // avatars render by the dozen per board. Only the pictures the open views
+  // name prime, in their order, and while the page is hidden the pictures
+  // hold and nothing primes.
+  wantPictures()
   // the inline images out of reach whose files the rows no longer hold
   // drop their bytes, and near ones a clear left waiting ask again
   inlineImages.retain(attachmentGate())
 }
 
+/* Whether `person` is someone whose name has not loaded: on its way or
+   after a failed read, which a text filter cannot tell from a match. */
+export const nameUnknown = (person: PersonView | null) =>
+  person !== null && (person.state === 'loading' || person.state === 'failed')
+
 /* What the last rebuild's contextVersion was taken from. */
 let lastContext: unknown[] = []
 let lastContextUsers: UserVM[] = []
+
+/* Hands the picture source the keys the store knows, every profile of the
+   people part and every face of the cache with a picture, and the profiles
+   it knows with none, by which the persistent cache prunes. */
+function syncPictureKeys() {
+  const keys: string[] = []
+  const without: string[] = []
+  for (const profile of rows.profiles.values()) {
+    if (profile.avatar_storage_id) keys.push(`avatar:${profile.id}:${profile.avatar_storage_id}`)
+    else without.push(profile.id)
+  }
+  for (const { face } of profileCache.faces()) {
+    if (rows.profiles.has(face.id)) continue
+    if (face.avatar) keys.push(`avatar:${face.id}:${face.avatar}`)
+    else without.push(face.id)
+  }
+  avatarSources.sync(keys, without)
+}
+
+/* The person views of the people part's people (from P.users) and of the
+   cache's faces and names, each keeping its identity from `prev` while it
+   is unchanged, so the views P.person answers stay the same objects. */
+function shapePersonViews(prev: ReadonlyMap<string, PersonOk>): ReadonlyMap<string, PersonOk> {
+  const next = new Map<string, PersonOk>()
+  const put = (view: PersonOk) => {
+    const was = prev.get(view.id)
+    next.set(view.id, was ? keep(was, view) : view)
+  }
+  for (const u of PLANNER.users) put(personOfUser(u))
+  for (const { org, face } of profileCache.faces())
+    if (!next.has(face.id))
+      put(
+        personOfFace(
+          org,
+          face,
+          face.avatar ? avatarSources.url(`avatar:${face.id}:${face.avatar}`) : null,
+        ),
+      )
+  for (const { org, name } of profileCache.names())
+    if (!next.has(name.id)) put(personOfName(org, name))
+  if (next.size === prev.size && [...next].every(([id, view]) => prev.get(id) === view)) return prev
+  return next
+}
 
 /** `users` without their Team sync stamps, for contextVersion. */
 const withoutStamps = (users: readonly UserVM[]) => users.map(({ sync: _sync, ...user }) => user)
@@ -9153,26 +9295,52 @@ const cleanTitle = (t: unknown) => String(t ?? '').trim()
     text reads where the preview does not name the project (P.keepText).
     Build a grant's change with grantRemoval, so a press and its `checking`
     name it alike. */
-export type AccessRemoval =
+export type AccessRemoval = (
   | { kind: 'userGrant'; projectId: string; userId: string; orgId?: string; topLevel?: boolean }
   | { kind: 'teamGrant'; projectId: string; teamId: string; orgId?: string; topLevel?: boolean }
-  | { kind: 'teamMember'; teamId: string; userId: string }
-  | { kind: 'deleteTeam'; teamId: string }
+  | { kind: 'teamMember'; teamId: string; userId: string; orgId?: string }
+  | { kind: 'deleteTeam'; teamId: string; orgId?: string }
+) & {
+  /** the person's or team's name as the page showed it, which the removal
+      window and the store's sentences name them by; a press and its check
+      are told apart without it (removalKey, useAccessRemoval) */
+  label?: string
+}
 
 /** The removal of a person's (`user`) or a team's grant `id` on project
     `projectId` of organization `orgId`, top-level or not as `topLevel`
-    says, with its keys always in the same order, as useAccessRemoval tells
-    a press apart by the change's JSON. */
+    says, named `label` as the page showed them (a press names it; a check
+    of whether one is on its way needs none), with its keys always in the
+    same order, as useAccessRemoval tells a press apart by the change's
+    JSON without its label. */
 export function grantRemoval(
   kind: 'team' | 'user',
   projectId: string,
   id: string,
   orgId: string,
   topLevel: boolean,
+  label?: string,
 ): Extract<AccessRemoval, { kind: 'userGrant' | 'teamGrant' }> {
+  const named = label === undefined ? {} : { label }
   return kind === 'team'
-    ? { kind: 'teamGrant', projectId, teamId: id, orgId, topLevel }
-    : { kind: 'userGrant', projectId, userId: id, orgId, topLevel }
+    ? { kind: 'teamGrant', projectId, teamId: id, orgId, topLevel, ...named }
+    : { kind: 'userGrant', projectId, userId: id, orgId, topLevel, ...named }
+}
+
+/** The removal of member `userId` from team `teamId`, or with no member the
+    team's deletion, of organization `orgId` as the page showed it, named
+    `label`, the member's or the team's name as the page showed it, with
+    its keys always in the same order (grantRemoval). The removal goes to
+    `orgId` whether or not the store holds the team. */
+export function teamRemoval(
+  teamId: string,
+  userId: string | null,
+  orgId: string,
+  label: string,
+): Extract<AccessRemoval, { kind: 'teamMember' | 'deleteTeam' }> {
+  return userId === null
+    ? { kind: 'deleteTeam', teamId, orgId, label }
+    : { kind: 'teamMember', teamId, userId, orgId, label }
 }
 
 /** The server's preview of a removal (accessRemovals.preview,
@@ -9361,15 +9529,31 @@ function grantsOn(projectId: string): Record<string, GrantLevel> {
    page showed for a grant that names it (AccessRemoval orgId), else the
    workspace's. */
 const removalOrg = (change: AccessRemoval) =>
-  'projectId' in change
-    ? (change.orgId ?? rows.projects.get(change.projectId)?.org_id)
-    : rows.teams.get(change.teamId)?.org_id
+  change.orgId ??
+  ('projectId' in change
+    ? rows.projects.get(change.projectId)?.org_id
+    : rows.teams.get(change.teamId)?.org_id)
 
 /* The removals whose write is on its way, by removalKey, for
    P.removingAccess. */
 const removing = new Set<string>()
 
-/* `change` as one key whatever organization it names, for `removing`. */
+/* The name of the team `change` is about as the page showed it, else the
+   store's team, else undefined (teamNoun then says "team"). */
+const removalTeamName = (change: AccessRemoval): string | undefined =>
+  'teamId' in change
+    ? change.kind === 'teamGrant' || change.kind === 'deleteTeam'
+      ? (change.label ?? rows.teams.get(change.teamId)?.name)
+      : rows.teams.get(change.teamId)?.name
+    : undefined
+
+/* The name of the person `change` is about as the page showed it, else as
+   the store knows them (P.person), else `fallback`. */
+const removalPersonName = (change: AccessRemoval, fallback: string): string =>
+  'userId' in change ? (change.label ?? knownName(change.userId) ?? fallback) : ''
+
+/* `change` as one key whatever organization and name it carries, for
+   `removing`, so a rename during a check keeps the press. */
 const removalKey = (change: AccessRemoval): string =>
   JSON.stringify([
     change.kind,
@@ -9493,13 +9677,19 @@ function sendRemoval(
     } else toastWriteError(error)
   }
   if (change.kind === 'deleteTeam') {
-    const team = rows.teams.get(change.teamId)
-    if (!team) return Promise.resolve(false)
+    // the name the page showed is the delete's expected value, else the
+    // store's team's; with neither nothing is sent
+    const name = change.label ?? rows.teams.get(change.teamId)?.name
+    if (name === undefined) return Promise.resolve(false)
     return send(
       api.teams.deleteDeep,
       { org_id: orgId, id: change.teamId, on_held_tasks: held },
       view,
-      { onError, over: overOf('teams', team, ['name']), notice: { deletes: true } },
+      {
+        onError,
+        over: overOf('teams', { id: change.teamId }, ['name'], { name }),
+        notice: { deletes: true },
+      },
     )
   }
   return change.kind === 'teamMember'
@@ -9767,7 +9957,7 @@ function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
     const unseen = holder ? PLANNER.unseenAbove(it, holder) : null
     const project = unseen && PLANNER.project(unseen.project)
     if (holder && project) {
-      const who = PLANNER.user(holder)?.name || 'This person'
+      const who = knownName(holder) || 'This person'
       toast(
         `${who} has no access to ${PLANNER.projectLabel(project)}, where a task above ${it.key} is. Give them access or choose someone else.`,
         'error',
@@ -10456,7 +10646,7 @@ function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions)
     const unseen = holder ? PLANNER.unseenAbove(it, holder) : null
     const project = unseen && PLANNER.project(unseen.project)
     if (holder && project) {
-      const who = PLANNER.user(holder)?.name || 'This person'
+      const who = knownName(holder) || 'This person'
       toast(
         `${who} has no access to ${PLANNER.projectLabel(project)}, where a task above ${it.key} is. Give them access or choose someone else.`,
         'error',
@@ -11453,6 +11643,20 @@ export type FieldSave = {
     project for: its organization. */
 export type ProjectShown = { orgId: string }
 
+/** A team as a page that read it from the server showed it (teams.get), for
+    a write the workspace may not hold the team for: its organization and
+    the name the page showed, the write's `expected`. */
+export type TeamShown = { orgId: string; name: string }
+
+/** A member as a team's page showed them (teams.members): the team's
+    organization and whether the page showed them leading the team. */
+export type MemberShown = { orgId: string; isLeader: boolean }
+
+/** A label as Settings › Labels showed it (labels.settingsPage, or the
+    store's catalogue while it holds the label): its organization, name and
+    color, which a write sends as its `expected`. */
+export type LabelShown = { orgId: string; name: string; color: string }
+
 /** A grant as a page that read it from the server showed it: the
     project's organization, the level the grant held there (null for none)
     and, for a person's, the project's own lead (projects.lead_id, null for
@@ -11509,6 +11713,12 @@ export const PLANNER = {
       keptBytes: avatarSources.keptBytes(),
       downloading: avatarSources.downloading(),
       mostDownloading: avatarSources.mostDownloading(),
+      named: namedPictures.length,
+    },
+    people: {
+      cached: profileCache.size(),
+      named: profileCache.named().length,
+      reads: profileCache.reads().map((read) => read.ids.length),
     },
     images: inlineImages.stats(),
   }),
@@ -11804,6 +12014,38 @@ export const PLANNER = {
       ? `${PLANNER.projectLabel(owner)}, ${PLANNER.projectLabel(project)}`
       : PLANNER.projectLabel(project),
   user: (id: string | null | undefined): UserVM | undefined => findUser(PLANNER.users, id),
+  /** Person `id` as every place that shows another person names and paints
+      them (store/viewModels.ts PersonView): from the workspace's people part,
+      else from the profile cache (store/profileCache.ts) as `ok` with their
+      face or a picker's name, `loading` until a view's read answers,
+      `failed` after a failed read, or `gone` only when the server's current
+      answer leaves them out of organization `org`. Null for no id. A person
+      no open view names stays `loading`, so each host names the people it
+      shows (components/usePeople.ts). It marks nothing and decides no
+      right; the rights helpers read P.user. */
+  person: (id: string | null | undefined, org?: string): PersonView | null => {
+    if (!id) return null
+    const view = personViews.get(id)
+    if (view && (org === undefined || view.org === org)) return view
+    const known = profileCache.look(id)
+    const state = known.state === 'face' || known.state === 'name' ? 'loading' : known.state
+    const key = `${state}\n${id}`
+    let shown = personStates.get(key)
+    if (!shown) {
+      shown = { state, id }
+      personStates.set(key, shown)
+      if (personStates.size > 2_000) personStates.delete(personStates.keys().next().value ?? '')
+    }
+    return shown
+  },
+  /** Names `people` under view `owner`, in its rows' order, replacing what
+      it named before; an empty list releases them. The profile cache reads
+      the ones the workspace does not hold, and the store asks for the
+      pictures of the named people only (components/usePeople.ts). */
+  namePeople: (owner: string, people: readonly NamedPerson[]) => profileCache.name(owner, people),
+  /** Keeps a picker's person rows of organization `org`, its answers and
+      picks, as names the views show at once until a face arrives. */
+  takePeople: (org: string, people: readonly PersonRow[]) => profileCache.take(org, people),
   teamById: (id: string | null | undefined): TeamVM | undefined => findTeam(PLANNER.teams, id),
   metaOf: (pid: string | null | undefined): ProjectVM | null => {
     const p = PLANNER.project(pid)
@@ -12380,17 +12622,17 @@ export const PLANNER = {
   /** What a press or the removal window says when the access `change`
       takes away is already gone, as when someone else removed it first. */
   removalGoneText: (change: AccessRemoval): string => {
-    const team = 'teamId' in change ? PLANNER.teams.find((t) => t.id === change.teamId) : null
-    const person = 'userId' in change ? PLANNER.user(change.userId)?.name || 'Someone' : ''
+    const team = removalTeamName(change)
+    const person = removalPersonName(change, 'Someone')
     switch (change.kind) {
       case 'userGrant':
         return `${person} no longer has this access.`
       case 'teamGrant':
-        return `The ${teamNoun(team?.name)} no longer has this access.`
+        return `The ${teamNoun(team)} no longer has this access.`
       case 'teamMember':
-        return `${person} has already left the ${teamNoun(team?.name)}.`
+        return `${person} has already left the ${teamNoun(team)}.`
       case 'deleteTeam':
-        return `The ${teamNoun(team?.name)} was already deleted.`
+        return `The ${teamNoun(team)} was already deleted.`
     }
   },
 
@@ -12554,9 +12796,9 @@ export const PLANNER = {
     shown?: RemovalAnswer,
   ): Promise<boolean> => {
     if (refusePausedEdit()) return false
-    const team = 'teamId' in change ? PLANNER.teams.find((t) => t.id === change.teamId) : null
-    const named = teamNoun(team?.name)
-    const person = 'userId' in change ? PLANNER.user(change.userId)?.name || 'This person' : ''
+    const teamName = removalTeamName(change)
+    const named = teamNoun(teamName)
+    const person = removalPersonName(change, 'This person')
     // who keeps their access when a write is refused
     const stays =
       change.kind === 'userGrant'
@@ -12566,8 +12808,16 @@ export const PLANNER = {
           : change.kind === 'teamMember'
             ? `${person} stays in the ${named}`
             : `The ${named} stays`
-    // the server refuses to delete the last team: say so before anything is sent
-    if (change.kind === 'deleteTeam' && team && !PLANNER.canDeleteTeam(change.teamId)) {
+    // the server refuses to delete the last team: say so before anything is
+    // sent, for a change from the store's team; a page that showed its
+    // organization turns Delete off from the server's count, and the
+    // preview refuses the last team over the whole organization
+    if (
+      change.kind === 'deleteTeam' &&
+      change.orgId === undefined &&
+      rows.teams.has(change.teamId) &&
+      !PLANNER.canDeleteTeam(change.teamId)
+    ) {
       toast(
         `The ${named} can't be deleted, because an organization needs at least one team. Create another team first.`,
         'error',
@@ -12585,13 +12835,14 @@ export const PLANNER = {
             ? { reassign_to: choice.to }
             : ('leave' as const)
     const removed = await removeAtOnce(change, held, shown, stays)
-    if (removed && change.kind === 'deleteTeam' && team)
-      toast(`Team “${team.name}” deleted`, 'success')
+    if (removed && change.kind === 'deleteTeam' && teamName)
+      toast(`Team “${teamName}” deleted`, 'success')
     return removed
   },
   /* One sentence naming who blocks a change and how to clear it. */
   blockerText: (b: AccessBlocker): string => {
-    const person = PLANNER.user(b.uid)
+    const known = PLANNER.person(b.uid)
+    const person = known?.state === 'ok' ? known : null
     const who = person?.name || 'Someone'
     const holds = b.role === 'reviewer' ? 'is reviewing' : 'is assigned to'
     const lacks = b.edit ? "can't edit" : 'has no access to'
@@ -12601,10 +12852,6 @@ export const PLANNER = {
       return `${who} is switched off and ${holds} ${b.task.key}. ${fix.charAt(0).toUpperCase()}${fix.slice(1)} ${b.task.key} first.`
     return `${who} ${holds} ${b.task.key} but ${lacks} ${PLANNER.projectLabel(b.project)}. Give them ${b.edit ? 'edit ' : ''}access or ${fix} ${b.task.key} first.`
   },
-  /* my own organization's USERS — the roster, team membership, the settings
-     page. Guests hold a seat in the org's `profiles` but are not part of it:
-     they occupy no seat and belong to no team. */
-  homeUsers: () => PLANNER.users.filter((u) => u.org === PLANNER.homeOrg && u.orgRole !== 'guest'),
   /* URL support (0081). An org-prefixed link names the organization by slug;
      these two turn that segment into the handle/project the app threads. */
   orgBySlug: (slug: string) =>
@@ -12767,10 +13014,13 @@ export const PLANNER = {
      assignee name, label names). Each word may land on a different field
      ("to do cable" = status To Do + "cable" in the title). The text comes
      from taskSearchText, which REST and MCP task search build too, and the
-     Archived tasks page searches the archive on the server by it. */
+     Archived tasks page searches the archive on the server by it. A task
+     whose assignee's name has not loaded (P.person) may match by that name,
+     so the filter keeps it: it never drops what it cannot tell. */
   matchesSearch: (x: IssueVM | string, query: string): boolean => {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
     if (!it) return false
+    const assignee = PLANNER.person(it.assignee, it.org)
     const hay = taskSearchText({
       key: it.key,
       title: it.title,
@@ -12778,10 +13028,10 @@ export const PLANNER = {
       status: it.status,
       group: PLANNER.isGroup(it),
       priority: it.priority,
-      assigneeName: PLANNER.users.find((u) => u.id === it.assignee)?.name,
+      assigneeName: assignee?.state === 'ok' ? assignee.name : undefined,
       labelNames: it.labels.map((lid) => PLANNER.labelById[lid]?.name),
     })
-    return matchesAllWords(hay, query)
+    return matchesAllWords(hay, query) || nameUnknown(assignee)
   },
   /* The toolbar filter row as ONE predicate for every view that renders it.
      Board and Roadmap each kept a private copy before #24 and they drifted
@@ -13592,8 +13842,9 @@ export const PLANNER = {
       does not send, from the window's painted answer while a window shows
       it from its creating answer, else as the create sent them. Null for
       any other task, and where a change of its description or labels
-      went out behind the create that no window shows, or a label has no
-      name the store knows, so the views count the card as unsure. The
+      went out behind the create that no window shows, or a label or the
+      assignee has no name the store knows, so the views count the card as
+      unsure. The
       views check such a card against the whole text filter (views/board
       useBoardView.ts), as the server will once it holds the task, and a
       refused write's paint going takes its text back with it. */
@@ -13613,6 +13864,9 @@ export const PLANNER = {
       if (name === undefined) return null
       labelNames.push(name)
     }
+    // an assignee whose name has not loaded leaves the card unsure too
+    const assignee = PLANNER.person(row.assignee_id)
+    if (nameUnknown(assignee)) return null
     return taskSearchText({
       key: `${ISSUE_PREFIX}-${row.num}`,
       title: row.title,
@@ -13620,7 +13874,7 @@ export const PLANNER = {
       status: row.status,
       group: pending.child !== null,
       priority: row.priority,
-      assigneeName: row.assignee_id ? PLANNER.user(row.assignee_id)?.name : undefined,
+      assigneeName: assignee?.state === 'ok' ? assignee.name : undefined,
       labelNames,
     })
   },
@@ -14038,7 +14292,7 @@ export const PLANNER = {
       const unseen = it && holder ? PLANNER.unseenAbove(it, holder) : null
       const project = unseen && PLANNER.project(unseen.project)
       if (it && holder && project) {
-        const who = PLANNER.user(holder)?.name || 'This person'
+        const who = knownName(holder) || 'This person'
         toast(
           `${who} has no access to ${PLANNER.projectLabel(project)}, where a task above ${it.key} is. Give them access or choose someone else.`,
           'error',
@@ -17602,14 +17856,19 @@ export const PLANNER = {
     return send(api.teams.create, { org_id: org.id, id: uuid, name }, view)
   },
 
-  /** Paints the change at once and resolves whether the server saved it.
-      Resolves false without sending when it refused the change first
-      (toasted) or the team is missing here, and false after a refusal,
-      which is toasted and taken back. `save` is a settings field's draft
-      (FieldSave). */
-  updateTeam: (id: string, patch: TeamPatch, save: FieldSave = {}): Promise<boolean> => {
-    const row = rows.teams.get(id)
-    if (!row || refusePausedEdit()) return Promise.resolve(false)
+  /** Sends `patch` to team `id` as the page showed it (`shown`, TeamShown):
+      to its organization, with the name the page showed as `expected`
+      under the draft's `save.seen`, whether or not the store holds the
+      team, and paints only where it does. Resolves whether the server saved
+      it, false without sending when it refused the change first (toasted),
+      and false after a refusal, which is toasted and taken back. */
+  updateTeam: (
+    id: string,
+    patch: TeamPatch,
+    save: FieldSave,
+    shown: TeamShown,
+  ): Promise<boolean> => {
+    if (refusePausedEdit()) return Promise.resolve(false)
     if ('name' in patch && refuseOver(LIMITS.teamName, patch.name ?? ''))
       return Promise.resolve(false)
     const wire: FunctionArgs<typeof api.teams.update>['patch'] = {}
@@ -17622,22 +17881,33 @@ export const PLANNER = {
         if (live) Object.assign(live, wire)
       },
     }
-    return send(api.teams.update, { org_id: row.org_id, id, patch: wire }, view, {
-      over: overOf('teams', row, Object.keys(wire), save.seen),
-      ...fieldSendOptions(save),
-    })
+    // the page shows no default of a team's delay setting, so only a name
+    // goes out with an expected value
+    const checked = Object.keys(wire).filter((key) => key === 'name')
+    return send(
+      api.teams.update,
+      { org_id: shown.orgId, id, patch: wire },
+      rows.teams.has(id) ? view : {},
+      {
+        ...(checked.length
+          ? { over: overOf('teams', { id }, checked, { name: shown.name, ...save.seen }) }
+          : {}),
+        ...fieldSendOptions(save),
+      },
+    )
   },
 
   /* --- team membership (managed in Team settings) ------------------------- */
   /** Paints the membership at once and resolves whether the server added
-      it. Resolves false without sending for a team the store does not hold,
-      a membership it holds already or a paused change (toasted), and false
-      after a refusal, which is toasted and taken back. A team's page keeps
-      the added member in view until its list holds them, and asks the list
-      whether it passed their place only once this resolved. */
-  addTeamMember: (teamId: string, uid: string, _isLeader = false): Promise<boolean> => {
-    const team = rows.teams.get(teamId)
-    if (!team || rows.teamMembers.some((m) => m.team_id === teamId && m.profile_id === uid))
+      it. Resolves false without sending for a membership the store holds
+      already or a paused change (toasted), and false after a refusal,
+      which is toasted and taken back. It goes to the
+      organization the page showed (`shown`), whether or not the store holds
+      the team. A team's page keeps the added member in view until its list
+      holds them, and asks the list whether it passed their place only once
+      this resolved. */
+  addTeamMember: (teamId: string, uid: string, shown: { orgId: string }): Promise<boolean> => {
+    if (rows.teamMembers.some((m) => m.team_id === teamId && m.profile_id === uid))
       return Promise.resolve(false)
     if (refusePausedEdit()) return Promise.resolve(false)
     // the server always inserts a plain member; leadership is its own verb
@@ -17650,15 +17920,18 @@ export const PLANNER = {
     }
     return send(
       api.teams.addMember,
-      { org_id: team.org_id, team_id: teamId, profile_id: uid },
+      { org_id: shown.orgId, team_id: teamId, profile_id: uid },
       view,
     )
   },
 
-  setTeamLeader: (teamId: string, uid: string, isLeader: boolean) => {
-    const team = rows.teams.get(teamId)
-    const row = rows.teamMembers.find((m) => m.team_id === teamId && m.profile_id === uid)
-    if (!team || !row || row.is_leader === isLeader || refusePausedEdit()) return
+  /** Makes member `uid` of team `teamId` a leader or not, as the page
+      showed them (`shown`, MemberShown): nothing when the page already
+      showed them so, else to the page's organization, painting only where
+      the store holds the membership. teams.setLeader takes no expected
+      value. */
+  setTeamLeader: (teamId: string, uid: string, isLeader: boolean, shown: MemberShown) => {
+    if (shown.isLeader === isLeader || refusePausedEdit()) return
     const view: View = {
       workspace: () => {
         const live = rows.teamMembers.find((m) => m.team_id === teamId && m.profile_id === uid)
@@ -17667,7 +17940,7 @@ export const PLANNER = {
     }
     void send(
       api.teams.setLeader,
-      { org_id: team.org_id, team_id: teamId, profile_id: uid, is_leader: isLeader },
+      { org_id: shown.orgId, team_id: teamId, profile_id: uid, is_leader: isLeader },
       view,
     )
   },
@@ -17770,13 +18043,22 @@ export const PLANNER = {
       rule refused the whole patch (with a toast), so an inline editor can
       put the stored value back. `save` is a settings field's draft
       (FieldSave), for each write the patch makes. */
-  updateUser: (id: string, patch: UserPatch, save: FieldSave = {}): boolean => {
-    const row = rows.profiles.get(id)
+  /** Sends `patch` to person `id` as the page showed them (`shown`,
+      PersonShown): the client's refusals come from what the page showed,
+      a field equal to what it showed goes unsent, and the rest go to its
+      organization with those values as their `expected`, the draft's
+      `save.seen` over them. It paints only where the workspace holds the
+      person. Answers whether anything was sent, or whether nothing needed
+      sending. */
+  updateUser: (id: string, patch: UserPatch, save: FieldSave, shown: PersonShown): boolean => {
     // deactivation alone only takes access away, so it goes on while paused,
     // unless every seat is gone
     const deactivation = Object.keys(patch).length === 1 && patch.active === false
     const paused = deactivation ? refusePausedWrite(api.profiles.deactivate) : refusePausedEdit()
-    if (!row || paused) return false
+    if (paused) return false
+    // the page showed no value to send as expected for these
+    if ('email' in patch && shown.email === undefined) return false
+    if ('canCreateProjects' in patch && shown.canCreateProjects === undefined) return false
     /* The client-predicted refusals stay audible first (the server states
        the same rules); a refusal here aborts the whole patch, matching the
        server's all-or-nothing mutation. */
@@ -17790,16 +18072,20 @@ export const PLANNER = {
     }
     if ('email' in patch) {
       const next = normalizeEmail(patch.email)
+      // the organization-wide address check reads the profiles the store
+      // holds, none of them the target's row; t3/limits-roster-parts
+      // leaves it to the server's refusal
       const taken =
         next &&
         [...rows.profiles.values()].some(
-          (p) => p.id !== id && p.org_id === row.org_id && p.email === next,
+          (p) => p.id !== id && p.org_id === shown.orgId && p.email === next,
         )
-      if (row.kind === 'agent') {
+      if (shown.isAgent) {
         toast('An agent has no email address. Its login is a key.')
         return false
       }
-      if (row.auth_user_id) {
+      // a person who is not an invitation any more has signed in
+      if (!shown.pending) {
         toast('This email cannot be changed after the user has signed in.')
         return false
       }
@@ -17814,16 +18100,25 @@ export const PLANNER = {
     }
     if (
       'plannableHours' in patch &&
-      row.kind !== 'agent' &&
+      !shown.isAgent &&
       refuseOutside(LIMITS.plannableHours, Number(patch.plannableHours))
     )
       return false
+    // the row as the page showed it, by the row's field names
+    const shownRow: Record<string, unknown> = {
+      name: shown.name,
+      org_role: shown.orgRole,
+      active: shown.active,
+      email: shown.email ?? null,
+      can_create_projects: shown.canCreateProjects ?? null,
+      plannable_hours: shown.plannableHours,
+    }
     // Capacity has its own write path (0094): the column may also be set by
     // a team's LEADER, so it is its own mutation (orgMutation, not admin),
     // with its own layer. An agent has no plannable week (0103), so its
     // hours are skipped; hours outside LIMITS.plannableHours were refused
-    // above, never clamped.
-    if ('plannableHours' in patch && row.kind !== 'agent') {
+    // above, never clamped. Hours equal to what the page showed go unsent.
+    if ('plannableHours' in patch && !shown.isAgent) {
       const h = Number(patch.plannableHours)
       const hours: View = {
         workspace: () => {
@@ -17831,15 +18126,17 @@ export const PLANNER = {
           if (live) live.plannable_hours = h
         },
       }
-      void send(
-        api.profiles.setPlannableHours,
-        { org_id: row.org_id, profile_id: id, hours: h },
-        hours,
-        {
-          over: overOf('profiles', row, ['plannable_hours'], save.seen),
-          ...fieldSendOptions(save),
-        },
-      )
+      if (h !== (shown.plannableHours ?? null))
+        void send(
+          api.profiles.setPlannableHours,
+          { org_id: shown.orgId, profile_id: id, hours: h },
+          hours,
+          {
+            over: overOf('profiles', { id }, ['plannable_hours'], { ...shownRow, ...save.seen }),
+            ...fieldSendOptions(save),
+          },
+        )
+      else save.onSettled?.()
     }
     const db: Partial<Row<'profiles'>> = {}
     const wire: FunctionArgs<typeof api.profiles.update>['patch'] = {}
@@ -17859,7 +18156,7 @@ export const PLANNER = {
        every-seat fan-out is the other door, and they are different rules. */
     if ('name' in patch) {
       const next = cleanName(String(patch.name ?? ''))
-      if (next !== row.name) {
+      if (next !== shown.name) {
         db.name = next
         db.initials = nameInitials(next)
         wire.name = next
@@ -17904,21 +18201,23 @@ export const PLANNER = {
     // Deactivation alone has its own door, which an admin can still use while
     // billing has paused editing. Every other change, reactivation included,
     // goes through update.
-    // a field sent with the value on screen changes nothing the person
-    // chose, such as the role select's active: true, so it goes unsent and
-    // unchecked, and cannot undo a change someone else made to it
+    // a field sent with the value the page showed changes nothing the
+    // person chose, such as the role select's active: true, so it goes
+    // unsent and unchecked, and cannot undo a change someone else made to it
     for (const key of ['org_role', 'active', 'email', 'can_create_projects'] as const)
-      if (key in wire && (wire[key] ?? null) === (row[key] ?? null)) delete wire[key]
+      if (key in wire && (wire[key] ?? null) === (shownRow[key] ?? null)) delete wire[key]
     const deactivateOnly = wire.active === false && Object.keys(wire).length === 1
-    if (deactivateOnly) void send(api.profiles.deactivate, { org_id: row.org_id, id }, view)
+    if (deactivateOnly) void send(api.profiles.deactivate, { org_id: shown.orgId, id }, view)
     else if (Object.keys(wire).length) {
       // teams is a list the server diffs, not a field the check compares
       const checked = Object.keys(wire).filter((key) => key !== 'teams')
-      void send(api.profiles.update, { org_id: row.org_id, id, patch: wire }, view, {
-        ...(checked.length ? { over: overOf('profiles', row, checked, save.seen) } : {}),
+      void send(api.profiles.update, { org_id: shown.orgId, id, patch: wire }, view, {
+        ...(checked.length
+          ? { over: overOf('profiles', { id }, checked, { ...shownRow, ...save.seen }) }
+          : {}),
         ...fieldSendOptions(save),
       })
-    }
+    } else if (!('plannableHours' in patch)) save.onSettled?.()
     return true
   },
 
@@ -17933,14 +18232,14 @@ export const PLANNER = {
      AWAITED, returning an error sentence or null. An accepted change paints
      until a delivery holds it. */
 
-  /** True when this session may change that person's picture. Mirrors the
-      server rule so the UI can hide a control that would be refused. */
-  canSetAvatar: (profileId: string) => {
-    const row = rows.profiles.get(profileId)
-    if (!row) return false
-    const me = rows.profiles.get(CURRENT_USER)
+  /** True when this session may change the picture of person `profileId`
+      of organization `orgId`: their own, or as an admin of that
+      organization, whether or not the store holds them. Mirrors the server
+      rule so the UI can hide a control that would be refused. */
+  canSetAvatar: (profileId: string, orgId: string) => {
     if (myProfileSet.has(profileId)) return true
-    return !!me && me.org_id === row.org_id && me.org_role === 'admin'
+    const me = rows.profiles.get(profileIn(orgId))
+    return !!me && me.org_id === orgId && me.org_role === 'admin'
   },
 
   /** Upload a picture and hang it on the profile: files.avatarUploadUrl →
@@ -17949,11 +18248,9 @@ export const PLANNER = {
       bucket's rules, now enforced in files.setAvatar) so a refusal is caught
       before any bytes move. bc022c2's bytes-first/rows-first ceremony
       collapses server-side: row-swap and old-byte delete commit atomically. */
-  setAvatar: withUpdateBlock(async (profileId: string, file: File) => {
-    const row = rows.profiles.get(profileId)
-    if (!row) return 'That person is no longer in the organization'
+  setAvatar: withUpdateBlock(async (profileId: string, file: File, shownAvatar: string | null) => {
     // the picture on screen when the person picked the file
-    const expected = { avatar_storage_id: row.avatar_storage_id ?? null }
+    const expected = { avatar_storage_id: shownAvatar as Id<'_storage'> | null }
     const type = (file.type || '').toLowerCase().split(';')[0].trim()
     if (!(AVATAR_TYPES as readonly string[]).includes(type)) {
       return 'A picture has to be a PNG, JPEG, WebP or GIF'
@@ -17999,13 +18296,13 @@ export const PLANNER = {
     return null
   }),
 
-  /** Drop the uploaded picture. The person falls back to their initials, or to
-      their sample portrait in the demo. */
-  clearAvatar: async (profileId: string) => {
-    const row = rows.profiles.get(profileId)
-    if (!row?.avatar_storage_id) return null
+  /** Drop the uploaded picture `shownAvatar`, the one the page showed. The
+      person falls back to their initials, or to their sample portrait in the
+      demo. */
+  clearAvatar: async (profileId: string, shownAvatar: string | null) => {
+    if (!shownAvatar) return null
     try {
-      const expected = { avatar_storage_id: row.avatar_storage_id }
+      const expected = { avatar_storage_id: shownAvatar as Id<'_storage'> }
       await sendAwaited(api.files.clearAvatar, { profile_id: profileId, expected }, 'none', {
         keep: () => ({
           workspace: () => {
@@ -18029,17 +18326,16 @@ export const PLANNER = {
      copy names the id until they do. Archived tasks, comments, messages and
      the removed profile's subscriptions are cleared later in the background,
      and this client holds only its own subscriptions. The server also owns
-     the avatar bytes, so there is no client-side reap. Answers whether the
-     removal was sent. */
-  removeUser: (id: string): boolean => {
-    if (id === CURRENT_USER) return false
-    const target = rows.profiles.get(id)
-    if (!target) return false
-    const admins = [...rows.profiles.values()].filter((u) => u.org_role === 'admin')
-    if (target.org_role === 'admin' && admins.length <= 1) return false
+     the avatar bytes, so there is no client-side reap. `shown` is the
+     person's organization as the page showed it, which the removal goes to
+     whether or not the store holds the person; the store paints only where
+     it does. The server refuses the last admin over the whole organization
+     (assertNotLastAdmin). Resolves whether the server accepted it. */
+  removeUser: (id: string, shown: { orgId: string }): Promise<boolean> => {
+    if (id === CURRENT_USER) return Promise.resolve(false)
     // removal only takes access away, so it goes on while edits are paused,
     // unless every seat is gone
-    if (refusePausedWrite(api.profiles.remove)) return false
+    if (refusePausedWrite(api.profiles.remove)) return Promise.resolve(false)
     const at = new Date().toISOString()
     const view: View = {
       workspace: () => {
@@ -18063,8 +18359,7 @@ export const PLANNER = {
         rows.profiles.delete(id)
       },
     }
-    void send(api.profiles.remove, { org_id: target.org_id, id }, view)
-    return true
+    return send(api.profiles.remove, { org_id: shown.orgId, id }, rows.profiles.has(id) ? view : {})
   },
 
   /* Roles are viewer / user / lead; exactly one lead per project (the
@@ -18277,30 +18572,27 @@ export const PLANNER = {
   },
 
   /* --- labels: one shared, curated list per organization (0078) ------------ */
-  /** Paints a new label at once. Returns its id and whether the server
-      created it, or the existing label of that name with nothing sent. Null
-      when it refused the change first (toasted) or there is nothing to
-      create. A name over LIMITS.labelName is refused with its sentence
-      before anything else, so no label is made or matched from a cut name.
-      A refusal after sending is toasted and taken back. */
+  /** Paints a new label of the home organization at once. Returns its id,
+      its color and whether the server created it. Null when it refused the
+      change first (toasted) or there is nothing to create. A name over
+      LIMITS.labelName is refused with its sentence before anything else.
+      It reads no catalogue: the label picker and Settings › Labels call it
+      only once the server's `exact` said no label of that name exists, or
+      after that read failed, and the server refuses a name another label
+      holds in any case, which is toasted and taken back (a toggle that
+      follows it is refused with it, toggleIssueLabel `created`). The color
+      comes from the new id (labelColorFor) unless `rec.color` gives one. */
   addLabel: (rec: {
     name?: string
     color?: string
-  }): { id: string; saved: Promise<boolean> } | null => {
+  }): { id: string; color: string; saved: Promise<boolean> } | null => {
     const name = (rec.name || '').trim()
     const org = homeRow()
     if (!name || !org || refuseOver(LIMITS.labelName, name)) return null
-    // the vocabulary is per ORGANIZATION and the cache is blended (0081):
-    // a same-named label in a host org must not be returned as "already there"
-    const dup = [...rows.labels.values()].find(
-      (l) => l.org_id === org.id && l.name.toLowerCase() === name.toLowerCase(),
-    )
     // paused first, so a paused create never reads as done
     if (refusePausedEdit()) return null
-    if (dup) return { id: dup.id, saved: Promise.resolve(true) }
-    // the shared palette picks the color unless rec.color overrides it
-    const color = rec.color || LABEL_COLORS[rows.labels.size % LABEL_COLORS.length].color
     const uuid = crypto.randomUUID()
+    const color = rec.color || labelColorFor(uuid)
     const label: Row<'labels'> = {
       id: uuid,
       org_id: org.id,
@@ -18316,40 +18608,34 @@ export const PLANNER = {
     }
     return {
       id: uuid,
+      color,
       saved: send(api.labels.create, { org_id: org.id, id: uuid, name, color }, view),
     }
   },
 
-  /** Renames or recolors a label. Returns false when nothing was written,
-      either refused with a toast or already stored, so an inline editor
-      can keep or put back its text. `save` is a settings field's draft
-      (FieldSave). Its base goes out as the value seen, so the server
-      refuses a rename over someone else's change, and a refusal keeps the
-      draft. Without it the values on screen go out, as for a recolor. */
+  /** Renames or recolors label `id` as the page showed it (`shown`,
+      LabelShown). Returns false when nothing was written, either refused
+      with a toast or already as shown, so an inline editor can keep or put
+      back its text. It goes to the organization the page showed, with the
+      name and color the row showed as `expected`, the draft's `save.seen`
+      over them, whether or not the store holds the label, and paints only
+      where it does. The server refuses a name another label holds, in any
+      case, and a refusal keeps the draft (keepUnsaved). */
   updateLabel: (
     id: string,
     patch: { name?: string; color?: string },
-    save: FieldSave = {},
+    save: FieldSave,
+    shown: LabelShown,
   ): boolean => {
-    const row = rows.labels.get(id)
-    if (!row || refusePausedEdit()) return false
+    if (refusePausedEdit()) return false
     const wire: FunctionArgs<typeof api.labels.update>['patch'] = {}
     if ('name' in patch) {
       const name = (patch.name || '').trim()
       if (!name || refuseOver(LIMITS.labelName, name)) return false
-      // names are unique per organization, as in addLabel and on the server;
-      // a guest's cache also holds the host organization's labels
-      const dup = [...rows.labels.values()].find(
-        (l) =>
-          l.id !== id && l.org_id === row.org_id && l.name.toLowerCase() === name.toLowerCase(),
-      )
-      if (dup) {
-        toast('A label with that name already exists')
-        return false
-      }
-      if (name !== row.name) wire.name = name
+      if (name !== shown.name) wire.name = name
     }
-    if ('color' in patch) wire.color = patch.color
+    if ('color' in patch && patch.color?.toLowerCase() !== shown.color.toLowerCase())
+      wire.color = patch.color
     if (!Object.keys(wire).length) return false
     const view: View = {
       workspace: () => {
@@ -18359,20 +18645,30 @@ export const PLANNER = {
         if (wire.name !== undefined) live.name_lower = wire.name.toLowerCase()
       },
     }
-    void send(api.labels.update, { org_id: row.org_id, id, patch: wire }, view, {
-      over: overOf('labels', row, Object.keys(wire), save.seen),
-      ...fieldSendOptions(save),
-    })
+    void send(
+      api.labels.update,
+      { org_id: shown.orgId, id, patch: wire },
+      rows.labels.has(id) ? view : {},
+      {
+        over: overOf('labels', { id }, Object.keys(wire), {
+          name: shown.name,
+          color: shown.color,
+          ...save.seen,
+        }),
+        ...fieldSendOptions(save),
+      },
+    )
     return true
   },
 
-  /** Removes the label from the screen at once and resolves whether the
-      server deleted it: false without sending when it refused the change
-      first (toasted), and false after a refusal, which is toasted and
-      taken back. */
-  removeLabel: (id: string): Promise<boolean> => {
-    const row = rows.labels.get(id)
-    if (!row || refusePausedEdit()) return Promise.resolve(false)
+  /** Deletes label `id` as the page showed it (`shown`, LabelShown): to its
+      organization, with the name and color the page showed as `expected`,
+      whether or not the store holds the label, which it takes off the
+      screen at once where it does. Resolves whether the server deleted it:
+      false without sending when it refused the change first (toasted), and
+      false after a refusal, which is toasted and taken back. */
+  removeLabel: (id: string, shown: LabelShown): Promise<boolean> => {
+    if (refusePausedEdit()) return Promise.resolve(false)
     // the attach rows go with the label server-side — mirror the sweep
     const view: View = {
       workspace: () => {
@@ -18380,8 +18676,11 @@ export const PLANNER = {
         rows.labels.delete(id)
       },
     }
-    return send(api.labels.remove, { org_id: row.org_id, id }, view, {
-      over: overOf('labels', row, ['name', 'color']),
+    return send(api.labels.remove, { org_id: shown.orgId, id }, rows.labels.has(id) ? view : {}, {
+      over: overOf('labels', { id }, ['name', 'color'], {
+        name: shown.name,
+        color: shown.color,
+      }),
       notice: { deletes: true },
     })
   },
@@ -19414,11 +19713,7 @@ export async function initStore(
   })
   // the rows, with any layer from before a re-init painted over them
   paintRows(true, false)
-  avatarSources.sync(
-    [...first.profiles]
-      .filter((profile) => profile.avatar_storage_id)
-      .map((profile) => `avatar:${profile.id}:${profile.avatar_storage_id}`),
-  )
+  syncPictureKeys()
   if (!stillCurrent()) return null
   /* Avatar restoration is a warm cache and may finish after the first paint.
      Navigation preferences stay awaited: App reads them while constructing

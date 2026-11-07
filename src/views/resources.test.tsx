@@ -276,6 +276,39 @@ describe('Team utilization from the owner loads', { timeout: BOARD_TEST_TIMEOUT 
     expect(hoursOf(OTHER)).toEqual(theirs)
   })
 
+  it('keeps an owner the workspace does not hold, loading and then named, with hours and no percentage while their capacity is unknown', async () => {
+    // the store repaints the faces an answer brings in the next frame
+    vi.stubGlobal('requestAnimationFrame', (run: () => void) => setTimeout(run, 0))
+    const board = await loadBoard(network, twoPeople())
+    // the people part no longer holds Other, and their face is held back
+    board.server.people.unheld = new Set([OTHER])
+    board.server.people.hold = true
+    await board.deliver()
+    await renderRoadmap(board)
+    await act(async () => await new Promise((r) => setTimeout(r, 40)))
+    const row = () => document.querySelector<HTMLElement>(`[data-res-row="${OTHER}"]`)
+    // listed, never dropped, named as loading, with a plain square
+    expect(row()).not.toBeNull()
+    expect(row()?.querySelector('.rs-person-name')?.textContent).toBe('Loading…')
+    expect(row()?.querySelector('[data-avatar-state="loading"]')).not.toBeNull()
+    // capacity unknown: hours with no percentage, no over-capacity tone
+    const week = cells(OTHER).find((c) => c.week === TODAY_WEEK)
+    expect(week?.hours).toBe('4')
+    expect(week?.pct).toBeUndefined()
+    expect(week?.text).toBe('4 h')
+    expect(week?.label).toContain('Capacity unknown')
+    expect(row()?.querySelector('[data-tone="over"], [data-tone="near"]')).toBeNull()
+    expect(row()?.dataset.resCapacityUnknown).toBe('true')
+    // the answer names them and gives their hours, so the percentage shows
+    board.server.people.hold = false
+    await board.answer()
+    await act(async () => await new Promise((r) => setTimeout(r, 40)))
+    expect(row()?.querySelector('.rs-person-name')?.textContent).toBe('Other')
+    const named = cells(OTHER).find((c) => c.week === TODAY_WEEK)
+    expect(named?.pct).toBeDefined()
+    expect(named?.label).not.toContain('Capacity unknown')
+  })
+
   it("shows an agent's hours, not a percentage", async () => {
     const board = await loadBoard(network, twoPeople('agent'))
     await renderRoadmap(board)

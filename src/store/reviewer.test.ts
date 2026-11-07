@@ -257,7 +257,7 @@ describe('the Reviewer rule in the client store', () => {
   })
 
   it('clears a removed person from the tasks they review', () => {
-    P.removeUser(f.other)
+    P.removeUser(f.other, { orgId: P.homeOrg })
     expect(task('C').reviewer).toBeUndefined()
     expect(task('C').owner).toBe(f.me)
   })

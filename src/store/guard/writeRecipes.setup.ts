@@ -6,6 +6,7 @@ import type { RelationCandidate } from '../../../convex/lib/relationPicker'
 import type { ViewRow } from '../../../convex/lib/viewReads'
 import type { Workspace } from '../../../convex/lib/workspaceJoin'
 import type { MilestoneAsk } from '../milestoneRows'
+import { labelShownOf, shownOf } from '../personShown.setup'
 import type { Row } from '../rows'
 
 /* One recipe per write the store sends (layerGuard.test.ts checks that each
@@ -1080,7 +1081,7 @@ export const recipes: Recipe[] = [
     mutator: 'setAvatar',
     what: 'a portrait upload address',
     pause: 'P',
-    act: (P) => P.setAvatar(PAT, file('pat.png', 'image/png')),
+    act: (P) => P.setAvatar(PAT, file('pat.png', 'image/png'), null),
     // the address then refuses the bytes, so the upload ends there
     answers: { 'files:avatarUploadUrl': () => 'https://files.test/refused' },
   },
@@ -1089,7 +1090,7 @@ export const recipes: Recipe[] = [
     mutator: 'cancelDemoReservation',
     what: 'a cancelled demo portrait upload',
     pause: 'P',
-    act: (P) => P.setAvatar(PAT, file('pat.png', 'image/png')),
+    act: (P) => P.setAvatar(PAT, file('pat.png', 'image/png'), null),
     // the POST to the demo's upload address ends without an answer
     answers: {
       'files:avatarUploadUrl': () => 'https://files.test/demo-uploads/lost-2?e=1&m=me&t=t',
@@ -1101,7 +1102,7 @@ export const recipes: Recipe[] = [
     what: 'a new portrait',
     paintsOnAccept: true,
     pause: 'P',
-    act: (P) => P.setAvatar(PAT, file('pat.png', 'image/png')),
+    act: (P) => P.setAvatar(PAT, file('pat.png', 'image/png'), null),
     answers: { 'files:avatarUploadUrl': () => 'https://files.test/avatar' },
     truth: (snap) => {
       profile(snap, PAT).avatar_storage_id = STORED as Row<'profiles'>['avatar_storage_id']
@@ -1116,7 +1117,7 @@ export const recipes: Recipe[] = [
     seed: (snap) => {
       profile(snap, PAT).avatar_storage_id = STORED as Row<'profiles'>['avatar_storage_id']
     },
-    act: (P) => P.clearAvatar(PAT),
+    act: (P) => P.clearAvatar(PAT, P.user(PAT)?.avatarPath ?? null),
     truth: (snap) => {
       profile(snap, PAT).avatar_storage_id = undefined
     },
@@ -1881,7 +1882,13 @@ export const recipes: Recipe[] = [
     mutator: 'updateTeam',
     what: 'a renamed team',
     pause: 'P',
-    act: (P) => P.updateTeam('team-a', { name: 'Field crew' }),
+    act: (P) =>
+      P.updateTeam(
+        'team-a',
+        { name: 'Field crew' },
+        {},
+        { orgId: P.homeOrg, name: P.teamById('team-a')?.name ?? '' },
+      ),
     truth: (snap) => {
       snap.teams[0].name = 'Field crew'
     },
@@ -1891,7 +1898,7 @@ export const recipes: Recipe[] = [
     mutator: 'addTeamMember',
     what: 'a new team member',
     pause: 'P',
-    act: (P) => P.addTeamMember('team-b', PAT),
+    act: (P) => P.addTeamMember('team-b', PAT, { orgId: P.homeOrg }),
     truth: (snap) =>
       snap.teamMembers.push({ team_id: 'team-b', profile_id: PAT, is_leader: false }),
   },
@@ -1900,7 +1907,7 @@ export const recipes: Recipe[] = [
     mutator: 'setTeamLeader',
     what: 'a new team leader',
     pause: 'P',
-    act: (P) => P.setTeamLeader('team-a', PAT, true),
+    act: (P) => P.setTeamLeader('team-a', PAT, true, { orgId: P.homeOrg, isLeader: false }),
     truth: (snap) => {
       snap.teamMembers[1].is_leader = true
     },
@@ -1944,7 +1951,7 @@ export const recipes: Recipe[] = [
     mutator: 'updateUser',
     what: "a person's plannable hours",
     pause: 'P',
-    act: (P) => P.updateUser(PAT, { plannableHours: 30 }),
+    act: (P) => P.updateUser(PAT, { plannableHours: 30 }, {}, shownOf(P, PAT)),
     truth: (snap) => {
       profile(snap, PAT).plannable_hours = 30
     },
@@ -1961,7 +1968,7 @@ export const recipes: Recipe[] = [
     mutator: 'updateUser',
     what: 'a person switched off',
     pause: 'U',
-    act: (P) => P.updateUser(PAT, { active: false }),
+    act: (P) => P.updateUser(PAT, { active: false }, {}, shownOf(P, PAT)),
     truth: (snap) => {
       profile(snap, PAT).active = false
     },
@@ -1971,7 +1978,7 @@ export const recipes: Recipe[] = [
     mutator: 'updateUser',
     what: "a person's name and teams",
     pause: 'P',
-    act: (P) => P.updateUser(PAT, { name: 'Pat Quinn', teams: ['team-b'] }),
+    act: (P) => P.updateUser(PAT, { name: 'Pat Quinn', teams: ['team-b'] }, {}, shownOf(P, PAT)),
     truth: (snap) => {
       Object.assign(profile(snap, PAT), { name: 'Pat Quinn', initials: 'PQ' })
       snap.teamMembers = [
@@ -1985,7 +1992,7 @@ export const recipes: Recipe[] = [
     mutator: 'removeUser',
     what: 'a removed person',
     pause: 'U',
-    act: (P) => P.removeUser(PAT),
+    act: (P) => P.removeUser(PAT, { orgId: P.homeOrg }),
     // the server clears the person from tasks and grants in one transaction
     truth: (snap) => {
       snap.profiles = [snap.profiles[0]]
@@ -2015,7 +2022,7 @@ export const recipes: Recipe[] = [
     mutator: 'updateLabel',
     what: 'a renamed label',
     pause: 'P',
-    act: (P) => P.updateLabel('label-a', { name: 'Defect' }),
+    act: (P) => P.updateLabel('label-a', { name: 'Defect' }, {}, labelShownOf(P, 'label-a')),
     truth: (snap) => Object.assign(snap.labels[0], { name: 'Defect', name_lower: 'defect' }),
   },
   {
@@ -2023,7 +2030,7 @@ export const recipes: Recipe[] = [
     mutator: 'removeLabel',
     what: 'a removed label',
     pause: 'P',
-    act: (P) => P.removeLabel('label-a'),
+    act: (P) => P.removeLabel('label-a', labelShownOf(P, 'label-a')),
     truth: (snap) => {
       snap.labels = []
       snap.issueLabels = []

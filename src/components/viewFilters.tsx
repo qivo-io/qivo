@@ -26,6 +26,14 @@ const groundRadius = (ground: Ground) => (ground === 'well' ? 'rounded-sm' : 'ro
 
 /* The clear action sits over the trigger's trailing padding as a sibling
    button. It shares the trigger's surface without nesting interactive controls. */
+/** The first name of the one chosen assignee, or "1 person" while the
+    store cannot name them (P.person), so a chosen person the workspace does
+    not hold never breaks the filter row. */
+const firstNameOf = (id: string) => {
+  const person = P.person(id)
+  return person?.state === 'ok' ? (person.name.split(' ')[0] ?? person.name) : '1 person'
+}
+
 function ClearX({ kind, label, onClear }: ClearFilter) {
   const fire = (e) => {
     e.stopPropagation()
@@ -191,6 +199,9 @@ function PeopleRows({ filters, setFilters }: { filters: IssueFilters; setFilters
         </span>
         Anyone
       </MenuItem>
+      {/* the people of the workspace's people part, until the roster parts
+          stage decides what the menu lists; its rows name no one, so a
+          portrait shows a picture only when an open view holds it */}
       {P.users.map((u) => {
         const on = filters.assignees.includes(u.id)
         return (
@@ -399,7 +410,7 @@ function ViewFilters({
                     : filters.assignees.length === 0
                       ? 'Assignee'
                       : filters.assignees.length === 1
-                        ? P.user(filters.assignees[0]).name.split(' ')[0]
+                        ? firstNameOf(filters.assignees[0])
                         : `${filters.assignees.length} people`}
                   {!who && <DropdownChevron />}
                 </FilterMenuButton>

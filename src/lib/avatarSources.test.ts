@@ -29,7 +29,12 @@ function persistentFixture(blob: Blob | null = new Blob(['cached face'], { type:
   return { cache, blobs }
 }
 
-function fixture(overrides: { shrink?: (blob: Blob) => Promise<Blob>; changed?: () => void } = {}) {
+function fixture(
+  overrides: { shrink?: (blob: Blob) => Promise<Blob>; changed?: () => void } = {},
+  // whether each sync names the keys it knows, as a page that shows every
+  // known picture does; the cases of the named pictures name their own
+  nameKnown = true,
+) {
   let now = 0
   let serial = 0
   const fetcher = vi
@@ -46,6 +51,14 @@ function fixture(overrides: { shrink?: (blob: Blob) => Promise<Blob>; changed?: 
     revokeUrl,
     ...overrides,
   })
+  // these cases show every known picture on an open page: each sync names
+  // the keys it knows, as the store names the people its views show
+  const sync = cache.sync
+  cache.sync = (keys, without) => {
+    const all = [...keys]
+    sync(all, without)
+    if (nameKnown) cache.named(all)
+  }
   cache.sync([KEY])
   return {
     cache,
@@ -93,6 +106,7 @@ describe('prepared profile pictures', () => {
       decode: vi.fn<(url: string) => Promise<void>>().mockResolvedValue(),
     })
     cache.sync([KEY])
+    cache.named([KEY])
     expect(await cache.prepare(KEY, LEASE)).toBe(true)
     expect(fetcher).toHaveBeenCalledOnce()
     vi.unstubAllGlobals()
@@ -654,5 +668,163 @@ describe('profile picture bounds', () => {
     expect(f.cache.url(KEY)).not.toBeNull()
     f.time(3_600_000 + 10 * 60_000)
     expect(f.cache.url(KEY)).toBeNull()
+  })
+})
+
+describe('pictures only for what the open views name', () => {
+  const BOUNDS = structuredClone(AVATAR_SOURCES)
+  afterEach(() => {
+    Object.assign(AVATAR_SOURCES, structuredClone(BOUNDS))
+  })
+  const KIB = 1024
+  const face = (bytes: number) => new Blob([new Uint8Array(bytes)], { type: 'image/webp' })
+  const keys = (n: number) => Array.from({ length: n }, (_, i) => `avatar:person-${i}:v1`)
+
+  it('downloads a picture only while a view names it', async () => {
+    const f = fixture({}, false)
+    const [a, b] = keys(2) as [string, string]
+    f.cache.sync([a, b])
+    f.cache.named([a])
+    expect(await f.cache.prepare(b, LEASE)).toBe(false)
+    expect(await f.cache.prepare(a, LEASE)).toBe(true)
+    expect(f.fetcher).toHaveBeenCalledOnce()
+    expect(f.cache.url(b)).toBeNull()
+  })
+
+  it('drops a closed page’s waiting and slot-waiting pictures, finishes a running download and keeps loading one another view names', async () => {
+    AVATAR_SOURCES.downloads = 1
+    const f = fixture({}, false)
+    const running = deferred<Response>()
+    f.fetcher.mockImplementationOnce(() => running.promise)
+    f.fetcher.mockImplementation(async () => new Response(face(20 * KIB)))
+    const [a, b, c] = keys(3) as [string, string, string]
+    f.cache.sync([a, b, c])
+    f.cache.named([a, b, c])
+    const first = f.cache.prepare(a, LEASE)
+    const second = f.cache.prepare(b, LEASE)
+    const third = f.cache.prepare(c, LEASE)
+    expect(f.fetcher).toHaveBeenCalledOnce()
+    // the page that showed a and b closes; another view still names c
+    f.cache.named([c])
+    expect(await second).toBe(false)
+    running.resolve(new Response(face(20 * KIB)))
+    expect(await first).toBe(true)
+    expect(await third).toBe(true)
+    // a ran to its end and is kept, b never downloaded, c loaded
+    expect(f.fetcher).toHaveBeenCalledTimes(2)
+    expect(f.cache.url(a)).not.toBeNull()
+    expect(f.cache.url(b)).toBeNull()
+    expect(f.cache.url(c)).not.toBeNull()
+    // b, dropped, is no failure: named again, the store mints it at once
+    f.cache.named([b, c])
+    expect(f.cache.needsRefresh(b)).toBe(true)
+  })
+
+  it('lets a named picture past the budget take the room of the one shown least recently that nothing names', async () => {
+    AVATAR_SOURCES.keptBytes = 4 * 256 * KIB
+    const f = fixture({}, false)
+    f.fetcher.mockImplementation(async () => new Response(face(256 * KIB)))
+    const all = keys(6)
+    const [a, b, c, d, e, g] = all as [string, string, string, string, string, string]
+    f.cache.sync(all)
+    f.cache.named([a, b, c, d])
+    for (const key of [a, b, c, d]) expect(await f.cache.prepare(key, LEASE)).toBe(true)
+    expect(f.cache.keptBytes()).toBe(4 * 256 * KIB)
+    // b is let go first, then a: b is shown least recently
+    f.cache.named([a, c, d])
+    f.cache.named([c, d])
+    f.cache.named([c, d, e])
+    expect(await f.cache.prepare(e, LEASE)).toBe(true)
+    expect(f.cache.url(b)).toBeNull()
+    expect(f.cache.url(a)).not.toBeNull()
+    expect(f.cache.keptBytes()).toBe(4 * 256 * KIB)
+    // with every held picture named, a fifth waits as initials
+    f.cache.named([a, c, d, e, g])
+    expect(await f.cache.prepare(g, LEASE)).toBe(false)
+    expect(f.cache.url(g)).toBeNull()
+    expect([a, c, d, e].every((key) => f.cache.url(key) !== null)).toBe(true)
+    expect(f.fetcher).toHaveBeenCalledTimes(5)
+  })
+
+  it('waits in the named order and starts the first named once room frees', async () => {
+    AVATAR_SOURCES.keptBytes = 2 * 256 * KIB
+    const changed = vi.fn()
+    const f = fixture({ changed }, false)
+    f.fetcher.mockImplementation(async () => new Response(face(256 * KIB)))
+    const [a, b, c, d] = keys(4) as [string, string, string, string]
+    f.cache.sync([a, b, c, d])
+    f.cache.named([a, b, c, d])
+    await f.cache.prepare(a, LEASE)
+    await f.cache.prepare(b, LEASE)
+    expect(await f.cache.prepare(c, LEASE)).toBe(false)
+    expect(await f.cache.prepare(d, LEASE)).toBe(false)
+    // d comes first now, and a goes: d starts, c still waits
+    f.cache.named([d, c, b])
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce())
+    expect(f.cache.url(d)).not.toBeNull()
+    expect(f.cache.url(c)).toBeNull()
+  })
+
+  it('stops showing a held picture no view names past its grace, keeps its bytes, and shows it again on one renewal', async () => {
+    const f = fixture({}, false)
+    f.cache.sync([KEY])
+    f.cache.named([KEY])
+    await f.cache.prepare(KEY, LEASE)
+    const shown = f.cache.url(KEY)
+    expect(shown).not.toBeNull()
+    f.cache.named([])
+    // the lease ends at 600 s and the grace 10 minutes after
+    f.time(1_200_000)
+    expect(f.cache.expire()).toBe(false)
+    expect(f.cache.url(KEY)).toBeNull()
+    expect(f.cache.keptBytes()).toBeGreaterThan(0)
+    expect(f.revokeUrl).not.toHaveBeenCalled()
+    // named again, one renewal shows it with no download
+    f.cache.named([KEY])
+    expect(f.cache.needsRefresh(KEY)).toBe(true)
+    expect(await f.cache.prepare(KEY, { url: 'https://files.test/portrait?r=2', exp: 1800 })).toBe(
+      true,
+    )
+    expect(f.cache.url(KEY)).toBe(shown)
+    expect(f.fetcher).toHaveBeenCalledOnce()
+    // a refusal releases it
+    expect(f.cache.failure(KEY, true)).toBe(true)
+    expect(f.cache.url(KEY)).toBeNull()
+  })
+
+  it('releases a named picture past its grace, as before', async () => {
+    const f = fixture({}, false)
+    f.cache.sync([KEY])
+    f.cache.named([KEY])
+    await f.cache.prepare(KEY, LEASE)
+    f.time(1_200_000)
+    expect(f.cache.expire()).toBe(true)
+    expect(f.cache.keptBytes()).toBe(0)
+  })
+
+  it('restores the persisted picture of a key that becomes known after the boot', async () => {
+    const stored = persistentFixture(face(20 * KIB))
+    const changed = vi.fn()
+    const f = fixture({ changed }, false)
+    f.cache.sync([])
+    f.cache.setPersistent(stored.cache)
+    await f.cache.restore()
+    expect(f.cache.url(KEY)).toBeNull()
+    // a face arrives with the key the device holds
+    f.cache.sync([KEY])
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce())
+    expect(f.cache.url(KEY)).not.toBeNull()
+    expect(f.fetcher).not.toHaveBeenCalled()
+    // shown before its renewal, which a view's naming asks for
+    f.cache.named([KEY])
+    expect(f.cache.needsRefresh(KEY)).toBe(true)
+  })
+
+  it('hands the persistent cache the known keys and the profiles known without a picture', () => {
+    const stored = persistentFixture()
+    const f = fixture({}, false)
+    f.cache.setPersistent(stored.cache)
+    f.cache.sync([KEY], ['someone-without'])
+    expect(stored.cache.sync).toHaveBeenLastCalledWith(new Set([KEY]), ['someone-without'])
   })
 })

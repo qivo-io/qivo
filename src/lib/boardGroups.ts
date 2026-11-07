@@ -27,11 +27,13 @@ export type BoardAssigneeLane<T> = {
  * lane's person is its cards' effective owner (IssueVM.owner: the reviewer
  * while a task waits In Review, else the assignee). Profile IDs distinguish
  * people with the same name and preserve historical owners; only unowned
- * tasks belong to Unassigned, which sorts last. Lane keys stay
+ * tasks belong to Unassigned, which sorts last. `nameOf` answers a lane's
+ * name, or undefined for a person not named yet, whose lane keeps its
+ * place by id after the named ones, never dropped. Lane keys stay
  * `assignee:<id|unassigned>`, the stable handle drives and data-lane read. */
 export function groupBoardAssignees<T extends { owner?: string | null }>(
   cards: readonly T[],
-  nameOf: (id: string) => string,
+  nameOf: (id: string) => string | undefined,
 ): BoardAssigneeLane<T>[] {
   const lanes = new Map<string | null, BoardAssigneeLane<T>>()
   for (const task of cards) {
@@ -46,7 +48,11 @@ export function groupBoardAssignees<T extends { owner?: string | null }>(
   return [...lanes.values()].sort((a, b) => {
     if (a.owner === null) return 1
     if (b.owner === null) return -1
-    return nameOf(a.owner).localeCompare(nameOf(b.owner)) || a.key.localeCompare(b.key)
+    const an = nameOf(a.owner)
+    const bn = nameOf(b.owner)
+    if (an === undefined || bn === undefined)
+      return an !== undefined ? -1 : bn !== undefined ? 1 : a.key.localeCompare(b.key)
+    return an.localeCompare(bn) || a.key.localeCompare(b.key)
   })
 }
 

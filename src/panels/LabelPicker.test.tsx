@@ -481,6 +481,33 @@ describe("the label picker's Create new label", () => {
     )
   })
 
+  it('creates with a color from the new id, and never answers a catalogue label in its place', async () => {
+    // the catalogue holds Bench, which the server's answer does not name
+    // here, as for a catalogue the store holds but a search has not read
+    await load()
+    const input = await open()
+    await search(input, 'Bench')
+    await enter(input)
+    const create = sent.find((s) => s.name === 'labels:create')
+    const { labelColorFor } = await import('../lib/labelColors')
+    expect(create?.args.color).toBe(labelColorFor(String(create?.args.id)))
+    // a second create of another name goes out too: the store answers no
+    // catalogue label in its place, only the server's refusal would
+    await search(input, 'Bench two')
+    await enter(input)
+    expect(sent.filter((s) => s.name === 'labels:create')).toHaveLength(2)
+  })
+
+  it('offers Create new label after a failed read of the typed name, and the server decides', async () => {
+    await load({ labels: many(3) })
+    const input = await open()
+    // the read for the typed name fails
+    network.query.mockImplementationOnce(() => Promise.reject(new Error('the read failed')))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await search(input, 'Bench')
+    expect(createRow()?.textContent).toBe('Create new label:“Bench”')
+  })
+
   it('ignores a second Enter in the emptied field after creating the first label', async () => {
     await load()
     const input = await open()

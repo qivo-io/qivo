@@ -28,6 +28,7 @@ import { LIMITS } from '../../../convex/lib/limits'
 import { LimitedInput } from '../../components/LimitedField'
 import { Avatar, Icon, MenuItem, Popover, Seg } from '../../components/qivo'
 import { PageTitle } from '../../components/settingsPage'
+import { usePeople } from '../../components/usePeople'
 import {
   ACCESS_LABEL,
   type ApiAccessEntry,
@@ -277,6 +278,8 @@ function ApiAccessPage({
   const figures = shown?.figures
   const page = shown?.page
   const rows = page?.state === 'ready' ? page.rows : []
+  // the people of the credentials on this page, named while it shows
+  usePeople(rows.flatMap((row) => (row.removed ? [] : [{ org: P.homeOrg, id: row.profile_id }])))
   const start = shown ? (shown.ask.pages[shown.ask.pages.length - 1] ?? FIRST_PAGE) : FIRST_PAGE
   const largest = rows.reduce((max, row) => Math.max(max, row.calls), 0)
   const range = rangeLabel(start.first, rows.length)
@@ -937,7 +940,7 @@ function CredentialRow({
           className={cn(CELL, PERSON_COL, 'flex items-center gap-2 text-text-1')}
         >
           {row.removed ? (
-            // a person who left has no portrait; Avatar would call them Unassigned
+            // a person who left has no portrait, only the dashed face
             <span
               aria-hidden="true"
               className="grid size-5 shrink-0 place-items-center rounded-[4px] border border-dashed border-border-strong bg-surface-3"

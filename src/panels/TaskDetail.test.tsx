@@ -2053,6 +2053,9 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
   const fieldName = (label: string) =>
     field(label)?.querySelector('[data-owner-name]')?.textContent ?? null
   const byIds = () => subs.filter((s) => s.name === 'people:byIds' && !s.closed)
+  /* The store repaints the faces an answer brings once a frame
+     (store/planner.ts showPortraits). */
+  const repaint = () => act(async () => await new Promise((r) => setTimeout(r, 40)))
   /* Gina is a person of the organization the workspace does not hold. */
   const GINA = {
     id: 'gina',
@@ -2063,6 +2066,9 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
     pending: false,
     color: '#335577',
     initials: 'GG',
+    avatar: null,
+    sample_avatar: null,
+    plannable_hours: 32,
   }
 
   it('opens the shared owner list in a popover, keeping the field’s hooks, and writes a pick', async () => {
@@ -2129,6 +2135,7 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
     expect(field('Assignee')?.getAttribute('aria-label')).toBe('Assignee, Loading…')
     expect(byIds().map((s) => s.args)).toEqual([{ org_id: snap.orgs[0].id, ids: ['gina'] }])
     await act(async () => byIds()[0].deliver({ rows: [GINA] }))
+    await repaint()
     expect(fieldName('Assignee')).toBe('Gina Ghost')
     expect(field('Assignee')?.getAttribute('aria-label')).toBe('Assignee, Gina Ghost')
   })
@@ -2143,6 +2150,7 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
     expect(fieldName('Assignee')).toBe('Loading…')
     vi.spyOn(console, 'error').mockImplementation(() => {})
     await act(async () => byIds()[0].fail(new Error('Server Error')))
+    await repaint()
     expect(fieldName('Assignee')).toBe("Couldn't load this person")
     // the list still opens
     await click(field('Assignee'))
@@ -2158,6 +2166,7 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
     })
     await openSettled(P.handleOf(FAM) ?? '')
     await act(async () => byIds()[0].deliver({ rows: [] }))
+    await repaint()
     expect(fieldName('Assignee')).toBe('Unassigned')
   })
 
@@ -2177,6 +2186,7 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
     const owner = () => document.querySelector('[data-task-assignee-name]')?.textContent
     expect(owner()).toBe('Loading…')
     await act(async () => byIds()[0].deliver({ rows: [GINA] }))
+    await repaint()
     expect(owner()).toBe('Gina Ghost')
   })
 

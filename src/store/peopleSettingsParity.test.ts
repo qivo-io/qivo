@@ -232,7 +232,7 @@ describe("the Users page's stand-in", () => {
     })
   }, 60_000)
 
-  it("answers people by id with their pictures, sample portraits and hours as the server does", async () => {
+  it('answers people by id with their pictures, sample portraits and hours as the server does', async () => {
     const { t, org, nora, ws, people, guest } = await northstar()
     // the planted people carry a picture, a sample portrait, stored hours,
     // an agent's none and a guest's, beside an id nobody holds

@@ -3,7 +3,10 @@
    the label, else from labels.byIds, so a label not loaded shows as
    loading and never as taken off, and only the server's answer hides one
    as deleted. The Labels section (IssueDetail.tsx) shows them as chips and
-   the label picker (LabelPicker.tsx) lists them first. */
+   the label picker (LabelPicker.tsx) lists them first. Its bounded map of
+   names (keepNamed) keeps the labels a picker put on a task and the ones
+   the picker and Settings › Labels created, so a new label's chip names it
+   at once; the store's profile cache holds people, not labels. */
 
 import { api } from '../../convex/_generated/api'
 import { BY_IDS_MAX } from '../../convex/lib/limits'

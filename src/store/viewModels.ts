@@ -6,6 +6,8 @@ import { messageLine } from '../../convex/lib/inbox'
 import { LIMITS } from '../../convex/lib/limits'
 import { reviewerOwns, taskOwnerId } from '../../convex/lib/review'
 import type { SyncStamp } from '../../convex/lib/teamSync'
+import type { PersonFaceRow } from '../../convex/model/peopleSettings'
+import type { PersonRow } from '../../convex/model/projectSettings'
 import {
   DEFAULT_DATE_FORMAT,
   DEFAULT_WEEK_ONE_RULE,
@@ -15,6 +17,7 @@ import {
 } from '../lib/dates'
 import { sampleAvatarUrl } from '../lib/demoAvatars'
 import type { InboxPageRow } from '../lib/inboxPage'
+import { nameInitials } from '../lib/initials'
 import { DEFAULT_PLANNABLE_HOURS } from '../lib/workload'
 import type { Row } from './rows'
 
@@ -74,6 +77,142 @@ export const shapeUser = (
   sync: syncStampOf(u),
 })
 export type UserVM = ReturnType<typeof shapeUser>
+
+/** A person as every place that shows another person names and paints
+    them (store/planner.ts P.person): `ok` with their name, initials, color
+    and picture (null for none, or while it loads), or not named yet
+    (`loading`), after a read that failed (`failed`), or, only from the
+    server's answer that leaves them out, not a person of the organization
+    (`gone`). `nameOnly` marks a person the store knows by name alone,
+    from a picker's answer, painted with their initials on a neutral fill
+    until their face arrives. `plannableHours` is the stored weekly hours,
+    null for none (which plans the organization's default) and for an
+    agent, or undefined while the store knows only the person's name. */
+export type PersonView =
+  | {
+      state: 'ok'
+      id: string
+      org: string
+      name: string
+      initials: string
+      color: string
+      picture: string | null
+      /** the uploaded picture's storage id, its version, or null for none */
+      avatar: string | null
+      /** whether the picture is the demo's sample portrait */
+      sample: boolean
+      kind: Row<'profiles'>['kind']
+      orgRole: Row<'profiles'>['org_role']
+      active: boolean
+      pending: boolean
+      nameOnly: boolean
+      plannableHours: number | null | undefined
+    }
+  | { state: 'loading' | 'failed' | 'gone'; id: string }
+
+/** A person as a Settings page showed them (Settings › Users' row, or a
+    team page's member row), for P.updateUser, which decides its refusals
+    from it, leaves a field unsent that equals what the page showed, sends
+    the rest to `orgId` with these values as their `expected`, and paints
+    only where the workspace holds the person. The page shows the store's
+    profile while the store holds it, so this session's own saves show at
+    once, else the server's answer. `email` and `canCreateProjects` are
+    the Users page's alone; a write of either needs them. */
+export type PersonShown = {
+  orgId: string
+  name: string
+  isAgent: boolean
+  pending: boolean
+  orgRole: Row<'profiles'>['org_role']
+  active: boolean
+  /** null for none, which plans the organization's default, and for an
+      agent */
+  plannableHours: number | null
+  email?: string | null
+  canCreateProjects?: boolean
+}
+
+/** The workspace's person `u` as a page that shows the store's profile
+    shows them (PersonShown). */
+export const personShownOf = (u: UserVM): PersonShown => ({
+  orgId: u.org,
+  name: u.name,
+  isAgent: u.isAgent,
+  pending: u.pending,
+  orgRole: u.orgRole,
+  active: u.active,
+  plannableHours: u.plannableHours,
+  email: u.email ?? null,
+  canCreateProjects: u.canCreateProjects,
+})
+
+/** A person the view names is `ok`. */
+export type PersonOk = Extract<PersonView, { state: 'ok' }>
+
+/** The workspace's person `u` as a person view. */
+export const personOfUser = (u: UserVM): PersonOk => ({
+  state: 'ok',
+  id: u.id,
+  org: u.org,
+  name: u.name,
+  initials: u.initials,
+  color: u.color,
+  picture: u.avatarPath ? u.avatarUrl : null,
+  avatar: u.sampleAvatar ? null : (u.avatarPath ?? null),
+  sample: u.sampleAvatar,
+  kind: u.kind,
+  orgRole: u.orgRole,
+  active: u.active,
+  pending: u.pending,
+  nameOnly: false,
+  plannableHours: u.plannableHours,
+})
+
+/** A people.byIds row of organization `org` as a person view, its picture
+    `pictureUrl` (the picture source's URL, null while it loads) for an
+    upload, or the demo's sample portrait. */
+export const personOfFace = (
+  org: string,
+  face: PersonFaceRow,
+  pictureUrl: string | null,
+): PersonOk => ({
+  state: 'ok',
+  id: face.id,
+  org,
+  name: face.name,
+  initials: face.initials,
+  color: face.color,
+  picture: face.avatar ? pictureUrl : sampleAvatarUrl(face.sample_avatar ?? undefined),
+  avatar: face.avatar,
+  sample: !face.avatar && !!face.sample_avatar,
+  kind: face.kind,
+  orgRole: face.org_role,
+  active: face.active,
+  pending: face.pending,
+  nameOnly: false,
+  plannableHours: face.kind === 'agent' ? null : face.plannable_hours,
+})
+
+/** A picker's person row of organization `org` as a person view, known by
+    name only: the name's initials on a neutral fill, no picture and unknown
+    hours, until their face arrives. */
+export const personOfName = (org: string, row: PersonRow): PersonOk => ({
+  state: 'ok',
+  id: row.id,
+  org,
+  name: row.name,
+  initials: nameInitials(row.name),
+  color: '',
+  picture: null,
+  avatar: null,
+  sample: false,
+  kind: row.kind,
+  orgRole: row.org_role,
+  active: row.active,
+  pending: row.pending,
+  nameOnly: true,
+  plannableHours: undefined,
+})
 
 /* P.org IS the home org (the one whose settings the app runs on) — identity
    from the HOME row (empty for a guest-only login), display settings from a

@@ -333,6 +333,58 @@ describe('removing access through the server preview', () => {
       expect(requests).toEqual([])
     })
 
+    it('names the person and the team as the page showed them, from the change, whether or not the store holds them', async () => {
+      await load()
+      const { teamRemoval, grantRemoval } = await import('./planner')
+      for (const [change, said] of [
+        // a person and a team the store holds by other names: the change's
+        // label wins
+        [{ ...user('leo'), label: 'Leo As Shown' }, 'Leo As Shown no longer has this access.'],
+        [
+          teamRemoval('crew', 'ann', org, 'Ann As Shown'),
+          'Ann As Shown has already left the Crew team.',
+        ],
+        [
+          teamRemoval('crew', null, org, 'Crew As Shown'),
+          'The Crew As Shown team was already deleted.',
+        ],
+        // a person and a team the store does not hold, named only by the page
+        [
+          grantRemoval('user', work, 'nobody-held', org, false, 'Nina Unheld'),
+          'Nina Unheld no longer has this access.',
+        ],
+        [teamRemoval('far-team', null, org, 'Far Team'), 'The Far Team was already deleted.'],
+      ] as const) {
+        preview = async () => ({ state: 'unavailable' })
+        expect(await P.startRemoval(change, shown)).toBeNull()
+        expect(window.showToast).toHaveBeenLastCalledWith(`${said} Nothing was changed.`, 'info')
+      }
+      expect(requests).toEqual([])
+    })
+
+    it('sends a team change to the organization it names, with no early last-team refusal for one that names it', async () => {
+      await load()
+      const { teamRemoval } = await import('./planner')
+      // a member of a team the store does not hold
+      preview = async () => answer({ tasks: 0 })
+      expect(await P.startRemoval(teamRemoval('far-team', 'ann', org, 'Ann'), shown)).toBeNull()
+      await settle()
+      expect(requests.at(-1)).toMatchObject({
+        name: 'teams:removeMember',
+        args: { org_id: org, team_id: 'far-team', profile_id: 'ann' },
+      })
+      // the server, not the store, refuses the last team for a change that
+      // names its organization
+      const deleting = P.removeAccess(teamRemoval('far-team', null, org, 'Far Team'), { to: null })
+      // a press and its check are told apart without the label
+      expect(P.removingAccess(teamRemoval('far-team', null, org, ''))).toBe(true)
+      await deleting
+      expect(requests.at(-1)).toMatchObject({
+        name: 'teams:deleteDeep',
+        args: { org_id: org, id: 'far-team', expected: { name: 'Far Team' } },
+      })
+    })
+
     it("refuses with the server's sentence what it refuses or cannot check in one request", async () => {
       await load()
       for (const state of ['refused', 'too_large'] as const) {

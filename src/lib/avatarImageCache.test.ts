@@ -31,7 +31,9 @@ async function flush(cache: ReturnType<typeof createAvatarImageCache>) {
 }
 
 describe('persistent account profile image bytes', () => {
-  it('restores only the authorized roster and replaces a storage-version key', async () => {
+  // Changed with the roster cache stage: an entry of a profile the store
+  // does not know stays, unread, where the cache used to prune it
+  it('reads only the keys the store knows and replaces a storage-version key, keeping unknown profiles', async () => {
     const f = fixture({
       scope,
       entries: [
@@ -42,15 +44,49 @@ describe('persistent account profile image bytes', () => {
     const cache = createAvatarImageCache(scope, { store: f.store })
     cache.sync(['avatar:alice:storage-1'])
     expect(await cache.read('avatar:alice:storage-1')).toBeInstanceOf(Blob)
+    // Bob is unknown: not read, and not deleted from the device
     expect(await cache.read('avatar:bob:storage-2')).toBeNull()
     await flush(cache)
-    expect(f.saved()?.entries.map((entry) => entry.key)).toEqual(['avatar:alice:storage-1'])
+    expect(f.saved()?.entries.map((entry) => entry.key)).toEqual([
+      'avatar:alice:storage-1',
+      'avatar:bob:storage-2',
+    ])
 
     cache.sync(['avatar:alice:storage-3'])
     expect(await cache.read('avatar:alice:storage-3')).toBeNull()
     cache.put('avatar:alice:storage-3', picture('new'))
     await flush(cache)
-    expect(f.saved()?.entries.map((entry) => entry.key)).toEqual(['avatar:alice:storage-3'])
+    expect(f.saved()?.entries.map((entry) => entry.key)).toEqual([
+      'avatar:bob:storage-2',
+      'avatar:alice:storage-3',
+    ])
+    // known again, Bob's bytes are read
+    cache.sync(['avatar:alice:storage-3', 'avatar:bob:storage-2'])
+    expect(await cache.read('avatar:bob:storage-2')).toBeInstanceOf(Blob)
+    cache.dispose()
+  })
+
+  it('drops a key only on definite knowledge: another version, no picture or a refusal', async () => {
+    const f = fixture({
+      scope,
+      entries: [
+        { key: 'avatar:alice:1', blob: picture('a') },
+        { key: 'avatar:bob:1', blob: picture('b') },
+        { key: 'avatar:cara:1', blob: picture('c') },
+        { key: 'avatar:dan:1', blob: picture('d') },
+      ],
+    })
+    const cache = createAvatarImageCache(scope, { store: f.store })
+    // Alice has a new picture, Bob none, Cara is refused, Dan is unknown
+    cache.sync(['avatar:alice:2', 'avatar:cara:1'], ['bob'])
+    await flush(cache)
+    cache.remove('avatar:cara:1')
+    await flush(cache)
+    expect(f.saved()?.entries.map((entry) => entry.key)).toEqual(['avatar:dan:1'])
+    // a boot that knows almost no one deletes nothing it does not know
+    cache.sync([])
+    await flush(cache)
+    expect(f.saved()?.entries.map((entry) => entry.key)).toEqual(['avatar:dan:1'])
     cache.dispose()
   })
 

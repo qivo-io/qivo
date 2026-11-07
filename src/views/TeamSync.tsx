@@ -33,6 +33,7 @@ import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useSta
 import { NoProjects } from '@/components/NoProjects'
 import { Avatar, FieldSelect, Icon } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
+import { usePeople } from '@/components/usePeople'
 import { WalkFooter, WalkRail } from '@/components/walk'
 import { flushWalkInput, useReviewed } from '@/components/walkRows'
 import type { UnsentScope } from '@/lib/leaveGuard'
@@ -503,6 +504,15 @@ export function TeamSync({
   const scope = parseSyncScope(scopeKey)
   const meeting = useSyncMeeting(scopeKey, now)
   const { humans, agents } = meeting
+  // the people the page shows, named while it shows: the walk's people and
+  // the meeting's tasks' assignees and reviewers, in the walk's order
+  usePeople([
+    ...[...humans, ...agents].map((u) => ({ org: P.homeOrg, id: u.id })),
+    ...meeting.tasks.flatMap((it) => [
+      { org: it.org, id: it.assignee ?? '' },
+      { org: it.org, id: it.reviewer ?? '' },
+    ]),
+  ])
   const steps = ['team', ...humans.map((u) => u.id), ...(agents.length ? ['agents'] : [])]
   const walkers = new Set([...humans, ...agents].map((u) => u.id))
   // the footer's total: every row on some page of the walk (the Waiting on

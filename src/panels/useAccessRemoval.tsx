@@ -2,15 +2,20 @@
    Delete on Teams, a member's Remove on a team's page, and a person's or a
    team's Remove in a project's access editor. One hook beside the removal
    window, so the three pages share its code, and each page that calls it
-   holds its own press. It lives apart from Modals.tsx, which exports
+   holds its own press. Each change carries the organization and the name
+   the page showed (store/planner.ts grantRemoval, teamRemoval), so the
+   window and the store's sentences name the person or team without the
+   store holding them. It lives apart from Modals.tsx, which exports
    components only. */
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useFocusAfterRender } from '../lib/focusWhenGone'
 import { type AccessRemoval, P, type RemovalAnswer } from '../store/planner'
 import { AccessRemovalModal } from './Modals'
 
-/* One removal as a key, to tell the pressed control apart. */
-const keyOf = (change: AccessRemoval) => JSON.stringify(change)
+/* One removal as a key, to tell the pressed control apart: its JSON
+   without the name the page showed, so a rename during a check keeps the
+   press. */
+const keyOf = ({ label: _label, ...change }: AccessRemoval) => JSON.stringify(change)
 
 /** What a press says while another removal of the page is being checked,
     as it then removes nothing. */

@@ -27,6 +27,7 @@ import { ChoiceEnd, PickerSearch } from '../components/pickerParts'
 import { type ChoiceWords, escapeClearsFirst } from '../components/pickerWords'
 import { Avatar, DateSelect, Icon, MenuItem, Popover } from '../components/qivo'
 import { WAITS_FOR_SAVE } from '../components/rowElements'
+import { usePeople } from '../components/usePeople'
 import { ACCESS_CAPS } from '../lib/accessCaps'
 import { copyText } from '../lib/clipboard'
 import { relativeWeek, weekToISO } from '../lib/dates'
@@ -1338,13 +1339,17 @@ function AccessRemovalModal({
   const tasks = `${count} task${count === 1 ? '' : 's'}`
   // "the task" and "this task" read better than "the 1 task"
   const theTasks = count === 1 ? 'the task' : `the ${tasks}`
-  const team = 'teamId' in change ? P.teams.find((t) => t.id === change.teamId) : null
-  const teamName = `the ${teamNoun(team?.name)}`
+  // the team and the person as the page that pressed showed them (the
+  // change's label), the store's team only as a fallback
+  const team =
+    'teamId' in change
+      ? ((change.kind !== 'teamMember' ? change.label : undefined) ??
+        P.teamById(change.teamId)?.name)
+      : undefined
+  const teamName = `the ${teamNoun(team)}`
   const person =
     'userId' in change
-      ? shown.people.find((p) => p.id === change.userId)?.name ||
-        P.user(change.userId)?.name ||
-        'Someone'
+      ? shown.people.find((p) => p.id === change.userId)?.name || change.label || 'Someone'
       : ''
   const refs = new Map(shown.projects.map((p) => [p.id, p]))
   const places = shown.keep.targets.flatMap((id) => refs.get(id) ?? [])
@@ -1713,6 +1718,9 @@ function ReassignChoiceList({
     most: TAKERS_MOST,
   })
   const end = listEnd(list, query !== '')
+  // the picker's people, named while it is open, in the change's
+  // organization
+  usePeople(list.rows.map((person) => ({ org: change.orgId ?? P.homeOrg, id: person.id })))
   // the answer of a read that holds no rows says why: the first read's, or
   // a Load more's, after which Try again would only ask the same
   const held = end === 'held' ? list.answers[0] : (list.failure ?? undefined)

@@ -19,6 +19,7 @@ import { createMountScheduler, useMountGuards } from '@/lib/mountScheduler'
 import { type RevealRequest, useReveal } from '@/lib/reveal'
 import { NoProjects } from '../components/NoProjects'
 import { Avatar, EmptyState, Icon, ProjectName, StatusDot } from '../components/qivo'
+import { personLabel, sortName, usePeople } from '../components/usePeople'
 import { registerTaskMount, useFollowTaskFocus } from '../lib/taskFocus'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { useLatest } from '../lib/useLatest'
@@ -401,9 +402,12 @@ function LaneHeader({
   /** opens the new-task window on the lane's own project or sub-project */
   onAdd?: (id: string) => void
 }) {
+  // a project lane's lead, or a person lane's owner, as P.person names
+  // them: "Loading…" while their details are on their way, never "Unknown
+  // user" before the server's answer says so
   const leadId = proj ? P.leadOf(proj.id) : owner
-  const lead = leadId ? P.user(leadId) : null
-  const name = proj?.name || lead?.name || (owner ? 'Unknown user' : 'Unassigned')
+  const lead = leadId ? P.person(leadId, proj?.org) : null
+  const name = proj?.name || personLabel(lead, owner ? 'Unknown user' : 'Unassigned')
   return (
     <div
       data-lane={proj?.id || `assignee:${owner || 'unassigned'}`}
@@ -469,11 +473,13 @@ function LaneHeader({
       {/* no task counter after the name in either kind of lane (deviation
           #232): the status columns already count, and a lane's width is the
           measure that matters */}
-      {!proj && lead?.isAgent && <span className="text-xs text-text-3">Agent</span>}
+      {!proj && lead?.state === 'ok' && lead.kind === 'agent' && (
+        <span className="text-xs text-text-3">Agent</span>
+      )}
       <div className="[flex:1]" />
       {/* The lane lead's full name stays available through the portrait's
           tooltip and accessible label. */}
-      {(lead || !proj) && <Avatar id={leadId} size={28} />}
+      {((lead && lead.state !== 'gone') || !proj) && <Avatar id={leadId} size={28} />}
     </div>
   )
 }
@@ -697,6 +703,21 @@ function KanbanBoard({
 
   // the cards: the leaves among the tasks the Board shows
   const visible = view.tasks.filter((it) => !P.isGroup(it))
+  // the people the Board shows, named while it shows: each row's assignee
+  // and reviewer in the rows' order, which the lanes' owners are, and the
+  // project lanes' leads
+  usePeople(
+    React.useMemo(
+      () => [
+        ...view.tasks.flatMap((it) => [
+          { org: it.org, id: it.assignee ?? '' },
+          { org: it.org, id: it.reviewer ?? '' },
+        ]),
+        ...info.groups.map((g) => ({ org: g.proj.org, id: P.leadOf(g.proj.id) ?? '' })),
+      ],
+      [view.tasks, info.groups, P.contextVersion],
+    ),
+  )
   // a message in place of the Board ends a drag over it
   React.useEffect(() => {
     if (!view.shows && dragId) endDrag()
@@ -788,10 +809,12 @@ function KanbanBoard({
     ? []
     : byAssignee
       ? // a lane for each owner of a card, so no lane is empty
-        groupBoardAssignees(visible, (id) => P.user(id)?.name || 'Unknown user').map((lane) => ({
-          ...lane,
-          proj: null,
-        }))
+        groupBoardAssignees(visible, (id) => sortName(P.person(id), 'Unknown user')).map(
+          (lane) => ({
+            ...lane,
+            proj: null,
+          }),
+        )
       : swimlanes
         ? info.groups
             .filter((g) => holdsScoped(g))
@@ -815,7 +838,7 @@ function KanbanBoard({
     lane.proj
       ? lane.proj.name
       : lane.owner !== undefined
-        ? P.user(lane.owner)?.name || (lane.owner ? 'Unknown user' : 'Unassigned')
+        ? personLabel(P.person(lane.owner), lane.owner ? 'Unknown user' : 'Unassigned')
         : null
   const laneCells = lanes.map((lane) =>
     statuses.map((s) =>

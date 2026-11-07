@@ -1,14 +1,18 @@
 // @vitest-environment jsdom
 import { getFunctionName } from 'convex/server'
-import { act } from 'react'
+import { Activity, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { PersonFaceRow } from '../../convex/model/peopleSettings'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
-/* A task's holders as the task window names them (useOwnerNames): the
-   store's profile at once, else people.byIds, loading until it answers,
-   gone only on an answer that leaves the id out, failed on a failed read,
-   and a kept name through a read with no answer, within its bound. */
+/* The people a view shows as it names them (usePeople, through the store's
+   profile cache and P.person): the store's profile at once, else
+   people.byIds, loading until it answers, gone only on an answer that
+   leaves the id out, failed on a failed read, a picker's name at once; and
+   the names follow the component's life: named while mounted and shown,
+   released on unmount and while a kept page is hidden by Activity, named
+   again on return. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -23,7 +27,8 @@ vi.mock('../lib/auth', () => ({
   signOut: vi.fn(),
 }))
 
-type Names = typeof import('./ownerNames')
+type Hook = typeof import('./usePeople')
+type Store = typeof import('../store/planner')
 type Sub = {
   args: { org_id: string; ids: string[] }
   next: (value: unknown) => void
@@ -31,13 +36,14 @@ type Sub = {
   closed: boolean
 }
 
-let names: Names
+let hook: Hook
+let store: Store
 let snap: Snapshot
 let subs: Sub[]
 let container: HTMLDivElement
 let root: Root
 
-const row = (id: string, name: string) => ({
+const row = (id: string, name: string): PersonFaceRow => ({
   id,
   name,
   org_role: 'user',
@@ -46,6 +52,9 @@ const row = (id: string, name: string) => ({
   pending: false,
   color: '#335577',
   initials: 'XX',
+  avatar: null,
+  sample_avatar: null,
+  plannable_hours: 32,
 })
 
 beforeEach(async () => {
@@ -69,9 +78,9 @@ beforeEach(async () => {
       sub.closed = true
     }
   })
-  const store = await import('../store/planner')
+  store = await import('../store/planner')
   await store.initStore()
-  names = await import('./ownerNames')
+  hook = await import('./usePeople')
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -84,35 +93,48 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-/** Renders the names of `ids` and answers what they show, as text. */
-async function show(ids: string[], org = snap.orgs[0].id) {
-  function Names() {
-    const shown = names.useOwnerNames(org, ids)
-    return (
-      <ul>
-        {shown.map((n) => (
-          <li key={n.id}>{n.state === 'ok' ? `${n.id}:${n.name}` : `${n.id}:${n.state}`}</li>
-        ))}
-      </ul>
-    )
-  }
-  await act(async () => root.render(<Names />))
+/** The names a list of `ids` shows. */
+function Names({ ids, org }: { ids: string[]; org: string }) {
+  const shown = hook.usePeople(ids.map((id) => ({ org, id })))
+  return (
+    <ul>
+      {shown.map((n) => (
+        <li key={n.id}>{n.state === 'ok' ? `${n.id}:${n.name}` : `${n.id}:${n.state}`}</li>
+      ))}
+    </ul>
+  )
 }
+
+/** Renders the names of `ids`, inside an Activity `mode`. */
+async function show(ids: string[], org = snap.orgs[0].id, mode: 'visible' | 'hidden' = 'visible') {
+  await act(async () =>
+    root.render(
+      <Activity mode={mode}>
+        <Names ids={ids} org={org} />
+      </Activity>,
+    ),
+  )
+}
+/** Lets the store's frame-batched repaint run. */
+const frame = () => act(async () => new Promise((resolve) => setTimeout(resolve, 40)))
 const text = () => [...container.querySelectorAll('li')].map((li) => li.textContent)
 const open = () => subs.filter((s) => !s.closed)
+const named = () => store.P.fileStats().people.named
 
-describe('useOwnerNames', () => {
+describe('usePeople', () => {
   it('names a person the store holds at once, reading nothing', async () => {
     await show(['held'])
     expect(text()).toEqual(['held:Hal Held'])
     expect(subs).toEqual([])
   })
 
-  it('reads the others by id, sorted, loading until the answer, and gone only when it leaves one out', async () => {
+  it('reads the others by id in the order named, loading until the answer, and gone only when it leaves one out', async () => {
     await show(['zed', 'held', 'amy'])
     expect(text()).toEqual(['zed:loading', 'held:Hal Held', 'amy:loading'])
-    expect(open().map((s) => s.args)).toEqual([{ org_id: snap.orgs[0].id, ids: ['amy', 'zed'] }])
+    expect(open().map((s) => s.args)).toEqual([{ org_id: snap.orgs[0].id, ids: ['zed', 'amy'] }])
     await act(async () => open()[0].next({ rows: [row('amy', 'Amy Archer')] }))
+    await frame()
+    // the face arrived and the component rendered again
     expect(text()).toEqual(['zed:gone', 'held:Hal Held', 'amy:Amy Archer'])
   })
 
@@ -120,53 +142,50 @@ describe('useOwnerNames', () => {
     await show(['zed'])
     vi.spyOn(console, 'error').mockImplementation(() => {})
     await act(async () => open()[0].fail(new Error('Server Error')))
+    await frame()
     expect(text()).toEqual(['zed:failed'])
   })
 
-  it('keeps an answered name while a new read has no answer', async () => {
+  it('keeps an answered face while a longer list reads again', async () => {
     await show(['amy'])
     await act(async () => open()[0].next({ rows: [row('amy', 'Amy Archer')] }))
+    await frame()
     await show(['amy', 'bo'])
-    // a new set of ids reads again; Amy keeps her name meanwhile
+    // the chunk reads again with Bo added; Amy keeps her face meanwhile
     expect(open().at(-1)?.args.ids).toEqual(['amy', 'bo'])
+    await frame()
     expect(text()).toEqual(['amy:Amy Archer', 'bo:loading'])
   })
 
-  it('keeps a picked person’s name, by organization', async () => {
-    names.keepOwnerName(snap.orgs[0].id, { id: 'pat', name: 'Pat Picked', active: true })
+  it("names a picker's person at once, by organization", async () => {
+    store.P.takePeople(snap.orgs[0].id, [row('pat', 'Pat Picked')])
+    await frame()
     await show(['pat'])
     expect(text()).toEqual(['pat:Pat Picked'])
     await show(['pat'], 'another-org')
     expect(text()).toEqual(['pat:loading'])
   })
 
-  // the bound lowered to 3, so the case keeps four names, not 1,001
-  it('keeps at most its bound of names, the oldest dropped first', () => {
-    const org = snap.orgs[0].id
-    const keep = (id: string) =>
-      names.keepOwnerName(org, { id, name: `Person ${id}`, active: true })
-    const was = names.OWNER_NAMES.kept
-    expect(was).toBe(1000)
-    names.OWNER_NAMES.kept = 3
-    try {
-      for (const id of ['p0', 'p1', 'p2', 'p3']) keep(id)
-      expect(['p0', 'p1', 'p2', 'p3'].map((id) => names.ownerNameKept(org, id))).toEqual([
-        false,
-        true,
-        true,
-        true,
-      ])
-      // a name kept again is the newest
-      keep('p1')
-      keep('p4')
-      expect(['p1', 'p2', 'p3', 'p4'].map((id) => names.ownerNameKept(org, id))).toEqual([
-        true,
-        false,
-        true,
-        true,
-      ])
-    } finally {
-      names.OWNER_NAMES.kept = was
-    }
+  it('names while mounted, releases on unmount and while hidden by Activity, and names again on return', async () => {
+    await show(['zed', 'amy'])
+    expect(named()).toBe(2)
+    expect(open()).toHaveLength(1)
+    await show(['zed', 'amy'], snap.orgs[0].id, 'hidden')
+    expect(named()).toBe(0)
+    expect(open()).toHaveLength(0)
+    await show(['zed', 'amy'])
+    expect(named()).toBe(2)
+    expect(open()).toHaveLength(1)
+    await act(async () => root.render(<div />))
+    expect(named()).toBe(0)
+    expect(open()).toHaveLength(0)
+  })
+
+  it('names the same people again without a registration when the list only renders again', async () => {
+    await show(['zed', 'amy'])
+    const reads = subs.length
+    await show(['zed', 'amy'])
+    await show(['zed', 'amy'])
+    expect(subs).toHaveLength(reads)
   })
 })

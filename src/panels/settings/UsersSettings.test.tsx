@@ -17,6 +17,7 @@ import {
   peopleSettingsServer,
   type StandInKey,
 } from '../../store/peopleSettingsStandIn.setup'
+import { shownOf } from '../../store/personShown.setup'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 
 /* Organization > Users on the real store, its people read from the server
@@ -266,22 +267,6 @@ async function click(element: HTMLElement) {
   })
   await settle()
 }
-/* The tooltip of `element`, as a pointer over it opens it, or null when it
-   has none. */
-async function hintOf(element: Element) {
-  const trigger = element.closest<HTMLElement>('[data-tooltip-trigger]')
-  if (!trigger) return null
-  const pointer = (type: string) =>
-    Object.assign(new MouseEvent(type, { bubbles: true }), { pointerType: 'mouse' })
-  await act(async () => {
-    trigger.dispatchEvent(pointer('pointermove'))
-    await new Promise((resolve) => setTimeout(resolve, 400))
-  })
-  const said = document.querySelector('[data-slot="tooltip-content"]')?.firstChild?.textContent
-  await act(async () => trigger.dispatchEvent(pointer('pointerleave')))
-  await settle()
-  return said ?? null
-}
 /* Types `text` in the search box, which takes focus first, as a person's
    typing gives it, and lets the search rest. */
 const search = async (text: string) => {
@@ -372,7 +357,7 @@ describe('the list', () => {
     expect(has('[data-org-guests]')).toBe(false)
     expect(find('[data-org-users]').dataset.usersState).toBe('ok')
     // a rename in this session shows at once, before the server holds it
-    store.P.updateUser('p00', { name: 'Paula Renamed' })
+    store.P.updateUser('p00', { name: 'Paula Renamed' }, {}, shownOf(store.P, 'p00'))
     await settle()
     expect(find<HTMLInputElement>('input[data-user-name="p00"]').value).toBe('Paula Renamed')
 
@@ -447,30 +432,93 @@ describe('the list', () => {
     expect(end().textContent).toBe(limitSentence(LIMITS.search))
   })
 
-  it('shows a person the store does not hold read-only, with a face and controls that wait', async () => {
+  it('writes a person the store does not hold from the answer, each control once with what the row showed', async () => {
     await load()
     await show()
     // the server holds a person the store does not
-    snap.profiles.push(person('aaron', 'Aaron Unheld'))
+    snap.profiles.push(person('aaron', 'Aaron Unheld', { plannable_hours: 30 }))
     await act(async () => server.rerun())
+    await settle()
+    const org = snap.orgs[0].id
     const row = find('[data-user-row="aaron"]')
     expect(pageRows()[0]).toBe('aaron')
-    expect(row.querySelector('[data-person-face]')?.getAttribute('aria-label')).toBe('Aaron Unheld')
-    expect(row.querySelector('[data-person-face]')?.textContent).toBe('AU')
+    // the face comes from people.byIds, never Unassigned, and nothing waits
+    expect(opened('people:byIds').some((r) => (r.args.ids as string[]).includes('aaron'))).toBe(
+      true,
+    )
+    await act(async () => await new Promise((r) => setTimeout(r, 40)))
+    expect(row.querySelector('[data-avatar="aaron"]')?.getAttribute('aria-label')).toBe(
+      'Aaron Unheld',
+    )
     expect(row.querySelector('[aria-label="Unassigned"]')).toBeNull()
-    expect(row.querySelector('[data-user-waiting]')).not.toBeNull()
-    expect(row.querySelector('input[data-user-name]')).toBeNull()
+    expect(row.querySelector('[data-user-waiting]')).toBeNull()
+    expect(container.textContent).not.toContain('Loading this person…')
+    // the name
+    const name = find<HTMLInputElement>('input[data-user-name="aaron"]')
+    await act(async () => name.focus())
+    await type(name, 'Aaron Renamed')
+    await act(async () => name.blur())
+    await settle()
+    expect(pending.at(-1)).toMatchObject({
+      name: 'profiles:update',
+      args: {
+        org_id: org,
+        id: 'aaron',
+        patch: { name: 'Aaron Renamed' },
+        expected: { name: 'Aaron Unheld' },
+      },
+    })
+    // the hours
+    const hours = find<HTMLInputElement>('[data-plannable-for="aaron"]')
+    await act(async () => hours.focus())
+    await type(hours, '28')
+    await act(async () => hours.blur())
+    await settle()
+    expect(pending.at(-1)).toMatchObject({
+      name: 'profiles:setPlannableHours',
+      args: { org_id: org, profile_id: 'aaron', hours: 28, expected: { plannable_hours: 30 } },
+    })
+    // the role
     const role = find<HTMLSelectElement>('[data-user-role="aaron"]')
-    expect(role.disabled).toBe(true)
-    expect(find<HTMLInputElement>('[data-plannable-for="aaron"]').disabled).toBe(true)
-    expect(
-      row.querySelector<HTMLButtonElement>('button[aria-label="Loading this person…"]')?.disabled,
-    ).toBe(true)
-    // a row the store holds keeps its controls
-    expect(find<HTMLSelectElement>('[data-user-role="anna"]').disabled).toBe(false)
+    expect(role.disabled).toBe(false)
+    await act(async () => {
+      role.value = 'viewer'
+      role.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await settle()
+    expect(pending.at(-1)).toMatchObject({
+      name: 'profiles:update',
+      args: {
+        org_id: org,
+        id: 'aaron',
+        patch: { org_role: 'viewer' },
+        expected: { org_role: 'user' },
+      },
+    })
+    // Remove: the row hides while the removal is on its way, and a refusal
+    // brings it back, with no store paint to tell it
+    const remove = () =>
+      find<HTMLButtonElement>(
+        '[data-user-row="aaron"] button[aria-label^="Remove from the organization"], [data-user-row="aaron"] button[aria-label="Click again to confirm removal"]',
+      )
+    expect(remove().disabled).toBe(false)
+    await click(remove())
+    // the second press counts past the confirm's ignore time
+    await act(async () => await new Promise((r) => setTimeout(r, 550)))
+    await click(remove())
+    expect(pending.at(-1)).toMatchObject({
+      name: 'profiles:remove',
+      args: { org_id: org, id: 'aaron' },
+    })
+    expect(has('[data-user-row="aaron"]')).toBe(false)
+    await act(async () =>
+      pending.at(-1)?.reject(new ConvexError({ code: 'rule', message: 'the server said no' })),
+    )
+    await settle()
+    expect(has('[data-user-row="aaron"]')).toBe(true)
   })
 
-  it("turns a waiting row's invitation, project right and address off, saying so", async () => {
+  it("sends a row's invitation, project right and address for a person the store does not hold", async () => {
     await load((s) => {
       s.orgs[0].project_creators = 'selected'
     })
@@ -487,25 +535,41 @@ describe('the list', () => {
     })
     await act(async () => server.rerun())
     await settle()
+    const org = snap.orgs[0].id
     expect(opened('invites:deliveries').at(-1)?.args.profile_ids).toContain('abby')
     const again = find<HTMLButtonElement>('[data-invite-again="abby"]')
-    expect(again.disabled).toBe(true)
-    expect(again.hasAttribute('data-user-waiting')).toBe(true)
-    expect(await hintOf(again)).toBe('Loading this person…')
+    expect(again.disabled).toBe(false)
+    expect(again.hasAttribute('data-user-waiting')).toBe(false)
     await click(again)
-    expect(sentNames()).not.toContain('invites:sendAgain')
+    expect(sentNames()).toContain('invites:sendAgain')
     const right = find<HTMLInputElement>('[data-can-create-projects="abby"]')
-    expect(right.disabled).toBe(true)
-    expect(await hintOf(right)).toBe('Loading this person…')
-    // the address line says why too
-    const address = find('[data-user-email="abby"]')
-    expect(address.hasAttribute('data-user-waiting')).toBe(true)
-    expect(address.querySelector('input')).toBeNull()
-    expect(await hintOf(address)).toBe('Loading this person…')
-    // a row the store holds keeps its checkbox, with no such hint
-    const held = find<HTMLInputElement>('[data-can-create-projects="anna"]')
-    expect(held.disabled).toBe(false)
-    expect(await hintOf(held)).toBeNull()
+    expect(right.disabled).toBe(false)
+    await click(right)
+    expect(pending.at(-1)).toMatchObject({
+      name: 'profiles:update',
+      args: {
+        org_id: org,
+        id: 'abby',
+        patch: { can_create_projects: true },
+        expected: { can_create_projects: false },
+      },
+    })
+    // the address of an invitation takes a change, with the address shown
+    // as its expected value
+    const address = find<HTMLInputElement>('input[data-user-email="abby"]')
+    await act(async () => address.focus())
+    await type(address, 'abby.new@example.test')
+    await act(async () => address.blur())
+    await settle()
+    expect(pending.at(-1)).toMatchObject({
+      name: 'profiles:update',
+      args: {
+        org_id: org,
+        id: 'abby',
+        patch: { email: 'abby.new@example.test' },
+        expected: { email: 'abby@example.test' },
+      },
+    })
   })
 
   it('reads nothing while the tab is hidden, and reads again on return', async () => {
@@ -1086,7 +1150,7 @@ describe('invitation labels', () => {
           {seats.map((seat) => (
             <pages.controls.InviteLabel
               key={seat.id}
-              user={{ id: seat.id, org: store.P.homeOrg }}
+              user={{ id: seat.id, orgId: store.P.homeOrg }}
             />
           ))}
         </pages.invites.InviteRows.Provider>

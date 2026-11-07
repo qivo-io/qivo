@@ -11,12 +11,23 @@
    projects included, and never a count the server did not give.
 
    A row's name and color come from the store's catalogue while it holds
-   the label, which paints this session's writes at once and gives the
-   writes their `expected`; until then the row shows the answer's and its
-   controls wait. A name is a draft against the saved name it began from
-   (lib/savedDraft.ts). The page also keeps, for this visit, the labels it
-   created, the labels renamed here and the rows that hold an unsaved name,
-   above the list while no loaded batch holds them, so a label made past
+   the label, which paints this session's writes at once, else from the
+   page's answers with what the page saved over them. Every write sends
+   what the row showed (store/planner.ts LabelShown) to the page's
+   organization with its `expected` from it, so no control waits for the
+   store. A name is a draft against the saved name it began from
+   (lib/savedDraft.ts); a rename to a name another label holds is refused
+   by the server and keeps the typed text. New label checks the typed name
+   once typing rests, on labels.picker's `exact` (P.labelChoices): Add is
+   on only once the answer for the text on screen names no label of that
+   name, in any case, says so beside the button while the check runs or
+   when a label holds the name, and after a failed check stays on and lets
+   the server decide. A new label takes its color from its id
+   (lib/labelColors.ts labelColorFor). The page also keeps, for this visit,
+   the labels it created, the labels renamed here and the rows that hold an
+   unsaved name, above the list while no loaded batch holds them under the
+   name the page saved, each with the name and color of the answer the
+   page last held for it or that it was created with, so a label made past
    the loaded rows shows, and a search never drops typed text. */
 import type { FunctionReturnType } from 'convex/server'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
@@ -41,8 +52,9 @@ import {
 } from '../../lib/pagedList'
 import { TRIMMED, useSavedDraft } from '../../lib/savedDraft'
 import { useUpdateBlocker } from '../../lib/updateSafety'
-import { P } from '../../store/planner'
+import { type LabelShown, P } from '../../store/planner'
 import { ModalShell } from '../Modals'
+import { keepNamed } from '../taskLabels'
 import { DraftConflictLine } from './controls'
 
 /** The most labels Load more gathers, eight batches; past it, a search
@@ -79,17 +91,22 @@ function labelDeleteSentence(count: number | null): string {
 }
 
 /** The home organization's label `id` in the store's catalogue, if it
-    holds it. */
+    holds it, which a row paints over the answer so this session's writes
+    show at once. */
 const storeLabel = (id: string) => {
   const label = P.labelById[id]
   return label && label.org === P.homeOrg ? label : null
 }
 
-/** Whether another label of the home organization is named `name`, in any
-    case. The store's catalogue holds every one (store/planner.ts
-    orgLabels), so the check does not rest on the loaded batches. */
-const nameTaken = (name: string, id: string | null) =>
-  P.orgLabels().some((l) => l.id !== id && l.name.toLowerCase() === name.toLowerCase())
+/** What New label says beside Add while it checks the typed name, and
+    once the server's answer names a label of that name. */
+export const NAME_CHECKING = 'Checking the name…'
+export const NAME_TAKEN = 'A label with that name already exists'
+
+/** Where New label's check of a typed name stands: on its way, free (the
+    answer's `exact` is null), taken by a label, or failed, when Add stays
+    on and the server decides. */
+type NameCheck = { name: string; state: 'checking' | 'free' | 'taken' | 'failed' }
 
 /** The name input of row `id`, for focus. */
 const nameOf = (id: string) =>
@@ -97,6 +114,7 @@ const nameOf = (id: string) =>
 
 function LabelRow({
   id,
+  org,
   name,
   color,
   count,
@@ -105,11 +123,13 @@ function LabelRow({
   canEdit,
   onUnsaved,
   onRenamed,
+  onRecolored,
   onDelete,
 }: {
   id: string
+  org: string
   /** the name and color shown: the store's while it holds the label, else
-      the answer's */
+      the answer's with what the page saved over it */
   name: string
   color: string
   /** the answer's count, null for none given, undefined for a kept row */
@@ -119,19 +139,21 @@ function LabelRow({
   kept: 'Added' | 'Not in this list' | null
   canEdit: boolean
   onUnsaved: (id: string, unsaved: boolean) => void
-  onRenamed: (id: string) => void
-  onDelete: (id: string) => void
+  /** a rename the page sent, with the name it saved */
+  onRenamed: (id: string, name: string) => void
+  /** a recolor the page sent, with the color it saved */
+  onRecolored: (id: string, color: string) => void
+  onDelete: (id: string, name: string, color: string) => void
 }) {
-  // the controls wait for the store's row, which the writes need
-  const held = storeLabel(id) !== null
-  const ready = canEdit && held
+  const ready = canEdit
   const draft = useSavedDraft(`${id}:name`, name, TRIMMED, 'label name', !ready)
   useEffect(() => onUnsaved(id, draft.unsaved), [id, draft.unsaved])
   useEffect(() => () => onUnsaved(id, false), [id])
-  const waiting = held ? undefined : 'Loading this label…'
+  // the label as the row shows it, which each write sends
+  const shown: LabelShown = { orgId: org, name, color }
   // an empty or unchanged name shows the saved one; a conflict waits for
-  // Use saved or Keep mine; a name over the cap, one another label holds,
-  // a paused rename and a refused one stay typed and unsaved
+  // Use saved or Keep mine; a name over the cap, a paused rename and a
+  // refused one, as for a name another label holds, stay typed and unsaved
   const commit = () => {
     const next = draft.text.trim()
     if (!next || draft.isSaved(next)) return draft.showSaved()
@@ -140,18 +162,13 @@ function LabelRow({
       return
     }
     if (draft.conflict || P.refusePausedEdit()) return
-    if (nameTaken(next, id)) {
-      window.showToast?.('A label with that name already exists', 'error')
-      return
-    }
     const save = draft.save(next)
-    if (P.updateLabel(id, { name: next }, save.as('name'))) onRenamed(id)
+    if (P.updateLabel(id, { name: next }, save.as('name'), shown)) onRenamed(id, next)
     else save.keepUnsaved()
   }
   return (
     <div
       data-label-row={id}
-      data-label-waiting={held ? undefined : ''}
       className="[display:flex] [flex-direction:column] [padding:8px] [border-radius:var(--r-md)] [border:1px_solid_var(--border)] [background:var(--surface-1)]"
     >
       <div data-label-line="" className="[display:flex] [align-items:center] [gap:8px]">
@@ -165,7 +182,7 @@ function LabelRow({
               onClick={toggle}
               data-field-trigger
               aria-label={`Change color for ${name}`}
-              title={canEdit ? (waiting ?? 'Change label color') : undefined}
+              title={canEdit ? 'Change label color' : undefined}
               className="size-8 disabled:cursor-default"
               variant="ghost"
               size="icon"
@@ -190,8 +207,11 @@ function LabelRow({
                   aria-label={colorName}
                   aria-pressed={color.toLowerCase() === option.toLowerCase()}
                   onClick={() => {
-                    if (option.toLowerCase() !== color.toLowerCase())
-                      P.updateLabel(id, { color: option })
+                    if (
+                      option.toLowerCase() !== color.toLowerCase() &&
+                      P.updateLabel(id, { color: option }, {}, shown)
+                    )
+                      onRecolored(id, option)
                     close()
                   }}
                 >
@@ -213,8 +233,6 @@ function LabelRow({
             limit={LIMITS.labelName}
             value={draft.text}
             data-label-name=""
-            disabled={!held}
-            title={waiting}
             aria-label={`Name of label ${name}`}
             aria-describedby={draft.conflict ? draft.conflictId : undefined}
             onChange={(e) => draft.edit(e.target.value)}
@@ -253,10 +271,9 @@ function LabelRow({
             data-delete-label={id}
             variant="ghost"
             size="icon-sm"
-            disabled={!held}
             aria-label={`Delete ${name}`}
-            title={waiting ?? 'Delete label'}
-            onClick={() => onDelete(id)}
+            title="Delete label"
+            onClick={() => onDelete(id, name, color)}
           >
             <Icon name="trash" size={16} />
           </Button>
@@ -371,43 +388,123 @@ export function OrgLabelsPage() {
   const [renamed, setRenamed] = useState<ReadonlySet<string>>(() => new Set())
   const [drafts, setDrafts] = useState<ReadonlySet<string>>(() => new Set())
   const [deleting, setDeleting] = useState<ReadonlySet<string>>(() => new Set())
+  // the name and color the page last showed for each label, from its
+  // answers or as it created the label, and what the page saved over them
+  // since, which a kept row shows and a loaded row shows until the answer
+  // holds it
+  const known = useRef(new Map<string, { name: string; color: string }>())
+  const [saved, setSaved] = useState<ReadonlyMap<string, { name?: string; color?: string }>>(
+    () => new Map(),
+  )
   const onUnsaved = useCallback((id: string, unsaved: boolean) => {
     setDrafts((s) => (unsaved === s.has(id) ? s : toggled(s, id, unsaved)))
   }, [])
-  const onRenamed = useCallback((id: string) => setRenamed((s) => toggled(s, id, true)), [])
+  const onRenamed = (id: string, name: string) => {
+    setRenamed((s) => toggled(s, id, true))
+    setSaved((m) => new Map(m).set(id, { ...m.get(id), name }))
+  }
+  const onRecolored = (id: string, color: string) => {
+    setSaved((m) => new Map(m).set(id, { ...m.get(id), color }))
+  }
   const loaded = new Map(list.rows.map((row) => [row.id, row]))
+  for (const row of list.rows) known.current.set(row.id, { name: row.name, color: row.color })
   // a created or renamed label goes from the kept rows once a loaded batch
-  // holds it under the name the store holds, or the store no longer does
+  // holds it under the name the page saved; what the page saved goes once
+  // the answer shows it
   useEffect(() => {
     const settled = (id: string) => {
-      const label = storeLabel(id)
-      return !label || loaded.get(id)?.name === label.name
+      const row = loaded.get(id)
+      return !!row && row.name === (saved.get(id)?.name ?? known.current.get(id)?.name)
     }
     setMade((s) => without(s, settled))
     setRenamed((s) => without(s, settled))
+    setSaved((m) => {
+      let next: Map<string, { name?: string; color?: string }> | null = null
+      for (const [id, over] of m) {
+        const row = loaded.get(id)
+        if (!row) continue
+        const nameShown = over.name === undefined || row.name === over.name
+        const colorShown =
+          over.color === undefined || row.color.toLowerCase() === over.color.toLowerCase()
+        if (!nameShown || !colorShown) continue
+        next ??= new Map(m)
+        next.delete(id)
+      }
+      return next ?? m
+    })
   })
   const kept = [...new Set([...made, ...renamed, ...drafts])].filter(
-    (id) => !loaded.has(id) && !deleting.has(id) && storeLabel(id) !== null,
+    (id) =>
+      !loaded.has(id) && !deleting.has(id) && (storeLabel(id) !== null || known.current.has(id)),
   )
+  /** Label `id` as the page shows it: the store's while it holds it, else
+      what the page last held or created, with what it saved over that. */
+  const shownLabel = (id: string, answer: LabelRowAnswer | null) => {
+    const label = storeLabel(id)
+    if (label) return { name: label.name, color: label.color }
+    const base = answer ?? known.current.get(id)
+    const over = saved.get(id)
+    return {
+      name: over?.name ?? base?.name ?? '',
+      color: over?.color ?? base?.color ?? 'var(--border-strong)',
+    }
+  }
 
   const [newLabel, setNewLabel] = useState('')
   // a create in flight: Add waits for the server's answer
   const [adding, setAdding] = useState(false)
   useUpdateBlocker(!!newLabel)
   useUnsaved(!!newLabel.trim(), 'label name')
-  const dup = nameTaken(newLabel.trim(), null)
   const tooLong = overLimit(LIMITS.labelName, newLabel)
+  // the typed name, checked once typing rests on labels.picker's `exact`,
+  // one read a name, never subscribed; a name past LIMITS.labelName or
+  // LIMITS.search reads nothing
+  const typedName = useSettledSearch(newLabel, LIMITS.search)
+  const checkName = typedName.settled
+  const [check, setCheck] = useState<NameCheck | null>(null)
+  useEffect(() => {
+    if (!admin || checkName === '' || typedName.tooLong || overLimit(LIMITS.labelName, checkName))
+      return setCheck(null)
+    let live = true
+    setCheck({ name: checkName, state: 'checking' })
+    void P.labelChoices({ org, search: checkName, cursor: null }).then((answer) => {
+      if (!live) return
+      setCheck({
+        name: checkName,
+        state: answer?.state === 'ready' ? (answer.exact === null ? 'free' : 'taken') : 'failed',
+      })
+    })
+    return () => {
+      live = false
+    }
+  }, [admin, org, checkName, typedName.tooLong])
+  // the check for the text on screen, else one on its way
+  const name = newLabel.trim()
+  const checked = check !== null && check.name === name ? check.state : 'checking'
+  const nameNote =
+    name === '' || tooLong
+      ? null
+      : checked === 'checking'
+        ? NAME_CHECKING
+        : checked === 'taken'
+          ? NAME_TAKEN
+          : null
+  const canAdd = name !== '' && !tooLong && !adding && (checked === 'free' || checked === 'failed')
   const addLabel = () => {
     const v = newLabel.trim()
-    if (!v || dup || tooLong || adding) return
+    if (!canAdd) return
     // The typed name stays until the server creates the label, and after a
     // refusal, so a paused or refused create can be sent again.
     const created = P.addLabel({ name: v })
     if (!created) return
     setAdding(true)
-    void created.saved.then((saved) => {
+    void created.saved.then((ok) => {
       setAdding(false)
-      if (!saved) return
+      if (!ok) return
+      known.current.set(created.id, { name: v, color: created.color })
+      // its chip names it at once on any task, whether or not the
+      // catalogue holds it
+      keepNamed(org, { id: created.id, name: v, color: created.color })
       setMade((s) => toggled(s, created.id, true))
       window.showToast?.(`Label “${v}” created`)
       setNewLabel((typed) => (typed.trim() === v ? '' : typed))
@@ -419,9 +516,12 @@ export function OrgLabelsPage() {
   // else the previous one's, else the search box. A window closed without
   // a delete leaves the row in place, and its Delete button takes focus
   // back (ModalShell).
-  const [asked, setAsked] = useState<{ id: string; name: string; count: number | null } | null>(
-    null,
-  )
+  const [asked, setAsked] = useState<{
+    id: string
+    name: string
+    color: string
+    count: number | null
+  } | null>(null)
   const searchBox = useRef<HTMLInputElement>(null)
   const after = useRef<() => HTMLElement | null>(() => null)
   const [opener, setOpener] = useState<string | null>(null)
@@ -429,24 +529,22 @@ export function OrgLabelsPage() {
     opener !== null && !deleting.has(opener),
     () => after.current() ?? searchBox.current,
   )
-  const askDelete = (id: string) => {
-    const label = storeLabel(id)
-    if (!label) return
+  const askDelete = (id: string, name: string, color: string) => {
     // no target from an earlier delete, so a close without one gives focus
     // back to this Delete button
     after.current = () => null
     setOpener(id)
-    setAsked({ id, name: label.name, count: loaded.get(id)?.active_tasks ?? null })
+    setAsked({ id, name, color, count: loaded.get(id)?.active_tasks ?? null })
   }
   const remove = () => {
     if (!asked) return
-    const { id, name } = asked
+    const { id, name, color } = asked
     after.current = focusAround('data-label-row', id, (row) =>
       row.querySelector<HTMLElement>('[data-label-name]'),
     )
     setAsked(null)
     setDeleting((s) => toggled(s, id, true))
-    void P.removeLabel(id).then((saved) => {
+    void P.removeLabel(id, { orgId: org, name, color }).then((saved) => {
       if (saved) window.showToast?.(`Label “${name}” deleted`)
       // a refusal, toasted by the store, brings the row back
       else setDeleting((s) => toggled(s, id, false))
@@ -487,19 +585,21 @@ export function OrgLabelsPage() {
     answer: LabelRowAnswer | null,
     note: 'Added' | 'Not in this list' | null,
   ) => {
-    const label = storeLabel(id)
+    const shown = shownLabel(id, answer)
     return (
       <LabelRow
         key={id}
         id={id}
-        name={label?.name ?? answer?.name ?? ''}
-        color={label?.color ?? answer?.color ?? 'var(--border-strong)'}
+        org={org}
+        name={shown.name}
+        color={shown.color}
         count={note === null ? (answer?.active_tasks ?? null) : undefined}
         counting={counting}
         kept={note}
         canEdit={admin}
         onUnsaved={onUnsaved}
         onRenamed={onRenamed}
+        onRecolored={onRecolored}
         onDelete={askDelete}
       />
     )
@@ -593,16 +693,18 @@ export function OrgLabelsPage() {
                 wrapperClassName="[flex:1]"
                 className="h-control w-full bg-surface-1 px-2.5 text-base font-sans"
               />
-              <Button
-                type="button"
-                disabled={!newLabel.trim() || dup || tooLong || adding}
-                title={dup && !adding ? 'A label with that name already exists' : 'Add label'}
-                onClick={addLabel}
-              >
+              <Button type="button" data-label-add="" disabled={!canAdd} onClick={addLabel}>
                 <Icon name="plus" size={16} />
                 Add label
               </Button>
             </div>
+            {/* said beside Add, not only in a disabled button's title,
+                which browsers do not show */}
+            {nameNote && (
+              <p data-label-name-check={checked} role="status" className="mt-1 text-sm text-text-2">
+                {nameNote}
+              </p>
+            )}
           </SettingsGroup>
         )}
       </SettingsSection>

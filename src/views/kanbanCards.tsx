@@ -9,6 +9,7 @@ import {
 } from '@/components/rowElements'
 import { buttonElement } from '@/components/ui/button-element'
 import { HoverTooltip } from '@/components/ui/tooltip'
+import { personLabel } from '@/components/usePeople'
 import type { BoardCellGroup } from '@/lib/boardGroups'
 import { clampedTitleTip } from '@/lib/clampedTitle'
 import { type StaticControls, StaticControlsContext, useLiveControls } from '@/lib/liveControls'
@@ -143,13 +144,16 @@ function ParentHeading({
   place: ProjectPlace | null
   statics: StaticControls | null
 }) {
-  const owner = P.user(it.owner)
+  const ownerView = P.person(it.owner, it.org)
+  const owner = personLabel(ownerView, 'Unassigned')
+  // the first name once named; the other words as they are
+  const firstName = ownerView?.state === 'ok' ? (ownerView.name.split(' ')[0] ?? owner) : owner
   /* A screen reader hears the owner, priority and due date after the title,
      in plain words: the meta row holds the owner button, whose name repeats
      the title. A parent is never paused (P.isPaused). */
   const meta = useId()
   const summary = [
-    owner?.name || 'Unassigned',
+    owner,
     `${P.PRIORITIES[it.priority]?.name ?? ''} priority`,
     it.due && `due ${P.fmtISO(it.due)}`,
   ]
@@ -182,10 +186,10 @@ function ParentHeading({
       <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-2">
         {hoverTooltip(
           statics,
-          owner?.name || 'Unassigned',
+          owner,
           <span data-focus-key="owner-name" className="inline-flex min-w-0 items-center gap-1.5">
             {ownerPortrait(statics, it, true)}
-            <span className="truncate">{owner?.name.split(' ')[0] || 'Unassigned'}</span>
+            <span className="truncate">{firstName}</span>
           </span>,
         )}
         {priorityIcon(statics, it.priority, 11)}
@@ -315,7 +319,9 @@ function TaskRow({
                         </span>,
                       )}
                     {dueDate(statics, it, true)}
-                    {!P.user(it.owner) && <span>Unassigned</span>}
+                    {/* only a task without an owner; one whose owner has
+                        not loaded shows the loading portrait */}
+                    {!it.owner && <span>Unassigned</span>}
                   </span>
                 </>
               ),

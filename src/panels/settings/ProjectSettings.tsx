@@ -5,10 +5,12 @@
    sub-projects as Settings › Projects lists them (ProjectLists.tsx), and
    sends every write with what it showed, so it works the same for a
    project the workspace does not hold, whose address then names it by its
-   uuid (lib/router.ts noteProjectPage). It reads the workspace only to
-   know whether it holds the project, for the address and the page a
-   delete returns to, for the names the removal window and the Archive or
-   delete window give, and for the avatars. */
+   uuid (lib/router.ts noteProjectPage). A removal names its person or team
+   as the page showed them (the change's label). It reads the workspace
+   only to know whether it holds the project, for the address and the page
+   a delete returns to, and for the names the Archive or delete window
+   gives. Its portraits come from P.person, which the access editor names
+   its people for (components/usePeople.ts). */
 import React, { useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -323,8 +325,8 @@ function ProjectSettingsFields({
   )
   const trackDelay = delayChosen ?? project.track_delay
   const lead = leadChosen ?? (answer.lead ? { id: answer.lead.id, name: answer.lead.name } : null)
-  const grant = (kind: 'team' | 'user', id: string) =>
-    grantRemoval(kind, project.id, id, project.org_id, isMeta)
+  const grant = (kind: 'team' | 'user', id: string, label?: string) =>
+    grantRemoval(kind, project.id, id, project.org_id, isMeta, label)
   return (
     <>
       {read.afterFailure && !gone && (
@@ -534,8 +536,8 @@ function ProjectSettingsFields({
                     leadId: project.lead_id,
                   })
             }
-            onRemove={(kind, id) =>
-              removal.press(grant(kind, id), focusAfterAccessRemoval(kind, id))
+            onRemove={(kind, id, name) =>
+              removal.press(grant(kind, id, name), focusAfterAccessRemoval(kind, id))
             }
             checking={(kind, id) => removal.checking(grant(kind, id))}
             removing={(kind, id) => P.removingAccess(grant(kind, id))}

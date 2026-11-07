@@ -23,6 +23,7 @@ import { staticTooltipTarget } from '@/components/ui/tooltip-target'
 import type { StaticControls } from '@/lib/liveControls'
 import { cn } from '@/lib/utils'
 import { type IssueVM, P } from '@/store/planner'
+import { personLabel } from './usePeople'
 
 /** The Lucide glyphs drawn by one element each (styles/glyphs.css). */
 type GlyphName = 'pause' | 'user'
@@ -57,7 +58,11 @@ export function hoverTooltip(
 /* ---- Avatars ----------------------------------------------------------
    An uploaded picture painted over the initials-on-color chip. The chip is
    not a placeholder that gets replaced: it is always rendered, so a person
-   without a picture, or one whose picture fails to load, shows initials. */
+   without a picture, or one whose picture fails to load, shows initials.
+   The person comes from P.person, the workspace's people part or the
+   profile cache, so a person not loaded yet is a plain square, never the
+   dashed Unassigned face, which only no person and the server's answer
+   that leaves the person out draw. */
 /* 20 is the Team sync row's portrait (beside a chevron in a 32px control). */
 export type AvatarSize = 20 | 28 | 40
 
@@ -67,9 +72,26 @@ const hidePicture = (event: SyntheticEvent<HTMLImageElement>) => {
   event.currentTarget.style.display = 'none'
 }
 
-type AvatarRootProps = HTMLAttributes<HTMLSpanElement> & { 'data-avatar'?: string }
+type AvatarRootProps = HTMLAttributes<HTMLSpanElement> & {
+  'data-avatar'?: string
+  'data-avatar-state'?: string
+}
 
-/** Avatar: the portrait of the person `id`, or Unassigned's. */
+/** The words of a portrait whose person is not named yet: loading, or
+    after a failed read. */
+export const AVATAR_LOADING = 'Loading person…'
+
+/**
+ * Avatar: the portrait of person `id` as P.person answers them. Named
+ * (`ok`), their initials on their color with their picture over them, or
+ * on a neutral fill for a person known only by a picker's name. Not named
+ * yet, a plain square of --surface-3 without initials, labelled "Loading
+ * person…", or "Couldn't load this person" after a failed read
+ * (`data-avatar-state`). The dashed Unassigned face for no id, and
+ * labelled "Unknown person" for one the server's answer leaves out. Every
+ * portrait of a person carries `data-avatar` with their id, which the
+ * audit of named people reads (src/peopleNamed.test.tsx).
+ */
 export function avatar(
   statics: StaticControls | null,
   id: string | null | undefined,
@@ -83,23 +105,42 @@ export function avatar(
     ) : (
       <UiAvatar className={className} {...props} />
     )
-  const u = P.user(id)
-  if (!u)
+  const u = P.person(id)
+  if (!u || u.state === 'gone') {
+    const label = u ? 'Unknown person' : 'Unassigned'
     return hoverTooltip(
       statics,
-      'Unassigned',
+      label,
       root({
         tabIndex: -1,
         role: 'img',
-        'aria-label': 'Unassigned',
+        'aria-label': label,
+        ...(u ? { 'data-avatar': u.id, 'data-avatar-state': 'gone' } : {}),
         style: { width: size, height: size },
         className:
           'flex items-center justify-center rounded-[5px] border border-dashed border-border-strong bg-surface-3',
         children: glyph('user', size * 0.55, 'var(--text-3)'),
       }),
     )
+  }
+  if (u.state !== 'ok') {
+    const label = u.state === 'failed' ? "Couldn't load this person" : AVATAR_LOADING
+    return hoverTooltip(
+      statics,
+      label,
+      root({
+        tabIndex: -1,
+        role: 'img',
+        'aria-label': label,
+        'data-avatar': u.id,
+        'data-avatar-state': u.state,
+        style: { width: size, height: size },
+        className: cn('rounded-[5px] bg-surface-3', size === 20 && 'rounded-[4px]'),
+      }),
+    )
+  }
   // null until an uploaded picture's signed URL arrives (0097)
-  const src = u.avatarPath ? u.avatarUrl : null
+  const src = u.picture
   // The two larger portraits share one readable fallback type step; the
   // 20px row portrait steps its initials down so two letters still fit.
   return hoverTooltip(
@@ -113,13 +154,16 @@ export function avatar(
       style: {
         width: size,
         height: size,
-        backgroundColor: u.color,
+        backgroundColor: u.nameOnly ? undefined : u.color,
         boxShadow: ring ? '0 0 0 2px var(--surface-1)' : undefined,
       },
       // centered by flex: a grid would keep its track sizes for every
       // portrait, and a Board holds thousands
       className: cn(
-        'flex items-center justify-center rounded-[5px] font-semibold text-white',
+        'flex items-center justify-center rounded-[5px] font-semibold',
+        // a person known only by a picker's name: their initials on a
+        // neutral fill until their face arrives
+        u.nameOnly ? 'bg-surface-3 text-text-2' : 'text-white',
         size === 20 ? 'rounded-[4px] text-[10px]' : '[font-size:var(--fs-sm)]',
       ),
       // one text node when there is no picture
@@ -311,7 +355,10 @@ export function ownerTrigger(
   toggle: (event: MouseEvent<HTMLElement>) => void,
   offTitle = 'Read-only project access',
 ) {
-  const name = P.user(issue[shown])?.name || (shown === 'reviewer' ? 'No reviewer' : 'Unassigned')
+  const name = personLabel(
+    P.person(issue[shown], issue.org),
+    shown === 'reviewer' ? 'No reviewer' : 'Unassigned',
+  )
   return {
     'data-assignee-edit': issue.id,
     'data-owner-field': shown,

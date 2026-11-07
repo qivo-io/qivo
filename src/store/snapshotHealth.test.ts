@@ -5,6 +5,7 @@ import type { Id } from '../../convex/_generated/dataModel'
 import { DEMO_UNAVAILABLE } from '../../convex/lib/demoRefusals'
 import type { Seatless } from '../../convex/lib/workspaceJoin'
 import { SEATS_DELETING } from './guard/liveDouble.setup'
+import { shownOf } from './personShown.setup'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 /* Snapshot trouble is the live snapshot query failing after the first
@@ -364,10 +365,12 @@ describe('snapshot trouble', () => {
     void P.deleteMcpToken('token-b')
     void P.revokeApiCredential('oauth_connections', 'connection-a')
     void P.revokeOAuthConnection('connection-b')
-    expect(P.updateUser('seat-a', { active: false })).toBe(true)
-    expect(P.removeUser('seat-b')).toBe(true)
+    expect(P.updateUser('seat-a', { active: false }, {}, shownOf(P, 'seat-a'))).toBe(true)
+    // the removal goes out, which sentNames shows; it resolves once the
+    // server answers
+    void P.removeUser('seat-b', { orgId: P.homeOrg })
     // a role change or a new credential is an ordinary edit and pauses
-    expect(P.updateUser('seat-a', { orgRole: 'viewer' })).toBe(false)
+    expect(P.updateUser('seat-a', { orgRole: 'viewer' }, {}, shownOf(P, 'seat-a'))).toBe(false)
     await expect(P.createMcpToken('Laptop', { access: 'read' })).resolves.toBeNull()
     await settle()
     expect(sentNames()).toEqual([
@@ -561,8 +564,8 @@ describe('snapshot trouble', () => {
     P.saveUI({ view: 'kanban' })
     // the writes that take access away or change a seat answer that they
     // were not sent, so their callers announce nothing
-    expect(P.updateUser('seat-a', { active: false })).toBe(false)
-    expect(P.removeUser('seat-b')).toBe(false)
+    expect(P.updateUser('seat-a', { active: false }, {}, shownOf(P, 'seat-a'))).toBe(false)
+    await expect(P.removeUser('seat-b', { orgId: P.homeOrg })).resolves.toBe(false)
     expect(P.setMessageRetention(30)).toBe(false)
     void P.revokeMcpToken('token-a')
     void P.setFavorite({ id: snapshot.projects[0].id, org_id: org.id }, true)

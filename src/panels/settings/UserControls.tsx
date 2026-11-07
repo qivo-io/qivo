@@ -1,9 +1,12 @@
 /* Roster identity, invitation address, role and weekly capacity controls.
-   Each control reads only the fields of `user` it shows, so Settings ›
-   Users can draw a row from the server's answer while the store does not
-   hold the person. Writes go through P.updateUser, which needs the store's
-   row, so such a row passes `waiting`, and the control shows the answer's
-   values, writes nothing and says "Loading this person…" (WAITING). */
+   Each control shows the person as the page showed them (ShownPerson): the
+   store's profile while the store holds it, so this session's writes show
+   at once, else the server's answer. Every write goes through P.updateUser
+   with what the page showed, which decides its refusals, its organization
+   and its `expected` from it, whether or not the store holds the person.
+   `waiting` keeps the writes off with "Loading this person…" (WAITING)
+   only where the page's own read is not current, as on the phone's user
+   page. */
 import React, { useEffect as useEffectS, useState as useStateS } from 'react'
 import { flushSync } from 'react-dom'
 import { Button } from '@/components/ui/button'
@@ -29,12 +32,17 @@ import {
 import { projectRightBox } from '../../lib/projectCreators'
 import { EMAIL, PERSON_NAME, useSavedDraft, wholeNumber } from '../../lib/savedDraft'
 import { DEFAULT_PLANNABLE_HOURS } from '../../lib/workload'
-import type { FieldSave, UserPatch, UserVM } from '../../store/planner'
+import type { FieldSave, PersonShown, UserPatch } from '../../store/planner'
 import { P } from '../../store/planner'
 import { DraftConflictLine } from './controls'
 
-/** What a control says while its row waits for the store's profile. */
+/** What a control says while its page's read of the person is not
+    current. */
 export const WAITING = 'Loading this person…'
+
+/** A person as a Settings row showed them, with their id: what every
+    control shows and each write sends (store/planner.ts PersonShown). */
+export type ShownPerson = PersonShown & { id: string }
 
 /** Tells `onUnsaved` whether a field holds its row, as that changes, and
     false when the field goes, so a list can keep the row on screen while a
@@ -75,16 +83,16 @@ function useHeldRow(
 // a refused save keeps it, and a name changed elsewhere while it is typed
 // shows under it, and nothing saves until Use saved or Keep mine. A name over
 // the cap stays typed and invalid, with the cap's sentence, until it is
-// shortened. `waiting` shows the name read-only while the store does not
-// hold the person; `onUnsaved` hears whether the field holds its row, with
-// a typed name unsaved or a rename the server has not answered (useHeldRow).
+// shortened. `waiting` shows the name read-only while the page's read is
+// not current; `onUnsaved` hears whether the field holds its row, with a
+// typed name unsaved or a rename the server has not answered (useHeldRow).
 export function UserName({
   user,
   isSelf,
   waiting = false,
   onUnsaved,
 }: {
-  user: Pick<UserVM, 'id' | 'name' | 'isAgent' | 'orgRole'>
+  user: ShownPerson
   isSelf: boolean
   waiting?: boolean
   onUnsaved?: (id: string, unsaved: boolean) => void
@@ -113,7 +121,7 @@ export function UserName({
     }
     // a conflict waits for Use saved or Keep mine; a paused rename keeps it
     if (draft.conflict || P.refusePausedEdit()) return
-    send(draft.save(next).as('name'), (save) => P.updateUser(user.id, { name: next }, save))
+    send(draft.save(next).as('name'), (save) => P.updateUser(user.id, { name: next }, save, user))
     window.showToast?.(`${(user.isAgent ? 'Agent renamed to “' : 'Renamed to “') + next}”`)
   }
   const chips = (
@@ -208,14 +216,13 @@ export function UserName({
     page's reads of its pending rows (InviteRows), and says "invited"
     until the seat's read answers or outside such a page, and that it
     couldn't check while that read failed (INVITE_UNCHECKED). `waiting`
-    turns SendAgain off with WAITING while the store does not hold the
-    seat. */
+    turns SendAgain off with WAITING while the page's read is not current. */
 export function InviteLabel({
   user,
   className,
   waiting = false,
 }: {
-  user: Pick<UserVM, 'id' | 'org'>
+  user: Pick<ShownPerson, 'id' | 'orgId'>
   className?: string
   waiting?: boolean
 }) {
@@ -240,7 +247,7 @@ export function InviteLabel({
           {label.text}
         </span>
       </HoverTooltip>
-      <SendAgain orgId={user.org} seat={user.id} row={row} waiting={waiting} />
+      <SendAgain orgId={user.orgId} seat={user.id} row={row} waiting={waiting} />
     </>
   )
 }
@@ -251,7 +258,7 @@ export function InviteLabel({
     and unlocks by itself. Nothing for any other seat. The server lets only
     an org admin or whoever caused the send use it (invites.sendAgain), the
     people who see the seat's row. `waiting` disables it with WAITING, for
-    a row the store does not hold. */
+    a row whose page's read is not current. */
 function SendAgain({
   orgId,
   seat,
@@ -367,15 +374,15 @@ export function InviteOutcome({
 // the one it began from (lib/savedDraft.ts): the server's refusal keeps it,
 // and an address changed elsewhere while it is typed shows under it, and
 // nothing saves until Use saved or Keep mine. `waiting` shows the address
-// read-only while the store does not hold the person; `onUnsaved` hears
-// whether the field holds its row, with a typed address unsaved or a change
-// the server has not answered (useHeldRow).
+// read-only while the page's read is not current; `onUnsaved` hears whether
+// the field holds its row, with a typed address unsaved or a change the
+// server has not answered (useHeldRow).
 export function UserEmail({
   user,
   waiting = false,
   onUnsaved,
 }: {
-  user: Pick<UserVM, 'id' | 'name' | 'email' | 'pending' | 'org'>
+  user: ShownPerson
   waiting?: boolean
   onUnsaved?: (id: string, unsaved: boolean) => void
 }) {
@@ -390,7 +397,7 @@ export function UserEmail({
     // a conflict waits for Use saved or Keep mine; a paused change keeps it
     if (draft.conflict || P.refusePausedEdit()) return
     const save = draft.save(next).as('email')
-    if (!send(save, (sent) => P.updateUser(user.id, { email: next }, sent))) draft.discard()
+    if (!send(save, (sent) => P.updateUser(user.id, { email: next }, sent, user))) draft.discard()
   }
   if (!canEdit) {
     const line = (
@@ -455,11 +462,10 @@ const HOURS = wholeNumber<number | null>(DEFAULT_PLANNABLE_HOURS)
 // with the range's sentence. The typed hours are a draft against the hours
 // they began from (lib/savedDraft.ts): hours changed elsewhere meanwhile show
 // under the field, and nothing saves until Use saved or Keep mine. Team
-// leaders may edit this field, not other profile data. `user` needs only the
-// fields the field shows, so a list can pass a person the store does not
-// hold, read-only. The save goes through P.updateUser, which needs the
-// store's row, so pass `canEdit` only while the store holds it, and
-// `waiting` while a row waits for it, which says so. `onUnsaved` hears
+// leaders may edit this field, not other profile data. `user` is the person
+// as the row showed them, which the save sends (P.updateUser) whether or
+// not the store holds them; `waiting` keeps it off while the page's read is
+// not current, which says so. `onUnsaved` hears
 // whether the field holds its row, with unsaved hours or a save the server
 // has not answered (useHeldRow), so a list can keep the row on screen while
 // a search would hide it.
@@ -470,7 +476,7 @@ export function PlannableHoursInput({
   waiting = false,
   onUnsaved,
 }: {
-  user: Pick<UserVM, 'id' | 'name' | 'isAgent' | 'plannableHours'>
+  user: ShownPerson
   canEdit: boolean
   width?: number
   waiting?: boolean
@@ -511,7 +517,7 @@ export function PlannableHoursInput({
     // a conflict waits for Use saved or Keep mine; a pause keeps the hours
     if (draft.conflict || P.refusePausedEdit()) return
     send(draft.save(h).as('plannable_hours'), (save) =>
-      P.updateUser(user.id, { plannableHours: h }, save),
+      P.updateUser(user.id, { plannableHours: h }, save, user),
     )
     window.showToast?.(`${user.name} plans ${h} h per week`)
   }
@@ -570,13 +576,13 @@ export function PlannableHoursInput({
    (projectRightBox). The phone's user page shows a single row without the
    header, so there the checkbox carries a visible label and the empty cell
    is left out. `waiting` turns the checkbox off with WAITING while the
-   store does not hold the person. */
+   page's read is not current. */
 export function ProjectRightCell({
   user,
   labelled,
   waiting = false,
 }: {
-  user: Pick<UserVM, 'id' | 'name' | 'active' | 'orgRole' | 'canCreateProjects'>
+  user: ShownPerson
   labelled: boolean
   waiting?: boolean
 }) {
@@ -602,13 +608,13 @@ export function ProjectRightCell({
             type="checkbox"
             data-can-create-projects={user.id}
             aria-label={`${user.name} can create projects`}
-            checked={box === 'locked' || user.canCreateProjects}
+            checked={box === 'locked' || !!user.canCreateProjects}
             disabled={locked}
             title={waiting ? WAITING : undefined}
             onChange={(e) => {
               const on = e.target.checked
               if (waiting || P.refusePausedEdit()) return
-              P.updateUser(user.id, { canCreateProjects: on })
+              P.updateUser(user.id, { canCreateProjects: on }, {}, user)
               window.showToast?.(
                 on
                   ? `${user.name} can create projects`
@@ -646,15 +652,15 @@ export function ProjectRightHeader() {
 }
 
 // Role and active status share one selector; deactivation removes access.
-// `waiting` shows the role, unchangeable, while the store does not hold the
-// person.
+// `waiting` shows the role, unchangeable, while the page's read is not
+// current.
 export function UserRoleSelect({
   user,
   isSelf,
   lastAdmin,
   waiting = false,
 }: {
-  user: Pick<UserVM, 'id' | 'name' | 'active' | 'orgRole' | 'isAgent'>
+  user: ShownPerson
   isSelf: boolean
   lastAdmin: boolean
   waiting?: boolean
@@ -691,8 +697,8 @@ export function UserRoleSelect({
         // The viewer guard refuses someone who leads a project or a team;
         // the toast names what to hand over first. Reactivation contributes
         // to the billable user count at the next monthly renewal.
-        if (v === 'inactive') P.updateUser(user.id, { active: false })
-        else P.updateUser(user.id, { orgRole: v, active: true })
+        if (v === 'inactive') P.updateUser(user.id, { active: false }, {}, user)
+        else P.updateUser(user.id, { orgRole: v, active: true }, {}, user)
       }}
       style={{ opacity: lastAdmin || waiting ? 0.55 : 1 }}
       className="h-control-sm w-[132px] shrink-0 bg-surface-1 text-sm font-sans"

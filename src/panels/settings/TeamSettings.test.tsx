@@ -66,6 +66,8 @@ let server: {
 /* The one-shot reads of the team pages the page sent, by name and
    arguments. */
 let queries: { name: string; args: Record<string, unknown> }[]
+/* The removal previews the page asked for, each with its arguments. */
+let previews: unknown[] = []
 /* Every function the app read or watched over the client, by name, which
    a test empties once the store has loaded. The store's workspace parts
    come from the one workspace:whole watch the double holds
@@ -127,6 +129,7 @@ async function load(shape?: (snap: Snapshot) => void, leave?: (snap: Snapshot) =
   shape?.(snap)
   requests = []
   queries = []
+  previews = []
   opened = []
   const reads = teamSettingsServer(
     () => server.snap,
@@ -140,7 +143,10 @@ async function load(shape?: (snap: Snapshot) => void, leave?: (snap: Snapshot) =
     opened.push(name)
     if (name.startsWith('teams:')) queries.push({ name, args })
     if (isTeamSettingsRead(name)) return await reads.query(name, args)
-    if (name === 'accessRemovals:preview') return removalAnswer()
+    if (name === 'accessRemovals:preview') {
+      previews.push(args)
+      return removalAnswer()
+    }
     return null
   })
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
@@ -634,36 +640,75 @@ describe("a team's page", () => {
     expect(find('[data-team-settings-state]').dataset.teamSettingsState).toBe('unavailable')
   })
 
-  it("shows the answer's name read-only, and keeps Delete's, Remove's and Add's writes waiting, while the store does not hold the team", async () => {
+  it('renames, sets a leader, adds and removes a member and deletes a team the store does not hold, each with what the page showed', async () => {
     await load(undefined, (held) => {
       held.teams = held.teams.filter((t) => t.id !== 'crew')
       held.teamMembers = held.teamMembers.filter((m) => m.team_id !== 'crew')
     })
     await teamPage()
+    const org = server.snap.orgs[0].id
+    // nothing waits for the store
+    expect(document.querySelector('[data-team-waiting], [data-team-member-waiting]')).toBeNull()
     const name = find<HTMLInputElement>('input[aria-label="Team name"]')
     expect(name.value).toBe('Crew')
-    expect(name.disabled).toBe(true)
-    expect(document.querySelector('[data-team-members]')?.hasAttribute('data-team-waiting')).toBe(
-      true,
+    expect(name.disabled).toBe(false)
+    await act(async () => name.focus())
+    await type(name, 'Field crew')
+    await act(async () => name.blur())
+    await settle()
+    expect(requests.at(-1)).toMatchObject({
+      name: 'teams:update',
+      args: { org_id: org, id: 'crew', patch: { name: 'Field crew' }, expected: { name: 'Crew' } },
+    })
+    await answer('teams:update', 'accept')
+    // the Leader box decides from what the row showed
+    const leader = find<HTMLInputElement>(
+      '[data-settings-team-member="leo"] [data-team-leader-toggle] input',
     )
-    const remove = find<HTMLButtonElement>(
-      '[data-settings-team-member="leo"] [data-team-member-remove]',
+    expect(leader.disabled).toBe(false)
+    await click(leader)
+    expect(requests.at(-1)).toMatchObject({
+      name: 'teams:setLeader',
+      args: { org_id: org, team_id: 'crew', profile_id: 'leo', is_leader: true },
+    })
+    await answer('teams:setLeader', 'accept')
+    // Add member sends to the page's organization
+    await click(find('[data-team-member-picker]'))
+    await click(document.querySelector('[data-team-member-choice="off"]'))
+    await click(find('[data-team-member-add]'))
+    expect(requests.at(-1)).toMatchObject({
+      name: 'teams:addMember',
+      args: { org_id: org, team_id: 'crew', profile_id: 'off' },
+    })
+    expect(find('[data-settings-team-member="off"] [data-team-member-kept]').textContent).toBe(
+      'Added',
     )
-    expect(remove.disabled).toBe(true)
-    expect(find<HTMLButtonElement>('[data-team-member-picker]').disabled).toBe(true)
-    expect(find<HTMLButtonElement>('[data-team-member-add]').disabled).toBe(true)
-    expect(
-      find<HTMLInputElement>('[data-settings-team-member="leo"] [data-team-leader-toggle] input')
-        .disabled,
-    ).toBe(true)
-    // the store holds Leo, so his hours are his
-    expect(find<HTMLInputElement>('[data-plannable-for="leo"]').disabled).toBe(false)
+    // a refused add takes the kept row away, with no store to tell it
+    await answer('teams:addMember', 'refuse')
+    expect(document.querySelector('[data-settings-team-member="off"]')).toBeNull()
+    // Remove asks the preview of the change in the page's organization,
+    // named as the row showed them
+    const remove = () =>
+      find<HTMLButtonElement>('[data-settings-team-member="leo"] [data-team-member-remove]')
+    expect(remove().disabled).toBe(false)
+    await click(remove())
+    // the second press counts past the confirm's ignore time
+    await act(async () => await new Promise((r) => setTimeout(r, 550)))
+    await click(remove())
+    await settle()
+    expect(previews.at(-1)).toMatchObject({
+      org_id: org,
+      change: { team_id: 'crew', user_id: 'leo' },
+    })
+    expect(requests.at(-1)).toMatchObject({
+      name: 'teams:removeMember',
+      args: { org_id: org, team_id: 'crew', profile_id: 'leo' },
+    })
     await act(async () => root.unmount())
     root = createRoot(container)
     await teamsPage()
-    expect(deleteOf('crew').disabled).toBe(true)
-    expect(find('[data-team-row="crew"]').hasAttribute('data-team-waiting')).toBe(true)
-    expect(deleteOf('bench').disabled).toBe(false)
+    expect(deleteOf('crew').disabled).toBe(false)
+    expect(document.querySelector('[data-team-waiting]')).toBeNull()
   })
 
   it("shows the store's hours and role while it holds the person, else the answer's", async () => {
@@ -680,9 +725,10 @@ describe("a team's page", () => {
     expect(
       document.querySelector('[data-settings-team-member="vic"] [data-viewer-chip]'),
     ).toBeNull()
-    // the agent the store does not hold shows from the answer, waiting
+    // the agent the store does not hold shows from the answer, and nothing
+    // waits for the store
     const bot = find('[data-settings-team-member="bot"]')
-    expect(bot.hasAttribute('data-team-member-waiting')).toBe(true)
+    expect(bot.hasAttribute('data-team-member-waiting')).toBe(false)
     expect(bot.textContent).toContain('Relay')
     expect(bot.querySelector('[data-plannable-unbounded]')).not.toBeNull()
   })

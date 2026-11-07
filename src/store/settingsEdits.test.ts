@@ -1,6 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { labelShownOf, shownOf } from './personShown.setup'
 import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup'
 
 /* Inline settings editors restore their draft when the store reports that
@@ -111,18 +112,20 @@ describe('settings edits through the client store', () => {
   })
 
   describe('updateLabel', () => {
-    it('refuses a name another label in the organization has', () => {
-      expect(P.updateLabel('l-feat', { name: ' bug ' })).toBe(false)
-      expect(showToast).toHaveBeenCalledExactlyOnceWith(
-        'A label with that name already exists',
-        'error',
-      )
-      expect(requests).toEqual([])
-      expect(P.labelById['l-feat'].name).toBe('Feature')
+    // Changed with the roster cache stage: the store reads no catalogue for
+    // a duplicate, and the server refuses a name another label holds
+    it('sends a name another label in the organization has, leaving the refusal to the server', () => {
+      expect(P.updateLabel('l-feat', { name: ' bug ' }, {}, labelShownOf(P, 'l-feat'))).toBe(true)
+      expect(showToast).not.toHaveBeenCalled()
+      expect(requests).toMatchObject([
+        { name: 'labels:update', args: { id: 'l-feat', patch: { name: 'bug' } } },
+      ])
     })
 
     it('writes a trimmed new name', () => {
-      expect(P.updateLabel('l-feat', { name: '  Firmware ' })).toBe(true)
+      expect(P.updateLabel('l-feat', { name: '  Firmware ' }, {}, labelShownOf(P, 'l-feat'))).toBe(
+        true,
+      )
       expect(P.labelById['l-feat'].name).toBe('Firmware')
       expect(requests).toMatchObject([
         { name: 'labels:update', args: { id: 'l-feat', patch: { name: 'Firmware' } } },
@@ -130,26 +133,32 @@ describe('settings edits through the client store', () => {
     })
 
     it('allows a case change of its own name', () => {
-      expect(P.updateLabel('l-feat', { name: 'feature' })).toBe(true)
+      expect(P.updateLabel('l-feat', { name: 'feature' }, {}, labelShownOf(P, 'l-feat'))).toBe(true)
       expect(P.labelById['l-feat'].name).toBe('feature')
     })
 
     it("ignores another organization's labels", () => {
-      expect(P.updateLabel('l-feat', { name: 'Hardware' })).toBe(true)
+      expect(P.updateLabel('l-feat', { name: 'Hardware' }, {}, labelShownOf(P, 'l-feat'))).toBe(
+        true,
+      )
       expect(showToast).not.toHaveBeenCalled()
     })
 
     it('reports a name that shortens to the stored one as nothing written', () => {
       const long = 'A'.repeat(40)
-      expect(P.updateLabel('l-feat', { name: long })).toBe(true)
+      expect(P.updateLabel('l-feat', { name: long }, {}, labelShownOf(P, 'l-feat'))).toBe(true)
       requests = []
-      expect(P.updateLabel('l-feat', { name: `${long} and more` })).toBe(false)
+      expect(
+        P.updateLabel('l-feat', { name: `${long} and more` }, {}, labelShownOf(P, 'l-feat')),
+      ).toBe(false)
       expect(requests).toEqual([])
       expect(P.labelById['l-feat'].name).toBe(long)
     })
 
     it('restores the stored name when the server refuses', async () => {
-      expect(P.updateLabel('l-feat', { name: 'Firmware' })).toBe(true)
+      expect(P.updateLabel('l-feat', { name: 'Firmware' }, {}, labelShownOf(P, 'l-feat'))).toBe(
+        true,
+      )
       requests[0].reject(
         new ConvexError({ code: 'rule', message: 'a label with that name already exists' }),
       )
@@ -163,7 +172,9 @@ describe('settings edits through the client store', () => {
 
   describe('updateUser', () => {
     it("refuses an invited seat's email that another seat has", () => {
-      expect(P.updateUser('u-ben', { email: 'ANA@example.test' })).toBe(false)
+      expect(P.updateUser('u-ben', { email: 'ANA@example.test' }, {}, shownOf(P, 'u-ben'))).toBe(
+        false,
+      )
       expect(showToast).toHaveBeenCalledExactlyOnceWith(
         'ana@example.test already has a seat in this organization',
         'error',
@@ -173,7 +184,9 @@ describe('settings edits through the client store', () => {
     })
 
     it('writes a free address, lowercased', () => {
-      expect(P.updateUser('u-ben', { email: 'Ben.New@Example.test' })).toBe(true)
+      expect(
+        P.updateUser('u-ben', { email: 'Ben.New@Example.test' }, {}, shownOf(P, 'u-ben')),
+      ).toBe(true)
       expect(P.user('u-ben')?.email).toBe('ben.new@example.test')
       expect(requests).toMatchObject([
         {
@@ -185,9 +198,11 @@ describe('settings edits through the client store', () => {
 
     it('turns the project-creation right on and off', () => {
       expect(P.user('u-ana')?.canCreateProjects).toBe(false)
-      expect(P.updateUser('u-ana', { canCreateProjects: true })).toBe(true)
+      expect(P.updateUser('u-ana', { canCreateProjects: true }, {}, shownOf(P, 'u-ana'))).toBe(true)
       expect(P.user('u-ana')?.canCreateProjects).toBe(true)
-      expect(P.updateUser('u-ana', { canCreateProjects: false })).toBe(true)
+      expect(P.updateUser('u-ana', { canCreateProjects: false }, {}, shownOf(P, 'u-ana'))).toBe(
+        true,
+      )
       expect(P.user('u-ana')?.canCreateProjects).toBe(false)
       expect(requests.map((r) => [r.name, r.args.patch])).toEqual([
         ['profiles:update', { can_create_projects: true }],
@@ -196,23 +211,41 @@ describe('settings edits through the client store', () => {
     })
 
     it('clears the right on a role change but keeps it on deactivation or an unchanged role', () => {
-      P.updateUser('u-ana', { canCreateProjects: true })
-      P.updateUser('u-ana', { active: false })
+      P.updateUser('u-ana', { canCreateProjects: true }, {}, shownOf(P, 'u-ana'))
+      P.updateUser('u-ana', { active: false }, {}, shownOf(P, 'u-ana'))
       expect(P.user('u-ana')?.canCreateProjects).toBe(true)
       // the role select sends the role it shows, changed or not, and only
       // the fields that differ from the screen go out, each as expected
-      P.updateUser('u-ana', { orgRole: 'user', active: true })
+      P.updateUser('u-ana', { orgRole: 'user', active: true }, {}, shownOf(P, 'u-ana'))
       expect(P.user('u-ana')?.canCreateProjects).toBe(true)
-      P.updateUser('u-ana', { orgRole: 'viewer', active: true })
+      P.updateUser('u-ana', { orgRole: 'viewer', active: true }, {}, shownOf(P, 'u-ana'))
       expect(P.user('u-ana')?.canCreateProjects).toBe(false)
       expect(requests.at(-1)?.args.patch).toEqual({ org_role: 'viewer' })
       expect(requests.at(-1)?.args.expected).toEqual({ org_role: 'user' })
     })
 
+    it('compares each field with what the page showed, not with the store', () => {
+      // the page still shows Ana as a viewer while the store holds her as a
+      // user: choosing user on the page is a change, sent over the viewer
+      // the page showed, and the server's check decides it
+      P.updateUser(
+        'u-ana',
+        { orgRole: 'user', active: true },
+        {},
+        {
+          ...shownOf(P, 'u-ana'),
+          orgRole: 'viewer',
+        },
+      )
+      expect(requests.map((r) => [r.name, r.args.patch, r.args.expected])).toEqual([
+        ['profiles:update', { org_role: 'user' }, { org_role: 'viewer' }],
+      ])
+    })
+
     it('sends deactivation alone to its own door and reactivation through update', () => {
-      P.updateUser('u-ana', { active: false })
+      P.updateUser('u-ana', { active: false }, {}, shownOf(P, 'u-ana'))
       expect(P.user('u-ana')?.active).toBe(false)
-      P.updateUser('u-ana', { orgRole: 'user', active: true })
+      P.updateUser('u-ana', { orgRole: 'user', active: true }, {}, shownOf(P, 'u-ana'))
       // the role is unchanged, so only the reactivation goes out, over the
       // deactivation still on screen
       expect(requests.map((r) => [r.name, r.args])).toEqual([
@@ -231,10 +264,10 @@ describe('settings edits through the client store', () => {
 
     it('sets the right with the standard user role only when the same patch turns it on', () => {
       // a stale right on a viewer never comes back with the role
-      P.updateUser('u-cat', { orgRole: 'user', active: true })
+      P.updateUser('u-cat', { orgRole: 'user', active: true }, {}, shownOf(P, 'u-cat'))
       expect(P.user('u-cat')?.canCreateProjects).toBe(false)
-      P.updateUser('u-cat', { orgRole: 'viewer', active: true })
-      P.updateUser('u-cat', { orgRole: 'user', canCreateProjects: true })
+      P.updateUser('u-cat', { orgRole: 'viewer', active: true }, {}, shownOf(P, 'u-cat'))
+      P.updateUser('u-cat', { orgRole: 'user', canCreateProjects: true }, {}, shownOf(P, 'u-cat'))
       expect(P.user('u-cat')).toMatchObject({ orgRole: 'user', canCreateProjects: true })
       expect(requests.at(-1)?.args.patch).toEqual({ org_role: 'user', can_create_projects: true })
     })
@@ -297,9 +330,19 @@ describe('settings edits through the client store', () => {
     })
 
     it('sends it from updateTeam and updateProject', () => {
-      P.updateTeam('t-crew', { name: 'Bench crew' })
+      P.updateTeam(
+        't-crew',
+        { name: 'Bench crew' },
+        {},
+        { orgId: P.homeOrg, name: P.teamById('t-crew')?.name ?? '' },
+      )
       expect(latest().args.expected).toEqual({ name: 'Crew' })
-      P.updateTeam('t-crew', { name: 'Field crew' }, { seen: { name: 'Crew' } })
+      P.updateTeam(
+        't-crew',
+        { name: 'Field crew' },
+        { seen: { name: 'Crew' } },
+        { orgId: P.homeOrg, name: P.teamById('t-crew')?.name ?? '' },
+      )
       expect(latest().args.expected).toEqual({ name: 'Crew' })
       const project = snap.projects[0].id
       P.updateProject(project, { name: 'Sensor' })
@@ -309,7 +352,7 @@ describe('settings edits through the client store', () => {
     })
 
     it('sends it from updateLabel, the value on screen without it, and keeps the draft a rename refused', async () => {
-      P.updateLabel('l-feat', { name: 'Firmware' })
+      P.updateLabel('l-feat', { name: 'Firmware' }, {}, labelShownOf(P, 'l-feat'))
       expect(latest().args.expected).toEqual({ name: 'Feature' })
       const kept: unknown[] = []
       const save = {
@@ -322,11 +365,13 @@ describe('settings edits through the client store', () => {
       }
       // the field began before the first save's paint, which the screen shows
       expect(P.labelById['l-feat'].name).toBe('Firmware')
-      expect(P.updateLabel('l-feat', { name: 'Field test' }, save)).toBe(true)
+      expect(P.updateLabel('l-feat', { name: 'Field test' }, save, labelShownOf(P, 'l-feat'))).toBe(
+        true,
+      )
       expect(latest().args.expected).toEqual({ name: 'Feature' })
       latest().reject(changed('label', 'l-feat', 'name'))
       // a recolor sends the color on screen
-      P.updateLabel('l-feat', { color: '#DC2626' })
+      P.updateLabel('l-feat', { color: '#DC2626' }, {}, labelShownOf(P, 'l-feat'))
       expect(latest().args.expected).toEqual({ color: '#2563EB' })
       latest().reject(new ConvexError({ code: 'rule', message: 'the server said no' }))
       await settle()
@@ -337,19 +382,24 @@ describe('settings edits through the client store', () => {
     })
 
     it('sends it from both writes of updateUser', () => {
-      P.updateUser('u-ana', { name: 'Ana Berg' })
+      P.updateUser('u-ana', { name: 'Ana Berg' }, {}, shownOf(P, 'u-ana'))
       expect(latest()).toMatchObject({
         name: 'profiles:update',
         args: { expected: { name: 'Ana' } },
       })
-      P.updateUser('u-ana', { name: 'Ana B.' }, { seen: { name: 'Ana' } })
+      P.updateUser('u-ana', { name: 'Ana B.' }, { seen: { name: 'Ana' } }, shownOf(P, 'u-ana'))
       expect(latest().args.expected).toEqual({ name: 'Ana' })
-      P.updateUser('u-ana', { plannableHours: 30 })
+      P.updateUser('u-ana', { plannableHours: 30 }, {}, shownOf(P, 'u-ana'))
       expect(latest()).toMatchObject({
         name: 'profiles:setPlannableHours',
         args: { expected: { plannable_hours: null } },
       })
-      P.updateUser('u-ana', { plannableHours: 28 }, { seen: { plannable_hours: 32 } })
+      P.updateUser(
+        'u-ana',
+        { plannableHours: 28 },
+        { seen: { plannable_hours: 32 } },
+        shownOf(P, 'u-ana'),
+      )
       expect(latest().args.expected).toEqual({ plannable_hours: 32 })
     })
 
@@ -376,11 +426,16 @@ describe('settings edits through the client store', () => {
       const project = snap.projects[0].id
       P.setOrg({ name: 'Testbed Robotics' }, undefined, { keepDraft })
       latest().reject(changed('organization', org, 'name'))
-      P.updateTeam('t-crew', { name: 'Bench crew' }, { keepDraft })
+      P.updateTeam(
+        't-crew',
+        { name: 'Bench crew' },
+        { keepDraft },
+        { orgId: P.homeOrg, name: P.teamById('t-crew')?.name ?? '' },
+      )
       latest().reject(changed('team', 't-crew', 'name', 'u-ben'))
       P.updateProject(project, { name: 'Sensor' }, { keepDraft })
       latest().reject(changed('project', project, 'name', P.CURRENT_USER))
-      P.updateUser('u-ana', { plannableHours: 30 }, { keepDraft })
+      P.updateUser('u-ana', { plannableHours: 30 }, { keepDraft }, shownOf(P, 'u-ana'))
       latest().reject(changed('profile', 'u-ana', 'plannable_hours'))
       await settle()
       expect(kept).toEqual([
@@ -401,7 +456,7 @@ describe('settings edits through the client store', () => {
       expect(P.org.name).toBe('Testbed Robotics')
       // a server fault reaches the app as an Error, not a ConvexError
       latest().reject(new Error('[Request ID: 1] Server Error'))
-      P.updateUser('u-ana', { plannableHours: 30 }, save)
+      P.updateUser('u-ana', { plannableHours: 30 }, save, shownOf(P, 'u-ana'))
       latest().reject(new ConvexError({ code: 'rule', message: 'the server said no' }))
       await settle()
       expect(calls).toEqual(['keepUnsaved', 'keepUnsaved'])

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
 import type { Workspace } from '../../convex/lib/workspaceJoin'
+import type { PersonFaceRow } from '../../convex/model/peopleSettings'
 
 type Snapshot = Workspace
 type Minted = FunctionReturnType<typeof api.files.mintUrls>
@@ -92,15 +93,20 @@ describe('uploaded profile pictures through the planner store', () => {
   let decode: ReturnType<typeof vi.fn<(url: string) => Promise<void>>>
   let revoke: ReturnType<typeof vi.spyOn>
 
+  // the people.byIds rows of people the workspace does not hold
+  let faces: PersonFaceRow[] = []
   const response = (): Minted => ({
     attachments: {},
     avatars: Object.fromEntries(
-      snap.profiles
-        .filter((profile) => profile.avatar_storage_id)
+      [
+        ...snap.profiles.map((p) => ({ id: p.id, version: p.avatar_storage_id })),
+        ...faces.map((face) => ({ id: face.id, version: face.avatar ?? undefined })),
+      ]
+        .filter((profile) => profile.version)
         .map((profile) => [
           profile.id,
           {
-            url: `https://files.test/avatars/${profile.id}?v=${profile.avatar_storage_id}&e=${Date.now()}`,
+            url: `https://files.test/avatars/${profile.id}?v=${profile.version}&e=${Date.now()}`,
             exp: Math.floor(Date.now() / 1000) + 600,
           },
         ]),
@@ -113,6 +119,13 @@ describe('uploaded profile pictures through the planner store', () => {
     snap.orgs[0].name = `Testbed ${++deliveries}`
     publish(structuredClone(snap))
   }
+  /* An open view that shows every person of the workspace, so the store
+     asks for each one's picture, as a page that lists them all does. */
+  const nameAll = () =>
+    store.P.namePeople(
+      'every-person',
+      snap.profiles.map((profile) => ({ org: profile.org_id, id: profile.id })),
+    )
   const ready = async () =>
     vi.waitFor(() =>
       expect(store.P.users.every((user) => user.avatarUrl?.startsWith('blob:'))).toBe(true),
@@ -148,7 +161,14 @@ describe('uploaded profile pictures through the planner store', () => {
       getFunctionName(ref) === 'files:mintUrls' ? mint() : Promise.resolve(null),
     )
     network.mutation.mockResolvedValue(null)
-    network.onUpdate.mockImplementation((_ref, _args, next) => {
+    faces = []
+    network.onUpdate.mockImplementation((ref, args: { ids?: string[] }, next) => {
+      // people.byIds answers the faces of the people the workspace does not
+      // hold, as the server would
+      if (getFunctionName(ref) === 'people:byIds') {
+        next({ rows: faces.filter((face) => args.ids?.includes(face.id)) })
+        return () => {}
+      }
       publish = next
       next(structuredClone(snap))
       return () => {}
@@ -167,6 +187,7 @@ describe('uploaded profile pictures through the planner store', () => {
     const slow = deferred<void>()
     decode.mockReturnValueOnce(slow.promise)
     await store.initStore()
+    nameAll()
     await vi.waitFor(() => expect(store.P.users.filter((user) => user.avatarUrl)).toHaveLength(1))
     expect(store.P.users[0].avatarUrl).toBeNull()
     slow.resolve()
@@ -176,6 +197,7 @@ describe('uploaded profile pictures through the planner store', () => {
 
   it('retains shared prepared sources on a rebuild during delayed and successful renewal', async () => {
     await store.initStore()
+    nameAll()
     await ready()
     const sources = store.P.users.map((user) => user.avatarUrl)
     const renewal = deferred<Minted>()
@@ -201,6 +223,7 @@ describe('uploaded profile pictures through the planner store', () => {
     'drops prepared portraits immediately on mint %s',
     async (kind) => {
       await store.initStore()
+      nameAll()
       await ready()
       if (kind === 'omission') mint.mockResolvedValueOnce({ avatars: {}, attachments: {} })
       else
@@ -217,6 +240,7 @@ describe('uploaded profile pictures through the planner store', () => {
 
   it('releases a stuck mint and retries without losing the ready source or re-downloading bytes', async () => {
     await store.initStore()
+    nameAll()
     await ready()
     const sources = store.P.users.map((user) => user.avatarUrl)
     const stalled = deferred<Minted>()
@@ -255,6 +279,7 @@ describe('uploaded profile pictures through the planner store', () => {
       emits++
     })
     await store.initStore()
+    nameAll()
     const start = Date.now()
     const before = emits
     await vi.waitFor(
@@ -285,6 +310,7 @@ describe('uploaded profile pictures through the planner store', () => {
       for (const listener of page.listeners) listener()
     }
     await store.initStore()
+    nameAll()
     await ready()
     const sources = store.P.users.map((user) => user.avatarUrl)
     turn('hidden')
@@ -314,6 +340,10 @@ describe('uploaded profile pictures through the planner store', () => {
     const pending = deferred<Minted>()
     mint.mockReturnValueOnce(pending.promise)
     await store.initStore()
+    nameAll()
+    // the first mint goes once a view names the people, before the version
+    // changes, as the boot's mint did when every held picture was asked
+    await vi.advanceTimersByTimeAsync(0)
     const obsolete = response()
     snap.profiles[0].avatar_storage_id = 'new-storage' as Id<'_storage'>
     deliverChange()
@@ -324,8 +354,100 @@ describe('uploaded profile pictures through the planner store', () => {
     expect(store.P.users[0].avatarUrl).toBe('blob:portrait-1')
   })
 
+  it('mints and downloads only the pictures an open view names, and stops when it closes', async () => {
+    await store.initStore()
+    await vi.advanceTimersByTimeAsync(20)
+    // no view names anyone: nothing is asked
+    expect(mint).not.toHaveBeenCalled()
+    expect(fetcher).not.toHaveBeenCalled()
+    const [one, two] = snap.profiles as [Snapshot['profiles'][number], Snapshot['profiles'][number]]
+    const asked: string[][] = []
+    network.query.mockImplementation((ref, args: { profile_ids?: string[] }) => {
+      if (getFunctionName(ref) !== 'files:mintUrls') return Promise.resolve(null)
+      asked.push(args.profile_ids ?? [])
+      return mint()
+    })
+    store.P.namePeople('page', [{ org: two.org_id, id: two.id }])
+    await vi.waitFor(() =>
+      expect(store.P.person(two.id)).toMatchObject({ picture: expect.stringMatching(/^blob:/) }),
+    )
+    expect(asked).toEqual([[two.id]])
+    expect(fetcher).toHaveBeenCalledOnce()
+    expect(store.P.person(one.id)).toMatchObject({ state: 'ok', picture: null })
+    // the page closes: its picture is not renewed
+    store.P.namePeople('page', [])
+    vi.setSystemTime(new Date(NOW.getTime() + 480_000))
+    deliverChange()
+    await vi.advanceTimersByTimeAsync(31_000)
+    expect(asked).toEqual([[two.id]])
+  })
+
+  it('mints 25 pictures in one call for a page naming 25 of 1,000 people, and asks for no other', async () => {
+    const base = snap.profiles[0] as Snapshot['profiles'][number]
+    snap.profiles = Array.from({ length: 1000 }, (_, i) => ({
+      ...base,
+      id: i === 0 ? base.id : crypto.randomUUID(),
+      auth_user_id: i === 0 ? 'portrait-account' : `account-${i}`,
+      name: `Person ${i}`,
+      created_at: new Date(NOW.getTime() + i).toISOString(),
+      avatar_storage_id: `storage-${i}` as Id<'_storage'>,
+    }))
+    const asked: string[][] = []
+    network.query.mockImplementation((ref, args: { profile_ids?: string[] }) => {
+      if (getFunctionName(ref) !== 'files:mintUrls') return Promise.resolve(null)
+      asked.push(args.profile_ids ?? [])
+      return mint()
+    })
+    await store.initStore()
+    const page = snap.profiles.slice(500, 525)
+    store.P.namePeople(
+      'users-page',
+      page.map((p) => ({ org: p.org_id, id: p.id })),
+    )
+    await vi.waitFor(() =>
+      expect(page.map((p) => store.P.person(p.id))).toEqual(
+        page.map(() => expect.objectContaining({ picture: expect.stringMatching(/^blob:/) })),
+      ),
+    )
+    expect(asked).toEqual([page.map((p) => p.id)])
+    expect(fetcher).toHaveBeenCalledTimes(25)
+  })
+
+  it('reads the face of a person the workspace does not hold and shows its picture', async () => {
+    await store.initStore()
+    const org = snap.orgs[0]?.id ?? ''
+    faces = [
+      {
+        id: 'unheld',
+        name: 'Una Unheld',
+        org_role: 'user',
+        kind: 'person',
+        active: true,
+        pending: false,
+        color: '#335577',
+        initials: 'UU',
+        avatar: 'storage-unheld',
+        sample_avatar: null,
+        plannable_hours: 24,
+      },
+    ]
+    store.P.namePeople('board', [{ org, id: 'unheld' }])
+    expect(store.P.person('unheld')).toMatchObject({ state: 'loading' })
+    await vi.waitFor(() =>
+      expect(store.P.person('unheld')).toMatchObject({
+        state: 'ok',
+        name: 'Una Unheld',
+        plannableHours: 24,
+        picture: expect.stringMatching(/^blob:/),
+      }),
+    )
+    expect(fetcher).toHaveBeenCalledOnce()
+    expect(String(fetcher.mock.calls[0]?.[0])).toContain('v=storage-unheld')
+  })
+
   it('revokes removed versions and clears prepared sources before authentication reinitializes', async () => {
     await store.initStore()
+    nameAll()
     await ready()
     const removed = store.P.users[0].avatarUrl
     snap.profiles[0].avatar_storage_id = undefined
@@ -336,6 +458,7 @@ describe('uploaded profile pictures through the planner store', () => {
     const pending = deferred<Minted>()
     mint.mockReturnValueOnce(pending.promise)
     await store.initStore()
+    nameAll()
     expect(revoke).toHaveBeenCalledWith(remaining)
     expect(store.P.users.every((user) => user.avatarUrl === null)).toBe(true)
     pending.resolve(response())

@@ -1,13 +1,10 @@
 import { Button } from '@/components/ui/button'
 import { Avatar, Icon } from '../../components/qivo'
+import { personLabel } from '../../components/usePeople'
 import type { captureWeekDates } from '../../lib/weekDrafts'
-import {
-  hasPlannableWeek,
-  type LoadItem,
-  loadByProject,
-  plannableHoursOf,
-} from '../../lib/workload'
+import { hasPlannableWeek, type LoadItem, loadByProject } from '../../lib/workload'
 import { type IssueVM, P } from '../../store/planner'
+import { CAPACITY_UNKNOWN, capacityOf } from '../capacity'
 
 /* a small on/off switch for the PlanCard's auto-fit control; the off track
    reads the palette's --switch-off, else --surface-3 */
@@ -86,10 +83,13 @@ export function PlanCard({
 }) {
   const scheduled = issue.start != null && issue.end != null
   const dur = scheduled ? issue.end - issue.start + 1 : 0
-  const owner = issue.owner ? P.user(issue.owner) : null
+  const owner = issue.owner ? P.person(issue.owner, issue.org) : null
   const remaining = issue.remaining || 0
-  const canFit = !!owner && remaining > 0
-  const first = owner ? owner.name.split(' ')[0] : ''
+  // the owner's weekly capacity, null while the store does not know their
+  // hours, when auto-fit stays off rather than fit against the default
+  const cap = owner ? capacityOf(owner) : null
+  const canFit = !!owner && cap !== null && remaining > 0
+  const first = owner?.state === 'ok' ? owner.name.split(' ')[0] : ''
   // Match auto-fit: weeks before the measurement anchor cannot dilute load.
   const fitStart =
     scheduled && issue.remainingSet != null
@@ -101,11 +101,11 @@ export function PlanCard({
   const buckets =
     !loading && load && scheduled ? loadByProject(load, fitStart, issue.end, issue.uuid) : []
   const committedInWindow = buckets.reduce((s, b) => s + b.hours, 0)
-  // Use the same owner for capacity and existing commitments.
-  const cap = plannableHoursOf(owner)
-  // Agents have no bounded capacity; auto-fit ends in the starting week.
-  const bounded = hasPlannableWeek(cap)
-  const freePerWk = scheduled ? Math.max(0, cap - committedInWindow / fitDur) : cap
+  // Use the same owner for capacity and existing commitments. Agents have
+  // no bounded capacity; auto-fit ends in the starting week.
+  const bounded = cap !== null && hasPlannableWeek(cap)
+  const freePerWk =
+    cap === null ? 0 : scheduled ? Math.max(0, cap - committedInWindow / fitDur) : cap
   return (
     <div
       className="animate-in fade-in slide-in-from-bottom-2 [position:fixed] [right:20px] [bottom:calc(20px+var(--float-inset-bottom))] [width:344px] [max-width:calc(100vw-40px)] [max-height:calc(100vh-40px-var(--float-inset-y))] [overflow-y:auto] [z-index:60] [background:var(--surface-2)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [box-shadow:var(--qivo-shadow-pop)] [display:flex] [flex-direction:column] [overflow-x:hidden]"
@@ -139,7 +139,9 @@ export function PlanCard({
             {owner ? (
               <>
                 <Avatar id={owner.id} size={28} />
-                <span className="min-w-0 break-words font-medium text-text-1">{owner.name}</span>
+                <span className="min-w-0 break-words font-medium text-text-1">
+                  {personLabel(owner, 'Unknown person')}
+                </span>
               </>
             ) : (
               <span className="[color:var(--text-3)] [font-style:italic]">Unassigned</span>
@@ -170,11 +172,13 @@ export function PlanCard({
             <div className="[font-size:var(--fs-xs)] [color:var(--text-3)]">
               {!owner
                 ? 'Assign someone to auto-fit'
-                : remaining <= 0
-                  ? 'Add remaining time to auto-fit'
-                  : session.autoFit
-                    ? `End follows ${first}’s free time on drop`
-                    : 'Drag the end freely'}
+                : cap === null
+                  ? `${CAPACITY_UNKNOWN}, so auto-fit is off`
+                  : remaining <= 0
+                    ? 'Add remaining time to auto-fit'
+                    : session.autoFit
+                      ? `End follows ${first}’s free time on drop`
+                      : 'Drag the end freely'}
             </div>
           </div>
         </div>

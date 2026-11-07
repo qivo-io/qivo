@@ -88,7 +88,7 @@ import { OUT_OF_USE } from '../lib/viewHidden'
 import { loadDescEditor } from '../lib/workspaceChunks'
 import '../styles/mobile-issue.css'
 import { OwnerField } from '../components/AssigneeAvatar'
-import { useOwnerNames } from '../components/ownerNames'
+import { nameOf, personLabel, usePeople } from '../components/usePeople'
 import {
   type ActivityVM,
   type CommentsEarlier,
@@ -501,7 +501,7 @@ function AttachmentRow({ att, canEdit }: { att: SectionAttachmentVM; canEdit: bo
     a.rel = 'noopener'
     a.click()
   }
-  const by = att.by ? P.user(att.by) : null
+  const by = nameOf(P.person(att.by))
   return (
     <div className="[display:flex] [align-items:center] [gap:8px] [padding:8px] [border-radius:var(--r-md)] [border:1px_solid_var(--border)] [background:var(--surface-1)]">
       <Icon name="paperclip" size={14} color="var(--text-3)" />
@@ -509,7 +509,7 @@ function AttachmentRow({ att, canEdit }: { att: SectionAttachmentVM; canEdit: bo
         type="button"
         data-attachment-open={att.name}
         onClick={() => openIt(false)}
-        title={`Open ${att.name}${by ? `. Added by ${by.name}` : ''}`}
+        title={`Open ${att.name}${by ? `. Added by ${by}` : ''}`}
         className="[display:flex] [flex-direction:column] [align-items:flex-start] [gap:2px] [flex:1] [min-width:0] [text-align:left] [background:none] [border:none] [padding:0] [cursor:pointer] [color:var(--text-1)] [font-size:var(--fs-base)]"
         variant="unstyled"
       >
@@ -743,7 +743,7 @@ function evIcon(verb: string) {
 const spineNodeRing: React.CSSProperties = { position: 'relative', zIndex: 1 }
 
 function EventRow({ e }: { e: ActivityVM }) {
-  const u = e.actor ? P.user(e.actor) : null
+  const actor = personLabel(P.person(e.actor), 'Someone')
   return (
     <div
       data-event={e.id}
@@ -758,8 +758,8 @@ function EventRow({ e }: { e: ActivityVM }) {
       <span className="[font-size:var(--fs-sm)] [color:var(--text-3)] [min-width:0] [overflow-wrap:anywhere]">
         {/* same grammar as the activity bell (actor · verb · object · detail),
             with "this issue" for the object — the title is the modal itself */}
-        <b className="[color:var(--text-1)] [font-weight:500]">{u ? u.name : 'Someone'}</b> {e.verb}{' '}
-        this task{e.detail ? ` ${e.detail}` : ''}
+        <b className="[color:var(--text-1)] [font-weight:500]">{actor}</b> {e.verb} this task
+        {e.detail ? ` ${e.detail}` : ''}
         <HoverTooltip content={new Date(e.ts).toLocaleString()}>
           <span className="[font-size:var(--fs-xs)]">, {P.fmtAgo(e.ts)}</span>
         </HoverTooltip>
@@ -773,12 +773,12 @@ function EventRow({ e }: { e: ActivityVM }) {
    project lead) when the editor wasn't the author. */
 function EditedGlyph({ c, it }: { c: CommentVM; it: IssueVM }) {
   const foreign = !!c.editedBy && c.editedBy !== c.author
-  const editor = c.editedBy ? P.user(c.editedBy) : null
+  const editor = personLabel(P.person(c.editedBy), 'someone')
   const lead = foreign && P.levelOn(it.project, c.editedBy) === 'lead'
   const tip =
     'Edited ' +
     new Date(c.editedTs).toLocaleString() +
-    (foreign ? ` by ${editor ? editor.name : 'someone'}${lead ? ' (project lead)' : ''}` : '')
+    (foreign ? ` by ${editor}${lead ? ' (project lead)' : ''}` : '')
   return (
     <Button
       type="button"
@@ -1374,7 +1374,7 @@ function CommentRow({
   // mine = authored by ANY of my seats (0081): a comment I left in a
   // foreign project is authored by my guest profile there, not CURRENT_USER
   const own = !!c.author && P.myProfileIds.includes(c.author)
-  const u = c.author ? P.user(c.author) : null
+  const author = personLabel(P.person(c.author), 'Someone')
   const canEdit = !locked && (own || canLead)
   return (
     <div
@@ -1396,7 +1396,7 @@ function CommentRow({
       <div className="[flex:1] [min-width:0]">
         <div className="[display:flex] [align-items:center] [gap:8px] [min-height:32px]">
           <span className="[font-size:var(--fs-base)] [font-weight:600] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
-            {u ? u.name : 'Someone'}
+            {author}
           </span>
           <HoverTooltip content={new Date(c.ts).toLocaleString()}>
             <span className="[font-size:var(--fs-xs)] [color:var(--text-3)] [flex-shrink:0]">
@@ -2323,11 +2323,9 @@ function IssueDetail({
     ? P.levelOn(held.project) === 'lead'
     : !!it && !archived && answerLevel === 'lead' && P.levelOn(it.project) === 'lead'
   // the Inbox pane's owner, named from the workspace or by id
-  // (components/ownerNames.ts), so one not loaded never reads as unassigned
-  const [ownerName] = useOwnerNames(
-    it?.org ?? '',
-    embedded && !mobile && it?.owner ? [it.owner] : [],
-  )
+  // (store/planner.ts P.person), so one not loaded never reads as
+  // unassigned; the window names its people below (usePeople)
+  const ownerName = it?.owner ? P.person(it.owner, it.org) : null
   // one sentence for every control the read-only case switches off, so a
   // viewer is told WHY rather than left prodding a dead field. A task shown
   // from its answer says, to someone who could change it, that it waits
@@ -2592,6 +2590,27 @@ function IssueDetail({
           (e.targetId === it.id || e.targetId === it.uuid),
       )
     : []
+  // the people the window shows, named while it shows: the task's holders
+  // and reporter, the loaded comments' authors and editors, the loaded
+  // history's actors, the listed files' uploaders and the owners of the
+  // listed subtasks and linked tasks
+  usePeople(
+    it
+      ? [
+          ...[it.assignee, it.reviewer, it.reporter].map((id) => ({ org: it.org, id: id ?? '' })),
+          ...comments.flatMap((c) => [
+            { org: it.org, id: c.author ?? '' },
+            { org: it.org, id: c.editedBy ?? '' },
+          ]),
+          ...history.map((e) => ({ org: it.org, id: e.actor ?? '' })),
+          ...files.rows.map((file) => ({ org: it.org, id: file.by ?? '' })),
+          ...[...subtasks.rows, ...linked.rows].map((row) => ({
+            org: row.org,
+            id: row.owner ?? '',
+          })),
+        ]
+      : [],
+  )
   const all = actFilter === 'all'
   // whether everything the filter shows has arrived, and whether the thread
   // says it is loading: under All also while the history is on its way,
@@ -3761,7 +3780,7 @@ function IssueDetail({
                         data-task-assignee
                         className="[display:flex] [align-items:center] [gap:12px] [margin-bottom:16px] [min-width:0]"
                       >
-                        {it.owner && P.user(it.owner) && <Avatar id={it.owner} size={40} />}
+                        {it.owner && <Avatar id={it.owner} size={40} />}
                         <div className="min-w-0">
                           <div className="mb-1 text-sm text-text-2">
                             {it.ownerField === 'reviewer' ? 'Reviewer' : 'Assignee'}
@@ -3770,13 +3789,7 @@ function IssueDetail({
                             data-task-assignee-name
                             className="text-base font-semibold text-text-1 break-words"
                           >
-                            {!it.owner || !ownerName || ownerName.state === 'gone'
-                              ? 'Unassigned'
-                              : ownerName.state === 'ok'
-                                ? ownerName.name
-                                : ownerName.state === 'failed'
-                                  ? "Couldn't load this person"
-                                  : 'Loading…'}
+                            {personLabel(ownerName, 'Unassigned')}
                           </div>
                         </div>
                       </div>
@@ -3923,11 +3936,11 @@ function IssueDetail({
                         <DetailField label="Reporter" person>
                           {/* Set at creation; retained when access or activity changes. */}
                           <span data-task-reporter className="task-reporter">
-                            {it.reporter && P.user(it.reporter) ? (
+                            {it.reporter && P.person(it.reporter, it.org)?.state !== 'gone' ? (
                               <>
                                 <Avatar id={it.reporter} size={28} />
                                 <span className="min-w-0 break-words">
-                                  {P.user(it.reporter).name}
+                                  {personLabel(P.person(it.reporter, it.org), 'No reporter')}
                                 </span>
                               </>
                             ) : (
