@@ -47,10 +47,11 @@
 // syncLongestFrameMs), Next to the first person's columns (syncNext), a
 // Remaining typed on that person's first card and Enter until the person's
 // load moves (syncEdit), a press on that card's owner until its list shows
-// its first person (syncOwnerOpen), and a press on its @ until the Mention
-// window shows its first person (syncMentionOpen); on this branch both
-// lists read their people from the server as they open, on a build before
-// the owner pickers from the workspace's roster. On this branch the meeting is the server's agenda
+// the owner and one more person (syncOwnerOpen), and a press on its @ until
+// the Mention window shows its first person (syncMentionOpen); on this
+// branch both lists read their people from the server as they open, on a
+// build before the owner pickers from the workspace's roster. On this
+// branch the meeting is the server's agenda
 // and the card is one only the agenda brings; a build whose Team sync asks
 // for every task first (--baseline before the agenda view) loads every
 // task inside syncOpen and edits a task the workspace holds, so its
@@ -1352,7 +1353,7 @@ async function runSyncSample(origin, metrics, query = '') {
     return null
   })
   // With many people (--files people=1000) the first person may hold no
-  // card this week's load counts, which syncEdit needs: then the sample
+  // card this week's load counts, which syncEdit needs. Then the sample
   // leaves syncEdit out, says so, and opens the first card's lists
   if (card) {
     const chip = page.locator('[data-sync-person] [data-sync-load]')
@@ -1378,16 +1379,23 @@ async function runSyncSample(origin, metrics, query = '') {
   const listCard =
     card ?? (await page.locator('[data-sync-card]').first().getAttribute('data-sync-card'))
   assert.ok(listCard, "Team sync's first person has a card")
-  // the card's owner list, until it shows a person: a row other than the
-  // clear row and the list's end, from the roster on a build before the
-  // owner pickers, from the server's first batch or check on this branch
-  const personShown = (within) =>
+  // Until `least` people show in a list, counting no clear row and no row
+  // of the list's end. The owner list waits for two, the card's owner and
+  // one more. On this branch the owner's row comes at once from the store's
+  // name, and the next from the server's first batch, so the phase holds
+  // that round trip; on a build before the owner pickers both come from
+  // the roster. The Mention window waits for one, since it chooses no one
+  // until a batch or the check answers.
+  const personShown = (within, least) =>
     page.waitForFunction(
-      (selector) =>
-        [...document.querySelectorAll(selector)].some(
-          (item) => !/^(Unassigned|No reviewer|Load more|Loading…)$/.test(item.textContent.trim()),
-        ),
-      within,
+      ([selector, least]) =>
+        [...document.querySelectorAll(selector)].filter(
+          (item) =>
+            !/^(Unassigned|No reviewer|Load more|Loading…|Try again)$/.test(
+              item.textContent.trim(),
+            ),
+        ).length >= least,
+      [within, least],
       { timeout: timeout * 10 },
     )
   const owner = await handle(page.locator(`[data-sync-card="${listCard}"] [data-assignee-edit]`))
@@ -1395,7 +1403,7 @@ async function runSyncSample(origin, metrics, query = '') {
   metrics.syncOwnerOpen.push(
     await timed(async () => {
       await owner.click({ timeout: timeout * 10 })
-      await personShown('[data-slot="popover-content"] [cmdk-item]')
+      await personShown('[data-slot="popover-content"] [cmdk-item]', 2)
     }),
   )
   await page.keyboard.press('Escape')
@@ -1406,7 +1414,7 @@ async function runSyncSample(origin, metrics, query = '') {
   metrics.syncMentionOpen.push(
     await timed(async () => {
       await mention.click({ timeout: timeout * 10 })
-      await personShown('[data-sync-mention-window] [data-sync-mention-person]')
+      await personShown('[data-sync-mention-window] [data-sync-mention-person]', 1)
     }),
   )
   await page.keyboard.press('Escape')
