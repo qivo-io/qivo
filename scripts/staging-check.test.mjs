@@ -22,6 +22,8 @@ import {
   addDays,
   addedArgs,
   addsQuery,
+  addsQueryFor,
+  answersMutation,
   appBatches,
   atProject,
   authCorsProblems,
@@ -30,6 +32,9 @@ import {
   BILLING_ACCOUNTS_STEP,
   BILLING_STORAGE_EXPECTED,
   BILLING_STORAGE_STEP,
+  CREATE_ANSWER_STEP,
+  CREATE_MUTATION,
+  createOrder,
   creatorsLine,
   DELETED_ITEMS_EXPECTED,
   DELETED_ITEMS_MARKS,
@@ -66,6 +71,8 @@ import {
   MILESTONES_BETWEEN_QUERY,
   MILESTONES_SECTION_QUERY,
   mcpListSettled,
+  mutationRequest,
+  NEW_TASK_READS,
   NOT_LOADED_YET,
   newerWalk,
   ON_DEMAND_STEP,
@@ -841,6 +848,96 @@ describe('staging check REST contract', () => {
       ),
     ).toBe(false)
     expect(addsQuery('not json', TASK_WINDOWS_QUERY)).toBe(false)
+  })
+
+  it("tells a create's request, its answer and the reads of the new task that went out before it", () => {
+    expect(CREATE_ANSWER_STEP).toBe('ui/create-answer')
+    expect(CREATE_MUTATION).toBe('issues:create')
+    expect(NEW_TASK_READS).toEqual(['taskWindow:task', 'snapshot:threadComments', 'inbox:item'])
+    // the app's names for them
+    const store = readFileSync(new URL('../src/store/planner.ts', import.meta.url), 'utf8')
+    expect(store).toContain('api.issues.create,')
+    const parts = readFileSync(new URL('../src/store/liveParts.ts', import.meta.url), 'utf8')
+    for (const name of ['api.taskWindow.task', 'api.snapshot.threadComments', 'api.inbox.item'])
+      expect(store + parts).toContain(name)
+    const uuid = '0f6e2c7a-1111-4222-8333-444455556666'
+    const out = (text) => ({ out: true, text: JSON.stringify(text) })
+    const back = (text) => ({ out: false, text: JSON.stringify(text) })
+    const create = out({
+      type: 'Mutation',
+      requestId: 7,
+      udfPath: 'issues:create',
+      args: [{ id: uuid }],
+    })
+    const rename = out({
+      type: 'Mutation',
+      requestId: 8,
+      udfPath: 'issues:update',
+      args: [{ id: uuid }],
+    })
+    const answer = back({
+      type: 'MutationResponse',
+      requestId: 7,
+      success: true,
+      result: { num: 41 },
+    })
+    const read = (udfPath, args) =>
+      out({
+        type: 'ModifyQuerySet',
+        baseVersion: 3,
+        newVersion: 4,
+        modifications: [{ type: 'Add', queryId: 9, udfPath, args: [args] }],
+      })
+    const windowRead = read('taskWindow:task', { org_id: 'org', ref: uuid })
+    // a correct app: the create, a change behind it, the answer, then the reads
+    const good = createOrder([
+      create,
+      rename,
+      back({ type: 'Transition', startVersion: {}, endVersion: {}, modifications: [] }),
+      answer,
+      windowRead,
+      read('snapshot:threadComments', { org_id: 'org', issue_id: uuid }),
+      read('inbox:item', { issue_id: uuid }),
+    ])
+    expect(good).toEqual({ uuid, answered: true, early: [], taskWindows: 0 })
+    // a read of the task sent before the answer, and the task windows, are caught
+    const early = createOrder([create, windowRead, answer, read('workspace:tasks', {})])
+    expect(early?.early).toEqual([windowRead.text])
+    expect(early?.taskWindows).toBe(1)
+    // a read of another task, or an answer to another write, is no answer
+    expect(createOrder([create, read('taskWindow:task', { ref: 'other' }), answer])?.early).toEqual(
+      [],
+    )
+    expect(createOrder([create, back({ type: 'MutationResponse', requestId: 8 })])?.answered).toBe(
+      false,
+    )
+    expect(createOrder([rename, answer])).toBeNull()
+    expect(mutationRequest('not json', CREATE_MUTATION)).toBeNull()
+    expect(answersMutation('not json', 7)).toBe(false)
+    expect(addsQueryFor('not json', 'taskWindow:task', uuid)).toBe(false)
+    // the step runs after ui/tasks-on-demand and before the run archives M
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const at = [
+      'await tasksOnDemandCheck()',
+      'await createAnswerCheck()',
+      'await archiveChecks()',
+    ].map((call) => script.indexOf(call))
+    expect(at.every((n) => n > 0)).toBe(true)
+    expect([...at].sort((a, b) => a - b)).toEqual(at)
+    // in a sub-project of its own, with the run's tag
+    const step = script.slice(
+      script.indexOf('async function createAnswerCheck()'),
+      script.indexOf('export const UPLOAD_STEP'),
+    )
+    expect(step).toContain("restOk(w, 'POST', '/projects', {")
+    expect(step).toContain('`$' + '{run.tag} create answer`')
+    expect(step).toContain("'framereceived'")
+    // the marks it presses and reads
+    const board = readFileSync(new URL('../src/views/Kanban.tsx', import.meta.url), 'utf8')
+    expect(board).toContain('aria-label={`New task in $' + '{s.name}`}')
+    const window = readFileSync(new URL('../src/panels/IssueDetail.tsx', import.meta.url), 'utf8')
+    for (const mark of ['aria-label="Task title"', 'data-task-title', 'data-issue-key'])
+      expect(window).toContain(mark)
   })
 
   it("checks Billing's storage on a file of its own, in the page's words", () => {
