@@ -769,9 +769,16 @@ describe('staging check REST contract', () => {
     // while the run's tokens and connections are still live
     expect(at).toBeLessThan(check.indexOf("check('read-token/ui/revoke'"))
     expect(at).toBeLessThan(check.indexOf("check('oauth-read/ui/delete'"))
-    // the sweep reads the app's two lists a batch at a time
-    expect(check).toContain('window.PLANNER.connectedApps(search, cursor)')
-    expect(check).toContain('window.PLANNER.personalTokens(search, cursor)')
+    // every read of the app's two lists names its search and its cursor,
+    // a batch at a time, and the sweep and its check for leftovers go on
+    // from each batch's cursor
+    const listReads =
+      check.match(/window\.PLANNER\.(?:connectedApps|personalTokens)\([^)]*\)/g) ?? []
+    for (const read of listReads) expect(read).toMatch(/\(search, (?:cursor|null)\)$/)
+    for (const list of ['connectedApps', 'personalTokens'])
+      expect(
+        listReads.filter((read) => read === `window.PLANNER.${list}(search, cursor)`),
+      ).toHaveLength(2)
     const step = check.slice(
       check.indexOf('async function mcpAccessListsCheck()'),
       check.indexOf('export const SETTINGS_PROJECTS_STEP'),
