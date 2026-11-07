@@ -4,9 +4,9 @@
    judged by ordinary access, so an organization admin finds here the
    projects they take part in, and Settings › Projects › All projects keeps
    every project of the organization. It reads no task, and of the store
-   only the organizations' names, the home organization, whether the login
-   may create a project or an organization, and whether the workspace holds
-   a project it opens.
+   only the organizations' names, the home organization, whether the person
+   is an organization admin, whether the login may create a project or an
+   organization, and whether the workspace holds a project it opens.
 
    - Browsing lists projectNav.page, the top-level projects, the favorites
      first and then the rest, each in the server's name order, 25 a page

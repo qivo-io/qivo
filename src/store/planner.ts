@@ -6093,11 +6093,11 @@ function endHeldRecovery() {
 
 /* The writes that go on while the snapshot is stale, each named. They change
    only the signed-in person's own state, such as a followed task or a
-   favorite project, whose star the server checks by the seat's own access
-   and which the All projects directory shows from the navigation reads, not
-   from the snapshot, read the OAuth consent page's
-   request, or only take access away: revoking or deleting a credential, and
-   deactivating or removing a seat. An admin must be able to shut out a
+   favorite project, read the OAuth consent page's request, or only take
+   access away: revoking or deleting a credential, and deactivating or
+   removing a seat. The server checks a star by the seat's own access, and
+   the All projects directory shows it from the navigation reads, not from
+   the snapshot. An admin must be able to shut out a
    leaked key or a compromised person during an outage, because REST, MCP
    and other people's sessions do not depend on this browser's snapshot. The
    access removals act on one row by id, so stale data cannot make them

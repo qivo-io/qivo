@@ -1929,8 +1929,8 @@ function App() {
         },
       )
     },
-    // My view is a scope, so it also has to leave whichever page owns the
-    // screen — the sidebar is visible from the inbox, the palette from all
+    // My view is a scope, so it also leaves whichever page owns the screen,
+    // since the sidebar shows over the inbox and the palette over every page
     openMine: () =>
       move(
         {
