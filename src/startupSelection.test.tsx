@@ -52,28 +52,31 @@ vi.mock('./lib/auth', () => ({
 // what Settings told App of a project the person archived or deleted, as
 // the stand-in's buttons send it
 const settings = vi.hoisted(() => ({ gone: { id: '', parent: null as string | null } }))
-vi.mock('./panels/Settings', () => ({
-  SettingsScreen: ({
-    onExit,
-    onProjectGone,
-  }: {
-    onExit: () => void
-    onProjectGone?: (id: string, parent: string | null) => void
-  }) => (
-    <div data-settings-stand-in>
-      <button
-        type="button"
-        data-gone
-        onClick={() => onProjectGone?.(settings.gone.id, settings.gone.parent)}
-      >
-        Gone
-      </button>
-      <button type="button" data-exit onClick={onExit}>
-        Exit
-      </button>
-    </div>
-  ),
-}))
+vi.mock('./panels/Settings', async () => {
+  const { Button } = await import('./components/ui/button')
+  return {
+    SettingsScreen: ({
+      onExit,
+      onProjectGone,
+    }: {
+      onExit: () => void
+      onProjectGone?: (id: string, parent: string | null) => void
+    }) => (
+      <div data-settings-stand-in>
+        <Button
+          type="button"
+          data-gone
+          onClick={() => onProjectGone?.(settings.gone.id, settings.gone.parent)}
+        >
+          Gone
+        </Button>
+        <Button type="button" data-exit onClick={onExit}>
+          Exit
+        </Button>
+      </div>
+    ),
+  }
+})
 
 const NOW = '2026-09-14T08:00:00.000Z'
 

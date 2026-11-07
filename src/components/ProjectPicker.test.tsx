@@ -11,6 +11,7 @@ import {
   isProjectNavRead,
   queryProjectNav,
 } from '../store/projectNavStandIn.setup'
+import { Button } from './ui/button'
 import { TooltipProvider } from './ui/tooltip'
 
 /* The shared project picker (components/ProjectPicker.tsx) on the real
@@ -943,9 +944,9 @@ describe('the panel embedded in a page', { timeout: 30_000 }, () => {
     await act(async () =>
       root.render(
         <TooltipProvider>
-          <button type="button" data-outside="">
+          <Button type="button" data-outside="">
             Outside
-          </button>
+          </Button>
           <Harness />
         </TooltipProvider>,
       ),

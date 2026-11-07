@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 import { answerProjectNav, isProjectNavRead, NAV_UNCHECKED } from '../store/projectNavStandIn.setup'
+import { Button } from './ui/button'
 
 /* The open rule of the lists on the navigation reads
    (components/projectNavRows.tsx useNavOpen and openResolved), which the
@@ -163,13 +164,19 @@ function Opener({ list }: { list: { id: string; name: string }[] }) {
   return (
     <div>
       {list.map((row) => (
-        <button key={row.id} type="button" data-open={row.id} onClick={() => nav.open(row)}>
+        <Button
+          key={row.id}
+          type="button"
+          noTooltip
+          data-open={row.id}
+          onClick={() => nav.open(row)}
+        >
           {row.name}
-        </button>
+        </Button>
       ))}
-      <button type="button" data-cancel onClick={() => nav.cancel()}>
+      <Button type="button" noTooltip data-cancel onClick={() => nav.cancel()}>
         Cancel
-      </button>
+      </Button>
       <p data-line>{line}</p>
     </div>
   )
