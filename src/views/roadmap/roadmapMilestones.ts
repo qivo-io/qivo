@@ -211,9 +211,12 @@ const NO_STORED: ReadonlyMap<string, { name: string; week: string }> = new Map()
  * `w1` and the projects named now (null for none). The rows are the shown
  * answer's, also one kept beside a failure or refusal, each in the window
  * and in the weeks the shown ask covers, so while a new window's read is
- * on its way the shown answer shows only for the weeks both windows cover,
- * and of a project named now. The shown read's failure, refusal or limit
- * comes first, then the pending one's.
+ * on its way the shown answer shows only for the weeks both windows cover.
+ * While the shown ask names other projects than those named now, only the
+ * rows of a project named now show. Otherwise every row shows, as the
+ * server answers a sub-project the store holds without its parent for
+ * that top-level project. The shown read's failure, refusal or limit comes
+ * first, then the pending one's.
  */
 export function markerView<R extends Marker>(
   plan: MarkerPlan | null,
@@ -237,11 +240,13 @@ export function markerView<R extends Marker>(
     return { ...empty, state: 'too_many' }
   const answer = answerOf(shown)
   const named = new Set(projects)
+  // whether the shown ask names the projects named now
+  const sameProjects = markerKey({ ...plan.shown.ask, projects: [...projects] }) === plan.shown.key
   // the weeks the shown answer read, in the app's week grid now
   const from = Math.max(w0, isoToWeek(plan.shown.ask.from))
   const to = Math.min(w1, isoToWeek(plan.shown.ask.to) - 1)
   const rows = (answer?.rows ?? []).filter(
-    (row) => row.week >= from && row.week <= to && named.has(row.project),
+    (row) => row.week >= from && row.week <= to && (sameProjects || named.has(row.project)),
   )
   const base = {
     ...empty,

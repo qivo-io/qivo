@@ -150,13 +150,28 @@ describe('the plan of slots', () => {
 
 describe('markerView', () => {
   it("shows the shown answer's flags in the window and of the projects named now, with their stored values", () => {
-    const plan = planOf(['luma', 'plan'], W - 2, W + 6)
+    const plan = planOf(['gone', 'luma', 'plan'], W - 2, W + 6)
     const read = ok([row('a', W), row('b', W + 3, 'luma'), row('c', W + 5, 'gone')])
-    const view = markerView(plan, read, null, W - 2, W + 6, ['luma', 'plan'])
+    const view = markerView(plan, read, null, W - 2, W + 6, ['gone', 'luma', 'plan'])
     expect(view.state).toBe('ok')
     expect(view.busy).toBe(false)
-    expect(view.rows.map((r) => r.id)).toEqual(['a', 'b'])
+    expect(view.rows.map((r) => r.id)).toEqual(['a', 'b', 'c'])
     expect(view.stored.get('b')).toEqual({ name: 'Milestone b', week: weekToISO(W + 3) })
+    // must fail: while the read of fewer projects is on its way, a flag of
+    // a project no longer named
+    const fewer = nextPlan(plan, markerAsk(['luma', 'plan'], W - 2, W + 6), true) as MarkerPlan
+    const narrowed = markerView(fewer, read, LOADING, W - 2, W + 6, ['luma', 'plan'])
+    expect(narrowed.rows.map((r) => r.id)).toEqual(['a', 'b'])
+  })
+
+  it("shows the rows a sub-project's read answers for a top-level project the store does not hold", () => {
+    // a sub-project held without its parent names itself, which the server
+    // folds to the parent, whose milestones it answers
+    const projects = markerProjects({ ...project('orphan'), metas: [] }, [], null) ?? []
+    const plan = planOf(projects, W - 2, W + 6)
+    const view = markerView(plan, ok([row('a', W, 'parent')]), null, W - 2, W + 6, projects)
+    // must fail: every row dropped as one of a project not named
+    expect(view.rows.map((r) => r.id)).toEqual(['a'])
   })
 
   it('shows a kept answer only for the weeks both windows cover while the new one loads', () => {
