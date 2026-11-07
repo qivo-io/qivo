@@ -26,9 +26,10 @@
      all of a view's tasks.
    - The person's own new task goes into the rows of the views whose join
      shows the person's own changed tasks, the Board's and the Roadmap's
-     (insert), from what its create sends, until those views' answers hold
-     it (store/planner.ts newTaskViewPaint). An insert is the one paint
-     that adds a row no answer brought.
+     (insert), from what its create sends, until the create answers, or
+     until a read that is behind a reconnect delivers again
+     (store/planner.ts newTaskViewPaint, slotsBehind). An insert is the one
+     paint that adds a row no answer brought.
    - A model keeps its object while its row, its own and its parent's
      handles, its delay and the week grid hold the same data, so an answer
      that arrives again renders no card again (views/kanbanCards.tsx

@@ -14,8 +14,8 @@ import type { Row } from './rows'
 /* A create of the person's own in a store that never asked for every task,
    as every session of the app is (store/planner.ts P.addIssue,
    P.createParent, P.createLinked): it asks for no task, puts the new task
-   into the Board's and the Roadmap's rows from what it sends until their
-   answers hold it, shows a window opened on it from its creating answer
+   into the Board's and the Roadmap's rows from what it sends until the
+   server answers it, shows a window opened on it from its creating answer
    until the server took it and the window's own read answered, sends the
    window's changes behind it at once, and takes all of it away when the
    server refuses it. The real store runs on the shared live transport

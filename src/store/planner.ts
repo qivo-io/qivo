@@ -4190,8 +4190,9 @@ type ViewQuery = {
       tasks inserted into its rows (takesNew). Without it every row's
       owner does. */
   judged?: (value: unknown) => ReadonlySet<string> | null
-  /** whether the person's own new tasks go into the read's rows until its
-      answer holds them (newTaskViewPaint), as for a view whose join shows
+  /** whether the person's own new tasks go into the read's rows until
+      their create answers, or until a read behind a reconnect delivers
+      again (newTaskParts, newTaskViewPaint), as for a view whose join shows
       the person's own changed tasks where its answer does not
       (P.ownOnScreen): the Board's and the Roadmap's */
   takesNew?: true
