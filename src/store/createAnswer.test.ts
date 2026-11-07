@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BoardAnswer } from '../../convex/lib/board'
 import type { RoadmapAnswer } from '../../convex/lib/roadmap'
 import type { ViewRow } from '../../convex/lib/viewReads'
+import { MIN_BYTES } from '../lib/images'
 import { refParts } from '../lib/taskReference'
 import { fixture, ME, ORG, PAT, type Snapshot, type TaskAnswer } from './guard/writeRecipes.setup'
 import { type OwnerLoadsArgs, ownerLoadsStandIn } from './ownerLoadsStandIn.setup'
@@ -579,6 +580,46 @@ describe('a create in a store that never asked for every task', () => {
     await settle()
     expect(P().taskDetail(uuid)?.state).toBe('unavailable')
     expect(readsOf(watch, uuid)).toEqual([])
+  })
+
+  it('says nothing more for files added to a refused create than its own refusal', async () => {
+    await boot()
+    const { uuid } = create()
+    P().watchComments(uuid, ORG)
+    P().showSections({}, true)
+    await settle()
+    const handle = P().taskDetail(uuid)?.view?.id ?? ''
+    // a photo whose re-encode still runs when the refusal arrives
+    let encoded: (error: unknown) => void = () => {}
+    vi.stubGlobal(
+      'createImageBitmap',
+      () =>
+        new Promise((_, reject) => {
+          encoded = reject
+        }),
+    )
+    const notes = P().addAttachment(handle, new File(['Bench notes'], 'notes.txt'))
+    const photo = P().addAttachment(
+      handle,
+      new File([new Uint8Array(MIN_BYTES)], 'bench.jpg', { type: 'image/jpeg' }),
+    )
+    await settle()
+    // the notes' upload went out behind the create
+    expect(waiting().map((s) => s.name)).toEqual(['issues:create', 'files:uploadUrl'])
+    take('issues:create').reject(
+      new ConvexError({ code: 'forbidden', message: 'no write access to this project' }),
+    )
+    await settle()
+    take('files:uploadUrl').reject(
+      new ConvexError({ code: 'not_found', message: 'task not found' }),
+    )
+    encoded(new Error('no decoder'))
+    expect(await notes).toBeNull()
+    expect(await photo).toBeNull()
+    // the next file of the same drop, which the window sends by the uuid
+    expect(await P().addAttachment(uuid, new File(['More notes'], 'more.txt'))).toBeNull()
+    expect(waiting()).toEqual([])
+    expect(toasts).toEqual(["You don't have permission for that. Change reverted."])
   })
 
   it("moves the reference to the server's number when someone else took the preview", async () => {

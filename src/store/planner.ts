@@ -9766,8 +9766,11 @@ const uploadTarget = (issueKey: string, org?: string) =>
 /* Says why task `id` takes no file now, for an upload of file `name`.
    Either the window shows it from an answer that is not current
    (P.refuseStaleEdit), or neither the workspace nor the window shows it
-   any more, as for a file still queued when the window moved on. */
+   any more, as for a file still queued when the window moved on. A file
+   of a create the server refused says nothing, since the create's own
+   refusal said what happened (refusedCreates). */
 function refuseUpload(id: string, name: string) {
+  if (refusedCreates.has(id)) return
   if (PLANNER.refuseStaleEdit(id)) return
   toast(
     `Couldn't upload "${name}". The upload stopped because the window no longer shows its task.`,
@@ -14910,13 +14913,16 @@ export const PLANNER = {
       has already been accepted or refused server-side. A task the window
       shows from its own answer takes files the same way, with its
       organization, project and cap from that answer (answerUploadTarget),
-      and none while that answer is not current (P.refuseStaleEdit). The
-      upload follows the task `issueKey` names when it starts, by its uuid
-      and organization, whatever that handle names later. With `opts.org`
-      it is that organization's task, as two organizations can hold one
-      task id, so the window's task shown from its answer takes a file by
-      its uuid while the workspace holds another organization's task of
-      that id. */
+      and none while that answer is not current (P.refuseStaleEdit). So
+      does the person's new task the window shows from its creating
+      answer, and a file of it resolves null without a toast once the
+      server refused the create, whose own toast said why
+      (refusedCreates). The upload follows the task `issueKey` names when
+      it starts, by its uuid and organization, whatever that handle names
+      later. With `opts.org` it is that organization's task, as two
+      organizations can hold one task id, so the window's task shown from
+      its answer takes a file by its uuid while the workspace holds another
+      organization's task of that id. */
   addAttachment: withUpdateBlock(
     async (
       issueKey: string,
@@ -15019,6 +15025,9 @@ export const PLANNER = {
         return attId
       } catch (e) {
         console.error('[qivo] upload failed:', e)
+        // a file sent behind a create the server refused was refused for a
+        // task that never existed, which the create's own refusal said
+        if (refusedCreates.has(uuid)) return null
         const msg = errData(e).message || ''
         toast(`Couldn't upload "${file.name}"${msg ? `. ${asSentence(msg)}` : ''}`)
         return null
