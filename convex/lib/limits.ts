@@ -645,7 +645,7 @@ export const LIMITS = {
       'this person leads more than 1,000 projects and cannot be removed at once. Give some of those projects another lead first, or make the person Inactive to end their access now.',
     on: ['app', 'operator'],
   },
-  // A page of the app's own, not a stored cap: the Inbox lists one page of
+  // A page of the app's own, not a stored cap. The Inbox lists one page of
   // task groups at a time, which Previous and Next replace (inbox.page,
   // src/panels/Inbox.tsx). REST and MCP page their inbox apart from it.
   inboxPage: {

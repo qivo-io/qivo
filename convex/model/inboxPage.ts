@@ -50,9 +50,10 @@
  * `checked_to` is the list time of the last group the page examined whose
  * task the caller is shown, matched or not, so the list can say how far a
  * stopped search looked. The kind filter applies before the access check,
- * without a read, so a page the kind filter fills with misses can stop
- * with `checked_to` null, and the list then says it searched part of the
- * Inbox. `not_ready` names the seats whose items are not complete
+ * without a read, so a page can stop with `checked_to` null, as when the
+ * kind filter or items about tasks the caller is not shown spend its
+ * budget, and the list then says it looked through part of the Inbox.
+ * `not_ready` names the seats whose items are not complete
  * (model/inboxItems.ts seatReady), which the page leaves out, and
  * `unchecked` says a check of the caller's access that a bound stopped
  * (lib/access.ts accessUnchecked, roomSpent included) left a group out.
