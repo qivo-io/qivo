@@ -458,9 +458,7 @@ describe("the stand-in's forced states", () => {
       expect(read(name, {}).rows).toHaveLength(LIST_BATCH)
       expect(() => read(name, { fail: true })).toThrow(/fails/)
     }
-    expect(() => credentialListsStandIn('tokens:listMcpTokens', {}, world(1))).toThrow(
-      /do not answer/,
-    )
+    expect(() => credentialListsStandIn('tokens:agentKeys', {}, world(1))).toThrow(/do not answer/)
   })
 
   it('refuses a cursor of another list, login or search, junk and a long search, and goes on after its own', () => {

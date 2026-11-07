@@ -2,8 +2,7 @@
  * read a batch at a time (model/connectedApps.ts). It lives apart from
  * oauthConnections.ts, which loads Better Auth for the consent screen, so
  * the list's first call on a fresh isolate loads no Better Auth package
- * (convex/tests/authTriggers.test.ts). oauthConnections.list, the full list
- * the app read before, stays there for one release, deprecated. */
+ * (convex/tests/authTriggers.test.ts). */
 
 import { v } from 'convex/values'
 import { authedQuery } from './lib/functions'

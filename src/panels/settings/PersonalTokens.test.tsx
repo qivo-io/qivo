@@ -675,13 +675,15 @@ async function search(text: string) {
 const tokenReads = () => reads().filter(([name]) => name === 'tokens:personalTokens')
 
 describe('the token list read from the server', () => {
-  it('reads one batch with no empty field and never the full list, and shows no search for two tokens', async () => {
+  it('reads one batch with no empty field and no other token read, and shows no search for two tokens', async () => {
     tokens = many(2)
     await render()
     expect(reads()).toEqual([['tokens:personalTokens', {}]])
-    expect(network.query.mock.calls.map(([ref]) => getFunctionName(ref))).not.toContain(
-      'tokens:listMcpTokens',
-    )
+    expect(
+      network.query.mock.calls
+        .map(([ref]) => getFunctionName(ref))
+        .filter((name) => name.startsWith('tokens:')),
+    ).toEqual(['tokens:personalTokens'])
     expect(shownNames()).toEqual(['Token 1', 'Oldest helper'])
     expect(searchBox()).toBeNull()
     expect(end()).toBe('end')

@@ -76,12 +76,11 @@ export const REMOVED_MEMBER = 'Removed member'
  * gone. */
 export const REMOVED_ORGANIZATION = 'Removed organization'
 
-/** One connected app as MCP access lists it, the row oauthConnections.list
- * answered, field for field, and no stored hash, requested scope or name
- * key. `appGone` marks an unrevoked connection whose OAuth client Qivo no
- * longer has, which has ended although nothing revoked it, as when an
- * operator deletes the client's rows by hand (lib/access.ts
- * oauthClientLive). */
+/** One connected app as MCP access lists it, with no stored hash,
+ * requested scope or name key. `appGone` marks an unrevoked connection
+ * whose OAuth client Qivo no longer has, which has ended although nothing
+ * revoked it, as when an operator deletes the client's rows by hand
+ * (lib/access.ts oauthClientLive). */
 export type ConnectedAppRow = {
   id: string
   clientId: string

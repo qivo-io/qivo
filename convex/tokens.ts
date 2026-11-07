@@ -36,8 +36,7 @@
  * never as a subscription either, and lists the login's connected apps the
  * same way (connectedApps.ts). Machine auth stamps last_used_at on every
  * call, so a live read of key or token rows would run again on each API
- * call of each credential on screen. listMcpTokens, which the app read
- * before, stays for one release, deprecated. */
+ * call of each credential on screen. */
 
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
@@ -121,9 +120,6 @@ const pubToken = (t: Doc<'mcp_tokens'>) => ({
   // an organization admin revoked it on API access
   revokedByAdmin: t.revoked_by_admin === true,
 })
-
-const byCreatedDesc = <R extends { createdAt: string }>(rows: R[]): R[] =>
-  rows.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
 
 /** The caller's own seat with id `profileId`, if it is one. */
 const ownSeat = (
@@ -391,8 +387,8 @@ function tokenIndex(ctx: QueryCtx, profileId: string): NamedIndex<Doc<'mcp_token
 /**
  * One batch of the caller's own personal tokens for MCP access, at most
  * LIST_BATCH (25) tokens of the login's active seats outside an
- * organization's deletion, as listMcpTokens lists them, newest created_at
- * first across the seats, equal times in descending id order, each in
+ * organization's deletion, newest created_at first across the seats,
+ * equal times in descending id order, each in
  * pubToken's shape without its hash, revoked, expired and admin-revoked
  * tokens included. `search` keeps the tokens whose name or shown prefix
  * holds every whitespace-separated fragment of it, ignoring case and
@@ -455,30 +451,6 @@ export async function personalTokensOf(
     },
   )
 }
-
-/**
- * @deprecated The app reads tokens.personalTokens since the release after
- * v0.1.158. This query stays, with its arguments and its answer, through
- * that release, so tabs and desktop windows loaded before it still list
- * tokens on MCP access, and a later release removes it and adds it to the
- * Instant Rollback list in docs/deployment.md.
- *
- * Before then P.listMcpTokens read every token of every active seat of the
- * caller in one fetch, sorted newest first by created_at. */
-export const listMcpTokens = authedQuery({
-  args: {},
-  handler: async (ctx) => {
-    const out: ReturnType<typeof pubToken>[] = []
-    for (const me of ctx.myProfiles.values()) {
-      const tokens = await ctx.db
-        .query('mcp_tokens')
-        .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
-        .collect()
-      for (const t of tokens) out.push(pubToken(t))
-    }
-    return byCreatedDesc(out)
-  },
-})
 
 /* P.createMcpToken (awaited). The old client always minted for CURRENT_USER
  * (the home seat); any own seat is accepted. `access` is required, so no

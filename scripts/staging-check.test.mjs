@@ -767,9 +767,9 @@ describe('staging check REST contract', () => {
     // while the run's tokens and connections are still live
     expect(at).toBeLessThan(check.indexOf("check('read-token/ui/revoke'"))
     expect(at).toBeLessThan(check.indexOf("check('oauth-read/ui/delete'"))
-    // the app's lists are read a batch at a time, never the deprecated queries
-    for (const old of ['listMcpTokens', 'listOAuthConnections', 'oauthConnections.list'])
-      expect(check).not.toContain(old)
+    // the sweep reads the app's two lists a batch at a time
+    expect(check).toContain('window.PLANNER.connectedApps(search, cursor)')
+    expect(check).toContain('window.PLANNER.personalTokens(search, cursor)')
     const step = check.slice(
       check.indexOf('async function mcpAccessListsCheck()'),
       check.indexOf('export const SETTINGS_PROJECTS_STEP'),

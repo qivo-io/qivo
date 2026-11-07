@@ -10,8 +10,7 @@
  *      approval first, deleted ones read and left out, the seat's and the
  *      organization's names, the gone app, batches, searches, refusals,
  *      the read share, the demo and a login without a seat.
- *   3. The deprecated full lists, one pin each, unchanged.
- *   4. Reads of everyday batches, logged for the read shares' docstrings.
+ *   3. Reads of everyday batches, logged for the read shares' docstrings.
  *
  * No design-size figure covers these lists, so no case raises one. A case
  * holds at most 26 rows of a list, three seats, 26 deleted connections and
@@ -798,50 +797,6 @@ describe('connected apps', () => {
     const found = await walk((cursor) => apps(caller, { search: 'oldest', cursor }))
     expect(found.some((b) => b.stopped && b.rows.length === 0)).toBe(true)
     expect(found.flatMap((b) => b.rows.map((row) => row.clientName))).toEqual(['Oldest helper'])
-  })
-})
-
-/* -------------------------------------------------------- the deprecated */
-
-describe('the deprecated full lists', () => {
-  it('keeps listMcpTokens answering every token of every active seat, newest first', async () => {
-    const { t, f, guestSeat } = await seats()
-    await plantTokens(t, f.user, [{ name: 'home', created_at: at(1) }])
-    await plantTokens(t, guestSeat, [{ name: 'guest', created_at: at(2), access: 'none' }])
-    const rows = await as(t, f.user).query(api.tokens.listMcpTokens, {})
-    expect(rows.map((row) => [row.name, row.access])).toEqual([
-      ['guest', 'read'],
-      ['home', 'write'],
-    ])
-    expect(Object.keys(rows[0]).sort()).toEqual(
-      [
-        'access',
-        'createdAt',
-        'expiresAt',
-        'id',
-        'lastUsedAt',
-        'name',
-        'prefix',
-        'revokedAt',
-        'revokedByAdmin',
-      ].sort(),
-    )
-  })
-
-  it('keeps oauthConnections.list answering every approved connection, newest created first', async () => {
-    const { t, f } = await seats()
-    await plantClients(t, ['Early'])
-    await plantConnections(t, f.user, [
-      { client: 'Early', created_at: at(1), approved_at: at(50) },
-      { client: 'Late', created_at: at(20), approved_at: at(21) },
-      { client: 'Unfinished', created_at: at(30) },
-      { client: 'Deleted', approved_at: at(40), revoked_at: at(41), revocation_reason: 'deleted' },
-    ])
-    const rows = await as(t, f.user).query(api.oauthConnections.list, {})
-    expect(rows.map((row) => [row.clientName, row.appGone])).toEqual([
-      ['Late', true],
-      ['Early', false],
-    ])
   })
 })
 
