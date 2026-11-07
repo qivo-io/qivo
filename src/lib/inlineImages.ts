@@ -106,6 +106,9 @@ type Dependencies = {
   mint: (id: string, fresh: boolean) => Promise<MintOutcome>
   /** the store's row gate: whether it still holds or names attachment `id` */
   held: (id: string) => boolean
+  /** the store drops the lease it keeps for attachment `id`, which the
+      gateway just refused, so no later view is handed it again */
+  forget: (id: string) => void
   fetch: typeof fetch
   createUrl: (blob: Blob) => string
   revokeUrl: (url: string) => void
@@ -209,6 +212,7 @@ export function createInlineImages(
         ? null
         : (receive, options) => new IntersectionObserver(receive, options),
     rootOf: scrollRoot,
+    forget: () => {},
     now: () => Date.now(),
     setTimer: (run, ms) => setTimeout(run, ms),
     clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
@@ -393,8 +397,11 @@ export function createInlineImages(
     })
   }
   /* A gateway refusal: one fresh mint, then gone. With no view near or
-     the page hidden, the fresh mint waits for the next view (want). */
+     the page hidden, the fresh mint waits for the next view (want), and
+     the store drops the refused lease, so a view after the entry was
+     forgotten mints afresh too. */
   const refused = (entry: Entry) => {
+    deps.forget(entry.id)
     forgetBytes(entry)
     entry.exp = 0
     if (entry.refusedOnce) return gone(entry)

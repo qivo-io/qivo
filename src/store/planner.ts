@@ -7541,6 +7541,7 @@ const avatarSources = createAvatarSources({ changed: () => showPortraits() })
 const inlineImages = createInlineImages({
   held: (id) => attachmentHeld(id),
   mint: (id, fresh) => attachmentLease(id, fresh),
+  forget: (id) => minted.delete(`att:${id}`),
 })
 let mintSweep: ReturnType<typeof setInterval> | null = null
 let fileVisibility: (() => void) | null = null

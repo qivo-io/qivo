@@ -76,9 +76,11 @@ function harness(o: { size?: number; hold?: boolean; queue?: boolean; observer?:
   })
   let serial = 0
   const revokeUrl = vi.fn()
+  const forget = vi.fn()
   const loader = createInlineImages({
     held: (id) => held.has(id),
     mint,
+    forget,
     fetch: fetcher,
     createUrl: () => `blob:image-${++serial}`,
     revokeUrl,
@@ -129,6 +131,7 @@ function harness(o: { size?: number; hold?: boolean; queue?: boolean; observer?:
   return {
     loader,
     mint,
+    forget,
     calls,
     fetcher,
     downloads,
@@ -426,6 +429,18 @@ describe('the inline image loader', () => {
     h.loader.pause(false)
     await settle()
     expect(h.mint.mock.calls.map(([, fresh]) => fresh)).toEqual([false, true, false, true])
+  })
+
+  it('has the store drop a lease the gateway refused, also when no view is left to mint afresh', async () => {
+    const h = harness({ hold: true })
+    const v = h.view('a')
+    v.near()
+    await settle()
+    v.unmount()
+    h.downloads[0]?.answer.resolve(image(0, 404))
+    await settle()
+    expect(h.forget).toHaveBeenCalledExactlyOnceWith('a')
+    expect(h.loader.stats().entries).toBe(0)
   })
 
   it('forgets an image whose mint or download fails after its last view went', async () => {
