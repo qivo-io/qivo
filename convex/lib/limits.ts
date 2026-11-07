@@ -134,13 +134,17 @@ export const DEFAULT_PAGE_SIZE = 50
  * section and between). The app asks nothing for a view of more top-level
  * projects and says so with LIMITS.milestoneProjects's sentence, rather
  * than cut the projects and show a next milestone that may not be the next
- * one (src/store/planner.ts P.watchMilestones). */
+ * one (src/store/planner.ts P.watchMilestones). A section read with `mine`,
+ * whose projects the server finds, refuses more than this many with the
+ * same sentence (model/milestones.ts MILESTONE_TOO_MANY). */
 export const MILESTONE_READ_PROJECTS = 200
 
-/** The most rows one milestones.section answer holds. The app asks 25 at
- * first and 25 more for each Load more, reading one section as one live
- * read whose limit grows, and past this many it moves the read on rather
- * than holding more (src/lib/milestoneSection.ts). */
+/** The most rows one milestones.section answer holds. The app asks a first
+ * batch, 10 for the Overview's and the phone agenda's Upcoming and 25 for
+ * their Past and the Milestones window's sections, and one batch more for
+ * each Load more, reading one section as one live read whose limit grows,
+ * and past this many it moves the read on rather than holding more
+ * (src/lib/milestoneSection.ts). */
 export const MILESTONE_READ_ROWS = 100
 
 /** The most a task row takes as Convex counts a document without the
@@ -657,7 +661,9 @@ export const LIMITS = {
   },
   // A view of more top-level projects than one milestone read names asks
   // nothing and says this (src/store/planner.ts P.watchMilestones), as Team
-  // sync's opening does; milestones.ts refuses more ids with bad_request.
+  // sync's opening does; milestones.ts refuses more ids with bad_request,
+  // and a section read with `mine` whose projects the server finds refuses
+  // more than this many with this sentence (milestone_too_many).
   milestoneProjects: {
     label: 'Projects whose milestones one view reads',
     group: 'tasks',
