@@ -113,8 +113,7 @@ export function ConnectedApps() {
   useFocusWhenGone(list.rows.length > 0, () => (end === 'failed' ? retryButton() : null))
   // Load more keeps focus while it reads, and its Retry is the same button;
   // once it goes, focus moves to the first new row's Delete, else to the
-  // search. A first batch's Try again that goes moves focus to the search,
-  // else the first row's Delete, else the empty list's line.
+  // search.
   const searchBox = useRef<HTMLInputElement>(null)
   const moreFrom = useRef<number | null>(null)
   useFocusWhenGone(end === 'more', () => {
@@ -127,12 +126,17 @@ export function ConnectedApps() {
     moreFrom.current = list.rows.length
     list.more()
   }
+  // A first batch's Try again leaves before anything it could give focus to
+  // shows, so focus moves once the batch it reads again has ended: to the
+  // search, else the first row's Delete, else the empty list's line, or to
+  // the new Try again when it failed again.
   const retried = useRef<string | null>(null)
-  useFocusWhenGone(end === 'failed' && list.batches.length === 0, () =>
-    retried.current === key
-      ? (searchBox.current ?? (rows[0] ? rowButton(rows[0].id) : null) ?? empty.current)
-      : null,
-  )
+  useFocusWhenGone(end === 'loading' && list.batches.length === 0, () => {
+    if (retried.current !== key) return null
+    retried.current = null
+    if (end === 'failed') return retryButton()
+    return searchBox.current ?? (rows[0] ? rowButton(rows[0].id) : null) ?? empty.current
+  })
   const retry = () => {
     retried.current = list.batches.length === 0 ? key : null
     list.retry()

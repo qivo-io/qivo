@@ -351,6 +351,43 @@ describe('the Connected apps list read from the server', () => {
     expect(names()).toHaveLength(25)
   })
 
+  it("moves focus from a first batch's Try again once the batch lands, or to the new Try again when it fails again", async () => {
+    /** Opens the page on a failed first batch, presses its Try again with
+        focus on it, and lands the batch it reads again, failed when `fail`. */
+    const retryFirst = async (list: StandInConnection[], fail: boolean) => {
+      await act(async () => root.unmount())
+      store.lists.length = 0
+      rows = list
+      force = { fail: true }
+      root = createRoot(container)
+      await act(async () =>
+        root.render(
+          <TooltipProvider>
+            <ConnectedApps />
+          </TooltipProvider>,
+        ),
+      )
+      await serve()
+      const retry = button('Try again')
+      retry.focus()
+      await act(async () => retry.click())
+      // the batch is on its way and nothing it could focus shows yet
+      expect(end()).toBe('loading')
+      expect(document.activeElement).toBe(document.body)
+      force = fail ? { fail: true } : {}
+      await serve()
+    }
+    await retryFirst(many(3), false)
+    expect(names()).toHaveLength(3)
+    const row = document.querySelector('[data-oauth-connection="app-002"]')
+    expect(row && document.activeElement).toBe(row && button('Delete', row))
+    await retryFirst([], false)
+    expect(document.activeElement?.textContent).toBe('No connected apps.')
+    await retryFirst(many(3), true)
+    expect(end()).toBe('failed')
+    expect(document.activeElement).toBe(button('Try again'))
+  })
+
   it('hides a deleted row at once and keeps the others until the refresh has landed', async () => {
     await fresh(many(3))
     await ask('app-001')

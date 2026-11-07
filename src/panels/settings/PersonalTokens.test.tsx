@@ -791,6 +791,40 @@ describe('the token list read from the server', () => {
     expect(shownNames()).toHaveLength(30)
   })
 
+  it("moves focus from a first batch's Retry once the batch lands, or to the new Retry when it fails again", async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    /** Opens the page on a failed first batch, presses its Retry with focus
+        on it, and lands the batch it reads again, failed when `fail`. */
+    const retryFirst = async (fail: boolean) => {
+      await act(async () => root.unmount())
+      root = createRoot(container)
+      holding = false
+      force = { fail: true }
+      await render()
+      expect(end()).toBe('failed')
+      holding = true
+      const retry = find('[data-mcp-tokens-retry]')
+      retry.focus()
+      await click(retry)
+      // the batch is on its way and nothing it could focus shows yet
+      expect(end()).toBe('loading')
+      expect(document.activeElement).toBe(document.body)
+      force = fail ? { fail: true } : {}
+      await release()
+    }
+    tokens = many(3)
+    await retryFirst(false)
+    expect(shownNames()).toHaveLength(3)
+    expect(document.activeElement).toBe(find('[data-mcp-token="t002"] button'))
+    tokens = []
+    await retryFirst(false)
+    expect(shownNames()).toEqual([])
+    expect(document.activeElement).toBe(find('[data-mcp-new-token]'))
+    await retryFirst(true)
+    expect(end()).toBe('failed')
+    expect(document.activeElement).toBe(find('[data-mcp-tokens-retry]'))
+  })
+
   it('keeps the new secret and the rows on screen while the list reads again after a create', async () => {
     tokens = many(2)
     await render()
