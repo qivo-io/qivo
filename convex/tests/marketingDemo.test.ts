@@ -1430,7 +1430,7 @@ describe('marketing demo rebuild ownership', () => {
         expect(row.org_id).toBe(profile.org_id)
         expect(row.created_at >= profile.created_at).toBe(true)
         // which every reader shows
-        expect(await shows(t, row), `${profile.name} on ${project.name}`).not.toBeNull()
+        expect(await shows(t, row), `${profile.name} on ${project.name}`).toBe(true)
       }
       // Nora's star puts the last project by name first
       const nora = rows.find((r) => r.profile?.name === 'Nora Berg')?.profile
