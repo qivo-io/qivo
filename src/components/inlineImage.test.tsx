@@ -99,6 +99,9 @@ describe('description images', () => {
     )
     const box = container.querySelector<HTMLElement>('.mdimgbox')
     expect(box?.textContent).toBe('Loading image…')
+    // assistive technology hears the image's alt text, not only its state
+    expect(box?.getAttribute('role')).toBe('img')
+    expect(box?.getAttribute('aria-label')).toBe('board (loading image)')
     expect(box?.style.aspectRatio).toBe('4 / 3')
     // in pixels: a percentage of the shrink-to-fit wrapper would shrink it
     expect(box?.style.width).toBe('453px')
@@ -195,6 +198,7 @@ describe('description images', () => {
     expect(container.textContent).toContain('Image unavailable')
     expect(P.inlineImages.stats().externalLoading).toBe(0)
     const retry = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Retry')
+    expect(retry?.getAttribute('aria-label')).toBe('Retry image chart')
     await act(async () => retry?.click())
     expect(container.querySelector('img')?.getAttribute('src')).toBe(
       'https://slow.example.com/chart.png',

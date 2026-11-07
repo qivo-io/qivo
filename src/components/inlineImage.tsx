@@ -75,13 +75,26 @@ export function InlineImageBody({ alt, attId, external, editor = false, iconSize
             </span>
           </HoverTooltip>
           {!attId && external && outside.unavailable && (
-            <Button type="button" variant="ghost" size="sm" onClick={() => outside.retry()}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-label={alt ? `Retry image ${alt}` : 'Retry image'}
+              onClick={() => outside.retry()}
+            >
               Retry
             </Button>
           )}
         </>
       ) : !shows ? (
-        <span className="mdimgph mdimgbox" style={boxStyle(attId ? image.box : null)}>
+        // an image to assistive technology, named by its alt text, which
+        // says it is still loading
+        <span
+          className="mdimgph mdimgbox"
+          style={boxStyle(attId ? image.box : null)}
+          role="img"
+          aria-label={alt ? `${alt} (loading image)` : 'Loading image'}
+        >
           Loading image…
         </span>
       ) : (
