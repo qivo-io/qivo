@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TODAY_WEEK, weekToISO } from '../lib/dates'
+import type { ForcedMilestones } from '../store/milestoneStandIn.setup'
 import type { IssueFilters } from '../store/planner'
 import type { Snapshot } from '../store/plannerFixture.setup'
 import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
@@ -13,8 +14,9 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
    remounts: Upcoming 10 at a time and a collapsed Past, a `mine` read in
    My view, the reads stopped while the task schedule or the landscape
    timeline shows and freed by P.releaseRoadmap, the reads under a note
-   whatever section the person chose, and the Roadmap's own flag read
-   stopped while the agenda shows. */
+   whatever section the person chose, the section staying under a note
+   while Retry and Show from the start read again, and the Roadmap's own
+   flag read stopped while the agenda shows. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -132,10 +134,29 @@ const plan = (snap: Snapshot) => {
   })
 }
 
-/** Loads the fixture over `scope` and renders its Roadmap, the phone's
-    agenda. */
-async function agenda(scope = 'plan') {
-  const board = await loadBoard(network, plan, { scope })
+/** Loads the fixture over `scope`, with what `o.prepare` adds, and
+    renders its Roadmap, the phone's agenda, with Upcoming's sizes
+    `o.upcoming` and the milestone reads answering `o.force`. A test that
+    sets the sizes restores them. */
+async function agenda(
+  scope = 'plan',
+  o: {
+    prepare?: (snap: Snapshot) => void
+    upcoming?: { batch: number; rows: number }
+    force?: ForcedMilestones
+  } = {},
+) {
+  const board = await loadBoard(
+    network,
+    (snap) => {
+      plan(snap)
+      o.prepare?.(snap)
+    },
+    { scope },
+  )
+  const section = await import('../lib/milestoneSection')
+  if (o.upcoming) Object.assign(section.OVERVIEW_MILESTONES.upcoming, o.upcoming)
+  if (o.force) board.server.milestones.force = o.force
   const { Roadmap } = await import('./Roadmap')
   const { WorkspaceShell } = await import('../components/WorkspaceShell')
   const store = await import('../store/planner')
@@ -155,7 +176,7 @@ async function agenda(scope = 'plan') {
       />
     </WorkspaceShell>
   ))
-  return { board, store }
+  return { board, store, section }
 }
 
 const q = (selector: string) => document.querySelector<HTMLElement>(selector)
@@ -273,6 +294,61 @@ describe("the phone agenda's milestones", { timeout: BOARD_TEST_TIMEOUT }, () =>
     expect(rowsOf('upcoming')).toContain('u1')
     expect(rowsOf('upcoming')).not.toContain('s1')
     expect(document.body.textContent).toContain('Open a project to add a milestone to its roadmap.')
+  })
+
+  it('keeps the section and its focus under a note while Retry and Show from the start read again', async () => {
+    // Lone, a top-level project without sub-projects, so the agenda shows
+    // its note, with 7 upcoming milestones
+    const lone = (snap: Snapshot) => {
+      const top = snap.projects.find((p) => p.id === 'plan')
+      if (!top) throw new Error('no Plan')
+      snap.projects.push({ ...top, id: 'lone', key: 'LONE', num: 5, name: 'Lone' })
+      for (let i = 0; i < 7; i++)
+        snap.milestones.push({
+          id: `l${i + 1}`,
+          project_id: 'lone',
+          name: `Lone ${i + 1}`,
+          week: week(i),
+          created_at: AT,
+        })
+    }
+    const { board, section } = await agenda('lone', {
+      prepare: lone,
+      upcoming: { batch: 2, rows: 4 },
+      force: { upcoming: 'error' },
+    })
+    try {
+      expect(document.body.textContent).toContain('Nothing to schedule yet')
+      const retry = [...(sectionOf('upcoming')?.querySelectorAll('button') ?? [])].find(
+        (b) => b.textContent === 'Retry',
+      )
+      expect(retry).toBeDefined()
+      board.server.milestones.force = {}
+      board.server.milestones.hold = true
+      retry?.focus()
+      await press(retry)
+      // must fail for an agenda that swaps the section for New milestone
+      // while Upcoming loads again
+      expect(sectionOf('upcoming')?.dataset.milestoneSectionState).toBe('loading')
+      expect(document.activeElement).toBe(sectionOf('upcoming'))
+      expect(button('New milestone')).toBeUndefined()
+      board.server.milestones.hold = false
+      await board.answer()
+      expect(rowsOf('upcoming')).toEqual(['l1', 'l2'])
+      await press(sectionOf('upcoming')?.querySelector('[data-milestone-more]'))
+      await press(sectionOf('upcoming')?.querySelector('[data-milestone-more]'))
+      expect(rowsOf('upcoming')).toEqual(['l3', 'l4', 'l5', 'l6'])
+      board.server.milestones.hold = true
+      await press(sectionOf('upcoming')?.querySelector('[data-milestone-from-start]'))
+      expect(sectionOf('upcoming')?.dataset.milestoneSectionState).toBe('loading')
+      expect(document.activeElement).toBe(sectionOf('upcoming'))
+      expect(button('New milestone')).toBeUndefined()
+      board.server.milestones.hold = false
+      await board.answer()
+      expect(rowsOf('upcoming')).toEqual(['l1', 'l2'])
+    } finally {
+      Object.assign(section.OVERVIEW_MILESTONES.upcoming, { batch: 10, rows: 100 })
+    }
   })
 
   it('lists none in All projects', async () => {

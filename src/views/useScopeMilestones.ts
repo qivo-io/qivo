@@ -76,7 +76,8 @@ export type ScopeMilestones = {
   /** whether Past's disclosure shows: once Upcoming's first answer came or
       failed, unless it says the projects hold no past milestone or the
       read names too many projects or was refused, which Past would be
-      too; and always while Past is open */
+      too; and always while Past is open. While Upcoming loads again for
+      the same base, the last answer's or failure's decision holds. */
   showPast: boolean
   /** whether Past shows its search box: once one of its answers had more
       to load, a search was typed or it moved on, as the window's does */
@@ -86,7 +87,10 @@ export type ScopeMilestones = {
       projects hold a past milestone, or Upcoming failed, was refused,
       names too many projects or stopped before a row. Until Upcoming
       answers, and where its whole answer is empty with no past milestone,
-      the note is the whole page. */
+      the note is the whole page. While Upcoming loads again for the same
+      base, after Retry, Show from the start or a new week, the last
+      answer's or failure's decision holds, so the section and the control
+      that has focus stay. */
   stands: boolean
   next: NextMilestone
   /** the row Upcoming shows the next milestone on, for its emphasis */
@@ -140,10 +144,28 @@ export function useScopeMilestones(
   if (!pastSearchable && (past.view.next !== null || past.text !== '' || past.view.dropped))
     setPastSearchable(true)
   const view = upcoming.view
-  const blocked = view.state === 'too_many' || view.state === 'refused'
-  const showPast =
-    base !== null && (pastOpen || (view.state !== 'loading' && view.past !== false && !blocked))
-  const stands = base !== null && view.state !== 'loading' && !(view.empty && view.past === false)
+  // what Upcoming's answer or failure decides for this base: whether the
+  // sections stand under a note and whether Past's disclosure shows
+  const key = base && JSON.stringify(base)
+  const decided =
+    key !== null && view.state !== 'loading'
+      ? {
+          key,
+          stands: !(view.empty && view.past === false),
+          past: view.past !== false && view.state !== 'too_many' && view.state !== 'refused',
+        }
+      : null
+  // the last decision (stood), kept while Upcoming loads again for the
+  // same base and dropped for a new one, whose first answer decides afresh
+  const [stood, setStood] = useState<typeof decided>(null)
+  if (
+    decided &&
+    (stood?.key !== decided.key || stood.stands !== decided.stands || stood.past !== decided.past)
+  )
+    setStood(decided)
+  const holds = decided ?? (stood?.key === key ? stood : null)
+  const showPast = base !== null && (pastOpen || holds?.past === true)
+  const stands = holds?.stands === true
 
   // the next milestone's one-row read, only while Upcoming moved on
   const nextAsk =

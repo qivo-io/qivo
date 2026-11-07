@@ -11,9 +11,10 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
    more and the move on at a lowered cap, a collapsed Past that reads
    nothing until it opens, 25 at a time with its search on the server, the
    Next milestone cell in each state, My view's `mine` read, All projects
-   reading none, the note pages, another person's rename, move and delete
-   arriving while the page shows, a hidden tab, a kept page, a scope switch,
-   P.releaseOverview and a new week. The reads answer through the milestone
+   reading none, the note pages, the section staying under a note while
+   Retry and Show from the start read again, another person's rename, move
+   and delete arriving while the page shows, a hidden tab, a kept page, a
+   scope switch, P.releaseOverview and a new week. The reads answer through the milestone
    stand-in over the fixture's workspace (store/milestoneStandIn.setup.ts).
    Every case asks for no task. */
 
@@ -130,6 +131,15 @@ const plan =
       week: mondayIn(1),
       created_at: AT,
     })
+  }
+
+/** plan's projects and milestones with no task at all, so a top-level
+    project's note says "No tasks yet". */
+const noTasks =
+  (o: { up?: number; past?: number } = {}) =>
+  (snap: Snapshot) => {
+    plan(o)(snap)
+    snap.issues = []
   }
 
 /** Loads the fixture with `prepare` over `scope` and renders the Overview. */
@@ -458,6 +468,54 @@ describe('the note pages', { timeout: BOARD_TEST_TIMEOUT }, () => {
     await none.board.answer()
     expect(rowsOf('upcoming')).toEqual(['late'])
     expect(loaded.board.snapshot.milestones).toHaveLength(2)
+  })
+})
+
+describe('the note pages through a new read', { timeout: BOARD_TEST_TIMEOUT }, () => {
+  it('keeps the section and its focus under a note while Retry and Show from the start read again', async () => {
+    const loaded = await overview(noTasks({ up: 7, past: 1 }))
+    const { board, section, store } = loaded
+    Object.assign(section.OVERVIEW_MILESTONES.upcoming, { batch: 2, rows: 4 })
+    try {
+      // Upcoming's first read fails, so the section stands under the note
+      // with Retry
+      board.server.milestones.force = { upcoming: 'error' }
+      await act(async () => root.unmount())
+      await act(async () => store.P.releaseOverview())
+      root = createRoot(container)
+      await loaded.render()
+      expect(document.body.textContent).toContain('No tasks yet')
+      const retry = [...(sectionOf('upcoming')?.querySelectorAll('button') ?? [])].find(
+        (b) => b.textContent === 'Retry',
+      )
+      expect(retry).toBeDefined()
+      board.server.milestones.force = {}
+      board.server.milestones.hold = true
+      retry?.focus()
+      await click(retry)
+      // must fail for a section that leaves the page while Upcoming loads
+      // again, and takes its focus with it
+      expect(stateOf('upcoming')).toBe('loading')
+      expect(document.activeElement).toBe(sectionOf('upcoming'))
+      board.server.milestones.hold = false
+      await board.answer()
+      expect(rowsOf('upcoming')).toEqual(['u1', 'u2'])
+      // two Load mores reach the lowered cap, so the section moves on
+      await click(sectionOf('upcoming')?.querySelector('[data-milestone-more]'))
+      await click(sectionOf('upcoming')?.querySelector('[data-milestone-more]'))
+      expect(rowsOf('upcoming')).toEqual(['u3', 'u4', 'u5', 'u6'])
+      board.server.milestones.hold = true
+      await click(sectionOf('upcoming')?.querySelector('[data-milestone-from-start]'))
+      expect(stateOf('upcoming')).toBe('loading')
+      expect(document.activeElement).toBe(sectionOf('upcoming'))
+      // Past's disclosure stays too
+      expect(q('[data-overview-milestones] [data-milestone-past-toggle]')).not.toBeNull()
+      board.server.milestones.hold = false
+      await board.answer()
+      expect(rowsOf('upcoming')).toEqual(['u1', 'u2'])
+    } finally {
+      Object.assign(section.OVERVIEW_MILESTONES.upcoming, { batch: 10, rows: 100 })
+    }
   })
 })
 
