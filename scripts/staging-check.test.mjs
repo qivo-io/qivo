@@ -99,6 +99,8 @@ import {
   SETTINGS_PROJECTS_STEP,
   SETTINGS_USERS_EXPECTED,
   SETTINGS_USERS_STEP,
+  SIDEBAR_PROJECTS_MARKS,
+  SIDEBAR_PROJECTS_STEP,
   searchOf,
   selectedCreatorsStarts,
   send,
@@ -347,6 +349,12 @@ describe('staging check REST contract', () => {
       check.indexOf('export const BILLING_STORAGE_STEP'),
     )
     expect(step).toContain(`app.locator(\`aside [data-project-row="\${M.id}"]\`)`)
+    // M's address first, so the sidebar's tree reads on to M's row
+    // wherever it sorts
+    expect(step.indexOf(`/board/p/\${M.num}`)).toBeGreaterThan(-1)
+    expect(step.indexOf(`/board/p/\${M.num}`)).toBeLessThan(
+      step.indexOf(`app.locator(\`aside [data-project-row="\${M.id}"]\`)`),
+    )
     expect(step).toContain(`sub.locator(\`[data-new-subproject-parent="\${M.id}"]\`)`)
     expect(step.indexOf(`[data-new-subproject-parent-choice="\${project.id}"]`)).toBeLessThan(
       step.indexOf(`.locator(\`[data-new-subproject-parent="\${project.id}"]\`)`),
@@ -381,8 +389,12 @@ describe('staging check REST contract', () => {
     expect(PROJECT_DIRECTORY_STEP).toBe('ui/project-directory')
     for (const mark of Object.values(PROJECT_DIRECTORY_MARKS)) expect(page).toContain(mark)
     // the note for a project the workspace has not delivered, which the
-    // step waits out
-    expect(page).toContain(`${NOT_LOADED_YET}. Try again in a moment.`)
+    // step waits out, in the open rule the directory shares
+    // (projectNavRows.tsx)
+    expect(page).toContain('openNavProject(row, actions, say)')
+    expect(
+      readFileSync(new URL('../src/components/projectNavRows.tsx', import.meta.url), 'utf8'),
+    ).toContain(`${NOT_LOADED_YET}. Try again in a moment.`)
     const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
     expect(check.indexOf('await projectDirectoryCheck()')).toBeGreaterThan(
       check.indexOf('await settingsProjectsCheck()'),
@@ -408,6 +420,50 @@ describe('staging check REST contract', () => {
     expect(step).toMatch(browse)
     expect(step.search(browse)).toBeLessThan(step.indexOf('await search(run.tag)'))
     expect(step).toContain('order.indexOf(M.id) < order.indexOf(A.id)')
+  })
+  it("checks the sidebar's project tree on its own marks, after the directory and before the archive", () => {
+    const tree = readFileSync(
+      new URL('../src/components/SidebarProjects.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(SIDEBAR_PROJECTS_STEP).toBe('ui/sidebar-projects')
+    for (const mark of Object.values(SIDEBAR_PROJECTS_MARKS)) expect(tree).toContain(mark)
+    // the open rule's toast, which the step presses through
+    const rows = readFileSync(
+      new URL('../src/components/projectNavRows.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(rows).toContain(`${NOT_LOADED_YET}. Try again in a moment.`)
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    expect(check.indexOf('await sidebarProjectsCheck()')).toBeGreaterThan(
+      check.indexOf('await projectDirectoryCheck()'),
+    )
+    expect(check.indexOf('await sidebarProjectsCheck()')).toBeLessThan(
+      check.indexOf('await archiveChecks()'),
+    )
+    const step = check.slice(
+      check.indexOf('async function sidebarProjectsCheck()'),
+      check.indexOf('/** The step that checks Settings › Projects › Deleted items'),
+    )
+    // on the run's own M, Alpha and Zulu, adding no project
+    expect(step).toContain('const { M, A, Z } = run.projects')
+    expect(step).not.toContain("'POST', '/projects'")
+    // M's address first, then the tree's answered list and M's lit row
+    const address = step.indexOf(`/board/p/\${M.num}`)
+    const ok = step.indexOf(`[\${m.state}="ok"]`)
+    const lit = step.indexOf(`[\${m.row}="\${M.id}"][data-on]`)
+    expect(address).toBeGreaterThan(-1)
+    expect(ok).toBeGreaterThan(address)
+    expect(lit).toBeGreaterThan(ok)
+    // the star and the unstar go through the store, also after a failure
+    expect(step).toContain(
+      'window.PLANNER.setFavorite({ id, org_id: window.PLANNER.homeOrg }, want)',
+    )
+    expect(step).toContain('if (starred) await setStar(false)')
+    // Zulu's own address and lit row, and no scrollbar
+    expect(step).toContain('atProject(path(), Z.num)')
+    expect(step).toContain(`[\${m.child}="\${Z.id}"][data-on]`)
+    expect(step).toContain('getComputedStyle(el).scrollbarWidth')
   })
   it('reads the directory’s groups, and refuses a page that breaks favorites first', () => {
     const fav = { group: 'favorites' }

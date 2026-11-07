@@ -160,6 +160,13 @@
  * it by name (projectNav.setFavorite), lists Alpha and Zulu under it
  * (projectNav.children), opens Zulu, and unstars the project again
  * (ui/project-directory).
+ * It opens its project's Board by its address, waits for the sidebar's
+ * tree from the deployment's navigation reads (projectNav.page) to light
+ * the project wherever it sorts, with Alpha and Zulu under it
+ * (projectNav.children), stars the project through the store, which the
+ * server's answer moves into the tree's favorites with its mark, opens
+ * Zulu from the tree, checks that the tree shows no scrollbar, and unstars
+ * the project again (ui/sidebar-projects).
  * It makes 26 tasks of its own in Alpha and deletes them over REST,
  * searches its tag in Settings › Projects › Deleted items, from the
  * deployment's page (deletedItems.page), and waits until the page answers
@@ -6538,8 +6545,12 @@ async function projectDialogsCheck() {
       "Nora's grant",
     )
     // New sub-project from the sidebar menu of the run's project M, so the
-    // dialog starts on M and only a pick from the list can make it D
+    // dialog starts on M and only a pick from the list can make it D. M's
+    // address makes the sidebar's tree read on to M wherever it sorts.
     const { M } = run.projects
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/p/${M.num}`, {
+      waitUntil: 'domcontentloaded',
+    })
     const row = app.locator(`aside [data-project-row="${M.id}"]`)
     await row.waitFor({ timeout: 30_000 })
     await row.hover()
@@ -7167,6 +7178,122 @@ async function projectDirectoryCheck() {
           (id) => window.PLANNER.setFavorite({ id, org_id: window.PLANNER.homeOrg }, false),
           M.id,
         ).catch(() => {})
+    }
+  })
+}
+
+/** The step that checks the sidebar's project tree (sidebarProjectsCheck). */
+export const SIDEBAR_PROJECTS_STEP = 'ui/sidebar-projects'
+
+/** The marks the step waits for in the sidebar's tree
+ *  (src/components/SidebarProjects.tsx). */
+export const SIDEBAR_PROJECTS_MARKS = {
+  tree: 'data-sidebar-projects',
+  state: 'data-sidebar-projects-state',
+  row: 'data-project-row',
+  group: 'data-sidebar-group',
+  mark: 'data-sidebar-favorite',
+  children: 'data-sidebar-children',
+  child: 'data-subproject-row',
+  more: 'data-sidebar-children-more',
+}
+
+/** The sidebar's project tree on the deployment's navigation reads
+ *  (projectNav.page and children), on the run's own project M, which Nora
+ *  leads, and its sub-projects Alpha and Zulu, so the step adds no project.
+ *  In the app it opens M's Board by its address, waits for the tree's
+ *  list to answer and for M's lit row, which the tree reads on to wherever
+ *  M sorts, and for Alpha and Zulu under it, pressing Load more while one
+ *  is still to come. It stars M through the store and waits for the
+ *  server's answer to put M's row, with its mark, in the tree's favorites,
+ *  with one row for M in the tree. It opens Zulu from the tree, pressing
+ *  again while the address has not moved, as the tree says in a toast that
+ *  the workspace has not loaded a project yet, and waits for Zulu's
+ *  address and lit row. The tree must show no scrollbar
+ *  (scrollbar-width none). It unstars M and waits for M to leave the
+ *  favorites; a failure unstars it through the store, so no later step
+ *  meets the run's project as a favorite. It reads none of Nora's own
+ *  favorites, which a deployment seeded before dataset version 10 does not
+ *  hold, and must run before the run archives M. It needs a backend from
+ *  v0.1.118 on. */
+async function sidebarProjectsCheck() {
+  const m = SIDEBAR_PROJECTS_MARKS
+  await check(SIDEBAR_PROJECTS_STEP, async () => {
+    const { M, A, Z } = run.projects
+    expect(Number.isInteger(M.num), 'the run project has no number')
+    const tree = app.locator(`aside [${m.tree}]`)
+    const rowOf = (p) => tree.locator(`[${m.row}="${p.id}"]`)
+    const children = tree.locator(`[${m.children}="${M.id}"]`)
+    const child = (p) => children.locator(`[${m.child}="${p.id}"]`)
+    const favorite = () => tree.locator(`[${m.group}="favorites"] [${m.row}="${M.id}"]`)
+    const setStar = (on) =>
+      evaluate(
+        app,
+        ([id, want]) => window.PLANNER.setFavorite({ id, org_id: window.PLANNER.homeOrg }, want),
+        [M.id, on],
+      )
+    let starred = false
+    try {
+      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/p/${M.num}`, {
+        waitUntil: 'domcontentloaded',
+      })
+      // the tree's list from projectNav.page, and M's row, lit for the
+      // scope, wherever M sorts
+      await app.locator(`aside [${m.tree}][${m.state}="ok"]`).waitFor({ timeout: 60_000 })
+      await tree.locator(`[${m.row}="${M.id}"][data-on]`).waitFor({ timeout: 60_000 })
+      // M's sub-projects from projectNav.children
+      expect(
+        await until(async () => {
+          if ((await child(A).count()) && (await child(Z).count())) return true
+          const more = tree.locator(`[${m.more}]`)
+          if (await more.count()) await more.click()
+          return false
+        }, 60_000),
+        'the tree does not list Alpha and Zulu under M',
+      )
+      // a star from the store, which the server's answer puts first
+      await setStar(true)
+      starred = true
+      expect(
+        await until(
+          async () =>
+            (await favorite().count()) === 1 &&
+            (await favorite().locator(`[${m.mark}]`).count()) === 1 &&
+            (await rowOf(M).count()) === 1,
+          30_000,
+        ),
+        "M's row does not come once into the tree's favorites with its mark",
+      )
+      // Zulu opened from the tree
+      const path = () => new URL(app.url()).pathname
+      const opened = await until(async () => {
+        if (atProject(path(), Z.num)) return true
+        // a project the workspace has not delivered yet: the tree says so
+        // in a toast and moves nothing, so the step presses again
+        await child(Z).locator('button').first().click()
+        return atProject(path(), Z.num)
+      }, 60_000)
+      expect(opened, `Zulu's page did not open from the tree, which went to ${path()}`)
+      await tree.locator(`[${m.child}="${Z.id}"][data-on]`).waitFor({ timeout: 30_000 })
+      // no scrollbar beside the tree
+      eq(
+        await evaluate(tree, (el) => getComputedStyle(el).scrollbarWidth),
+        'none',
+        "the tree's scrollbar-width",
+      )
+      // unstarred, M leaves the favorites
+      await setStar(false)
+      expect(
+        await until(
+          async () => (await favorite().count()) === 0 && (await rowOf(M).count()) === 1,
+          30_000,
+        ),
+        'M stays in the favorites once unstarred',
+      )
+      starred = false
+      return `lit ${M.name} wherever it sorts with Alpha and Zulu under it, moved it into the favorites with its mark and out again, and opened Zulu from the tree, which shows no scrollbar`
+    } finally {
+      if (starred) await setStar(false).catch(() => {})
     }
   })
 }
@@ -9028,6 +9155,9 @@ async function main() {
   // the All projects directory on the server's navigation reads, its star
   // and its sub-project list, on its project while it is active
   await projectDirectoryCheck()
+  // the sidebar's project tree on the server's navigation reads, a star
+  // and the scope's sub-projects, on its project while it is active
+  await sidebarProjectsCheck()
   // Deleted items on the server's page, with tasks and a sub-project of its
   // own, restored past 25 in steps and deleted for good
   await deletedItemsCheck()
