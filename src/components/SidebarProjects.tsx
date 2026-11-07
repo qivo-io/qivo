@@ -41,9 +41,9 @@
    - The tree scrolls without a visible scrollbar (styles/appearance.css),
      and a row that takes focus by anything but a press inside the tree
      scrolls into its view, as a Tab focus does by itself. Load more gives
-     focus to the first new row only after the person pressed it; the
-     tree's own loads, as its end scrolls into view or the scope rule reads
-     on, never move focus.
+     focus to the first new row only for the batch the person's press asked
+     for; the tree's own loads, as its end scrolls into view or the scope
+     rule reads on, never move focus, also after a pressed batch landed.
    - App asks for focus on a row once the tree shows it (FocusRow), as
      after a create whose row comes with the server's answer. The row's
      name button takes focus in the first commit that renders it, if focus
@@ -181,11 +181,12 @@ export function SidebarProjects({
   const ownerName = owner === null ? undefined : P.project(owner)?.name
   const ownerRow = owner === null ? undefined : list.rows.find((r) => r.id === owner)
 
-  /* Whether the person pressed Load more since it last showed, so its focus
-     rule, which moves focus that is nowhere once Load more goes, acts only
-     for a press: the tree loads by itself as its end comes into view and
-     as the scope rule reads on, also before anyone touched the page, and
-     must never take focus for that. */
+  /* Whether the batch the person asked for by pressing Load more is still
+     on its way, so its focus rule, which moves focus that is nowhere once
+     Load more goes, acts only for that press's own batch: the tree loads
+     by itself as its end comes into view and as the scope rule reads on,
+     also before anyone touched the page and after a pressed batch landed
+     with more to come, and must never take focus for that. */
   const pressedMore = useRef(false)
   const { more, marker } = useLoadMore(
     list,
@@ -203,8 +204,10 @@ export function SidebarProjects({
           ].at(-1) ??
           null),
   )
+  // after useLoadMore's focus rule, which reads the flag first; a pressed
+  // batch that landed with more to come counts no more
   useLayoutEffect(() => {
-    if (end !== 'more') pressedMore.current = false
+    if (end !== 'more' || list.phase === 'ready') pressedMore.current = false
   })
 
   // the scope rule: read on, a batch at a time, until a batch holds the
@@ -694,7 +697,8 @@ function SidebarChildren({
   // the scoped sub-project, when the scope is one of this project's
   const scoped = P.project(scope)
   const target = scoped && scoped.type !== 'meta' && scoped.parent === parent.id ? scoped : null
-  // as the tree's own list, Load more's focus rule acts only for a press
+  // as the tree's own list, Load more's focus rule acts only for the batch
+  // a press asked for
   const pressedMore = useRef(false)
   const { more, marker } = useLoadMore(
     list,
@@ -713,7 +717,7 @@ function SidebarChildren({
         : null,
   )
   useLayoutEffect(() => {
-    if (end !== 'more') pressedMore.current = false
+    if (end !== 'more' || list.phase === 'ready') pressedMore.current = false
   })
   const seek =
     target !== null &&

@@ -439,7 +439,7 @@ describe('the order', { timeout: 60_000 }, () => {
 })
 
 describe('the projects figure', { timeout: 60_000 }, () => {
-  it('loads 200 top-level projects 25 at a time as the marker comes into view, one read a batch, and stops at a lowered bound', async () => {
+  it('loads 200 top-level projects 25 at a time on Load more and as the marker comes into view, one read a batch, and stops at a lowered bound', async () => {
     // IntersectionObserver reports the marker where the layout puts it,
     // out of view below 25 rows until a scroll
     const markers: ((seen: boolean) => void)[] = []
@@ -465,8 +465,18 @@ describe('the projects figure', { timeout: 60_000 }, () => {
     await render('mine')
     expect(rowIds()).toEqual(ids.slice(0, 25))
     expect(asked('page')).toHaveLength(1)
-    // each scroll to the end reads one batch more
-    for (let batch = 2; batch <= 8; batch++) {
+    // Load more pressed by keyboard reads the second batch, which has more
+    // to come, so Load more stays and keeps focus
+    const pressed = find('[data-sidebar-more]')
+    pressed.focus()
+    await click(pressed)
+    expect(rowIds()).toEqual(ids.slice(0, 50))
+    expect(open('projectNav:page')).toHaveLength(2)
+    expect(document.activeElement).toBe(find('[data-sidebar-more]'))
+    // the person moves focus off it; each scroll to the end reads one
+    // batch more
+    await act(async () => pressed.blur())
+    for (let batch = 3; batch <= 8; batch++) {
       await act(async () => {
         markers.at(-1)?.(true)
         markers.at(-1)?.(false)
@@ -475,7 +485,8 @@ describe('the projects figure', { timeout: 60_000 }, () => {
       expect(rowIds()).toEqual(ids.slice(0, batch * 25))
       expect(open('projectNav:page')).toHaveLength(batch)
     }
-    // loads by scrolling take no focus, also once the list ends
+    // loads by scrolling take no focus, also once the list ends after an
+    // earlier press of Load more whose batch had landed
     expect(document.activeElement).toBe(document.body)
     // the end says nothing after rows, and nothing more is read
     expect(end()).toBe('end')
