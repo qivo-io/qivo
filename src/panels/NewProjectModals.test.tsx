@@ -820,6 +820,43 @@ describe('New sub-project', () => {
     expect(note()?.textContent).toBe("You won't see this sub-project.")
   })
 
+  it('offers a Viewer of the parent no starter task for a sub-project someone else leads, which they see', async () => {
+    // Aisha, an admin, holds Viewer on Beam, which Leo leads, so a
+    // sub-project Leo leads there shows to her and takes no task of hers
+    await load('admin', (snap) => {
+      snap.access = [{ project_id: 'beam', profile_id: 'aisha', level: 'viewer' }]
+    })
+    const viewer = await openSub('beam')
+    await type(nameField(), 'Docs')
+    // as its lead she adds tasks there
+    expect(has('#subproject-starter')).toBe(true)
+    await pickLead('leo')
+    expect(note()).toBeNull()
+    expect(has('#subproject-starter')).toBe(false)
+    await click(create())
+    expect(viewer).toHaveBeenCalledWith(expect.objectContaining({ parent: 'beam', lead: 'leo' }), {
+      withStarter: false,
+      shown: { orgId: home },
+      sees: true,
+    })
+  })
+
+  it('offers a starter task to a creator with User on the parent who names another lead', async () => {
+    // Aisha, an admin, holds the fixture's User on Beam, which the
+    // sub-project inherits
+    await load('admin')
+    const user = await openSub('beam')
+    await type(nameField(), 'Docs')
+    await pickLead('leo')
+    expect(has('#subproject-starter')).toBe(true)
+    await click(create())
+    expect(user).toHaveBeenCalledWith(expect.objectContaining({ parent: 'beam', lead: 'leo' }), {
+      withStarter: true,
+      shown: { orgId: home },
+      sees: true,
+    })
+  })
+
   it('checks its parent on the server and turns Create on only once the answer allows it', async () => {
     await load('user')
     server.reads.hold(true)

@@ -537,10 +537,11 @@ function NameRow({ nameRef, name, setName, submit }) {
 }
 
 /** What a create dialog hands App with its project: whether to make a
-    starter task, and for a sub-project the organization its parent check
-    named (ProjectShown), which the create goes to, and whether its creator
-    will see it (`sees`, null while unknown), which App's toast and its
-    move into the sub-project use. */
+    starter task, which New sub-project asks only for a creator who will
+    be able to add one there, and for a sub-project the organization its
+    parent check named (ProjectShown), which the create goes to, and
+    whether its creator will see it (`sees`, null while unknown), which
+    App's toast and its move into the sub-project use. */
 type CreateOptions = {
   withStarter: boolean
   shown?: { orgId: string }
@@ -740,14 +741,18 @@ function parentNote(read: ProjectSettingsRead, picked: ParentPick, opener: boole
    a current answer that the parent may take a sub-project, so it is off
    while the check loads, failed, refreshes after a failure, or answered
    archived, unavailable or no. The create goes to the answer's
-   organization (CreateOptions `shown`). A starter task is offered only
+   organization (CreateOptions `shown`). The creator sees the sub-project
+   as its lead, or by their own level on the parent, which the parent check
+   answers without navigation (`accessible`), so an organization admin who
+   manages a parent they take no part in and names someone else as lead
+   reads "You won't see this sub-project.", and an unknown answer, as from
+   a check that stopped, warns of nothing. A starter task is offered only
    under a parent the workspace holds, as P.addIssue creates tasks only in
-   a project it holds, and only to a creator who may see the sub-project.
-   The creator sees it as its lead, or by their own level on the parent,
-   which the parent check answers without navigation (`accessible`), so an
-   organization admin who manages a parent they take no part in and names
-   someone else as lead reads "You won't see this sub-project.", and an
-   unknown answer, as from a check that stopped, warns of nothing. Of the
+   a project it holds, and only to a creator who will be able to add a
+   task there: its lead, or one whose level on the parent, which the
+   sub-project inherits, is User or Lead (a team share counts at its
+   level). Seeing it is not enough, as a Viewer on the parent sees the
+   sub-project and may add no task, and an unknown level offers none. Of the
    store it reads the caller's seats and their names, the organizations'
    names, whether the workspace holds the parent, the keys the name's
    preview avoids (genKey) and the creator's admin flag for the footer; no
@@ -815,7 +820,17 @@ function NewSubProjectModal({
       : answer && parent && answer.project.id === parent.id
         ? answer.accessible
         : null
-  const offersStarter = !!held && sees !== false
+  // whether the creator will be able to add a task to it, as the server's
+  // task create asks for User or Lead (model/issues.ts assertCanEdit): as
+  // its lead, or by User or Lead on the parent, which it inherits; false
+  // while the parent's level is unknown
+  const edits =
+    (!!seat && lead.id === seat) ||
+    (!!answer &&
+      !!parent &&
+      answer.project.id === parent.id &&
+      (answer.level === 'user' || answer.level === 'lead'))
+  const offersStarter = !!held && edits
 
   const submit = () => {
     if (!canSave || !parent || !answer) return

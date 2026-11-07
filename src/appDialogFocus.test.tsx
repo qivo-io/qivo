@@ -482,11 +482,12 @@ describe('New sub-project', { timeout: 30_000 }, () => {
      (projectSettings.get) stopped before it knew their level, as past a
      read bound, and answers level and accessible null to a manager, so the
      dialog cannot tell whether they will see Docs: it warns of nothing and
-     offers the starter task. The workspace then holds Docs, as the create's
-     kept paint under a held parent does, so only App's check that the
-     creator sees it (P.resolveProject) keeps App from opening it and
-     making the task. `resolve` answers that check from the navigation
-     stand-in, which finds no level of theirs on Docs, or fails it. */
+     offers no starter task, as an unknown level gives no Edit. The
+     workspace then holds Docs, as the create's kept paint under a held
+     parent does, so only App's check that the creator sees it
+     (P.resolveProject) keeps App from opening it. `resolve` answers that
+     check from the navigation stand-in, which finds no level of theirs on
+     Docs, or fails it. */
   async function createUnderOps(resolve: 'answered' | 'failed') {
     history.replaceState(null, '', '/app/testbed/settings/projects')
     await boot((snap) => {
@@ -559,10 +560,11 @@ describe('New sub-project', { timeout: 30_000 }, () => {
         "Leo's choice",
       ),
     )
-    // an unknown sight warns of nothing and keeps the starter task, checked
+    // an unknown sight warns of nothing, and an unknown level offers no
+    // starter task
     const shell = await waitFor(() => document.querySelector('[data-modal-shell]'), 'the dialog')
     expect(shell.textContent).not.toContain("You won't see this sub-project.")
-    expect(document.querySelector<HTMLInputElement>('#subproject-starter')?.checked).toBe(true)
+    expect(document.querySelector('#subproject-starter')).toBeNull()
     await finish(true)
     const create = sent.find((w) => w.name === 'projects:create')
     expect(create?.args).toMatchObject({ parent_id: 'ops', lead_id: 'leo', name: 'Docs' })
@@ -600,6 +602,106 @@ describe('New sub-project', { timeout: 30_000 }, () => {
     await createUnderOps('failed')
     expect(document.body.textContent).toContain('Sub-project “Docs” created')
     expect(document.body.textContent).not.toContain("You don't have access to it.")
+  })
+
+  /* The Planner, an organization admin with a Viewer grant on Ops, which
+     Leo leads, creates Docs led by Leo under it from Settings › Projects.
+     Docs inherits Viewer, so she sees it and may add no task there, which
+     the server's task create refuses. `level` 'user' has Ops' parent check
+     answer User, as a check that knew more than the workspace would, so
+     the dialog offers the starter task and only App's own check of Edit
+     (P.canWrite) keeps the task from being sent. Answers whether the
+     dialog offered the starter task. */
+  async function createAsViewer(level: 'answered' | 'user') {
+    history.replaceState(null, '', '/app/testbed/settings/projects')
+    await boot((snap) => {
+      const me = snap.profiles[0]
+      snap.profiles.push({
+        ...me,
+        id: 'leo',
+        auth_user_id: 'leo-account',
+        name: 'Leo',
+        initials: 'LE',
+        org_role: 'user',
+      })
+      snap.projects.push({
+        ...snap.projects[0],
+        id: 'ops',
+        key: 'OPS',
+        num: 3,
+        name: 'Ops',
+        lead_id: 'leo',
+      })
+      snap.access.push({ project_id: 'ops', profile_id: me.id, level: 'viewer' })
+    })
+    if (level === 'user') {
+      const watch = network.onUpdate.getMockImplementation()
+      network.onUpdate.mockImplementation((ref, args, next, fail) =>
+        getFunctionName(ref) === 'projectSettings:get' && (args as { id: string }).id === 'ops'
+          ? watch?.(
+              ref,
+              args,
+              (value: { state: string }) =>
+                next(value.state === 'ok' ? { ...value, level: 'user', accessible: true } : value),
+              fail,
+            )
+          : watch?.(ref, args, next, fail),
+      )
+    }
+    // the Lead picker's one-shot read (projectSettings.leadCandidates)
+    // answers from the stand-in too
+    const reads = projectSettingsServer(() => server)
+    const ask = network.query.getMockImplementation()
+    network.query.mockImplementation((ref, args) =>
+      isProjectSettingsRead(getFunctionName(ref))
+        ? reads.query(getFunctionName(ref), args)
+        : ask?.(ref, args),
+    )
+    const row = await waitFor(
+      () => document.querySelector('[data-settings-projects] [data-project-row="ops"]'),
+      "Ops's row",
+    )
+    await press(await find('Project actions', row))
+    const menu = await waitFor(
+      () => document.querySelector('[data-slot="popover-content"]'),
+      'the menu',
+    )
+    await press(await find('New sub-project…', menu))
+    await waitFor(() => document.querySelector('[data-new-subproject-parent="ops"]'), 'the check')
+    await press(
+      await waitFor(
+        () => document.querySelector<HTMLElement>('[data-project-lead-picker]'),
+        'the Lead picker',
+      ),
+    )
+    await press(
+      await waitFor(
+        () => document.querySelector<HTMLElement>('[data-lead-choice="leo"]'),
+        "Leo's choice",
+      ),
+    )
+    // she will see Docs, as a Viewer
+    const shell = await waitFor(() => document.querySelector('[data-modal-shell]'), 'the dialog')
+    expect(shell.textContent).not.toContain("You won't see this sub-project.")
+    const offered = document.querySelector<HTMLInputElement>('#subproject-starter')?.checked
+    await finish(true)
+    const create = sent.find((w) => w.name === 'projects:create')
+    expect(create?.args).toMatchObject({ parent_id: 'ops', lead_id: 'leo', name: 'Docs' })
+    await save()
+    // App confirmed that she sees Docs, said so with the plain toast and
+    // sent no task
+    expect(document.body.textContent).toContain('Sub-project “Docs” created')
+    expect(document.body.textContent).not.toContain("You don't have access to it.")
+    expect(sent.some((w) => w.name.startsWith('issues:'))).toBe(false)
+    return offered === true
+  }
+
+  it('offers no starter task to an admin who views the parent and names another lead, and sends none', async () => {
+    expect(await createAsViewer('answered')).toBe(false)
+  })
+
+  it('sends no starter task where the workspace gives the creator no Edit, also when the dialog offered it', async () => {
+    expect(await createAsViewer('user')).toBe(true)
   })
 
   it.each([

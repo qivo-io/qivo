@@ -1912,7 +1912,10 @@ function App() {
   // (P.resolveProject), since the paint under a held parent shows it
   // either way and an organization admin manages parents they cannot see.
   // `sees` false, the dialog's own knowledge that they will not, skips the
-  // read and says so.
+  // read and says so. The starter task also needs the workspace's level
+  // rule to give the creator Edit there (P.canWrite), as the server's task
+  // create does, so a Viewer of the parent, who sees the sub-project, gets
+  // the plain toast and no task, also where the dialog offered one.
   const createProject = (
     p: NewProjectInput,
     {
@@ -1942,7 +1945,7 @@ function App() {
         /* What follows once whether the creator sees the project is known:
            true, false or null for unknown. */
         const follow = (seen: boolean | null) => {
-          if (withStarter && held && seen === true) {
+          if (withStarter && held && seen === true && P.canWrite(id)) {
             P.addIssue({
               title: p.name,
               project: id,
