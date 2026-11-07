@@ -312,6 +312,35 @@ describe('people the workspace does not hold, on each page', () => {
   )
 
   it(
+    'names the owner of a parent heading that an Assignee filter leaves on the Board only above its subtask',
+    async () => {
+      const { board, names } = await load((snap) => {
+        snap.issues.push({ ...taskRow(snap, 'par', 'progress', 1), assignee_id: GINA })
+        snap.issues.push({
+          ...taskRow(snap, 'kid', 'todo', 2),
+          parent_id: 'par',
+          assignee_id: HAL,
+        })
+      }, {})
+      await board.render(root)
+      await board.filter({ assignees: [HAL] })
+      await repaint()
+      // Hal's card shows under its parent's heading, whose owner is Gina
+      const heading = document.querySelector('[aria-label="Parent: Task par"]')
+      expect(heading).not.toBeNull()
+      expect(board.card('par')).toBeNull()
+      expect(portraits(GINA).length).toBeGreaterThan(0)
+      expect(names.named().has(GINA)).toBe(true)
+      expect(names.unnamed()).toEqual([])
+      board.server.people.hold = false
+      await board.answer()
+      await repaint()
+      expect(portraits(GINA).every((s) => s === 'ok')).toBe(true)
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
     'names the Overview’s lead and its lists’ owners, loading and then by name',
     async () => {
       const { board, names } = await load(

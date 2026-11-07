@@ -26,6 +26,7 @@ import { useLatest } from '../lib/useLatest'
 import {
   type IssueFilters,
   type IssueVM,
+  type NamedPerson,
   P,
   type ProjectPlace,
   type ProjectVM,
@@ -95,6 +96,28 @@ const pendingLabel = (n: number) => `Loading ${n} more ${n === 1 ? 'card' : 'car
 
 /** One status cell's tasks and cards, with the id its list mounts under. */
 type BoardCellCards = { key: string; items: IssueVM[]; groups: CardGroup[] }
+
+/** The owners of the parent headings `cells` draw above their cards
+    (ParentHeading), each heading's ancestors first, as usePeople names
+    them. The same array while every cell keeps its groups, which
+    createCellGrouper hands back unchanged until a card or its heading
+    changes, so the Board's list of named people keeps its identity. */
+function useHeadingOwners(cells: BoardCellCards[]): NamedPerson[] {
+  const last = React.useRef<{ groups: CardGroup[][]; owners: NamedPerson[] } | null>(null)
+  const groups = cells.map((cell) => cell.groups)
+  const was = last.current
+  if (was && was.groups.length === groups.length && was.groups.every((g, i) => g === groups[i]))
+    return was.owners
+  const owners = groups.flatMap((list) =>
+    list.flatMap((group) =>
+      group.parent
+        ? [...group.ancestors, group.parent].map((it) => ({ org: it.org, id: it.owner ?? '' }))
+        : [],
+    ),
+  )
+  last.current = { groups, owners }
+  return owners
+}
 
 /** The task's card in each cell that shows it, in board order. A parent
     heading repeats in every cell that holds one of its subtasks. */
@@ -703,25 +726,6 @@ function KanbanBoard({
 
   // the cards: the leaves among the tasks the Board shows
   const visible = view.tasks.filter((it) => !P.isGroup(it))
-  // the people the Board shows, named while it shows: each row's assignee
-  // and reviewer in the rows' order, which the lanes' owners are, and the
-  // leads of the project lanes, whose headings alone draw a lead's portrait
-  // (LaneHeader), so only while it draws them as swimlanes
-  const leadLanes = grouped && tweaks.metaViz === 'swimlanes'
-  usePeople(
-    React.useMemo(
-      () => [
-        ...view.tasks.flatMap((it) => [
-          { org: it.org, id: it.assignee ?? '' },
-          { org: it.org, id: it.reviewer ?? '' },
-        ]),
-        ...(leadLanes
-          ? info.groups.map((g) => ({ org: g.proj.org, id: P.leadOf(g.proj.id) ?? '' }))
-          : []),
-      ],
-      [view.tasks, info.groups, leadLanes, P.contextVersion],
-    ),
-  )
   // a message in place of the Board ends a drag over it
   React.useEffect(() => {
     if (!view.shows && dragId) endDrag()
@@ -851,6 +855,29 @@ function KanbanBoard({
   )
   const rows = sideBoards ? boards.map((board) => board.cells) : laneCells
   const cells = rows.flat()
+  // the people the Board shows, named while it shows: each row's assignee
+  // and reviewer in the rows' order, which the lanes' owners are; the
+  // owners of the parent headings the cells draw, which a filter such as
+  // Assignee, Focus or the text can leave out of the rows while their
+  // subtasks match; and the leads of the project lanes, whose headings
+  // alone draw a lead's portrait (LaneHeader), so only while it draws them
+  // as swimlanes
+  const headingOwners = useHeadingOwners(cells)
+  usePeople(
+    React.useMemo(
+      () => [
+        ...view.tasks.flatMap((it) => [
+          { org: it.org, id: it.assignee ?? '' },
+          { org: it.org, id: it.reviewer ?? '' },
+        ]),
+        ...headingOwners,
+        ...(swimlanes
+          ? info.groups.map((g) => ({ org: g.proj.org, id: P.leadOf(g.proj.id) ?? '' }))
+          : []),
+      ],
+      [view.tasks, headingOwners, info.groups, swimlanes, P.contextVersion],
+    ),
+  )
 
   /* How many cards each cell mounts at once: all of them on a Board of
      SYNC_LIMIT cards or fewer, else the cards that fit in the first screen.
