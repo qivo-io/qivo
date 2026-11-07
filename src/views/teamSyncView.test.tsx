@@ -854,7 +854,7 @@ describe('the reviewer prompt', () => {
         search.dispatchEvent(new Event('input', { bubbles: true }))
       })
       /* An Escape in the prompt's search; true when the app took it. */
-      const escape = async () => {
+      const pressEscape = async () => {
         const event = new KeyboardEvent('keydown', {
           key: 'Escape',
           bubbles: true,
@@ -864,11 +864,11 @@ describe('the reviewer prompt', () => {
         await settle()
         return event.defaultPrevented
       }
-      expect(await escape()).toBe(true)
+      expect(await pressEscape()).toBe(true)
       expect(prompt()).not.toBeNull()
       expect(box()?.value).toBe('')
       const sent = network.mutation.mock.calls.length
-      await escape()
+      await pressEscape()
       expect(prompt()).toBeNull()
       expect(network.mutation.mock.calls.length).toBe(sent)
     },

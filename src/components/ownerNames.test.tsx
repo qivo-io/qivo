@@ -143,7 +143,8 @@ describe('useOwnerNames', () => {
   // the bound lowered to 3, so the case keeps four names, not 1,001
   it('keeps at most its bound of names, the oldest dropped first', () => {
     const org = snap.orgs[0].id
-    const keep = (id: string) => names.keepOwnerName(org, { id, name: `Person ${id}`, active: true })
+    const keep = (id: string) =>
+      names.keepOwnerName(org, { id, name: `Person ${id}`, active: true })
     const was = names.OWNER_NAMES.kept
     expect(was).toBe(1000)
     names.OWNER_NAMES.kept = 3

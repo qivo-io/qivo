@@ -802,10 +802,11 @@ describe('the Team sync @ window’s Send', () => {
     await toggle()
     expect(windowOpen()).toBe(false)
     await toggle()
-    expect(reads('pickers:canOwn').slice(-2).map((a) => a.args.ids)).toEqual([
-      ['aisha'],
-      ['aisha'],
-    ])
+    expect(
+      reads('pickers:canOwn')
+        .slice(-2)
+        .map((a) => a.args.ids),
+    ).toEqual([['aisha'], ['aisha']])
     await release('pickers:syncRecipients')
     await release('pickers:syncRecipients')
     // Ben Carter, picked in the second opening

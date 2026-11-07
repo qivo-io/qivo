@@ -42,6 +42,7 @@ import { useMenuBackLayer } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
 import { useViewHidden } from '@/lib/viewHidden'
 import { P } from '../../store/planner'
+import { ESCAPE_CLEARS, escapeClearsFirst } from '../pickerWords'
 import {
   type AvatarSize,
   avatar,
@@ -50,7 +51,6 @@ import {
   priorityIcon,
   projectName,
 } from '../rowElements'
-import { ESCAPE_CLEARS, escapeClearsFirst } from '../pickerWords'
 import { Icon } from './icon'
 
 /* The one paused mark: the amber pause glyph, named for readers and drives
