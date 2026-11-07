@@ -2593,7 +2593,7 @@ function IssueDetail({
   // the people the window shows, named while it shows: the task's holders
   // and reporter, the loaded comments' authors and editors, the loaded
   // history's actors, the listed files' uploaders and the owners of the
-  // listed subtasks and linked tasks
+  // Parent row and of the listed subtasks and linked tasks
   usePeople(
     it
       ? [
@@ -2604,7 +2604,7 @@ function IssueDetail({
           ]),
           ...history.map((e) => ({ org: it.org, id: e.actor ?? '' })),
           ...files.rows.map((file) => ({ org: it.org, id: file.by ?? '' })),
-          ...[...subtasks.rows, ...linked.rows].map((row) => ({
+          ...[...(parentRow ? [parentRow] : []), ...subtasks.rows, ...linked.rows].map((row) => ({
             org: row.org,
             id: row.owner ?? '',
           })),

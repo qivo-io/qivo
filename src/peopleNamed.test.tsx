@@ -406,6 +406,15 @@ describe('people the workspace does not hold, on each page', () => {
       await repaint()
       expect(reporter()).toContain('Hal Hidden')
       expect(names.unnamed()).toEqual([])
+      // the child's window draws its Parent row's owner, Gina, and names her
+      const child = board.P.handleOf('child') ?? ''
+      await board.renderView(root, () => (
+        <IssueDetail issueId={child} onClose={() => {}} onOpen={() => {}} />
+      ))
+      await repaint()
+      expect(portraits(GINA).length).toBeGreaterThan(0)
+      expect(names.named().has(GINA)).toBe(true)
+      expect(names.unnamed()).toEqual([])
     },
     BOARD_TEST_TIMEOUT,
   )
