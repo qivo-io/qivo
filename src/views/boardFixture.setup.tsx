@@ -18,6 +18,8 @@ import {
   overviewStandIn,
 } from '../store/overviewStandIn.setup'
 import { type OwnerLoadsArgs, ownerLoadsStandIn } from '../store/ownerLoadsStandIn.setup'
+import { isOwnerPickerRead, ownerPickersStandIn } from '../store/ownerPickersStandIn.setup'
+import { peopleSettingsStandIn } from '../store/peopleSettingsStandIn.setup'
 import type { IssueFilters, ScopeInfo } from '../store/planner'
 import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 import { answerRoadmap, type ForcedRoadmap } from '../store/roadmapStandIn.setup'
@@ -45,7 +47,12 @@ import { type ForcedSync, type SyncArgs, teamSyncStandIn } from '../store/teamSy
    Roadmap from the server's answer too, and the milestone reads
    (milestones:get, section and between, store/milestoneStandIn.setup.ts,
    `server.milestones`), so the Roadmap shows its flags from its range
-   read. */
+   read. A task's people pickers (pickers:taskOwners, syncRecipients and
+   canOwn) answer through their stand-in
+   (store/ownerPickersStandIn.setup.ts, `server.owners`), and people:byIds
+   through store/peopleSettingsStandIn.setup.ts, so the owner lists and
+   Team sync's Mention window list people; every other one-shot read
+   answers null. */
 
 type Network = {
   mutation: ReturnType<typeof vi.fn>
@@ -223,6 +230,10 @@ export async function loadBoard(
     }
     /** the last comments' subscriptions open now, each with its owners */
     comments: Set<{ owners: string[] }>
+    /** a task's people pickers (pickers:taskOwners, syncRecipients and
+        canOwn) and people:byIds: `force` answers the stand-in's states,
+        `asked` is every read's name and arguments, oldest first */
+    owners: { force: Set<string>; asked: { name: string; args: unknown }[] }
     /** the milestone reads: `hold` keeps their answers back, `force`
         answers states the workspace cannot reach, `asked` is every
         subscription's query and arguments, newest last, and `open` those
@@ -268,6 +279,7 @@ export async function loadBoard(
     },
     sync: { hold: false, force: {}, fail: undefined, edit: null, asked: [], open: new Set() },
     comments: new Set(),
+    owners: { force: new Set(), asked: [] },
     milestones: { hold: false, force: {}, asked: [], open: new Set() },
   }
   // the store's canSee and canWrite, once the store loaded
@@ -357,9 +369,25 @@ export async function loadBoard(
     for (const sub of server.roadmap.open) answerRoadmapSub(sub)
     if (!server.milestones.hold) for (const sub of server.milestones.open) answerMilestoneSub(sub)
   }
-  network.query.mockResolvedValue(null)
+  // a task's people pickers answer through their stand-in, and every other
+  // one-shot read with nothing
+  network.query.mockImplementation(async (ref, args) => {
+    const name = getFunctionName(ref)
+    if (!isOwnerPickerRead(name)) return null
+    server.owners.asked.push({ name, args })
+    return structuredClone(ownerPickersStandIn(snapshot, name, args, server.owners.force))
+  })
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
+    if (name === 'people:byIds') {
+      server.owners.asked.push({ name, args })
+      try {
+        next(peopleSettingsStandIn(snapshot, name, args))
+      } catch (e) {
+        fail?.(e)
+      }
+      return () => {}
+    }
     if (name === 'workspace:whole') {
       deliver = (snap) => next(structuredClone(snap))
       deliver(snapshot)

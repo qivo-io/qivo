@@ -9240,6 +9240,40 @@ export type MentionChoices =
   | { state: 'refused'; message: string }
 /** A person the mention popup offers. */
 export type MentionChoice = Extract<MentionChoices, { state: 'ready' }>['rows'][number]
+/** One answer of a task's owner or recipient picker (P.ownerChoices and
+    P.recipientChoices, pickers.taskOwners and syncRecipients), or a
+    refusal with the server's sentence. */
+export type OwnerChoices =
+  | FunctionReturnType<typeof api.pickers.taskOwners>
+  | { state: 'refused'; message: string }
+/** A person an owner or recipient picker offers, a person row with no
+    face (convex/model/projectSettings.ts PersonRow). */
+export type OwnerChoice = Extract<OwnerChoices, { state: 'ready' }>['rows'][number]
+/** One answer of a check of people by id (P.ownerChecks, pickers.canOwn),
+    or a refusal with the server's sentence. */
+export type OwnerChecks =
+  | FunctionReturnType<typeof api.pickers.canOwn>
+  | { state: 'refused'; message: string }
+/** One person P.ownerChecks answered. */
+export type OwnerCheck = Extract<OwnerChecks, { state: 'ready' }>['rows'][number]
+
+/* One read of a picker by `read`: its answer, a `bad_request` or `rule`
+   refusal as `refused` with the server's sentence, and any other failure
+   null, logged as `what`'s. */
+async function pickerRead<A>(
+  what: string,
+  read: () => Promise<A>,
+): Promise<A | { state: 'refused'; message: string } | null> {
+  try {
+    return await read()
+  } catch (e) {
+    const { code, message } = errData(e)
+    if (code === 'bad_request' || code === 'rule')
+      return { state: 'refused', message: asSentence(message || 'Qivo refused this search.') }
+    console.error(`[qivo] ${what} read failed:`, e)
+    return null
+  }
+}
 
 /* `change` as the server names a removal (convex/model/removalPreview.ts
    vRemovalChange). */
@@ -14864,6 +14898,65 @@ export const PLANNER = {
       return null
     }
   },
+
+  /* --- the task owner pickers and Team sync's Mention window ---------- */
+  /** One batch of the people who could become task `task`'s assignee or
+      reviewer (`field`, pickers.taskOwners), read once and never
+      subscribed to: those whose name holds every word of `search`, after
+      `cursor`, an earlier answer's `next`, or from the start. A search
+      past its limit or a cursor the server no longer accepts answers
+      `refused` with the server's sentence, and a failed read null. */
+  ownerChoices: (o: {
+    task: { uuid: string; org: string }
+    field: 'assignee' | 'reviewer'
+    search: string
+    cursor: string | null
+  }): Promise<OwnerChoices | null> =>
+    pickerRead('owner picker', () =>
+      convex.query(api.pickers.taskOwners, {
+        org_id: o.task.org,
+        issue_id: o.task.uuid,
+        field: o.field,
+        ...(o.search === '' ? {} : { search: o.search }),
+        ...(o.cursor === null ? {} : { after: o.cursor }),
+      }),
+    ),
+
+  /** One batch of the people Team sync's Mention window may notify about
+      task `task` (pickers.syncRecipients), read once as P.ownerChoices
+      reads its batches. */
+  recipientChoices: (o: {
+    task: { uuid: string; org: string }
+    search: string
+    cursor: string | null
+  }): Promise<OwnerChoices | null> =>
+    pickerRead('mention recipients', () =>
+      convex.query(api.pickers.syncRecipients, {
+        org_id: o.task.org,
+        issue_id: o.task.uuid,
+        ...(o.search === '' ? {} : { search: o.search }),
+        ...(o.cursor === null ? {} : { after: o.cursor }),
+      }),
+    ),
+
+  /** Whether each person of `ids` could be chosen now in task `task`'s
+      picker for `field` (pickers.canOwn), read once: their row, null for
+      an id the organization does not hold, and `eligible`. More ids than
+      the server takes answers `refused` with the server's sentence, and a
+      failed read null. */
+  ownerChecks: (o: {
+    task: { uuid: string; org: string }
+    field: 'assignee' | 'reviewer' | 'recipient'
+    ids: string[]
+  }): Promise<OwnerChecks | null> =>
+    pickerRead('owner check', () =>
+      convex.query(api.pickers.canOwn, {
+        org_id: o.task.org,
+        issue_id: o.task.uuid,
+        field: o.field,
+        ids: o.ids,
+      }),
+    ),
 
   /** The parent of task `uuid` as the window's own answer of it shows it,
       painted, for the Parent row of a task the workspace holds whose

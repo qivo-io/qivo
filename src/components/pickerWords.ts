@@ -89,6 +89,44 @@ export const MENTION_WORDS: ChoiceWords & { searching: string; failedMore: strin
     none: 'No matching members',
   }
 
+/** What a task's people picker says of `held`, a read with no rows: the
+    server's sentence for a refusal, the task gone for `unavailable`, its
+    rule past its read budget for `over_budget` (`unchecked`), and names
+    not keyed yet for `not_ready`. */
+const taskHeldLine = (held: HeldPick | undefined, unchecked: string) => {
+  if (held?.state === 'refused' && held.message) return sentence(held.message)
+  if (held?.state === 'unavailable') return 'This task is no longer available.'
+  if (held?.state === 'over_budget') return unchecked
+  return "People can't be listed yet."
+}
+
+/** The words of a task's Assignee list (components/AssigneeAvatar.tsx
+    OwnerPickList). */
+export const OWNER_WORDS: ChoiceWords = {
+  held: (held) => taskHeldLine(held, "Qivo couldn't check who can take this task."),
+  failed: "Couldn't load people.",
+  stopped: 'Showing the people found so far.',
+  empty: 'No one can be assigned to this task.',
+  none: 'No matching assignees.',
+}
+
+/** The words of a task's Reviewer list, as OWNER_WORDS. */
+export const REVIEWER_WORDS: ChoiceWords = {
+  ...OWNER_WORDS,
+  empty: 'No one can review this task.',
+  none: 'No matching reviewers.',
+}
+
+/** The words of Team sync's Mention window (views/teamSync/SyncCard.tsx
+    MentionCtl). */
+export const RECIPIENT_WORDS: ChoiceWords = {
+  held: (held) => taskHeldLine(held, "Qivo couldn't check who can be mentioned on this task."),
+  failed: "Couldn't load people.",
+  stopped: 'Showing the people found so far.',
+  empty: 'No one else can be mentioned on this task.',
+  none: 'No people match.',
+}
+
 /** Keeps a picker's popover open on an Escape in its search box, marked
     `probe`, while the box holds text, which the box then clears. */
 export const escapeClearsFirst = (probe: string) => (event: KeyboardEvent) => {
