@@ -60,10 +60,11 @@
  *               included, as registering one again enables it. Events are
  *               filtered by profileCanSeeProject (webhooks.ts,
  *               model/taskEvents.ts), so it delivers none of the events
- *               of the projects that leave, without a word. A subscription whose owner can never authorize it
- *               again, as its credential was revoked, expired or replaced
- *               or its login or app is gone (model/webhookOwners.ts
- *               ownerStandings), delivers nothing today and is left out.
+ *               of the projects that leave, without a word. A subscription
+ *               whose owner can never authorize it again, as its credential
+ *               was revoked, expired or replaced or its login or app is
+ *               gone (model/webhookOwners.ts ownerStandings), delivers
+ *               nothing today and is left out.
  *               `standing` is 'suspended' while Qivo refuses its owner for
  *               now, as for a banned login or a disabled app, and on the
  *               demo, which sends no events, else 'live'. `scope` is 'task'
@@ -98,18 +99,19 @@
  * limits plan, under the owner's decision of 7 November 2026: on staging
  * and production through the private helpers under the standing approval,
  * and on the demo only with the owner's approval of that one command, and
- * records each run's counts in qivo-internal docs/verification.md. `check` is a query, so it cannot write, and a key
- * that may only run internal queries can run it. It reports one page of one
- * phase. Start with `{"phase": "projects"}`, pass the returned `cursor` back
- * until `done` is true, then do the same for "work" and "machine". `run`
- * walks the pages of every phase from its `cursor` and answers the counts
- * and the first FINDINGS_MOST findings. A call stops after RUN.ms, well
- * inside Convex's action time limit, and then answers a `cursor`; call it
- * again with `"cursor"` set to it until the cursor is null. The counts of a
- * call that goes on from a cursor add to those of the call before it. A
- * page that fails ends the call with its counts so far, `failed` set to the
- * error and the cursor of that page, so a call from it with a smaller
- * `page_size` can go on, or the operator can look into what it names. With
+ * records each run's counts in qivo-internal docs/verification.md. `check`
+ * is a query, so it cannot write, and a key that may only run internal
+ * queries can run it. It reports one page of one phase. Start with
+ * `{"phase": "projects"}`, pass the returned `cursor` back until `done` is
+ * true, then do the same for "work" and "machine". `run` walks the pages of
+ * every phase from its `cursor` and answers the counts and the first
+ * FINDINGS_MOST findings. A call stops after RUN.ms, well inside Convex's
+ * action time limit, and then answers a `cursor`; call it again with
+ * `"cursor"` set to it until the cursor is null. The counts of a call that
+ * goes on from a cursor add to those of the call before it. A page that
+ * fails ends the call with its counts so far, `failed` set to the error and
+ * the cursor of that page, so a call from it with a smaller `page_size` can
+ * go on, or the operator can look into what it names. With
  * the private helper:
  *   H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
  *   "$H" staging npx convex run internal/adminAccessReport:check '{"phase": "projects"}'

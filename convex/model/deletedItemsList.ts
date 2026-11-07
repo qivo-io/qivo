@@ -174,8 +174,9 @@ export type Deleter = {
  * show only what the viewer may see; a redacted row shows one task the
  * viewer can see instead of the root. An organization admin's row shows the
  * whole item, and a hidden one, a task item whose root's project the admin
- * cannot read, its key with an empty title and no status or reason. `blocked` explains a ready row that
- * cannot be restored by the viewer; rows in other states say so by `state`. */
+ * cannot read, its key with an empty title and no status or reason.
+ * `blocked` explains a ready row that cannot be restored by the viewer;
+ * rows in other states say so by `state`. */
 export type DeletedRow = {
   id: string
   org_id: string

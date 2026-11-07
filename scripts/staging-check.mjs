@@ -1917,8 +1917,9 @@ async function deleteConnectionInUi(clientName) {
  *  ('archive') is archived over REST first and deleted once the store
  *  lists it archived, which it does for a project the caller reads. Any
  *  other ('direct'), one Nora only manages, which the store does not hold
- *  since the admin access split, is deleted as it is, live or archived. The store's own copy never decides, as it can still hold a
- *  project whose access was just taken away. */
+ *  since the admin access split, is deleted as it is, live or archived. The
+ *  store's own copy never decides, as it can still hold a project whose
+ *  access was just taken away. */
 export const projectDeleteRoute = (current) =>
   current?.json?.access?.read === true ? 'archive' : 'direct'
 

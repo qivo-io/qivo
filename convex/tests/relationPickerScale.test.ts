@@ -7,9 +7,9 @@
  * archived ones at their sum, a project's Done tasks, the catalogue at its
  * sum for a member and an admin in the member's teams, one batch at its
  * full scan, the teams a person is in, the sub-projects one person reads,
- * the teams a project is shared with and a team's shares. Each case prints what each first batch read,
- * the figures RELATION_PICKER's docstring quotes, and checks that it
- * answered whole within the default budgets. */
+ * the teams a project is shared with and a team's shares. Each case prints
+ * what each first batch read, the figures RELATION_PICKER's docstring
+ * quotes, and checks that it answered whole within the default budgets. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'

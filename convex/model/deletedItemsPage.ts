@@ -64,9 +64,10 @@
  * allowances set before any reads (gatherTasks); the cross-project items no
  * query covers are read whole. A candidate counts only in a project the
  * seat may read in its view of the item (ItemView readable), so an
- * admin's search keeps its sources and drops the tasks they cannot read, which is how it narrows an admin's search
- * (coordinator, 2026-11-05). Every page gathers the same candidates and
- * orders them, and is the entries after its cursor.
+ * admin's search keeps its sources and drops the tasks they cannot read,
+ * which is how it narrows an admin's search (coordinator, 2026-11-05).
+ * Every page gathers the same candidates and orders them, and is the
+ * entries after its cursor.
  *
  * Stops. A browse or scan that spends its budget ends the page with
  * next_cursor at the last item it looked at, also with no entries. A page

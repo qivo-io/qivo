@@ -84,13 +84,14 @@ import { ownerSettled, ROW_BYTES } from './viewReads'
  * a family of 30 sub-projects 1,364, the page of the lead of 20
  * sub-projects in an organization of 1,000 people 1,360, and a member's
  * page 1,495 in 5 teams, 1,491 where each project is shared with 5 teams
- * and 1,512 where a team shares 50 live and 150 archived projects. A staff page whose 200 rows have 25 owners of about
- * 100 open tasks in four sub-projects each judges 53 rows' delays within
- * the delays' share and answers 91 unavailable; an owner past the owner
- * reader's bounds answers unavailable at once. That a row of a person with
- * very much open work says unavailable on every page, while the task's own
- * read judges it, is the agreed rule for figures that depend on people's
- * workloads (limits plan, "Design size", owner, 2026-11-01). */
+ * and 1,512 where a team shares 50 live and 150 archived projects. A staff
+ * page whose 200 rows have 25 owners of about 100 open tasks in four
+ * sub-projects each judges 53 rows' delays within the delays' share and
+ * answers 91 unavailable; an owner past the owner reader's bounds answers
+ * unavailable at once. That a row of a person with very much open work says
+ * unavailable on every page, while the task's own read judges it, is the
+ * agreed rule for figures that depend on people's workloads (limits plan,
+ * "Design size", owner, 2026-11-01). */
 export const ACTIVE_PAGE = {
   ranges: 3800,
   documents: 20_000,
