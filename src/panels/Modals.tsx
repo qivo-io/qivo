@@ -1302,12 +1302,16 @@ type Taker = { id: string; name: string } | null
 function AccessRemovalModal({
   change,
   answer,
+  onRemoved,
   onClose,
   focusAfterClose,
 }: {
   change: AccessRemoval
   /** the server's preview that opened the window (P.startRemoval) */
   answer: RemovalAnswer
+  /** runs once the access is gone: the server accepted the removal the
+      window sent, or said it was gone already */
+  onRemoved?: () => void
   onClose: () => void
   /** what takes focus as the window closes, as the removal takes the row
       of the button that opened it away before the server accepts it */
@@ -1391,6 +1395,14 @@ function AccessRemovalModal({
       chosen ? nextKeep || !next.reassign.allowed : !next.reassign.allowed && nextKeep,
     )
   }
+  /* The removal that leaves the tasks, once a read-only organization
+     allows only that, reported once the server accepts it. */
+  const leaveTasks = (now: RemovalAnswer) => {
+    onClose()
+    void P.removeLeavingTasks(change, now).then((removed) => {
+      if (removed) onRemoved?.()
+    })
+  }
   /* After a refused write, the window asks the server again: an answer it
      cannot read keeps the window with its lists, a refusal closes it, as the
      write's own message already said why, and a read-only organization
@@ -1398,18 +1410,20 @@ function AccessRemovalModal({
   const finish = (removal: Promise<boolean>) => {
     setSaving(true)
     void removal.then(async (removed) => {
-      if (removed) return onClose()
+      if (removed) {
+        onRemoved?.()
+        return onClose()
+      }
       const now = await P.previewRemoval(change)
       if (!open.current) return
       setSaving(false)
       if (now === null || now.state === 'too_large') return
       if (now.state === 'refused') return onClose()
-      if (now.state === 'unavailable' || !now.pending) return onClose()
-      if (now.leave_only) {
-        onClose()
-        void P.removeLeavingTasks(change, now)
-        return
+      if (now.state === 'unavailable' || !now.pending) {
+        onRemoved?.()
+        return onClose()
       }
+      if (now.leave_only) return leaveTasks(now)
       // a refused removal whose tasks are now covered keeps its answer, so
       // a retry checks again and takes the plain removal
       if (now.tasks > 0) showAgain(now, true)
@@ -1430,6 +1444,7 @@ function AccessRemovalModal({
       if (now.state === 'unavailable' || (now.state === 'ok' && !now.pending)) {
         // someone else removed this access meanwhile: say so instead of a silent close
         window.showToast?.(`${P.removalGoneText(change)} Nothing was changed.`, 'info')
+        onRemoved?.()
         onClose()
         return
       }
@@ -1445,11 +1460,7 @@ function AccessRemovalModal({
         window.showToast?.(sentence(now.message), 'error')
         return
       }
-      if (now.leave_only) {
-        onClose()
-        void P.removeLeavingTasks(change, now)
-        return
-      }
+      if (now.leave_only) return leaveTasks(now)
       // nobody loses sight of anything any more, so the plain removal applies
       if (now.tasks === 0) {
         finish(P.removeAccess(change, { to: null }))

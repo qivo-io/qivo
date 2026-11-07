@@ -903,6 +903,47 @@ describe("a team's page", () => {
     expect(memberIds()).toEqual(['leo', 'off'])
   })
 
+  it('drops a member added here past the loaded batch once their removal goes through, with no store to tell it', async () => {
+    await load(undefined, (held) => {
+      held.teams = held.teams.filter((t) => t.id !== 'crew')
+      held.teamMembers = held.teamMembers.filter((m) => m.team_id !== 'crew')
+    })
+    await teamPage()
+    await click(find('[data-team-member-picker]'))
+    await click(document.querySelector('[data-team-member-choice="off"]'))
+    // the list shows one member a batch, so Oli sorts past what it loaded
+    server.force = { batch: 1 }
+    await rerun()
+    expect(memberIds()).toEqual(['leo'])
+    await click(find('[data-team-member-add]'))
+    server.snap.teamMembers.push({ team_id: 'crew', profile_id: 'off', is_leader: false })
+    await answer('teams:addMember', 'accept')
+    await rerun()
+    expect(memberIds()).toEqual(['off', 'leo'])
+    expect(find('[data-settings-team-member="off"] [data-team-member-kept]').textContent).toBe(
+      'Added',
+    )
+    const remove = () =>
+      find<HTMLButtonElement>('[data-settings-team-member="off"] [data-team-member-remove]')
+    await click(remove())
+    // the second press counts past the confirm's ignore time
+    await act(async () => await new Promise((r) => setTimeout(r, CONFIRM_IGNORE_MS + 50)))
+    await click(remove())
+    await settle()
+    expect(requests.at(-1)).toMatchObject({
+      name: 'teams:removeMember',
+      args: { team_id: 'crew', profile_id: 'off' },
+    })
+    expect(memberIds()).toEqual(['leo'])
+    // the server removes her and accepts; the list has still not reached
+    // her place, and the kept row does not come back
+    server.snap.teamMembers = server.snap.teamMembers.filter((m) => m.profile_id !== 'off')
+    await answer('teams:removeMember', 'accept')
+    await rerun()
+    expect(document.querySelector('[data-team-member-kept]')).toBeNull()
+    expect(memberIds()).toEqual(['leo'])
+  })
+
   it('keeps a member added to a team whose whole list shows as Added until the server answers, then lets the list tell', async () => {
     await load()
     await teamPage()

@@ -474,7 +474,8 @@ function TeamFields({
   }, [])
   const current = useListCurrent(list)
   // an added member goes from the kept rows once a loaded batch holds them,
-  // or once the add was refused (addMember). Until the server added them
+  // once the add was refused (addMember), or once their removal went
+  // through (the Remove press's onRemoved). Until the server added them
   // every answer is from before the add, so only once it did, and the
   // answers are current, may the list tell that it does not hold them, as
   // when someone removed them meanwhile. None of it needs the store.
@@ -510,6 +511,13 @@ function TeamFields({
     () => searchBox.current,
   )
 
+  // a member whose removal went through leaves the kept rows, so an added
+  // member the list has not reached, or a search hides, is not kept again
+  // once the removal's write stops hiding the row
+  const left = (id: string) => {
+    setAdded((m) => without(m, (gone) => gone === id))
+    setDrafts((s) => toggled(s, id, false))
+  }
   const row = (id: string, member: MemberRowAnswer | null, note: string | null) => (
     <MemberRow
       key={id}
@@ -525,7 +533,9 @@ function TeamFields({
       armed={confirm.armed === `m:${id}`}
       checking={removal.checking(teamRemoval(teamId, id, org, ''))}
       onRemove={(shownName, at) =>
-        confirm.press(`m:${id}`, () => removal.press(teamRemoval(teamId, id, org, shownName), at))
+        confirm.press(`m:${id}`, () =>
+          removal.press(teamRemoval(teamId, id, org, shownName), at, () => left(id)),
+        )
       }
       onUnsaved={onUnsaved}
     />

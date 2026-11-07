@@ -12759,10 +12759,13 @@ export const PLANNER = {
       `still` says whether the page that pressed is still shown; when it
       answers false once the preview arrives, nothing happens at all. A
       paused save refuses before anything is read, since the read would
-      wait for the connection. */
+      wait for the connection. `removed` runs once the access is gone: the
+      server accepted the removal this press made, or the preview says it
+      was gone already. */
   startRemoval: async (
     change: AccessRemoval,
     still: () => boolean,
+    removed: () => void = () => {},
   ): Promise<RemovalAnswer | null> => {
     if (refusePausedEdit()) return null
     const answer = await PLANNER.previewRemoval(change)
@@ -12773,6 +12776,7 @@ export const PLANNER = {
     }
     if (answer.state === 'unavailable' || (answer.state === 'ok' && !answer.pending)) {
       toast(`${PLANNER.removalGoneText(change)} Nothing was changed.`, 'info')
+      removed()
       return null
     }
     if (answer.state !== 'ok') {
@@ -12780,11 +12784,15 @@ export const PLANNER = {
       return null
     }
     if (answer.tasks === 0) {
-      void PLANNER.removeAccess(change, { to: null })
+      void PLANNER.removeAccess(change, { to: null }).then((ok) => {
+        if (ok) removed()
+      })
       return null
     }
     if (answer.leave_only || !settlesRemoval(answer)) {
-      void PLANNER.removeLeavingTasks(change, answer)
+      void PLANNER.removeLeavingTasks(change, answer).then((ok) => {
+        if (ok) removed()
+      })
       return null
     }
     return answer
