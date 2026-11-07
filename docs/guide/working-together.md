@@ -226,7 +226,7 @@ you choose oldest, with **Previous** and **Next** at the list's end. Each
 task has one row showing its current title, its age, and its project and
 sub-project. The order, the filters and the search cover your whole Inbox
 before the page is cut, so every task with messages is reachable. A page
-updates as news arrives: a task with news moves to the start of Newest
+updates as news arrives. A task with news moves to the start of Newest
 first, or to the end of Oldest first, where it can show again on a later
 page. While you read a later page, news can also move tasks of an earlier
 page past where you came from; **Previous** and then **Next** shows them.
