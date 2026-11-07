@@ -169,18 +169,22 @@ if (!process.argv.includes('--serve'))
       process.exit(code)
     })
 // the timed phases, each with its script, layout and style time and the
-// number of App renders in it. Tasks load on demand: `startup` is the
-// startup without task windows, and the phases before `taskLoad` (BEFORE_ASK)
-// run before any task is held, the Roadmap's navigation and drag among them,
-// since the Roadmap reads its tasks from the server (tasks.roadmap), and the
-// person's own create, timed from its send to its confirmation; taskLoad
-// times the ask for every task (P.askTasks) to every task held, and every
-// phase after it reads or edits held tasks. A build from before the Roadmap
-// read the server asks for every task as the Roadmap mounts, so its
-// navigation holds that load and its taskLoad finds every task held. A build
-// from before a create stopped asking (t3/limits-create-answer) asks for
-// every task as it creates, so its `create` holds the start of the task load
-// and its taskLoad only the rest
+// number of App renders in it. Tasks load on demand, so `startup` is the
+// startup without task windows. It lasts until the project the app opens
+// shows a view (startedOn). On this branch that follows the
+// projectNav.resolve check of the remembered project, one round trip more
+// than a build from before it, which opened the first project at once. The
+// phases before `taskLoad` (BEFORE_ASK) run before any task is held, the
+// Roadmap's navigation and drag among them, since the Roadmap reads its
+// tasks from the server (tasks.roadmap), and the person's own create, timed
+// from its send to its confirmation; taskLoad times the ask for every task
+// (P.askTasks) to every task held, and every phase after it reads or edits
+// held tasks. A build from before the Roadmap read the server asks for
+// every task as the Roadmap mounts, so its navigation holds that load and
+// its taskLoad finds every task held. A build from before a create stopped
+// asking (t3/limits-create-answer) asks for every task as it creates, so
+// its `create` holds the start of the task load and its taskLoad only the
+// rest
 const PHASES = [
   'searchOpen',
   'search',
@@ -489,6 +493,13 @@ const boardComplete = () => {
   )
 }
 
+/** Waits until the project the app opens shows a view. The stand-in
+    server remembers its first program (scripts/perf/server.mjs prefs:get),
+    which this branch opens once projectNav.resolve answered, with the top
+    bar up meanwhile, and a build from before it opened at once as the
+    first project; the project chooser is never a view. */
+const startedOn = (page) => page.locator('[data-workspace-view]').first().waitFor()
+
 /* What shows once the Overview's summary answered, on this branch, or its
    status strip on a build from before it asked the server. */
 const OVERVIEW_SHOWN =
@@ -732,7 +743,7 @@ const searchRowsOf = (target, tasks) => Math.min(target.browserSearch ? 9 : 25, 
 async function runSample(origin, tasks, metrics, query = '', searchRows = Math.min(25, tasks)) {
   const opened = await openPage(origin, tasks, metrics, query)
   const { context, page, cdp, errors, settle, appRenders, timed } = opened
-  await page.locator('[data-view-switch]').waitFor()
+  await startedOn(page)
   await settle()
   // the startup without task windows, as the app boots
   metrics.startup.push(await page.evaluate(() => performance.now()))
@@ -1199,7 +1210,7 @@ async function runVariedSample(origin, tasks, metrics, query = '') {
   phase('variedStartup')
   const opened = await openPage(origin, tasks, metrics, `&shape=varied${query}`)
   const { context, page, errors, settle, timed } = opened
-  await page.locator('[data-view-switch]').waitFor()
+  await startedOn(page)
   await settle()
   metrics.variedBoardLongestFrameMs.push((await openBoard(opened, metrics, 'variedBoard')).longest)
   await scrollBoard(opened, metrics, 'variedBoardScroll')
@@ -1303,7 +1314,7 @@ async function runSyncSample(origin, metrics, query = '') {
     `&subprojects=3&done=0.2&syncscope=program${query}`,
   )
   const { context, page, errors, settle, timed } = opened
-  await page.locator('[data-view-switch]').waitFor()
+  await startedOn(page)
   await settle()
   const nav = await handle(page.locator('[data-sync-nav]'))
   const watch = await watchInput(page)
@@ -1510,7 +1521,7 @@ async function runThreadSample(origin, figure, kind, metrics) {
   phase(`thread${all ? 'All' : 'Comments'}Startup`)
   const opened = await openPage(origin, 100, metrics, `${thread}&threadkeep=${figure}`)
   const { context, page, cdp, errors, settle, timed } = opened
-  await page.locator('[data-view-switch]').waitFor()
+  await startedOn(page)
   await settle()
   await (await viewButton(page, 'Roadmap')).click()
   await page.locator('[data-roadmap-task-open]').first().click()

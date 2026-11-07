@@ -11,6 +11,7 @@ import {
   isProjectNavRead,
   NAV_UNCHECKED,
   PROJECT_NAV_STAR,
+  queryProjectNav,
   setFavoriteStandIn,
 } from '../store/projectNavStandIn.setup'
 import { isProjectSettingsRead, projectSettingsServer } from '../store/projectSettingsStandIn.setup'
@@ -452,17 +453,20 @@ describe('browsing', { timeout: 60_000 }, () => {
     expect(rowIds()).toEqual([])
   })
 
-  it('says the person has no active projects, and where an admin finds every project', async () => {
+  it('says a standard user has no active projects, and an admin that they take part in none and where every project is', async () => {
+    const member =
+      'You have no active projects. Ask an organization admin or a project lead for access.'
     for (const role of ['user', 'admin'] as const) {
       await load(base(false, role))
       await render()
       expect(end()).toBe('empty')
-      expect(pageText()).toContain(
-        'You have no active projects. Ask an organization admin or a project lead for access.',
-      )
-      expect(pageText().includes('Settings › Projects › All projects lists every project')).toBe(
-        role === 'admin',
-      )
+      // an admin gets the sentence of every other page (noProjectsHint)
+      expect(pageText().includes(member)).toBe(role === 'user')
+      expect(
+        pageText().includes(
+          'You take part in no active projects. Settings › Projects › All projects lists every project of your organization.',
+        ),
+      ).toBe(role === 'admin')
       await act(async () => root.unmount())
       root = createRoot(container)
       vi.useRealTimers()
@@ -907,20 +911,48 @@ describe('the expanded list', { timeout: 60_000 }, () => {
 })
 
 describe('opening and the menu', { timeout: 60_000 }, () => {
-  it('opens a project as the sidebar does, and says when the workspace does not hold it yet', async () => {
+  it('opens a project as the sidebar does, and one the workspace does not hold yet through the server', async () => {
     const next0 = base()
     const plan = top(next0, 'Plan')
     await load(next0)
     // a project the server lists that the workspace has not delivered yet
     const late = top(snap, 'Late arrival')
+    // the server's check of it waits until the test lets it answer
+    let release = () => {}
+    network.query.mockImplementation(async (ref, args) => {
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+      return queryProjectNav(snap, getFunctionName(ref) as never, args)
+    })
+    // the checks the directory asked the server for, by their arguments
+    const resolves = () =>
+      network.query.mock.calls
+        .filter(([ref]) => getFunctionName(ref) === 'projectNav:resolve')
+        .map(([, args]) => args)
     await render()
     await click(find('[data-directory-open]', row(plan)))
     expect(actions.openProject).toHaveBeenCalledWith(plan)
+    expect(resolves()).toEqual([])
     await click(find('[data-directory-open]', row(late)))
+    const status = () => find('[data-directory-status]').textContent
+    expect(status()).toBe('Opening Late arrival…')
+    expect(resolves()).toEqual([{ project_id: late }])
+    // the server's ok, while the workspace is current without it
+    await act(async () => release())
+    await settle()
     expect(actions.openProject).toHaveBeenCalledTimes(1)
-    expect(find('[data-directory-status]').textContent).toBe(
-      'Late arrival has not loaded yet. Try again in a moment.',
-    )
+    expect(status()).toBe('Late arrival has not loaded yet. Try again in a moment.')
+    // with the delivery that brings it beside the answer, it opens
+    await click(find('[data-directory-open]', row(late)))
+    await act(async () => {
+      snap.delivered_at = '2026-09-15T09:00:00.000Z'
+      whole?.next(structuredClone(snap))
+      release()
+    })
+    await settle()
+    expect(actions.openProject).toHaveBeenLastCalledWith(late)
+    expect(status()).toBe('')
     // People & settings names the project
     const people = [...row(plan).querySelectorAll('button')].find((b) =>
       b.textContent?.includes('People & settings'),
@@ -936,16 +968,28 @@ describe('opening and the menu', { timeout: 60_000 }, () => {
     // first by name, and not yet in the workspace
     const late = top(snap, 'Late arrival')
     force.batch = 5
+    let release = () => {}
+    network.query.mockImplementation(async (ref, args) => {
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+      return queryProjectNav(snap, getFunctionName(ref) as never, args)
+    })
     await render()
     await click(find('[data-directory-open]', row(late)))
     const status = () => find('[data-directory-status]').textContent
-    expect(status()).toBe('Late arrival has not loaded yet. Try again in a moment.')
+    expect(status()).toBe('Opening Late arrival…')
     const list = find('[data-project-directory]')
     list.scrollTop = 400
     await next()
     expect(rowIds()).not.toContain(late)
     expect(status()).toBe('')
     expect(list.scrollTop).toBe(0)
+    // the move dropped the open that waited, so its answer says nothing
+    await act(async () => release())
+    await settle()
+    expect(status()).toBe('')
+    expect(actions.openProject).not.toHaveBeenCalled()
   })
 
   it('offers New sub-project… after Archived tasks once the project’s settings allow it', async () => {

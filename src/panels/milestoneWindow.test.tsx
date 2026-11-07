@@ -1294,6 +1294,8 @@ describe('tasks on demand', { timeout: 30_000 }, () => {
       await start({ batch: 2, rows: 4 })
       const { syncStatus } = await import('../lib/syncStatus')
       syncStatus.setSocket({ connected: true, everConnected: true })
+      // Plan's Overview by its address, as startup opens no project unchecked
+      history.replaceState(null, '', '/app/testbed/overview/p/1')
       const { default: App } = await import('../App')
       await act(async () =>
         root.render(
@@ -1331,6 +1333,7 @@ describe('tasks on demand', { timeout: 30_000 }, () => {
       expect(store.__layerProbe?.faults()).toEqual([])
     } finally {
       TASKS.atBoot = true
+      history.replaceState(null, '', '/')
     }
   })
 })

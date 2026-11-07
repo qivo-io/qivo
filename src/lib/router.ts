@@ -14,7 +14,14 @@
      sync[/all|/p/<n>|/team/<uuid>][/people/<uuid>|/agents][/tasks/<ref>]
 
    Team sync uses the home organization. Bare /app or /app/<org> returns null
-   so App restores saved UI state instead of persisting a default view.
+   so App opens the remembered project once the server checked it, else
+   the project chooser, instead of persisting a default view. A project
+   segment the workspace does not hold names no scope but the project the
+   address names (Route.unheld), which App checks through
+   projectNav.resolve: by its organization and number, a `~` number in the
+   home organization, or by its uuid; one that names no project a read can
+   ask about, under a slug this login cannot resolve or by a ref no project
+   can have, is unheld as null, which shows the chooser with a note.
    Task refs accept qn-<num> (any case), bare numbers or immutable uuids;
    project refs accept numbers or uuids. Emission is lowercase. Numbers are
    org-scoped and survive moves; renamed project keys are display-only.
@@ -33,7 +40,7 @@
 
 import { parseIssueRef, UUID } from '../../convex/lib/taskRefs'
 import type { AddressedTask } from '../store/liveParts'
-import { ALL_SCOPE, ISSUE_PREFIX, MINE_SCOPE, P } from '../store/planner'
+import { ALL_SCOPE, ISSUE_PREFIX, MINE_SCOPE, P, type ProjectAsk } from '../store/planner'
 import type { IssueVM } from '../store/viewModels'
 import { refParts, taskRef } from './taskReference'
 
@@ -52,6 +59,14 @@ export type Route = {
      it cannot honour as unavailable and the page asks to choose, and a step
      that resolves to nothing falls back to the opening. */
   sync?: { scope?: string; step?: string }
+  /* A project segment the workspace does not hold: how P.resolveProject
+     asks about the project, by its organization and number or by its id,
+     or null where no read can ask, under a slug this login cannot resolve,
+     a `~` number for a login without a home organization, or a ref no
+     project can have. Absent where the segment names a held project
+     (`scope`) or the address has none. Team sync's `p/<n>` keeps its own
+     `unresolved:` form. */
+  unheld?: ProjectAsk | null
 }
 
 /** The prefix that separates the app from the marketing site sharing its
@@ -103,6 +118,21 @@ const findProject = (s: string | undefined, org?: string) => {
     return all.find((p) => p.org === P.homeOrg) || all[0]
   }
   return P.projects.find((p) => p.id === s.toLowerCase())
+}
+/* How P.resolveProject asks about the project a segment `s` names that
+   the workspace does not hold (Route.unheld): a number in the
+   organization the address pins, or unpinned in the home organization,
+   as findProject reads it, and a uuid alone. Null where no read can ask:
+   under a slug the login cannot resolve, a number with no organization to
+   read it in, or a ref no project can have. */
+const unheldProject = (s: string | undefined, org: string | undefined, orgUnknown: boolean) => {
+  if (orgUnknown || !s) return null
+  if (/^\d+$/.test(s)) {
+    const num = Number(s)
+    const at = org ?? P.homeOrg
+    return num >= 1 && at ? { org_id: at, num } : null
+  }
+  return UUID.test(s) ? s.toLowerCase() : null
 }
 /* The task an address's task segment `s` names: its handle when the
    workspace holds it, else a reference (lib/taskReference.ts), which the
@@ -373,6 +403,7 @@ function parseSegments(seg: string[], org: string | undefined, orgUnknown: boole
   if (seg[i] === 'p') {
     const p = proj(seg[i + 1])
     if (p) r.scope = p.id
+    else r.unheld = unheldProject(seg[i + 1], org, orgUnknown)
     // tolerated combined form (never emitted): <view>/p/<n>/tasks/<task>
     if (seg[i + 2] === 'tasks') r.issue = issue(seg[i + 3])
     return r
@@ -404,6 +435,16 @@ export function orgSegmentOf(pathname: string): string {
   if (path !== APP_PREFIX && path.indexOf(`${APP_PREFIX}/`) !== 0) return ''
   const seg = path.slice(APP_PREFIX.length).split('/').filter(Boolean)
   return seg.length ? decodeURIComponent(seg[0]) : ''
+}
+
+/** Whether `pathname` is an app front door, bare /app or /app/<org> with
+    nothing after it. parsePath answers null for it, as for a path outside
+    the app, which is not one. App reads it on Back and Forward, which show
+    at a front door what a boot there shows. */
+export function isFrontDoor(pathname: string): boolean {
+  const path = (pathname || '').split('?')[0].split('#')[0]
+  if (path !== APP_PREFIX && path.indexOf(`${APP_PREFIX}/`) !== 0) return false
+  return path.slice(APP_PREFIX.length).split('/').filter(Boolean).length <= 1
 }
 
 export function parsePath(pathname: string): Route | null {
@@ -779,8 +820,8 @@ export function buildPath(state: UiState): string {
     return at(it?.org, `/${viewUrl}/tasks/${encodeURIComponent(ref.toLowerCase())}`)
   }
   const p = s.scope ? P.project(s.scope) : null
-  // no scope to name yet (a brand-new organization with no projects): the
-  // org's own front door, which parses back to null and keeps the saved state
+  // no scope, as while the project chooser shows: the org's own front door,
+  // which parses back to null, so the next page replaces it in place
   if (!p) return `${APP_PREFIX}/${orgSegment(P.homeOrg)}`
   if (p.num == null) return at(p.org, `/${viewUrl}/p/${encodeURIComponent(p.id)}`)
   return at(p.org, `/${viewUrl}/p/${String(p.num)}`)

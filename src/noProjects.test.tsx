@@ -12,13 +12,16 @@ import { answerProjectNav, isProjectNavRead } from './store/projectNavStandIn.se
 import { answerRoadmap } from './store/roadmapStandIn.setup'
 
 /* The pages of a person who can see no active project, on the real store
-   and App: they land on All projects rather than on a page with no view,
-   and every page says why it is empty and who can give access, without a
+   and App: with nothing remembered they land on the project chooser, whose
+   empty state says they have no active projects and who can give access,
+   never All projects, and every other page says why it is empty without a
    word about projects they cannot see. New project shows only to a person
-   who may create one. A person with a project lands on it, as before, also
-   once one is shared with a person who landed on All projects for want of
-   one. Team sync, which covers the home organization only, asks about that
-   organization's projects. The phone's Roadmap gives the desktop's note for
+   who may create one. A person with a project and nothing remembered lands
+   on the chooser too, never on their first project, and one who loses the
+   project they are in sees the chooser with a note, and nothing opens by
+   itself once a project is shared again. Startup's own cases are in
+   startupSelection.test.tsx. Team sync, which covers the home organization
+   only, asks about that organization's projects. The phone's Roadmap gives the desktop's note for
    every scope with nothing to schedule. A project's Roadmap keeps its
    timeline with the milestones of its window behind the note, and the
    phone's agenda lists the scope's milestones under it, as the Overview
@@ -44,6 +47,11 @@ const MEMBER =
   'No active projects are shared with you. Ask an organization admin or a project lead for access.'
 const ADMIN =
   'You take part in no active projects. Settings › Projects › All projects lists every project of your organization.'
+// the chooser's empty state words it as the All projects directory does,
+// which tells a standard user this and an admin what every page does
+// (ADMIN)
+const CHOOSER_MEMBER =
+  'You have no active projects. Ask an organization admin or a project lead for access.'
 
 let container: HTMLDivElement
 let root: Root
@@ -154,27 +162,27 @@ const button = (label: string) =>
     (button) => button.textContent?.trim() === label,
   )
 const newProject = () => button('New project')
-/** The scope App saved for the fixture's person. */
-const savedScope = (snap: Snapshot) =>
-  JSON.parse(localStorage.getItem(`planner.ui.v1:${snap.profiles[0].id}`) ?? '{}').scope
+/** The project chooser's state, once it shows one. */
+const chooser = (state: string) =>
+  vi.waitFor(
+    () =>
+      expect(
+        document
+          .querySelector('[data-project-chooser]')
+          ?.getAttribute('data-project-chooser-state'),
+      ).toBe(state),
+    { timeout: 10_000 },
+  )
+/** The project App remembers for the fixture's person. */
+const remembered = (snap: Snapshot) =>
+  JSON.parse(localStorage.getItem(`planner.ui.v1:${snap.profiles[0].id}`) ?? '{}').lastProject
+    ?.project_id
 
-/** Unmounts App, as leaving the page does. With `type`, the next page load
-    is a reload ('reload') or Back or Forward ('back_forward'), as
-    PerformanceNavigationTiming says; without it, one that opens an address
-    anew. */
-async function reload(type?: 'reload' | 'back_forward') {
+/** Unmounts App, as leaving the page does. */
+async function reload() {
   await act(async () => root.unmount())
   root = createRoot(container)
   vi.restoreAllMocks()
-  const load = {
-    name: '',
-    entryType: 'navigation',
-    startTime: 0,
-    duration: 0,
-    toJSON: () => ({}),
-    type,
-  }
-  if (type) vi.spyOn(performance, 'getEntriesByType').mockReturnValue([load])
 }
 
 /** The fixture with its one person a member of Plan, a project over the
@@ -192,11 +200,14 @@ function member(): Snapshot {
 }
 
 describe('a person who can see no project', () => {
-  it('lands on All projects, which says why it is empty and offers New project', async () => {
+  it('lands on the project chooser, whose empty state says why and offers New project', async () => {
     await app(noProjects('user'))
-    await shows('Nothing to summarize yet')
-    expect(document.body.textContent).toContain(MEMBER)
-    expect(location.pathname).toBe('/app/~/overview/all')
+    await chooser('empty')
+    await shows(CHOOSER_MEMBER)
+    expect(document.body.textContent).not.toContain(MEMBER)
+    // the front door, never All projects
+    expect(location.pathname).toBe('/app/testbed')
+    expect(document.querySelector('[data-workspace-view]')).toBeNull()
     expect(newProject()).toBeDefined()
     // the sidebar's tree says so once the server's list ended empty
     await vi.waitFor(() =>
@@ -204,28 +215,27 @@ describe('a person who can see no project', () => {
         'No active projects.',
       ),
     )
-    // with no milestone to show, the note is the whole page
-    expect(document.body.textContent).not.toContain('No milestones in any of your projects yet.')
   })
 
   it('offers no New project to a person who may not create one', async () => {
     const snap = noProjects('user')
     snap.orgs[0].project_creators = 'admins'
     await app(snap, '/app/testbed/board')
-    await shows('Nothing to show yet')
-    expect(document.body.textContent).toContain(MEMBER)
+    await chooser('empty')
+    await shows(CHOOSER_MEMBER)
     expect(newProject()).toBeUndefined()
     await act(async () => root.unmount())
     root = createRoot(container)
     await app(noProjects('viewer'), '/app/testbed/roadmap')
-    await shows('Nothing to schedule yet')
+    await chooser('empty')
     expect(newProject()).toBeUndefined()
   })
 
-  it('tells an admin that the organization has none', async () => {
+  it('tells an admin where every project of the organization is listed', async () => {
     await app(noProjects('admin'))
+    await chooser('empty')
     await shows(ADMIN)
-    expect(document.body.textContent).not.toContain(MEMBER)
+    expect(document.body.textContent).not.toContain(CHOOSER_MEMBER)
     expect(newProject()).toBeDefined()
   })
 
@@ -256,105 +266,58 @@ describe('a person who can see no project', () => {
 })
 
 describe('a person with a project', () => {
-  it('lands on it, with no word about missing projects', async () => {
+  it('lands on the chooser with nothing remembered, never on the first project', async () => {
     await app(member())
-    await shows('No tasks yet')
-    expect(location.pathname).toBe('/app/testbed/overview/p/2')
+    await chooser('choose')
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector('[data-project-chooser] [data-project-pick]')?.textContent,
+      ).toBe('Plan'),
+    )
+    expect(location.pathname).toBe('/app/testbed')
+    expect(document.querySelector('[data-workspace-view]')).toBeNull()
     expect(document.body.textContent).not.toContain(MEMBER)
   })
 
-  it('moves to All projects when the last share goes, and back when it returns', async () => {
+  it('shows the chooser with a note when the last share goes, and opens nothing once it returns', async () => {
     const snap = member()
-    const publish = await app(snap)
+    const publish = await app(snap, '/app/testbed/overview/p/2')
     await shows('No tasks yet')
+    // the project the person opened by its address is remembered
+    await vi.waitFor(() => expect(remembered(snap)).toBe('plan'))
     await publish({ ...snap, access: [], delivered_at: '2026-09-15T09:00:00.000Z' })
-    await shows(MEMBER)
-    expect(location.pathname).toBe('/app/~/overview/all')
-    expect(savedScope(snap)).toBe('plan')
+    // the note over the empty state, as no project is left to choose
+    await chooser('empty')
+    expect(document.querySelector('[data-project-chooser-note]')?.textContent).toBe(
+      'Plan is no longer available to you.',
+    )
+    expect(document.body.textContent).toContain(CHOOSER_MEMBER)
+    // its address gives way to the front door, never All projects, and the
+    // loss leaves what is remembered
+    expect(location.pathname).toBe('/app/testbed')
+    expect(remembered(snap)).toBe('plan')
     await publish({ ...snap, delivered_at: '2026-09-15T10:00:00.000Z' })
-    await vi.waitFor(() => expect(location.pathname).toBe('/app/testbed/overview/p/2'))
+    await act(async () => await new Promise((resolve) => setTimeout(resolve, 50)))
+    expect(location.pathname).toBe('/app/testbed')
+    expect(document.querySelector('[data-workspace-view]')).toBeNull()
   })
 
-  it('lands on the first one shared after landing on All projects, which it never saves', async () => {
-    const snap = member()
-    const publish = await app({ ...snap, access: [] })
-    await shows(MEMBER)
-    expect(location.pathname).toBe('/app/~/overview/all')
-    expect(savedScope(snap)).toBeUndefined()
-    await publish({ ...snap, delivered_at: '2026-09-15T09:00:00.000Z' })
-    await vi.waitFor(() => expect(location.pathname).toBe('/app/testbed/overview/p/2'))
-    expect(savedScope(snap)).toBe('plan')
-  })
-
-  it('keeps All projects that the person chose, after a reload while they see none', async () => {
+  it('keeps All projects when the person opened it, whatever they see', async () => {
     const snap = member()
     const publish = await app(snap, '/app/~/overview/all')
-    // All projects asks to choose a project
     await shows('Choose a project')
     await publish({ ...snap, access: [], delivered_at: '2026-09-15T09:00:00.000Z' })
     await shows(MEMBER)
-    await reload()
-    const again = await app({ ...snap, access: [] }, '/app/~/overview/all')
-    await shows(MEMBER)
-    await again({ ...snap, delivered_at: '2026-09-15T10:00:00.000Z' })
+    await publish({ ...snap, delivered_at: '2026-09-15T10:00:00.000Z' })
     await vi.waitFor(() => expect(document.body.textContent).not.toContain(MEMBER))
     expect(location.pathname).toBe('/app/~/overview/all')
-    expect(savedScope(snap)).toBe('all')
-  })
-
-  it('opens the directory from All projects while it is App’s, which stays App’s', async () => {
-    const snap = member()
-    const publish = await app({ ...snap, access: [] })
-    await shows(MEMBER)
-    const before = savedScope(snap)
-    const all = document.querySelector<HTMLElement>('[data-all-nav]')
-    await act(async () => all?.click())
-    // the directory, which says it lists nothing, and no scope of the person's
-    await vi.waitFor(() => expect(location.pathname).toBe('/app/~/projects'))
-    await shows('You have no active projects.')
-    expect(all?.hasAttribute('data-on')).toBe(true)
-    expect(savedScope(snap)).toBe(before)
-    // so App's All projects still gives way to the project shared meanwhile,
-    // under the directory
-    await publish({ ...snap, delivered_at: '2026-09-15T09:00:00.000Z' })
-    await vi.waitFor(() => expect(savedScope(snap)).toBe('plan'))
-    expect(location.pathname).toBe('/app/~/projects')
-  })
-
-  it('opens the project shared meanwhile on a reload of App’s All projects', async () => {
-    const snap = member()
-    await app({ ...snap, access: [] })
-    await shows(MEMBER)
-    await reload('reload')
-    await app({ ...snap, access: [] }, '/app/~/overview/all')
-    await shows(MEMBER)
-    expect(savedScope(snap)).toBeUndefined()
-    await reload('back_forward')
-    await app(snap, '/app/~/overview/all')
-    await vi.waitFor(() => expect(location.pathname).toBe('/app/testbed/overview/p/2'))
-    expect(savedScope(snap)).toBe('plan')
-  })
-
-  it('keeps an All projects address opened anew in the tab where App had it', async () => {
-    const snap = member()
-    await app({ ...snap, access: [] })
-    await shows(MEMBER)
+    // All projects is never remembered
+    expect(remembered(snap)).toBeUndefined()
     await reload()
     await app(snap, '/app/~/roadmap/all')
-    await vi.waitFor(() => expect(savedScope(snap)).toBe('all'))
-    expect(location.pathname).toBe('/app/~/roadmap/all')
-  })
-
-  it('keeps All projects when the person opened it', async () => {
-    const snap = member()
-    const publish = await app(snap, '/app/~/overview/all')
     await shows('Choose a project')
-    await publish({ ...snap, access: [], delivered_at: '2026-09-15T09:00:00.000Z' })
-    await shows(MEMBER)
-    await publish({ ...snap, delivered_at: '2026-09-15T10:00:00.000Z' })
-    await vi.waitFor(() => expect(document.body.textContent).not.toContain(MEMBER))
-    expect(location.pathname).toBe('/app/~/overview/all')
-    expect(savedScope(snap)).toBe('all')
+    expect(location.pathname).toBe('/app/~/roadmap/all')
+    expect(remembered(snap)).toBeUndefined()
   })
 })
 

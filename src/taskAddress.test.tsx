@@ -235,7 +235,8 @@ describe('a boot on a task address', { timeout: 30_000 }, () => {
 
   it("moves the page behind it to the task's own project once its answer names it", async () => {
     const { snap } = await bootAt('/app/testbed/board/tasks/qn-2', {
-      // My view, saved, holds only my tasks, and nobody has QN-2
+      // My view, which an earlier app saved as the scope, is read by
+      // nothing, and nobody has QN-2
       shape: (next) =>
         localStorage.setItem(
           `planner.ui.v1:${next.profiles[0].id}`,

@@ -23,8 +23,11 @@ its sub-projects, 25 at first and more as you scroll or press **Load more**,
 up to 100, after which it asks you to search. One project stays expanded at
 a time, the one you are in. When you open a project from elsewhere, such as
 **All projects**, Search or a link, the tree loads on until it shows that
-project and brings its row into view. A project that has not loaded yet
-says so, and you can try again in a moment. The tree loads no tasks.
+project and brings its row into view. A project Qivo has not loaded yet
+opens once the server confirms that you can open it, with a note that
+says **Opening** and its name meanwhile, or that you can no longer open
+it. If you switch views, go elsewhere or open another project first, Qivo
+stops opening it. The tree loads no tasks.
 
 The tree says so when its list is not ready yet, when Qivo could not finish
 checking which projects you can see, with **Retry**, and when it checked
@@ -97,8 +100,10 @@ restored or your access returns. Removing your seat removes its stars.
 **Sub-projects** under a project lists its sub-projects, 25 at first and
 more as you scroll or press **Load more**, up to 100, and then asks you to
 search. One project's list is open at a time. Selecting a project or a
-sub-project opens it as the sidebar does; one that has not loaded yet says
-so, and you can try again in a moment. A project's **…** menu opens its
+sub-project opens it as the sidebar does. One Qivo has not loaded yet opens
+once the server confirms that you can open it, and the line above the list
+says **Opening** and its name meanwhile, or says that you can no longer
+open it. A project's **…** menu opens its
 **Archived tasks** and, for those who may add one, **New sub-project…**.
 
 The field at the top finds projects and sub-projects by their own names,
@@ -122,11 +127,11 @@ The Board, the Overview and the Roadmap show one project at a time
 ([Which tasks a Board shows](./the-board.md#which-tasks-a-board-shows),
 [The Overview](./the-overview-project-health-at-a-glance.md),
 [The Roadmap](./the-roadmap.md)). Over all projects they still show in
-three places, each asking you to choose a project: an address that ends in
-`/all`, such as `…/board/all`, a person's Board or Roadmap jump from Team
-sync across all projects, and the page Qivo opens when you can see no
-project. **All projects** in the sidebar lights there too. **My view**
-shows your own tasks across every project on all three. A task link that
+two places, each asking you to choose a project: an address that ends in
+`/all`, such as `…/board/all`, and a person's Board or Roadmap jump from
+Team sync across all projects. **All projects** in the sidebar lights there
+too. **My view** shows your own tasks across every project on all three
+views. A task link that
 names no project, such as `…/tasks/qn-12`, opens the Board, the Overview or
 the Roadmap of the task's sub-project instead when it would open over all
 projects. A link that names all projects, such as `…/board/all/tasks/qn-12`,
@@ -137,21 +142,21 @@ list and empty states offer no way to create a task; on a phone, **New
 task** in the task list lets you choose its project. The Team strip omits
 **This project only** because the scope already includes all projects.
 
-When you can see no active project, Qivo opens the views over all projects.
-Their pages, Team sync and the Inbox then say that no active projects are
-shared with you, and that an organization admin or a project lead can give
-you access. An organization admin sees, like anyone, only the projects they
-take part in, so for an admin they say that they take part in no active
-projects and that Settings › Projects › All projects lists every project of
-the organization. The directory says
-that you have no active projects, and tells an admin that Settings ›
-Projects › All projects lists every project of the organization. **New
-project** appears there if you can create projects ([Who can create projects](./organization-and-team-settings.md#who-can-create-projects)).
+When you can see no active project, Qivo opens on the project list. It says
+that you have no active projects and that an organization admin or a
+project lead can give you access, as the directory does. **New project**
+appears there if you can create projects ([Who can create projects](./organization-and-team-settings.md#who-can-create-projects)).
+A project shared with you shows in the list as soon as it is, and opens
+when you choose it; Qivo never opens it by itself. Team sync and the Inbox
+say that no active projects are shared with you, and that an organization
+admin or a project lead can give you access. An organization admin sees,
+like anyone, only the projects they take part in, so for an admin the
+project list, the directory, Team sync and the Inbox say that they take
+part in no active projects and that Settings › Projects › All projects
+lists every project of the organization.
 Team sync covers your home organization only, so it says the same when you can
 see none of that organization's projects, and names the organization if you
 belong to more than one ([Team sync](./planning-against-real-capacity.md#team-sync)).
-Once a project is shared with you, Qivo opens it, at once and on your next
-visit, unless you chose the views over all projects yourself.
 
 If you hold a guest identity in another organization, the Team strip lists
 it separately from your home identity. Their capacity is not combined.
@@ -176,8 +181,26 @@ unassigned, so Qivo opens its sub-project where you can see and assign it.
 
 ## The three views
 
-Qivo saves your last view, scope and Roadmap window per user on the server.
-They follow you across devices and reloads.
+Qivo saves your last view, the last project or sub-project you opened, your
+Focus and your Roadmap window per user on the server. They follow you
+across devices and reloads.
+
+Opening Qivo without a page in its address, such as `qivo.io/app`, opens
+that project if you can still open it, after a quick check with the server,
+and shows nothing of it before that check. Otherwise Qivo asks you to choose
+a project from a list of your projects, your favorites first, and when you
+can no longer open the project you opened last, it says that the project
+is no longer available to you. It never opens another project, **My view**
+or all projects by itself. If you switch views or go elsewhere before the
+check answers, Qivo does not open the project you opened last. Opening **My
+view**, **All projects** or Team sync does not change the project Qivo
+remembers, and neither does reading a task in the Inbox or opening one by
+its link. A jump from Team sync or the Inbox to a project's Board or
+Roadmap, such as **Open task in board**, remembers that project, as opening
+it yourself does. If Qivo could not finish the check, it says so with
+**Retry**, which checks again. The top bar stays meanwhile, so the Inbox
+and the view you will open are one click away. On a phone, Qivo opens the
+Inbox.
 
 ## Pages stay as you left them
 
@@ -333,18 +356,21 @@ your account, use `~` instead of an organization name. For example,
 opens Archived tasks.
 
 Task links accept any case, a bare number or a full key. Project URLs use a
-stable number that survives renaming. All projects is `…/projects`, and My
-view has its own paths, such as `…/board/mine`; `…/board/all` shows the
-views over all projects. Opening a task adds
-`/tasks/qn-482`, so a reload preserves both task and scope.
+stable number that survives renaming. A project link opens once the server
+confirms that you can open the project. If you switch views or go elsewhere
+before that, Qivo does not open it. A project link you cannot open shows the
+project list and says that the project is not available to you. All
+projects is `…/projects`, and My view has its own paths, such as
+`…/board/mine`; `…/board/all` shows the views over all projects. Opening a
+task adds `/tasks/qn-482`, so a reload preserves both task and scope.
 
 Copying a task link uses its short permanent address. Opening that link
 shows the task at once, read from the server, also before every task has
 loaded, and the same goes for a bookmark, a reload and Back or Forward to a
 task. A link opens the task in the organization its address names, never
-another organization's task with the same number. Opening it keeps a saved
-My view scope if the task is yours; otherwise, once the task has loaded, it
-opens the task's project. Recipients still need access. A link to an
+another organization's task with the same number. Opening it keeps the
+project you opened last if that project holds the task; otherwise, once the
+task has loaded, it opens the task's project. Recipients still need access. A link to an
 archived task opens it read-only, with **Restore** for someone who can edit
 its project ([Archiving](./the-task-window.md#archiving)). A link to a task
 you cannot open says that it can't be opened, the same whether it does not

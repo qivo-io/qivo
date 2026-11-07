@@ -1,7 +1,10 @@
 import { P } from '../store/planner'
 
 /** Whether the user can see no project at all, not even a sub-project, or
-    with `org` none of that organization's. */
+    with `org` none of that organization's, by the workspace, for the
+    Inbox's and Team sync's notes. Startup and the access guard do not
+    read it: they open a project only on the server's check, else the
+    project chooser (App.tsx). */
 export const seesNoProject = (org?: string): boolean =>
   !P.projects.some((p) => (org === undefined || p.org === org) && P.canSee(p.id))
 
@@ -15,43 +18,6 @@ export function noProjectsHint(): string {
   return P.isAdmin()
     ? 'You take part in no active projects. Settings › Projects › All projects lists every project of your organization.'
     : 'No active projects are shared with you. Ask an organization admin or a project lead for access.'
-}
-
-/* This tab's note that its All projects is App's own choice (App's autoAll),
-   not the person's, per profile. It outlives a reload, so a reload of that
-   page stays App's. A new tab starts without it, and a page load that opens
-   an address anew ignores it, so an address to All projects typed or
-   followed is the person's. */
-const autoAllKey = () => `planner.autoAll.v1:${P.CURRENT_USER}`
-
-/** Whether this page load returns to the address the tab had open: a reload,
-    or Back or Forward into Qivo. */
-const returning = () =>
-  performance
-    .getEntriesByType('navigation')
-    .some((load) => 'type' in load && (load.type === 'reload' || load.type === 'back_forward'))
-
-/** Whether this tab noted its All projects as App's own (noteAutoAll) and
-    this page load returns to it. Storage that cannot be read counts as no
-    note. */
-export function autoAllNoted(): boolean {
-  if (!returning()) return false
-  try {
-    return sessionStorage.getItem(autoAllKey()) === '1'
-  } catch {
-    return false
-  }
-}
-
-/** Notes that this tab's All projects is App's own, or with `false` that it
-    is not. */
-export function noteAutoAll(on: boolean) {
-  try {
-    if (on) sessionStorage.setItem(autoAllKey(), '1')
-    else sessionStorage.removeItem(autoAllKey())
-  } catch {
-    // Without the note a reload counts All projects as the person's and stays.
-  }
 }
 
 /** noProjectsHint for Team sync, which covers the home organization only

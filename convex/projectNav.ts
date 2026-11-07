@@ -30,12 +30,15 @@
  * about and answers before those rows and keys are complete. Where a check
  * a bound stopped, each read answers the access_unchecked refusal, never a
  * loss of access. The app's shared project picker
- * (src/components/ProjectPicker.tsx), for Search in, Archived tasks and
- * Deleted items, calls page, children, search and resolve, the All
- * projects directory (src/components/ProjectDirectory.tsx) calls page,
- * search and children and stars through setFavorite, and the sidebar's
- * project tree (src/components/SidebarProjects.tsx) calls page and
- * children. */
+ * (src/components/ProjectPicker.tsx), for Search in, Archived tasks,
+ * Deleted items and the project chooser, calls page, children, search and
+ * resolve, the All projects directory (src/components/ProjectDirectory.tsx)
+ * calls page, search and children and stars through setFavorite, and the
+ * sidebar's project tree (src/components/SidebarProjects.tsx) calls page
+ * and children. resolve is also the check startup runs on the project the
+ * person opened last and on a project address the workspace does not hold
+ * (src/App.tsx), and the open rule's check of a listed project the
+ * workspace does not hold (src/components/projectNavRows.tsx). */
 
 import { v } from 'convex/values'
 import { authedQuery, orgMutation } from './lib/functions'

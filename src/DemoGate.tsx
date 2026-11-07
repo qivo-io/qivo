@@ -154,8 +154,10 @@ export function DemoGate() {
         // lifecycle refusal must never preserve editable workspace data.
         if (!cancelled) end('lost', demoEnding(error)?.detail)
       })
+      // the demo's own front door, where startup opens the project the
+      // visitor opened last, else the project chooser, never All projects
       const openingPath = ['/', '/app', '/app/'].includes(location.pathname)
-        ? `/app/${result.orgSlug}/board/all`
+        ? `/app/${result.orgSlug}`
         : location.pathname
       preloadWorkspacePage(openingPath, location.hash)
       const [ready] = await demoStartupStep(
@@ -166,7 +168,7 @@ export function DemoGate() {
       signal.throwIfAborted()
       if (!ready) throw new DemoSessionEnded('lost')
       if (['/', '/app', '/app/'].includes(location.pathname))
-        history.replaceState(null, '', `/app/${result.orgSlug}/board/all`)
+        history.replaceState(null, '', `/app/${result.orgSlug}`)
       setPhase('ready')
     }, controller.signal).catch((error) => {
       if (cancelled || ended.current) return

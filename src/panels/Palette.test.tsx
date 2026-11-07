@@ -981,11 +981,118 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     expect(ctx.openIssue).toHaveBeenLastCalledWith(refTo(ORG, 14))
     await click(rows()[3])
     expect(ctx.setScope).toHaveBeenCalledWith(FW)
-    // a project the workspace does not hold yet stays unopened
+    // a project the workspace does not hold yet keeps the palette open while
+    // the server checks it, and says so where the workspace, current, still
+    // lacks it once the server said ok
+    const tools = {
+      state: 'ok',
+      project: { id: 'not-loaded', org_id: ORG, name: 'Firmware tools', num: 40, parent: null },
+    }
+    let release = () => {}
+    const held = () =>
+      new Promise<void>((resolve) => {
+        release = resolve
+      })
+    resolving = { hold: held(), answer: async () => tools }
     const closes = onClose.mock.calls.length
     await click(rows()[4])
+    expect(status()).toBe('Opening Firmware tools…')
+    await act(async () => release())
+    await settle()
+    expect(status()).toBe('Firmware tools has not loaded yet. Try again in a moment.')
     expect(ctx.setScope).toHaveBeenCalledTimes(1)
     expect(onClose.mock.calls.length).toBe(closes)
-    expect(status()).toBe('Firmware tools has not loaded yet. Try again in a moment.')
+    // the delivery that brings it with the answer opens it, and the palette
+    // closes as it does
+    resolving = { hold: held(), answer: async () => tools }
+    await click(rows()[4])
+    const next = structuredClone(snap)
+    next.projects.push({ ...next.projects[1], id: 'not-loaded', name: 'Firmware tools', num: 40 })
+    next.delivered_at = '2026-09-15T10:00:00.000Z'
+    await act(async () => {
+      publish(next)
+      release()
+    })
+    await settle()
+    expect(ctx.setScope).toHaveBeenLastCalledWith('not-loaded')
+    expect(onClose.mock.calls.length).toBe(closes + 1)
+  })
+
+  it('drops a project result that waits for the server once a new search starts', async () => {
+    await open()
+    await type('firm')
+    await last().answer([project('not-loaded', 'Firmware tools', null)])
+    const rows = () => [...document.querySelectorAll<HTMLElement>('[cmdk-item]')]
+    let release = () => {}
+    // the server's ok, with the delivery that brings the project
+    resolving = {
+      hold: new Promise<void>((resolve) => {
+        release = resolve
+      }),
+      answer: async () => ({
+        state: 'ok',
+        project: { id: 'not-loaded', org_id: ORG, name: 'Firmware tools', num: 40, parent: null },
+      }),
+    }
+    await click(rows()[0])
+    expect(status()).toBe('Opening Firmware tools…')
+    await type('firmware')
+    const next = structuredClone(snap)
+    next.projects.push({ ...next.projects[1], id: 'not-loaded', name: 'Firmware tools', num: 40 })
+    next.delivered_at = '2026-09-15T10:00:00.000Z'
+    await act(async () => {
+      publish(next)
+      release()
+    })
+    await settle()
+    // the dropped wait opens nothing and says nothing
+    expect(ctx.setScope).not.toHaveBeenCalled()
+    expect(document.body.textContent).not.toContain('Opening Firmware tools…')
+  })
+
+  it('drops a project result that waits once the field is cleared or holds a text past the limit, which ask nothing', async () => {
+    await open()
+    const rows = () => [...document.querySelectorAll<HTMLElement>('[cmdk-item]')]
+    const tools = {
+      state: 'ok',
+      project: { id: 'not-loaded', org_id: ORG, name: 'Firmware tools', num: 40, parent: null },
+    }
+    for (const [change, said] of [
+      ['', ''],
+      ['firmware '.repeat(25), 'A search must be at most 200 characters. Search for fewer words.'],
+    ]) {
+      await type('firm')
+      await last().answer([project('not-loaded', 'Firmware tools', null)])
+      let release = () => {}
+      resolving = {
+        hold: new Promise<void>((resolve) => {
+          release = resolve
+        }),
+        answer: async () => tools,
+      }
+      await click(rows()[0])
+      expect(status()).toBe('Opening Firmware tools…')
+      const asked = calls.length
+      // a change that asks the server nothing, the rows gone at once
+      await key(change)
+      expect(status()).toBe(said)
+      expect(rows()).toEqual([])
+      // the server's ok, with the delivery that brings the project
+      const next = structuredClone(snap)
+      next.projects.push({ ...next.projects[1], id: 'not-loaded', name: 'Firmware tools', num: 40 })
+      next.delivered_at = '2026-09-15T10:00:00.000Z'
+      await act(async () => {
+        publish(next)
+        release()
+      })
+      await wait(300)
+      expect(ctx.setScope).not.toHaveBeenCalled()
+      expect(onClose).not.toHaveBeenCalled()
+      expect(status()).toBe(said)
+      expect(calls.length).toBe(asked)
+      // the next round starts with a workspace that lacks the project again
+      publish({ ...snap, delivered_at: '2026-09-15T11:00:00.000Z' })
+      await settle()
+    }
   })
 })

@@ -90,7 +90,8 @@ try {
     await page.goto(
       `${server.origin}/?tasks=${tasks}&programs=${programsFor(tasks)}&subprojects=3&latency=0&mbps=10000`,
     )
-    await page.locator('[data-view-switch]').waitFor(slow)
+    // the project the app opens, once startup's check let it (App.tsx)
+    await page.locator('[data-workspace-view]').first().waitFor(slow)
     await page.evaluate(() => {
       const state = { first: null, firstAt: null, frames: [], observer: null }
       window.__boardOpen = state
@@ -424,7 +425,7 @@ try {
   await pooled.page.goto(
     `${server.origin}/?tasks=${tasks}&programs=${programsFor(tasks)}&subprojects=3&latency=0&mbps=10000`,
   )
-  await pooled.page.locator('[data-view-switch]').waitFor(slow)
+  await pooled.page.locator('[data-workspace-view]').first().waitFor(slow)
   await pooled.page.evaluate(() => window.PLANNER.saveUI({ metaViz: 'pool' }))
   await pooled.cpu(4)
   await openBoard(pooled.page)

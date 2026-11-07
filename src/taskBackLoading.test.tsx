@@ -433,7 +433,7 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     expect(location.pathname).toBe(`/app/${org}/board/tasks/qn-2`)
   })
 
-  it('keeps its address while the project in scope goes, then opens the task in the one left', async () => {
+  it('keeps its address while the project in scope goes, then shows the chooser with a note, never the project left', async () => {
     const { org, change } = await bootLoading(true, undefined, secondProject)
     await back(`/app/${org}/board/p/1`)
     const address = `/app/${org}/board/tasks/qn-2`
@@ -453,9 +453,17 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     )
     expect(location.pathname).toBe(address)
     expect(history.length).toBe(entries)
-    // the page moved to the project left
+    // the page under the window lost its project, so the task's answer
+    // moves nothing, and closing it shows the chooser with the note
     await close()
-    expect(location.pathname).toBe(`/app/${org}/board/p/2`)
+    await waitFor(
+      () => document.querySelector('[data-project-chooser-state="lost"]'),
+      'the chooser',
+    )
+    expect(document.querySelector('[data-project-chooser-note]')?.textContent).toBe(
+      'Task creation fixture is no longer available to you.',
+    )
+    expect(location.pathname).not.toBe(`/app/${org}/board/p/2`)
   })
 
   it('closes the waiting window when All projects opens the directory, whose address names no task', async () => {
@@ -570,16 +578,20 @@ describe('Back to a task during the first load', { timeout: 30_000 }, () => {
     expect(location.pathname).toBe(address)
   })
 
-  it('opens the task in its own project when it is not in the saved scope', async () => {
+  it('opens the task in its own project, whatever scope an earlier app saved', async () => {
     const { store } = await bootLoading(
       true,
       (slug) => `/app/${slug}/board/tasks/qn-2`,
-      // My view, saved, holds only my tasks, and nobody has QN-2
-      (snap) =>
+      // My view, which an earlier app saved as the scope, is read by
+      // nothing, though QN-2 is the person's own and My view holds it
+      (snap) => {
+        const own = snap.issues.find((t) => t.num === 2)
+        if (own) own.assignee_id = snap.profiles[0].id
         localStorage.setItem(
           `planner.ui.v1:${snap.profiles[0].id}`,
           JSON.stringify({ scope: 'mine', view: 'kanban' }),
-        ),
+        )
+      },
     )
     await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
     await arrive()
@@ -831,16 +843,42 @@ describe('Back and Forward in a session that never asked for every task', {
 })
 
 describe('Back to an address that is gone', { timeout: 30_000 }, () => {
-  it('names the page it shows in place when Back reaches a project that is gone, once every task loaded', async () => {
-    const { org } = await bootLoading(false)
+  it('checks a project address the workspace does not hold on Back, keeping its entry, and shows the chooser where it is not available', async () => {
+    const { store, org } = await bootLoading(false)
     await back(`/app/${org}/board/all`)
     expect(location.pathname).toBe(ALL_BOARD)
     const entries = history.length
-    // the page stays All projects' Board
+    // the server is asked by the address's organization and number; a
+    // failed check keeps the address, with Retry, and no other page
     await back(`/app/${org}/board/p/9`)
+    await waitFor(
+      () => document.querySelector('[data-project-chooser-state="retry"]'),
+      'the failed check',
+    )
+    expect(document.querySelector('[data-project-chooser-line]')?.textContent).toBe(
+      "Couldn't check that project.",
+    )
+    expect(network.query.mock.calls.at(-1)?.[1]).toEqual({ org_id: store.P.org.id, num: 9 })
     expect(document.querySelector('[role="dialog"]')).toBeNull()
-    expect(location.pathname).toBe(ALL_BOARD)
-    // replaced, not pushed: Back from here leaves the page
+    expect(location.pathname).toBe(`/app/${org}/board/p/9`)
+    expect(history.length).toBe(entries + 1)
+    // Retry asks again; unavailable shows the chooser, the front door in
+    // place of the address, not pushed: Back from here leaves the page
+    network.query.mockImplementation(async (ref) =>
+      getFunctionName(ref) === 'projectNav:resolve' ? { state: 'unavailable' } : null,
+    )
+    await act(async () =>
+      document.querySelector<HTMLElement>('[data-project-chooser-retry]')?.click(),
+    )
+    // the fixture's project is no top-level one the lists show, so the
+    // chooser's list ends empty beneath the note
+    await waitFor(
+      () =>
+        document.querySelector('[data-project-chooser-note]')?.textContent ===
+        'That project is not available to you.',
+      'the chooser',
+    )
+    expect(location.pathname).toBe(`/app/${org}`)
     expect(history.length).toBe(entries + 1)
   })
 

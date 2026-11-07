@@ -9,6 +9,7 @@ import {
   type ForcedProjectNav,
   isProjectNavRead,
   NAV_UNCHECKED,
+  queryProjectNav,
 } from '../store/projectNavStandIn.setup'
 import type { FocusRow } from './SidebarProjects'
 import { TooltipProvider } from './ui/tooltip'
@@ -882,7 +883,7 @@ describe('the states', { timeout: 60_000 }, () => {
 })
 
 describe('rows', { timeout: 60_000 }, () => {
-  it('offers New sub-project… where the person leads, and opens only a project the workspace holds', async () => {
+  it('offers New sub-project… where the person leads, and opens a project the workspace does not hold through the server', async () => {
     const next0 = base()
     const led = top(next0, 'Led by me', { lead: true })
     const used = top(next0, 'Used by me')
@@ -911,14 +912,42 @@ describe('rows', { timeout: 60_000 }, () => {
     expect(actions.openProject).toHaveBeenLastCalledWith(used)
     await click(row(led))
     expect(actions.openProject).toHaveBeenLastCalledWith(led)
-    // one the workspace does not hold says so and moves nothing
+    // one the workspace does not hold opens through the server's check,
+    // saying so in one toast; a second press waits for the same answer,
+    // and a failed check says so and moves nothing
+    let fail = () => {}
+    network.query.mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          fail = () => reject(new Error('the read failed'))
+        }),
+    )
     await click(find('button', row(late)))
     await click(row(late))
+    expect(
+      network.query.mock.calls
+        .filter(([ref]) => getFunctionName(ref) === 'projectNav:resolve')
+        .map(([, args]) => args),
+    ).toEqual([{ project_id: late }])
+    await act(async () => fail())
+    await settle()
     expect(actions.openProject).toHaveBeenCalledTimes(4)
     expect(vi.mocked(window.showToast).mock.calls).toEqual([
-      ['Late arrival has not loaded yet. Try again in a moment.', 'info'],
-      ['Late arrival has not loaded yet. Try again in a moment.', 'info'],
+      ['Opening Late arrival…', 'info', { key: 'sidebar-open' }],
+      ["Couldn't open Late arrival. Try again.", 'info', { key: 'sidebar-open' }],
     ])
+    // the server's ok, with the delivery that brings the project, opens it
+    // and takes the toast away
+    window.dismissToast = vi.fn()
+    const whole = subs.find((s) => s.name === 'workspace:whole')
+    network.query.mockImplementation(async (_ref, args) => {
+      whole?.next(structuredClone({ ...snap, delivered_at: '2026-09-15T09:00:00.000Z' }))
+      return queryProjectNav(snap, 'projectNav:resolve', args)
+    })
+    await click(find('button', row(late)))
+    await settle()
+    expect(actions.openProject).toHaveBeenLastCalledWith(late)
+    expect(window.dismissToast).toHaveBeenCalledExactlyOnceWith('sidebar-open')
   })
 })
 

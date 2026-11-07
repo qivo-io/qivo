@@ -11,13 +11,14 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 import { answerProjectNav, isProjectNavRead } from './store/projectNavStandIn.setup'
 import { answerRoadmap } from './store/roadmapStandIn.setup'
 
-/* Where the main All projects entry goes, on the real store and App: the
+/* Where the main All projects entry goes, on the real store and App. The
    sidebar's All projects row and the phone's Projects tab open the project
-   directory (`/app/~/projects`), which leaves the saved scope as it was;
-   the row lights for the directory and for the All projects scope the old
-   paths still reach, and no project row or My view lights under the
-   directory. The views' reads answer from their stand-ins, and the
-   directory's from the navigation reads' stand-in. */
+   directory (`/app/~/projects`), which leaves the remembered project
+   (UIPrefs.lastProject) as it was. The row lights for the directory and
+   for the All projects scope the old paths still reach, and no project row
+   or My view lights under the directory. The views' reads answer from
+   their stand-ins, and the directory's from the navigation reads'
+   stand-in. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => ({
@@ -132,23 +133,26 @@ const element = (selector: string) =>
     { timeout: 10_000 },
   )
 const lit = (selector: string) => document.querySelector(selector)?.hasAttribute('data-on')
-/** The scope App saved for the fixture's person. */
-const savedScope = (snap: Snapshot) =>
-  JSON.parse(localStorage.getItem(`planner.ui.v1:${snap.profiles[0].id}`) ?? '{}').scope
+/** The project App remembered for the fixture's person, as the browser's
+    copy of the preferences holds it. */
+const remembered = (snap: Snapshot): string | undefined =>
+  JSON.parse(localStorage.getItem(`planner.ui.v1:${snap.profiles[0].id}`) ?? '{}').lastProject
+    ?.project_id
 
 describe('the All projects entry', () => {
-  it("opens the directory from the sidebar's row, lit alone, and keeps the saved scope", async () => {
+  it("opens the directory from the sidebar's row, lit alone, and keeps the remembered project", async () => {
     const snap = member()
     await app(snap, '/app/testbed/board/p/2')
     await element('[data-project-row="plan"][data-on]')
-    const scope = savedScope(snap)
+    // the Board of Plan remembers it
+    await vi.waitFor(() => expect(remembered(snap)).toBe('plan'))
     await act(async () => (await element('[data-all-nav]')).click())
     await vi.waitFor(() => expect(location.pathname).toBe('/app/~/projects'))
     await element('[data-project-directory] [data-directory-row="plan"]')
     expect(lit('[data-all-nav]')).toBe(true)
     expect(lit('[data-project-row="plan"]')).toBe(false)
     expect(lit('[data-mine-nav]')).toBe(false)
-    expect(savedScope(snap)).toBe(scope)
+    expect(remembered(snap)).toBe('plan')
     // the desktop page's title names the entry, and the page has no All
     // projects button of its own
     expect(document.querySelector('[data-page-header]')?.getAttribute('data-page-header')).toBe(
@@ -167,12 +171,13 @@ describe('the All projects entry', () => {
     const snap = member()
     await app(snap, '/app/~/board/mine')
     await vi.waitFor(() => expect(lit('[data-mine-nav]')).toBe(true))
-    const scope = savedScope(snap)
+    // My view remembers nothing, and neither does the directory
+    expect(remembered(snap)).toBeUndefined()
     await act(async () => (await element('[data-all-nav]')).click())
     await element('[data-project-directory]')
     expect(lit('[data-all-nav]')).toBe(true)
     expect(lit('[data-mine-nav]')).toBe(false)
-    expect(savedScope(snap)).toBe(scope)
+    expect(remembered(snap)).toBeUndefined()
     await act(async () => root.unmount())
     root = createRoot(container)
     // an address ending in /all still names the scope, which lights the row
@@ -185,13 +190,13 @@ describe('the All projects entry', () => {
     phone = true
     const snap = member()
     await app(snap, '/app/testbed/board/p/2')
-    const scope = savedScope(snap)
+    await vi.waitFor(() => expect(remembered(snap)).toBe('plan'))
     await act(async () => (await element('[data-projects-nav]')).click())
     await vi.waitFor(() => expect(location.pathname).toBe('/app/~/projects'))
     await element('[data-project-directory] [data-directory-row="plan"]')
     expect(document.querySelector('[data-all-nav]')).toBeNull()
     // the field takes no focus as the page opens
     expect(document.activeElement).not.toBe(document.querySelector('[data-directory-search]'))
-    expect(savedScope(snap)).toBe(scope)
+    expect(remembered(snap)).toBe('plan')
   })
 })

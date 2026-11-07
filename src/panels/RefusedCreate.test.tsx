@@ -97,12 +97,13 @@ const editorOf = (label: string) =>
     `the ${label} editor`,
   )
 
-/** Renders App on the fixture, at `path` when given, creates a task from
-    the project's New task button and answers its key once the task's
-    window shows. The server leaves the create unanswered until `refused`. */
-async function openNewTask(path?: string) {
+/** Renders App on the fixture, at `path` when given and else at Plan's
+    Overview, creates a task from the project's New task button and answers
+    its key once the task's window shows. The server leaves the create
+    unanswered until `refused`. */
+async function openNewTask(path = '/app/testbed/overview/p/1') {
   vi.resetModules()
-  if (path) history.replaceState(null, '', path)
+  history.replaceState(null, '', path)
   const snap = plannerFixture()
   // App opens on a project the person leads, which offers New task
   const base = snap.projects[0]

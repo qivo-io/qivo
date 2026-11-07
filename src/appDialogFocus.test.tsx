@@ -176,6 +176,11 @@ async function boot(
   snap.projects = [
     { ...base, id: 'plan', type: 'meta', key: 'PLAN', name: 'Plan', lead_id: snap.profiles[0].id },
   ]
+  // a desktop case that names no page opens Plan by its address, so it
+  // does not depend on startup's check of a remembered project
+  // (startupSelection.test.tsx); a phone at the bare address opens the Inbox
+  if (location.pathname === '/' && !matchMedia('(max-width: 760px)').matches)
+    history.replaceState(null, '', '/app/testbed/overview/p/1')
   prepare(snap)
   /* The workspace is delivered once, and again only as a milestone's
      delete changes it (projects.removeMilestone, or roadmap.change during
@@ -247,7 +252,9 @@ async function boot(
   network.mutation.mockImplementation((ref, args) => {
     const name = getFunctionName(ref)
     sent.push({ name, args })
-    if (name !== 'identity:claimMySeats') wrote = true
+    // the person's preferences, such as the project App remembers, paint
+    // nothing and hold no write a delivery would take
+    if (name !== 'identity:claimMySeats' && name !== 'prefs:save') wrote = true
     // a delete from the window, or from it during a Roadmap visit
     const operations = (args.operations ?? []) as { kind: string; id: string }[]
     const removed =
@@ -462,16 +469,15 @@ describe('New sub-project', { timeout: 30_000 }, () => {
     const id = String(create?.args.id)
     const { P } = await import('./store/planner')
     expect(P.project(id)).toBeUndefined()
-    const scopes = vi.spyOn(P, 'saveUI')
+    const saves = vi.spyOn(P, 'saveUINow')
     await save()
     expect(document.body.textContent).toContain('Sub-project “Docs” created')
     expect(P.project(id)).toBeUndefined()
     // App stays in Settings › Projects, never moves into the sub-project,
-    // and creates no task
+    // so it never remembers it, and creates no task
     expect(document.querySelector('[data-settings-projects]')).not.toBeNull()
-    expect(scopes.mock.calls.some(([patch]) => (patch as { scope?: string }).scope === id)).toBe(
-      false,
-    )
+    expect(saves.mock.calls.some(([patch]) => patch.lastProject?.project_id === id)).toBe(false)
+    expect(P.loadUI().lastProject?.project_id).not.toBe(id)
     expect(sent.some((w) => w.name.startsWith('issues:'))).toBe(false)
   })
 
@@ -487,9 +493,12 @@ describe('New sub-project', { timeout: 30_000 }, () => {
      parent does, so only App's check that the creator sees it
      (P.resolveProject) keeps App from opening it. `resolve` answers that
      check from the navigation stand-in, which finds no level of theirs on
-     Docs, or fails it. */
+     Docs, or fails it. She opens Settings from Plan's Overview, so App
+     shows and remembers Plan beneath it. Answers the way out of Settings,
+     which checks that Plan shows again as it did, since App writes no
+     preference while Settings shows and a move into Docs there would show
+     only once she leaves. */
   async function createUnderOps(resolve: 'answered' | 'failed') {
-    history.replaceState(null, '', '/app/testbed/settings/projects')
     await boot((snap) => {
       const me = snap.profiles[0]
       snap.profiles.push({
@@ -515,6 +524,18 @@ describe('New sub-project', { timeout: 30_000 }, () => {
       )
       snap.access.push({ project_id: 'bench', profile_id: me.id, level: 'user' })
     })
+    const { P } = await import('./store/planner')
+    // Plan's Overview shows at its address, with Plan's row lit in the
+    // sidebar, and App remembers Plan
+    const planRow = () => document.querySelector('aside [data-project-row="plan"] > button')
+    await waitFor(
+      () =>
+        document.querySelector('[data-workspace-view="overview"]') &&
+        planRow()?.getAttribute('aria-current') === 'page',
+      "Plan's Overview",
+    )
+    expect(location.pathname).toBe('/app/testbed/overview/p/1')
+    expect(P.loadUI().lastProject?.project_id).toBe('plan')
     const watch = network.onUpdate.getMockImplementation()
     network.onUpdate.mockImplementation((ref, args, next, fail) =>
       getFunctionName(ref) === 'projectSettings:get' && (args as { id: string }).id === 'ops'
@@ -537,6 +558,14 @@ describe('New sub-project', { timeout: 30_000 }, () => {
         return Promise.reject(new Error('the navigation read failed'))
       return isProjectSettingsRead(name) ? reads.query(name, args) : ask?.(ref, args)
     })
+    // Settings › Projects, from the rail
+    await press(await find('Settings'))
+    await press(
+      await waitFor(
+        () => document.querySelector<HTMLElement>('[data-settings-item="projects"]'),
+        'Projects',
+      ),
+    )
     const row = await waitFor(
       () => document.querySelector('[data-settings-projects] [data-project-row="ops"]'),
       "Ops's row",
@@ -569,8 +598,7 @@ describe('New sub-project', { timeout: 30_000 }, () => {
     const create = sent.find((w) => w.name === 'projects:create')
     expect(create?.args).toMatchObject({ parent_id: 'ops', lead_id: 'leo', name: 'Docs' })
     const id = String(create?.args.id)
-    const { P } = await import('./store/planner')
-    const scopes = vi.spyOn(P, 'saveUI')
+    const saves = vi.spyOn(P, 'saveUINow')
     await save()
     // App asked the server whether the creator sees Docs, which the
     // workspace holds
@@ -582,26 +610,41 @@ describe('New sub-project', { timeout: 30_000 }, () => {
       ),
     ).toBe(true)
     expect(P.project(id)).toBeDefined()
-    // it stays in Settings › Projects, never moves into Docs and makes no
-    // starter task
+    // it stays in Settings › Projects and makes no starter task
     expect(document.querySelector('[data-settings-projects]')).not.toBeNull()
-    expect(scopes.mock.calls.some(([patch]) => (patch as { scope?: string }).scope === id)).toBe(
-      false,
-    )
     expect(sent.some((w) => w.name.startsWith('issues:'))).toBe(false)
+    return async () => {
+      await press(await find('Back'))
+      // Plan is still the scope and its Overview shows at its address, with
+      // no lost-project note or chooser from the access guard
+      expect(document.querySelector('[data-settings-projects]')).toBeNull()
+      expect(location.pathname).toBe('/app/testbed/overview/p/1')
+      expect(
+        document.querySelector('[data-workspace-view]')?.getAttribute('data-workspace-view'),
+      ).toBe('overview')
+      expect(planRow()?.getAttribute('aria-current')).toBe('page')
+      expect(document.querySelector('[data-project-chooser]')).toBeNull()
+      expect(document.body.textContent).not.toContain('is no longer available to you.')
+      // App never remembered Docs, under Settings or after it, and still
+      // remembers Plan
+      expect(saves.mock.calls.some(([patch]) => patch.lastProject?.project_id === id)).toBe(false)
+      expect(P.loadUI().lastProject?.project_id).toBe('plan')
+    }
   }
 
   it("says the creator can't see a sub-project the server does not show them, without opening it or making its starter task", async () => {
-    await createUnderOps('answered')
+    const leave = await createUnderOps('answered')
     expect(document.body.textContent).toContain(
       "Sub-project “Docs” created. You don't have access to it.",
     )
+    await leave()
   })
 
   it('stays put with the plain toast when the check that the creator sees the sub-project fails', async () => {
-    await createUnderOps('failed')
+    const leave = await createUnderOps('failed')
     expect(document.body.textContent).toContain('Sub-project “Docs” created')
     expect(document.body.textContent).not.toContain("You don't have access to it.")
+    await leave()
   })
 
   /* The Planner, an organization admin with a Viewer grant on Ops, which

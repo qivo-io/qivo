@@ -69,7 +69,9 @@ export function ProjectPage({
   read?: ProjectSettingsRead
   setPage: (page: string) => void
   onBackPage?: (page: string) => void
-  onProjectGone?: (parent: string | null) => void
+  /** told the id of the project the person archived or deleted here,
+      with its parent, null for a top-level project */
+  onProjectGone?: (id: string, parent: string | null) => void
   /** told the project's id while its Archive or delete window is open, and
       null once the person closes it. The page stays while the window is
       open, also once the project left the board, so the window keeps what
@@ -112,7 +114,7 @@ export function ProjectPage({
       setRemovingState(null)
       P.archiveProject(shown.id, showing)
       window.showToast?.(`Archived “${shown.name}”`)
-      onProjectGone?.(shown.parent)
+      onProjectGone?.(shown.id, shown.parent)
       setPage('projects-archived')
     }
     // the window waits for the server, so a refusal leaves it open
@@ -121,7 +123,7 @@ export function ProjectPage({
       if (!(await P.removeProject(shown.id, reason, showing))) return false
       setRemovingState(null)
       window.showToast?.(`Deleted “${shown.name}”`)
-      onProjectGone?.(parent)
+      onProjectGone?.(shown.id, parent)
       // a sub-project falls back to its project while the workspace holds
       // it; a project back to the list it was opened from (never to some
       // other project the caller may not see)

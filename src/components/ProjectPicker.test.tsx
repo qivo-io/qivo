@@ -11,6 +11,7 @@ import {
   isProjectNavRead,
   queryProjectNav,
 } from '../store/projectNavStandIn.setup'
+import { Button } from './ui/button'
 import { TooltipProvider } from './ui/tooltip'
 
 /* The shared project picker (components/ProjectPicker.tsx) on the real
@@ -911,5 +912,104 @@ describe('the picked projects as chips', () => {
       ),
     )
     expect(document.querySelector('[data-test-picks]')).toBeNull()
+  })
+})
+
+describe('the panel embedded in a page', { timeout: 30_000 }, () => {
+  const ONE: PickRules = { many: false, oneOrg: false, all: 'none' }
+
+  /** Renders the panel with the page's props: `autoFocus`, `fill` and an
+      empty state, after a button outside it. */
+  async function embedded(o: { autoFocus?: boolean } = {}) {
+    picked = null
+    done = vi.fn<() => void>()
+    function Harness() {
+      version.usePlannerVersion()
+      const [pick, setPick] = useState<ProjectPick | null>(null)
+      useEffect(() => {
+        picked = pick
+      })
+      return (
+        <picker.ProjectPickerPanel
+          pick={pick}
+          onPick={setPick}
+          rules={ONE}
+          onDone={done}
+          autoFocus={o.autoFocus}
+          fill
+          whenEmpty={<p data-when-empty="">Nothing to show yet</p>}
+        />
+      )
+    }
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <Button type="button" data-outside="">
+            Outside
+          </Button>
+          <Harness />
+        </TooltipProvider>,
+      ),
+    )
+    await settle()
+  }
+
+  it('leaves focus where it is with autoFocus off, also as Load more goes, and fills its container', async () => {
+    const next = base()
+    for (let n = 0; n < 30; n++) top(next, named(n))
+    await load(next)
+    await embedded({ autoFocus: false })
+    expect(document.activeElement).not.toBe(field())
+    // the list takes the container's height, with no popover cap
+    const list = find('[data-project-picker-list]')
+    expect(list.className).toContain('flex-1')
+    expect(list.className).not.toContain('max-h-')
+    // the last batch takes Load more away while focus is nowhere
+    await act(async () => (document.activeElement as HTMLElement | null)?.blur())
+    await more()
+    expect(rowIds()).toHaveLength(30)
+    expect(document.querySelector('[data-project-picker-more]')).toBeNull()
+    expect(document.activeElement).not.toBe(field())
+    // by default it takes focus as it mounts, as in a popover
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await embedded()
+    expect(document.activeElement).toBe(field())
+  })
+
+  it('shows its empty state only at a confirmed empty end of the browse list', async () => {
+    await load(base())
+    await embedded()
+    expect(find('[data-when-empty]').textContent).toBe('Nothing to show yet')
+    expect(document.querySelector('[data-project-picker]')).toBeNull()
+    // a list held back, failing or stopped never shows it
+    for (const held of [{ notReady: true }, { fail: true }] as ForcedProjectNav[]) {
+      await act(async () => root.unmount())
+      root = createRoot(container)
+      await load(base())
+      force = held
+      await embedded()
+      expect(document.querySelector('[data-when-empty]')).toBeNull()
+      expect(document.querySelector('[data-project-picker]')).not.toBeNull()
+    }
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await load(base())
+    holding = (s) => s.name === 'projectNav:page'
+    await embedded()
+    const page = asked('page')[0]
+    await act(async () => page.next({ state: 'ok', rows: [], next: null, stopped: true }))
+    await settle()
+    expect(document.querySelector('[data-when-empty]')).toBeNull()
+    expect(document.querySelector('[data-project-picker]')).not.toBeNull()
+    // a list with a row shows the panel
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    const one = base()
+    top(one, 'Luma Sensor')
+    await load(one)
+    await embedded()
+    expect(document.querySelector('[data-when-empty]')).toBeNull()
+    expect(rowText()).toEqual(['Luma Sensor'])
   })
 })
