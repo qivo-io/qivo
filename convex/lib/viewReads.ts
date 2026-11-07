@@ -34,8 +34,9 @@
  * charged at a fixed size in every budget decision (viewBudget charge), so a
  * hidden title's or description's length moves no answer. Only the `mine`
  * milestone read counts a person's own task in an archived sub-project they
- * can see, and that sub-project's row, at their real sizes, as the reader
- * may read both (ArchivedCharge).
+ * can see, that sub-project's row and the row of its top-level project
+ * where that is archived too, at their real sizes, as the reader may read
+ * them (ArchivedCharge).
  *
  * What still follows hidden data is how many documents and ranges those
  * reads take, which can move a view's answer at its budget's margin only:
@@ -361,10 +362,15 @@ export type ViewAccess = ReturnType<typeof viewAccess>
  * the task and the sub-project's row at their real sizes (`readable`), as
  * the reader may read both: the archived project in the app and the task
  * through REST and MCP, whose task reads show a task whose project the
- * caller can see (lib/core.ts findIssue). Only milestones.section's `mine`
- * read takes `readable` (model/milestones.ts mineMilestoneProjects), so no
- * other view's budget decisions change; a row the reader cannot see keeps
- * its fixed size under both. */
+ * caller can see (lib/core.ts findIssue). Under `readable` the row of that
+ * sub-project's top-level project counts at its real size too where that
+ * one is archived, because a level on a sub-project shows its top-level
+ * project for navigation (lib/access.ts levelUnder), archived or live, so
+ * the reader may see that row as well. A live top-level project keeps its
+ * fixed charge. Only milestones.section's `mine` read takes `readable`
+ * (model/milestones.ts mineMilestoneProjects), so no other view's budget
+ * decisions change; a row the reader cannot see keeps its fixed size under
+ * both. */
 export type ArchivedCharge = 'fixed' | 'readable'
 
 /**
@@ -487,10 +493,14 @@ export function viewAccess(ctx: QueryCtx, guard: ViewBudget, me: Doc<'profiles'>
      * of the organization the reader can see (Access.visible), asked
      * within the guard as `live` and `visible` ask, so a project asked
      * about before takes no more room. Each one that is counts its row at
-     * its real size from then on: the charge at the fixed size this seat
-     * made of it is undone, as the reader may be shown the row. Every
-     * other project keeps its fixed charge. Only a read whose budget takes
-     * ArchivedCharge `readable` asks it (ownHeldTasks). */
+     * its real size from then on, and so does its top-level project's row
+     * where that one is archived: the charges at the fixed size this seat
+     * made of them are undone, as the reader may be shown both rows (a
+     * level on a sub-project shows its top-level project for navigation,
+     * lib/access.ts levelUnder). Every other project, a live top-level
+     * project above one included, keeps its fixed charge. Only a read
+     * whose budget takes ArchivedCharge `readable` asks it
+     * (ownHeldTasks). */
     async readableArchived(ids: readonly string[]): Promise<boolean[]> {
       const isLive = await live(ids)
       const archived = new Set<string>()
@@ -502,11 +512,16 @@ export function viewAccess(ctx: QueryCtx, guard: ViewBudget, me: Doc<'profiles'>
       const asked = [...archived]
       const seen = await visible(asked)
       const readable = new Set(asked.filter((_, i) => seen[i]))
-      for (const id of readable) {
-        const p = fixed.get(id)
-        if (p === undefined) continue
-        fixed.delete(id)
+      const undo = (p: Doc<'projects'> | undefined) => {
+        if (p === undefined || !fixed.delete(p.id)) return
         guard.refund(p, PROJECT_ROW_MAX_BYTES)
+      }
+      for (const id of readable) {
+        undo(fixed.get(id))
+        // the archived top-level project above it, which visible read
+        const parent = (await access.project(id))?.parent_id
+        const top = parent === undefined ? undefined : fixed.get(parent)
+        if (top?.archived_at !== undefined) undo(top)
       }
       return ids.map((id) => readable.has(id))
     },
@@ -951,8 +966,9 @@ export async function* ownTasks(
  * lib/limits.ts TASK_ROW_MAX_BYTES each time a read returned it, and one
  * they are shown at its real size. With `archived` `readable`, a task it
  * does not hold whose archived sub-project the reader can see counts at
- * its real size too, with that sub-project's row (ArchivedCharge,
- * ViewAccess readableArchived), and is still not yielded. Which tasks the
+ * its real size too, with that sub-project's row and an archived
+ * top-level project's row above it (ArchivedCharge, ViewAccess
+ * readableArchived), and is still not yielded. Which tasks the
  * reader owns by the Reviewer rule is the caller's to settle.
  */
 export async function* ownHeldTasks(

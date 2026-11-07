@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { ACCESS_UNCHECKED, OWN_READS } from '../lib/access'
+import { ACCESS_UNCHECKED, accessOf, OWN_READS } from '../lib/access'
 import type { ReadCeiling } from '../lib/archivedTasks'
 import { byId, newWindowKey } from '../lib/db'
 import { LIMITS, MIB } from '../lib/limits'
@@ -138,22 +138,28 @@ async function program(t: T, orgId: string, name: string, over: Partial<Doc<'pro
  * sub-projects a top-level project, 1 unless given; `own` open tasks `me`
  * is assigned in each sub-project, 1 unless given; `others` open tasks of
  * `other` in each live sub-project beside them; `me`'s grant on each
- * sub-project, or on each top-level project alone (`grant` 'top'); and
- * `each` top-level projects a transaction, 50 unless given. */
+ * sub-project, or on each top-level project alone (`grant` 'top'); `each`
+ * top-level projects a transaction, 50 unless given; top-level projects
+ * archived whole (`closed`); and `first`, the number of the first
+ * top-level project, past those an earlier call planted, 0 unless given. */
 type TreeShape = {
   live?: number
   own?: number
   others?: { other: Doc<'profiles'>; n: number }
   grant?: 'sub' | 'top'
   each?: number
+  closed?: boolean
+  first?: number
 }
 
 /* `n` top-level projects of `orgId` in a few transactions, each with one
  * live sub-project and `archivedOf(i)` archived ones as archiving a
  * sub-project leaves it (model/projects.ts archiveProjectCore), archived
- * and listed under its live parent with its tasks untouched. Each
- * sub-project gets a grant to `me` and one open task `me` is assigned,
- * unless `shape` says otherwise (TreeShape). */
+ * and listed under its live parent with its tasks untouched. With `closed`
+ * each top-level project is archived whole, as archiving it leaves it and
+ * its sub-projects: archived, listed, with every sub-project under it.
+ * Each sub-project gets a grant to `me` and one open task `me` is
+ * assigned, unless `shape` says otherwise (TreeShape). */
 async function plantTrees(
   t: T,
   orgId: string,
@@ -162,13 +168,21 @@ async function plantTrees(
   archivedOf: (i: number) => number,
   shape: TreeShape = {},
 ) {
-  const { live: lives = 1, own = 1, others, grant: grantOn = 'sub', each = 50 } = shape
+  const {
+    live: lives = 1,
+    own = 1,
+    others,
+    grant: grantOn = 'sub',
+    each = 50,
+    closed = false,
+    first = 0,
+  } = shape
   const out = {
     tops: [] as Doc<'projects'>[],
     live: [] as Doc<'projects'>[],
     archived: [] as Doc<'projects'>[],
   }
-  for (let from = 0; from < n; from += each)
+  for (let from = first; from < first + n; from += each)
     await t.run(async (ctx) => {
       let num = 10_000 + from * 100
       const project = async (over: Partial<Doc<'projects'>>, name: string) => {
@@ -227,8 +241,11 @@ async function plantTrees(
         if (grantOn === 'sub') await access(sub)
         await tasks(sub, me, own)
       }
-      for (let i = from; i < Math.min(n, from + each); i++) {
-        const top = await project({}, `Programme ${i}`)
+      for (let i = from; i < Math.min(first + n, from + each); i++) {
+        const top = await project(
+          closed ? { archived_at: NOW, archive_state: 'listed' } : {},
+          `Programme ${i}`,
+        )
         out.tops.push(top)
         if (grantOn === 'top') await access(top)
         for (let l = 0; l < lives; l++) {
@@ -240,13 +257,13 @@ async function plantTrees(
           await work(live)
           if (others) await tasks(live, others.other, others.n)
         }
-        for (let k = 0; k < archivedOf(i); k++) {
+        for (let k = 0; k < archivedOf(i - first); k++) {
           const gone = await project(
             {
               type: 'project',
               parent_id: top.id,
               archived_at: NOW,
-              archive_state: 'listed',
+              archive_state: closed ? 'under' : 'listed',
             },
             `Closed ${i}-${k}`,
           )
@@ -851,7 +868,7 @@ describe('refusals of a mine read', () => {
 // ------------------------------------------------------------ what it counts
 
 describe("what a mine read's budget counts", () => {
-  it('counts an archived sub-project the caller can see and their tasks there at their real sizes, and one they cannot see at the fixed sizes', async () => {
+  it('counts an archived sub-project the caller can see, their tasks there and an archived top-level project above it at their real sizes, and one they cannot see at the fixed sizes', async () => {
     const t = newT()
     const f = await withOrg(t)
     const org = f.org.id
@@ -907,6 +924,52 @@ describe("what a mine read's budget counts", () => {
     const after = await decidedBytes(t, me)
     expect(after.fixed).toBe(before.fixed)
     expect(after.mine - before.mine).toBe(3 * longer(20).length + longer(40).length)
+    // a top-level project archived whole, with its two sub-projects under
+    // it (model/projects.ts archiveProjectCore) and 2 of the caller's open
+    // tasks in each. While the caller can see neither sub-project, the
+    // top-level project's row counts at the fixed size, so its description
+    // moves no decision
+    const shut = await plantProject(t, {
+      org_id: org,
+      key: 'SHUT',
+      num: 9003,
+      sort_order: 9003,
+      name: 'Closed programme',
+      archived_at: NOW,
+      archive_state: 'listed',
+    })
+    const under = (key: string, num: number) =>
+      plantProject(t, {
+        org_id: org,
+        type: 'project',
+        parent_id: shut.id,
+        key,
+        num,
+        sort_order: num,
+        name: `Closed ${key}`,
+        archived_at: NOW,
+        archive_state: 'under',
+      })
+    const opened = await under('SHTA', 9004)
+    const closed = await under('SHTB', 9005)
+    for (const sub of [opened, closed]) await plantTasks(t, sub, 2, () => ({ assignee_id: me.id }))
+    await withReach(t)
+    const sees = () => t.query((ctx) => accessOf(ctx, me).visible(shut.id))
+    expect(await sees()).toBe(false)
+    const hiddenTop = await decidedBytes(t, me)
+    await t.run((ctx) => ctx.db.patch(shut._id, { description: longer(30) }))
+    expect(await decidedBytes(t, me)).toEqual(hiddenTop)
+    // a grant on one of them shows the top-level project for navigation,
+    // so a mine read counts its row at its real size, and its description
+    // moves that read's decisions by its bytes and every other view's not
+    await grant(t, opened, me)
+    await withReach(t)
+    expect(await sees()).toBe(true)
+    const seenTop = await decidedBytes(t, me)
+    await t.run((ctx) => ctx.db.patch(shut._id, { description: longer(60) }))
+    const moved = await decidedBytes(t, me)
+    expect(moved.fixed).toBe(seenTop.fixed)
+    expect(moved.mine - seenTop.mine).toBe(longer(60).length - longer(30).length)
   })
 })
 
@@ -1058,6 +1121,51 @@ describe('a mine read at the design size', () => {
       t,
       me,
       '200 projects, 200 live and 500 archived sub-projects, limit 10',
+      10,
+    )
+    expect(got).toMatchObject({ answer: { projects: 200, rows: 10, next: true, stopped: null } })
+    const answer = await as(t, me).query(api.milestones.section, mineAsk({ limit: 10 }))
+    expect(answer.projects).toEqual(trees.tops.map((p) => p.id).sort())
+    expect(answer.rows).toHaveLength(10)
+    expect(answer.stopped).toBeNull()
+  })
+
+  it("lists 200 top-level projects of one live sub-project each beside 500 archived sub-projects under 167 archived top-level projects, each sub-project holding one of the caller's open tasks", async () => {
+    // the 200 live and 500 archived sub-projects one person can read, at
+    // their sum, each by a grant on it, as the case before, with the
+    // archived ones 3 to a top-level project archived whole, as archiving a
+    // project leaves them (2 under the last). Asking whether the caller can
+    // see an archived sub-project also reads its top-level project and the
+    // caller's grant there, which a live top-level project's sub-project
+    // has read already, and counts that row at its real size, as the
+    // caller sees it for navigation
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const me = await seatOf(t, f.org.id, { org_role: 'user' })
+    const trees = await plantTrees(t, f.org.id, me, 200, () => 0)
+    const closed = await plantTrees(t, f.org.id, me, 167, (i) => (i < 166 ? 3 : 2), {
+      live: 0,
+      closed: true,
+      first: 200,
+    })
+    expect(trees.live).toHaveLength(200)
+    expect(closed.archived).toHaveLength(500)
+    // TBED and SKNK, the fixture's own top-level projects, are archived with
+    // FW and PCB, so the organization holds the design size's 200 live
+    // top-level projects; the caller reads none of them
+    await t.run(async (ctx) => {
+      for (const p of [f.meta, f.sub, f.sub2, f.hidden])
+        await ctx.db.patch(p._id, { archived_at: NOW })
+    })
+    await plantMany(
+      t,
+      trees.tops.map((p, i) => ({ project: p.id, week: plus(MONDAY, i % 60), name: `Gate ${i}` })),
+    )
+    await withReach(t)
+    const got = await measureMine(
+      t,
+      me,
+      '200 projects of 200 live sub-projects, 500 archived sub-projects under 167 archived projects, limit 10',
       10,
     )
     expect(got).toMatchObject({ answer: { projects: 200, rows: 10, next: true, stopped: null } })
