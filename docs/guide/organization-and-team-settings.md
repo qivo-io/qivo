@@ -250,13 +250,22 @@ projects included. Where Qivo has no count yet, the label reads
 **Counting…** while Qivo counts the organization's labels, or **Not counted
 yet**, never 0.
 
-Renaming a label updates it everywhere. If someone else renames the same
-label while you type, your text stays and a line under the name says what
-it was changed to, with **Use saved** and **Keep mine**. Click its color dot
-and choose a swatch to save a new color. Escape or clicking outside cancels
-without changes. A label you created or renamed shows at the top of the
-list while the loaded labels do not include it, and so does one whose name
-you are still editing when you search.
+Renaming a label updates it everywhere. A name another label already has,
+in any case, is refused, and your text stays so you can change it. If
+someone else renames the same label while you type, your text stays and a
+line under the name says what it was changed to, with **Use saved** and
+**Keep mine**. Click its color dot and choose a swatch to save a new color.
+Escape or clicking outside cancels without changes. A label you created or
+renamed shows at the top of the list while the loaded labels do not include
+it, and so does one whose name you are still editing when you search.
+
+**Add label** checks the name as you type. While Qivo checks it, the line
+beside the button says **Checking the name…**, and **Add label** turns on
+once Qivo has found no label of that name. When a label has that name, in
+any case, the line says **A label with that name already exists**. If Qivo
+could not check the name, **Add label** stays on, and Qivo refuses a name
+another label has when you add it. A new label gets a color from the
+palette, which you can change with its color dot.
 
 **Delete** asks first. The window says how many active tasks use the label
 when Qivo has counted them, and that deleting it removes it from all tasks,

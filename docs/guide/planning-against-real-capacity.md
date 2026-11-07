@@ -58,6 +58,11 @@ workload of the 50 people with the most tasks on the Roadmap, and shows the
 others as unknown.
 Their weekly capacity appears beside their name. New people start with the
 organization default, initially 32 hours ([Planning hours](./organization-and-team-settings.md#planning-hours-and-teams)).
+While Qivo loads a person's details their row says **Loading…**, and a
+person whose weekly hours Qivo could not read shows their hours without a
+percentage or color, with **Capacity unknown** beside their name and in the
+cell descriptions. Their row stays in its place until their details
+arrive.
 
 Blue shows ordinary load, yellow marks **90–100%**, and red marks **over 100%**.
 **100%** fills that person's planning time, which already excludes time
