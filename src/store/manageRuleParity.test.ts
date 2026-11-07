@@ -68,7 +68,11 @@ async function worldOf(t: T, profile: Doc<'profiles'>): Promise<Snapshot> {
       .withIndex('by_org', (q) => q.eq('org_id', profile.org_id))
       .collect(),
   )
-  return { ...ws, milestones: [], projects: [...ws.projects, ...rest.filter((p) => !held.has(p.id))] }
+  return {
+    ...ws,
+    milestones: [],
+    projects: [...ws.projects, ...rest.filter((p) => !held.has(p.id))],
+  }
 }
 
 describe('the store’s management rule', () => {
