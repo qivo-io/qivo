@@ -1260,6 +1260,38 @@ describe("the phone's user page and Settings' check", () => {
     expect(role().disabled).toBe(false)
   })
 
+  it("keeps a guest's writes off on the phone's user page while its read fails, and on once one answers", async () => {
+    await load((s) => s.profiles.push(person('gail', 'Gail Guest', { org_role: 'guest' })))
+    narrowScreen(true)
+    // the guest's page as the Users page draws it, without Settings' check,
+    // which sends a guest back to the list once a read answers
+    function GuestPage() {
+      const read = pages.person.usePersonSettings('gail')
+      return <pages.users.OrgUsersPage narrow person={read} setPage={vi.fn()} />
+    }
+    await render(() => <GuestPage />)
+    const hours = () => find<HTMLInputElement>('[data-plannable-for="gail"]')
+    const remove = () => {
+      const button = [...find('[data-user-row="gail"]').querySelectorAll('button')].at(-1)
+      if (!button) throw new Error("no Remove on Gail's row")
+      return button
+    }
+    expect(hours().disabled).toBe(false)
+    expect(remove().disabled).toBe(false)
+    force = { fail: ['get'] }
+    await act(async () => server.rerun())
+    await settle()
+    expect(find('[data-settings-user-detail] [role="alert"]').textContent).toBe(
+      "Couldn't refresh this person.Try again",
+    )
+    expect(hours().disabled).toBe(true)
+    expect(remove().disabled).toBe(true)
+    force = {}
+    await click(find('[data-person-retry]'))
+    expect(hours().disabled).toBe(false)
+    expect(remove().disabled).toBe(false)
+  })
+
   it("reads no keys for the phone's list, which shows no key line, and an agent's on its page", async () => {
     await load()
     extra.keys.push(keyOf('atlas', 1))

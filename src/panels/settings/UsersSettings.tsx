@@ -522,23 +522,27 @@ function UserRow({
 /* One guest of the list, by id, with the address, the invitation's state,
    the first projects the server listed and the hours, and a two-press
    Remove. Like UserRow, it paints the store's profile while the store
-   holds it, else the answer, and writes with what it showed. */
+   holds it, else the answer, and writes with what it showed;
+   `forceWaiting` keeps the writes off on the phone's user page while its
+   read is not current. */
 function GuestRow({
   id,
   answer,
   note,
   ctx,
+  forceWaiting = false,
   pageRow = false,
 }: {
   id: string
   answer: SettingsPersonRow | null
   note: KeptNote | null
   ctx: RowContext
+  forceWaiting?: boolean
   pageRow?: boolean
 }) {
   const u = rowShown(id, answer)
   if (!u) return null
-  const waiting = false
+  const waiting = forceWaiting
   const arm = ctx.confirm.armed === `g:${id}`
   const projects = answer?.guest ?? null
   return (
@@ -1062,7 +1066,13 @@ export function OrgUsersPage({
             <SettingsSection>
               <div className="[display:flex] [flex-direction:column] [gap:6px]">
                 {answer.person.org_role === 'guest' ? (
-                  <GuestRow id={id} answer={answer.person} note={null} ctx={ctx} />
+                  <GuestRow
+                    id={id}
+                    answer={answer.person}
+                    note={null}
+                    forceWaiting={person.state !== 'ok'}
+                    ctx={ctx}
+                  />
                 ) : (
                   <UserRow
                     id={id}
