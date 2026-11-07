@@ -1019,27 +1019,24 @@ function Roadmap({
       another view may still hold the task (taskOf). */
   const sessionTask = (s: PlanSession): IssueVM | undefined =>
     cannotPlanReason(view) === null ? view.family.byId[s.issueId] : undefined
-  // Initial placement waits for valid workload and for an answer that
-  // names the task. Later answers leave the user's chosen dates alone.
+  // Initial placement waits for valid workload, for an answer that names
+  // the task and, while auto-fit can place it, for the owner's weekly
+  // hours, which arrive with their details (capacityFor). A bar the
+  // person moves before then gets its first fit from where they dropped
+  // it. Later answers leave the user's chosen dates alone.
   useEffectR(() => {
     const s = sessionRef.current
     const load = planLoad?.items
     if (!s?.fitOnLoad || !load) return
     const it = sessionTask(s)
     if (!it) return
+    const fits = s.autoFit && !!it.owner && !P.isGroup(it) && it.remaining > 0 && it.start != null
+    const cap = capacityFor(it)
+    if (fits && cap === null) return
     const placed = { ...s, fitOnLoad: false }
     sessionRef.current = placed
     setSession(placed)
-    const cap = capacityFor(it)
-    if (
-      s.autoFit &&
-      it.owner &&
-      !P.isGroup(it) &&
-      it.remaining > 0 &&
-      it.start != null &&
-      cap !== null
-    )
-      autoFitEnd(it.id, it.start, load, cap, it.uuid, it.remaining)
+    if (fits && cap !== null) autoFitEnd(it.id, it.start, load, cap, it.uuid, it.remaining)
   })
   const toggleAutoFit = () => {
     const s = sessionRef.current

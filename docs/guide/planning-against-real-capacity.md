@@ -29,7 +29,11 @@ The planning panel offers:
   an owner and positive Remaining hours. After each drag, Qivo computes the end
   from the owner's free weekly capacity, starting no earlier than the estimate
   measurement week. It uses the reviewer while a task is In Review with one
-  and follows ownership changes during the session.
+  and follows ownership changes during the session. While Qivo loads the
+  owner's details the panel says **Loading the owner's hours…**, and the
+  first fit of an unscheduled task waits for their weekly hours. If Qivo
+  could not read their hours, it says **Capacity unknown, so auto-fit is
+  off**.
 - The owner's committed hours by project, excluding paused work. Hidden
   projects appear as anonymous **Other projects** hours where your role allows
   it ([Delay projections](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)). The free-hours summary uses that person's plannable week.

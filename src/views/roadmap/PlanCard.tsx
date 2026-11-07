@@ -6,6 +6,11 @@ import { hasPlannableWeek, type LoadItem, loadByProject } from '../../lib/worklo
 import { type IssueVM, P } from '../../store/planner'
 import { CAPACITY_UNKNOWN, capacityOf } from '../capacity'
 
+/** What the planning panel says under auto-fit while its owner's details,
+    and so their weekly hours, are still loading. The first fit waits for
+    them. */
+export const OWNER_HOURS_LOADING = 'Loading the owner’s hours…'
+
 /* a small on/off switch for the PlanCard's auto-fit control; the off track
    reads the palette's --switch-off, else --surface-3 */
 function PlanSwitch({
@@ -86,8 +91,11 @@ export function PlanCard({
   const owner = issue.owner ? P.person(issue.owner, issue.org) : null
   const remaining = issue.remaining || 0
   // the owner's weekly capacity, null while the store does not know their
-  // hours, when auto-fit stays off rather than fit against the default
+  // hours, when auto-fit stays off rather than fit against the default:
+  // while their details load, which the first fit waits for, or after the
+  // read could not give their hours
   const cap = owner ? capacityOf(owner) : null
+  const ownerLoading = owner?.state === 'loading'
   const canFit = !!owner && cap !== null && remaining > 0
   const first = owner?.state === 'ok' ? owner.name.split(' ')[0] : ''
   // Match auto-fit: weeks before the measurement anchor cannot dilute load.
@@ -172,13 +180,15 @@ export function PlanCard({
             <div className="[font-size:var(--fs-xs)] [color:var(--text-3)]">
               {!owner
                 ? 'Assign someone to auto-fit'
-                : cap === null
-                  ? `${CAPACITY_UNKNOWN}, so auto-fit is off`
-                  : remaining <= 0
-                    ? 'Add remaining time to auto-fit'
-                    : session.autoFit
-                      ? `End follows ${first}’s free time on drop`
-                      : 'Drag the end freely'}
+                : ownerLoading
+                  ? OWNER_HOURS_LOADING
+                  : cap === null
+                    ? `${CAPACITY_UNKNOWN}, so auto-fit is off`
+                    : remaining <= 0
+                      ? 'Add remaining time to auto-fit'
+                      : session.autoFit
+                        ? `End follows ${first}’s free time on drop`
+                        : 'Drag the end freely'}
             </div>
           </div>
         </div>
