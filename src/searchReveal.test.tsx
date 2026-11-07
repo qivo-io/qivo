@@ -514,10 +514,15 @@ describe("an Inbox row of another organization's task with a held task's id", {
       "the held task's item",
     )
     expect(divider()).toBeNull()
-    // the guest organization's row of the same id shows that task instead
+    const pane = () => document.querySelector('.inbox-detail-frame > *')
+    const homePane = pane()
+    expect(homePane).not.toBeNull()
+    // the guest organization's row of the same id shows that task instead,
+    // in a window of its own, as another task's
     const guestRow = await rowOpen(GUEST)
     await act(async () => guestRow.click())
     await waitFor(() => title() === 'Calibrate the guest rig', "the guest task's title")
+    expect(pane()).not.toBe(homePane)
     // with that organization's New mark, frozen from its own item, not the
     // held task's read one
     await waitFor(divider, "the guest task's New mark")
@@ -525,7 +530,7 @@ describe("an Inbox row of another organization's task with a held task's id", {
     // and its read on open reads that organization's item
     await waitFor(() => reads().length === 1, 'the read on open')
     expect(reads()).toEqual([expect.objectContaining({ org_id: GUEST, issue_id: SOAK })])
-    expect(location.pathname).not.toMatch(/qn-2$/)
+    expect(location.pathname).toBe('/app/guest/inbox/tasks/qn-7')
     expect(title()).toBe('Calibrate the guest rig')
     // a comment typed there goes to that organization's task too
     const composer = await waitFor(
