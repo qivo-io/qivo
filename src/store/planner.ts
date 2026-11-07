@@ -13496,6 +13496,10 @@ export const PLANNER = {
       hold it: its card's owner list waits (WAITS_FOR_SAVE), as the server
       has no task to read for it yet. */
   createOnItsWay: (uuid: string): boolean => createOnItsWay(uuid),
+  /** Whether the server refused the create of the person's own new task
+      `uuid` (refusedCreates), so the writes sent behind it, a comment
+      among them, say nothing more than the create's own refusal did. */
+  refusedCreate: (uuid: string): boolean => refusedCreates.has(uuid),
   /** The search text of task `uuid` while it is a create of the person's
       own on its way that the workspace does not hold, as the screen shows
       it with the writes sent behind the create. The fields come from its

@@ -32,6 +32,8 @@ vi.mock('../lib/auth', () => ({
 let container: HTMLDivElement
 let root: Root
 let refuse: (error: unknown) => void
+/* Refuses the comment the window posted, which went out behind the create. */
+let refuseComment: (error: unknown) => void
 let toast: MockInstance
 
 beforeEach(() => {
@@ -118,7 +120,11 @@ async function openNewTask() {
       return new Promise((_resolve, reject) => {
         refuse = reject
       })
-    return name.startsWith('comments:') ? new Promise(() => {}) : Promise.resolve(null)
+    return name.startsWith('comments:')
+      ? new Promise((_resolve, reject) => {
+          refuseComment = reject
+        })
+      : Promise.resolve(null)
   })
   // the app's boot, without every task
   const { TASKS } = await import('../store/liveParts')
@@ -188,6 +194,28 @@ describe('a new task the server refuses', { timeout: 30_000 }, () => {
       `Created ${key}`,
       "You don't have permission for that. Change reverted.",
       `${key} was not created, so its window closed and your unsent comment and description went with it.`,
+    ])
+  })
+
+  it('says nothing more for a comment posted before the refusal, whose write the server refuses after it', async () => {
+    const key = await openNewTask()
+    const composer = await editorOf('Leave a comment')
+    await act(async () => composer.commands.insertContent('Drift is under 2%'))
+    const post = [...document.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Comment',
+    )
+    await act(async () => post?.click())
+    await refused()
+    // the comment went out behind the create, so the server refuses it
+    // after the create, for a task that never existed
+    await act(async () => {
+      refuseComment(new ConvexError({ code: 'not_found', message: 'issue not found' }))
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(document.querySelector('[role="textbox"]')).toBeNull()
+    expect(toasts()).toEqual([
+      `Created ${key}`,
+      "You don't have permission for that. Change reverted.",
     ])
   })
 

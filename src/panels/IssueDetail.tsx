@@ -3066,7 +3066,12 @@ function IssueDetail({
                   value=""
                   placeholder="Leave a comment…"
                   ariaLabel="Leave a comment"
-                  comment={{ label: 'Comment', reset: true, onCommit: postComment }}
+                  comment={{
+                    label: 'Comment',
+                    reset: true,
+                    onCommit: postComment,
+                    task: it.uuid,
+                  }}
                 />
               </EditorSlot>
             </div>
