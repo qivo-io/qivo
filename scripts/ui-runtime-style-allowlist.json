@@ -7,6 +7,10 @@
     "count": 1,
     "reason": "selection-anchored link-popover coordinates clamped to the viewport"
   },
+  "src/components/inlineImage.tsx": {
+    "count": 1,
+    "reason": "a loading description image's placeholder at the width and aspect ratio it will be drawn"
+  },
   "src/components/qivo/icon.tsx": {
     "count": 1,
     "reason": "Qivo icon geometry and color, and forwarded caller styles"

@@ -5,6 +5,8 @@ import { LIMITS } from '../convex/lib/limits'
 import {
   apiAccountId,
   fileSeedId,
+  imageSeedId,
+  imagesDescription,
   inboxCommentId,
   PROJECT_STARS,
   parseSeedArgs,
@@ -13,6 +15,7 @@ import {
   planDelete,
   planDeletedSub,
   planFiles,
+  planImages,
   planInbox,
   planLabels,
   planProjects,
@@ -231,6 +234,8 @@ vi.mock('convex/browser', () => ({
       }
       if (name === 'files:uploadUrl')
         return `http://127.0.0.1:3214/api/storage/upload?token=${fields.issue_id}`
+      if (name === 'files:avatarUploadUrl')
+        return `http://127.0.0.1:3214/api/storage/upload?token=${fields.profile_id}`
       if (name === 'files:attach') return { attachment: { id: fields.id } }
       if (name !== 'comments:create') return
       if (fake.rateRefusals > 0) {
@@ -2378,5 +2383,174 @@ describe('board-scale-seed --thread', () => {
       ['task-1', 'label-00', false],
     ])
     expect(fake.calls.some(([name]) => name === 'labels:create')).toBe(false)
+  })
+})
+
+describe('board-scale-seed --images and --pictures', () => {
+  const none = () => ({
+    tasks: new Set(),
+    files: new Set(),
+    rows: { tasks: new Set(), projects: new Set(), archived: new Set() },
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    fake.people = []
+    fake.fileRows = []
+    fake.issues = []
+    fake.calls = []
+  })
+
+  it('takes an image count up to the per-task limit, and --pictures without a value', () => {
+    expect(parseSeedArgs([...local, '--images', '100']).images).toBe(100)
+    expect(parseSeedArgs(local)).toMatchObject({ images: 0, pictures: false })
+    expect(parseSeedArgs([...local, '--pictures']).pictures).toBe(true)
+    for (const images of ['101', '-1', '2.5', 'many'])
+      expect(() => parseSeedArgs([...local, '--images', images])).toThrow(
+        `--images takes a whole number from 0 to ${LIMITS.attachments.max}.`,
+      )
+  })
+
+  it('plans the task, the images still missing and a description that shows them one a paragraph', () => {
+    const plan = planImages({ org: 'org', count: 6, project: 'sub', stored: none() })
+    expect(plan.task).toMatchObject({
+      id: imageSeedId('task'),
+      org_id: 'org',
+      project_id: 'sub',
+      title: 'Review the bench rig photos',
+    })
+    expect(plan.uploads.map((u) => u.id)).toEqual(
+      [0, 1, 2, 3, 4, 5].map((n) => imageSeedId('image', n)),
+    )
+    const paragraphs = plan.description.split('\n\n')
+    expect(paragraphs).toHaveLength(12)
+    expect(paragraphs.filter((p) => p.startsWith('![')).map((p) => p.slice(-37, -1))).toEqual(
+      plan.uploads.map((u) => u.id),
+    )
+    expect(imagesDescription(6)).toBe(plan.description)
+    // a rerun: the task and the first four images are there
+    const stored = none()
+    stored.tasks.add(imageSeedId('task'))
+    stored.rows.tasks.add(imageSeedId('task'))
+    for (let n = 0; n < 4; n++) stored.files.add(imageSeedId('image', n))
+    const rerun = planImages({ org: 'org', count: 6, project: 'sub', stored })
+    expect(rerun.task).toBeNull()
+    expect(rerun.uploads.map((u) => u.n)).toEqual([4, 5])
+    // an archived task gets nothing
+    stored.rows.archived.add(imageSeedId('task'))
+    expect(planImages({ org: 'org', count: 6, project: 'sub', stored })).toBeNull()
+    // a task in Deleted items gets nothing
+    stored.rows.archived.clear()
+    stored.rows.tasks.clear()
+    expect(planImages({ org: 'org', count: 6, project: 'sub', stored })).toBeNull()
+  })
+
+  it.each([
+    ['archived', { archived_at: '2026-10-29T00:00:00.000Z' }, []],
+    [
+      'in an archived sub-project',
+      {},
+      [{ id: 'sub', org_id: 'org', archived_at: '2026-10-29T00:00:00.000Z' }],
+    ],
+    [
+      'under an archived top-level project',
+      {},
+      [
+        { id: 'sub', org_id: 'org', parent_id: 'top' },
+        { id: 'top', org_id: 'org', archived_at: '2026-10-29T00:00:00.000Z' },
+      ],
+    ],
+  ])('leaves an --images task %s untouched on a rerun', async (_, task, projects) => {
+    // six images seeded before, then the task or its project archived
+    fake.archived = [
+      {
+        id: imageSeedId('task'),
+        org_id: 'org',
+        project_id: 'sub',
+        title: 'Review the bench rig photos',
+        ...task,
+      },
+    ]
+    fake.projectRows = projects
+    fake.fileRows = Array.from({ length: 6 }, (_, n) => ({
+      id: imageSeedId('image', n),
+      org_id: 'org',
+    }))
+    const logged = []
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--images', '8'], {
+        env,
+        log: (line) => logged.push(line),
+      })
+    } finally {
+      fake.archived = []
+      fake.projectRows = []
+    }
+    expect(fake.calls.map(([name]) => name)).toEqual([])
+    expect(logged).toContain(
+      'The --images task is archived, in Deleted items or deleted for good; skipped.',
+    )
+  })
+
+  it('makes the task, uploads its images inline and saves the description, then gives every person and agent without a picture one', async () => {
+    const posted = []
+    vi.stubGlobal('fetch', async (url, init) => {
+      posted.push({ url, type: init.headers['Content-Type'], size: init.body.length })
+      return new Response(JSON.stringify({ storageId: `storage-${posted.length}` }), {
+        status: 200,
+      })
+    })
+    fake.people = [
+      { id: 'aisha', org_id: 'org', kind: 'person', active: true, name: 'Aisha', email: 'a@x' },
+      { id: 'atlas', org_id: 'org', kind: 'agent', active: true, name: 'Atlas' },
+      {
+        id: 'leo',
+        org_id: 'org',
+        kind: 'person',
+        active: true,
+        name: 'Leo',
+        avatar_storage_id: 'has-one',
+      },
+      { id: 'gone', org_id: 'org', kind: 'person', active: false, name: 'Gone' },
+      { id: 'stranger', org_id: 'other', kind: 'person', active: true, name: 'Stranger' },
+    ]
+    await runBoardScaleSeed([...local, '--tasks', '0', '--images', '3', '--pictures'], {
+      env,
+      log: () => {},
+    })
+    const names = fake.calls.map(([name]) => name)
+    expect(names).toEqual([
+      'issues:create',
+      'files:uploadUrl',
+      'files:attach',
+      'files:uploadUrl',
+      'files:attach',
+      'files:uploadUrl',
+      'files:attach',
+      'issues:update',
+      'files:avatarUploadUrl',
+      'files:setAvatar',
+      'files:avatarUploadUrl',
+      'files:setAvatar',
+      'files:avatarUploadUrl',
+      'files:setAvatar',
+    ])
+    const attaches = fake.calls.filter(([name]) => name === 'files:attach').map(([, f]) => f)
+    expect(attaches.every((f) => f.inline && f.mime === 'image/png')).toBe(true)
+    const update = fake.calls.find(([name]) => name === 'issues:update')?.[1]
+    expect(update).toEqual({
+      org_id: 'org',
+      id: imageSeedId('task'),
+      patch: { description: imagesDescription(3) },
+    })
+    // Nora, Aisha and Atlas, each as Nora; Leo has one and the rest are
+    // inactive or elsewhere
+    const pictured = fake.calls.filter(([name]) => name === 'files:setAvatar')
+    expect(pictured.map(([, f]) => f.profile_id)).toEqual(['nora', 'aisha', 'atlas'])
+    expect(pictured.every(([, , login]) => login === 'nora-login')).toBe(true)
+    expect(
+      posted.every((p) => p.type === 'image/png' && p.url.startsWith('http://127.0.0.1:3214/')),
+    ).toBe(true)
+    expect(posted.slice(3).every((p) => p.size < 256 * 1024)).toBe(true)
   })
 })

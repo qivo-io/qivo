@@ -7,7 +7,7 @@
  *       [--sub-project FW] [--archived 160] [--deleted 70] [--inbox 600] \
  *       [--credentials 45 --api-url http://127.0.0.1:<site port>] [--relations] \
  *       [--api-accounts 90 --api-url http://127.0.0.1:<site port>] \
- *       [--labels 60] [--files 60] [--projects 200] [--thread 300]
+ *       [--labels 60] [--files 60] [--images 100] [--pictures] [--projects 200] [--thread 300]
  *
  * It takes the same loopback-only target as `marketing-demo.mjs --local`, and
  * the same refusals: no deploy key, no staging, production or demo
@@ -162,6 +162,26 @@
  * keeps a removed attachment's id. Pass `--tasks 0` to add none of the
  * Board's tasks. It runs after --relations and before --labels.
  *
+ * `--images N` gives one new task of Northstar, "Review the bench rig
+ * photos" in the first live sub-project the tasks fill, N small images in
+ * its description (N up to LIMITS.attachments.max, the per-task limit),
+ * for checking how description images load as they come near view. Nora
+ * makes the task through issues:create, uploads each image through the
+ * app's own path, files:uploadUrl, a POST of a 640 by 480 PNG to that URL
+ * on the local backend and files:attach with inline set, then saves a
+ * description through issues:update that shows them one a paragraph, with
+ * a paragraph of text between. Every id comes from its number, so a second
+ * run uploads only the images missing and saves the description again,
+ * and a task a check archived or deleted, or one in a project a check
+ * archived, gets nothing. It runs after --files.
+ *
+ * `--pictures` gives every active person and agent of Northstar without a
+ * picture one, for checking how profile pictures load: as Nora, an admin
+ * who may set anyone's, through files:avatarUploadUrl, a POST of a
+ * 256-pixel PNG of about 20 KB to that URL on the local backend and
+ * files:setAvatar, as the app's picture editor does. A second run gives
+ * pictures only to those still without one. It runs after --images.
+ *
  * `--relations` adds one task at both per-task caps, for checking the task
  * window's Subtasks, Linked tasks and Attachments at scale (planRelations):
  * a new top-level task in Firmware, "Coordinate the pilot firmware
@@ -236,6 +256,7 @@ import { ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
 import { LIMITS } from './limits.mjs'
 import { DemoCliError, isLoopbackOrigin, resolveTarget } from './marketing-demo.mjs'
+import { pngOf } from './perf/files.mjs'
 import { readWorkspace } from './workspaceJoin.mjs'
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -396,6 +417,18 @@ export const PROJECT_STARS = [2, 77, 150]
    SUBS_PER_PROJECT under one, three batches of Storage by project and
    part of a fourth. */
 const MOST_FILES = 78
+/* The most images --images puts in one task's description, the per-task
+   limit of attachments, description images included. */
+const MOST_IMAGES = LIMITS.attachments.max
+/* The --images task's title, and what the text between its images says,
+   in turn. */
+const IMAGES_TITLE = 'Review the bench rig photos'
+const IMAGE_NOTES = [
+  'The rig after the new fixture went in, before calibration.',
+  'Probe placement on the second board, with the shield removed.',
+  'Thermal camera view after ten minutes at full load.',
+  'Cable routing behind the rack, which the next revision tidies.',
+]
 /* What the --files sub-projects' files hold, in turn. */
 const FILE_TOPICS = [
   'Test logs',
@@ -434,6 +467,8 @@ export function parseSeedArgs(args) {
     files: 0,
     thread: 0,
     projects: 0,
+    images: 0,
+    pictures: false,
   }
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -460,6 +495,8 @@ export function parseSeedArgs(args) {
     else if (arg === '--files') options.files = Number(value())
     else if (arg === '--thread') options.thread = Number(value())
     else if (arg === '--projects') options.projects = Number(value())
+    else if (arg === '--images') options.images = Number(value())
+    else if (arg === '--pictures') options.pictures = true
     else throw new DemoCliError(`Unknown option ${arg}.`)
   }
   if (options.target !== 'local')
@@ -494,6 +531,8 @@ export function parseSeedArgs(args) {
     options.projects > MOST_PROJECTS
   )
     throw new DemoCliError(`--projects takes a whole number from 0 to ${MOST_PROJECTS}.`)
+  if (!Number.isInteger(options.images) || options.images < 0 || options.images > MOST_IMAGES)
+    throw new DemoCliError(`--images takes a whole number from 0 to ${MOST_IMAGES}.`)
   return options
 }
 
@@ -626,6 +665,63 @@ export function planProjects({ org, count, tops, present }) {
 /** The id of the --files sub-project, task or file (`what`) number `n`,
     from 0, the same for every run. */
 export const fileSeedId = (what, n) => uuidOf(`board-scale-seed files ${what} ${n}`)
+
+/** The id of the --images task, or of its image number `n` from 0, the
+    same for every run. */
+export const imageSeedId = (what, n = 0) => uuidOf(`board-scale-seed images ${what} ${n}`)
+
+/** The --images task's description: its `count` images one a paragraph,
+    with a paragraph of text between. */
+export function imagesDescription(count) {
+  return Array.from(
+    { length: count },
+    (_, n) =>
+      `${IMAGE_NOTES[n % IMAGE_NOTES.length]}\n\n![Bench photo ${n + 1}](att:${imageSeedId('image', n)})`,
+  ).join('\n\n')
+}
+
+/**
+ * The --images work in organization `org` for `count` images: `task`, the
+ * issues:create fields of the task when it is missing, else null; `uploads`,
+ * the images still missing, each its id, name and bytes; and `description`,
+ * the text the run saves. `stored` holds the ids that count as made, those
+ * with a row and the archived ones (storedIdsOf). A task that counts as
+ * made but has no row, in Deleted items or deleted for good, or that is
+ * archived or lies in an archived project, gets nothing, so the plan is
+ * null then.
+ */
+export function planImages({ org, count, project, stored }) {
+  const id = imageSeedId('task')
+  const made = stored.tasks.has(id)
+  if (made && (!stored.rows.tasks.has(id) || stored.rows.archived?.has(id))) return null
+  return {
+    task: made
+      ? null
+      : {
+          id,
+          org_id: org,
+          project_id: project,
+          title: IMAGES_TITLE,
+          description: '',
+          status: 'progress',
+          priority: 'medium',
+        },
+    uploads: Array.from({ length: count }, (_, n) => ({
+      id: imageSeedId('image', n),
+      issue_id: id,
+      name: `bench-photo-${n + 1}.png`,
+      n,
+    })).filter((image) => !stored.files.has(image.id)),
+    description: imagesDescription(count),
+  }
+}
+
+/** The bytes of --images image `n`: a 640 by 480 PNG. */
+export const seededImageBytes = (n) => pngOf(640, 480, 0.03, n + 1)
+
+/** The bytes of the --pictures picture of person `n`: a 256-pixel PNG of
+    about 20 KB, as the app's own pictures are 10 to 30 KB. */
+export const seededPictureBytes = (n) => pngOf(256, 256, 0.035, 1000 + n)
 
 /** The name of --files sub-project `n`, from 0: an accented one first, a
     word no other name has second, then what its files hold and a number,
@@ -1454,7 +1550,9 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   const archived = await archivedTasksOf(client, actor.org_id)
   const storedLinks = options.relations ? await linkIdsOf(client, actor.org_id) : new Set()
   const stored =
-    options.files > 0 || options.projects > 0 ? await storedIdsOf(client, actor.org_id) : null
+    options.files > 0 || options.projects > 0 || options.images > 0
+      ? await storedIdsOf(client, actor.org_id)
+      : null
   // what Deleted items holds, which no run seeds again, archives or
   // deletes, whatever its flags
   const inTrash = await deletedTasksOf(client, actor.org_id)
@@ -1622,6 +1720,19 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
     )
   }
   if (files !== null) await seedFiles(files, { client, org, target, log })
+  if (options.images > 0) {
+    const plan = planImages({ org, count: options.images, project: projects[0], stored })
+    if (plan === null)
+      log('The --images task is archived, in Deleted items or deleted for good; skipped.')
+    else await seedImages(plan, { client, org, target, log })
+  }
+  if (options.pictures)
+    await seedPictures(
+      people.page.filter(
+        (p) => p.org_id === org && p.active && (p.kind === 'person' || p.kind === 'agent'),
+      ),
+      { client, target, log },
+    )
   if (options.labels > 0) await seedLabels(options.labels, { client, org, seeded, target, log })
   if (options.archived > 0) {
     const parents = new Set([...issues, ...archived].map((task) => task.parent_id).filter(Boolean))
@@ -1893,13 +2004,26 @@ async function seedLabels(count, { client, org, seeded, target, log }) {
     attachment rows, every copy Deleted items stores, and the project and
     task ids used_ids keeps after a delete for good, which projects:create
     and issues:create refuse. `rows` holds the project and task ids that
-    have a row, which alone can take a new task or file. */
+    have a row, which alone can take a new task or file, and `archived`
+    the task ids of those rows that are archived or lie in an archived
+    project or under an archived top-level project. */
 async function storedIdsOf(client, org) {
-  const rows = { projects: new Set(), tasks: new Set() }
+  const rows = { projects: new Set(), tasks: new Set(), archived: new Set() }
+  const projects = new Map()
   for (const project of await tableRows(client, 'projects'))
-    if (project.org_id === org) rows.projects.add(project.id)
+    if (project.org_id === org) {
+      rows.projects.add(project.id)
+      projects.set(project.id, project)
+    }
+  const archivedProject = (id) => {
+    const project = projects.get(id)
+    return !!project && (!!project.archived_at || !!projects.get(project.parent_id)?.archived_at)
+  }
   for (const task of await tableRows(client, 'issues'))
-    if (task.org_id === org) rows.tasks.add(task.id)
+    if (task.org_id === org) {
+      rows.tasks.add(task.id)
+      if (task.archived_at || archivedProject(task.project_id)) rows.archived.add(task.id)
+    }
   const ids = { projects: new Set(rows.projects), tasks: new Set(rows.tasks), files: new Set() }
   for (const file of await tableRows(client, 'issue_attachments'))
     if (file.org_id === org) ids.files.add(file.id)
@@ -2001,6 +2125,91 @@ async function seedFiles(plan, { client, org, target, log }) {
   log(
     `Done: ${plan.projects.length} sub-projects and ${plan.files.length} files added in Northstar on ${target.url}.`,
   )
+}
+
+/* POSTs `bytes` of type `mime` to upload URL `url`, which must be on this
+   machine, and answers the stored file's id. */
+async function postBytes(url, bytes, mime, what) {
+  if (!isLoopbackOrigin(new URL(url).origin))
+    throw new DemoCliError(`The upload URL for ${what} is off this machine.`)
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': mime }, body: bytes })
+  const sent = await res.json().catch(() => ({}))
+  if (!res.ok || typeof sent.storageId !== 'string')
+    throw new DemoCliError(`The upload of ${what} failed (${res.status}).`)
+  return sent.storageId
+}
+
+/** Makes the --images task of `plan` (planImages) when missing, uploads its
+    missing images as Nora through files:uploadUrl, a POST and files:attach
+    with inline set, as the editor's paste does, and saves its description
+    through issues:update. */
+async function seedImages(plan, { client, org, target, log }) {
+  log(`${plan.uploads.length} description images to add for --images.`)
+  const call = async (name, fields, what) => {
+    try {
+      return await client.mutation(ref(name), fields)
+    } catch (error) {
+      throw new DemoCliError(`${name} refused ${what}: ${error.data?.message ?? error.message}`)
+    }
+  }
+  if (plan.task) await call('issues:create', plan.task, `"${plan.task.title}"`)
+  for (const image of plan.uploads) {
+    const bytes = seededImageBytes(image.n)
+    const url = await call(
+      'files:uploadUrl',
+      { org_id: org, issue_id: image.issue_id, size: bytes.length, name: image.name },
+      image.name,
+    )
+    const storageId = await postBytes(url, bytes, 'image/png', image.name)
+    const out = await call(
+      'files:attach',
+      {
+        org_id: org,
+        id: image.id,
+        issue_id: image.issue_id,
+        storage_id: storageId,
+        name: image.name,
+        mime: 'image/png',
+        inline: true,
+      },
+      image.name,
+    )
+    if (!out?.attachment)
+      throw new DemoCliError(`files:attach refused ${image.name}: ${out?.refused?.message}`)
+  }
+  await call(
+    'issues:update',
+    { org_id: org, id: imageSeedId('task'), patch: { description: plan.description } },
+    'the --images description',
+  )
+  log(`Done: "${IMAGES_TITLE}" shows its images in Northstar on ${target.url}.`)
+}
+
+/** Gives each of `profiles` without a picture one, as Nora through
+    files:avatarUploadUrl, a POST and files:setAvatar, as the picture
+    editor does. */
+async function seedPictures(profiles, { client, target, log }) {
+  const bare = profiles.filter((p) => !p.avatar_storage_id)
+  log(`${bare.length} people and agents to give a picture for --pictures.`)
+  for (const [n, profile] of bare.entries()) {
+    const what = `the picture of ${profile.name}`
+    const bytes = seededPictureBytes(n)
+    try {
+      const url = await client.mutation(ref('files:avatarUploadUrl'), {
+        profile_id: profile.id,
+        size: bytes.length,
+      })
+      const storageId = await postBytes(url, bytes, 'image/png', what)
+      await client.mutation(ref('files:setAvatar'), {
+        profile_id: profile.id,
+        storage_id: storageId,
+      })
+    } catch (error) {
+      if (error instanceof DemoCliError) throw error
+      throw new DemoCliError(`${what} was refused: ${error.data?.message ?? error.message}`)
+    }
+  }
+  log(`Done: ${bare.length} pictures added in Northstar on ${target.url}.`)
 }
 
 /** The ids of every link row of organization `org`, as the local admin

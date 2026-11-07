@@ -375,3 +375,116 @@ describe('cached Canvas loader identities', () => {
     expect(failed).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('a caller leaving a shared background request', () => {
+  it('rejects only the caller whose signal aborts, and stops the transfer once every such caller left', async () => {
+    const f = fixture()
+    const answer = deferred<Response>()
+    f.fetchImage.mockImplementation(async () => await answer.promise)
+    const cache = createBackgroundImageCache(scope, f.options)
+    cache.select(selection)
+    const settings = new AbortController()
+    const canvas = cache.resolve('https://private.test/preview', selection, 'preview')
+    const shown = cache.resolve(
+      'https://private.test/preview',
+      selection,
+      'preview',
+      settings.signal,
+    )
+    await vi.waitFor(() => expect(f.fetchImage).toHaveBeenCalledOnce())
+    const transfer = f.fetchImage.mock.calls[0]?.[1]?.signal
+    settings.abort()
+    await expect(shown).rejects.toThrow('Background request left')
+    // the canvas joined without a signal, so its transfer goes on
+    expect(transfer?.aborted).toBe(false)
+    answer.resolve(new Response(picture()))
+    expect(await canvas).toBe('blob:cached-1')
+
+    const alone = new AbortController()
+    const next = { ...selection, previewVersion: '3' }
+    cache.select(next)
+    const held = deferred<Response>()
+    f.fetchImage.mockImplementation(async () => await held.promise)
+    const only = cache.resolve('https://private.test/preview?v=3', next, 'preview', alone.signal)
+    await vi.waitFor(() => expect(f.fetchImage).toHaveBeenCalledTimes(2))
+    alone.abort()
+    await expect(only).rejects.toThrow('Background request left')
+    expect(f.fetchImage.mock.calls[1]?.[1]?.signal?.aborted).toBe(true)
+  })
+
+  it('starts afresh for a caller who comes once every caller of a request left', async () => {
+    const f = fixture()
+    const answers = [deferred<Response>(), deferred<Response>()]
+    let n = 0
+    f.fetchImage.mockImplementation(
+      async () => await (answers[n++] as ReturnType<typeof deferred<Response>>).promise,
+    )
+    const cache = createBackgroundImageCache(scope, f.options)
+    cache.select(selection)
+    const left = new AbortController()
+    const first = cache.resolve('https://private.test/preview', selection, 'preview', left.signal)
+    await vi.waitFor(() => expect(f.fetchImage).toHaveBeenCalledOnce())
+    left.abort()
+    await expect(first).rejects.toThrow('Background request left')
+    // at once, before the stopped request has settled
+    const next = cache.resolve(
+      'https://private.test/preview',
+      selection,
+      'preview',
+      new AbortController().signal,
+    )
+    await vi.waitFor(() => expect(f.fetchImage).toHaveBeenCalledTimes(2))
+    answers[1]?.resolve(new Response(picture()))
+    expect(await next).toMatch(/^blob:/)
+  })
+
+  it('answers a settled request again until the selection changes, also for bytes too large to keep', async () => {
+    const f = fixture()
+    // past the 4 MiB the cache keeps for a preview, so only the request holds it
+    const large = new Blob([new Uint8Array(4 * 1024 * 1024 + 1)], { type: 'image/webp' })
+    f.fetchImage.mockImplementation(async () => new Response(large))
+    const validate = vi.fn(async () => {})
+    const cache = createBackgroundImageCache(scope, { ...f.options, validate })
+    cache.select(selection)
+    const first = await cache.resolve('https://private.test/preview', selection, 'preview')
+    expect(
+      await cache.resolve(
+        'https://private.test/preview?t=renewed',
+        selection,
+        'preview',
+        new AbortController().signal,
+      ),
+    ).toBe(first)
+    expect(await cache.resolve('https://private.test/preview?t=third', selection, 'preview')).toBe(
+      first,
+    )
+    expect(f.fetchImage).toHaveBeenCalledOnce()
+    expect(validate).toHaveBeenCalledOnce()
+    await cache.settled()
+    expect(f.saved()?.preview).toBeUndefined()
+    // a new preview version asks again
+    const next = { ...selection, previewVersion: '3' }
+    cache.select(next)
+    await cache.resolve('https://private.test/preview?v=3', next, 'preview')
+    expect(f.fetchImage).toHaveBeenCalledTimes(2)
+    cache.dispose()
+  })
+
+  it('rejects an already aborted caller at once, leaving the selection and its cache as they were', async () => {
+    const f = fixture()
+    const cache = createBackgroundImageCache(scope, f.options)
+    cache.select(selection)
+    await cache.resolve('https://private.test/preview', selection, 'preview')
+    const gone = new AbortController()
+    gone.abort()
+    await expect(
+      cache.resolve('https://private.test/preview', selection, 'preview', gone.signal),
+    ).rejects.toThrow('Background request left')
+    expect(await cache.resolve('https://private.test/preview', selection, 'preview')).toBe(
+      'blob:cached-1',
+    )
+    expect(f.fetchImage).toHaveBeenCalledOnce()
+    await cache.settled()
+    expect(f.saved()?.selection).toEqual(selection)
+  })
+})

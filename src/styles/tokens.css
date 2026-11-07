@@ -1101,6 +1101,21 @@ textarea {
   font-size: var(--fs-sm);
   font-style: italic;
 }
+/* An image's reach: the element its loader watches near view
+   (lib/inlineImages.ts), around its placeholder or the image itself. */
+.mdimgreach {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: top;
+}
+/* A loading image's placeholder at the size it will be drawn, its width
+   and aspect ratio set inline (components/inlineImage.tsx). */
+.mdimgbox {
+  display: flex;
+  justify-content: center;
+  max-width: 100%;
+  margin: 0;
+}
 
 /* The editor's three stacked parts: the permanent formatting row (deviation
    #71 — it replaced the selection bubble), the text, and the Save / Discard

@@ -49,6 +49,18 @@ async function boot() {
     })
     for (const module of Object.values(found)) module.THREAD_KEEP.rows = keep
   }
+  // pictureskept=<bytes>: the profile pictures keep at most that many bytes
+  // (src/lib/avatarSources.ts AVATAR_SOURCES), so past it a picture waits
+  // as initials with few people. A baseline without the budget finds none
+  const kept = Number(parameters.get('pictureskept'))
+  if (kept > 0) {
+    const found = import.meta.glob<{ AVATAR_SOURCES: { keptBytes: number } }>(
+      '@perf/lib/avatarSources.ts',
+      { eager: true },
+    )
+    for (const module of Object.values(found))
+      if (module.AVATAR_SOURCES) module.AVATAR_SOURCES.keptBytes = kept
+  }
   await planner.initStore()
   createRoot(document.getElementById('root')!).render(
     <TooltipProvider>

@@ -2085,3 +2085,113 @@ describe('Deleted items on the benchmark page', () => {
     expect(paused.error).toMatchObject({ code: 'paused' })
   }, 60_000)
 })
+
+describe('files on the benchmark page', () => {
+  /* What files:mintUrls answers for `args` on a server of `params`. */
+  async function mint(params, args) {
+    const { posted, send } = await server(`latency=0&mbps=100000&${params}`)
+    await send({ type: 'query', id: 'm', name: 'files:mintUrls', args })
+    const result = posted.find((message) => message.type === 'result' && message.to === 'm')
+    return result.error ? { error: result.error, data: result.data } : JSON.parse(result.text)
+  }
+
+  it('gives the share of people a picture asks for, and the first task the images it asks for', async () => {
+    const { snapshot } = await snapshotOf('tasks=20&people=1000&pictures=1&images=100&bigimages=3')
+    const people = snapshot.profiles.filter((p) => p.kind === 'person')
+    expect(people).toHaveLength(1000)
+    expect(people.every((p) => p.avatar_storage_id)).toBe(true)
+    expect(new Set(people.map((p) => p.avatar_storage_id)).size).toBe(1000)
+    const half = (await snapshotOf('tasks=20&people=100&pictures=0.5')).snapshot
+    expect(half.profiles.filter((p) => p.avatar_storage_id)).toHaveLength(50)
+    const none = (await snapshotOf('tasks=20')).snapshot
+    expect(none.profiles.some((p) => p.avatar_storage_id)).toBe(false)
+    const first = snapshot.issues.find((row) => row.num === 1)
+    const images = snapshot.attachments.filter((a) => a.issue_id === first.id && a.inline)
+    expect(images).toHaveLength(100)
+    expect(images.filter((a) => a.mime === 'image/png')).toHaveLength(3)
+    const shown = [...first.description.matchAll(/!\[[^\]]*\]\(att:([^)]+)\)/g)].map((m) => m[1])
+    expect(shown).toEqual(images.map((a) => a.id))
+    // text between the images, one a paragraph, inside the description's
+    // 20,000 characters, past which the app shows it as plain text
+    expect(first.description.split('\n\n')).toHaveLength(200)
+    expect(first.description.length).toBeLessThanOrEqual(20_000)
+  })
+
+  it('answers files:mintUrls with perf.invalid URLs for what the workspace holds, pictures with their version', async () => {
+    const params = 'tasks=20&people=10&pictures=0.5&images=2&bigimages=1'
+    const { snapshot } = await snapshotOf(params)
+    const images = snapshot.attachments.filter(
+      (a) => a.name.startsWith('survey-') || a.name.startsWith('bench-photo-'),
+    )
+    const big = images.find((a) => a.mime === 'image/png')
+    const photo = images.find((a) => a.mime === 'image/webp')
+    const pictured = snapshot.profiles.filter((p) => p.avatar_storage_id)
+    const bare = snapshot.profiles.find((p) => !p.avatar_storage_id)
+    const answer = await mint(params, {
+      attachment_ids: [big.id, photo.id, 'unknown-file'],
+      profile_ids: [...pictured.map((p) => p.id), bare.id, 'unknown-person'],
+    })
+    expect(Object.keys(answer.attachments).sort()).toEqual([big.id, photo.id].sort())
+    expect(answer.attachments[big.id].url).toContain('size=big')
+    expect(answer.attachments[photo.id].url).toMatch(/^https:\/\/perf\.invalid\/files\//)
+    expect(Object.keys(answer.avatars).sort()).toEqual(pictured.map((p) => p.id).sort())
+    for (const p of pictured)
+      expect(new URL(answer.avatars[p.id].url).searchParams.get('v')).toBe(p.avatar_storage_id)
+  })
+
+  it('refuses files:mintUrls past 100 attachments or 1,000 pictures, as the server does', async () => {
+    const tooMany = await mint('tasks=20', {
+      attachment_ids: Array.from({ length: 101 }, (_, n) => `file-${n}`),
+    })
+    expect(tooMany.data).toEqual({
+      code: 'bad_request',
+      message: 'attachment_ids must name at most 100 attachments',
+    })
+    const pictures = await mint('tasks=20', {
+      profile_ids: Array.from({ length: 1001 }, (_, n) => `person-${n}`),
+    })
+    expect(pictures.data?.message).toBe('profile_ids must name at most 1000 profiles')
+    const atCap = await mint('tasks=20', {
+      profile_ids: Array.from({ length: 1000 }, (_, n) => `person-${n}`),
+    })
+    expect(atCap).toEqual({ attachments: {}, avatars: {} })
+  })
+
+  it('serves valid PNGs of the sizes the pictures and images stand for', async () => {
+    const { bytesFor, pngOf } = await import('./files.mjs')
+    const png = pngOf(4, 3)
+    expect([...png.subarray(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    expect(png.readUInt32BE(16)).toBe(4)
+    expect(png.readUInt32BE(20)).toBe(3)
+    const picture = bytesFor('https://perf.invalid/avatars/p?v=s')
+    expect(picture.readUInt32BE(16)).toBe(256)
+    expect(picture.length).toBeLessThan(256 * 1024)
+    const big = bytesFor('https://perf.invalid/files/f?size=big')
+    expect(big.readUInt32BE(16)).toBe(4096)
+  })
+
+  it('has the benchmark driver serve the files a page asks for, and report them', async () => {
+    const { servesFiles } = await import('./files.mjs')
+    expect(['images=100', '?people=1000&pictures=1', '&bigimages=6'].map(servesFiles)).toEqual([
+      true,
+      true,
+      true,
+    ])
+    expect(['', 'images=0', 'pictureskept=1000000&tasks=100'].map(servesFiles)).toEqual([
+      false,
+      false,
+      false,
+    ])
+    const { readFileSync } = await import('node:fs')
+    const driver = readFileSync(new URL('../benchmark-browser.mjs', import.meta.url), 'utf8')
+    // every page the driver opens takes --files and routes perf.invalid
+    // before it loads
+    const open = driver.slice(driver.indexOf('async function openPage('))
+    const routed = open.indexOf('servesFiles(query + filesQuery) ? await routePerfFiles(page)')
+    expect(routed).toBeGreaterThan(0)
+    expect(routed).toBeLessThan(open.indexOf('await page.goto('))
+    expect(open).toMatch(/\$\{query\}\$\{filesQuery\}`/)
+    // each sample records what the page served before it closes
+    expect(driver.match(/opened\.recordFiles\(\)\n {2}await context\.close\(\)/g)).toHaveLength(3)
+  })
+})

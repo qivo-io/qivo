@@ -1751,6 +1751,32 @@ gets them only at its next reset, and a seed refuses there until then, as
 for every dataset change; a seed of an absent or empty demo writes version
 10, and the public demo's new copies have them.
 
+From the release after v0.1.156, `files.mintUrls` refuses a call that names
+more than 100 attachments or more than 1,000 profile pictures, whole and
+before its handler reads anything (only the membership check runs first),
+and reads each task and each project's access once a call. The app of that
+release asks for its file URLs through one queue, at most 100 ids a call and
+two calls at a time, apart from its browser export, which still asks for
+one file a call beside the queue. It loads description and comment images
+as they come near view, and holds pictures and the background while the
+page is hidden. It works against any backend. A backend from before the
+release reads the access of each image's project on its own. For a task
+stored on a top-level project it walks that project's live and archived
+sub-projects for every image, up to about 146 index ranges an image at the
+design size's 30 live and 40 archived sub-projects. A call of more than
+about 28 such images can therefore pass that backend's 4,096-range limit,
+and so can a half of 50. The app asks for each half of a failed call once
+more. Each image of a half that also fails asks again 5 s later
+(`INLINE_IMAGES.retry`) while it stays near view, in calls that split the
+same way, and those images show late, a few at a time. So the release sets
+no rollback floor and needs no step. Returning the app to an earlier
+release stays safe, and so does returning the backend down to the
+newest floor above. An app loaded before the release asks for one attachment
+a call and works unchanged. It asks for every picture its workspace holds in
+one call, which inside the design size is at most 1,000, and a tab whose
+organizations together hold more pictures shows initials until it reloads.
+The release changes no table, field or index, and there is no backfill.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.

@@ -908,5 +908,71 @@ describe('a task the workspace does not hold, in the store', () => {
       )
       expect(mints.map(([, args]) => args)).toEqual([{ org_id: org, attachment_ids: ['file-1'] }])
     })
+
+    it('shows a held image through the inline loader and forgets its bytes once the store forgets the file', async () => {
+      const { P } = store
+      const file = (id: string) =>
+        ({
+          id,
+          issue_id: 'task-a',
+          name: `${id}.webp`,
+          size_bytes: 1200,
+          mime: 'image/webp',
+          storage_id: `storage-${id}`,
+          uploaded_by: snap.profiles[0].id,
+          created_at: AT,
+        }) as Snapshot['attachments'][number]
+      snap.attachments.push(file('file-1'), file('file-2'))
+      publishWhole(snap)
+      network.query.mockImplementation(async (ref, args: { attachment_ids?: string[] }) =>
+        getFunctionName(ref) === 'files:mintUrls'
+          ? {
+              attachments: Object.fromEntries(
+                (args.attachment_ids ?? []).map((id) => [
+                  id,
+                  { url: `https://files.test/files/${id}?t=1`, exp: Date.now() / 1000 + 600 },
+                ]),
+              ),
+              avatars: {},
+            }
+          : null,
+      )
+      const image = new Blob([new Uint8Array(1200)], { type: 'image/webp' })
+      const fetcher = vi.fn(async () => ({ ok: true, status: 200, blob: async () => image }))
+      vi.stubGlobal('fetch', fetcher)
+      vi.stubGlobal(
+        'Image',
+        class {
+          src = ''
+          naturalWidth = 640
+          naturalHeight = 480
+          decode = async () => {}
+        },
+      )
+      let serial = 0
+      vi.spyOn(URL, 'createObjectURL').mockImplementation(() => `blob:file-${++serial}`)
+      const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+      for (const id of ['file-1', 'file-2']) {
+        P.inlineImages.watch(id, () => {})
+        P.inlineImages.pin(id)
+      }
+      await vi.waitFor(() => expect(P.inlineImages.snapshot('file-2').state).toBe('ready'))
+      // both images in one call
+      expect(
+        network.query.mock.calls
+          .filter(([ref]) => getFunctionName(ref) === 'files:mintUrls')
+          .map(([, args]) => args),
+      ).toEqual([{ org_id: org, attachment_ids: ['file-1', 'file-2'] }])
+      // file-2 goes out of reach, then a delivery no longer holds it
+      P.inlineImages.unpin('file-2')
+      snap.attachments = snap.attachments.filter((a) => a.id !== 'file-2')
+      publishWhole(snap)
+      expect(revoke).toHaveBeenCalledWith('blob:file-2')
+      // the person removes file-1 while it shows
+      void P.removeAttachment('file-1')
+      expect(P.inlineImages.snapshot('file-1').state).toBe('gone')
+      expect(revoke).toHaveBeenCalledWith('blob:file-1')
+      expect(fetcher).toHaveBeenCalledTimes(2)
+    })
   })
 })

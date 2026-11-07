@@ -123,8 +123,10 @@ and devices. If you had chosen the former Blue theme, Qivo shows Dark.
 Over an image, panels, cards, windows and menus are tinted glass that lets
 the image show through. With **No image** they are solid.
 
-The settings page shows a preview and any available title, location and
-creator information for the weekly image.
+The settings page shows a preview of the chosen image, the small copy Qivo
+made of it. For a weekly image without one it shows the background itself.
+It also shows any available title, location and creator information for the
+weekly image.
 
 To upload a background, select **Custom image → Choose your image**. Use
 JPEG, PNG or static WebP with these limits:

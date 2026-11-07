@@ -38,16 +38,20 @@
  *
  * mintUrls is a QUERY but must be consumed ONE-SHOT (convex.query), never
  * subscribed: exp comes from Date.now(), which is not a reactive dependency —
- * a subscription would pin a stale exp forever. */
+ * a subscription would pin a stale exp forever. One call names at most 100
+ * attachment ids and 1,000 profile ids (MINT_IDS) and is refused whole past
+ * either, before its handler reads anything. It reads each task and each
+ * project's sight once a call, and the app asks for 100 ids a call. */
 
 import { makeFunctionReference } from 'convex/server'
 import { type Infer, type ObjectType, v } from 'convex/values'
 import { components } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import type { MutationCtx } from './_generated/server'
+import type { MutationCtx, QueryCtx } from './_generated/server'
 import { internalMutation, internalQuery } from './_generated/server'
 import { canSeeProject, hasProjectLevel } from './lib/access'
 import { assertOrgWritable } from './lib/billingAccess'
+import { seesProject } from './lib/core'
 import { byId } from './lib/db'
 import { isDemoDeployment } from './lib/demo'
 import {
@@ -65,7 +69,7 @@ import {
   orgQuery,
   rule,
 } from './lib/functions'
-import { LIMITS, MIB } from './lib/limits'
+import { BY_IDS_MAX, LIMITS, MIB } from './lib/limits'
 import { audit } from './model/admin'
 import { clearAccountAppearance } from './model/appearance'
 import {
@@ -353,52 +357,134 @@ export const clearAvatar = authedMutation({
  * caller's profile uuid (attachments) / auth-user id (avatars — the gateway
  * re-derives "active profile in the target's org" itself). ONE-SHOT ONLY —
  * see the header. */
+
+/** The most ids one files.mintUrls call may name, by kind. A longer array
+ * refuses the whole call before the handler reads anything, so no call
+ * answers part of what it asked.
+ *
+ * Attachments are BY_IDS_MAX, the app's chunk (src/lib/mintQueue.ts
+ * MINT_QUEUE). Every app before it asked for one attachment a call, so the
+ * cap refuses none of them. Profiles are 1,000, the design size's people of
+ * one organization, since an app before the mint queue asks for every
+ * picture its workspace holds in one call. Both stay under Convex's 1,024
+ * fields an answer object may hold, which binds on the ids answered.
+ *
+ * What the handler's body read at the design size in one transaction,
+ * one figure raised a case, without the wrapper's membership reads
+ * (tests/mintUrls.test.ts logs them):
+ * - 1,000 profile ids of an organization of 1,000 people, each with a
+ *   picture, the older app's call: 1,000 index ranges, 1,000 documents,
+ *   0.33 MiB and 1,000 tokens; 100 of them, the app's chunk, 100 ranges;
+ * - 100 images of one task, a user with a team grant: 111 ranges and 109
+ *   documents, and 103 ranges as an organization admin;
+ * - 100 attachments over the everyday 60 sub-projects, each and its
+ *   top-level project shared with 5 teams: 1,760 ranges, 1,640 documents
+ *   and 0.35 MiB, the most;
+ * - 100 attachments over 30 sub-projects under one project: 500 ranges;
+ * - 100 attachments over 100 sub-projects the caller reads: 1,200 ranges;
+ * - 100 images of a legacy task stored on a top-level project, whose
+ *   navigation walk runs once a call: 111 ranges.
+ * Convex allows 4,096 ranges a transaction. Each further id of a task
+ * already read adds its attachment's one range. */
+export const MINT_IDS = { attachments: BY_IDS_MAX, profiles: 1_000 }
+
+/** Who asks files.mintUrls: the orgQuery wrapper's membership reads. */
+type Minter = {
+  me: Doc<'profiles'>
+  authUserId: string
+  myProfiles: Map<string, Doc<'profiles'>>
+}
+
+type MintArgs = { attachment_ids?: string[]; profile_ids?: string[] }
+type Minted = Record<string, { url: string; exp: number }>
+
+/** The cached promise of `key` in `cache`, read once. */
+function once<T>(cache: Map<string, Promise<T>>, key: string, read: () => Promise<T>): Promise<T> {
+  let known = cache.get(key)
+  if (known === undefined) {
+    known = read()
+    cache.set(key, known)
+  }
+  return known
+}
+
+/** files.mintUrls' handler for `caller`, exported so the tests can count
+ * its reads inside one transaction.
+ *
+ * Its first step refuses a call that names more ids of a kind than
+ * MINT_IDS allows, counted on the arrays as sent, before it reads
+ * anything. Then it reads each task and each project's sight once a call,
+ * so the 100 images of one description cost one access check, not one an
+ * image. Both maps live inside this one run for this one caller and are
+ * keyed by the task's and the project's own id, so no answer is ever
+ * another caller's or another item's. A project whose parent is missing
+ * or sits in a cycle answers not visible (lib/core.ts seesProject), so it
+ * omits its own files and refuses no others in the batch. A missing,
+ * foreign or invisible id is omitted alike, never an error. */
+export async function mintFileUrls(
+  ctx: QueryCtx,
+  { me, authUserId, myProfiles }: Minter,
+  { attachment_ids, profile_ids }: MintArgs,
+): Promise<{ attachments: Minted; avatars: Minted }> {
+  if ((attachment_ids?.length ?? 0) > MINT_IDS.attachments)
+    throw badRequest(`attachment_ids must name at most ${MINT_IDS.attachments} attachments`)
+  if ((profile_ids?.length ?? 0) > MINT_IDS.profiles)
+    throw badRequest(`profile_ids must name at most ${MINT_IDS.profiles} profiles`)
+  const exp = await demoFileExpiry(
+    ctx,
+    authUserId,
+    Math.floor(Date.now() / 1000) + FILE_TOKEN_TTL_SECONDS,
+  )
+  const attachments: Minted = {}
+  const avatars: Minted = {}
+  const tasks = new Map<string, Promise<Doc<'issues'> | null>>()
+  const sight = new Map<string, Promise<boolean>>()
+  const taskOf = (id: string) => once(tasks, id, () => byId(ctx, 'issues', id))
+  const sees = (projectId: string) =>
+    once(sight, projectId, async () => {
+      const project = await byId(ctx, 'projects', projectId)
+      return project !== null && (await seesProject(ctx, me, project))
+    })
+  for (const id of new Set(attachment_ids ?? [])) {
+    const att = await byId(ctx, 'issue_attachments', id)
+    if (att === null || att.org_id !== me.org_id) continue
+    const issue = await taskOf(att.issue_id)
+    if (issue === null || issue.org_id !== me.org_id) continue
+    if (!(await sees(issue.project_id))) continue
+    const minter = me.id
+    const token = await mintFileToken({ kind: 'attachment', id: att.id, minter, exp })
+    attachments[att.id] = { url: attachmentFileUrl({ id: att.id, minter, exp, token }), exp }
+  }
+  for (const id of new Set(profile_ids ?? [])) {
+    const target = await byId(ctx, 'profiles', id)
+    if (target === null) continue
+    // profiles_select disjunction (0099:246-248): active profile in the
+    // target's org (guests and viewers qualify — 0097:20-26), or own active row
+    const visible =
+      myProfiles.has(target.org_id) ||
+      (target.auth_user_id !== undefined && target.auth_user_id === authUserId && target.active)
+    if (!visible) continue
+    const sid = target.avatar_storage_id
+    if (sid === undefined) continue
+    const minter = authUserId
+    const token = await mintFileToken({ kind: 'avatar', id: target.id, minter, exp })
+    avatars[target.id] = {
+      url: avatarFileUrl({ id: target.id, minter, exp, token, v: sid }),
+      exp,
+    }
+  }
+  return { attachments, avatars }
+}
+
+/** URLs for at most MINT_IDS.attachments attachment ids and
+ * MINT_IDS.profiles profile ids a call (mintFileUrls). The app asks for
+ * 100 ids a call, two calls at a time (src/lib/mintQueue.ts). */
 export const mintUrls = orgQuery({
   args: {
     attachment_ids: v.optional(v.array(v.string())),
     profile_ids: v.optional(v.array(v.string())),
   },
-  handler: async (ctx, { attachment_ids, profile_ids }) => {
-    const exp = await demoFileExpiry(
-      ctx,
-      ctx.authUserId,
-      Math.floor(Date.now() / 1000) + FILE_TOKEN_TTL_SECONDS,
-    )
-    const attachments: Record<string, { url: string; exp: number }> = {}
-    const avatars: Record<string, { url: string; exp: number }> = {}
-    for (const id of new Set(attachment_ids ?? [])) {
-      const att = await byId(ctx, 'issue_attachments', id)
-      if (att === null) continue
-      const issue = await byId(ctx, 'issues', att.issue_id)
-      if (issue === null || issue.org_id !== ctx.me.org_id) continue
-      const project = await byId(ctx, 'projects', issue.project_id)
-      if (project === null || !(await canSeeProject(ctx, ctx.me, project))) continue
-      const minter = ctx.me.id
-      const token = await mintFileToken({ kind: 'attachment', id: att.id, minter, exp })
-      attachments[att.id] = { url: attachmentFileUrl({ id: att.id, minter, exp, token }), exp }
-    }
-    for (const id of new Set(profile_ids ?? [])) {
-      const target = await byId(ctx, 'profiles', id)
-      if (target === null) continue
-      // profiles_select disjunction (0099:246-248): active profile in the
-      // target's org (guests and viewers qualify — 0097:20-26), or own active row
-      const visible =
-        ctx.myProfiles.has(target.org_id) ||
-        (target.auth_user_id !== undefined &&
-          target.auth_user_id === ctx.authUserId &&
-          target.active)
-      if (!visible) continue
-      const sid = target.avatar_storage_id
-      if (sid === undefined) continue
-      const minter = ctx.authUserId
-      const token = await mintFileToken({ kind: 'avatar', id: target.id, minter, exp })
-      avatars[target.id] = {
-        url: avatarFileUrl({ id: target.id, minter, exp, token, v: sid }),
-        exp,
-      }
-    }
-    return { attachments, avatars }
-  },
+  handler: (ctx, args) => mintFileUrls(ctx, ctx, args),
 })
 
 /* ---------------------------------------------------------------- gateway

@@ -2,7 +2,7 @@
 //
 //   node scripts/benchmark-browser.mjs [--sizes 100,1000,10000] [--samples 5]
 //     [--baseline [revision]] [--root checkout] [--output file.json]
-//     [--fixture varied] [--serve [--host address]]
+//     [--fixture varied] [--files parameters] [--serve [--host address]]
 //
 // The page loads a realistic workspace from a stand-in server in a Web Worker
 // (scripts/perf/server.mjs) and pays for every delivery what a real client
@@ -51,6 +51,14 @@
 // for every task first (--baseline before the agenda view) loads every
 // task inside syncOpen and edits a task the workspace holds, so its
 // complete means every task held and the meeting derived from them.
+// --files adds the stand-in's file parameters (scripts/perf/server.mjs) to
+// every page the run opens, for example `--files images=100` for a first
+// task with 100 description images or `--files people=1000&pictures=1` for
+// 1,000 pictures. The page then serves the stand-in's perf.invalid file
+// URLs itself (scripts/perf/files.mjs routePerfFiles), and each sample
+// records the image and picture downloads it served (fileDownloads,
+// pictureDownloads), the most of each in flight at once (fileMostInFlight,
+// pictureMostInFlight) and their bytes (fileBytesServed).
 // Each sample records the machine's load average in `loads`. --serve only
 // builds and serves the pages, on --host (127.0.0.1 by default), until it
 // is stopped.
@@ -80,6 +88,7 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { BaselineError, resolveBaseline } from './benchmark-backend.mjs'
 import { gitIn } from './git.mjs'
+import { routePerfFiles, servesFiles } from './perf/files.mjs'
 import { buildPage, checkoutOf, programsFor, serve } from './perf/page.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -105,6 +114,9 @@ const varied = option('fixture', 'default') === 'varied'
 // --thread: the figures the task window's thread phase measures, alone
 const threadFigures = option('thread', null)?.split(',').map(Number) ?? null
 const phone = process.argv.includes('--phone')
+// the stand-in's file parameters every page takes (see the header)
+const files = option('files', '')
+const filesQuery = files ? `&${files.replace(/^[?&]/, '')}` : ''
 // --baseline, with the revision when one follows it
 const baselineAt = process.argv.indexOf('--baseline')
 const baselineRevision =
@@ -339,6 +351,8 @@ async function openPage(origin, tasks, metrics, query = '') {
     downloadThroughput: bandwidth * 125000,
     uploadThroughput: bandwidth * 125000,
   })
+  // the stand-in's perf.invalid files, which only this page can serve
+  const fileStats = servesFiles(query + filesQuery) ? await routePerfFiles(page) : null
   const settle = () =>
     page.evaluate(
       () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
@@ -376,9 +390,23 @@ async function openPage(origin, tasks, metrics, query = '') {
     return elapsed
   }
   await page.goto(
-    `${origin}/?tasks=${tasks}&programs=${programsFor(tasks)}&latency=${latency}&mbps=${bandwidth}${query}`,
+    `${origin}/?tasks=${tasks}&programs=${programsFor(tasks)}&latency=${latency}&mbps=${bandwidth}${query}${filesQuery}`,
   )
-  return { context, page, cdp, errors, settle, appRenders, timed }
+  /* Adds the files the page served to `metrics`, once its sample ends. */
+  const recordFiles = () => {
+    if (!fileStats) return
+    for (const [key, value] of [
+      ['fileDownloads', fileStats.files],
+      ['pictureDownloads', fileStats.avatars],
+      ['fileMostInFlight', fileStats.mostInFlight.files],
+      ['pictureMostInFlight', fileStats.mostInFlight.avatars],
+      ['fileBytesServed', fileStats.bytes],
+    ]) {
+      metrics[key] ??= []
+      metrics[key].push(value)
+    }
+  }
+  return { context, page, cdp, errors, settle, appRenders, timed, recordFiles }
 }
 
 /* The shown view counts as complete when nothing on it waits to mount and,
@@ -1097,6 +1125,7 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
   await page.waitForFunction(boardComplete, null, { timeout: timeout * 10 })
   await changes('roadmapAfterBoard', 7, 8)
   assert.deepEqual(errors, [], `Browser errors at ${tasks} tasks`)
+  opened.recordFiles()
   await context.close()
 }
 
@@ -1195,6 +1224,7 @@ async function runVariedSample(origin, tasks, metrics, query = '') {
     await timed(() => page.waitForFunction(boardComplete, null, { timeout: timeout * 10 })),
   )
   assert.deepEqual(errors, [], `Browser errors at ${tasks} varied tasks`)
+  opened.recordFiles()
   await context.close()
 }
 
@@ -1281,6 +1311,7 @@ async function runSyncSample(origin, metrics, query = '') {
     }),
   )
   assert.deepEqual(errors, [], 'Browser errors on Team sync')
+  opened.recordFiles()
   await context.close()
 }
 
