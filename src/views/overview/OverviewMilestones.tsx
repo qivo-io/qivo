@@ -18,7 +18,7 @@ import { type MilestoneVM, P } from '../../store/planner'
 import type { ScopeMilestones } from '../useScopeMilestones'
 
 /** What My view's notes add where a read needs more reads than one
-    request allows: My view cannot choose fewer projects. */
+    request allows, as My view cannot choose fewer projects. */
 export const MINE_MILESTONES_HINT = 'Open a project to see its milestones.'
 
 /** My view's note where the person's own work lies in more top-level
