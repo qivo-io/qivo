@@ -42,7 +42,7 @@ import { enrollOrganization, nextReminder } from '../model/billing'
 import { REMOVAL_BUDGET } from '../model/cascade'
 import { deleteOrgStep } from '../model/orgDeletion'
 import { newOrgDefaults } from '../model/orgs'
-import { runOf, SAMPLE_PAGE } from '../model/storageSamples'
+import { runOf, SAMPLE_PAGE, SAMPLE_STALLED_MS } from '../model/storageSamples'
 import { addToOrg, addToProject, orgTotalsRow, startOrgTotals } from '../model/storageTotals'
 import { as, expectRefusal, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
 import { deleteTask } from './trash.setup'
@@ -3150,6 +3150,62 @@ describe('storage charged on the daily average', () => {
           .unique(),
       )
       expect(late?.at).toBe(at('2026-10-01', '00:05'))
+    })
+
+    it("records a period at its deadline from the next day's sample while the last day's run can still sample it", async () => {
+      SAMPLE_PAGE.orgs = 1
+      const { t, f } = await fixture()
+      // an organization each run samples before any of withOrg's
+      await payingOrg(t, 10, undefined, '00000000-0000-4000-8000-000000000000')
+      await storeBytes(t, f, 100)
+      // it ends at 01:00, so its deadline is 23:00 on its last day
+      const start = '2026-09-29T01:00:00.000Z'
+      const end = '2026-10-01T01:00:00.000Z'
+      await tickAt(t, '2026-09-29')
+      vi.setSystemTime(Date.parse(start))
+      await record(t, f.org.id, start, end)
+      await storeBytes(t, f, 20)
+      // the last day's run starts late, and its first step samples the
+      // other organization only. These ticks also start the finalize of
+      // this period, so their scheduled calls wait and the steps are taken
+      // here by hand.
+      vi.setSystemTime(at('2026-09-30', '23:58'))
+      await t.mutation(internal.storageSamples.tick, {})
+      const lastRun = (await t.run((ctx) => runOf(ctx, '2026-09-30')))?.run ?? ''
+      await t.mutation(internal.storageSamples.step, { day: '2026-09-30', run: lastRun })
+      // after midnight, the next day's run samples f.org
+      vi.setSystemTime(at('2026-10-01', '00:05'))
+      await storeBytes(t, f, 3)
+      await t.mutation(internal.storageSamples.tick, {})
+      const nextRun = () => t.run((ctx) => runOf(ctx, '2026-10-01'))
+      const run = (await nextRun())?.run ?? ''
+      while ((await nextRun())?.finished_at === undefined)
+        await t.mutation(internal.storageSamples.step, { day: '2026-10-01', run })
+      // past the deadline, with the last day's run open and not stalled, so
+      // before the deadline the finalize would wait for it
+      vi.setSystemTime(at('2026-10-01', '00:06'))
+      const lastDay = await t.run((ctx) => runOf(ctx, '2026-09-30'))
+      expect(lastDay).not.toHaveProperty('finished_at')
+      expect(Date.now() - (lastDay?.step_at ?? 0)).toBeLessThan(SAMPLE_STALLED_MS)
+      const open = await periodAt(t, start)
+      if (open === null) throw new Error('no period')
+      expect(await t.mutation(finalizeRef, { period: open._id })).toBe('recorded')
+      const period = await periodAt(t, start)
+      // the last day from the next day's sample, never from the earlier one
+      expect(period?.storage_days).toEqual([
+        { day: '2026-09-29', bytes: 100 },
+        { day: '2026-09-30', bytes: 123, from: '2026-10-01' },
+      ])
+      // (100 + 123) / 2 rounded up
+      expect(period).toMatchObject({
+        storage_bytes: 112,
+        storage_blocks: 0,
+        storage_finalized_at: isoAt('2026-10-01', '00:06'),
+      })
+      // the reading the last day's run then takes for its own day, and the
+      // finalize calls the ticks started, revise nothing
+      await sample(t)
+      expect(await periodAt(t, start)).toEqual(period)
     })
 
     it('records a period without any sample of its organization as unavailable, with no storage charge and an audit row, never 0', async () => {
