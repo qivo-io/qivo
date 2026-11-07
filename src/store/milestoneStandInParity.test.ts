@@ -22,16 +22,21 @@
  * milestone follows,
  * where the real read can answer a `next` that leads to an empty batch, so
  * the walks compare rows, not batches. The numbers the stand-in copies
- * equal the server's. */
+ * equal the server's. A `mine` read of a Northstar person whose work lies
+ * in more top-level projects than one read names, with that figure
+ * lowered, is refused in the stand-in's words, and the store booted from
+ * the person's workspace shows the real refusal as too many. */
 
-import { describe, expect, it } from 'vitest'
+import { getFunctionName } from 'convex/server'
+import { describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
 import { LIMITS } from '../../convex/lib/limits'
 import type { Workspace } from '../../convex/lib/workspaceJoin'
-import { MILESTONE_READ, OVERFLOW_DAYS } from '../../convex/model/milestones'
+import { MILESTONE_READ, MILESTONE_TOO_MANY, OVERFLOW_DAYS } from '../../convex/model/milestones'
 import {
   as,
+  expectRefusal,
   NOW,
   newT,
   plantProject,
@@ -44,10 +49,24 @@ import { NORTHSTAR_ANCHOR, plantNorthstar } from '../../convex/tests/northstar.s
 import { withReach } from '../../convex/tests/projectReach.setup'
 import { type MilestonePosition, positionOf } from './milestoneRows'
 import {
+  isMilestoneRead,
   MILESTONE_STAND_IN_NUMBERS,
   type MilestoneReadArgs,
   milestoneStandIn,
 } from './milestoneStandIn.setup'
+
+const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
+vi.mock('../lib/auth', () => ({
+  armConvexAuth: async () => true,
+  authClient: {
+    getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }),
+  },
+  signOut: vi.fn(),
+}))
 
 const DAY = 86_400_000
 /* `day` moved by `days`. */
@@ -279,5 +298,62 @@ describe('the milestone stand-in against the reads', () => {
       expect(got?.can_write, seat.name).toBe(false)
     }
     expect(writable).toBeGreaterThan(0)
+  })
+
+  it("refuses a mine read past the projects one read names in the stand-in's words, which the store shows as too many", async () => {
+    const t = newT()
+    const { profiles } = await plantNorthstar(t)
+    const from = plus(NORTHSTAR_ANCHOR, 7)
+    const ask = { projects: [], mine: true as const, from, side: 'upcoming' as const, limit: 10 }
+    // a person whose own work lies in at least one top-level project
+    let person: Doc<'profiles'> | undefined
+    let listed = 0
+    for (const p of profiles.filter((x) => x.kind === 'person')) {
+      const got = (await as(t, p).query(api.milestones.section, ask)) as Batch
+      if ((got.projects?.length ?? 0) > 0) {
+        person = p
+        listed = got.projects?.length ?? 0
+        break
+      }
+    }
+    if (!person) throw new Error('no Northstar person holds work')
+    const caller = as(t, person)
+    const snap = await workspaceOf(caller)
+    if (snap === null) throw new Error(`${person.name} holds no seat`)
+    const projects = MILESTONE_READ.projects
+    MILESTONE_READ.projects = listed - 1
+    try {
+      const real = await expectRefusal(caller.query(api.milestones.section, ask), 'rule')
+      expect(real.data.reason).toBe(MILESTONE_TOO_MANY)
+      let stand: unknown
+      try {
+        milestoneStandIn(snap, 'section', ask, { mine: 'too_many' })
+      } catch (e) {
+        stand = e
+      }
+      expect((stand as { data?: unknown } | undefined)?.data).toEqual(real.data)
+      // the store, booted from the person's workspace, asks the real read
+      // and shows its refusal as too many. No other case boots it, and a
+      // reset of the modules would give the real read a copy of
+      // MILESTONE_READ that is not lowered.
+      vi.stubGlobal('window', { showToast: vi.fn(), setTimeout, clearTimeout })
+      network.query.mockResolvedValue(null)
+      network.mutation.mockResolvedValue(null)
+      network.onUpdate.mockImplementation((ref, args, next, fail) => {
+        const name = getFunctionName(ref)
+        if (name === 'workspace:whole') next(structuredClone(snap))
+        else if (isMilestoneRead(name)) caller.query(ref, args).then(next, fail)
+        return () => {}
+      })
+      const store = await import('./planner')
+      await store.initStore()
+      store.P.watchMilestones('mine', { kind: 'section', ...ask })
+      await vi.waitFor(() => expect(store.P.milestoneRead('mine')).toEqual({ state: 'too_many' }), {
+        timeout: 10_000,
+      })
+    } finally {
+      MILESTONE_READ.projects = projects
+      vi.unstubAllGlobals()
+    }
   })
 })

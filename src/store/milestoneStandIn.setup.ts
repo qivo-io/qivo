@@ -143,6 +143,11 @@ export const MILESTONES_UNCHECKED =
 const refusal = (reason: string, message: string) =>
   new ConvexError({ code: 'rule', reason, message })
 const badRequest = (message: string) => new ConvexError({ code: 'bad_request', message })
+/* The refusal of a `mine` read whose person's work lies in more top-level
+   projects than one read names, as the server words it
+   (convex/model/milestones.ts MILESTONE_TOO_MANY, which the parity test
+   compares). */
+const mineTooMany = () => refusal('milestone_too_many', LIMITS.milestoneProjects.refusal)
 
 /* `day`, a real YYYY-MM-DD day, moved by `days`. */
 function shift(day: string, days: number): string {
@@ -232,8 +237,7 @@ export function milestoneStandIn(
   const mineAsk = query === 'section' && args.mine === true
   if (mineAsk && force.mine === 'refused')
     throw refusal('milestone_read_too_large', MILESTONES_TOO_LARGE)
-  if (mineAsk && force.mine === 'too_many')
-    throw refusal('milestone_too_many', LIMITS.milestoneProjects.refusal)
+  if (mineAsk && force.mine === 'too_many') throw mineTooMany()
   const forced = forcedOf(query, args, force)
   if (forced === 'loading') return undefined
   if (forced === 'error') throw new Error('the milestone read failed')
@@ -270,8 +274,7 @@ export function milestoneStandIn(
   // My view's projects, found as the server finds them, and refused past
   // the limit rather than cut
   const found = mineAsk ? [...myViewProjects(workspace).keys()] : []
-  if (found.length > MILESTONE_READ_PROJECTS)
-    throw refusal('milestone_too_many', LIMITS.milestoneProjects.refusal)
+  if (found.length > MILESTONE_READ_PROJECTS) throw mineTooMany()
   const from = args.from ?? ''
   const roots = rootsOf(workspace, mineAsk ? found : projects)
   const listed = mineAsk ? { projects: [...roots].sort() } : {}
