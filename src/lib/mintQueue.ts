@@ -51,7 +51,9 @@ type Options = {
   refused: (error: unknown) => boolean
   setTimer?: (run: () => void, ms: number) => unknown
   clearTimer?: (timer: unknown) => void
-  /** runs a task after the current one, so one paint's requests share calls */
+  /** runs a task once the current synchronous run ends, by default in a
+      microtask, so the requests of one run (the views one commit mounts,
+      or the entries one observer callback brings near) share calls */
   later?: (task: () => void) => void
 }
 
@@ -156,8 +158,9 @@ export function createMintQueue(mint: MintCall, options: Options) {
 
   return {
     /** The answer for `request`, sharing the one of a request with its key
-        that is waiting or on its way. Requests wait one task, so those one
-        paint asks for share calls. */
+        that is waiting or on its way. Requests wait until the next
+        microtask, so those one synchronous run makes share calls; requests
+        made in separate tasks go in separate calls. */
     request(request: MintRequest): Promise<MintOutcome> {
       const shared = known.get(request.key)
       if (shared) return shared.answer

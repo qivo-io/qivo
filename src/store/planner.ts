@@ -7529,8 +7529,8 @@ const MINT_SWEEP = 30_000 // access renewal, retry and stale-byte cleanup (avata
 const MINTED_MAX = 1_000
 const minted = new Map<string, { url: string; exp: number }>() // exp: unix SECONDS
 /* Keys primeMint asked the queue for and has not handled the answer of.
-   The queue forgets a key when its call answers, a task before primeMint
-   takes the answer, so a rebuild in between would ask again. */
+   The queue forgets a key when its call answers, and primeMint takes the
+   answer in a later microtask, so a rebuild in between would ask again. */
 const mintingKeys = new Set<string>()
 const mintQueue = createMintQueue(
   (org, ids) => convex.query(api.files.mintUrls, { org_id: org, ...ids }),
