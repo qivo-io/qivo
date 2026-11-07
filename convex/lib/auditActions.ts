@@ -11,6 +11,10 @@ export const AUDIT_ACTION_LABELS = {
   'billing.storage_sample_failed':
     'Stopped a storage sample that kept failing or waiting for storage totals',
   'billing.storage_sample_restarted': 'Started a stopped storage sample again',
+  'billing.storage_unavailable':
+    'Recorded no storage charge for a daily period without any storage measurement',
+  'billing.storage_finalize_stopped':
+    'Stopped trying to record the storage of a daily period that was not recorded in time',
   'billing.webhook_failed': 'Stopped processing a Polar subscription event',
   'billing.create_plan': 'Created billing plan',
   'billing.connect_plan': 'Connected billing plan to Polar',

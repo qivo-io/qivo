@@ -307,6 +307,28 @@ export async function periodHead(
   }
 }
 
+/** The open daily periods of every organization that end at or before
+ * `until`, an ISO time, by their end: on the daily basis, not recorded and
+ * not stopped (schema.ts billing_periods by_storage_open). period_end is an
+ * ISO time from toISOString, so its order is the time's. billingSync.ts
+ * finalizeDue pages it. */
+export const openDailyPeriods = (ctx: QueryCtx, until: string) =>
+  ctx.db
+    .query('billing_periods')
+    .withIndex('by_storage_open', (q) =>
+      q
+        .eq('storage_basis', 'daily')
+        .eq('storage_finalized_at', undefined)
+        .eq('storage_failed_at', undefined)
+        .lte('period_end', until),
+    )
+
+/** The first open daily period that ends at or before `until`, or null:
+ * one indexed read of at most one row, which the daily samples' triggers
+ * read before they schedule billingSync.ts finalizeDue (storageSamples.ts). */
+export const openDailyPeriodBy = (ctx: QueryCtx, until: string) =>
+  openDailyPeriods(ctx, until).first()
+
 /** The storage sample of the paid period `head` for organization `orgId`,
  * whose subscription is `sub`, as its billing_periods row holds it
  * (billingSync.ts storageStep), found by the provider subscription id and

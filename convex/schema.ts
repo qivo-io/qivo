@@ -903,33 +903,77 @@ export default defineSchema({
     seats: v.number(),
     // Local membership evidence, never profiles from another tenant.
     profile_ids: v.array(v.string()),
-    // The storage the period's sample measured, normally at its start, and
-    // the blocks over the allowance it charges. Both are absent until the
-    // sample finishes, and stay absent while it waits for the
-    // organization's stored-byte totals or after it stopped (billingSync.ts
-    // storageStep). The sample reads the totals, files in Deleted items
-    // included; one an earlier release finished scanned the attachment rows
-    // of live tasks and left those files out.
+    // How the period's storage is charged, set when the period is recorded
+    // and never changed: 'daily' for the average of its organization's
+    // daily storage samples (billingSync.ts finalizeStorage), for a period
+    // recorded while the deployment's DAILY_STORAGE_BILLING was true.
+    // Absent means the sample at the period's start, as for every period
+    // recorded while it was not.
+    storage_basis: v.optional(v.literal('daily')),
+    // The storage the period's charge uses and the blocks over the
+    // allowance it charges. For a period sampled at its start they are what
+    // the sample measured, normally at the start, absent until the sample
+    // finishes, and absent while it waits for the organization's
+    // stored-byte totals or after it stopped (billingSync.ts storageStep).
+    // The sample reads the totals, files in Deleted items included; one an
+    // earlier release finished scanned the attachment rows of live tasks
+    // and left those files out. For a daily period they are the average of
+    // its days rounded up to a whole byte and that average's blocks, absent
+    // while it is open and on one recorded as storage_unavailable.
     storage_bytes: v.optional(v.number()),
     storage_blocks: v.optional(v.number()),
     // When the sample read the totals, set with storage_bytes. That is
     // normally within a second of the renewal, and later for a sample that
     // waited for the totals or was started again, which measures storage
     // when it runs. Absent on a sample an earlier release finished, which
-    // counted the attachment rows stored before the period's row.
+    // counted the attachment rows stored before the period's row. For a
+    // daily period, when its finalize recorded the average.
     storage_sampled_at: v.optional(v.string()),
     // The running sample's id, which its step checks before it reads, and
-    // when the sample last started. Both are cleared when it finishes.
+    // when the sample last started. Both are cleared when it finishes. A
+    // daily period never starts a sample.
     storage_run: v.optional(v.string()),
     storage_run_at: v.optional(v.string()),
     // How many times the sample started, cleared when it finishes, and when
-    // apply stopped it after STORAGE_ATTEMPTS starts (billingSync.ts).
+    // apply stopped it after STORAGE_ATTEMPTS starts (billingSync.ts). On a
+    // daily period storage_failed_at is when the finalize's triggers
+    // stopped trying it, STORAGE_FINALIZE_RETRY_MS after its end, and
+    // finalizeStorage clears it when an operator records the period.
     storage_attempts: v.optional(v.number()),
     storage_failed_at: v.optional(v.string()),
+    // A daily period's days as its finalize recorded them, one entry for
+    // each UTC date of the period in order (model/storageSamples.ts
+    // periodDays), at most 31, since a plan's product renews monthly
+    // (lib/polar.ts validatePolarProduct). `bytes` is the reading the
+    // average used, absent on every entry of a period recorded as
+    // storage_unavailable. `from` is the day of the actual sample an
+    // estimate copied, later than `day` for a day filled from the next
+    // sample and earlier for one filled at the cutoff, and absent for a day
+    // its own sample measured.
+    storage_days: v.optional(
+      v.array(
+        v.object({ day: v.string(), bytes: v.optional(v.number()), from: v.optional(v.string()) }),
+      ),
+    ),
+    // Set on a daily period recorded without any actual reading of its
+    // organization's storage, which has no storage charge, never one for 0
+    // bytes.
+    storage_unavailable: v.optional(v.literal(true)),
+    // When a daily period's storage was recorded, with an average or as
+    // unavailable. Absent while the period is open.
+    storage_finalized_at: v.optional(v.string()),
     created_at: v.string(),
   })
     .index('by_subscription_period', ['subscription_id', 'period_start'])
-    .index('by_org', ['org_id']),
+    .index('by_org', ['org_id'])
+    // the open daily periods by their end, which the finalize's triggers
+    // read (model/billing.ts openDailyPeriods); a stopped one drops out
+    .index('by_storage_open', [
+      'storage_basis',
+      'storage_finalized_at',
+      'storage_failed_at',
+      'period_end',
+    ]),
 
   // API calls per credential and bucket. `period_start` is the bucket key
   // chosen by `usagePeriod` (model/billingUsage.ts): a paid period's ISO start,
@@ -2144,7 +2188,10 @@ export default defineSchema({
    * row is an actual reading only, never an estimate. An organization
    * whose totals are not complete, whose deletion has begun or that a run
    * never reached has no row for the day. At most one row per organization
-   * and day. Nothing bills from them yet. They go after
+   * and day. A paid period on the daily basis is charged on the average of
+   * its days' rows (billing_periods.storage_basis, billingSync.ts
+   * finalizeStorage), which no period is while DAILY_STORAGE_BILLING is
+   * unset; every other period bills nothing from them. They go after
    * SAMPLE_RETENTION_DAYS (model/storageSamples.ts) and with their
    * organization (model/orgDeletion.ts billingRows, model/cascade.ts
    * deleteOrgDeep). The demo deployment never writes one. */

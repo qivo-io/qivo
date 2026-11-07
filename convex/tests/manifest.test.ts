@@ -205,6 +205,8 @@ billingSync:claim mutation internal {"type":"object","value":{"org_id":{"fieldTy
 billingSync:claimWebhook mutation internal {"type":"object","value":{"event_id":{"fieldType":{"type":"string"},"optional":false}}}
 billingSync:eventReady mutation internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
 billingSync:eventResult mutation internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"success":{"fieldType":{"type":"boolean"},"optional":false}}}
+billingSync:finalizeDue mutation internal {"type":"object","value":{"until":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+billingSync:finalizeStorage mutation internal {"type":"object","value":{"period":{"fieldType":{"type":"id","tableName":"billing_periods"},"optional":false}}}
 billingSync:pendingEvents query internal {"type":"object","value":{}}
 billingSync:processWebhook action internal {"type":"object","value":{"event_id":{"fieldType":{"type":"string"},"optional":false}}}
 billingSync:pump action internal {"type":"object","value":{}}

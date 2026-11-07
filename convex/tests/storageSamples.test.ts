@@ -32,6 +32,10 @@
  *      a 0 reading measured, a trailing gap unresolved before the cutoff
  *      and at it from the next period, the last measured day or an earlier
  *      period, every day or none.
+ *  11. The finalize's triggers: while billing is on, a tick within two
+ *      hours of a daily period's end and the step that ends the run of its
+ *      last day start billingSync:finalizeDue, the step's read counted in
+ *      the run; nothing on the demo or with billing off.
  *
  * Totals are written only through their writers: the app's attach for a
  * small file, startOrgTotals, addToProject and addToOrg for the rest, and
@@ -1105,5 +1109,110 @@ describe("a daily period's days and its average (model/storageSamples.ts)", () =
             expect(entry.bytes).toBe(source)
           }
         }
+  })
+})
+
+/* ---------------------------------------------- the finalize's triggers */
+
+describe("the finalize's triggers", () => {
+  const HOUR = 60 * 60_000
+  /** Plants an open daily period of organization `orgId` that ends at
+   * `end`, as apply records one while DAILY_STORAGE_BILLING is true. */
+  const plantDaily = (t: T, orgId: string, end: number) =>
+    t.run((ctx) =>
+      ctx.db.insert('billing_periods', {
+        org_id: orgId,
+        subscription_id: uuid(),
+        plan_id: uuid(),
+        period_start: new Date(end - 30 * DAY_MS).toISOString(),
+        period_end: new Date(end).toISOString(),
+        seats: 5,
+        profile_ids: [],
+        storage_basis: 'daily',
+        created_at: new Date(AT).toISOString(),
+      }),
+    )
+  /** The finalize calls the job scheduled so far, with their arguments. */
+  const finalizes = (t: T) =>
+    t.run(async (ctx) =>
+      (await ctx.db.system.query('_scheduled_functions').collect())
+        .filter((job) => job.name === 'billingSync:finalizeDue')
+        .map((job) => job.args[0]),
+    )
+
+  it('reads one more range in a tick while billing is on, and starts the finalize of a period within two hours of its end', async () => {
+    vi.stubEnv('BILLING_ENABLED', 'true')
+    const t = newT()
+    const orgId = await plantOrg(t, 10)
+    await runDay(t)
+    // a tick with nothing due: the run row and the empty range of periods
+    expect(await measured(t, tickFn, {})).toMatchObject({ ranges: 2, documents: 1, written: 0 })
+    // two hours and a minute before its end, a period is not due yet
+    await plantDaily(t, orgId, AT + 2 * HOUR + 60_000)
+    await tick(t)
+    expect(await finalizes(t)).toEqual([])
+    // two hours less a minute before its end the tick starts its finalize once
+    vi.setSystemTime(AT + 2 * 60_000)
+    await tick(t)
+    expect(await finalizes(t)).toEqual([
+      { until: new Date(AT + 2 * 60_000 + 2 * HOUR).toISOString(), cursor: null },
+    ])
+    // with billing off the tick reads no period
+    vi.stubEnv('BILLING_ENABLED', 'false')
+    expect(await measured(t, tickFn, {})).toMatchObject({ ranges: 1, documents: 1 })
+    await tick(t)
+    expect(await finalizes(t)).toHaveLength(1)
+  })
+
+  it('reads nothing on the demo, billing or not', async () => {
+    vi.stubEnv('BILLING_ENABLED', 'true')
+    vi.stubEnv('APP_MODE', 'demo')
+    const t = newT()
+    await plantDaily(t, await plantOrg(t, 10), AT + HOUR)
+    expect(await measured(t, tickFn, {})).toMatchObject({ ranges: 0, documents: 0, written: 0 })
+    expect(await finalizes(t)).toEqual([])
+  })
+
+  it("starts the finalize from the step that ends the run of a period's last day, and counts its read in the run", async () => {
+    vi.stubEnv('BILLING_ENABLED', 'true')
+    SAMPLE_PAGE.orgs = 2
+    const t = newT()
+    const orgs = [await plantOrg(t, 10), await plantOrg(t, 20), await plantOrg(t, 30)]
+    // a period whose last day is tomorrow: today's run leaves it alone
+    await plantDaily(t, orgs[0], AT + 2 * DAY_MS - 20 * 60_000)
+    await runDay(t)
+    expect(await runRow(t)).toMatchObject({ finished_at: AT })
+    expect(await finalizes(t)).toEqual([])
+    // tomorrow, with another period whose last day is tomorrow too
+    vi.setSystemTime(AT + DAY_MS)
+    await plantDaily(t, orgs[1], AT + 2 * DAY_MS + 12 * HOUR)
+    await tick(t)
+    const run = (await runRow(t, dayAfter(1)))?.run ?? ''
+    // a full page, then the page that ends the run with the read: the
+    // counters grow by exactly what each transaction measured, the read
+    // included, which they would miss if it came after the run row's update
+    for (const _ of [0, 1]) {
+      const before = (await runRow(t, dayAfter(1)))?.counts
+      const m = await measured(t, stepFn, { day: dayAfter(1), run })
+      const after = (await runRow(t, dayAfter(1)))?.counts
+      expect({
+        documents_read: (after?.documents_read ?? 0) - (before?.documents_read ?? 0),
+        database_queries: (after?.database_queries ?? 0) - (before?.database_queries ?? 0),
+        bytes_read: (after?.bytes_read ?? 0) - (before?.bytes_read ?? 0),
+      }).toEqual({ documents_read: m.documents, database_queries: m.ranges, bytes_read: m.bytes })
+    }
+    expect(await runRow(t, dayAfter(1))).toMatchObject({ finished_at: AT + DAY_MS })
+    // the read lists both periods, whose last days are at or before the
+    // run's day, through the end of the day after it
+    expect(await finalizes(t)).toEqual([{ until: `${dayAfter(2)}T23:59:59.999Z`, cursor: null }])
+  })
+
+  it('starts no finalize from a run or a tick while billing is off', async () => {
+    const t = newT()
+    await plantDaily(t, await plantOrg(t, 10), AT + HOUR)
+    await runDay(t)
+    expect(await runRow(t)).toMatchObject({ finished_at: AT })
+    await tick(t)
+    expect(await finalizes(t)).toEqual([])
   })
 })

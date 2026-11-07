@@ -2,9 +2,18 @@
  * organization's stored-byte totals (model/storageTotals.ts), files in
  * Deleted items included, as one storage_daily_samples row an
  * organization, in steps of SAMPLE_PAGE.orgs organizations in id order. It
- * reads only each organization's totals row, never an attachment row, and
- * bills nothing. The samples are what a daily storage charge would
- * average, and the run rows say what recording them costs.
+ * reads only each organization's totals row, never an attachment row. A
+ * paid period on the daily basis (billing_periods.storage_basis) is charged
+ * on the average of its days' samples, which no period is while the
+ * deployment's DAILY_STORAGE_BILLING is unset, and the run rows say what
+ * recording them costs.
+ *
+ * While billing is on, the job also starts the finalize of the open daily
+ * periods that are due (billingSync.ts finalizeDue): the step that ends a
+ * day's run for those whose last day is at or before the run's day, and
+ * every tick for those within STORAGE_FINALIZE_LEAD_MS of their end or
+ * past it. Each is one indexed read of at most one period row, and nothing
+ * more when none is due. With billing off neither reads anything.
  *
  * The hourly cron (crons.ts 'storage-daily-samples', minute 20) calls tick.
  * The day's first tick starts its run; a later one resumes the run under a
@@ -26,10 +35,13 @@
  * A step reads organizations' totals rows, which every attach, removal,
  * move, rename and purge writes, so such a write that commits while a step
  * reads reruns the step, never the write, which reads nothing the job
- * writes. Two runs of one day that meet on an organization both read its
+ * writes. The step that ends a run, while billing is on, also reads the
+ * first open daily period due, which only apply's insert and the finalize
+ * write. Two runs of one day that meet on an organization both read its
  * sample of the day, so Convex commits one insert and reruns the other,
- * which then finds it present. The job writes only its own two tables, does
- * nothing on the demo deployment, and a branch preview registers no cron.
+ * which then finds it present. The job writes only its own two tables and
+ * schedules the finalize, which writes billing's, does nothing on the demo
+ * deployment, and a branch preview registers no cron.
  *
  * The cost reading on staging, a hosted read that needs the owner's
  * approval, with the private helper:
@@ -42,9 +54,11 @@ import { makeFunctionReference } from 'convex/server'
 import { getDocumentSize, v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import { internalMutation, internalQuery, type MutationCtx } from './_generated/server'
-import { deletionBegun } from './lib/billingAccess'
+import { STORAGE_FINALIZE_LEAD_MS } from './billingSync'
+import { billingEnabled, deletionBegun } from './lib/billingAccess'
 import { isDemoDeployment } from './lib/demo'
 import { badRequest, require } from './lib/functions'
+import { openDailyPeriodBy } from './model/billing'
 import { utcDate } from './model/demoMetrics'
 import { DAY_MS } from './model/orgRetention'
 import { newUuid } from './model/orgs'
@@ -67,20 +81,37 @@ const stepRef = makeFunctionReference<'mutation', { day: string; run: string }, 
   'storageSamples:step',
 )
 const expireRef = makeFunctionReference<'mutation', { day: string }, null>('storageSamples:expire')
+const finalizeDueRef = makeFunctionReference<
+  'mutation',
+  { until: string; cursor: string | null },
+  null
+>('billingSync:finalizeDue')
 
 /** Starts today's run of the daily storage samples once, by the UTC date,
  * or resumes it from its cursor under a new run id when its last step is
  * SAMPLE_STALLED_MS old, so a step of the earlier run stops at its run
- * check. Does nothing once the day's run finished, while its steps go on,
- * and on the demo deployment. Such a call reads one row and writes none.
- * It never goes back to an earlier day's run, which keeps the samples it
- * wrote and, unfinished, its cursor until the row expires. The hourly cron
- * calls it. */
+ * check. Does nothing more once the day's run finished, while its steps go
+ * on, and nothing at all on the demo deployment. It never goes back to an
+ * earlier day's run, which keeps the samples it wrote and, unfinished, its
+ * cursor until the row expires. The hourly cron calls it.
+ *
+ * First, while billing is on and whatever the day's run does, it starts
+ * the finalize of every open daily period that ends within
+ * STORAGE_FINALIZE_LEAD_MS or has ended (billingSync.ts finalizeDue), the
+ * deadline path and the hourly retry of a period whose finalize failed or
+ * waited. A call that does nothing reads one index range and at most one
+ * row, the run row, and with billing on one more range that finds no
+ * period; on the demo it reads nothing. */
 export const tick = internalMutation({
   args: {},
   handler: async (ctx): Promise<null> => {
     if (isDemoDeployment()) return null
     const now = Date.now()
+    if (billingEnabled()) {
+      const until = new Date(now + STORAGE_FINALIZE_LEAD_MS).toISOString()
+      if ((await openDailyPeriodBy(ctx, until)) !== null)
+        await ctx.scheduler.runAfter(0, finalizeDueRef, { until, cursor: null })
+    }
     const day = utcDate(now)
     const row = await runOf(ctx, day)
     if (row !== null && (row.finished_at !== undefined || now - row.step_at < SAMPLE_STALLED_MS))
@@ -186,9 +217,12 @@ async function record(
 /** One step of day `day`'s run `run`: up to SAMPLE_PAGE.orgs organizations
  * after the run's cursor, by id. A full page moves the cursor and schedules
  * the next step in this transaction; a shorter one marks the run finished,
- * clears its cursor and schedules the expiry. An organization created
- * behind the cursor waits for the next day. Does nothing unless the day's
- * run row holds this run and has not finished. */
+ * clears its cursor and schedules the expiry, and while billing is on it
+ * schedules the finalize (billingSync.ts finalizeDue) when an open daily
+ * period's last day is at or before `day`, so a period whose last day the
+ * run just sampled is normally recorded a day or more before its end. An
+ * organization created behind the cursor waits for the next day. Does
+ * nothing unless the day's run row holds this run and has not finished. */
 export const step = internalMutation({
   args: { day: v.string(), run: v.string() },
   handler: async (ctx, { day, run }): Promise<null> => {
@@ -217,12 +251,22 @@ export const step = internalMutation({
       await record(ctx, row, tally, { cursor: orgs[orgs.length - 1].id, step_at: now })
       await ctx.scheduler.runAfter(0, stepRef, { day, run })
     } else {
+      // read before record, so the run's counters hold this read too
+      const until = lastOfDayAfter(day)
+      const due = billingEnabled() && (await openDailyPeriodBy(ctx, until)) !== null
       await record(ctx, row, tally, { cursor: null, step_at: now, finished_at: now })
       await ctx.scheduler.runAfter(0, expireRef, { day })
+      if (due) await ctx.scheduler.runAfter(0, finalizeDueRef, { until, cursor: null })
     }
     return null
   },
 })
+
+/* The last millisecond of the UTC day after `day`, as an ISO time. A daily
+ * period ends at or before it exactly when its last day
+ * (model/storageSamples.ts periodDays) is at or before `day`. */
+const lastOfDayAfter = (day: string) =>
+  new Date(Date.parse(`${day}T00:00:00.000Z`) + 2 * DAY_MS - 1).toISOString()
 
 /** Deletes up to SAMPLE_EXPIRY.page samples and as many run rows of days
  * before the retention (keptSince), oldest days first, and schedules itself

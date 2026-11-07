@@ -26,9 +26,20 @@ import {
   validatePolarProduct,
 } from './lib/polar'
 import { audit } from './model/admin'
-import { GB, isoNow, nextReminder } from './model/billing'
+import { GB, isoNow, nextReminder, openDailyPeriods } from './model/billing'
 import { DAY_MS, retentionDue, syncOrgRemoval } from './model/orgRetention'
 import { newUuid } from './model/orgs'
+import {
+  type DayReading,
+  periodAverage,
+  periodDays,
+  runOf,
+  SAMPLE_STALLED_MS,
+  type StorageDay,
+  sampleAfter,
+  sampleBefore,
+  samplesOfDays,
+} from './model/storageSamples'
 import { storageTotalsOf } from './model/storageTotals'
 
 type SyncWork = {
@@ -106,11 +117,23 @@ type StorageStep = ObjectType<typeof storageStepArgs>
 const storageStepRef = makeFunctionReference<'mutation', StorageStep, null>(
   'billingSync:storageStep',
 )
+const finalizeDueRef = makeFunctionReference<
+  'mutation',
+  { until: string; cursor: string | null },
+  null
+>('billingSync:finalizeDue')
+const finalizeStorageRef = makeFunctionReference<
+  'mutation',
+  { period: Id<'billing_periods'> },
+  FinalizeOutcome
+>('billingSync:finalizeStorage')
 
 /** How long a storage sample may go without finishing before apply starts
  * it again. Its one step runs in well under a second, so only a sample
  * whose step failed, or that waits while its organization's stored-byte
- * totals are counted (storageStep), waits this long. */
+ * totals are counted (storageStep), waits this long. This and the two
+ * below are for a period sampled at its start; a daily period never starts
+ * a sample (finalizeStorage). */
 export const STORAGE_STALL_MS = 15 * 60_000
 
 /** How many times a period's storage sample starts before apply stops
@@ -128,6 +151,45 @@ export const STORAGE_ATTEMPTS = 5
  * still land is retried: its subscription is active or past due and has not
  * ended, and the period has not ended either. */
 export const STORAGE_RETRY_MS = 6 * 60 * 60_000
+
+/** How long before its end an open daily period is finalized at the
+ * latest, with the cutoff's fallback for a day still without a reading
+ * (finalizeStorage). The daily samples' hourly tick (storageSamples.ts,
+ * minute 20) finalizes it at its first call within this of the end, one to
+ * two hours before it. That leaves at least an hour for the charge's
+ * delivery before eventReady stops sending 30 seconds before the end, room
+ * for six attempts, whose five waits after a failure (eventResult) take
+ * about 31 minutes. Normally the run that samples the period's last day
+ * finalizes it a day or more before its end. */
+export const STORAGE_FINALIZE_LEAD_MS = 2 * 60 * 60_000
+
+/** How many open daily periods one finalizeDue call lists and schedules a
+ * finalize for. Each is a whole period row, up to about 40 KB with the
+ * 1,000 profile ids an organization at the design size records. Tests
+ * lower it. */
+export const STORAGE_FINALIZE_PAGE = { periods: 25 }
+
+/** How long after its end the finalize's triggers keep trying an open
+ * daily period that is still not recorded, because its finalize failed
+ * every time or never ran, as while the cron stood still or billing was
+ * off. Its charge can no longer be sent after the end (eventReady), but a
+ * period recorded late still keeps its figures. Past this, finalizeDue
+ * stops trying it with an error log and a billing.storage_finalize_stopped
+ * audit row, so a finalize that keeps failing does not run every hour for
+ * good. An operator records it with finalizeStorage once the cause is
+ * fixed. */
+export const STORAGE_FINALIZE_RETRY_MS = 3 * DAY_MS
+
+/** Whether a paid period recorded now is charged for storage on the
+ * average of its organization's daily storage samples (finalizeStorage)
+ * instead of a sample at its start: only while the deployment's
+ * DAILY_STORAGE_BILLING is exactly `true`. Read only when apply records a
+ * period, which keeps the answer as its storage_basis, so a change of the
+ * variable acts from each organization's next renewal, and a period
+ * already open keeps its basis. Unset on every deployment until the owner
+ * switches it on (docs/deployment.md). Billing, and with it this, never
+ * runs on the demo (billingEnabled). */
+export const dailyStorageBilling = () => process.env.DAILY_STORAGE_BILLING === 'true'
 
 // API responses are normalized by the adapter; serialize their raw-equivalent
 // fields for one shared validator on the write boundary and webhook path.
@@ -265,7 +327,8 @@ const checkoutPolled = (sub: Doc<'billing_subscriptions'>, now: number) =>
  * webhook after the check before the old end is read at the check after
  * it, and then every RENEWAL_POLL_MS until the renewal is known. A sample
  * that finishes computes the time again without its stall check
- * (dropStallCheck). */
+ * (dropStallCheck). A daily period asks for no reconciliation of its own:
+ * the daily samples' run and tick finalize it (finalizeStorage). */
 async function nextSyncDue(
   ctx: QueryCtx,
   sub: Doc<'billing_subscriptions'>,
@@ -299,7 +362,7 @@ async function nextSyncDue(
         q.eq('subscription_id', subscriptionId).eq('period_start', start),
       )
       .unique()
-    if (period && period.storage_bytes === undefined) {
+    if (period && period.storage_basis === undefined && period.storage_bytes === undefined) {
       if (period.storage_run_at) by(Date.parse(period.storage_run_at) + STORAGE_STALL_MS + 60_000)
       else if (period.storage_failed_at)
         by(Date.parse(period.storage_failed_at) + STORAGE_RETRY_MS + 60_000)
@@ -448,11 +511,15 @@ const receiptOf = (ctx: QueryCtx, event_id: string) =>
 
 /* Applies `remote` to its organization's billing row and answers the
  * organization's id. Stale or out-of-order states are ignored. It opens the
- * paid period's record when a new period starts and starts the period's
- * storage sample (storageStep), or starts a sample again that has gone
- * STORAGE_STALL_MS without finishing, up to STORAGE_ATTEMPTS starts, and a
- * stopped one again STORAGE_RETRY_MS after it stopped. Then it starts or
- * stops the read-only period before deletion (model/orgRetention.ts). */
+ * paid period's record when a new period starts. While DAILY_STORAGE_BILLING
+ * is true (dailyStorageBilling) the record holds storage_basis 'daily' and
+ * takes no sample, since the daily samples' run finalizes it
+ * (finalizeStorage). Otherwise it starts the period's storage sample
+ * (storageStep), or starts a sample again that has gone STORAGE_STALL_MS
+ * without finishing, up to STORAGE_ATTEMPTS starts, and a stopped one again
+ * STORAGE_RETRY_MS after it stopped, never one of a daily period. Then it
+ * starts or stops the read-only period before deletion
+ * (model/orgRetention.ts). */
 async function applySubscription(ctx: MutationCtx, remote: PolarSubscription): Promise<string> {
   require(remote.externalCustomerId, badRequest('Subscription has no Qivo organization.'))
   const sub = await subscriptionFor(ctx, remote.externalCustomerId)
@@ -537,6 +604,9 @@ async function applySubscription(ctx: MutationCtx, remote: PolarSubscription): P
     .unique()
   if (!period && (status === 'active' || status === 'past_due')) {
     const counts = await getBillableUsers(ctx, sub.org_id)
+    // read once, here, so the period keeps its basis whatever the variable
+    // says later
+    const daily = dailyStorageBilling()
     const periodId = await ctx.db.insert('billing_periods', {
       org_id: sub.org_id,
       subscription_id: incomingId,
@@ -545,10 +615,14 @@ async function applySubscription(ctx: MutationCtx, remote: PolarSubscription): P
       period_end: end,
       seats: remote.seats,
       profile_ids: counts.users.map((p) => p.profile_id),
+      ...(daily ? { storage_basis: 'daily' as const } : {}),
       created_at: now,
     })
-    await startStorageSample(ctx, periodId)
-  } else if (period && period.storage_bytes === undefined) {
+    if (!daily) await startStorageSample(ctx, periodId)
+  } else if (period && period.storage_basis === undefined && period.storage_bytes === undefined) {
+    // Only a period sampled at its start: a daily one has no storage_bytes
+    // until it is finalized and no storage_run_at, which would read as a
+    // stalled sample here and start a sample at its start.
     const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
     // A stopped sample has no run until its retry starts one.
     const stopped = period.storage_failed_at !== undefined && period.storage_run === undefined
@@ -663,13 +737,16 @@ async function retryStoppedSample(ctx: MutationCtx, period: Doc<'billing_periods
  * finished sample records is sent only while the period is still the
  * subscription's current one and more than 30 seconds from its end
  * (eventReady), so a restart after that records the bytes but charges
- * nothing. */
+ * nothing. A daily period is left alone too, answering false: it takes no
+ * sample, and the daily samples' run and tick finalize it. An operator who
+ * must record one at once runs finalizeStorage with it, which follows the
+ * same rules. */
 export const restartStorage = internalMutation({
   args: { period: v.id('billing_periods') },
   handler: async (ctx, { period }): Promise<boolean> => {
     const row = await ctx.db.get(period)
     require(row !== null, notFound('billing period not found'))
-    if (row.storage_bytes !== undefined) return false
+    if (row.storage_basis === 'daily' || row.storage_bytes !== undefined) return false
     await ctx.db.patch(row._id, { storage_failed_at: undefined })
     await startStorageSample(ctx, row._id)
     // a reconciliation then starts the sample again if it stalls (apply)
@@ -709,10 +786,11 @@ export const restartStorage = internalMutation({
  * a sample started again measures the totals when it runs, so it also
  * counts the files stored while it waited. Billing names its date when
  * that is a day or more after the period's start (src/lib/billingDisplay.ts
- * storageSampleLine). Taking a late sample from the daily sample nearest
- * the period's start (storageSamples.ts) is later work. A step whose period
- * is gone, or whose run was started again, does nothing
- * (takeStorageSample). */
+ * storageSampleLine). Taking such a late sample from the daily sample
+ * nearest the period's start (storageSamples.ts) is later work. A step
+ * whose period is gone, whose run was started again or whose period is on
+ * the daily basis, which never takes this sample (finalizeStorage), does
+ * nothing (takeStorageSample). */
 export const storageStep = internalMutation({
   args: storageStepArgs,
   handler: async (ctx, a): Promise<null> => await takeStorageSample(ctx, a.period, a.run),
@@ -732,7 +810,10 @@ export async function takeStorageSample(
   run: string,
 ): Promise<null> {
   const period = await ctx.db.get(periodId)
-  if (period === null || period.storage_run !== run) return null
+  // A daily period never holds storage_run here, so the basis check is a
+  // second guard, for a step an earlier backend queued for it across a
+  // rollback.
+  if (period === null || period.storage_run !== run || period.storage_basis === 'daily') return null
   const totals = await storageTotalsOf(ctx, period.org_id)
   if (totals === null) {
     console.warn(
@@ -768,14 +849,17 @@ async function dropStallCheck(ctx: MutationCtx, sub: Doc<'billing_subscriptions'
     await ctx.db.patch(sub._id, { sync_due_at: due, sync_safety: safety || undefined })
 }
 
-/* The end of a storage sample, with the `bytes` it measured now. It
- * records them, when it measured them and the blocks over the allowance,
- * adds the period's storage charge when one is due and drops the
+/* The end of a storage sample, with the `bytes` it measured now, or of a
+ * daily period's finalize, with its average rounded up to a whole byte and
+ * `record`, its days and when it was finalized, written in the same patch.
+ * It records the bytes, when it recorded them and the blocks over the
+ * allowance, adds the period's storage charge when one is due and drops the
  * organization's stall check (dropStallCheck). */
 async function finishStorageSample(
   ctx: MutationCtx,
   period: Doc<'billing_periods'>,
   bytes: number,
+  record: { storage_days?: StorageDay[]; storage_finalized_at?: string } = {},
 ): Promise<null> {
   const plan = await byId(ctx, 'billing_plans', period.plan_id)
   require(plan, notFound('billing plan not found'))
@@ -789,6 +873,7 @@ async function finishStorageSample(
     storage_run_at: undefined,
     storage_attempts: undefined,
     storage_failed_at: undefined,
+    ...record,
   })
   const sub = await subscriptionFor(ctx, period.org_id)
   const id = `${period.subscription_id}:${period.period_start}:storage`
@@ -816,6 +901,186 @@ async function finishStorageSample(
   if (sub !== null) await dropStallCheck(ctx, sub)
   return null
 }
+
+/** Lists the open daily periods of every organization that end at or
+ * before `until`, an ISO time, STORAGE_FINALIZE_PAGE.periods at a time from
+ * `cursor`, and schedules finalizeStorage for each, every one in its own
+ * transaction, so one that throws fails alone and the next trigger lists
+ * it again. It schedules itself with the next cursor while the range goes
+ * on. A period that ended STORAGE_FINALIZE_RETRY_MS or more ago is not
+ * tried again (stopFinalize). The daily samples' run, when it finishes,
+ * and their hourly tick schedule it, and only while billing is on
+ * (storageSamples.ts). It reads only the period rows it lists. */
+export const finalizeDue = internalMutation({
+  args: { until: v.string(), cursor: v.union(v.string(), v.null()) },
+  handler: async (ctx, { until, cursor }): Promise<null> => {
+    const page = await openDailyPeriods(ctx, until).paginate({
+      cursor,
+      numItems: STORAGE_FINALIZE_PAGE.periods,
+    })
+    const stopBy = iso(Date.now() - STORAGE_FINALIZE_RETRY_MS)
+    for (const period of page.page) {
+      if (period.period_end <= stopBy) await stopFinalize(ctx, period)
+      else await ctx.scheduler.runAfter(0, finalizeStorageRef, { period: period._id })
+    }
+    if (!page.isDone)
+      await ctx.scheduler.runAfter(0, finalizeDueRef, { until, cursor: page.continueCursor })
+    return null
+  },
+})
+
+/* Stops the triggers trying open daily period `period`, which is still not
+ * recorded STORAGE_FINALIZE_RETRY_MS after its end: storage_failed_at takes
+ * it out of their range (model/billing.ts openDailyPeriods), an error log
+ * and a billing.storage_finalize_stopped audit row name it, and it records
+ * no storage, never 0. An operator records it with finalizeStorage once
+ * the cause is fixed. */
+async function stopFinalize(ctx: MutationCtx, period: Doc<'billing_periods'>): Promise<void> {
+  console.error(
+    `billing: daily storage of period ${period._id} was not recorded by ${STORAGE_FINALIZE_RETRY_MS / DAY_MS} days after its end; it is no longer tried`,
+  )
+  await ctx.db.patch(period._id, { storage_failed_at: isoNow() })
+  await audit(ctx, {
+    actor_email: 'system',
+    action: 'billing.storage_finalize_stopped',
+    target_org_id: period.org_id,
+    detail: {
+      period: period._id,
+      subscription_id: period.subscription_id,
+      period_start: period.period_start,
+      period_end: period.period_end,
+    },
+  })
+}
+
+/** What finalizeStorage did with its period: recorded an average,
+ * recorded it as unavailable, waits for a reading of its last day, or
+ * nothing (null) for a period that is gone, not daily or already
+ * recorded. */
+export type FinalizeOutcome = 'recorded' | 'unavailable' | 'waiting' | null
+
+/* A sample row as a reading of its day, or null. */
+const readingOf = (row: Doc<'storage_daily_samples'> | null): DayReading | null =>
+  row && { day: row.day, bytes: row.bytes }
+
+/* Whether no step of UTC day `day`'s run of the daily samples can still
+ * write a sample of that day at `now`: it has no run row, or its run
+ * finished, or its last step is SAMPLE_STALLED_MS old. Asked only once a
+ * later day has a sample, when no tick resumes or starts that day's run
+ * (storageSamples.ts tick). */
+async function dayClosed(ctx: MutationCtx, day: string, now: number): Promise<boolean> {
+  const run = await runOf(ctx, day)
+  return run === null || run.finished_at !== undefined || now - run.step_at >= SAMPLE_STALLED_MS
+}
+
+/** Records the storage of daily period `period` once, from its
+ * organization's daily samples (model/storageSamples.ts), by the owner's
+ * rules (periodAverage). The period's days are the UTC dates from its
+ * start's date up to the day before its end's date (periodDays).
+ *
+ * Before its deadline, STORAGE_FINALIZE_LEAD_MS before its end, it records
+ * only a period whose every day resolves without the cutoff: its last day
+ * has its own sample, or a later day's sample stands for the last day and
+ * that day's run can no longer write one (dayClosed). Otherwise it waits
+ * and writes nothing. At or after the deadline it records the period
+ * whatever is missing: a day without a sample takes the first later one,
+ * the next period's first day included, else the most recent one before
+ * it, an earlier period's included. With a reading, the average rounded up
+ * to a whole byte goes through finishStorageSample, so the allowance is
+ * subtracted once, the blocks are one ceiling, and the charge keeps its
+ * event id `${subscription_id}:${period_start}:storage`, its complimentary
+ * rule and its single insert, together with the days and storage_finalized_at
+ * in one patch. With no reading of the organization in, after or before
+ * the period, it records the days and storage_unavailable, no bytes,
+ * blocks or event, never 0, with a warning and a billing.storage_unavailable
+ * audit row naming the period.
+ *
+ * The daily samples' run of the period's last day (storageSamples.ts step)
+ * normally finalizes it a day or more before its end, and the run of the
+ * day after when that day's sample is missing; at the latest the hourly
+ * tick does at its first call within STORAGE_FINALIZE_LEAD_MS of the end,
+ * one to two hours before it, and every later run and tick tries a period
+ * still open again (finalizeDue). The charge is sent while eventReady
+ * allows, so a period finalized after its end, as after the cron stood
+ * still, records its figures and eventReady abandons its event with a
+ * billing.usage_delivery_stopped audit row. So does a subscription that
+ * ends or is revoked before the recorded end, which the sample at a
+ * period's start had already charged: a daily period then has no storage
+ * charge, as its API calls after the end have none. The finalize times
+ * itself by the row's period_end, which apply never moves; if Polar moved
+ * a recorded period's end later the charge is recorded early, and earlier
+ * the charge can miss eventReady's boundary.
+ *
+ * Two calls for one period both read its row, so Convex commits one and
+ * runs the other again, which then finds it recorded, and the event's id
+ * guards a second charge too. A period gone with its organization, not
+ * daily or already recorded is left alone. An operator who must record a
+ * period at once runs this with its id, which applies the same rules,
+ * also for a period the triggers stopped trying:
+ *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
+ *     TARGET npx convex run billingSync:finalizeStorage '{"period":"…"}'
+ *
+ * It reads the period, the samples of its days, at most 31, the
+ * organization's first sample after its last day and, before the deadline,
+ * the last day's run row when the last day has no sample, its latest
+ * sample before its first day only when it has none in or after it, then
+ * the plan, the subscription, the charge's id when blocks are due and the
+ * period again for the next reconciliation. */
+export const finalizeStorage = internalMutation({
+  args: { period: v.id('billing_periods') },
+  handler: async (ctx, { period: periodId }): Promise<FinalizeOutcome> => {
+    const period = await ctx.db.get(periodId)
+    if (period?.storage_basis !== 'daily' || period.storage_finalized_at !== undefined) return null
+    const orgId = period.org_id
+    const days = periodDays(period.period_start, period.period_end)
+    const first = days[0]
+    const last = days[days.length - 1]
+    const readings = await samplesOfDays(ctx, orgId, first, last)
+    const now = Date.now()
+    const deadline = now >= Date.parse(period.period_end) - STORAGE_FINALIZE_LEAD_MS
+    let later: DayReading | null = null
+    let earlier: DayReading | null = null
+    if (!readings.has(last)) {
+      later = readingOf(await sampleAfter(ctx, orgId, last))
+      if (!deadline && (later === null || !(await dayClosed(ctx, last, now)))) return 'waiting'
+      if (later === null && readings.size === 0)
+        earlier = readingOf(await sampleBefore(ctx, orgId, first))
+    }
+    const average = periodAverage(days, readings, { later, earlier, final: true })
+    const finalized = isoNow()
+    if (average.bytes !== null) {
+      await finishStorageSample(ctx, period, average.bytes, {
+        storage_days: average.days,
+        storage_finalized_at: finalized,
+      })
+      return 'recorded'
+    }
+    console.warn(
+      `billing: no storage sample of organization ${orgId} for daily period ${period._id}; it is recorded with no storage charge`,
+    )
+    await ctx.db.patch(period._id, {
+      storage_days: average.days,
+      storage_unavailable: true,
+      storage_finalized_at: finalized,
+      storage_run: undefined,
+      storage_run_at: undefined,
+      storage_attempts: undefined,
+      storage_failed_at: undefined,
+    })
+    await audit(ctx, {
+      actor_email: 'system',
+      action: 'billing.storage_unavailable',
+      target_org_id: orgId,
+      detail: {
+        period: period._id,
+        subscription_id: period.subscription_id,
+        period_start: period.period_start,
+        days: days.length,
+      },
+    })
+    return 'unavailable'
+  },
+})
 
 export const reconcile = internalAction({
   args: { org_id: v.string() },
