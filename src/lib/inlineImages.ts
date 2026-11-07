@@ -42,12 +42,13 @@ import type { MintOutcome } from './mintQueue'
     - `retry`: how long a failed mint or download waits before it tries
       again, while the image stays near.
     - `stall`: how long a download may go without receiving a byte, or
-      its decode may take, before it stops, gives its slot back and tries
-      again later. It bounds the time without progress, not the whole
-      download, so a large image on a slow link that keeps arriving is
-      never cut off: a 20 MiB attachment at 256 kbit/s takes about 11
-      minutes and goes on. A plain-URL fallback, whose progress cannot be
-      seen, gives its slot back after the same time and goes on loading.
+      its decode may take, before it stops, releases its bytes, gives its
+      slot back and tries again later. It bounds the time without
+      progress, not the whole download, so a large image on a slow link
+      that keeps arriving is never cut off: a 20 MiB attachment at
+      256 kbit/s takes about 11 minutes and goes on. A plain-URL fallback,
+      whose progress cannot be seen, gives its slot back after the same
+      time and goes on loading.
     - `leave`: how long a download whose views all went far or unmounted
       goes on before it stops and gives its slot to a near image, so a
       quick scroll back keeps it.
@@ -500,21 +501,35 @@ export function createInlineImages(
       arm()
       const blob = await readBody(response, arm)
       if (!current()) return
+      // The bytes' URL belongs to this attempt until it shows. The stall,
+      // the leave grace, stop and clear all abort the attempt, and
+      // whichever ends it first releases the URL once, so a decode that
+      // never settles keeps no URL and a late decode shows nothing.
       const source = deps.createUrl(blob)
+      let unpublished = true
+      const release = () => {
+        if (!unpublished) return
+        unpublished = false
+        deps.revokeUrl(source)
+      }
+      controller.signal.addEventListener('abort', release, { once: true })
       let size: Size
       try {
         arm()
         size = await deps.measure(source)
       } catch {
-        deps.revokeUrl(source)
+        release()
         if (!current()) return
         entry.controller = null
         return gone(entry)
       }
       if (!current()) {
-        deps.revokeUrl(source)
+        release()
         return
       }
+      // the entry's bytes now, released by forgetBytes
+      controller.signal.removeEventListener('abort', release)
+      unpublished = false
       entry.controller = null
       entry.url = source
       entry.owned = true

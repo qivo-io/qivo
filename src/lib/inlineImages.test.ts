@@ -24,7 +24,15 @@ type FakeObserver = {
 /* A loader over stand-ins: a fake IntersectionObserver the test moves
    elements through, a mint per id (or through a real mint queue), and a
    fetch of images of `size` bytes each, answered at once unless `hold`. */
-function harness(o: { size?: number; hold?: boolean; queue?: boolean; observer?: boolean } = {}) {
+function harness(
+  o: {
+    size?: number
+    hold?: boolean
+    queue?: boolean
+    observer?: boolean
+    measure?: (url: string) => Promise<{ width: number; height: number }>
+  } = {},
+) {
   let now = 1_000_000
   const observers: FakeObserver[] = []
   const factory: ObserverFactory = (receive, options) => {
@@ -84,7 +92,7 @@ function harness(o: { size?: number; hold?: boolean; queue?: boolean; observer?:
     fetch: fetcher,
     createUrl: () => `blob:image-${++serial}`,
     revokeUrl,
-    measure: async () => ({ width: 800, height: 600 }),
+    measure: o.measure ?? (async () => ({ width: 800, height: 600 })),
     observer: o.observer === false ? null : factory,
     rootOf: () => null,
     now: () => now,
@@ -573,6 +581,42 @@ describe('the inline image loader', () => {
     h.downloads[2]?.answer.resolve(image(KIB))
     await settle()
     expect(a.shown().state).toBe('ready')
+  })
+
+  it('releases the bytes of a download whose decode never settles when the stall or a clear stops it, and shows nothing from a late decode', async () => {
+    const decodes: ReturnType<typeof deferred<{ width: number; height: number }>>[] = []
+    const h = harness({
+      measure: () => {
+        const decode = deferred<{ width: number; height: number }>()
+        decodes.push(decode)
+        return decode.promise
+      },
+    })
+    const a = h.view('a')
+    a.near()
+    await settle()
+    expect(decodes).toHaveLength(1)
+    // the stall stops the attempt and releases its bytes at once
+    await vi.advanceTimersByTimeAsync(INLINE_IMAGES.stall)
+    expect(h.revokeUrl.mock.calls).toEqual([['blob:image-1']])
+    expect(h.loader.stats().downloading).toBe(0)
+    // the retry downloads again into new bytes
+    await vi.advanceTimersByTimeAsync(INLINE_IMAGES.retry)
+    expect(h.fetcher).toHaveBeenCalledTimes(2)
+    expect(decodes).toHaveLength(2)
+    // the first decode answers late, and shows and releases nothing more
+    decodes[0]?.resolve({ width: 800, height: 600 })
+    await settle()
+    expect(a.shown().state).toBe('loading')
+    expect(h.revokeUrl).toHaveBeenCalledOnce()
+    // a clear while the second decode waits releases its bytes too
+    h.loader.clear()
+    expect(h.revokeUrl.mock.calls).toEqual([['blob:image-1'], ['blob:image-2']])
+    decodes[1]?.resolve({ width: 800, height: 600 })
+    await settle()
+    expect(a.shown().url).toBeNull()
+    expect(h.revokeUrl).toHaveBeenCalledTimes(2)
+    expect(h.loader.attachmentOf('blob:image-2')).toBeNull()
   })
 
   it('never stops a download that keeps receiving bytes, however long it takes', async () => {
