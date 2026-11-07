@@ -266,8 +266,14 @@ describe("the hold on the watched task's read on open", () => {
     await settle()
     expect(P().readOnOpen('task-a')).toBe(false)
     P().readItem({ org: org(), task: 'task-a', through: Date.parse(at(5)), latestAt: at(5) })
+    // news past the read's cutoff comes while it waits, and the hold turns
+    // its read on open away
+    await news(7)
+    expect(P().readOnOpen('task-a')).toBe(false)
     answer(1)
     await settle()
+    // the accepted read freed the hold, so the read it turned away runs
+    expect(reads().at(-1)?.args.through).toBe(Date.parse(at(7)))
     await news(9)
     expect(P().readOnOpen('task-a')).toBe(true)
     expect(reads().at(-1)?.args).toEqual({

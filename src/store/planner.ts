@@ -15377,7 +15377,10 @@ export const PLANNER = {
       at once (P.inboxMarks). Once the server accepts it, a read of the
       watched task supersedes every Mark as unread or snooze that went out
       before it, accepted, waiting or failed, so their hold goes
-      (holdWatched) and later news on it is read on open again, as the
+      (holdWatched). A read on open the hold turned away then runs, as it
+      does once a refusal frees the hold, and reads news that came past
+      this read's cutoff, or sends nothing when the item holds no unread
+      message. Later news on the task is read on open again, as the
       person's newest choice is read. A Mark as unread or snooze that went
       out after it is newer and still holds while it waits or once
       accepted, and frees nothing more once refused or failed. The read on
@@ -15392,9 +15395,12 @@ export const PLANNER = {
       if (watched?.task !== target.task || watched.org !== target.org) return
       const hold = itemHold
       hold.readThrough = Math.max(hold.readThrough, before)
-      // the read read the item, so a read on open turned away goes with
-      // the hold
-      if (!heldBack(hold)) hold.keptBack = false
+      // the read superseded the unread choices before it, so a read on
+      // open the hold turned away runs now, unless a newer choice still
+      // holds, for news past this read's cutoff
+      if (heldBack(hold) || !hold.keptBack) return
+      hold.keptBack = false
+      PLANNER.readOnOpen(target.task)
     })
   },
   /** The read on open of task `task`, which a window shows once it froze
@@ -15411,18 +15417,20 @@ export const PLANNER = {
       accepted Mark as read of the task frees the hold (P.readItem), so
       their choice holds while the task stays open, from the moment that
       write goes out. One the server refused or that failed holds nothing
-      once answered, and a read it turned away runs again then
-      (holdWatched). It sends each `through` once a visit of the watched
-      task, so the Inbox pane and its pop-out send one read, and once more
-      when the server confirmed that read and the item's answer, one that
-      came after the read went out, still holds unread messages at the same
-      `through`, as for a message whose mutation started before the read
-      and committed after it. It checks that at the confirmation too, since
-      Convex brings the answer that holds the read before the read's
-      promise resolves, so the answer that came with it may hold such a
-      message, and no later answer may come. A paused read is refused
-      quietly and goes out once the pause ends, and a refusal by the server
-      is not sent again for its `through`. Answers whether it sent one. */
+      once answered. A read the hold turned away runs again once nothing
+      holds, after a refusal, a failure or a row's accepted Mark as read
+      (holdWatched, P.readItem). It sends each `through` once a visit of
+      the watched task, so the Inbox pane and its pop-out send one read,
+      and once more when the server confirmed that read and the item's
+      answer, one that came after the read went out, still holds unread
+      messages at the same `through`, as for a message whose mutation
+      started before the read and committed after it. It checks that at
+      the confirmation too, since Convex brings the answer that holds the
+      read before the read's promise resolves, so the answer that came
+      with it may hold such a message, and no later answer may come. A
+      paused read is refused quietly and goes out once the pause ends, and
+      a refusal by the server is not sent again for its `through`. Answers
+      whether it sent one. */
   readOnOpen: (task: string): boolean => {
     const shown = PLANNER.inboxItem
     if (!shown || shown.task !== task || shown.state !== 'ok' || !shown.current) return false
