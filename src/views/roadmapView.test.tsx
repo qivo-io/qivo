@@ -957,60 +957,73 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
     },
   )
 
-  it('waits for the details of an owner a picker named while they load, and spends the first fit once their read fails', async () => {
-    // a picker named Gina before the plan, so she shows by name while her
-    // details load
-    const board = await loadBoard(network, ownedByGina, { scope: 'plan' })
-    board.server.people.unheld = new Set(['gina'])
-    board.server.people.hold = true
-    await board.deliver()
-    const org = board.snapshot.issues[0].org_id
-    await act(async () =>
-      board.P.takePeople(org, [
-        {
-          id: 'gina',
-          name: 'Gina Ghost',
-          org_role: 'user',
-          kind: 'person',
-          active: true,
-          pending: false,
-        },
-      ]),
-    )
-    board.P.roadmapContext(true, false)
-    network.mutation.mockClear()
-    const { start: _start, end: _end, ...unscheduled } = planOne(board)
-    await renderRoadmap(board, { focusPlan: unscheduled })
-    await flush()
-    await settle()
-    await flush()
-    // her read is on its way, so the panel says her hours are loading and
-    // the first fit waits with the starter bar
-    const starter = { start_week: week(0), end_week: week(1) }
-    expect(board.P.person('gina')).toMatchObject({ state: 'ok', nameOnly: true, reading: true })
-    expect(planCard()?.textContent).toContain('Loading the owner’s hours…')
-    expect(datesSent('one-1')).toEqual([starter])
-    // it fails, so her name stays, the panel says auto-fit is off and the
-    // drop keeps the dates the person chose
-    board.server.people.hold = false
-    board.server.people.force = 'error'
-    await board.answer()
-    await settle()
-    await flush()
-    expect(board.P.person('gina')).toMatchObject({ state: 'ok', nameOnly: true, reading: false })
-    expect(planCard()?.textContent).toContain('Capacity unknown, so auto-fit is off')
-    await dragBar('QN-1', 1)
-    const dropped = { start_week: week(1), end_week: week(2) }
-    expect(datesSent('one-1')).toEqual([starter, dropped])
-    // her details arrive with her 25-hour weeks, and the dates stay
-    board.server.people.force = null
-    await board.answer()
-    await settle()
-    await flush()
-    expect(board.P.person('gina')).toMatchObject({ state: 'ok', nameOnly: false })
-    expect(planCard()?.textContent).not.toContain('Capacity unknown')
-    expect(datesSent('one-1')).toEqual([starter, dropped])
-  })
+  it.each(['answers', 'fails'] as const)(
+    'waits for the details of an owner a picker named while they load, and fits the end or spends the first fit as their read %s',
+    async (outcome) => {
+      // a picker named Gina before the plan, so she shows by name while her
+      // details load
+      const board = await loadBoard(network, ownedByGina, { scope: 'plan' })
+      board.server.people.unheld = new Set(['gina'])
+      board.server.people.hold = true
+      await board.deliver()
+      const org = board.snapshot.issues[0].org_id
+      await act(async () =>
+        board.P.takePeople(org, [
+          {
+            id: 'gina',
+            name: 'Gina Ghost',
+            org_role: 'user',
+            kind: 'person',
+            active: true,
+            pending: false,
+          },
+        ]),
+      )
+      board.P.roadmapContext(true, false)
+      network.mutation.mockClear()
+      const { start: _start, end: _end, ...unscheduled } = planOne(board)
+      await renderRoadmap(board, { focusPlan: unscheduled })
+      await flush()
+      await settle()
+      await flush()
+      // her read is on its way, so the panel says her hours are loading and
+      // the first fit waits with the starter bar
+      const starter = { start_week: week(0), end_week: week(1) }
+      expect(board.P.person('gina')).toMatchObject({ state: 'ok', nameOnly: true, reading: true })
+      expect(planCard()?.textContent).toContain('Loading the owner’s hours…')
+      expect(datesSent('one-1')).toEqual([starter])
+      board.server.people.hold = false
+      if (outcome === 'answers') {
+        // her details arrive with her 25-hour weeks, and the first fit ends
+        // 100 hours in the fourth week
+        await board.answer()
+        await settle()
+        await flush()
+        expect(board.P.person('gina')).toMatchObject({ state: 'ok', nameOnly: false })
+        expect(datesSent('one-1')).toEqual([starter, { end_week: week(3) }])
+        return
+      }
+      // it fails, so her name stays, the panel says auto-fit is off and the
+      // drop keeps the dates the person chose
+      board.server.people.force = 'error'
+      await board.answer()
+      await settle()
+      await flush()
+      expect(board.P.person('gina')).toMatchObject({ state: 'ok', nameOnly: true, reading: false })
+      expect(planCard()?.textContent).toContain('Capacity unknown, so auto-fit is off')
+      await dragBar('QN-1', 1)
+      const dropped = { start_week: week(1), end_week: week(2) }
+      expect(datesSent('one-1')).toEqual([starter, dropped])
+      // her details arrive with her 25-hour weeks, and the dates stay
+      board.server.people.force = null
+      await board.answer()
+      await settle()
+      await flush()
+      expect(board.P.person('gina')).toMatchObject({ state: 'ok', nameOnly: false })
+      expect(planCard()?.textContent).not.toContain('Capacity unknown')
+      expect(datesSent('one-1')).toEqual([starter, dropped])
+    },
+  )
 
   it("spends the first fit once its owner's read fails while their load is on its way, so neither their details nor the load move the dropped dates", async () => {
     const board = await loadBoard(network, ownedByGina, { scope: 'plan' })
