@@ -109,10 +109,11 @@ milestone exists, and "Unavailable" where Qivo cannot tell, as when loading
 fails. A section says when it is loading, and when Qivo could check only
 part of the list, in which case **Load more** continues. If loading fails,
 it says so with **Retry**, and if Qivo refuses to read the milestones, it
-gives the reason. In My view, where your own work spans more projects than
-one read covers, it says so and asks you to open a project to see its
-milestones. "No upcoming milestones." means that the project has past
-milestones but no upcoming ones.
+gives the reason. In My view, where your own work spans more than 200
+projects ([Limits](./limits.md)), it says that their milestones are not
+listed there and asks you to open a project to see its milestones. "No
+upcoming milestones." means that the project has past milestones but no
+upcoming ones.
 
 Select **+** or a row to open the project's Milestones window. A row opens that milestone from the server,
 so the window says "Loading this milestone…" for a moment, then shows it

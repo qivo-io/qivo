@@ -12,7 +12,7 @@ import { autoMoveTitle } from '../lib/schedule'
 import { useLatest } from '../lib/useLatest'
 import { type IssueVM, type MilestoneVM, P, type ScopeInfo } from '../store/planner'
 import type { StoreVersion } from '../store/updates'
-import { MINE_MILESTONES_HINT } from './overview/OverviewMilestones'
+import { MINE_MILESTONES_HINT, MINE_TOO_MANY } from './overview/OverviewMilestones'
 import type { ScopeMilestones } from './useScopeMilestones'
 
 type MobileRoadmapProps = {
@@ -238,6 +238,7 @@ export function MobileRoadmap({
   )
   const canAddMilestone = !info.wide && P.canAddMilestone(info.id)
   const hint = info.mine ? MINE_MILESTONES_HINT : undefined
+  const tooMany = info.mine ? MINE_TOO_MANY : undefined
   // All projects reads no milestone and lists none (ms.base null)
   const milestoneSection = ms.base && (
     <section className="mobile-roadmap-section" data-agenda-milestones>
@@ -272,6 +273,7 @@ export function MobileRoadmap({
             : canAddMilestone
               ? 'No milestones yet. Add one with the + button.'
               : 'No milestones yet.',
+          tooMany,
         }}
         hint={hint}
       >
@@ -287,6 +289,7 @@ export function MobileRoadmap({
           scroller="[data-scroll]"
           rowMark="data-agenda-milestone"
           rowsClassName="gap-0"
+          sentences={{ tooMany }}
           hint={hint}
           className="mt-2"
           header={

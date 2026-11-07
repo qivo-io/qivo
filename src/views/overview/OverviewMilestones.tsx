@@ -11,14 +11,21 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { relativeWeek, weekToISO } from '@/lib/dates'
 import { cn } from '@/lib/utils'
+import { grouped, LIMITS } from '../../../convex/lib/limits'
 import { MilestoneSectionPart } from '../../components/MilestoneSectionPart'
 import { Icon } from '../../components/qivo'
 import { type MilestoneVM, P } from '../../store/planner'
 import type { ScopeMilestones } from '../useScopeMilestones'
 
-/** What My view's notes add where a read names too many projects or needs
-    more reads than one request allows: My view cannot choose fewer. */
+/** What My view's notes add where a read needs more reads than one
+    request allows: My view cannot choose fewer projects. */
 export const MINE_MILESTONES_HINT = 'Open a project to see its milestones.'
+
+/** My view's note where the person's own work lies in more top-level
+    projects than one read names (LIMITS.milestoneProjects), in place of
+    the limit's sentence, which asks to choose fewer projects, something My
+    view cannot do. */
+export const MINE_TOO_MANY = `Your work spans more than ${grouped(LIMITS.milestoneProjects.max)} projects, so their milestones are not listed here. ${MINE_MILESTONES_HINT}`
 
 /** One milestone of the Overview's list: the diamond, the project in a wide
     scope, the name, the relative week and the date. The next milestone is
@@ -104,8 +111,10 @@ function SectionHeader({ label, count }: { label: string; count: number | null }
  * The Overview's milestone sections in their root (data-overview-milestones):
  * Upcoming with no search, the next milestone's row emphasised, and Past's
  * disclosure, collapsed until the person opens it, with its search by the
- * window's rule. In My view each row names its project, and a too-many or
- * read-too-large note adds that a project shows its milestones. The empty
+ * window's rule. In My view each row names its project, the too-many note
+ * says the person's work spans more projects than one read names
+ * (MINE_TOO_MANY), and a read-too-large note adds that a project shows its
+ * milestones. The empty
  * line of an Upcoming whose projects hold no milestone at all says "No
  * milestones yet." in a project, with the + where the person may add one,
  * and "No milestones in any of your projects yet." in My view.
@@ -132,6 +141,7 @@ export function OverviewMilestones({
       ? 'No milestones yet. Add one with the + button.'
       : 'No milestones yet.'
   const hint = mine ? MINE_MILESTONES_HINT : undefined
+  const tooMany = mine ? MINE_TOO_MANY : undefined
   const label = (m: MilestoneVM) => (mine ? P.projectLabelOf(m.project) : null)
   const { upcoming, past } = ms
   return (
@@ -146,7 +156,7 @@ export function OverviewMilestones({
         scroller="[data-overview-root]"
         rowMark="data-overview-milestone"
         rowsClassName="gap-2"
-        sentences={{ noneYet }}
+        sentences={{ noneYet, tooMany }}
         hint={hint}
       >
         {upcoming.view.rows.map((m) => (
@@ -169,6 +179,7 @@ export function OverviewMilestones({
           scroller="[data-overview-root]"
           rowMark="data-overview-milestone"
           rowsClassName="gap-2"
+          sentences={{ tooMany }}
           hint={hint}
           header={
             <Button

@@ -11,11 +11,11 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
    more and the move on at a lowered cap, a collapsed Past that reads
    nothing until it opens, 25 at a time with its search on the server, the
    Next milestone cell in each state, a kept answer's included, My view's
-   `mine` read, All projects reading none, the note pages, the section
-   staying under a note while Retry and Show from the start read again,
-   another person's rename, move and delete arriving while the page shows,
-   a hidden tab, a kept page, a scope switch, P.releaseOverview and a new
-   week. The reads answer through the milestone
+   own too-many sentence, My view's `mine` read, All projects reading none,
+   the note pages, the section staying under a note while Retry and Show
+   from the start read again, another person's rename, move and delete
+   arriving while the page shows, a hidden tab, a kept page, a scope
+   switch, P.releaseOverview and a new week. The reads answer through the milestone
    stand-in over the fixture's workspace (store/milestoneStandIn.setup.ts).
    Every case asks for no task. */
 
@@ -443,7 +443,7 @@ describe('My view and All projects', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(q('[data-overview-milestone="u1"]')?.textContent).toContain('Plan')
   })
 
-  it("adds My view's hint to the too-many and read-too-large notes", async () => {
+  it("says My view's own too-many sentence, and adds its hint to the read-too-large note", async () => {
     const loaded = await overview(plan({ up: 2 }), { scope: 'mine' })
     for (const [force, note] of [
       ['too_many', 'too-many'],
@@ -461,6 +461,15 @@ describe('My view and All projects', { timeout: BOARD_TEST_TIMEOUT }, () => {
       // Past would be refused the same way, so it does not show
       expect(q('[data-overview-milestones] [data-milestone-past-toggle]')).toBeNull()
     }
+    // My view cannot choose fewer projects, so its note does not ask to;
+    // must fail for the limit's sentence with the hint after it
+    loaded.board.server.milestones.force = { mine: 'too_many' }
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await loaded.render()
+    expect(noteOf('upcoming')).toEqual([
+      'too-many: Your work spans more than 200 projects, so their milestones are not listed here. Open a project to see its milestones.',
+    ])
   })
 
   it('asks nothing in All projects, whose chooser is the whole page', async () => {

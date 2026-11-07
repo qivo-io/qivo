@@ -37,11 +37,15 @@ const sectionNoteClass = 'flex flex-wrap items-center gap-2 px-0.5 py-1 text-sm 
     whose note takes the view's hint. */
 const READ_TOO_LARGE = 'milestone_read_too_large'
 
-/** What a section's search box and empty line say, beyond the window's. */
+/** What a section's search box, empty line and notes say, beyond the
+    window's. */
 export type SectionSentences = {
   /** the empty line of an Upcoming whose first answer says its projects
       hold no past milestone, "No milestones yet." unless given */
   noneYet?: string
+  /** the too-many note in place of LIMITS.milestoneProjects' sentence and
+      the hint, as My view, which cannot choose fewer projects, says it */
+  tooMany?: string
 }
 
 /**
@@ -56,7 +60,8 @@ export type SectionSentences = {
  * leave focus in the section. The empty line takes focus (tabIndex -1), so
  * a view's focus fallback can land on it. `hint` follows the too-many note
  * and the refusal of a read too large, as My view adds "Open a project to
- * see its milestones." When a section moves on and its first rows leave,
+ * see its milestones.", unless `sentences.tooMany` replaces the too-many
+ * note whole. When a section moves on and its first rows leave,
  * the browser's scroll anchoring keeps the rows the person reads in place,
  * and where it lacks that, as in Safari, the section moves the scroller
  * `scroller` names (the nearest ancestor it matches) by hand, measuring the
@@ -259,7 +264,7 @@ export function MilestoneSectionPart({
             className={sectionNoteClass}
           >
             {note.kind === 'too_many'
-              ? `${limitSentence(LIMITS.milestoneProjects)}${hinted}`
+              ? (sentences.tooMany ?? `${limitSentence(LIMITS.milestoneProjects)}${hinted}`)
               : note.kind === 'refused'
                 ? `${note.sentence}${hinted}`
                 : note.more

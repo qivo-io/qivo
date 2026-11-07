@@ -15,8 +15,8 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
    My view, the reads stopped while the task schedule or the landscape
    timeline shows and freed by P.releaseRoadmap, the reads under a note
    whatever section the person chose, the section staying under a note
-   while Retry and Show from the start read again, and the Roadmap's own
-   flag read stopped while the agenda shows. */
+   while Retry and Show from the start read again, My view's too-many
+   note, and the Roadmap's own flag read stopped while the agenda shows. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -294,6 +294,16 @@ describe("the phone agenda's milestones", { timeout: BOARD_TEST_TIMEOUT }, () =>
     expect(rowsOf('upcoming')).toContain('u1')
     expect(rowsOf('upcoming')).not.toContain('s1')
     expect(document.body.textContent).toContain('Open a project to add a milestone to its roadmap.')
+  })
+
+  it("says My view's own too-many sentence, which asks for no fewer projects", async () => {
+    await agenda('mine', { force: { mine: 'too_many' } })
+    // must fail for the limit's sentence with the hint after it
+    expect(
+      sectionOf('upcoming')?.querySelector('[data-milestone-note="too-many"]')?.textContent,
+    ).toBe(
+      'Your work spans more than 200 projects, so their milestones are not listed here. Open a project to see its milestones.',
+    )
   })
 
   it('keeps the section and its focus under a note while Retry and Show from the start read again', async () => {
