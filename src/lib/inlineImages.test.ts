@@ -428,6 +428,37 @@ describe('the inline image loader', () => {
     expect(h.mint.mock.calls.map(([, fresh]) => fresh)).toEqual([false, true, false, true])
   })
 
+  it('forgets an image whose mint or download fails after its last view went', async () => {
+    const h = harness({ hold: true })
+    for (const [id, status] of [
+      ['five-hundred', 503],
+      ['refused', 404],
+    ] as const) {
+      const v = h.view(id)
+      v.near()
+      await settle()
+      v.unmount()
+      h.downloads.at(-1)?.answer.resolve(image(0, status))
+      await settle()
+      expect(h.loader.stats().entries).toBe(0)
+    }
+    const v = h.view('mint-failed')
+    let answer: (outcome: MintOutcome) => void = () => {}
+    h.mint.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve
+      }),
+    )
+    v.near()
+    v.unmount()
+    answer({ state: 'failed' })
+    await settle()
+    expect(h.loader.stats().entries).toBe(0)
+    // no retry is left behind either
+    await vi.advanceTimersByTimeAsync(INLINE_IMAGES.retry)
+    expect(h.mint).toHaveBeenCalledTimes(3)
+  })
+
   it('keeps "Loading image…" and tries again after a failed mint', async () => {
     const h = harness()
     h.mint.mockResolvedValueOnce({ state: 'failed' })

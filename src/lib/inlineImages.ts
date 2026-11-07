@@ -331,14 +331,19 @@ export function createInlineImages(
     }
   }
   /* A failed mint or download: held bytes stay held but unrenewed, and
-     the entry tries again later while a view keeps it near. */
+     the entry tries again later while a view keeps it near. With no view
+     near it schedules nothing and is forgotten once nothing watches it;
+     the next view asks again. */
   const retryLater = (entry: Entry) => {
     if (entry.phase !== 'ready') entry.phase = 'idle'
     publish(entry)
     if (entry.retry !== null) deps.clearTimer(entry.retry)
+    entry.retry = null
+    if (entry.pins === 0) return tidy(entry)
     entry.retry = deps.setTimer(() => {
       entry.retry = null
       if (entry.pins > 0) want(entry, false)
+      else tidy(entry)
     }, INLINE_IMAGES.retry)
   }
   function pumpSlots() {
@@ -392,8 +397,9 @@ export function createInlineImages(
     if (entry.refusedOnce) return gone(entry)
     entry.refusedOnce = true
     entry.phase = 'idle'
-    if (entry.pins > 0 && !paused) lease(entry, true)
-    else publish(entry)
+    if (entry.pins > 0 && !paused) return lease(entry, true)
+    publish(entry)
+    tidy(entry)
   }
   async function download(entry: Entry) {
     const version = generation
@@ -520,6 +526,11 @@ export function createInlineImages(
     } finally {
       quiet()
       slot()
+      // a download that ended needs no stop for its views going far
+      if (entry.phase !== 'loading' && entry.leaving !== null) {
+        deps.clearTimer(entry.leaving)
+        entry.leaving = null
+      }
     }
   }
   /* What a near entry needs next: nothing while it loads or shows within
