@@ -2064,6 +2064,18 @@ below it gives organization admins every project again, which widens
 access, so roll forward instead. The release sets no app floor and changes
 no table, field or index, with no backfill and no release step.
 
+From the release after v0.1.159, the app opens the project the person
+opened last after `projectNav.resolve` says they may, else a project
+chooser on the navigation reads (`projectNav.page`, `children` and
+`search`), and the All projects directory, the sidebar's tree and Search
+open a project the workspace does not hold, and a project address, through
+`projectNav.resolve`. The reads first shipped in v0.1.118 (`13f4bcba`) and,
+for `search`, v0.1.126 (`1228de4c`), which the floors above already hold, so
+the release sets no new floor. It changes no server function and has no
+schema change, no backfill and no release step. The staging check's step
+`ui/startup-selection` checks it on the deployment's reads, so it needs a
+backend from v0.1.126 on.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
