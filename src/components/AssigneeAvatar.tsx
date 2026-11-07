@@ -26,12 +26,13 @@ import { nameKey } from '../../convex/lib/nameKey'
 import { allWordsMatcher } from '../../convex/lib/search'
 import { keepOwnerName, useOwnerNames } from './ownerNames'
 import { CommandChoiceEnd } from './pickerParts'
-import { escapeClearsFirst, OWNER_WORDS, REVIEWER_WORDS } from './pickerWords'
+import { ESCAPE_CLEARS, escapeClearsFirst, OWNER_WORDS, REVIEWER_WORDS } from './pickerWords'
 
 export type OwnerField = 'assignee' | 'reviewer'
 
 /** The data attribute of an owner list's search box, which Escape clears
-    before it closes the list (escapeClearsFirst). */
+    before it closes the list, in a popover (escapeClearsFirst) and in an
+    anchored pop (ESCAPE_CLEARS) alike. */
 const OWNER_SEARCH = 'data-owner-search'
 
 /** The value of the Unassigned or No reviewer row, which no id takes. */
@@ -256,11 +257,12 @@ export function OwnerPickList({
         onValueChange={setText}
         placeholder={`${find}…`}
         aria-label={find}
-        {...{ [OWNER_SEARCH]: '' }}
+        {...{ [OWNER_SEARCH]: '', [ESCAPE_CLEARS]: '' }}
         onKeyDown={(event) => {
           // Enter acts only on the answer for the typed text
           if (event.key === 'Enter' && stale) event.preventDefault()
-          // the popover stays open for this Escape (escapeClearsFirst)
+          // the popover or pop stays open for this Escape (escapeClearsFirst,
+          // ESCAPE_CLEARS)
           if (event.key === 'Escape' && text !== '') setText('')
         }}
       />

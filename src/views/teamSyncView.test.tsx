@@ -825,6 +825,57 @@ describe('the opening', () => {
   )
 })
 
+describe('the reviewer prompt', () => {
+  it(
+    'clears its typed search on Escape first, and is skipped on the next, writing nothing',
+    async () => {
+      const { P } = await open(people({}), (snap) => ({
+        scope: `project:${meta(snap)}`,
+        step: me(snap),
+      }))
+      const handle = P.syncTask('t1')?.id ?? ''
+      const status = card(handle)?.querySelector('[data-fieldselect]')
+      await act(async () =>
+        status?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
+      )
+      await click(
+        [...document.querySelectorAll('[role="option"]')].find(
+          (option) => option.textContent === 'In Review',
+        ),
+      )
+      await settle()
+      const prompt = () => document.querySelector(`[data-sync-reviewer-prompt="${handle}"]`)
+      const box = () => prompt()?.querySelector<HTMLInputElement>('[data-owner-search]') ?? null
+      const search = box()
+      if (!search) throw new Error('missing the prompt’s search')
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      await act(async () => {
+        setValue?.call(search, 'Ai')
+        search.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      /* An Escape in the prompt's search; true when the app took it. */
+      const escape = async () => {
+        const event = new KeyboardEvent('keydown', {
+          key: 'Escape',
+          bubbles: true,
+          cancelable: true,
+        })
+        await act(async () => box()?.dispatchEvent(event))
+        await settle()
+        return event.defaultPrevented
+      }
+      expect(await escape()).toBe(true)
+      expect(prompt()).not.toBeNull()
+      expect(box()?.value).toBe('')
+      const sent = network.mutation.mock.calls.length
+      await escape()
+      expect(prompt()).toBeNull()
+      expect(network.mutation.mock.calls.length).toBe(sent)
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+})
+
 describe('a meeting that stops fitting', () => {
   it(
     'keeps the last meeting under the note, its cards’ unsent note and read-only controls, and ends with the next ok answer',

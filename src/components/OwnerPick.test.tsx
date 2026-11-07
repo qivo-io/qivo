@@ -588,6 +588,45 @@ describe('the owner list’s batches and states', () => {
   }, 60_000)
 })
 
+describe('the owner list’s Escape', () => {
+  it('clears the typed text first in the landscape Roadmap’s pop, which then closes on the next', async () => {
+    await load()
+    const { AssigneeAvatar } = await import('./AssigneeAvatar')
+    const { LandscapeContext } = await import('../lib/landscape')
+    const host = document.createElement('div')
+    document.body.append(host)
+    // the landscape frame closes itself on an Escape no one took
+    const frameEscape = vi.fn()
+    await render(
+      <LandscapeContext.Provider
+        value={{ host, rotated: false, width: 844, height: 390, toLocal: (x, y) => ({ x, y }) }}
+      >
+        <div
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && !event.defaultPrevented) frameEscape()
+          }}
+        >
+          <AssigneeAvatar issue={task()} />
+        </div>
+      </LandscapeContext.Provider>,
+    )
+    await act(async () => document.querySelector<HTMLElement>('[data-assignee-edit]')?.click())
+    await settle()
+    const list = () => host.querySelector('[data-owner-list]')
+    expect(list()).not.toBeNull()
+    await type('Ben')
+    expect(await press('Escape')).toBe(true)
+    await settle()
+    expect(searchBox()?.value).toBe('')
+    expect(list()).not.toBeNull()
+    expect(frameEscape).not.toHaveBeenCalled()
+    await press('Escape')
+    await settle()
+    expect(list()).toBeNull()
+    expect(frameEscape).not.toHaveBeenCalled()
+  })
+})
+
 describe('the owner list’s pick', () => {
   it('writes the person and runs onPick once the server saves the pick', async () => {
     await load()

@@ -271,11 +271,12 @@ function StatusCtl({
 }
 
 /** The reviewer picker a move into In Review offers, anchored to the row's
-    owner control. Escape, a click outside or a phone's Back skips it; a pick
-    is a change made from the row, written as the prompt closes, which takes
-    no history step (lib/useMobile useMenuBackLayer). Closing hands focus back
-    to the owner control while the row is still on the page (a pick usually
-    moves it to the reviewer's page). */
+    owner control. An Escape in its search clears typed text first, as in
+    every owner list. After that Escape, a click outside or a phone's Back
+    skips it; a pick is a change made from the row, written as the prompt
+    closes, which takes no history step (lib/useMobile useMenuBackLayer).
+    Closing hands focus back to the owner control while the row is still on
+    the page (a pick usually moves it to the reviewer's page). */
 function ReviewerPrompt({
   it,
   ctx,

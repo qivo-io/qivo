@@ -17,7 +17,7 @@ import { LIMITS } from '../../convex/lib/limits'
 import { limitSentence } from '../lib/fieldLimits'
 import type { ListEnd, PagedList } from '../lib/pagedList'
 import { LimitedInput } from './LimitedField'
-import type { ChoiceWords, HeldPick } from './pickerWords'
+import { type ChoiceWords, ESCAPE_CLEARS, type HeldPick } from './pickerWords'
 import { MenuItem } from './qivo'
 
 /** Load more or Try again as ChoiceEnd hands it to an `action` renderer:
@@ -179,8 +179,9 @@ export function CommandChoiceEnd<A extends HeldPick, Row>({
 }
 
 /** A picker's search box, which clears its text on Escape first; the
-    popover closes on the Escape after that (escapeClearsFirst). `probe`
-    is the data attribute that marks it. */
+    popover or anchored pop closes on the Escape after that
+    (escapeClearsFirst, ESCAPE_CLEARS). `probe` is the data attribute that
+    marks it. */
 export function PickerSearch({
   text,
   onText,
@@ -199,7 +200,7 @@ export function PickerSearch({
       limit={LIMITS.search}
       aria-label={label}
       placeholder={placeholder}
-      {...{ [probe]: '' }}
+      {...{ [probe]: '', [ESCAPE_CLEARS]: '' }}
       value={text}
       onChange={(e) => onText(e.target.value)}
       onKeyDown={(e) => {

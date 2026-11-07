@@ -127,6 +127,13 @@ export const RECIPIENT_WORDS: ChoiceWords = {
   none: 'No people match.',
 }
 
+/** The data attribute of a search box that clears its text on Escape
+    before its picker closes. An anchored pop (components/qivo AnchoredPop)
+    stays open for that Escape while the box holds text, by the rule
+    escapeClearsFirst gives a popover, so the landscape Roadmap's owner
+    list and Team sync's reviewer prompt clear first as the popovers do. */
+export const ESCAPE_CLEARS = 'data-escape-clears'
+
 /** Keeps a picker's popover open on an Escape in its search box, marked
     `probe`, while the box holds text, which the box then clears. */
 export const escapeClearsFirst = (probe: string) => (event: KeyboardEvent) => {
