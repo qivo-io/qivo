@@ -212,8 +212,7 @@
   backdrop-filter: var(--workspace-panel-blur);
 }
 
-.mobile-roadmap-tools > summary,
-.mobile-roadmap-past > summary {
+.mobile-roadmap-tools > summary {
   min-height: 44px;
   display: flex;
   align-items: center;
@@ -231,15 +230,13 @@
   background: var(--workspace-panel, var(--surface-1));
 }
 
-.mobile-roadmap-tools > summary::after,
-.mobile-roadmap-past > summary::after {
+.mobile-roadmap-tools > summary::after {
   content: "+";
   margin-left: auto;
   font-size: 18px;
 }
 
-.mobile-roadmap-tools[open] > summary::after,
-.mobile-roadmap-past[open] > summary::after {
+.mobile-roadmap-tools[open] > summary::after {
   content: "−";
 }
 

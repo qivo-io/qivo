@@ -40,6 +40,7 @@ import { type AutoMove, autoMoveTitle } from '../lib/schedule'
 import { captureWeekDates, restoreWeekDates } from '../lib/weekDrafts'
 import { fitEndWeekAgainst, type LoadItem, plannableHoursOf } from '../lib/workload'
 import {
+  AGENDA_MILESTONE_SLOTS,
   type IssueFilters,
   type IssueVM,
   type MilestoneVM,
@@ -78,6 +79,7 @@ import {
   useRoadmapView,
 } from './roadmap/useRoadmapView'
 import { WinMenu, WinRangePicker } from './roadmap/WindowControls'
+import { useScopeMilestones } from './useScopeMilestones'
 import '../styles/mobile-views.css'
 import './Roadmap.css'
 
@@ -1559,6 +1561,7 @@ function Roadmap({
       taskState={mobileTaskState}
       onTaskStateChange={setMobileTaskState}
       empty={empty}
+      milestones={agendaMilestones}
     />
   )
   const withMobileTimeline = (timeline: React.ReactNode) =>
@@ -1690,6 +1693,19 @@ function Roadmap({
        Only a current answer says so, never a wait or a refusal. */
     emptyNote = <EmptyState icon="user" title="Nothing assigned to you" />
   }
+  /* The phone agenda's milestone sections, the Overview's
+     (views/useScopeMilestones.ts) on the Roadmap page's own slots, read
+     here rather than in MobileRoadmap, which mounts anew after the
+     landscape timeline, a planning session or a reveal, so a Load more and
+     an open Past outlive those and a return shows the kept rows as
+     refreshing. They read only while the agenda shows its milestones, as
+     it does under a note whatever its section, and stop and keep their
+     answers otherwise; P.releaseRoadmap frees them. */
+  const agendaMilestones = useScopeMilestones(
+    info,
+    AGENDA_MILESTONE_SLOTS,
+    showMobileAgenda && (!!emptyNote || mobileAgendaSection === 'milestones'),
+  )
   if (emptyNote && wide && (!mine || info.metas.length === 0))
     return (
       <RoadmapRoot view={view} milestones={markers.view.state}>

@@ -134,23 +134,41 @@ describe('a long list on another view', () => {
   it("mounts the first screen of the phone's task schedule, then the rest", async () => {
     const board = await loadBoardWithTasks(network, paused(LONG))
     const { MobileRoadmap } = await import('./MobileRoadmap')
+    const { useScopeMilestones } = await import('./useScopeMilestones')
+    const { AGENDA_MILESTONE_SLOTS } = await import('../store/planner')
     const noop = () => {}
+    /* the agenda with its milestone sections, which the Roadmap reads and
+       which read nothing while the task schedule shows */
+    function Agenda({
+      info,
+      children,
+    }: {
+      info: Parameters<typeof useScopeMilestones>[0]
+      children: (milestones: ReturnType<typeof useScopeMilestones>) => React.ReactNode
+    }) {
+      return children(useScopeMilestones(info, AGENDA_MILESTONE_SLOTS, false))
+    }
     await board.renderView(root, (info) => (
-      <MobileRoadmap
-        info={info}
-        // the Roadmap's tasks, as its answer brings them
-        tasks={board.P.issues}
-        filterControls={null}
-        actions={{}}
-        onTimeline={noop}
-        onAutoCorrect={noop}
-        corrections={0}
-        undoControls={null}
-        section="tasks"
-        onSectionChange={noop}
-        taskState="all"
-        onTaskStateChange={noop}
-      />
+      <Agenda info={info}>
+        {(milestones) => (
+          <MobileRoadmap
+            milestones={milestones}
+            info={info}
+            // the Roadmap's tasks, as its answer brings them
+            tasks={board.P.issues}
+            filterControls={null}
+            actions={{}}
+            onTimeline={noop}
+            onAutoCorrect={noop}
+            corrections={0}
+            undoControls={null}
+            section="tasks"
+            onSectionChange={noop}
+            taskState="all"
+            onTaskStateChange={noop}
+          />
+        )}
+      </Agenda>
     ))
     expect(count('.mobile-roadmap-row')).toBeGreaterThan(0)
     expect(count('.mobile-roadmap-row')).toBeLessThanOrEqual(20)

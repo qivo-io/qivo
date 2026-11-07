@@ -513,17 +513,21 @@ describe('the Overview of a scope with nothing to summarize', () => {
     expect(document.querySelector('main [aria-label="New milestone"]')).not.toBeNull()
     // nothing counted, so no summary and no status strip
     expect(document.querySelector('[data-ov-summary], [data-ov-strip]')).toBeNull()
-    // a project and My view whose sub-project holds no task
+    // My view whose sub-project holds no task of the person's lists no
+    // milestone, as it covers only the projects that hold their own work
+    // (owner, 28 October 2026), so its note is the whole page
     await reload()
     const plan = withMilestone(member(), 'plan', 'Plan launch')
     await app(plan, '/app/~/overview/mine')
     await shows('Nothing assigned to you')
-    expect(milestoneRows()).toHaveLength(1)
-    // All projects asks to choose a project, its milestones under it
+    expect(milestoneRows()).toHaveLength(0)
+    expect(document.querySelector('[data-overview-milestones]')).toBeNull()
+    // All projects asks to choose a project and lists no milestone
+    // (coordinator, 7 November 2026)
     await reload()
     await app(plan, '/app/~/overview/all')
     await shows('Choose a project')
-    expect(milestoneRows()).toHaveLength(1)
+    expect(milestoneRows()).toHaveLength(0)
     await reload()
     await app(plan, '/app/testbed/overview/p/2')
     await shows('No tasks yet')
@@ -535,7 +539,7 @@ describe('the Overview of a scope with nothing to summarize', () => {
     only.access = only.access.filter((grant) => grant.project_id === 'bare')
     await app(only, '/app/~/overview/all')
     await shows('Choose a project')
-    expect(milestoneRows()).toHaveLength(1)
+    expect(milestoneRows()).toHaveLength(0)
   })
 
   it('keeps them on the phone too', async () => {
@@ -546,7 +550,7 @@ describe('the Overview of a scope with nothing to summarize', () => {
     await reload()
     await app(withMilestone(member(), 'plan', 'Plan launch'), '/app/~/overview/mine')
     await shows('Nothing assigned to you')
-    expect(milestoneRows()).toHaveLength(1)
+    expect(milestoneRows()).toHaveLength(0)
   })
 })
 
@@ -578,10 +582,13 @@ describe('the phone Roadmap of a scope with nothing to schedule', () => {
     await shows('Tasks live in sub-projects.')
     expect(document.body.textContent).toContain('Upcoming milestones')
     expect(document.body.textContent).toContain('Bare launch')
+    // My view's agenda lists only the projects that hold the person's own
+    // work, so none here, and its note is all it shows
     await reload()
     await app(withMilestone(member(), 'plan', 'Plan launch'), '/app/~/roadmap/mine')
     await shows('Nothing assigned to you')
-    expect(document.body.textContent).toContain('Plan launch')
+    expect(document.body.textContent).not.toContain('Plan launch')
+    expect(document.body.textContent).not.toContain('Upcoming milestones')
     expect(document.body.textContent).not.toContain('Task schedule')
   })
 })

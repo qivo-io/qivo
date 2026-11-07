@@ -1,7 +1,8 @@
-import { memo, useLayoutEffect, useRef, useState } from 'react'
+import { memo, useId, useLayoutEffect, useRef, useState } from 'react'
 import { DeferredList } from '@/components/DeferredList'
 import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
+import { MilestoneSectionPart } from '../components/MilestoneSectionPart'
 import { Avatar, Icon, StatusDot } from '../components/qivo'
 import { SYNC_LIMIT } from '../lib/boardGroups'
 import { focusAround } from '../lib/focusWhenGone'
@@ -11,6 +12,8 @@ import { autoMoveTitle } from '../lib/schedule'
 import { useLatest } from '../lib/useLatest'
 import { type IssueVM, type MilestoneVM, P, type ScopeInfo } from '../store/planner'
 import type { StoreVersion } from '../store/updates'
+import { MINE_MILESTONES_HINT } from './overview/OverviewMilestones'
+import type { ScopeMilestones } from './useScopeMilestones'
 
 type MobileRoadmapProps = {
   info: ScopeInfo
@@ -37,6 +40,10 @@ type MobileRoadmapProps = {
       with nothing to schedule, or the Roadmap's answer's note
       (roadmap/RoadmapNote.tsx). */
   empty?: React.ReactNode
+  /** The scope's milestone sections (views/useScopeMilestones.ts), which
+      the Roadmap reads, so they outlive this agenda's remounts after the
+      landscape timeline, a planning session or a reveal. */
+  milestones: ScopeMilestones
 }
 
 /* A task row's height before it renders (a two-line title), and the least
@@ -106,10 +113,16 @@ const MobileRoadmapRow = memo(function MobileRoadmapRow({
  * rules still come from the planner; the timeline remains available for
  * spatial planning.
  * A toolbar row under Timeline & team holds Undo and Auto-move.
+ * Its Milestones section lists the scope's milestones as the Overview does,
+ * from the server: Upcoming 10 at a time and a collapsed Past, the
+ * Overview's sections on slots of the Roadmap page's own
+ * (views/useScopeMilestones.ts). My view lists those of the projects that
+ * hold the person's own work, and All projects lists none.
  * With `empty`, the agenda keeps what the desktop's empty roadmap keeps in its
  * toolbar (Undo, Auto-move and New milestone) and shows the note in
  * place of the timeline button, the section switch and the task schedule. The
- * scope's milestones stay listed under the note, as the desktop keeps their
+ * scope's milestones stay listed under the note where the scope holds some
+ * or Qivo cannot tell (ScopeMilestones `stands`), as the desktop keeps their
  * flags. */
 export function MobileRoadmap({
   info,
@@ -127,10 +140,9 @@ export function MobileRoadmap({
   taskState,
   onTaskStateChange,
   empty,
+  milestones: ms,
 }: MobileRoadmapProps) {
-  const milestones = info.milestones.slice().sort((a, b) => a.week - b.week)
-  const upcoming = milestones.filter((m) => m.week >= P.TODAY_WEEK)
-  const past = milestones.filter((m) => m.week < P.TODAY_WEEK)
+  const pastBodyId = useId()
   const tasks = shown
     .filter(
       (it) =>
@@ -178,17 +190,19 @@ export function MobileRoadmap({
       data-agenda-milestone={m.id}
       onClick={() =>
         // the window can delete this milestone, and its row with it. Focus
-        // then goes to the next row, the previous one, New milestone or the
-        // empty list's line. A row in the closed past list is out of reach
+        // then goes to the next row, the previous one, New milestone or
+        // Upcoming's empty line. A collapsed Past shows no row
         actions.editMilestone(
           m.id,
           focusAround(
             'data-agenda-milestone',
             m.id,
-            (row) => (row.closest('details:not([open])') ? null : row),
+            (row) => row,
             () =>
               scroller.current?.querySelector<HTMLElement>('[data-new-milestone]') ??
-              scroller.current?.querySelector<HTMLElement>('[data-no-milestones]'),
+              scroller.current?.querySelector<HTMLElement>(
+                '[data-agenda-milestones] [data-milestone-section="upcoming"] [data-milestone-note="empty"]',
+              ),
           ),
           m.project,
         )
@@ -223,8 +237,10 @@ export function MobileRoadmap({
     </div>
   )
   const canAddMilestone = !info.wide && P.canAddMilestone(info.id)
-  const milestoneSection = (
-    <section className="mobile-roadmap-section">
+  const hint = info.mine ? MINE_MILESTONES_HINT : undefined
+  // All projects reads no milestone and lists none (ms.base null)
+  const milestoneSection = ms.base && (
+    <section className="mobile-roadmap-section" data-agenda-milestones>
       <div className="mobile-roadmap-section-heading">
         <h2>Upcoming milestones</h2>
         {canAddMilestone && (
@@ -240,20 +256,60 @@ export function MobileRoadmap({
           </Button>
         )}
       </div>
-      {upcoming.length ? (
-        upcoming.map(milestoneRow)
-      ) : (
-        <p data-no-milestones tabIndex={-1} className="mobile-roadmap-note">
-          No upcoming milestones.
-        </p>
+      <MilestoneSectionPart
+        side="upcoming"
+        section={ms.upcoming}
+        open
+        searchable={false}
+        pastKnown={ms.upcoming.view.past === false}
+        header={null}
+        scroller="[data-scroll]"
+        rowMark="data-agenda-milestone"
+        sentences={{
+          noneYet: info.mine
+            ? 'No milestones in any of your projects yet.'
+            : canAddMilestone
+              ? 'No milestones yet. Add one with the + button.'
+              : 'No milestones yet.',
+        }}
+        hint={hint}
+      >
+        {ms.upcoming.view.rows.map(milestoneRow)}
+      </MilestoneSectionPart>
+      {ms.showPast && (
+        <MilestoneSectionPart
+          side="past"
+          section={ms.past}
+          open={ms.pastOpen}
+          searchable={ms.pastSearchable}
+          bodyId={pastBodyId}
+          scroller="[data-scroll]"
+          rowMark="data-agenda-milestone"
+          hint={hint}
+          className="mt-2"
+          header={
+            <Button
+              type="button"
+              variant="ghost"
+              data-milestone-past-toggle
+              aria-expanded={ms.pastOpen}
+              aria-controls={pastBodyId}
+              onClick={() => ms.setPastOpen(!ms.pastOpen)}
+              className="-ml-2 gap-1.5 self-start px-2 text-sm font-medium text-text-2"
+            >
+              <Icon
+                name={ms.pastOpen ? 'chevronDown' : 'chevronRight'}
+                size={16}
+                color="var(--text-2)"
+              />
+              Past milestones
+            </Button>
+          }
+        >
+          {ms.pastOpen ? ms.past.view.rows.map(milestoneRow) : []}
+        </MilestoneSectionPart>
       )}
-      {past.length > 0 && (
-        <details className="mobile-roadmap-past">
-          <summary>Past milestones ({past.length})</summary>
-          {past.slice().reverse().map(milestoneRow)}
-        </details>
-      )}
-      {info.wide && (
+      {info.mine && (
         <p className="mobile-roadmap-note">Open a project to add a milestone to its roadmap.</p>
       )}
     </section>
@@ -263,7 +319,7 @@ export function MobileRoadmap({
       <div ref={scroller} data-scroll data-screen-label="Roadmap" className="mobile-roadmap-agenda">
         {toolbar}
         {empty}
-        {milestones.length > 0
+        {ms.stands
           ? milestoneSection
           : canAddMilestone && (
               <Button type="button" data-new-milestone onClick={() => actions.newMilestone({})}>
