@@ -60,6 +60,7 @@ import {
   MCP_ACCESS_MARKS,
   MILESTONE_STEP,
   MILESTONES_BETWEEN_QUERY,
+  mcpListSettled,
   NOT_LOADED_YET,
   newerWalk,
   ON_DEMAND_STEP,
@@ -777,6 +778,27 @@ describe('staging check REST contract', () => {
     // it writes nothing, and falls back to the store's read without the box
     expect(step).not.toMatch(/restOk\(|\.mutation\(|\.click\(/)
     expect(step).toContain('window.PLANNER.personalTokens(search, null)')
+  })
+
+  it("waits for an MCP access list to answer the typed search, never the earlier list's end", () => {
+    expect(mcpListSettled('end', 'tag', 'tag')).toBe(true)
+    expect(mcpListSettled('none', '', '')).toBe(true)
+    expect(mcpListSettled('more', 'tag', ' tag ')).toBe(true)
+    // the search is on its way
+    expect(mcpListSettled('loading', 'tag', 'tag')).toBe(false)
+    // typing has not rested, so the end line still answers the earlier search
+    expect(mcpListSettled('end', '', 'tag')).toBe(false)
+    expect(mcpListSettled('none', 'tag', 'tag no such token')).toBe(false)
+    expect(mcpListSettled(null, null, '')).toBe(false)
+    // the helper waits on that, not on a fixed time
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const helpers = check.slice(
+      check.indexOf('async function listSettled('),
+      check.indexOf('/** Creates a personal token through the New token dialog'),
+    )
+    expect(helpers).toContain('mcpListSettled(end, settled, text)')
+    expect(helpers).toContain('await listSettled(list, text)')
+    expect(helpers).not.toMatch(/sleep\(/)
   })
 
   it('reads every batch of an app list, going on after a stopped one and failing on a failed read', async () => {

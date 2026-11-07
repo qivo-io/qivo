@@ -64,6 +64,12 @@ export function ConnectedApps() {
   const end: ListEnd | 'too_long' = search.tooLong
     ? 'too_long'
     : listEnd(list, search.settled !== '')
+  // The search the list on screen answers, which the end line carries for
+  // the staging check (scripts/staging-check.mjs listSettled). It follows
+  // the settled search in the effect after the one that opens its list, so
+  // it changes in the same render as the list's state.
+  const [listed, setListed] = useState(search.settled)
+  useEffect(() => setListed(search.settled), [search.settled])
   // The search shows once the list without a search answered more than
   // one batch's worth in this visit, and stays for the rest of it.
   const [searchShown, setSearchShown] = useState(false)
@@ -174,6 +180,7 @@ export function ConnectedApps() {
       <div
         ref={endLine}
         data-connected-apps-end={end}
+        data-connected-apps-settled-search={listed}
         aria-busy={end === 'loading' || list.phase === 'more' || list.refreshing || undefined}
       >
         <div className="space-y-2">

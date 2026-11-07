@@ -712,10 +712,23 @@ describe('the token list read from the server', () => {
     tokens = many(26)
     await render()
     expect(searchBox()).not.toBeNull()
+    // the end line names the search its list answers, the earlier one until
+    // typing rests and the new list opens
+    const listed = () =>
+      find('[data-mcp-tokens-end]').getAttribute('data-mcp-tokens-settled-search')
+    expect(listed()).toBe('')
+    await act(async () => {
+      const box = searchBox()
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(box, 'OLDEST')
+      box?.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(listed()).toBe('')
+    expect(end()).toBe('more')
     await search('OLDEST')
     expect(tokenReads().at(-1)?.[1]).toEqual({ search: 'OLDEST' })
     expect(shownNames()).toEqual(['Oldest helper'])
     expect(end()).toBe('end')
+    expect(listed()).toBe('OLDEST')
     await search('nothing like it')
     expect(shownNames()).toEqual([])
     expect(end()).toBe('none')

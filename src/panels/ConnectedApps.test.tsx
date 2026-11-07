@@ -288,16 +288,27 @@ describe('the Connected apps list read from the server', () => {
     document.querySelector('[data-connected-apps-end]')?.getAttribute('data-connected-apps-end')
   const note = () => document.querySelector('[data-connected-apps-note]')?.textContent ?? ''
   const box = () => document.querySelector<HTMLInputElement>('[data-connected-apps-search]')
-  /** Types `text` into the search and waits for its batch to be asked. */
-  async function search(text: string) {
+  /** Types `text` into the search, before typing rests. */
+  async function typeSearch(text: string) {
     const input = box()
     if (!input) throw new Error('no search')
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, text)
       input.dispatchEvent(new Event('input', { bubbles: true }))
     })
-    await act(async () => await new Promise((r) => setTimeout(r, 300)))
   }
+  /** Lets typing rest, so the search's batch is asked. */
+  const rest = () => act(async () => await new Promise((r) => setTimeout(r, 300)))
+  /** Types `text` into the search and waits for its batch to be asked. */
+  async function search(text: string) {
+    await typeSearch(text)
+    await rest()
+  }
+  /** The search the list on screen answers, as its end line names it. */
+  const listed = () =>
+    document
+      .querySelector('[data-connected-apps-end]')
+      ?.getAttribute('data-connected-apps-settled-search')
   const asked = (): Asked[] => store.lists.map(({ search, cursor }) => ({ search, cursor }))
 
   it('shows 25 of 30 with Load more, then 30 and the end, and no search for two', async () => {
@@ -322,10 +333,19 @@ describe('the Connected apps list read from the server', () => {
 
   it('searches the whole list on the server, says when nothing matches, and refuses a long search', async () => {
     await fresh(many(30))
-    await search('OLDEST')
+    // the end line names the search its list answers, the earlier one until
+    // typing rests and the new list opens
+    expect(listed()).toBe('')
+    await typeSearch('OLDEST')
+    expect(listed()).toBe('')
+    expect(end()).toBe('more')
+    await rest()
+    expect(listed()).toBe('OLDEST')
+    expect(end()).toBe('loading')
     expect(asked()).toEqual([{ search: 'OLDEST', cursor: null }])
     await serve()
     expect(names()).toEqual(['Oldest helper'])
+    expect(listed()).toBe('OLDEST')
     await search('nothing like it')
     await serve()
     expect(end()).toBe('none')

@@ -1562,49 +1562,77 @@ export const MCP_ACCESS_MARKS = {
   app: 'data-oauth-connection',
   appsSearch: 'data-connected-apps-search',
   appsEnd: 'data-connected-apps-end',
+  appsSettledSearch: 'data-connected-apps-settled-search',
   token: 'data-mcp-token',
   tokensSearch: 'data-mcp-tokens-search',
   tokensEnd: 'data-mcp-tokens-end',
+  tokensSettledSearch: 'data-mcp-tokens-settled-search',
   tokensNote: 'data-mcp-tokens-note',
   newToken: 'data-mcp-new-token',
 }
 
+/** Each MCP access list's search box, its end line, and the mark on the
+ *  end line that names the search the list on screen answers. */
+const MCP_LISTS = {
+  apps: {
+    box: MCP_ACCESS_MARKS.appsSearch,
+    end: MCP_ACCESS_MARKS.appsEnd,
+    settled: MCP_ACCESS_MARKS.appsSettledSearch,
+  },
+  tokens: {
+    box: MCP_ACCESS_MARKS.tokensSearch,
+    end: MCP_ACCESS_MARKS.tokensEnd,
+    settled: MCP_ACCESS_MARKS.tokensSettledSearch,
+  },
+}
+
+/** Whether an MCP access list whose end line says `end` and names the
+ *  search `settled` has answered the search `text`: the list on screen is
+ *  the one for `text`, and it says anything but loading. Until a typed
+ *  search rests and its list opens, the end line still names the earlier
+ *  search, whose list may have ended. */
+export const mcpListSettled = (end, settled, text) =>
+  end !== null && end !== 'loading' && settled === text.trim()
+
 /** Opens MCP access and waits until both lists hold their first batch. */
 async function openAccountMcp() {
-  const m = MCP_ACCESS_MARKS
   await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/account`, {
     waitUntil: 'domcontentloaded',
   })
   await app.getByRole('heading', { name: 'Your account', exact: true }).waitFor({ timeout: 45_000 })
   const section = app.locator('[data-settings-account-section="mcp"]')
   if (await section.count()) await section.first().click()
-  await app.locator(`[${m.newToken}]`).waitFor()
-  await listSettled(m.appsEnd)
+  await app.locator(`[${MCP_ACCESS_MARKS.newToken}]`).waitFor()
+  await listSettled(MCP_LISTS.apps)
 }
 
-/** Waits until the MCP access list whose end line carries `endMark` says
- *  anything but loading. */
-async function listSettled(endMark) {
+/** Waits until MCP access's list `list` (MCP_LISTS) has answered the
+ *  search `text` (mcpListSettled), reading its end line's two marks at
+ *  once. */
+async function listSettled(list, text = '') {
+  const line = app.locator(`[${list.end}]`)
   expect(
     await until(async () => {
-      const end = await app.locator(`[${endMark}]`).getAttribute(endMark)
-      return end !== null && end !== 'loading'
+      const [end, settled] = await evaluate(
+        line,
+        (element, marks) => marks.map((mark) => element.getAttribute(mark)),
+        [list.end, list.settled],
+      )
+      return mcpListSettled(end, settled, text)
     }, 30_000),
     'an MCP access list is still loading',
   )
 }
 
-/** Searches the MCP access list whose search box carries `boxMark` for
- *  `text` when the box shows, and waits for its batch. A list shows its
- *  box only once it holds more than one batch, so a list without one
- *  holds every row on screen. Answers whether it searched. */
-async function searchMcpList(boxMark, endMark, text) {
-  const box = app.locator(`[${boxMark}]`)
+/** Searches MCP access's list `list` (MCP_LISTS) for `text` when its box
+ *  shows, and waits until the list on screen answers that search. A list
+ *  shows its box only once it holds more than one batch, so a list
+ *  without one holds every row on screen. Answers whether it searched. */
+async function searchMcpList(list, text) {
+  const box = app.locator(`[${list.box}]`)
   if (!(await box.count())) return false
   await box.fill(text)
-  // the search goes to the server once typing rests
-  await sleep(500)
-  await listSettled(endMark)
+  await listSettled(list, text)
   return true
 }
 
@@ -1641,7 +1669,7 @@ async function createTokenInUi(name, allowChanges) {
   expect(/^qvt_[0-9a-f]{20,}$/.test(secret), 'the revealed token has the qvt_ shape')
   await dialog.getByRole('button', { name: 'Done', exact: true }).click()
   await shown.waitFor({ state: 'detached' })
-  await searchMcpList(MCP_ACCESS_MARKS.tokensSearch, MCP_ACCESS_MARKS.tokensEnd, name)
+  await searchMcpList(MCP_LISTS.tokens, name)
   const row = app.locator('[data-mcp-token]').filter({ hasText: name })
   await row.waitFor()
   eq(
@@ -1657,7 +1685,7 @@ async function createTokenInUi(name, allowChanges) {
 /** Revokes a personal token on MCP access and waits for the revoked mark. */
 async function revokeTokenInUi(name) {
   await openAccountMcp()
-  await searchMcpList(MCP_ACCESS_MARKS.tokensSearch, MCP_ACCESS_MARKS.tokensEnd, name)
+  await searchMcpList(MCP_LISTS.tokens, name)
   const row = app.locator('[data-mcp-token]').filter({ hasText: name })
   await confirmTwice(
     row.getByRole('button', { name: 'Revoke this token', exact: true }),
@@ -1668,7 +1696,7 @@ async function revokeTokenInUi(name) {
 
 async function deleteTokenInUi(name) {
   await openAccountMcp()
-  await searchMcpList(MCP_ACCESS_MARKS.tokensSearch, MCP_ACCESS_MARKS.tokensEnd, name)
+  await searchMcpList(MCP_LISTS.tokens, name)
   const row = app.locator('[data-mcp-token]').filter({ hasText: name })
   await confirmTwice(
     row.getByRole('button', { name: 'Delete revoked token', exact: true }),
@@ -1827,7 +1855,7 @@ async function removeAgentInUi(agent) {
  *  first when the list shows its search. */
 async function deleteConnectionInUi(clientName) {
   await openAccountMcp()
-  await searchMcpList(MCP_ACCESS_MARKS.appsSearch, MCP_ACCESS_MARKS.appsEnd, clientName)
+  await searchMcpList(MCP_LISTS.apps, clientName)
   await app.getByRole('group', { name: 'Connected apps', exact: true }).scrollIntoViewIfNeeded()
   const rows = app.locator('[data-oauth-connection]').filter({ hasText: clientName })
   await rows.first().waitFor()
@@ -6776,7 +6804,7 @@ async function mcpAccessListsCheck() {
       const mine = texts.filter((text) => hasTag(tag, text))
       return { mine, alone: mine.length === texts.length }
     }
-    const appsSearched = await searchMcpList(m.appsSearch, m.appsEnd, tag)
+    const appsSearched = await searchMcpList(MCP_LISTS.apps, tag)
     const apps = await tagged(m.app)
     expect(
       apps.mine.length === 2 &&
@@ -6785,7 +6813,7 @@ async function mcpAccessListsCheck() {
         (!appsSearched || apps.alone),
       `Connected apps lists ${short(apps.mine.map((t) => t.slice(0, 40)))} for the run`,
     )
-    const tokensSearched = await searchMcpList(m.tokensSearch, m.tokensEnd, tag)
+    const tokensSearched = await searchMcpList(MCP_LISTS.tokens, tag)
     const tokens = await tagged(m.token)
     expect(
       tokens.mine.length === 2 &&
@@ -6795,7 +6823,7 @@ async function mcpAccessListsCheck() {
       `Personal access tokens lists ${short(tokens.mine.map((t) => t.slice(0, 40)))} for the run`,
     )
     const nothing = `${tag} no such token`
-    if (await searchMcpList(m.tokensSearch, m.tokensEnd, nothing)) {
+    if (await searchMcpList(MCP_LISTS.tokens, nothing)) {
       eq(await app.locator(`[${m.token}]`).count(), 0, 'token rows for a search with no match')
       eq(
         ((await app.locator(`[${m.tokensNote}]`).textContent()) ?? '').trim(),
