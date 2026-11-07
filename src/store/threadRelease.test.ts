@@ -392,7 +392,7 @@ describe('the task window keeps a bounded thread', () => {
   })
 
   describe('places and presses', () => {
-    it("keeps the rows around this window's place while its earlier page loads, and another window's through a press", async () => {
+    it("keeps the rows around this window's place while its earlier page loads", async () => {
       const { P } = store
       openServed(300)
       await earlier()
