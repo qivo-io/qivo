@@ -475,6 +475,8 @@ describe('the projects figure', { timeout: 60_000 }, () => {
       expect(rowIds()).toEqual(ids.slice(0, batch * 25))
       expect(open('projectNav:page')).toHaveLength(batch)
     }
+    // loads by scrolling take no focus, also once the list ends
+    expect(document.activeElement).toBe(document.body)
     // the end says nothing after rows, and nothing more is read
     expect(end()).toBe('end')
     expect(endOf().textContent).toBe('')

@@ -40,7 +40,10 @@
      Retry.
    - The tree scrolls without a visible scrollbar (styles/appearance.css),
      and a row that takes focus by anything but a press inside the tree
-     scrolls into its view, as a Tab focus does by itself.
+     scrolls into its view, as a Tab focus does by itself. Load more gives
+     focus to the first new row only after the person pressed it; the
+     tree's own loads, as its end scrolls into view or the scope rule reads
+     on, never move focus.
    - App asks for focus on a row once the tree shows it (FocusRow), as
      after a create whose row comes with the server's answer. The row's
      name button takes focus in the first commit that renders it, if focus
@@ -178,18 +181,21 @@ export function SidebarProjects({
   const ownerName = owner === null ? undefined : P.project(owner)?.name
   const ownerRow = owner === null ? undefined : list.rows.find((r) => r.id === owner)
 
-  // whether the last read was the scope rule's, so the focus rule of Load
-  // more moves nothing for it
-  const ruleRead = useRef(false)
+  /* Whether the person pressed Load more since it last showed, so its focus
+     rule, which moves focus that is nowhere once Load more goes, acts only
+     for a press: the tree loads by itself as its end comes into view and
+     as the scope rule reads on, also before anyone touched the page, and
+     must never take focus for that. */
+  const pressedMore = useRef(false)
   const { more, marker } = useLoadMore(
     list,
     end,
     (id) =>
-      ruleRead.current
-        ? null
-        : (tree.current?.querySelector<HTMLElement>(`[data-project-row="${id}"] button`) ?? null),
+      pressedMore.current
+        ? (tree.current?.querySelector<HTMLElement>(`[data-project-row="${id}"] button`) ?? null)
+        : null,
     () =>
-      ruleRead.current
+      !pressedMore.current
         ? null
         : (tree.current?.querySelector<HTMLElement>('[data-sidebar-all]') ??
           [
@@ -198,7 +204,7 @@ export function SidebarProjects({
           null),
   )
   useLayoutEffect(() => {
-    if (end !== 'more') ruleRead.current = false
+    if (end !== 'more') pressedMore.current = false
   })
 
   // the scope rule: read on, a batch at a time, until a batch holds the
@@ -214,7 +220,7 @@ export function SidebarProjects({
   // each landed batch asks again, also where its render met seek unchanged
   useEffect(() => {
     if (!seek) return
-    ruleRead.current = true
+    pressedMore.current = false
     list.more()
   }, [seek, list.batches.length, list.rows.length])
 
@@ -502,7 +508,7 @@ export function SidebarProjects({
         list={list}
         end={end}
         onMore={() => {
-          ruleRead.current = false
+          pressedMore.current = true
           more()
         }}
         onAll={() => actions.openProjects()}
@@ -688,25 +694,26 @@ function SidebarChildren({
   // the scoped sub-project, when the scope is one of this project's
   const scoped = P.project(scope)
   const target = scoped && scoped.type !== 'meta' && scoped.parent === parent.id ? scoped : null
-  const ruleRead = useRef(false)
+  // as the tree's own list, Load more's focus rule acts only for a press
+  const pressedMore = useRef(false)
   const { more, marker } = useLoadMore(
     list,
     end,
     (id) =>
-      ruleRead.current
-        ? null
-        : document.querySelector<HTMLElement>(
+      pressedMore.current
+        ? document.querySelector<HTMLElement>(
             `[data-sidebar-children="${parent.id}"] [data-subproject-row="${id}"] > button`,
-          ),
+          )
+        : null,
     () =>
-      ruleRead.current
-        ? null
-        : document.querySelector<HTMLElement>(
+      pressedMore.current
+        ? document.querySelector<HTMLElement>(
             `[data-sidebar-projects] [data-project-row="${parent.id}"] > button`,
-          ),
+          )
+        : null,
   )
   useLayoutEffect(() => {
-    if (end !== 'more') ruleRead.current = false
+    if (end !== 'more') pressedMore.current = false
   })
   const seek =
     target !== null &&
@@ -719,7 +726,7 @@ function SidebarChildren({
   // each landed batch asks again, also where its render met seek unchanged
   useEffect(() => {
     if (!seek) return
-    ruleRead.current = true
+    pressedMore.current = false
     list.more()
   }, [seek, list.batches.length, list.rows.length])
   // the tree's focus request waits while this list still reads toward the
@@ -826,7 +833,7 @@ function SidebarChildren({
         list={list}
         end={end}
         onMore={() => {
-          ruleRead.current = false
+          pressedMore.current = true
           more()
         }}
         onAdd={lead ? () => actions.newProject({ parent: parent.id }) : null}
