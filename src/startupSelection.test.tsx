@@ -692,6 +692,33 @@ describe('what is remembered', { timeout: 60_000 }, () => {
     await until(() => lastSent() === LUMA, 'the directory row remembered')
     expect(sentProjects()).toEqual([LUMA, PORTAL, LUMA])
   })
+
+  it('is written by Plan on roadmap from an Inbox task address, whose scope reading the task left alone', async () => {
+    const snap = world()
+    // QN-7 in Firmware, which the workspace holds from its boot
+    snap.orgs[0].next_issue_num = 8
+    snap.issues.push({
+      ...taskRow(snap, '01000000-0000-4000-8000-000000000007', 'todo', 7),
+      project_id: FW,
+    })
+    await app(snap, '/app/testbed/inbox/tasks/qn-7', remembering(PORTAL, PARTNER))
+    // the Inbox's pane shows the discussion alone on a desktop, so the
+    // person plans from the window it pops out
+    await until(() => q('[data-task-popout]'), "the pane's pop-out")
+    await click(q('[data-task-popout]'))
+    await until(() => q('[data-plan-on-roadmap]'), 'Plan on roadmap')
+    // the task's address chose Firmware beneath the Inbox, which is not
+    // remembered
+    expect(shown()).toBe('inbox')
+    expect(sentProjects()).toEqual([])
+    await click(q('[data-plan-on-roadmap]'))
+    await until(() => shown() === 'roadmap', "Firmware's Roadmap")
+    expect(q('[data-scope-crumb] h1')?.textContent).toBe('Firmware')
+    // the jump is the person's choice of that Roadmap, so it is remembered
+    await until(() => lastSent() === FW, 'Firmware remembered')
+    expect(sentProjects()).toEqual([FW])
+    expect(saves.at(-1)?.lastProject).toEqual({ org_id: ORG, project_id: FW })
+  })
 })
 
 describe('at the design size', { timeout: 60_000 }, () => {

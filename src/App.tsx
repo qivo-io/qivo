@@ -1826,19 +1826,32 @@ function App() {
     const meta = P.metaOf(it.project)
     if (!meta) return
     const place = taskPlaceOf(it)
+    /* All projects has no Roadmap of its own (it asks to choose a
+       project), so planning from there opens the task's top-level
+       project. A Roadmap that holds the task's sub-project, that
+       sub-project's or its top-level project's, stays. My view carries it
+       only when it IS mine: spotlighting somebody else's task from there
+       would open a planning session over a bar the view doesn't render.
+       The jump passes the scope it shows through move, also one it keeps,
+       so that Roadmap is the person's choice, which the save effect
+       remembers even where a task's address chose the scope, as under an
+       Inbox task (taskScope). */
+    const cur = scopeRef.current
+    const stays =
+      cur !== undefined &&
+      (cur === it.project || cur === meta.id || (P.isMineScope(cur) && P.isMine(it)))
+    const to = stays ? cur : meta.id
     move(
-      { view: 'roadmap', projectsOpen: false, inboxOpen: false, sync: null, openIssue: null },
+      {
+        scope: to,
+        view: 'roadmap',
+        projectsOpen: false,
+        inboxOpen: false,
+        sync: null,
+        openIssue: null,
+      },
       () => {
-        /* All projects has no Roadmap of its own (it asks to choose a
-           project), so planning from there opens the task's top-level
-           project. A Roadmap that holds the task's sub-project, that
-           sub-project's or its top-level project's, stays. My view carries
-           it only when it IS mine: spotlighting somebody else's task from
-           there would open a planning session over a bar the view doesn't
-           render. */
-        const cur = scopeRef.current
-        const holds = cur === it.project || cur === meta.id
-        if (!(holds || (P.isMineScope(cur) && P.isMine(it)))) setScope(meta.id)
+        setScope(to)
         // a reveal does not bypass the toolbar filters, so clear them as Team
         // sync's jump does (Focus stays)
         if (group) clearFilters()
