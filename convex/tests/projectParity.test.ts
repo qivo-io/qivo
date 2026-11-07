@@ -12,7 +12,8 @@
  *   3. Access one user or team at a time, and what a removal does with the
  *      open tasks it hides (leave, keep_as_viewer, reassign_to), all at once.
  *   4. Milestones folded to the top-level project, with real dates.
- *   5. Reading one project, and the refusals that reveal nothing. */
+ *   5. Reading one project, and the refusals that reveal nothing, and a
+ *      project an admin manages without reading it. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
@@ -1739,6 +1740,168 @@ describe('reading one project', () => {
       lead_id: fx.user.id,
       grants: out.grants,
     })
+  })
+
+  it('an admin who takes part in no project reads its management data without its planning data, and manages it', async () => {
+    const fx = await setup()
+    await fx.t.run(async (ctx) => {
+      await ctx.db.patch(fx.meta._id, { review_hours: 4 })
+      await ctx.db.insert('milestones', {
+        id: uuid(),
+        project_id: fx.meta.id,
+        name: 'Launch',
+        week: '2026-06-01',
+        created_at: NOW,
+      })
+    })
+    await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    await countOrg(fx.t, fx.org.id)
+    const mcpGet = (p: Doc<'profiles'>, project: string) =>
+      parsed(fx.t.query(internal.machine.projects.mcpGetProject, { ...as_(p), project }))
+    const restGet = (p: Doc<'profiles'>, ref: string) =>
+      fx.t.query(internal.machine.rest.getProject, { ...as_(p), ref })
+    // the agent, who reads TBED, gets its planning data
+    expect(await mcpGet(fx.agent, 'FW')).toMatchObject({
+      access: { read: true, write: true },
+      completion: { status: 'ok', done: 0, total: 1, percent: 0 },
+      milestones: [{ name: 'Launch', date: '2026-06-01' }],
+    })
+    // the admin, who reads neither, gets each project's row, lead, settings
+    // and grants, with completion unavailable and no milestones, never 0 of 0
+    for (const ref of ['TBED', 'FW']) {
+      const out = await mcpGet(fx.admin, ref)
+      expect(out, ref).toMatchObject({
+        key: ref,
+        access: { read: false, write: false },
+        lead_id: fx.user.id,
+        effective_review_hours: 4,
+        completion: { status: 'unavailable', done: null, total: null, percent: null },
+        milestones: null,
+      })
+      expect(await restGet(fx.admin, ref)).toEqual(out)
+    }
+    expect((await mcpGet(fx.admin, 'FW')).grants).toEqual({
+      users: [{ id: fx.pia.id, name: 'Pia', level: 'user' }],
+      teams: [],
+    })
+    // the admin changes its settings over MCP and REST
+    const renamed = await parsed(
+      fx.t.mutation(internal.machine.projects.mcpUpdateProject, {
+        ...as_(fx.admin),
+        project: 'FW',
+        name: 'Firmware two',
+      }),
+    )
+    expect(renamed).toMatchObject({ name: 'Firmware two', milestones: null })
+    await fx.t.mutation(internal.machine.projects.restUpdateProject, {
+      ...rest(fx.admin),
+      ref: 'FW',
+      body: '{"description":"Managed"}',
+    })
+    expect((await projectRow(fx.t, fx.sub.id))?.description).toBe('Managed')
+    // archives and restores it; an archived project has no completion for anyone
+    const archived = await fx.t.mutation(internal.machine.projects.restUpdateProject, {
+      ...rest(fx.admin),
+      ref: 'FW',
+      body: '{"archived":true}',
+    })
+    expect(archived).toMatchObject({ archived: true, completion: null, milestones: null })
+    expect(await restGet(fx.admin, 'FW')).toMatchObject({ completion: null })
+    await fx.t.mutation(internal.machine.projects.mcpUpdateProject, {
+      ...as_(fx.admin),
+      project: 'FW',
+      archived: false,
+    })
+    expect((await projectRow(fx.t, fx.sub.id))?.archived_at).toBeUndefined()
+    // changes its access over MCP and REST
+    await fx.t.mutation(internal.machine.projects.mcpSetProjectAccess, {
+      ...as_(fx.admin),
+      project: 'FW',
+      user_id: fx.pia.id,
+      level: 'viewer',
+    })
+    await fx.t.mutation(internal.machine.projects.restSetUserAccess, {
+      ...rest(fx.admin),
+      ref: 'PCB',
+      subject: fx.pia.id,
+      body: '{"level":"user"}',
+    })
+    expect(await grants(fx.t, fx.sub.id)).toEqual({ [fx.pia.id]: 'viewer' })
+    expect(await grants(fx.t, fx.sub2.id)).toEqual({ [fx.pia.id]: 'user' })
+    await fx.t.mutation(internal.machine.projects.restRemoveUserAccess, {
+      ...rest(fx.admin),
+      ref: 'PCB',
+      subject: fx.pia.id,
+      body: '',
+    })
+    expect(await grants(fx.t, fx.sub2.id)).toEqual({})
+    // a milestone, planning data, answers like an unknown project for them
+    await refused(
+      fx.t.mutation(internal.machine.projects.restAddMilestone, {
+        ...rest(fx.admin),
+        ref: 'TBED',
+        body: '{"name":"Beta","date":"2026-07-01"}',
+      }),
+      'not_found',
+      'project not found',
+    )
+    await refused(
+      fx.t.mutation(internal.machine.projects.mcpSetMilestone, {
+        ...as_(fx.admin),
+        project: 'TBED',
+        name: 'Beta',
+        date: '2026-07-01',
+      }),
+      'not_found',
+      'project "TBED" not found (or not visible to you)',
+    )
+    // and creates a sub-project under it, which they lead and so read, and
+    // which shows them TBED for navigation from then on
+    const made = await parsed(
+      fx.t.mutation(internal.machine.projects.mcpCreateProject, {
+        ...as_(fx.admin),
+        name: 'Managed child',
+        parent: 'TBED',
+      }),
+    )
+    expect(made).toMatchObject({ parent_id: fx.meta.id, access: { read: true } })
+    const viaRest = await fx.t.mutation(internal.machine.projects.restCreateProject, {
+      ...rest(fx.admin),
+      body: JSON.stringify({ name: 'Managed REST child', parent: 'TBED' }),
+    })
+    expect(viaRest).toMatchObject({ parent_id: fx.meta.id })
+    // Pia, who reads FW and manages nothing, finds SKNK nowhere
+    await refused(
+      mcpGet(fx.pia, 'SKNK'),
+      'not_found',
+      'project "SKNK" not found (or not visible to you)',
+    )
+    await refused(restGet(fx.pia, 'SKNK'), 'not_found', 'project not found')
+    await refused(
+      fx.t.mutation(internal.machine.projects.mcpSetProjectAccess, {
+        ...as_(fx.pia),
+        project: 'SKNK',
+        user_id: fx.viewer.id,
+        level: 'viewer',
+      }),
+      'not_found',
+      'project "SKNK" not found (or not visible to you)',
+    )
+    await refused(
+      fx.t.mutation(internal.machine.projects.restCreateProject, {
+        ...rest(fx.pia),
+        body: JSON.stringify({ name: 'Under SKNK', parent: 'SKNK' }),
+      }),
+      'bad_request',
+      'parent project not found',
+    )
+    // the other organization's admin finds TBED nowhere
+    await refused(restGet(fx.otherAdmin, 'TBED'), 'not_found', 'project not found')
+    await refused(
+      mcpGet(fx.otherAdmin, fx.meta.id),
+      'not_found',
+      `project "${fx.meta.id}" not found (or not visible to you)`,
+    )
   })
 
   it('a project the caller cannot read answers like an unknown one', async () => {

@@ -21,10 +21,21 @@
  * result. MCP answers pretty-printed text, stringified here so the key order
  * survives the function boundary; REST answers objects.
  *
- * Visibility: a project the caller cannot read answers like an unknown one,
- * and so does a milestone on it. Machine creation takes no grant maps; access
- * changes one person or team at a time, and only a person may change it
- * (lib/access.ts canChangeAccess). */
+ * Visibility: the management actions (get_project and its REST read,
+ * update_project and PATCH with archive and restore, set_project_access and
+ * the access routes, and a create's parent) resolve a project the caller
+ * reads or manages (managedProject), as the app's Settings pages do; a
+ * project the caller neither reads nor manages answers like an unknown one.
+ * An organization admin manages every project of their organization, and
+ * anyone else only what they lead, which they read, so management reveals
+ * no project to anyone it does not already show. A project the caller
+ * manages without reading answers its row with `read` false, its lead,
+ * settings and grants, and neither its milestones nor its completion
+ * (projectDetailJson). The milestone tools and routes, which change
+ * planning data, resolve only a project the caller reads, and so does a
+ * milestone on it. Machine creation takes no grant maps; access changes one
+ * person or team at a time, and only a person may change it (lib/access.ts
+ * canChangeAccess). */
 
 import { type ConvexError, type ObjectType, v } from 'convex/values'
 import { internal } from '../_generated/api'
@@ -35,7 +46,7 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from '../_generated/server'
-import { canSeeProject, rootMetaOf } from '../lib/access'
+import { canManageOwnProjectAccess, canSeeProject, rootMetaOf } from '../lib/access'
 import {
   type AccessFlag,
   accessFlags,
@@ -48,6 +59,7 @@ import {
   NO_TASKS,
   projectCompletion,
   projectJson,
+  UNAVAILABLE_COMPLETION,
   UUID,
 } from '../lib/core'
 import { byId } from '../lib/db'
@@ -132,9 +144,12 @@ type ProjectDetailJson = {
   effective_review_hours: number
   track_delay: boolean
   /** the app Overview's Completion from the stored counts, null for an
-   * archived project */
+   * archived project, `unavailable` for a live one the caller manages
+   * without reading */
   completion: CompletionJson | null
-  milestones: MilestoneJson[]
+  /** the top-level project's milestones by date, null for a project the
+   * caller manages without reading, as milestones are planning data */
+  milestones: MilestoneJson[] | null
   grants: { users: GrantJson[]; teams: GrantJson[] }
 }
 
@@ -154,24 +169,28 @@ const byName = (a: { name: string; id: string }, b: { name: string; id: string }
  * own is led by its parent's), the review time it sets and the one its tasks
  * get, delay tracking, its `completion` (lib/core.ts projectCompletion, from
  * the stored counts of what the caller reads), the milestones of the
- * top-level project that stores
- * them, by date, and the project's own grants, as the app's project settings
- * show them to anyone who can read the project. A sub-project also inherits
- * its parent's grants.
+ * top-level project that stores them, by date, and the project's own
+ * grants, as the app's project settings show them to anyone who can read or
+ * manage the project. A sub-project also inherits its parent's grants.
+ * `milestones` is null where `reads` is false, a project the caller manages
+ * without reading, and no milestone is read.
  */
 async function projectDetail(
   ctx: QueryCtx,
   project: Doc<'projects'>,
   completion: CompletionJson | null,
+  reads: boolean,
 ): Promise<ProjectDetailJson> {
   const root = await rootMetaOf(ctx, project)
   const leadId = project.lead_id ?? root.lead_id
   const lead = leadId === undefined ? null : await byId(ctx, 'profiles', leadId)
-  const milestones = await ctx.db
-    .query('milestones')
-    .withIndex('by_project', (q) => q.eq('project_id', root.id))
-    .collect()
-  milestones.sort((a, b) => a.week.localeCompare(b.week) || a.name.localeCompare(b.name))
+  const milestones = reads
+    ? await ctx.db
+        .query('milestones')
+        .withIndex('by_project', (q) => q.eq('project_id', root.id))
+        .collect()
+    : null
+  milestones?.sort((a, b) => a.week.localeCompare(b.week) || a.name.localeCompare(b.name))
   const users: GrantJson[] = []
   const grants = ctx.db
     .query('project_access')
@@ -198,21 +217,31 @@ async function projectDetail(
     effective_review_hours: await reviewHoursFor(ctx, project),
     track_delay: project.track_delay,
     completion,
-    milestones: milestones.map(milestoneJson),
+    milestones: milestones?.map(milestoneJson) ?? null,
     grants: { users: users.sort(byName), teams: teams.sort(byName) },
   }
 }
 
 /** The single-project read of REST GET /v1/projects/{ref} and MCP
  * get_project, which is the list row with the caller's `flag` plus the
- * single read's fields (projectDetail) with the caller's `completion`. */
+ * single read's fields (projectDetail). `completion` reads the caller's
+ * Completion, asked only where `flag.read` holds. A project the caller
+ * manages without reading (`read` false) answers `completion`
+ * UNAVAILABLE_COMPLETION, or null where it is archived, as for anyone, and
+ * `milestones` null, never 0 of 0 or an empty list, and keeps its lead,
+ * settings and grants, the management data the app's Settings page shows. */
 export async function projectDetailJson(
   ctx: QueryCtx,
   project: Doc<'projects'>,
   flag: AccessFlag,
-  completion: CompletionJson | null,
+  completion: () => Promise<CompletionJson | null>,
 ): Promise<ReturnType<typeof projectJson> & ProjectDetailJson> {
-  return { ...projectJson(project, flag), ...(await projectDetail(ctx, project, completion)) }
+  const known = flag.read
+    ? await completion()
+    : project.archived_at === undefined
+      ? UNAVAILABLE_COMPLETION
+      : null
+  return { ...projectJson(project, flag), ...(await projectDetail(ctx, project, known, flag.read)) }
 }
 
 /* projectDetailJson for one project the caller resolved itself, such as one
@@ -229,20 +258,19 @@ async function projectOut(
   const cat = await loadCatalogue(ctx, me)
   const flags = await accessFlags(ctx, me, cat, access)
   const readable = (id: string) => flags.get(id)?.read === true
-  const completion =
-    o.created === true ? NO_TASKS : await projectCompletion(ctx, project, { cat, readable })
   return await projectDetailJson(
     ctx,
     project,
     flags.get(project.id) ?? { read: false, write: false },
-    completion,
+    async () =>
+      o.created === true ? NO_TASKS : await projectCompletion(ctx, project, { cat, readable }),
   )
 }
 
 /* ------------------------------------------------------------------ refs */
 
 /* The project `ref` names (uuid, number or key) when the caller can read it,
- * else null. */
+ * else null. The milestone tools and routes resolve with it. */
 async function readableProject(
   ctx: QueryCtx,
   me: Caller,
@@ -250,6 +278,24 @@ async function readableProject(
 ): Promise<Doc<'projects'> | null> {
   const project = await findProject(ctx, me, ref)
   return project !== null && (await canSeeProject(ctx, me, project)) ? project : null
+}
+
+/** The project `ref` names (uuid, number or key) in the caller's
+ * organization when the caller manages it (lib/access.ts
+ * canManageOwnProjectAccess: an active seat in a meta tree, an organization
+ * admin or the project's effective lead) or can read it, else null. The
+ * management actions resolve with it, as the app's Settings pages reach a
+ * project by management; it asks management first, which reads the root
+ * alone, and the level only of a project the caller does not manage. */
+export async function managedProject(
+  ctx: QueryCtx,
+  me: Caller,
+  ref: string,
+): Promise<Doc<'projects'> | null> {
+  const project = await findProject(ctx, me, ref)
+  if (project === null) return null
+  if (await canManageOwnProjectAccess(ctx, me, project)) return project
+  return (await canSeeProject(ctx, me, project)) ? project : null
 }
 
 /** A profile uuid in the caller's organization, else null. */
@@ -398,9 +444,17 @@ const mcpUserMissing = (ref: string): ConvexError<Refusal> =>
 const mcpTeamMissing = (ref: string): ConvexError<Refusal> =>
   badRequest(`team "${ref}" not found in your organization`)
 
-/* An MCP project ref the caller can read. */
+/* An MCP project ref the caller can read, for the milestone tools. */
 async function mcpProject(ctx: QueryCtx, me: Caller, ref: string): Promise<Doc<'projects'>> {
   const project = await readableProject(ctx, me, ref)
+  if (project === null) throw mcpProjectMissing(ref)
+  return project
+}
+
+/* An MCP project ref the caller reads or manages (managedProject), for the
+ * management tools. */
+async function mcpManaged(ctx: QueryCtx, me: Caller, ref: string): Promise<Doc<'projects'>> {
+  const project = await managedProject(ctx, me, ref)
   if (project === null) throw mcpProjectMissing(ref)
   return project
 }
@@ -434,13 +488,14 @@ async function mcpSubject(
 
 /* ------------------------------------------------------ MCP internal fns */
 
-/* get_project: one readable project with the caller's access, its lead,
- * settings, milestones and grants. */
+/* get_project: one project the caller reads or manages, with the caller's
+ * access, its lead, settings, milestones and grants, and for a project they
+ * only manage neither milestones nor completion (projectDetailJson). */
 export const mcpGetProject = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, project: v.string() },
   handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    const project = await mcpProject(ctx, me, a.project)
+    const project = await mcpManaged(ctx, me, a.project)
     return pretty(await projectOut(ctx, me, project, a.access))
   },
 })
@@ -459,7 +514,7 @@ export const mcpCreateProject = internalMutation({
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     let parent: Doc<'projects'> | undefined
     if (a.parent !== undefined) {
-      const found = await readableProject(ctx, me, a.parent)
+      const found = await managedProject(ctx, me, a.parent)
       if (found === null) {
         throw notFound(`parent project "${a.parent}" not found (or not visible to you)`)
       }
@@ -490,7 +545,7 @@ export const mcpUpdateProject = internalMutation({
   },
   handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    const project = await mcpProject(ctx, me, a.project)
+    const project = await mcpManaged(ctx, me, a.project)
     const { callerId: _caller, access: _access, project: _ref, lead_id, expected, ...fields } = a
     const input: UpdateInput = fields
     if (lead_id !== undefined) input.lead_id = await mcpLead(ctx, me, lead_id)
@@ -524,7 +579,7 @@ export const mcpSetProjectAccess = internalMutation({
     if (a.level === null && a.expected !== undefined) {
       throw badRequest('expected applies only when level is not null')
     }
-    const project = await mcpProject(ctx, me, a.project)
+    const project = await mcpManaged(ctx, me, a.project)
     const subject = await mcpSubject(ctx, me, a)
     const now = new Date().toISOString()
     const base = { project: project.key, ...subjectJson(subject) }
@@ -630,9 +685,18 @@ export const mcpDeleteMilestone = internalMutation({
 
 /* -------------------------------------------------------- REST parsing */
 
-/* A REST project path ref the caller can read, else the one 404. */
+/* A REST project path ref the caller can read, else the one 404, for the
+ * milestone routes. */
 async function restProject(ctx: QueryCtx, me: Caller, ref: string): Promise<Doc<'projects'>> {
   const project = await readableProject(ctx, me, ref)
+  if (project === null) throw notFound('project not found')
+  return project
+}
+
+/* A REST project path ref the caller reads or manages (managedProject),
+ * else the one 404, for the management routes. */
+async function restManaged(ctx: QueryCtx, me: Caller, ref: string): Promise<Doc<'projects'>> {
+  const project = await managedProject(ctx, me, ref)
   if (project === null) throw notFound('project not found')
   return project
 }
@@ -715,8 +779,9 @@ export const restCreateProject = internalMutation({
     if (typeof b.name !== 'string') throw badRequest('name must be a string')
     let parent: Doc<'projects'> | undefined
     if ('parent' in b && b.parent !== null) {
-      // an unknown parent and one the caller cannot read answer alike
-      const found = typeof b.parent === 'string' ? await readableProject(ctx, me, b.parent) : null
+      // an unknown parent and one the caller neither reads nor manages
+      // answer alike
+      const found = typeof b.parent === 'string' ? await managedProject(ctx, me, b.parent) : null
       if (found === null) throw badRequest('parent project not found')
       parent = found
     }
@@ -745,7 +810,7 @@ export const restUpdateProject = internalMutation({
   },
   handler: async (ctx, a) => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    const project = await restProject(ctx, me, a.ref)
+    const project = await restManaged(ctx, me, a.ref)
     const b = needJson(a.body)
     refuseProjectFields(b)
     // POST takes `parent`; a project keeps the parent it was created with
@@ -821,7 +886,7 @@ async function restSetAccess(ctx: MutationCtx, a: RestAccessArgs, kind: 'users' 
   refuseUnknownFields(b, ACCESS_PUT_FIELDS)
   const level = restLevel(b)
   const expected = parseExpected(GRANT_FIELDS, b.expected, ['level'])
-  const project = await restProject(ctx, me, a.ref)
+  const project = await restManaged(ctx, me, a.ref)
   const subject = await restSubject(ctx, me, kind, a.subject)
   const { changed } = await setProjectGrantCore(ctx, {
     me,
@@ -844,7 +909,7 @@ async function restRemoveAccess(ctx: MutationCtx, a: RestAccessArgs, kind: 'user
   const b = optionalJson(a.body)
   refuseUnknownFields(b, HELD_TASKS_FIELDS)
   const held: HeldTasks = parseHeldTasks(b.on_held_tasks)
-  const project = await restProject(ctx, me, a.ref)
+  const project = await restManaged(ctx, me, a.ref)
   const subject = await restSubject(ctx, me, kind, a.subject)
   const removal = await removeProjectGrantCore(ctx, {
     me,
@@ -1016,7 +1081,7 @@ export const PROJECT_TOOLS: McpTool[] = [
       name: 'get_project',
       title: 'Get project',
       description:
-        'One project you can see, by number, key or uuid: its lead, review time, delay tracking, its completion (done and total tasks, `status: "counting"` with null counts for a moment after any project is archived or restored, so ask again later, or `status: "unavailable"` in a project with very many sub-projects), its milestones (kept on the top-level project) and the users and teams given access to it.',
+        'One project you can see or manage, by number, key or uuid: its lead, review time, delay tracking, its completion (done and total tasks, `status: "counting"` with null counts for a moment after any project is archived or restored, so ask again later, or `status: "unavailable"` in a project with very many sub-projects), its milestones (kept on the top-level project) and the users and teams given access to it. A project you manage without reading it, as an organization admin who takes no part in it, has `access.read` false, completion `unavailable` and milestones null.',
       inputSchema: {
         type: 'object',
         $schema: SCHEMA,
@@ -1041,7 +1106,7 @@ export const PROJECT_TOOLS: McpTool[] = [
       name: 'create_project',
       title: 'Create project',
       description:
-        "Create a top-level project, or with `parent` (a project number, key or uuid) a sub-project under it. A top-level project follows the organization's project creation setting (get_me `can_create_projects`); a sub-project needs Lead access on its parent. `lead_id` defaults to you, and only a person may name someone else. Tasks go in sub-projects.",
+        "Create a top-level project, or with `parent` (a project number, key or uuid) a sub-project under it. A top-level project follows the organization's project creation setting (get_me `can_create_projects`); a sub-project needs managing its parent, as its lead or an organization admin. `lead_id` defaults to you, and only a person may name someone else. Tasks go in sub-projects.",
       inputSchema: {
         type: 'object',
         $schema: SCHEMA,
@@ -1077,7 +1142,7 @@ export const PROJECT_TOOLS: McpTool[] = [
       name: 'update_project',
       title: 'Update project',
       description:
-        'Change a project you lead: `name`, `description`, `review_hours` (null uses the parent or default), `track_delay`, or `archived: true/false` to archive or restore it. `lead_id` hands the lead to another user, which only a person may do; the old lead keeps User access. Only tasks take an archive reason. ' +
+        'Change a project you manage, as its lead or an organization admin: `name`, `description`, `review_hours` (null uses the parent or default), `track_delay`, or `archived: true/false` to archive or restore it. `lead_id` hands the lead to another user, which only a person may do; the old lead keeps User access. Only tasks take an archive reason. ' +
         EXPECTED_SENTENCE +
         ' Its `lead_id` is the lead get_project shows.',
       inputSchema: {
@@ -1148,7 +1213,7 @@ export const PROJECT_TOOLS: McpTool[] = [
       name: 'set_project_access',
       title: 'Set project access',
       description:
-        'Give one user (`user_id`) or one team (`team_id`) `user` or `viewer` access to a project, or with `level: null` remove it. `on_held_tasks` settles open tasks a removal hides from the people working on them: `leave` (the default; the result lists them), `keep_as_viewer`, or `{"reassign_to": user id or null}`. Needs Lead access, and only a person may change access. ' +
+        'Give one user (`user_id`) or one team (`team_id`) `user` or `viewer` access to a project, or with `level: null` remove it. `on_held_tasks` settles open tasks a removal hides from the people working on them: `leave` (the default; the result lists them), `keep_as_viewer`, or `{"reassign_to": user id or null}`. Needs managing the project, as its lead or an organization admin, and only a person may change access. ' +
         EXPECTED_SENTENCE +
         ' Its `level` is the access get_project shows, null for none, and takes no removal.',
       inputSchema: {

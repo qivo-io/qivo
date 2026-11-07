@@ -49,8 +49,12 @@ whether billing has paused changes, and what this credential may do:
   part of browser links.
 
 Changing a task also needs User or Lead access on its project, and changing a
-project's settings needs Lead access. Following a task, your inbox and your
-own comments need only read access to the task.
+project's settings needs managing it, as its lead or an organization admin.
+Following a task, your inbox and your own comments need only read access to
+the task. An organization admin manages every project but works only on the
+projects their own lead, grants and team shares reach, so `get_project`
+answers a project they only manage with `access.read` `false`, completion
+`unavailable` and `milestones` `null`.
 
 ## Choose the interface
 
@@ -433,11 +437,11 @@ Useful field rules:
 - **Create:** a top-level project follows the organization's project
   creation setting; check `can_create_projects` in `get_me` or `GET /v1/me`
   first. A Standard user agent counts as a standard user there. Create a
-  sub-project with `parent`, which needs Lead access on that parent. Tasks go
+  sub-project with `parent`, which needs managing that parent. Tasks go
   in sub-projects. The lead defaults to you, and an agent always leads what
   it creates and cannot hand it over, so create a project only when the user
   asks for one.
-- **Change:** settings, archive and restore need Lead access. Archiving a
+- **Change:** settings, archive and restore need managing the project. Archiving a
   project hides its tasks from default task lists; restore it before adding
   tasks.
 - **Access and lead:** only a person who is an organization admin or the

@@ -136,8 +136,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = '3c13be6ddfd22a3224bb3875a74c680e97bbbb626c3d6b312e3e9b7bfaa7165a'
-const SHA_TOOLS_MODERN = '42eb02aa3d15db0d57d1321576c938a2f2e0033fa27b7dd57b5ee1766c8bea93'
+const SHA_TOOLS_LEGACY = '099ec611f37f86746e861b6d8a9bcfa909516f1bc685a4b75c1fcc05e869526d'
+const SHA_TOOLS_MODERN = 'ad343cefecb75c0eb3a9f4e9ed16720b4008a659d9e715ce9727d1e97cde1867'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -981,7 +981,8 @@ describe('read tools', () => {
     })
     expect(Object.keys(members)).toEqual(['next_cursor', 'team', 'members'])
 
-    // guest reads only the granted meta tree; admin reads all four
+    // guest reads only the granted meta tree; the admin reads the four
+    // their grants reach, and an admin without grants none
     const guestProjects = JSON.parse(
       await fx.t.query(internal.machine.mcp.listProjects, {
         callerId: fx.guest.id,
@@ -1010,6 +1011,16 @@ describe('read tools', () => {
       }),
     ) as Record<string, unknown>[]
     expect(adminProjects.map((p) => p.key)).toEqual(['FW', 'PCB', 'SKNK', 'TBED'])
+    const rowless = await plantSeat(fx.t, { org_id: fx.org.id, name: 'Ada', org_role: 'admin' })
+    await keyOrg(fx.t, fx.org.id)
+    expect(
+      JSON.parse(
+        await fx.t.query(internal.machine.mcp.listProjects, {
+          callerId: rowless.id,
+          access: 'read',
+        }),
+      ),
+    ).toEqual([])
 
     const usersPage = JSON.parse(
       await fx.t.query(internal.machine.mcp.listUsers, { callerId: fx.agent.id, access: 'read' }),

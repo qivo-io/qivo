@@ -49,7 +49,7 @@ import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { ActionCtx, QueryCtx } from '../_generated/server'
 import { internalMutation, internalQuery } from '../_generated/server'
-import { hasProjectLevel } from '../lib/access'
+import { hasProjectLevel, managesIn } from '../lib/access'
 import { listActiveIssuesCore } from '../lib/activeTaskPage'
 import { archiveCursorText } from '../lib/archivedTasks'
 import { ORG_DELETING } from '../lib/billingAccess'
@@ -466,21 +466,27 @@ export const listProjects = internalQuery({
 })
 
 /* GET /v1/projects/{ref} — an explicit ref resolves an archived project too;
- * unknown OR unreadable answer the one 404 (NO oracle on GET, rest:341-347).
- * The list row gains the single read's fields: lead, review time, delay
- * tracking, completion, milestones and grants (machine/projects.ts
- * projectDetailJson). */
+ * a project the caller reads, or manages (lib/access.ts managesIn over the
+ * catalogue, which reads nothing more: an organization admin or the
+ * effective lead, in a meta tree), answers, and an unknown one or one they
+ * neither read nor manage answers the one 404 (NO oracle on GET,
+ * rest:341-347). The list row gains the single read's fields: lead, review
+ * time, delay tracking, completion, milestones and grants, and for a
+ * project the caller only manages neither completion nor milestones
+ * (machine/projects.ts projectDetailJson). */
 export const getProject = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
   handler: async (ctx, a): Promise<RestProjectDetailJson> => {
-    const { cat, flags, readable } = await withAccess(ctx, a.callerId, a.access)
+    const { me, cat, flags, readable } = await withAccess(ctx, a.callerId, a.access)
     const p = findProjectRef(cat, a.ref)
-    if (p === undefined || !readable(p.id)) throw notFound('project not found')
+    const root = p?.parent_id === undefined ? p : cat.byUuid.get(p.parent_id)
+    const manages = p !== undefined && root !== undefined && managesIn(me, p, root)
+    if (p === undefined || !(readable(p.id) || manages)) throw notFound('project not found')
     return await projectDetailJson(
       ctx,
       p,
       flags.get(p.id) ?? { read: false, write: false },
-      await projectCompletion(ctx, p, { cat, readable }),
+      async () => await projectCompletion(ctx, p, { cat, readable }),
     )
   },
 })

@@ -502,11 +502,11 @@ The response never contains a secret, a hash or a display identifier.
 ```
 GET   /v1/projects                → readable ACTIVE projects, with access flags
 GET   /v1/projects?archived=true  → the archived ones instead (0106)
-GET   /v1/projects/{id|num|KEY}   → one project (uuid, per-org number, or
-                                    key) with its lead, settings,
-                                    completion, milestones and grants; an
-                                    explicit ref resolves an archived
-                                    project too
+GET   /v1/projects/{id|num|KEY}   → one project you read or manage
+                                    (uuid, per-org number, or key) with
+                                    its lead, settings, completion,
+                                    milestones and grants; an explicit
+                                    ref resolves an archived project too
 GET   /v1/projects/{ref}/users    → users with access to that project, for
                                     reporter, assignee and reviewer
                                     selection
@@ -578,7 +578,20 @@ A row of the list:
 - `grants` are the project's own individual and team grants, as its
   **Project access** list shows them, ordered by name. A sub-project also
   inherits its parent's grants, which the parent's own read lists. Anyone who
-  can read the project sees its grants, as in the app.
+  can read or manage the project sees its grants, as in the app.
+
+An organization admin manages every project of the organization, also one
+they take no part in. Admin status gives no access to a project's work, so
+`GET /v1/projects` leaves such a project out, while `GET` and `PATCH
+/v1/projects/{ref}`, the [project access](#project-access) routes and a
+create's `parent` find it. The single-project read then answers its row
+with `access.read` `false`, its lead, settings and grants, `completion` as
+`{"status": "unavailable", "done": null, "total": null, "percent": null}`
+(`null` once it is archived) and `milestones` as `null`, because
+completion and milestones are planning data. The
+[milestone](#milestones) routes and `GET /v1/projects/{ref}/users` need to
+read the project. A project you neither read nor manage answers `404`,
+exactly like an unknown one.
 
 The writes below, and the [project access](#project-access) and
 [milestone](#milestones) routes, answer `403` with the read-only sentence for
@@ -608,7 +621,7 @@ this route when mapping identities for an import instead of guessing from the
 organization-wide roster.
 
 On a parent project the rows are the people with access to the parent
-itself: organization admins, its lead and its individual or team grants. These
+itself: its lead and its individual or team grants. These
 are the people its **Project access** list shows in the app. Someone who
 reaches the parent only through one of its sub-projects is listed under that
 sub-project, not under the parent. A caller that sees the parent only through
@@ -642,9 +655,11 @@ read, `access` flags included.
   create projects`. A Standard user agent counts as a standard user for this
   setting, including the **Can create projects** box under `selected`. A
   Viewer agent never creates projects.
-- A sub-project needs Lead access on its parent, whatever the setting, and the
-  parent must be an active top-level project. A parent the caller cannot read
-  answers `400` with `parent project not found`, exactly like an unknown one.
+- A sub-project needs managing its parent, as its lead or an organization
+  admin, whatever the setting (`requires lead access to this project` for
+  someone who only reads it), and the parent must be an active top-level
+  project. A parent the caller neither reads nor manages answers `400` with
+  `parent project not found`, exactly like an unknown one.
 - `lead_id` defaults to the caller. A lead must be an active admin, standard
   user or guest of the organization; a Viewer is refused with `a viewer cannot
   lead a project, so make them a standard user first`. Only a person may name
@@ -678,8 +693,8 @@ PATCH /v1/projects/{ref}  {"name": "…", "description": "…", "review_hours": 
 ```
 
 Every field is optional, and the answer is the single-project read. Changing a
-project needs Lead access (`requires lead access to this project`), which
-organization admins have. A lead handover alone on a top-level project
+project needs managing it, as its lead or an organization admin (`requires
+lead access to this project` for someone who only reads it). A lead handover alone on a top-level project
 follows the rule for managing its users instead, so someone who is neither an
 organization admin nor its lead gets `no permission to manage users on this
 project`.
@@ -691,7 +706,7 @@ project`.
 - `archived: true` archives the project, and a top-level project's active
   sub-projects with it; `archived: false` restores it, with the sub-projects
   archived along with it, and a sub-project's archived parent too (which
-  needs Lead on the parent). Qivo archives or restores before it changes the
+  needs managing the parent). Qivo archives or restores before it changes the
   other fields, so one request may restore and rename, or archive and hand
   over the lead. The archive or restore and a rename share one budget of
   2,000 sub-projects and access entries (see [Limits](#limits)) and of the

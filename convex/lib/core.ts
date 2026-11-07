@@ -2669,7 +2669,9 @@ export const projectJson = (
  * `total` tasks and `percent` rounded, 0 without tasks; `counting` with all
  * three null while the stored counts are not whole, which clears on its own;
  * `unavailable` with all three null where the request has no room left to
- * read them (projectCompletion); never a partial count. */
+ * read them (projectCompletion), or for a project the caller manages
+ * without reading its tasks (machine/projects.ts projectDetailJson); never a
+ * partial count. */
 export type CompletionJson =
   | { status: 'ok'; done: number; total: number; percent: number }
   | { status: 'counting'; done: null; total: null; percent: null }
@@ -2687,7 +2689,7 @@ export const COUNTING_COMPLETION: CompletionJson = {
 }
 
 /** The completion of a project whose counts the request has no room left
- * to read. */
+ * to read, or whose tasks the caller cannot read though they manage it. */
 export const UNAVAILABLE_COMPLETION: CompletionJson = {
   status: 'unavailable',
   done: null,
