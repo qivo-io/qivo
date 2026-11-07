@@ -1,7 +1,7 @@
-/* The image node of the description and comment editor (descEditor.tsx):
+/* The image node of the description and comment editor (descEditor.tsx),
    how its HTML parses and renders, and what a paste may keep. It holds no
-   React and no store, so the tests drive it in a plain TipTap editor; the
-   editor adds its React node view and the store's loader. */
+   React and no store. The editor adds its React node view and the store's
+   loader, and descImage.test.tsx drives it through the real DescEditor. */
 import type { Attributes, NodeViewRenderer } from '@tiptap/core'
 import Image from '@tiptap/extension-image'
 import type { Node as PMDocNode } from '@tiptap/pm/model'
