@@ -473,7 +473,10 @@ Leo, the sub-project's lead goes back to Nora over REST and the User grant
 the handover leaves Leo is removed, until `GET /v1/projects/{ref}/users`
 stops listing him, and **Send** must post
 nothing and say Leo can no longer be mentioned (`ui/owner-pickers`). It
-notifies nobody. Against a backend from before v0.1.147 that step fails.
+notifies only the run's own Standard agent, which follows the task once it
+is assigned and gets the task's later changes, such as its handover to
+Nora, in its Inbox; no fixture person is notified. Against a backend from
+before v0.1.147 that step fails.
 Before the archive, it
 checks that the top bar's Inbox badge shows what the deployment's unread
 summary (`inbox.summary`) says, has the Standard agent mention Nora in a
