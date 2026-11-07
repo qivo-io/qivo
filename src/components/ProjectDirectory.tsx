@@ -700,8 +700,9 @@ function BatchNote({
 
 /* The line that ends an expanded list (lib/pagedList.ts listEnd). Its Load
    more stays in place while it reads, so keyboard focus stays on it. A
-   failed list and the access_unchecked refusal offer Retry, which reads the
-   list again from its first batch. */
+   failed list and the access_unchecked refusal offer Retry. Retry reads the
+   refused or wholly failed list again from its first batch, and otherwise
+   reads only its failed and stuck batches again (lib/pagedList.ts retry). */
 function ChildrenEnd({
   list,
   end,
