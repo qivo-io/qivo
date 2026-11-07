@@ -1470,23 +1470,35 @@ function dropAboveGap() {
    which the server does not know yet. */
 const serverTask = (uuid: string) => base.stagedTask(uuid)
 
-/* The organization of the watched task: its row's while the workspace
-   holds it, else the one kept for it (watchedOrg), or undefined. */
-function watchedOrgOf(): string | undefined {
+/* The workspace's row of the watched task while it holds the task in the
+   watched organization (watchedOrg), else undefined. Another
+   organization's task of the same id, which the workspace may hold
+   instead, is not the watched task, and the window shows the watched one
+   from its own read (P.taskDetail). */
+function watchedRow(): Row<'issues'> | undefined {
   const t = watchedComments
-  if (!t) return undefined
-  return rows.issues.get(t)?.org_id ?? watchedOrg ?? undefined
+  const row = t ? rows.issues.get(t) : undefined
+  return row && (!watchedOrg || row.org_id === watchedOrg) ? row : undefined
 }
 
-/* The organization of task `uuid` for a comment write or read: its row's
-   while the workspace holds it, else the watched task's kept one
-   (watchedOrg) when it is the watched task, else the row an open view's
-   answer brings, as a Team sync card's mention names its task, or
-   undefined. The server checks the comment either way. */
+/* The organization of the watched task: the one kept for it (watchedOrg),
+   else its row's while the workspace holds it, or undefined. */
+function watchedOrgOf(): string | undefined {
+  if (!watchedComments) return undefined
+  return watchedOrg ?? watchedRow()?.org_id
+}
+
+/* The organization of task `uuid` for a comment write or read: the
+   watched task's kept one (watchedOrg) when it is the watched task, so a
+   comment never goes to another organization's task of the same id that
+   the workspace holds, else its row's while the workspace holds it, else
+   the row an open view's answer brings, as a Team sync card's mention
+   names its task, or undefined. The server checks the comment either
+   way. */
 function orgOfTask(uuid: string): string | undefined {
+  if (uuid === watchedComments && watchedOrg) return watchedOrg
   const row = rows.issues.get(uuid)
   if (row) return row.org_id
-  if (uuid === watchedComments && watchedOrg) return watchedOrg
   return viewRows.peek(uuid)?.org_id
 }
 
@@ -1529,11 +1541,12 @@ function watchedCreating(): boolean {
 function subscribeWaitingThread() {
   const t = watchedComments
   if (!t || threadWatched || watchedGone()) return
-  const row = serverTask(t)
+  const server = serverTask(t)
+  const row = server && (!watchedOrg || server.org_id === watchedOrg) ? server : undefined
   const took = tookCreates.get(t)
   if (row) subscribeThread(t, row.org_id)
   else if (took) subscribeThread(t, took)
-  else if (watchedOrg && !rows.issues.has(t)) subscribeThread(t, watchedOrg)
+  else if (watchedOrg && !watchedRow()) subscribeThread(t, watchedOrg)
 }
 
 /* Subscribes to the watched thread `issueUuid` in organization `orgId`, as
@@ -1858,7 +1871,7 @@ function historyNews(news: SideNews) {
 function sidesWanted(): Record<SectionSide, boolean> {
   const t = watchedComments
   const shown = !!t && sectionOwners.size > 0
-  const detail = !!t && !rows.issues.has(t) && watchedOrgOf() !== undefined
+  const detail = !!t && !watchedRow() && watchedOrgOf() !== undefined
   return { task: shown || detail, links: shown, attachments: shown }
 }
 
@@ -1884,7 +1897,7 @@ function syncThread() {
    (subscribeWaitingThread, retryComments). */
 function watchedGone(): boolean {
   const t = watchedComments
-  if (!t || rows.issues.has(t)) return false
+  if (!t || watchedRow()) return false
   const answer = sectionAnswers.issue === t ? sectionAnswers.task : null
   return answer !== null && answer !== CREATING && answer.state === 'unavailable'
 }
@@ -2369,10 +2382,12 @@ function syncRefRead() {
 }
 
 /* The handle of the registered reference's task once the workspace holds
-   it, else undefined. */
+   it in the reference's organization, else undefined, so a reference to
+   another organization's task of the same id as a held one never moves
+   to the held task's handle (heldHandle). */
 function refHandle(read: RefRead): string | undefined {
   const uuid = read.task?.uuid ?? read.parts.uuid
-  if (uuid) return uuidToKey.get(uuid)
+  if (uuid) return heldHandle(uuid, read.task?.org ?? read.parts.org)
   if (read.parts.org && read.parts.num !== undefined)
     return PLANNER.issueRefIn(read.parts.org, `${ISSUE_PREFIX}-${read.parts.num}`) ?? undefined
   return undefined
@@ -2888,7 +2903,7 @@ function shownAnswer(answer: SectionAnswers['task']): SectionAnswers['task'] {
 function taskDetailNow(): TaskDetailVM | null {
   const t = watchedComments
   const org = watchedOrgOf()
-  if (!t || !org || rows.issues.has(t)) return null
+  if (!t || !org || watchedRow()) return null
   const answers = sectionAnswers.issue === t ? sectionAnswers : null
   const answer = answers ? shownAnswer(answers.task) : undefined
   const links = answers?.links
@@ -2917,7 +2932,7 @@ function taskDetailNow(): TaskDetailVM | null {
    (syncSections). Answers whether either changed. */
 function rebuildSections(): boolean {
   const t = watchedComments
-  const row = t ? rows.issues.get(t) : undefined
+  const row = watchedRow()
   const handle = t ? uuidToKey.get(t) : undefined
   const it = handle === undefined ? undefined : PLANNER.issueById[handle]
   if (t && row && it)
@@ -3289,6 +3304,17 @@ const handleUnder = (home: string, uuid: string, orgId: string, key: string) =>
   orgId && orgId === home ? key : uuid
 const handleFor = (uuid: string, orgId: string, key: string) =>
   handleUnder(HOME_ORG, uuid, orgId, key)
+/* The handle of task `uuid` while the workspace holds it in organization
+   `org`, by the task index's own maps, or with no organization named, by
+   its id alone, else undefined. Two organizations can hold one task id,
+   and the workspace holds one task by an id, so the handle of another
+   organization's task of the same id never stands for this one. */
+function heldHandle(uuid: string, org: string | null | undefined): string | undefined {
+  const handle = uuidToKey.get(uuid)
+  if (handle === undefined || !org) return handle
+  const key = uuidToDisplayKey.get(uuid)
+  return key !== undefined && keyByOrg.get(org)?.get(key) === uuid ? handle : undefined
+}
 
 // Week indexes are UNBOUNDED offsets from TIMELINE_START (negative and past
 // the prototype's 28 alike) — the roadmap's user-chosen window clips them
@@ -8544,7 +8570,7 @@ function withUnheldMoves(moved: ReadonlyMap<string, string>, homeBefore: string)
    workspace last held it (watchedHeld), or null. */
 function unheldWatched(): { uuid: string; org: string; num: number } | null {
   const t = watchedComments
-  if (!t || rows.issues.has(t)) return null
+  if (!t || watchedRow()) return null
   const detail = PLANNER.detail
   if (detail?.task === t && detail.num != null) return { uuid: t, org: detail.org, num: detail.num }
   return watchedHeld?.uuid === t ? watchedHeld : null
@@ -9440,11 +9466,14 @@ type UploadTarget = { uuid: string; org: string; project: string; count: number;
 
 /** The workspace's task for an upload: its cap counts the larger of the
     workspace's rows and the whole section list (capInputs), and an image a
-    description save took out no longer counts. */
+    description save took out no longer counts. None while the window
+    watches another organization's task of the same id, which the
+    workspace does not hold. */
 function heldUploadTarget(issueKey: string): UploadTarget | null {
   const uuid = keyToUuid.get(issueKey) || (rows.issues.has(issueKey) ? issueKey : undefined)
   const row = uuid ? rows.issues.get(uuid) : undefined
   if (!row || !uuid) return null
+  if (uuid === watchedComments && watchedOrg && row.org_id !== watchedOrg) return null
   const held = PLANNER.issueById[uuidToKey.get(uuid) ?? '']
   const count = Math.max(
     [...rows.attachments.values()].filter((a) => a.issue_id === uuid && a.dropped_at === undefined)
@@ -12776,17 +12805,26 @@ export const PLANNER = {
     return it && row ? taskRef({ org: it.org, num: row.num, uuid: it.uuid }) : id
   },
   /** What opening task `uuid`, number `num` of organization `org` passes
-      on: its handle when the workspace holds it, else a reference that
-      names all three (lib/taskReference.ts), as Search and the related
-      rows open a task. */
+      on: its handle when the workspace holds it in that organization,
+      else a reference that names all three (lib/taskReference.ts), as
+      Search, the related rows and an Inbox row open a task. Another
+      organization's held task of the same id is another task
+      (heldHandle). */
   openTask: (uuid: string, org: string, num: number | null): string =>
-    uuidToKey.get(uuid) ?? taskRef({ org, num, uuid }),
+    heldHandle(uuid, org) ?? taskRef({ org, num, uuid }),
   /** The handle task `uuid`, number `num` of organization `orgId` opens by
-      now: the store's when it holds the task, else the home organization's
-      key or another organization's uuid (handleFor). Read when the task
-      opens, as a role change since a search answered can change it. */
+      now: the store's when it holds the task in that organization, else
+      the home organization's key or another organization's uuid
+      (handleFor). While the workspace holds another organization's task
+      of the same id, whose handle that would be, it is a reference that
+      names all three, which no lookup of a handle finds (heldHandle). Read
+      when the task opens, as a role change since a search answered can
+      change it. */
   handleNow: (uuid: string, orgId: string, num: number): string =>
-    uuidToKey.get(uuid) ?? handleFor(uuid, orgId, `${ISSUE_PREFIX}-${num}`),
+    heldHandle(uuid, orgId) ??
+    (uuidToKey.has(uuid)
+      ? taskRef({ org: orgId, num, uuid })
+      : handleFor(uuid, orgId, `${ISSUE_PREFIX}-${num}`)),
   /** The handle the views name the task that `open` opens by: a handle as
       it is, and a reference that names a task's organization, number and
       uuid (P.openTask) by the handle that task opens by now (P.handleNow),
@@ -14430,13 +14468,15 @@ export const PLANNER = {
       it. */
   watchComments: (issueUuid: string | null, orgId?: string) => {
     // the organization a later call brings for the watched task starts its
-    // watch over, so the empty thread and lists of a task without one go
+    // watch over, so the empty thread and lists of a task without one go,
+    // and so does another organization's, whose task of the same id is
+    // another task
     if (watchedComments === issueUuid) {
-      if (!issueUuid || !orgId || watchedOrg) return
+      if (!issueUuid || !orgId || watchedOrg === orgId) return
       watchedComments = null
     }
     ++commentsWatchEpoch
-    if (watchedHeld?.uuid !== issueUuid) watchedHeld = null
+    if (watchedHeld?.uuid !== issueUuid || (orgId && watchedHeld.org !== orgId)) watchedHeld = null
     watchedComments = issueUuid
     const row = issueUuid ? serverTask(issueUuid) : undefined
     watchedOrg = orgId ?? row?.org_id ?? null
@@ -14477,8 +14517,9 @@ export const PLANNER = {
       if (historyOwners.size > 0) startHistory()
     }
     // the thread, and with it the sections and the task answer
-    // (syncSections), then the emptied thread and lists show
-    const org = row?.org_id ?? watchedOrg
+    // (syncSections), then the emptied thread and lists show, in the
+    // organization the window named
+    const org = watchedOrg
     if (issueUuid && org && !creating) subscribeThread(issueUuid, org)
     repaint({ thread: true, sections: true })
   },

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { TiptapEditorHTMLElement } from '@tiptap/core'
 import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -13,7 +14,10 @@ import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixt
    that never asked for every task. The task window opens over the Board,
    and the Board rings the task's card, which only its answer brings, as
    the workspace holds no task: App reveals the handle the Board names a
-   referenced task by (P.handleOfOpen). */
+   referenced task by (P.handleOfOpen). And an Inbox row of another
+   organization's task with the id of a task the workspace holds, which
+   the Inbox pane shows, reads on open and comments on in that
+   organization, never as the held task. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => {
@@ -261,5 +265,149 @@ describe("an Inbox row's Open task in board", { timeout: 30_000 }, () => {
     )
     expect(document.querySelector('[role="dialog"]')).not.toBeNull()
     expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+  })
+})
+
+describe("an Inbox row of another organization's task with a held task's id", {
+  timeout: 30_000,
+}, () => {
+  it("shows that organization's task in the pane and reads it there, not the held one", async () => {
+    vi.resetModules()
+    history.replaceState(null, '', '/app/~/inbox')
+    const GUEST = 'org-guest'
+    const snap: Snapshot = underProgram(plannerFixture())
+    const me = snap.profiles[0]
+    snap.orgs.push({ ...snap.orgs[0], id: GUEST, slug: 'guest', name: 'Guest Co' })
+    snap.profiles.push({ ...me, id: 'me-guest', org_id: GUEST })
+    snap.myProfileIds.push('me-guest')
+    const guestProject = {
+      ...snap.projects[1],
+      id: 'guest-work',
+      org_id: GUEST,
+      name: 'Guest work',
+    }
+    snap.projects.push(guestProject)
+    const task = (org: string, project: string, num: number, title: string) => ({
+      id: SOAK,
+      org_id: org,
+      project_id: project,
+      num,
+      title,
+      description: '',
+      status: 'progress' as const,
+      priority: 'medium' as const,
+      paused: false,
+      created_at: AT,
+      updated_at: AT,
+      has_hidden_subtasks: false,
+      has_hidden_parent: false,
+    })
+    // the workspace holds the home organization's task, and the server
+    // also holds the guest organization's task of the same id, which the
+    // parts do not send
+    snap.issues.push(task(snap.orgs[0].id, snap.projects[1].id, 2, 'Run the soak test'))
+    const guestTask = task(GUEST, guestProject.id, 7, 'Calibrate the guest rig')
+    Object.assign(snap, { unheld: { issues: [guestTask] } })
+    for (const [org, recipient] of [
+      [snap.orgs[0].id, me.id],
+      [GUEST, 'me-guest'],
+    ])
+      snap.messages.push({
+        id: `message-${org}`,
+        org_id: org,
+        recipient_id: recipient,
+        issue_id: SOAK,
+        issue_title: 'News',
+        kind: 'comment',
+        detail: 'New comment',
+        created_at: AT,
+      })
+    network.onUpdate.mockImplementation((ref, args, next) => {
+      const name = getFunctionName(ref)
+      const a = args as { org_id?: string; ref?: string }
+      if (name === 'workspace:whole') next(structuredClone(snap))
+      else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+      else if (name === 'taskWindow:task') {
+        // the window's own read, of the task of the organization it names
+        const row = [...snap.issues, guestTask].find(
+          (it) => it.org_id === a.org_id && it.id === a.ref,
+        )
+        if (row)
+          next({
+            state: 'ok',
+            task: { ...row, has_subtasks: false },
+            level: 'lead',
+            labels: [],
+            follow: null,
+            parent: null,
+            subtasks: { rows: [], complete: true },
+          })
+      }
+      return () => {}
+    })
+    network.query.mockResolvedValue(null)
+    // only this case's writes
+    network.mutation.mockReset()
+    network.mutation.mockResolvedValue(null)
+    const store = await import('./store/planner')
+    await store.initStore()
+    const { syncStatus } = await import('./lib/syncStatus')
+    syncStatus.setSocket({ connected: true, everConnected: true })
+    const { default: App } = await import('./App')
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <App />
+        </TooltipProvider>,
+      ),
+    )
+    const home = snap.orgs[0].id
+    expect(store.P.issueById[store.P.handleOf(SOAK) ?? '']?.org).toBe(home)
+    const rowOpen = (org: string) =>
+      waitFor(
+        () =>
+          document.querySelector<HTMLElement>(
+            `[data-message-key="${org}:${SOAK}"] .inbox-message-open`,
+          ),
+        `the row of ${org}`,
+      )
+    const title = () => document.querySelector('[data-task-title]')?.textContent
+    const reads = () =>
+      network.mutation.mock.calls
+        .filter(([ref]) => getFunctionName(ref) === 'messages:readItem')
+        .map(([, args]) => args as { org_id: string; issue_id: string })
+    // the held task's row opens it, and reads its item
+    const homeRow = await rowOpen(home)
+    await act(async () => homeRow.click())
+    await waitFor(() => title() === 'Run the soak test', "the held task's title")
+    await waitFor(() => reads().length === 1, 'the first read on open')
+    // the guest organization's row of the same id shows that task instead
+    const guestRow = await rowOpen(GUEST)
+    await act(async () => guestRow.click())
+    await waitFor(() => title() === 'Calibrate the guest rig', "the guest task's title")
+    // and its read on open reads that organization's item
+    await waitFor(() => reads().length === 2, 'the second read on open')
+    expect(reads()).toEqual([
+      expect.objectContaining({ org_id: home, issue_id: SOAK }),
+      expect.objectContaining({ org_id: GUEST, issue_id: SOAK }),
+    ])
+    expect(location.pathname).not.toMatch(/qn-2$/)
+    expect(title()).toBe('Calibrate the guest rig')
+    // a comment typed there goes to that organization's task too
+    const composer = await waitFor(
+      () =>
+        document.querySelector<TiptapEditorHTMLElement>(
+          '[role="textbox"][aria-label="Leave a comment"]',
+        )?.editor,
+      'the comment editor',
+    )
+    await act(async () => composer.chain().focus().insertContent('Rig calibrated').run())
+    const send = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Comment')
+    await act(async () => send?.click())
+    expect(
+      network.mutation.mock.calls
+        .filter(([ref]) => getFunctionName(ref) === 'comments:create')
+        .map(([, args]) => (args as { org_id: string }).org_id),
+    ).toEqual([GUEST])
   })
 })

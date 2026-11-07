@@ -1241,8 +1241,9 @@ function ArchivedPlace({ project, archivedAt }: { project: string; archivedAt: n
     (lib/taskReference.ts), is about, by uuid and organization: the
     workspace's task (`held`), else the task the window showed last when
     `issueId` names it too (`shown`, as a reference and the handle it moved
-    to do), else what the reference names once its uuid and organization
-    are known (`named`), or null. The window watches it (P.watchComments)
+    to do, by uuid and organization, lib/router.ts sameTask), else what
+    the reference names once its uuid and organization are known
+    (`named`), or null. The window watches it (P.watchComments)
     and shows it from its own read while the workspace does not hold it
     (P.taskDetail). */
 function windowTaskOf(
@@ -1263,16 +1264,20 @@ function windowTaskOf(
 /** The workspace's task that reference `ref` names once the workspace
     holds it, before the reference moves to its handle (P.watchHandles),
     by its uuid, or its number in its organization: never by reading the
-    reference as a handle. */
+    reference as a handle. A held task of another organization than the
+    one the reference or its read names is another task of the same id,
+    so it is not that task. */
 function heldByRef(ref: RefParts | undefined, read: TaskRefVM | null): IssueVM | undefined {
   if (!ref) return undefined
   const uuid = ref.uuid ?? read?.task?.uuid
+  const org = ref.org ?? read?.task?.org
   const handle = uuid
     ? P.handleOf(uuid)
     : ref.org && ref.num !== undefined
       ? P.issueRefIn(ref.org, `${P.ISSUE_PREFIX}-${ref.num}`)
       : null
-  return handle ? P.issueById[handle] : undefined
+  const held = handle ? P.issueById[handle] : undefined
+  return held && (!org || held.org === org) ? held : undefined
 }
 
 /** What the window names a task opened by reference `ref` by while it

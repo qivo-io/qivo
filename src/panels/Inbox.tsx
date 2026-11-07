@@ -77,7 +77,6 @@ import { notificationPermission, requestNotificationPermission } from '../lib/no
 import { pageEnd, usePagedPages, useSettledSearch } from '../lib/pagedList'
 import { sameTask, taskFacts } from '../lib/router'
 import { fmtSnoozeUntil, SNOOZE_UNIT_MS, type SnoozeUnit, snoozeStepMax } from '../lib/snooze'
-import { taskRef } from '../lib/taskReference'
 import { useMobile } from '../lib/useMobile'
 import { OUT_OF_USE } from '../lib/viewHidden'
 import {
@@ -370,14 +369,9 @@ type RowMenu = { x: number; y: number; row: InboxRowVM | null }
 
 /** The task a row opens, by its handle where the workspace holds the task
     in the row's organization, else by a reference with the organization,
-    the number and the uuid, as two organizations can hold one task id. */
-function rowTask(row: InboxRowVM): string {
-  const open = P.openTask(row.uuid, row.org, row.num)
-  const held = P.issueById[open]
-  return held && held.org !== row.org
-    ? taskRef({ org: row.org, num: row.num, uuid: row.uuid })
-    : open
-}
+    the number and the uuid, as two organizations can hold one task id
+    (P.openTask). */
+const rowTask = (row: InboxRowVM): string => P.openTask(row.uuid, row.org, row.num)
 
 /** The organization `org` as the notes name it. */
 const orgName = (org: string) => P.orgs.find((o) => o.id === org)?.name ?? 'an organization'
