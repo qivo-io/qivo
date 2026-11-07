@@ -869,8 +869,8 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
   it.each(['load', 'hours'] as const)(
     "places an unscheduled task's end once its owner's load and weekly hours are both in, the %s last",
     async (last) => {
-      // Gina, whom the workspace's people part does not hold, owns one-1:
-      // her weekly hours arrive with her details (people.byIds)
+      // Gina, whom the workspace's people part does not hold, owns one-1,
+      // and her weekly hours arrive with her details (people.byIds)
       const board = await loadBoard(
         network,
         (snap) => {
@@ -916,7 +916,7 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
       await board.answer()
       await settle()
       await flush()
-      // 100 hours over Gina's 25-hour weeks: the end in the fourth week
+      // 100 hours over Gina's 25-hour weeks end in the fourth week
       expect(datesSent('one-1')).toEqual([starter, { end_week: week(3) }])
     },
   )

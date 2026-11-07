@@ -8350,8 +8350,8 @@ async function primeMint(items: MintItem[]): Promise<boolean> {
         // prepare marks the key pending before its first await, so no
         // rebuild can ask for it again in between
         mintingKeys.delete(key)
-        // no view names it any more: no failure, and a view that names it
-        // again mints it at once
+        // no view names it any more, which is no failure, and a view that
+        // names it again mints it at once
         if (epoch !== storeEpoch || outcome.state === 'dropped') return false
         if (outcome.state === 'refused' || outcome.state === 'failed') {
           if (outcome.state === 'failed') console.warn('[qivo] url mint failed:', key)

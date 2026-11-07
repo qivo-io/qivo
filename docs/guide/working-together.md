@@ -39,7 +39,7 @@ organization. Qivo uses temporary download links, which you should treat as
 private. Qivo loads your own picture and the pictures of the people the
 page, list or picker you have open shows, and shows their initials until a
 picture is ready. The **Assignee** filter and the **+ Add** list under
-**Subscribers** load no pictures themselves: they show a picture another
+**Subscribers** load no pictures themselves. They show a picture another
 open view has loaded, and initials otherwise. Someone whose details are
 still loading shows as a plain square, with **Loading…** in place of their
 name, for a moment. Your browser keeps recently shown pictures for your

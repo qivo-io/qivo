@@ -357,10 +357,10 @@ export function createProfileCache(deps: ProfileCacheDeps) {
       bound()
       flush()
     },
-    /** What the cache knows of person `id`, marking nothing: as a person
-        of organization `org` when given, so the answer of a read of
-        another organization, and a face or name taken under one, say
-        nothing of them there. */
+    /** What the cache knows of person `id`, marking nothing, as a person
+        of organization `org` when given. The answer of a read of another
+        organization, and a face or name taken under one, say nothing of
+        them there. */
     look(id: string, org?: string): CachedPerson {
       const ours = (of: string) => org === undefined || of === org
       const read = chunkOf.get(id)

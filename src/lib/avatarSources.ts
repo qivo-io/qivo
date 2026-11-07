@@ -176,14 +176,14 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
   const held = () => kept + (downloading + slotQueue.length) * AVATAR_SOURCES.pictureBytes
   const roomFor = (bytes: number) => held() + bytes <= AVATAR_SOURCES.keptBytes
   /* Whether `bytes` more pass the budget beside the kept pictures and the
-     downloads on their way, leaving out the ones waiting for a slot: each
-     of those is counted at pictureBytes until it runs, while a picture
+     downloads on their way. The downloads waiting for a slot are left out,
+     since each counts at pictureBytes until it runs, while a picture
      normally holds 10 to 30 KB. */
   const short = (bytes: number) =>
     kept + downloading * AVATAR_SOURCES.pictureBytes + bytes > AVATAR_SOURCES.keptBytes
   /* Frees room for `bytes` by releasing the held pictures no view names,
      the one shown least recently first, and answers whether it fits now.
-     Only a real need releases one: a picture that does not fit only
+     Only a real need releases one. A picture that does not fit only
      because of the downloads waiting for a slot waits for them, and
      starts once their real sizes leave room (admit). A named picture is
      never released for room. */
@@ -471,8 +471,8 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
 
   /* Restores the persistent cache's pictures of `keys` that hold no
      source and are not downloading yet, answering whether any shows now.
-     A download that starts while a restore reads wins: its lease decides
-     when the picture renews. */
+     A download that starts while a restore reads wins, and its lease
+     decides when the picture renews. */
   const restoreKeys = async (keys: readonly string[]): Promise<boolean> => {
     const cache = persistent
     if (!cache) return false

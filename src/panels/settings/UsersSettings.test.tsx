@@ -1392,10 +1392,10 @@ describe('the picture editor', () => {
       nameOnly: false,
       plannableHours: 32,
     }
-    // a face: the menu
+    // a face gets the menu
     await render(() => <AvatarPicker person={known} />)
     expect(has('[data-avatar-pick="zed"]')).toBe(true)
-    // a picker's name: no picture is known, so no menu
+    // a picker's name does not tell the picture, so there is no menu
     await render(() => (
       <AvatarPicker
         person={{ ...known, avatar: null, color: '', nameOnly: true, plannableHours: undefined }}

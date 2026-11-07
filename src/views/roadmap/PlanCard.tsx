@@ -91,9 +91,9 @@ export function PlanCard({
   const owner = issue.owner ? P.person(issue.owner, issue.org) : null
   const remaining = issue.remaining || 0
   // the owner's weekly capacity, null while the store does not know their
-  // hours, when auto-fit stays off rather than fit against the default:
-  // while their details load, which the first fit waits for, or after the
-  // read could not give their hours
+  // hours, when auto-fit stays off rather than fit against the default.
+  // That is while their details load, which the first fit waits for, or
+  // after the read could not give their hours.
   const cap = owner ? capacityOf(owner) : null
   const ownerLoading = owner?.state === 'loading'
   const canFit = !!owner && cap !== null && remaining > 0

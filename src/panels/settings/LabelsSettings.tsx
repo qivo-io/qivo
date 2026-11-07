@@ -398,7 +398,7 @@ export function OrgLabelsPage() {
   // label's name or color, or goes out later as `expected`.
   const known = useRef(new Map<string, { name: string; color: string }>())
   // the labels of the kept rows the store's catalogue held during this
-  // visit: one it no longer holds was deleted, here or by someone else
+  // visit. One it no longer holds was deleted, here or by someone else
   const heldHere = useRef(new Set<string>())
   const [saved, setSaved] = useState<ReadonlyMap<string, { name?: string; color?: string }>>(
     () => new Map(),
@@ -458,7 +458,7 @@ export function OrgLabelsPage() {
     })
   })
   // a created or renamed label, or one with an unsaved name, that no loaded
-  // batch shows: while the store holds it, or while the page knows it and
+  // batch shows, while the store holds it or while the page knows it and
   // the store never held it, as a label the answers show before the
   // catalogue does. One the store held and no longer holds is gone.
   const candidates = [...new Set([...made, ...renamed, ...drafts])]

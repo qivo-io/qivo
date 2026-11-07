@@ -757,12 +757,12 @@ describe('pictures only for what the open views name', () => {
     f.cache.sync([...earlier, ...page])
     f.cache.named(earlier)
     for (const key of earlier) expect(await f.cache.prepare(key, LEASE)).toBe(true)
-    // the earlier page closes, and the next names 30 others at once: six
+    // the earlier page closes, and the next names 30 others at once. Six
     // download, and the rest wait for a slot, each counted at 256 KiB
     f.cache.named(page)
     await Promise.all(page.map((key) => f.cache.prepare(key, LEASE)))
     await vi.waitFor(() => expect(page.every((key) => f.cache.url(key) !== null)).toBe(true))
-    // 50 pictures of 20 KiB fit the budget: none of the earlier ones went
+    // 50 pictures of 20 KiB fit the budget, so none of the earlier ones went
     expect(earlier.every((key) => f.cache.url(key) !== null)).toBe(true)
     expect(f.cache.keptBytes()).toBe(50 * 20 * KIB)
     expect(f.fetcher).toHaveBeenCalledTimes(50)
@@ -903,7 +903,7 @@ describe('pictures only for what the open views name', () => {
     f.cache.sync([])
     f.cache.setPersistent(stored.cache)
     await f.cache.restore()
-    // a face arrives with the key the device holds: its restore reads, and
+    // a face arrives with the key the device holds. Its restore reads, and
     // its decode is still on its way when the picture's mint answers
     const restoring = deferred<unknown>()
     f.decode.mockImplementationOnce(() => restoring.promise)

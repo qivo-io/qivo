@@ -448,7 +448,7 @@ describe('uploaded profile pictures through the planner store', () => {
       calls[2]?.answer.resolve(response())
       await vi.advanceTimersByTimeAsync(0)
       expect(calls).toHaveLength(3)
-      // the dropped ones count as no failure: named again, they mint at
+      // the dropped ones count as no failure, so named again they mint at
       // once, with no retry delay, beside the ones whose leases came while
       // the page was closed
       store.P.namePeople('page', named(pictured))
