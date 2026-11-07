@@ -377,8 +377,18 @@ function MobileTaskBoard({
     (info.mine ? 0 : Number(filters.mine || filters.assignees.length > 0))
   // the tasks the Board shows, groups as rows
   const tasks = view.tasks
-  // the owners the rows show, named while the list shows
-  usePeople(useMemo(() => tasks.map((task) => ({ org: task.org, id: task.owner ?? '' })), [tasks]))
+  // the owners the rows show, named while the list shows, with each task's
+  // assignee, whose name the text filter matches the task by
+  usePeople(
+    useMemo(
+      () =>
+        tasks.flatMap((task) => [
+          { org: task.org, id: task.owner ?? '' },
+          { org: task.org, id: task.assignee ?? '' },
+        ]),
+      [tasks],
+    ),
+  )
   const statusOrder = info.mine
     ? ['progress', 'review', 'todo', 'backlog', 'done']
     : P.STATUSES.map((item) => item.id)

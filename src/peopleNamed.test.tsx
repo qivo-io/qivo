@@ -341,6 +341,37 @@ describe('people the workspace does not hold, on each page', () => {
   )
 
   it(
+    'names the phone Board’s owners and the assignees its text filter matches tasks by',
+    async () => {
+      const { board, names } = await load(
+        (snap) => {
+          snap.issues.push({
+            ...taskRow(snap, 'r1', 'review', 1),
+            assignee_id: GINA,
+            reviewer_id: HAL,
+          })
+        },
+        { phone: true },
+      )
+      await board.render(root)
+      await repaint()
+      // Hal owns the task while it waits for his review; Gina is its assignee
+      expect(names.named().has(HAL)).toBe(true)
+      expect(names.named().has(GINA)).toBe(true)
+      expect(names.unnamed()).toEqual([])
+      // once Gina's name loads, the text filter decides by it
+      board.server.people.hold = false
+      await board.answer()
+      await repaint()
+      const task = board.P.viewTask('board:phone', 'r1')
+      if (!task) throw new Error('the phone Board holds no r1')
+      expect(board.P.matchesSearch(task, 'ghost')).toBe(true)
+      expect(board.P.matchesSearch(task, 'zzz')).toBe(false)
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
     'names the Overview’s lead and its lists’ owners, loading and then by name',
     async () => {
       const { board, names } = await load(
