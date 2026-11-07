@@ -538,22 +538,42 @@ let itemConnection = 0
 let itemRerun = false
 /* A hold on the open task's read on open that holds nothing, which each
    visit starts with (itemHold). */
-const freeHold = () => ({ waiting: 0, accepted: false, keptBack: false })
+const freeHold = () => ({
+  waiting: new Set<number>(),
+  accepted: 0,
+  readThrough: 0,
+  keptBack: false,
+})
 /* This client's hold on the open task's read on open this visit
    (P.readOnOpen), from its Mark as unread or a snooze or its end on the
-   task (holdUnreadOf). It counts those writes that still wait and says
-   whether the server accepted one, and while either holds, no read on
-   open goes out. A write the server refused or that failed only stops
-   waiting, so the hold is as it would be without that write. `keptBack`
-   says whether the hold turned away a read on open the window asked for,
-   which runs again once nothing holds. Each visit gets a new hold, so a
-   write of an earlier visit changes nothing. Forgotten when the thread
-   changes or stops. */
+   task (holdUnreadOf), its unread choices, each by the number holdWrites
+   gave it as it went out. `waiting` holds the numbers of those whose
+   write still waits, `accepted` the newest the server accepted, and
+   `readThrough` the newest that went out before a row's Mark as read the
+   server accepted (P.readItem), which supersedes every unread choice up
+   to it, accepted, waiting or failed. A later choice that waits or was
+   accepted holds (heldBack), and while one does, no read on open goes
+   out. A write the server refused or that failed only stops waiting, so
+   the hold is as it would be without that write. `keptBack` says whether
+   the hold turned away a read on open the window asked for, which runs
+   again once nothing holds. Each visit gets a new hold, so a write of an
+   earlier visit changes nothing. Forgotten when the thread changes or
+   stops. */
 let itemHold = freeHold()
-/* How many writes took a hold on the watched task's read on open
-   (holdWatched), so a row's Mark as read frees only a hold no later write
-   took (P.readItem). */
+/* The number of the newest write that took a hold on the watched task's
+   read on open (holdWatched), in the order they went out, so a row's
+   accepted Mark as read supersedes exactly the unread choices that went
+   out before it (P.readItem). */
 let holdWrites = 0
+
+/* Whether hold `hold` holds off the read on open: an unread choice that
+   went out after the last accepted row read still waits, or the server
+   accepted one. */
+function heldBack(hold: ReturnType<typeof freeHold>): boolean {
+  if (hold.accepted > hold.readThrough) return true
+  for (const n of hold.waiting) if (n > hold.readThrough) return true
+  return false
+}
 
 /* The marks of the person's Inbox writes by `${org}:${task}`
    (inboxMarkKey), which P.inboxMarks shows. A write sets its mark as it
@@ -1645,27 +1665,29 @@ function holdUnreadOfItem(org: string, task: string): SendOptions<unknown> {
 /* Holds off the read on open of the watched task `task` while one write
    waits (itemHold), and answers the handlers send() runs for that write.
    The hold stays for the rest of the visit once the server accepts the
-   write, until a row's Mark as read of the task frees it (P.readItem). A
-   refusal or a failure takes away only this write's part, so an unread
-   choice the server accepted, before or since, still holds. Once nothing
-   holds, a read on open the hold turned away runs again, so an update
-   that arrived while the write waited is read as it would have been
-   without it. A write of an earlier visit changes nothing. Call it just
-   before the write goes out. */
+   write, until a row's Mark as read of the task that went out after it
+   is accepted (P.readItem). A refusal or a failure takes away only this
+   write's part, so an unread choice the server accepted and no accepted
+   read superseded, before or since, still holds. Once nothing holds, a
+   read on open the hold turned away runs again, so an update that
+   arrived while the write waited is read as it would have been without
+   it. A write of an earlier visit changes nothing. Call it just before
+   the write goes out. */
 function holdWatched(task: string): SendOptions<unknown> {
-  holdWrites++
+  const n = ++holdWrites
   const hold = itemHold
-  hold.waiting++
+  hold.waiting.add(n)
   return {
     onOk: () => {
-      if (hold === itemHold) hold.accepted = true
+      if (hold === itemHold) hold.accepted = Math.max(hold.accepted, n)
     },
     onSettled: () => {
       if (hold !== itemHold) return
-      hold.waiting--
-      // refused or failed, so the read the window asked for meanwhile goes
-      // out, unless another unread choice still holds
-      if (hold.waiting > 0 || hold.accepted || !hold.keptBack) return
+      hold.waiting.delete(n)
+      // refused or failed, or an accepted read superseded it, so the read
+      // the window asked for meanwhile goes out, unless another unread
+      // choice still holds
+      if (heldBack(hold) || !hold.keptBack) return
       hold.keptBack = false
       PLANNER.readOnOpen(task)
     },
@@ -15352,19 +15374,26 @@ export const PLANNER = {
       out of what the notice counts, for the read that opening a task sends
       on its own (P.readOnOpen). Its read mark turns the Inbox's row read
       at once (P.inboxMarks). Once the server accepts it, a read of the
-      watched task frees the hold an earlier Mark as unread or snooze set
-      (holdWatched), so later news on it is read on open again, as the
-      person's newest choice is read, unless a Mark as unread or snooze
-      went out after it, which is newer. The read on open never frees it. */
+      watched task supersedes every Mark as unread or snooze that went out
+      before it, accepted, waiting or failed, so their hold goes
+      (holdWatched) and later news on it is read on open again, as the
+      person's newest choice is read. A Mark as unread or snooze that went
+      out after it is newer and still holds while it waits or once
+      accepted, and frees nothing more once refused or failed. The read on
+      open never frees it. */
   readItem: (
     target: { org: string; task: string; through: number; latestAt: string },
     { quiet = false } = {},
   ): boolean => {
-    const holdsBefore = holdWrites
+    const before = holdWrites
     return sendItemRead(target, quiet, () => {
       const watched = threadWatched
-      if (holdWrites !== holdsBefore) return
-      if (watched?.task === target.task && watched.org === target.org) itemHold = freeHold()
+      if (watched?.task !== target.task || watched.org !== target.org) return
+      const hold = itemHold
+      hold.readThrough = Math.max(hold.readThrough, before)
+      // the read read the item, so a read on open turned away goes with
+      // the hold
+      if (!heldBack(hold)) hold.keptBack = false
     })
   },
   /** The read on open of task `task`, which a window shows once it froze
@@ -15397,7 +15426,7 @@ export const PLANNER = {
     const shown = PLANNER.inboxItem
     if (!shown || shown.task !== task || shown.state !== 'ok' || !shown.current) return false
     // the person chose unread for this visit, or the write that does waits
-    if (itemHold.waiting > 0 || itemHold.accepted) {
+    if (heldBack(itemHold)) {
       itemHold.keptBack = true
       return false
     }

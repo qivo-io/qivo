@@ -13,10 +13,11 @@ import type { Row } from './rows'
    (P.endInboxMarks), and each write settles only its own. The pause
    refuses a write first, with no mark. Mark as unread and a snooze of the
    watched task hold off its read on open, by organization and task, and a
-   row's accepted Mark as read frees that hold unless a newer unread choice
-   went out after it. Mark all as read and Remove all read mark the rows
-   the Inbox showed at the press, by seat, and a long one runs on the
-   lanes every large action shares. */
+   row's accepted Mark as read frees the hold of every unread choice that
+   went out before it, while a newer one holds until the server refuses
+   it. Mark all as read and Remove all read mark the rows the Inbox showed
+   at the press, by seat, and a long one runs on the lanes every large
+   action shares. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -258,6 +259,47 @@ describe("the hold on the watched task's read on open", () => {
       org_id: org(),
       issue_id: 'task-a',
       through: Date.parse(at(9)),
+    })
+  })
+
+  it("is freed by the row's accepted Mark as read once a Mark as unread sent after it is refused, in either order", async () => {
+    await watchTaskA()
+    const through = Date.parse(at(5))
+    const target = { org: org(), task: 'task-a', through }
+    // Mark as unread, accepted, holds the read on open
+    P().unreadItem(target)
+    answer(0)
+    await settle()
+    // the row's Mark as read goes out, then Mark as unread, which the
+    // server refuses before it accepts the read
+    P().readItem({ ...target, latestAt: at(5) })
+    P().unreadItem(target)
+    refuse(2)
+    await settle()
+    answer(1)
+    await settle()
+    // the server holds the task read, so later news is read on open
+    await news(9)
+    expect(P().readOnOpen('task-a')).toBe(true)
+    answer(3)
+    await settle()
+    // and the same with the read accepted first and the unread refused after
+    P().unreadItem({ ...target, through: Date.parse(at(9)) })
+    answer(4)
+    await settle()
+    P().readItem({ ...target, through: Date.parse(at(9)), latestAt: at(9) })
+    P().unreadItem({ ...target, through: Date.parse(at(9)) })
+    answer(5)
+    await settle()
+    // the newer unread still waits, so it holds
+    await news(12)
+    expect(P().readOnOpen('task-a')).toBe(false)
+    refuse(6)
+    await settle()
+    expect(reads().at(-1)?.args).toEqual({
+      org_id: org(),
+      issue_id: 'task-a',
+      through: Date.parse(at(12)),
     })
   })
 
