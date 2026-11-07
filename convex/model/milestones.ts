@@ -1305,8 +1305,9 @@ type Lane = {
  * `after` is a plain position, not a sealed one, and a caller can send any
  * position. That reveals nothing, because whatever the position, a batch
  * reads only the milestones of the listed projects the caller can see,
- * which the caller checks again on every call (milestoneProjects), so a
- * position only says where to start among them.
+ * which the caller checks again on every call (milestoneProjects for named
+ * projects, mineMilestoneProjects for a `mine` read), so a position only
+ * says where to start among them.
  */
 export async function readMilestones(
   ctx: QueryCtx,
