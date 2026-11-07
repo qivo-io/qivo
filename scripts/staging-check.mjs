@@ -7493,6 +7493,10 @@ async function projectDialogsCheck() {
  *  part in (adminManagementCheck). */
 export const ADMIN_MANAGEMENT_STEP = 'ui/admin-management'
 
+/** The step's own cleanup, reported apart from the step, so a delete that
+ *  fails never takes the place of the step's own failure. */
+export const ADMIN_MANAGEMENT_CLEANUP = 'cleanup/admin-management'
+
 /** The marks and sentence the step waits for: Settings › Projects' search,
  *  its list and its project and sub-project rows
  *  (src/panels/settings/ProjectLists.tsx), Archived tasks' page and
@@ -7522,12 +7526,13 @@ export const ADMIN_MANAGEMENT_MARKS = {
  *  Projects searched for the run's tag lists the project, its row's
  *  Archived tasks says the page can't show its tasks, and Search for the
  *  tasks' common words, once it has answered, holds the control task and
- *  not the managed one. The step deletes the project, still live, through
- *  the app's store by the organization at its end, also after a failure
- *  (deleteProjectInApp), and the sweep finds a project left behind, which
- *  stays live, through Settings' list of the parents Nora manages. It
- *  needs a backend from this release on; against an older one Nora reads
- *  the project and the step fails, as it should. */
+ *  not the managed one. The project is deleted, still live, through the
+ *  app's store by the organization after the step, also after a failure
+ *  (deleteProjectInApp), under ADMIN_MANAGEMENT_CLEANUP, and the sweep
+ *  finds a project left behind through Settings' lists of the projects
+ *  Nora manages, live and archived. It needs a backend from this release
+ *  on; against an older one Nora reads the project and the step fails, as
+ *  it should. */
 async function adminManagementCheck() {
   const w = run.creds.writeToken
   const k = run.creds.stdKey
@@ -7536,103 +7541,102 @@ async function adminManagementCheck() {
   const m = ADMIN_MANAGEMENT_MARKS
   let project = null
   await check(ADMIN_MANAGEMENT_STEP, async () => {
-    try {
-      const name = `${run.tag} Managed`
-      project = await restOk(w, 'POST', '/projects', { name, lead_id: std.id })
-      await restOk(w, 'DELETE', `/projects/${project.id}/access/users/${run.nora.id}`, {
-        on_held_tasks: 'leave',
-      })
-      const sub = await restOk(k, 'POST', '/projects', { name: `${name} sub`, parent: project.id })
-      const managed = await restOk(k, 'POST', '/tasks', {
-        project: sub.id,
-        title: `${run.tag} managed work item`,
-        status: 'todo',
-      })
-      const controlSub = await restOk(w, 'POST', '/projects', {
-        name: `${name} control`,
-        parent: M.id,
-      })
-      const control = await restOk(w, 'POST', '/tasks', {
-        project: controlSub.id,
-        title: `${run.tag} managed work control`,
-        status: 'todo',
-      })
-      // management data, and no planning data or task
-      const read = await restOk(w, 'GET', `/projects/${project.id}`)
-      eq(read.access?.read, false, "Nora's read of the managed project")
-      eq(read.completion?.status, 'unavailable', "the managed project's completion")
-      eq(read.milestones, null, "the managed project's milestones")
-      eq((await rest(w, 'GET', `/tasks/${managed.key}`)).status, 404, 'the managed task')
-      await restOk(w, 'PATCH', `/projects/${project.id}`, { description: `${run.tag} managed` })
-      eq(
-        (await restOk(w, 'GET', `/projects/${project.id}`)).description,
-        `${run.tag} managed`,
-        "the managed project's description",
-      )
-      // Settings › Projects lists it, and its Archived tasks says it can't
-      // show the project's tasks
-      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/projects`, {
-        waitUntil: 'domcontentloaded',
-      })
-      await app.locator(`[${m.search}]`).fill(run.tag)
-      // the search's own rows, every one with the tag, not the list before
-      // it, whose row goes with a menu opened on it once the search answers
-      const listed = app.locator(`[${m.list}] [${m.row}], [${m.list}] [${m.subRow}]`)
-      expect(
-        await until(async () => {
-          const names = await listed.allTextContents()
-          return names.length > 0 && names.every((name) => name.includes(run.tag))
-        }, 60_000),
-        'Settings › Projects did not answer the search for the run tag',
-      )
-      const row = app.locator(`[${m.list}] [${m.row}="${project.id}"]`)
-      await row.waitFor({ timeout: 60_000 })
-      await row.hover()
-      await row.getByRole('button', { name: 'Project actions', exact: true }).click()
-      // the row menu's entry, not the Settings navigation's item of the
-      // same name beside it
-      await app
-        .locator('[data-slot="popover-content"]')
-        .getByRole('button', { name: 'Archived tasks', exact: true })
-        .click()
-      expect(
-        await until(
-          async () =>
-            ((await app.locator(`[${m.archived}]`).textContent()) ?? '').includes(m.unavailable),
-          30_000,
-        ),
-        'Archived tasks does not say it cannot show the managed project',
-      )
-      // Search has answered once it holds the control task, and then must
-      // not hold the managed one
-      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/all`, {
-        waitUntil: 'domcontentloaded',
-      })
-      const open = app.locator('button[data-sidebar-search]')
-      await open.waitFor({ timeout: 60_000 })
-      await open.click()
-      const palette = app.getByRole('dialog', { name: 'Search tasks and projects', exact: true })
-      const input = palette.getByRole('combobox', { name: 'Search tasks and projects' })
-      await input.waitFor()
-      await input.fill(`${run.tag} managed work`)
-      const item = (key) => palette.locator(`[cmdk-item][data-value="issue-${key}"]`)
-      expect(
-        await until(
-          async () =>
-            (await palette.locator('[cmdk-list]').getAttribute('aria-busy')) === null &&
-            (await item(control.key).count()) === 1,
-          30_000,
-        ),
-        `Search did not find the control task ${control.key}`,
-      )
-      eq(await item(managed.key).count(), 0, 'the managed task in Search')
-      await input.press('Escape')
-      return `${run.nora.name} read ${name} with read false, completion unavailable and no milestones, could not read ${managed.key}, saved its description, found it in Settings › Projects, where its Archived tasks said it cannot show its tasks, and Search found the control ${control.key} and not ${managed.key}`
-    } finally {
-      // the step's own cleanup, which the run's cleanup does not reach
-      if (project) await deleteProjectInApp(w, project)
-    }
+    const name = `${run.tag} Managed`
+    project = await restOk(w, 'POST', '/projects', { name, lead_id: std.id })
+    await restOk(w, 'DELETE', `/projects/${project.id}/access/users/${run.nora.id}`, {
+      on_held_tasks: 'leave',
+    })
+    const sub = await restOk(k, 'POST', '/projects', { name: `${name} sub`, parent: project.id })
+    const managed = await restOk(k, 'POST', '/tasks', {
+      project: sub.id,
+      title: `${run.tag} managed work item`,
+      status: 'todo',
+    })
+    const controlSub = await restOk(w, 'POST', '/projects', {
+      name: `${name} control`,
+      parent: M.id,
+    })
+    const control = await restOk(w, 'POST', '/tasks', {
+      project: controlSub.id,
+      title: `${run.tag} managed work control`,
+      status: 'todo',
+    })
+    // management data, and no planning data or task
+    const read = await restOk(w, 'GET', `/projects/${project.id}`)
+    eq(read.access?.read, false, "Nora's read of the managed project")
+    eq(read.completion?.status, 'unavailable', "the managed project's completion")
+    eq(read.milestones, null, "the managed project's milestones")
+    eq((await rest(w, 'GET', `/tasks/${managed.key}`)).status, 404, 'the managed task')
+    await restOk(w, 'PATCH', `/projects/${project.id}`, { description: `${run.tag} managed` })
+    eq(
+      (await restOk(w, 'GET', `/projects/${project.id}`)).description,
+      `${run.tag} managed`,
+      "the managed project's description",
+    )
+    // Settings › Projects lists it, and its Archived tasks says it can't
+    // show the project's tasks
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/projects`, {
+      waitUntil: 'domcontentloaded',
+    })
+    await app.locator(`[${m.search}]`).fill(run.tag)
+    // the search's own rows, every one with the tag, not the list before
+    // it, whose row goes with a menu opened on it once the search answers
+    const listed = app.locator(`[${m.list}] [${m.row}], [${m.list}] [${m.subRow}]`)
+    expect(
+      await until(async () => {
+        const names = await listed.allTextContents()
+        return names.length > 0 && names.every((name) => name.includes(run.tag))
+      }, 60_000),
+      'Settings › Projects did not answer the search for the run tag',
+    )
+    const row = app.locator(`[${m.list}] [${m.row}="${project.id}"]`)
+    await row.waitFor({ timeout: 60_000 })
+    await row.hover()
+    await row.getByRole('button', { name: 'Project actions', exact: true }).click()
+    // the row menu's entry, not the Settings navigation's item of the
+    // same name beside it
+    await app
+      .locator('[data-slot="popover-content"]')
+      .getByRole('button', { name: 'Archived tasks', exact: true })
+      .click()
+    expect(
+      await until(
+        async () =>
+          ((await app.locator(`[${m.archived}]`).textContent()) ?? '').includes(m.unavailable),
+        30_000,
+      ),
+      'Archived tasks does not say it cannot show the managed project',
+    )
+    // Search has answered once it holds the control task, and then must
+    // not hold the managed one
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/all`, {
+      waitUntil: 'domcontentloaded',
+    })
+    const open = app.locator('button[data-sidebar-search]')
+    await open.waitFor({ timeout: 60_000 })
+    await open.click()
+    const palette = app.getByRole('dialog', { name: 'Search tasks and projects', exact: true })
+    const input = palette.getByRole('combobox', { name: 'Search tasks and projects' })
+    await input.waitFor()
+    await input.fill(`${run.tag} managed work`)
+    const item = (key) => palette.locator(`[cmdk-item][data-value="issue-${key}"]`)
+    expect(
+      await until(
+        async () =>
+          (await palette.locator('[cmdk-list]').getAttribute('aria-busy')) === null &&
+          (await item(control.key).count()) === 1,
+        30_000,
+      ),
+      `Search did not find the control task ${control.key}`,
+    )
+    eq(await item(managed.key).count(), 0, 'the managed task in Search')
+    await input.press('Escape')
+    return `${run.nora.name} read ${name} with read false, completion unavailable and no milestones, could not read ${managed.key}, saved its description, found it in Settings › Projects, where its Archived tasks said it cannot show its tasks, and Search found the control ${control.key} and not ${managed.key}`
   })
+  // the step's own cleanup, which the run's cleanup does not reach, also
+  // after a failure, under its own id, so a failed delete never takes the
+  // place of the step's own failure in the report
+  if (project) await check(ADMIN_MANAGEMENT_CLEANUP, () => deleteProjectInApp(w, project))
 }
 
 /** The step that checks Billing's storage figures (billingStorageCheck). */

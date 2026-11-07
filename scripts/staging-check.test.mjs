@@ -16,6 +16,7 @@ import { billingBytes, CALLS_COUNTING, STORAGE_COUNTING } from '../src/lib/billi
 import { endText } from '../src/lib/deletedItems'
 import { creatorPhrase } from '../src/lib/projectCreators'
 import {
+  ADMIN_MANAGEMENT_CLEANUP,
   ADMIN_MANAGEMENT_MARKS,
   ADMIN_MANAGEMENT_STEP,
   AGENDA_QUERY,
@@ -509,12 +510,19 @@ describe('staging check REST contract', () => {
     // the row menu's Archived tasks, apart from the Settings navigation's
     // item of the same name, which shows beside the non-modal menu
     expect(step).toContain(
-      `.locator('[data-slot="popover-content"]')\n        .getByRole('button', { name: 'Archived tasks', exact: true })`,
+      `.locator('[data-slot="popover-content"]')\n      .getByRole('button', { name: 'Archived tasks', exact: true })`,
     )
     expect(step).not.toContain("app.getByRole('button', { name: 'Archived tasks', exact: true })")
-    // the step deletes its project itself, also after a failure
-    expect(step).toContain('} finally {')
-    expect(step).toContain('if (project) await deleteProjectInApp(w, project)')
+    // the step deletes its project itself, also after a failure, under its
+    // own id, so a failed delete never replaces the step's own failure
+    expect(ADMIN_MANAGEMENT_CLEANUP).toBe('cleanup/admin-management')
+    expect(step).not.toContain('} finally {')
+    const cleanup =
+      'if (project) await check(ADMIN_MANAGEMENT_CLEANUP, () => deleteProjectInApp(w, project))'
+    expect(step.indexOf(cleanup)).toBeGreaterThan(
+      step.indexOf('await check(ADMIN_MANAGEMENT_STEP, async () => {'),
+    )
+    expect(step.indexOf(cleanup)).toBeGreaterThan(step.lastIndexOf('  })\n'))
   })
 
   it('archives first only a project the server says the caller reads, and deletes any other as it is', () => {
