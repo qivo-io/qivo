@@ -104,6 +104,7 @@ import {
   verdicts,
 } from './viewLoads'
 import {
+  type ArchivedCharge,
   BY_ID,
   firstSubtaskCheck,
   type GroupFacts,
@@ -542,9 +543,10 @@ async function* dueTasks(
 
 /** What one query knows of its tasks' subtasks (lib/viewReads.ts Subtasks)
  * and the group facts it read. */
-type Groups = { known: Subtasks; facts: Map<string, GroupFacts> }
+export type Groups = { known: Subtasks; facts: Map<string, GroupFacts> }
 
-const newGroups = (): Groups => ({ known: noSubtasks(), facts: new Map() })
+/** An empty Groups, for one query. */
+export const newGroups = (): Groups => ({ known: noSubtasks(), facts: new Map() })
 
 /* Reads which of `tasks`, tasks of the reader's working set, are groups
  * (firstSubtaskCheck), and with `facts` the group facts of the groups among
@@ -1601,13 +1603,11 @@ type HealthItem = {
 /* The health table's rows of the scope `at`, before the search: for a
  * project scope each selected sub-project, an empty one included, with its
  * own lead or else its top-level project's; for My view each top-level
- * project a seat shows (live, a meta and visible, as the app's
- * P.visibleProjects) above a task the seat's person owns by the Reviewer
- * rule, a group included, in a visible live sub-project, with those tasks,
- * read through the person's own ranges (lib/viewReads.ts ownTasks), never
- * the projects'. In My view `g` learns which of the tasks whose owner
- * depends on it are groups. Past the guard it throws OverBudget, as the
- * table cannot know its rows without them. */
+ * project a seat shows above a task the seat's person owns by the Reviewer
+ * rule, with those tasks (myViewProjects, which milestones.section's
+ * `mine` scope shares). In My view `g` learns which of the tasks whose
+ * owner depends on it are groups. Past the guard it throws OverBudget, as
+ * the table cannot know its rows without them. */
 async function healthItems(
   ctx: QueryCtx,
   guard: ViewBudget,
@@ -1635,14 +1635,60 @@ async function healthItems(
     }
     return out
   }
-  const out: HealthItem[] = []
-  for (const seat of at.seats.values()) {
+  return (await myViewProjects(ctx, guard, at.seats, g)).map(({ project, own }) => ({
+    project,
+    key: nameKey(project.name),
+    lead: project.lead_id ?? null,
+    own,
+  }))
+}
+
+// --- My view's projects ---------------------------------------------------------------
+
+/** A top-level project of My view (myViewProjects): the project, and the
+ * person's own tasks under it. */
+export type MyViewProject = { project: Doc<'projects'>; own: Doc<'issues'>[] }
+
+/**
+ * My view's top-level projects for the login whose seats are `seats`: each
+ * top-level project a seat shows (live, a meta and visible, as the app's
+ * P.visibleProjects) above a task the seat's person owns by the Reviewer
+ * rule (lib/review.ts taskOwnerId), a group included, in a visible live
+ * sub-project, in any status, Done tasks the nightly archive has not taken
+ * yet among them, with those tasks. The tasks are read through the
+ * person's own ranges (lib/viewReads.ts ownTasks), never the projects', so
+ * a task in a sub-project the seat does not hold adds nothing
+ * (ownHeldTasks). `g` learns which of the tasks whose owner depends on it
+ * are groups. `archived` says how a task in an archived sub-project counts
+ * in the guard's decisions (lib/viewReads.ts ArchivedCharge), at the fixed
+ * size unless given; the projects it answers are the same either way.
+ *
+ * It is the rule of My view's health table rows (healthItems) and of
+ * milestones.section's `mine` scope (model/milestones.ts
+ * mineMilestoneProjects), so both list the same projects. The Roadmap's
+ * held_sub_projects (lib/roadmap.ts heldSubProjects) reads the same tasks
+ * by the same Reviewer rule, and the app names the top-level projects
+ * above them. The seats are the caller's, so one query asks each access
+ * question once. Past the guard it throws OverBudget, as no project of the
+ * answer is known without every task, and a check of a seat's own access
+ * that a bound stopped rejects with lib/access.ts accessUnchecked.
+ */
+export async function myViewProjects(
+  ctx: QueryCtx,
+  guard: ViewBudget,
+  seats: ViewSeats,
+  g: Groups = newGroups(),
+  archived: ArchivedCharge = 'fixed',
+): Promise<MyViewProject[]> {
+  const out: MyViewProject[] = []
+  for (const seat of seats.values()) {
     const own: Doc<'issues'>[] = []
-    for await (const step of ownTasks(ctx, guard, seat, ISSUE_STATUSES)) own.push(...step)
+    for await (const step of ownTasks(ctx, guard, seat, ISSUE_STATUSES, true, archived))
+      own.push(...step)
     await readGroups(
       ctx,
       guard,
-      at.seats,
+      seats,
       g,
       own.filter((t) => !ownerSettled(t)),
       false,
@@ -1661,12 +1707,7 @@ async function healthItems(
     for (const [i, id] of liveIds.entries()) {
       const top = await seat.project(id)
       if (!shown[i] || top === null || !inMetaTree(top, top)) continue
-      out.push({
-        project: top,
-        key: nameKey(top.name),
-        lead: top.lead_id ?? null,
-        own: byTop.get(id) ?? [],
-      })
+      out.push({ project: top, own: byTop.get(id) ?? [] })
     }
   }
   return out

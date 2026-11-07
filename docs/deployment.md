@@ -1931,6 +1931,20 @@ Returning the app alone to an earlier release is safe. The staging check's
 step `ui/sidebar-projects` checks the tree on the deployment's reads, so it
 needs a backend from v0.1.118 on.
 
+From the release after v0.1.158, `milestones.section` takes `mine: true`,
+which reads My view's milestones from the top-level projects that hold the
+caller's own tasks, and the Overview's Milestones section and the phone
+Roadmap's agenda read their sections from `milestones.section` with their
+sizes as arguments, My view with `mine`. This app's My view milestones need
+this backend, so the release is the backend's newest rollback floor. From
+it on, never return the backend to a commit before it; roll forward
+instead. Returning the app alone to an earlier release is safe, because that
+app reads the workspace's milestones, which the projects part still sends.
+The staging check's `ui/overview-milestones` step checks on staging that a
+project's Overview and My view's read their milestones from
+`milestones.section`, My view with `mine`. The release changes no table,
+field or index and has no backfill.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.

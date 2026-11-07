@@ -93,6 +93,44 @@ export const ACCESS_UNCHECKED_MESSAGE =
 type Task = Workspace['issues'][number]
 type Project = Workspace['projects'][number]
 
+/** My view's top-level projects in `workspace`, by the rule of the
+    health table's My view rows and of milestones.section's `mine` scope
+    (convex/lib/overview.ts myViewProjects): each top-level project the
+    person sees (a meta, not archived, and `sees`, true unless given) above
+    an active task in a sub-project they see that one of their seats owns
+    by the Reviewer rule (convex/lib/review.ts taskOwnerId), a group
+    included, with those tasks, in the order the tasks come.
+    store/milestoneStandIn.setup.ts answers a `mine` read with it. */
+export function myViewProjects(
+  workspace: Workspace,
+  sees?: (projectId: string) => boolean,
+): Map<string, Task[]> {
+  const mine = new Set(workspace.myProfileIds)
+  const projectById = new Map(workspace.projects.map((p) => [p.id, p]))
+  const seen = (id: string) => {
+    const p = projectById.get(id)
+    return p !== undefined && p.archived_at === undefined && (sees ? sees(id) : true)
+  }
+  const parents = new Set(
+    workspace.issues.flatMap((t) => (t.parent_id === undefined ? [] : [t.parent_id])),
+  )
+  const isGroup = (t: Task) => t.has_hidden_subtasks || parents.has(t.id)
+  const byTop = new Map<string, Task[]>()
+  for (const t of workspace.issues) {
+    const p = projectById.get(t.project_id)
+    if (p?.parent_id === undefined || !seen(p.id)) continue
+    if (!mine.has(taskOwnerId(t, isGroup(t)) ?? '')) continue
+    byTop.set(p.parent_id, [...(byTop.get(p.parent_id) ?? []), t])
+  }
+  const out = new Map<string, Task[]>()
+  for (const [id, tasks] of byTop) {
+    const top = projectById.get(id)
+    if (top && top.type === 'meta' && top.parent_id === undefined && seen(top.id))
+      out.set(id, tasks)
+  }
+  return out
+}
+
 /* -1, 0 or 1 as `a` sorts before, with or after `b` in code unit order. */
 const order = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 const byCreation = (a: Project, b: Project) =>
@@ -398,19 +436,11 @@ export function overviewStandIn(
           scoped.filter((t) => t.project_id === p.id),
         ),
       )
-    else {
-      const byTop = new Map<string, Task[]>()
-      for (const t of scoped) {
-        const top = projectById.get(t.project_id)?.parent_id
-        if (top !== undefined) byTop.set(top, [...(byTop.get(top) ?? []), t])
-      }
-      items = []
-      for (const [id, tasks] of byTop) {
+    else
+      items = [...myViewProjects(workspace, sees)].flatMap(([id, tasks]) => {
         const top = projectById.get(id)
-        if (top && top.type === 'meta' && top.parent_id === undefined && seen(top.id))
-          items.push(item(top, top.lead_id ?? null, tasks))
-      }
-    }
+        return top ? [item(top, top.lead_id ?? null, tasks)] : []
+      })
     items = items.filter((r) => matches(r.key))
     // the counts: the leaves by status, the paused leaves and Left in tenths
     const countsOf = (r: Item): LeafCounts => {

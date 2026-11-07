@@ -5,7 +5,6 @@ import {
   type ReactNode as ReactNodeM,
   useEffect as useEffectM,
   useId as useIdM,
-  useLayoutEffect as useLayoutEffectM,
   useRef as useRefM,
   useState as useStateM,
 } from 'react'
@@ -21,6 +20,7 @@ import { grouped, LIMITS } from '../../convex/lib/limits'
 import { projectKeyBase, projectKeyCandidate } from '../../convex/lib/projectKeys'
 import { issueKey } from '../../convex/lib/taskRefs'
 import { LimitedInput, LimitedTextarea } from '../components/LimitedField'
+import { MilestoneSectionPart } from '../components/MilestoneSectionPart'
 import { LeadPicker } from '../components/ProjectAccessEditor'
 import { ProjectAccessSelect } from '../components/ProjectAccessSelect'
 import { ChoiceEnd, PickerSearch } from '../components/pickerParts'
@@ -32,7 +32,6 @@ import { relativeWeek, weekToISO } from '../lib/dates'
 import { closeOrAsk } from '../lib/discardQuestion'
 import { limitSentence, overLimit, sentence } from '../lib/fieldLimits'
 import { restoreFocus } from '../lib/focusVisibility'
-import { useFocusWhenGone } from '../lib/focusWhenGone'
 import { isLandscapeRoadmapOpen } from '../lib/landscape'
 import { UnsentScopeContext, useTypedUnsaved, useUnsaved, useUnsentScope } from '../lib/leaveGuard'
 import {
@@ -43,7 +42,6 @@ import {
   requestedAccess,
 } from '../lib/newProjectAccess'
 import { listEnd, usePagedList, useSettledSearch } from '../lib/pagedList'
-import { SCROLL_ANCHORING } from '../lib/scrollAnchoring'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { useConfirmArm } from '../lib/useConfirmArm'
 import { useMobile, useMobileBackLayer } from '../lib/useMobile'
@@ -71,7 +69,7 @@ import {
   teamNoun,
 } from '../store/planner'
 import { duplicateNameTags } from '../store/viewModels'
-import { type MilestoneSection, useMilestoneSection } from '../views/useMilestoneSection'
+import { useMilestoneSection } from '../views/useMilestoneSection'
 import { useViewsNews } from '../views/useViewsNews'
 import { type ProjectSettingsRead, useProjectSettings } from './settings/useProjectSettings'
 
@@ -3279,227 +3277,6 @@ function MilestoneModal({
         )}
       </div>
     </ModalShell>
-  )
-}
-
-/* The class of a section's notes, as the Overview's lists set theirs. */
-const sectionNoteClass = 'flex flex-wrap items-center gap-2 px-0.5 py-1 text-sm text-text-2'
-
-/** One of the window's sections, Upcoming or Past: its header (Past's
-    disclosure), then, while open, its search box, the moved-on note with
-    Show from the start, its rows (`children`, keyed by milestone, in a
-    container that stays so an editor in it keeps its place), what it says
-    while loading, when it ends empty, when it stopped, failed or was
-    refused, and Load more. Load more keeps focus while its read loads;
-    where it leaves, as the section ends or its read fails, focus it left
-    nowhere goes to that note's Retry, else to the section, and Show from
-    the start and Retry leave focus in the section. When a section moves on
-    and its first rows leave, the browser's scroll anchoring keeps the rows
-    the person reads in place, and where it lacks that, as in Safari, the
-    section moves the window's scroller by hand, as the Overview's lists
-    do. */
-function MilestoneSectionPart({
-  side,
-  section,
-  open,
-  searchable,
-  pastKnown = false,
-  bodyId,
-  header,
-  children,
-}: {
-  side: 'upcoming' | 'past'
-  section: MilestoneSection
-  open: boolean
-  searchable: boolean
-  /** Upcoming's first answer said the project holds no past milestone */
-  pastKnown?: boolean
-  bodyId?: string
-  header: ReactNodeM
-  children: ReactNodeM[]
-}) {
-  const root = useRefM<HTMLElement>(null)
-  const { view } = section
-  /** `step` for a button that goes with its press, with focus on the
-      section. */
-  const inSection = (step: () => void) => () => {
-    step()
-    root.current?.focus()
-  }
-  useFocusWhenGone(
-    open && view.more !== null,
-    () => root.current?.querySelector<HTMLElement>('[data-milestone-note] button') ?? root.current,
-  )
-  // where the section moved on, the first row left on screen keeps its
-  // place in the scroller, from where it stood before the commit. An open
-  // editor is passed over for the next row, which moves by as much, since
-  // an editor may stay at its last place or above the sections
-  const first = view.rows[0]?.id
-  const places = useRefM(new Map<string, number>())
-  const lastFirst = useRefM(first)
-  const scrolled = useRefM<number | null>(null)
-  useEffectM(() => {
-    const pane = root.current?.closest<HTMLElement>('[data-modal-scroll]')
-    if (SCROLL_ANCHORING || !pane) return
-    const note = () => {
-      scrolled.current = pane.scrollTop
-    }
-    pane.addEventListener('scroll', note, { passive: true })
-    return () => pane.removeEventListener('scroll', note)
-  }, [])
-  useLayoutEffectM(() => {
-    const pane = root.current?.closest<HTMLElement>('[data-modal-scroll]')
-    if (SCROLL_ANCHORING || !root.current || !pane) return
-    const top = pane.getBoundingClientRect().top - pane.scrollTop
-    const measure = () => {
-      const now = new Map<string, number>()
-      for (const element of root.current?.querySelectorAll<HTMLElement>('[data-milestone-row]') ??
-        [])
-        now.set(element.dataset.milestoneRow ?? '', element.getBoundingClientRect().top - top)
-      return now
-    }
-    const now = measure()
-    if (first !== lastFirst.current && first !== undefined && view.dropped) {
-      // the first of the answer's milestones that showed here as a row
-      // before and does now
-      const anchor = view.rows.find((m) => places.current.has(m.id) && now.has(m.id))?.id
-      const was = anchor === undefined ? undefined : places.current.get(anchor)
-      const is = anchor === undefined ? undefined : now.get(anchor)
-      if (was !== undefined && is !== undefined && was !== is)
-        pane.scrollTop = (scrolled.current ?? pane.scrollTop) + is - was
-    }
-    lastFirst.current = first
-    places.current = measure()
-    scrolled.current = pane.scrollTop
-  })
-  const searched = section.settled !== ''
-  const empty =
-    side === 'upcoming'
-      ? searched
-        ? 'No upcoming milestones match.'
-        : pastKnown
-          ? 'No milestones yet.'
-          : 'No upcoming milestones.'
-      : searched
-        ? 'No past milestones match.'
-        : 'No past milestones.'
-  const note = view.note
-  const retry = note?.kind === 'failed' && (
-    <Button
-      type="button"
-      variant="ghost"
-      className="h-control-sm text-sm"
-      onClick={inSection(section.retry)}
-    >
-      Retry
-    </Button>
-  )
-  return (
-    <section
-      ref={root}
-      tabIndex={-1}
-      data-milestone-section={side}
-      data-milestone-section-state={open ? view.state : undefined}
-      aria-busy={(open && (view.state === 'refreshing' || view.more === 'loading')) || undefined}
-      aria-label={side === 'upcoming' ? 'Upcoming milestones' : 'Past milestones'}
-      className="flex flex-col"
-    >
-      {header}
-      <div id={bodyId} className="flex flex-col gap-2">
-        {open && searchable && (
-          <LimitedInput
-            limit={LIMITS.search}
-            data-milestone-search
-            aria-label={
-              side === 'upcoming' ? 'Search upcoming milestones' : 'Search past milestones'
-            }
-            placeholder="Search"
-            value={section.text}
-            onChange={(e) => section.setText(e.target.value)}
-            className={cn(ctlClass, 'h-control-sm text-sm')}
-          />
-        )}
-        {open && view.dropped && (
-          <div data-milestone-dropped className={sectionNoteClass}>
-            {side === 'upcoming'
-              ? 'Earlier milestones are not shown.'
-              : 'More recent milestones are not shown.'}
-            <Button
-              type="button"
-              variant="ghost"
-              data-milestone-from-start
-              className="h-control-sm text-sm"
-              onClick={inSection(section.fromStart)}
-            >
-              Show from the start
-            </Button>
-          </div>
-        )}
-        <div data-milestone-rows className="flex flex-col gap-1">
-          {children}
-        </div>
-        {open && view.state === 'loading' && (
-          <div
-            role="status"
-            data-milestone-note="loading"
-            className="px-0.5 py-1 text-sm text-text-3 italic"
-          >
-            {side === 'upcoming' ? 'Loading milestones…' : 'Loading past milestones…'}
-          </div>
-        )}
-        {open && view.empty && !children.length && (
-          <div data-milestone-note="empty" className="px-0.5 py-1 text-sm text-text-3 italic">
-            {empty}
-          </div>
-        )}
-        {open && view.stopped !== null && view.answered && (
-          <div data-milestone-note="stopped" className="px-0.5 py-1 text-sm text-text-3 italic">
-            Qivo checked part of the list. Load more continues.
-          </div>
-        )}
-        {open && note && (
-          <div
-            role="alert"
-            data-milestone-note={
-              note.kind === 'failed' && note.more
-                ? 'more-failed'
-                : note.kind === 'too_many'
-                  ? 'too-many'
-                  : note.kind
-            }
-            className={sectionNoteClass}
-          >
-            {note.kind === 'too_many'
-              ? limitSentence(LIMITS.milestoneProjects)
-              : note.kind === 'refused'
-                ? note.sentence
-                : note.more
-                  ? "Couldn't load more milestones."
-                  : view.answered
-                    ? "Couldn't load the latest milestones."
-                    : "Couldn't load milestones."}
-            {retry}
-          </div>
-        )}
-        {open && view.more !== null && (
-          // while its read loads it stays, with no action, so keyboard focus
-          // stays on it
-          <Button
-            type="button"
-            variant="outline"
-            data-milestone-more
-            aria-disabled={view.more === 'loading' || undefined}
-            aria-busy={view.more === 'loading' || undefined}
-            className={cn('self-start', view.more === 'loading' && 'pointer-events-none italic')}
-            onClick={() => {
-              if (view.more === 'ready') section.more()
-            }}
-          >
-            {view.more === 'loading' ? 'Loading…' : 'Load more'}
-          </Button>
-        )}
-      </div>
-    </section>
   )
 }
 

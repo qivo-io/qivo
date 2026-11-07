@@ -20,6 +20,7 @@ import {
   APP_BATCHES_MAX,
   ASSIGNEE_LOAD_QUERY,
   addDays,
+  addedArgs,
   addsQuery,
   appBatches,
   atProject,
@@ -60,12 +61,14 @@ import {
   MCP_ACCESS_MARKS,
   MILESTONE_STEP,
   MILESTONES_BETWEEN_QUERY,
+  MILESTONES_SECTION_QUERY,
   mcpListSettled,
   NOT_LOADED_YET,
   newerWalk,
   ON_DEMAND_STEP,
   OVERVIEW_EXPECTED,
   OVERVIEW_HEALTH_EXPECTED,
+  OVERVIEW_MILESTONES_STEP,
   OVERVIEW_OVERDUE_DAYS,
   PEOPLE_PAGE,
   PEOPLE_REFUSALS,
@@ -207,7 +210,11 @@ describe('staging check REST contract', () => {
     expect(TEAMS_EXPECTED).toEqual({ none: '0 members', one: '1 member' })
   })
   it("opens its own milestone in the Milestones window by the window's own marks, in a free week, and a past one in Past", () => {
-    const modals = readFileSync(new URL('../src/panels/Modals.tsx', import.meta.url), 'utf8')
+    // the window and its section part, which the Overview and the phone
+    // agenda share (src/components/MilestoneSectionPart.tsx)
+    const modals = ['../src/panels/Modals.tsx', '../src/components/MilestoneSectionPart.tsx']
+      .map((file) => readFileSync(new URL(file, import.meta.url), 'utf8'))
+      .join('\n')
     for (const mark of [
       'data-milestone-window',
       'data-milestone-editor={m.id}',
@@ -222,7 +229,10 @@ describe('staging check REST contract', () => {
     ])
       expect(modals).toContain(mark)
     expect(modals).toMatch(/aria-label=\{`Edit \$\{m\.name\}`\}/)
-    const overview = readFileSync(new URL('../src/views/Overview.tsx', import.meta.url), 'utf8')
+    const overview = readFileSync(
+      new URL('../src/views/overview/OverviewMilestones.tsx', import.meta.url),
+      'utf8',
+    )
     expect(overview).toContain('data-overview-milestone={m.id}')
     expect(MILESTONE_STEP).toBe('ui/milestones')
     // three weeks after the run's own Monday, past the weeks M holds
@@ -272,6 +282,55 @@ describe('staging check REST contract', () => {
     // a week starting on Sunday
     expect(inDefaultWindow('2026-12-06', '2026-11-06', 0)).toBe(true)
     expect(inDefaultWindow('2026-12-13', '2026-11-06', 0)).toBe(false)
+  })
+  it("checks the Overview's Upcoming and collapsed Past on the deployment's section read, and My view's with mine", () => {
+    expect(OVERVIEW_MILESTONES_STEP).toBe('ui/overview-milestones')
+    expect(MILESTONES_SECTION_QUERY).toBe('milestones:section')
+    // the marks the step waits on and presses
+    const source = [
+      '../src/views/overview/OverviewMilestones.tsx',
+      '../src/components/MilestoneSectionPart.tsx',
+    ]
+      .map((file) => readFileSync(new URL(file, import.meta.url), 'utf8'))
+      .join('\n')
+    for (const mark of [
+      'data-overview-milestones',
+      'data-overview-milestone={m.id}',
+      'data-milestone-past-toggle',
+      'aria-expanded={ms.pastOpen}',
+      'data-milestone-section={side}',
+      'data-milestone-section-state={open ? view.state : undefined}',
+      'data-milestone-more',
+      "aria-busy={view.more === 'loading' || undefined}",
+    ])
+      expect(source, mark).toContain(mark)
+    // it runs after ui/roadmap-milestones and before ui/team-sync
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const main = script.slice(script.indexOf('await roadmapMilestonesCheck()\n'))
+    expect(main.indexOf('await overviewMilestonesCheck()')).toBeGreaterThan(0)
+    expect(main.indexOf('await overviewMilestonesCheck()')).toBeLessThan(
+      main.indexOf('await teamSyncCheck()'),
+    )
+    // the arguments of each subscription a frame adds
+    const add = (udfPath, args) =>
+      JSON.stringify({
+        type: 'ModifyQuerySet',
+        modifications: [{ type: 'Add', queryId: 1, udfPath, args: [args] }],
+      })
+    const mine = { projects: [], mine: true, from: '2026-11-02', side: 'upcoming', limit: 10 }
+    expect(addedArgs(add(MILESTONES_SECTION_QUERY, mine), MILESTONES_SECTION_QUERY)).toEqual([mine])
+    // must fail: another query, a removal and text that is no JSON add none
+    expect(addedArgs(add(MILESTONES_BETWEEN_QUERY, mine), MILESTONES_SECTION_QUERY)).toEqual([])
+    expect(
+      addedArgs(
+        JSON.stringify({
+          type: 'ModifyQuerySet',
+          modifications: [{ type: 'Remove', queryId: 1 }],
+        }),
+        MILESTONES_SECTION_QUERY,
+      ),
+    ).toEqual([])
+    expect(addedArgs('not json', MILESTONES_SECTION_QUERY)).toEqual([])
   })
 
   it("checks the removal window on a sub-project of its own, in the window's words", () => {

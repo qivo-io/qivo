@@ -335,12 +335,17 @@
 //                        sync-too-many (the page lowers the store's cap of
 //                        projects one read names to none, scripts/perf/
 //                        entry.tsx, so the opening asks nothing); for the
-//                        Milestones window's sections, window-loading,
-//                        window-error, window-refused and window-partial
-//                        (Upcoming stops after its first row),
-//                        past-loading and past-error (Past alone), and
-//                        more-error (a Load more fails while the read it
-//                        grows answers); for the Roadmap's flags, which
+//                        sections of the Milestones window, the Overview
+//                        and the phone agenda, every section of their
+//                        side, window-loading, window-error,
+//                        window-refused and window-partial (Upcoming
+//                        stops after its first row), past-loading and
+//                        past-error (Past alone), and more-error (a Load
+//                        more fails while the read it grows answers); for
+//                        My view's sections, which read with `mine`,
+//                        mine-refused (the refusal of a read too large)
+//                        and mine-too-many (the refusal of more projects
+//                        than one read names); for the Roadmap's flags, which
 //                        read milestones:between for the weeks on screen,
 //                        roadmap-loading, roadmap-error, roadmap-refused,
 //                        roadmap-unchecked (the access_unchecked refusal),
@@ -357,12 +362,13 @@
 //                        four two weeks apart, on each of the first that
 //                        many programs instead of the visible one alone,
 //                        so My view's Roadmap shows flags on several rows
-//   milestonecap         the window's sections read batches of that many
-//                        and hold at most twice that (the page lowers
-//                        src/lib/milestoneSection.ts MILESTONE_SECTION,
-//                        scripts/perf/entry.tsx), so milestoneweeks=5&
-//                        milestonecap=2 shows Load more and the moved-on
-//                        note with few rows
+//   milestonecap         the sections of the window, the Overview and the
+//                        phone agenda read batches of that many and hold
+//                        at most twice that (the page lowers
+//                        src/lib/milestoneSection.ts MILESTONE_SECTION and
+//                        OVERVIEW_MILESTONES, scripts/perf/entry.tsx), so
+//                        milestoneweeks=5&milestonecap=2 shows Load more
+//                        and the moved-on note with few rows
 //   sync                 states Team sync's agenda (teamSync:agenda)
 //                        answers whatever the workspace says
 //                        (src/store/teamSyncStandIn.setup.ts), for the
@@ -774,7 +780,9 @@ const forcedInbox = (() => {
    stand-in's `force` takes them; sync-too-many and roadmap-too-many are
    the page's (scripts/perf/entry.tsx). The roadmap-* states force the
    range read alone, which Team sync's opening also reads for this week and
-   next. */
+   next. The window-*, past-* and more-error states force every section of
+   their side, the Overview's and the agenda's included, and the mine-*
+   states My view's sections alone. */
 const forcedMilestones = (() => {
   const force = {}
   const sync = { 'sync-loading': 'loading', 'sync-error': 'error', 'sync-partial': 'stopped' }
@@ -804,8 +812,11 @@ const forcedMilestones = (() => {
     else if (state in sync) force.section = force.between = sync[state]
     else if (state in roadmap) force.between = roadmap[state]
     else if (state in sections) force[sections[state][0]] = sections[state][1]
+    else if (state === 'mine-refused') force.mine = 'refused'
+    else if (state === 'mine-too-many') force.mine = 'too_many'
   }
-  // a Load more is an ask above the page's first batch (milestonecap)
+  // a Load more is an ask past the page's first batch, its one size under
+  // milestonecap, else the window's 25 and the Overview's 10
   const cap = option('milestonecap', 0)
   if (cap > 0) force.firstBatch = cap
   return force

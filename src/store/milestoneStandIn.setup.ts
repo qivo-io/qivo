@@ -15,14 +15,18 @@
    stored on a sub-project or one of a project the person does not see,
    with `can_write` from the person's own level on its top-level project,
    as the app's level rule reads the workspace (User access or more; a
-   project shown only to reach a sub-project gives none). It reads no read
-   budget, so a refusal, a failure, a read that stops or one that never
-   answers comes only when `force` asks for it.
+   project shown only to reach a sub-project gives none). A section read
+   with `mine` lists My view's projects, which it finds by the health
+   table's rule (store/overviewStandIn.setup.ts myViewProjects), answers
+   them as `projects` and refuses more than MILESTONE_READ_PROJECTS of them
+   with milestone_too_many. It reads no read budget, so a refusal, a
+   failure, a read that stops or one that never answers comes only when
+   `force` asks for it.
    src/store/milestoneStandInParity.test.ts compares it with the real
    queries. It imports nothing the benchmark's worker cannot load. */
 
 import { ConvexError } from 'convex/values'
-import { MILESTONE_READ_PROJECTS, MILESTONE_READ_ROWS } from '../../convex/lib/limits'
+import { LIMITS, MILESTONE_READ_PROJECTS, MILESTONE_READ_ROWS } from '../../convex/lib/limits'
 import { nameKey } from '../../convex/lib/nameKey'
 import { allWordsMatcher } from '../../convex/lib/search'
 import type { Workspace } from '../../convex/lib/workspaceJoin'
@@ -33,6 +37,7 @@ import {
   positionOf,
   shownDay,
 } from './milestoneRows'
+import { myViewProjects } from './overviewStandIn.setup'
 
 /** A state a section or a range answers whatever the workspace says. */
 type ForcedBatch = 'loading' | 'error' | 'refused' | 'unchecked' | 'stopped'
@@ -45,32 +50,55 @@ type ForcedBatch = 'loading' | 'error' | 'refused' | 'unchecked' | 'stopped'
     its first row (`stopped`). `upcoming` and `past` force one side of a
     section alone, over `section`, so a test can fail Past while Upcoming
     answers. `more` forces a section ask that grows or moves a section,
-    one whose `limit` is above `firstBatch` (25 unless set, the app's
-    first batch, src/lib/milestoneSection.ts MILESTONE_SECTION) or that
-    names `after`, over its side's state, so a Load more fails while the
-    read it grows answers. `canWrite` replaces `get`'s `can_write`. */
+    over its side's state, so a Load more fails while the read it grows
+    answers: one that names `after`, or whose `limit` is above the least
+    of `firstBatch` and none of them, the app's first batches (10 and 25
+    unless set, src/lib/milestoneSection.ts OVERVIEW_MILESTONES and
+    MILESTONE_SECTION), so a first ask of either size is not one and a
+    one-row read is not either. `next` forces the Overview's one-row read
+    of the next milestone, a section ask of one row from the start, over
+    its side's state, so it fails while Upcoming answers. `mine` forces a
+    section read with `mine` alone, over every other state: its refusal
+    for a read too large (`refused`) or for too many projects (`too_many`).
+    `canWrite` replaces `get`'s `can_write`. */
 export type ForcedMilestones = {
   get?: 'loading' | 'error' | 'unavailable' | 'refused' | 'unchecked'
   section?: ForcedBatch
   upcoming?: ForcedBatch
   past?: ForcedBatch
   more?: ForcedBatch
-  firstBatch?: number
+  next?: ForcedBatch
+  firstBatch?: number | readonly number[]
+  mine?: 'refused' | 'too_many'
   between?: ForcedBatch
   canWrite?: boolean
 }
 
+/** The app's first batches of a section, which a Load more is not
+    (ForcedMilestones `more`). */
+const FIRST_BATCHES: readonly number[] = [10, 25]
+
 /** The state `force` holds the read `query` with `args` in, if any: a
-    section ask's own one first (ForcedMilestones `more`, then its side). */
+    section ask's own one first (ForcedMilestones `more` or `next`, then its
+    side). */
 function forcedOf(
   query: 'get' | 'section' | 'between',
   args: MilestoneReadArgs,
   force: ForcedMilestones,
 ): ForcedMilestones['get'] | ForcedBatch | undefined {
   if (query !== 'section') return force[query]
-  const grows = args.after !== undefined || (args.limit ?? 0) > (force.firstBatch ?? 25)
+  const firsts =
+    force.firstBatch === undefined
+      ? FIRST_BATCHES
+      : typeof force.firstBatch === 'number'
+        ? [force.firstBatch]
+        : force.firstBatch
+  const limit = args.limit ?? 0
+  const grows = args.after !== undefined || (limit > Math.min(...firsts) && !firsts.includes(limit))
+  const oneRow = args.after === undefined && limit === 1
   return (
     (grows ? force.more : undefined) ??
+    (oneRow ? force.next : undefined) ??
     (args.side === 'past' ? force.past : force.upcoming) ??
     force.section
   )
@@ -80,6 +108,7 @@ function forcedOf(
 export type MilestoneReadArgs = {
   id?: string
   projects?: readonly string[]
+  mine?: boolean
   from?: string
   to?: string
   side?: 'upcoming' | 'past'
@@ -120,6 +149,11 @@ export const MILESTONES_UNCHECKED =
 const refusal = (reason: string, message: string) =>
   new ConvexError({ code: 'rule', reason, message })
 const badRequest = (message: string) => new ConvexError({ code: 'bad_request', message })
+/* The refusal of a `mine` read whose person's work lies in more top-level
+   projects than one read names, as the server words it
+   (convex/model/milestones.ts MILESTONE_TOO_MANY, which the parity test
+   compares). */
+const mineTooMany = () => refusal('milestone_too_many', LIMITS.milestoneProjects.refusal)
 
 /* `day`, a real YYYY-MM-DD day, moved by `days`. */
 function shift(day: string, days: number): string {
@@ -205,6 +239,11 @@ export function milestoneStandIn(
   args: MilestoneReadArgs,
   force: ForcedMilestones = {},
 ): unknown {
+  // a section read with `mine` alone, as the perf page's mine-* states ask
+  const mineAsk = query === 'section' && args.mine === true
+  if (mineAsk && force.mine === 'refused')
+    throw refusal('milestone_read_too_large', MILESTONES_TOO_LARGE)
+  if (mineAsk && force.mine === 'too_many') throw mineTooMany()
   const forced = forcedOf(query, args, force)
   if (forced === 'loading') return undefined
   if (forced === 'error') throw new Error('the milestone read failed')
@@ -235,10 +274,16 @@ export function milestoneStandIn(
     }
   }
   const projects = args.projects ?? []
+  if (mineAsk && projects.length > 0) throw badRequest('projects must be empty when mine is true')
   if (projects.length > MILESTONE_READ_PROJECTS)
     throw badRequest(`projects can name at most ${MILESTONE_READ_PROJECTS} projects`)
+  // My view's projects, found as the server finds them, and refused past
+  // the limit rather than cut
+  const found = mineAsk ? [...myViewProjects(workspace).keys()] : []
+  if (found.length > MILESTONE_READ_PROJECTS) throw mineTooMany()
   const from = args.from ?? ''
-  const roots = rootsOf(workspace, projects)
+  const roots = rootsOf(workspace, mineAsk ? found : projects)
+  const listed = mineAsk ? { projects: [...roots].sort() } : {}
   const mine = workspace.milestones.filter((m) => roots.has(m.project_id))
   if (query === 'between') {
     const to = args.to ?? ''
@@ -264,7 +309,7 @@ export function milestoneStandIn(
   const search = (args.search ?? '').trim()
   const matches = search === '' ? null : allWordsMatcher(nameKey(search))
   const lower = shift(from, -OVERFLOW_DAYS)
-  const listed = mine
+  const matching = mine
     .filter((m) => {
       const shown = shownDay(m.week)
       if (shown === null) return false
@@ -277,7 +322,7 @@ export function milestoneStandIn(
       return desc ? -c : c
     })
     .map((m) => ({ ...m }))
-  const rows = listed.slice(0, limit)
+  const rows = matching.slice(0, limit)
   const last = rows.at(-1)
   const past =
     !desc && args.after === undefined
@@ -288,12 +333,13 @@ export function milestoneStandIn(
           }),
         }
       : {}
-  if (forced === 'stopped') return { ...stoppedAt(listed, from), ...past }
+  if (forced === 'stopped') return { ...stoppedAt(matching, from), ...past, ...listed }
   return {
     rows,
-    next: listed.length > limit && last ? positionOf(last) : null,
+    next: matching.length > limit && last ? positionOf(last) : null,
     stopped: null,
     ...past,
+    ...listed,
   }
 }
 

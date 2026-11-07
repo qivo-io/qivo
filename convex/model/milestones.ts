@@ -27,7 +27,8 @@
  * The app's milestone reads (milestones.ts) live at the end of this file.
  * readMilestones merges the milestones of up to MILESTONE_READ.projects
  * top-level projects in one order, a batch at a time and inside a read
- * budget, and visibleMilestone answers one milestone by id. */
+ * budget, mineMilestoneProjects finds My view's projects for a section
+ * read with `mine`, and visibleMilestone answers one milestone by id. */
 
 import type { GenericDocument, TransactionMetric, TransactionMetrics } from 'convex/server'
 import { ConvexError, getDocumentSize, v } from 'convex/values'
@@ -56,7 +57,9 @@ import {
   WEEK_START_REFUSALS,
 } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
+import { myViewProjects } from '../lib/overview'
 import { allWordsMatcher } from '../lib/search'
+import { isOverBudget, type ViewAccess, viewAccess, viewBudget } from '../lib/viewReads'
 import { logActivity, signedDetail } from './activity'
 import { DOCUMENT_MAX_BYTES } from './comments'
 import { newMemo, viewOf } from './deletedItems'
@@ -682,7 +685,10 @@ export async function removeMilestoneCore(
  * the request's own limits, so that every call moves on. The share is the
  * one a workspace part reads before it asks to be cut (lib/workspaceParts.ts
  * PAGE.soft), because these reads are subscriptions too and rerun whenever
- * a row they read changes. Tests lower these. */
+ * a row they read changes. A section read with `mine` names no projects:
+ * the server finds them (mineMilestoneProjects) and refuses more than
+ * `projects` of them with MILESTONE_TOO_MANY and LIMITS.milestoneProjects'
+ * sentence. Tests lower these. */
 export const MILESTONE_READ = {
   projects: MILESTONE_READ_PROJECTS,
   rows: MILESTONE_READ_ROWS,
@@ -1079,6 +1085,169 @@ export async function milestoneProjects(
   return [...roots]
 }
 
+/* ---------------------------------------------------------- My view's projects */
+
+/** The share of the request a section read with `mine` may spend finding
+ * and judging My view's projects (mineMilestoneProjects), counted from that
+ * step's start, as MILESTONE_SCOPE is for the check of named projects. It
+ * holds the person's own tasks in every status across every seat, the
+ * group checks the Reviewer rule needs and the access questions about
+ * their sub-projects and top-level projects (lib/viewReads.ts viewAccess,
+ * PROJECT_ASK each).
+ *
+ * Its guard decides by the bytes the step read with each project row the
+ * access read, and each task in a project the person is not shown, counted
+ * at its fixed size (lib/viewReads.ts viewBudget charge), so no row's text
+ * moves the answer. An archived sub-project the person can see and their
+ * tasks in it count at their real sizes instead, as the person may read
+ * both (lib/viewReads.ts ArchivedCharge `readable`), and so does its
+ * top-level project's row where that is archived too, as the person sees
+ * it for navigation; every other view counts them at the fixed sizes,
+ * 6 KiB a project row and 2 KiB a task. Knowing which archived
+ * sub-projects the person can see takes an access question about each
+ * that holds their tasks, which reads an index range where they hold more
+ * grants than the access reads at once (lib/access.ts OWN_READS). The
+ * question also reads the sub-project's top-level project, counting its
+ * row, and the person's grant there the same way, unless an earlier
+ * question read them, as one about a live sub-project under it does. A
+ * top-level project archived whole, as archiving a project leaves its
+ * sub-projects, has no live sub-project, so each such top-level project
+ * takes up to two ranges more, its row and that grant. Rows within the
+ * caps read fewer real bytes than they count, so the step reads at most
+ * 4 MiB, the read after it at most MILESTONE_READ's 4 MiB within what the
+ * request has left (lib/archivedTasks.ts roomOf), and MILESTONE_RESERVE
+ * keeps 1 MiB back. That is 9 MiB of Convex's 16 MiB, which leaves 7 MiB
+ * for the sign-in and seats read before them. The two shares' 16,000
+ * documents keep under 32,000. The step's 3,000 ranges and the read's
+ * 2,000 pass 4,096 together, so the read takes at most what the step
+ * leaves, which is at least 1,096 ranges less those of the sign-in and
+ * seats, and a read whose projects' first days do not fit there is
+ * refused. The first batch of each 200-project case below took 400
+ * ranges.
+ *
+ * Measured on 7 November 2026 under convex-test's transaction limits with
+ * rows as the app writes them (tests/milestoneMine.test.ts, design size),
+ * the finding alone in ranges, documents, MiB and decision MiB, and the
+ * whole request with a first batch of 10 rows and its `past` probe in
+ * ranges, documents and MiB:
+ *
+ * - One open task of the caller in each of 200 top-level projects of one
+ *   sub-project each, 150 through the shares of the caller's three teams,
+ *   50 a team, and 50 through a grant on the top-level project (the 200
+ *   top-level projects and the 200 sub-projects one person can read at
+ *   their sum), one upcoming milestone each. The finding takes 579, 860,
+ *   0.31 and 2.5, the request 981, 1,062 and 0.35.
+ * - The same 200 projects where the caller's access comes through a grant
+ *   on each sub-project alone, so every top-level project shows only for
+ *   navigation. The finding takes 1,245, 1,566, 0.47 and 2.67, the request
+ *   1,647, 1,768 and 0.51. The check of named projects alone would read
+ *   1,434 ranges more for these 200 projects, more than the half of the
+ *   2,851 left that it may take (scopeCeiling), so a `mine` read does not
+ *   ask it.
+ * - The same shape with 2 or 3 sub-projects archived beside each live one,
+ *   each by a grant and with one of the caller's open tasks, which
+ *   archiving leaves in place (the 200 live and 500 archived sub-projects
+ *   one person can read at their sum). The finding takes 2,254, 4,087, 1.2
+ *   and 3.41, the request 2,664, 4,297 and 1.25. At every other view's
+ *   charges the finding would decide at 6.74 MiB in 1,753 ranges.
+ * - The same 200 live sub-projects, one under each top-level project,
+ *   beside 500 archived ones 3 under each of 167 top-level projects
+ *   archived whole (2 under the last), each by a grant and with one of the
+ *   caller's open tasks (the 200 live and 500 archived sub-projects one
+ *   person can read at their sum). The finding takes 2,588, 3,921, 1.15 and
+ *   3.36, the request 3,012, 4,145 and 1.2. At every other view's charges
+ *   the finding would decide at 6.63 MiB in 1,753 ranges. The 2,500 ranges
+ *   this share held before refused it.
+ * - 20 top-level projects the caller holds a grant on, each with 3 live
+ *   sub-projects of 30 open tasks, 7 of them the caller's, beside 500
+ *   archived sub-projects that keep 7 of the caller's open tasks each, 3
+ *   under each of 167 top-level projects archived whole (2 under the last)
+ *   that the caller holds a grant on (500 archived sub-projects one person
+ *   can read). The finding takes 1,360, 5,205, 2.13 and 2.57, the request
+ *   1,448, 5,273 and 2.15. At every other view's charges the finding would
+ *   decide at 10.56 MiB.
+ * - 300 open and 150 Done tasks of the caller in one sub-project (open and
+ *   Done at their sum). The finding takes 100, 466, 0.27 and 0.29, the
+ *   request 103, 478 and 0.28.
+ *
+ * Tests lower these. */
+export const MILESTONE_MINE: ReadCeiling = {
+  ranges: 3000,
+  documents: 8000,
+  bytes: 4 * 1024 * 1024,
+}
+
+/** The reason of the refusal of a section read with `mine` whose person's
+ * own work lies in more top-level projects than one read names
+ * (MILESTONE_READ.projects). */
+export const MILESTONE_TOO_MANY = 'milestone_too_many'
+
+/* That refusal, in LIMITS.milestoneProjects' words, as the app says them
+ * for a view of more projects. */
+const mineTooMany = (): ConvexError<Refusal> =>
+  new ConvexError<Refusal>({
+    code: 'rule',
+    reason: MILESTONE_TOO_MANY,
+    message: LIMITS.milestoneProjects.refusal,
+  })
+
+/**
+ * The top-level projects whose milestones a section read with `mine` lists
+ * for the caller, whose active seats are `myProfiles` keyed by
+ * organization: My view's projects, those above the caller's own tasks by
+ * the Reviewer rule across every seat of the login (lib/overview.ts
+ * myViewProjects, the rule of My view's health table), each once. Each is
+ * judged with the caller's seat in its own organization by the access
+ * layer (lib/access.ts accessOf live and visible): live, a meta, and
+ * visible to the caller, a top-level project seen only to reach one of its
+ * sub-projects included. That is the rule milestoneProjects applies to a
+ * named top-level project, so the answer lists no project a read naming
+ * the same ids would not, and a project the caller cannot see adds
+ * nothing. It does not ask milestoneProjects the same questions again:
+ * at the design size, for a caller who reaches 200 top-level projects only
+ * through grants on their sub-projects, the two checks together do not fit
+ * one request beside the read (MILESTONE_MINE). Each call finds the
+ * projects again, so a Load more after the person's work moved reads the
+ * new set.
+ *
+ * It reads within MILESTONE_MINE from its start, counting an archived
+ * sub-project the caller can see, their tasks in it and an archived
+ * top-level project above it at their real sizes (lib/viewReads.ts
+ * ArchivedCharge `readable`), and past it refuses the whole read with
+ * MILESTONE_READ_TOO_LARGE. A check of a seat's own access
+ * that a bound stopped refuses with its own reason (accessUnchecked). More
+ * than MILESTONE_READ.projects projects across every seat refuse with
+ * MILESTONE_TOO_MANY, never cut to that many, as a cut list could show a
+ * next milestone that is not the next one.
+ */
+export async function mineMilestoneProjects(
+  ctx: QueryCtx,
+  myProfiles: ReadonlyMap<string, Doc<'profiles'>>,
+): Promise<string[]> {
+  const start = await ctx.meta.getTransactionMetrics()
+  const guard = viewBudget(ctx, {
+    ranges: start.databaseQueries.used + MILESTONE_MINE.ranges,
+    documents: start.documentsRead.used + MILESTONE_MINE.documents,
+    bytes: start.bytesRead.used + MILESTONE_MINE.bytes,
+  })
+  let ids: string[]
+  try {
+    const seats = new Map(
+      [...myProfiles.values()].map((me): [string, ViewAccess] => [
+        me.org_id,
+        viewAccess(ctx, guard, me),
+      ]),
+    )
+    const found = await myViewProjects(ctx, guard, seats, undefined, 'readable')
+    ids = [...new Set(found.map((r) => r.project.id))]
+  } catch (e) {
+    if (isOverBudget(e)) throw readTooLarge()
+    throw e
+  }
+  if (ids.length > MILESTONE_READ.projects) throw mineTooMany()
+  return ids
+}
+
 /* Whether one of the projects `projectIds` holds a milestone the app shows
  * before `day`, read newest first until the first, under `guard`, and
  * whether the guard let it ask every project it had to. A probe the guard
@@ -1171,8 +1340,9 @@ type Lane = {
  * `after` is a plain position, not a sealed one, and a caller can send any
  * position. That reveals nothing, because whatever the position, a batch
  * reads only the milestones of the listed projects the caller can see,
- * which the caller checks again on every call (milestoneProjects), so a
- * position only says where to start among them.
+ * which the caller checks again on every call (milestoneProjects for named
+ * projects, mineMilestoneProjects for a `mine` read), so a position only
+ * says where to start among them.
  */
 export async function readMilestones(
   ctx: QueryCtx,

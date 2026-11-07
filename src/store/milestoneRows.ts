@@ -42,13 +42,15 @@ export type MilestonePosition = { week: string; key: string; id: string }
 
 /** One milestone read, as its query's arguments: one milestone by id, a
     batch of a section of the milestones of `projects` from `from` on
-    ('upcoming') or before it ('past'), or the milestones of `projects` on a
+    ('upcoming') or before it ('past'), or with `mine` and no projects of
+    My view's, which the server finds, or the milestones of `projects` on a
     day in [from, to) (convex/milestones.ts). */
 export type MilestoneAsk =
   | { kind: 'get'; id: string }
   | {
       kind: 'section'
       projects: readonly string[]
+      mine?: true
       from: string
       side: 'upcoming' | 'past'
       search?: string
@@ -69,7 +71,8 @@ export type MilestoneProject = { id: string; name: string; key: string; org_id: 
 /** What one answer brings: its rows in the server's order, the position a
     following batch starts after (null when none follows), the stored day a
     read reached when its budget ran out first (else null), whether one of
-    the projects holds a past milestone (a first upcoming batch only), and
+    the projects holds a past milestone (a first upcoming batch only), for a
+    section read with `mine` the top-level projects the server listed, and
     for a `get` answer the project that stores its milestone and whether the
     person may change it, or a null project for an answer of null, which
     brings no rows. */
@@ -78,6 +81,7 @@ export type MilestoneTake = {
   next: MilestonePosition | null
   stopped: string | null
   past?: boolean
+  projects?: readonly string[]
   project?: MilestoneProject | null
   canWrite?: boolean
 }
@@ -93,6 +97,13 @@ export type MilestonesShown = {
 }
 
 type Anchor = { key: string; ask: MilestoneAsk; take: MilestoneTake }
+
+/** The projects a section or range read lists: those its ask names, or for
+    a section read with `mine` those its answer names, so a person's write
+    on a project of My view paints into My view's reads and one on any
+    other project does not. A `mine` read lists none before it answered. */
+const listedOf = (ask: Exclude<MilestoneAsk, { kind: 'get' }>, take: MilestoneTake) =>
+  ask.kind === 'section' && ask.mine ? (take.projects ?? []) : ask.projects
 
 /* `n` as decimal text, zero-padded to `width` digits. */
 const pad = (n: number, width: number) => String(n).padStart(width, '0')
@@ -163,10 +174,16 @@ export function createMilestoneRows(o: {
 
   /** Whether a section or range ask would list `row` with no end, by the
       server's rules (convex/model/milestones.ts readMilestones): one of
-      the projects it names, folded to their top-level projects, a day it
-      lists (shownDay), its search and after its `after`. */
-  function reaches(ask: Exclude<MilestoneAsk, { kind: 'get' }>, row: MilestoneRow): boolean {
-    if (!ask.projects.some((id) => o.topOf(id) === o.topOf(row.project_id))) return false
+      the projects it lists (listedOf, from its answer `take`), folded to
+      their top-level projects, a day it lists (shownDay), its search and
+      after its `after`. */
+  function reaches(
+    ask: Exclude<MilestoneAsk, { kind: 'get' }>,
+    take: MilestoneTake,
+    row: MilestoneRow,
+  ): boolean {
+    const projects = listedOf(ask, take)
+    if (!projects.some((id) => o.topOf(id) === o.topOf(row.project_id))) return false
     const shown = shownDay(row.week)
     if (shown === null) return false
     if (ask.kind === 'between' && (shown < ask.from || shown >= ask.to)) return false
@@ -187,7 +204,10 @@ export function createMilestoneRows(o: {
     if (ask.kind === 'get') return false
     const held = new Set(take.rows.map((row) => row.id))
     const lacked = (row: MilestoneRow) =>
-      row.id !== id && !held.has(row.id) && reaches(ask, row) && before(ask, positionOf(row), pos)
+      row.id !== id &&
+      !held.has(row.id) &&
+      reaches(ask, take, row) &&
+      before(ask, positionOf(row), pos)
     for (const row of o.known?.() ?? []) if (lacked(row)) return true
     for (const other of anchors.values()) if (other.take.rows.some(lacked)) return true
     return false
@@ -202,7 +222,7 @@ export function createMilestoneRows(o: {
   function coversRow(anchor: Anchor, row: MilestoneRow): boolean {
     const { ask, take } = anchor
     if (ask.kind === 'get') return row.id === ask.id
-    if (!reaches(ask, row)) return false
+    if (!reaches(ask, take, row)) return false
     const pos = positionOf(row)
     if (take.next === null || !before(ask, take.next, pos)) return true
     return take.next.id === row.id && !lacksBefore(anchor, row.id, pos)
@@ -215,14 +235,15 @@ export function createMilestoneRows(o: {
     return at < 0 ? [...rows, row] : [...rows.slice(0, at), row, ...rows.slice(at)]
   }
 
-  /** Marks a first upcoming batch that names `row`'s project as one whose
-      projects hold a past milestone when `row` is shown before its first
-      day, as the server's `past` would say (layers.ts rule 6). */
+  /** Marks a first upcoming batch that lists `row`'s project (listedOf) as
+      one whose projects hold a past milestone when `row` is shown before
+      its first day, as the server's `past` would say (layers.ts rule 6). */
   function markPast(anchor: Anchor, shown: MilestonesShown, row: MilestoneRow): MilestonesShown {
     const { ask } = anchor
     if (ask.kind !== 'section' || ask.side !== 'upcoming' || ask.after !== undefined) return shown
     if (shown.past !== false) return shown
-    if (!ask.projects.some((id) => o.topOf(id) === o.topOf(row.project_id))) return shown
+    const projects = listedOf(ask, anchor.take)
+    if (!projects.some((id) => o.topOf(id) === o.topOf(row.project_id))) return shown
     const day = shownDay(row.week)
     return day !== null && day < ask.from ? { ...shown, past: true } : shown
   }

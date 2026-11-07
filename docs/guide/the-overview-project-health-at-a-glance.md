@@ -88,9 +88,36 @@ browser tab or desktop window is hidden or minimized. Shown again, it keeps
 the figures and rows it had until the server's fresh answer arrives. After
 midnight it counts again for the new day.
 
-**Milestones** shows names, projects, calendar weeks, dates and relative
-timing, with the next milestone highlighted. Select **+** or a row to open
-the project's Milestones window. A row opens that milestone from the server,
+**Milestones** lists the milestones of a project or sub-project's
+top-level project in two sections, with names, calendar weeks, dates and
+relative timing. **Upcoming** lists the milestones of the current week and
+later, nearest first, 10 at first and 10 more each time you select
+**Load more**. Beyond 100 milestones, **Load more** moves on, and the
+section says that earlier milestones are not shown and offers **Show from
+the start**. **Past**, collapsed when the Overview opens, lists the earlier
+milestones, newest first, once you select it, 25 at a time, and shows a
+search box once there are more to load. Past stays as you left it when you
+come back to a page Qivo kept, and starts again at its first milestones
+when a new week begins. In My view, **Milestones** lists the milestones of
+the projects that hold your own tasks, each with its project's name, and
+not those of other projects you can see. All projects shows no
+milestones; open a project to see its milestones.
+
+**Next milestone** is the first upcoming milestone, highlighted in the
+list. While it loads it shows "…", "None scheduled" where no upcoming
+milestone exists, and "Unavailable" where Qivo cannot tell, as when loading
+fails. Once **Load more** has moved past the first milestones, Next
+milestone loads on its own, and if that fails, it says "Couldn't load" with
+**Retry**. A section says when it is loading, and when Qivo could check only
+part of the list, in which case **Load more** continues. If loading fails,
+it says so with **Retry**, and if Qivo refuses to read the milestones, it
+gives the reason. In My view, where your own work spans more than 200
+projects ([Limits](./limits.md)), it says that their milestones are not
+listed there and asks you to open a project to see its milestones. "No
+upcoming milestones." means that the project has past milestones but no
+upcoming ones.
+
+Select **+** or a row to open the project's Milestones window. A row opens that milestone from the server,
 so the window says "Loading this milestone…" for a moment, then shows it
 with its editor, or as a row if you can only view it. It says so instead
 when the milestone can't be opened because it was deleted or you no longer
@@ -136,6 +163,6 @@ week whose dates differ from the ones shown.
 When a scope has no task to summarize, for example a project without
 sub-projects or My view with nothing assigned to you, Overview says why
 once the server has answered. Over all projects it says so when you can
-see no project. If there are milestones to show, **Milestones** stays below
-that note and below the list of projects. Otherwise the note or the list is
-the whole page.
+see no project. Once the project has milestones, upcoming or past, or Qivo
+cannot tell, **Milestones** stays below that note. Otherwise, and over all
+projects, the note or the list of projects is the whole page.

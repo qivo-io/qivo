@@ -423,6 +423,44 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     expect(live()).toEqual([])
   })
 
+  it("keeps the Overview's milestone reads on their fixed slots while it is kept, and forgets them once it is not", async () => {
+    const org = await boot((snap) => {
+      // the fixture's project as a sub-project (p/1) of a top-level one,
+      // which holds a milestone next week
+      const program = underProgram(snap).projects[1]
+      const day = new Date()
+      day.setDate(day.getDate() + 7 - ((day.getDay() + 6) % 7))
+      const week = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`
+      snap.milestones.push({
+        id: 'ms-1',
+        project_id: program.id,
+        name: 'Program launch',
+        week,
+        created_at: '2026-09-14T08:00:00.000Z',
+      })
+    })
+    const { P, OVERVIEW_MILESTONE_SLOTS } = await import('./store/planner')
+    const live = () => milestoneWatches.filter((w) => !w.stopped && w.name === 'milestones:section')
+    const holding = () =>
+      OVERVIEW_MILESTONE_SLOTS.upcoming.filter((slot) => P.milestoneRead(slot).state !== 'loading')
+    await go(`/app/${org}/overview/p/1`)
+    const page = await shownPage('overview')
+    await waitFor(() => page.querySelector('[data-overview-milestone="ms-1"]'), 'the row')
+    expect(live()).toHaveLength(1)
+    // must fail for numbered slots: the answer is on a fixed slot
+    expect(holding()).toHaveLength(1)
+    // hidden behind the Board, the read stops and keeps its answer
+    await go(`/app/${org}/board/p/1`)
+    await shownPage('kanban')
+    await waitFor(() => live().length === 0, 'the stopped milestone read')
+    expect(P.milestoneRead(holding()[0] ?? '')).toMatchObject({ state: 'ok', current: false })
+    // 30 minutes without input: the Overview is no longer kept, and its reads go
+    await act(async () => vi.advanceTimersByTime(30 * MINUTE))
+    await waitFor(() => !page.isConnected, 'the released Overview page')
+    expect(holding()).toEqual([])
+    expect(live()).toEqual([])
+  })
+
   it("keeps the Roadmap's milestone reads while it is kept, two at most through a scope switch, and forgets them once it is not", async () => {
     const org = await boot((snap) => {
       // the fixture's project as a sub-project (p/1) of a top-level one,

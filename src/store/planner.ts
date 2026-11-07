@@ -3891,6 +3891,24 @@ const PLAN_LOADS = 'roadmap:plan'
     new window's on its way, which it alternates
     (views/roadmap/useRoadmapMilestones.ts) and P.releaseRoadmap forgets. */
 export const ROADMAP_MILESTONE_SLOTS = ['milestones:roadmap:a', 'milestones:roadmap:b'] as const
+/** The slots of the Overview's milestone reads: two for each section, the
+    answer shown and a Load more's or a new base's on its way, which the
+    section alternates (views/useMilestoneSection.ts), and the one-row read
+    of the next milestone while Upcoming moved on
+    (views/useScopeMilestones.ts). P.releaseOverview forgets
+    them. */
+export const OVERVIEW_MILESTONE_SLOTS = {
+  upcoming: ['milestones:overview:upcoming:a', 'milestones:overview:upcoming:b'],
+  past: ['milestones:overview:past:a', 'milestones:overview:past:b'],
+  next: 'milestones:overview:next',
+} as const
+/** The slots of the phone Roadmap agenda's milestone reads, two for each
+    section as the Overview's (views/useScopeMilestones.ts), which
+    P.releaseRoadmap forgets. */
+export const AGENDA_MILESTONE_SLOTS = {
+  upcoming: ['milestones:agenda:upcoming:a', 'milestones:agenda:upcoming:b'],
+  past: ['milestones:agenda:past:a', 'milestones:agenda:past:b'],
+} as const
 
 /** The Overview's reads by query. The health table's rows are projects
     with figures, not tasks, so its answer brings no rows and holds no
@@ -4335,10 +4353,20 @@ function overviewStep(step: () => void) {
    ('milestones:window:upcoming:<n>', 'milestones:window:past:<n>',
    views/useMilestoneSection.ts), Team sync's opening its next
    milestone and the milestones of this week and next
-   ('milestones:sync-next', 'milestones:sync-ahead'), and the Roadmap's
+   ('milestones:sync-next', 'milestones:sync-ahead'), the Roadmap's
    flags for the weeks on screen, the shown range and a new window's on
    its way under two fixed slots it alternates
-   (ROADMAP_MILESTONE_SLOTS, views/roadmap/useRoadmapMilestones.ts). Each
+   (ROADMAP_MILESTONE_SLOTS, views/roadmap/useRoadmapMilestones.ts), the
+   Overview's Upcoming and Past, each on two fixed slots it alternates, and
+   its next milestone's one-row read while Upcoming moved on
+   (OVERVIEW_MILESTONE_SLOTS, views/useScopeMilestones.ts), and
+   the phone Roadmap agenda's Upcoming and Past on slots of their own
+   (AGENDA_MILESTONE_SLOTS, views/useScopeMilestones.ts, which the
+   Roadmap holds). A kept
+   page's reads only stop while it hides, and P.releaseOverview and
+   P.releaseRoadmap forget them once App no longer keeps the page. My
+   view's sections read with `mine` and name no projects; the server
+   lists the projects in its answer, which the paints read. Each
    is a view read
    (watchView), with its owner, attempt, key, connection and the answer it
    keeps while it stops, and its answer's milestones are the read's anchor
@@ -4363,6 +4391,12 @@ export const MILESTONE_READS = { projects: MILESTONE_READ_PROJECTS }
     access check a bound of the person's own reads stopped
     (convex/lib/access.ts ACCESS_UNCHECKED). */
 const MILESTONE_REFUSALS = new Set(['milestone_read_too_large', 'access_unchecked'])
+
+/** The reason of the refusal of a `mine` read whose person's work lies in
+    more top-level projects than one read names (convex/model/milestones.ts
+    MILESTONE_TOO_MANY), which P.milestoneRead answers as too_many, as for
+    a view that names more. */
+const MILESTONE_TOO_MANY = 'milestone_too_many'
 
 /* The slots whose last ask named more top-level projects than
    MILESTONE_READS.projects, which read nothing. */
@@ -4539,8 +4573,10 @@ const milestoneAskTooMany = (ask: MilestoneAsk) =>
   ask.kind !== 'get' && new Set(ask.projects).size > MILESTONE_READS.projects
 
 /** The arguments of `ask` as its query takes them, as JSON in a fixed key
-    order, with its projects once each and sorted and its empty fields left
-    out, so equal asks share one subscription. */
+    order, with its projects once each and sorted, `mine` after them on a
+    `mine` section ask (its projects empty), and its empty fields left out,
+    so equal asks share one subscription and a `mine` ask and a named one
+    never share an answer. */
 function milestoneKey(ask: MilestoneAsk): string {
   const after = (at: MilestonePosition | undefined) =>
     at === undefined ? {} : { after: { week: at.week, key: at.key, id: at.id } }
@@ -4551,6 +4587,7 @@ function milestoneKey(ask: MilestoneAsk): string {
   const search = ask.search?.trim() ? { search: ask.search } : {}
   return JSON.stringify({
     projects,
+    ...(ask.mine ? { mine: true } : {}),
     from: ask.from,
     side: ask.side,
     ...search,
@@ -4565,6 +4602,7 @@ type MilestoneBatchAnswer = {
   next: MilestonePosition | null
   stopped: string | null
   past?: boolean
+  projects?: string[]
 }
 type MilestoneGetAnswer = {
   row: MilestoneRow
@@ -4606,6 +4644,8 @@ const MILESTONE_QUERIES: Record<MilestoneAsk['kind'], ViewQuery> = {
           next: batch.next,
           stopped: batch.stopped,
           ...(batch.past === undefined ? {} : { past: batch.past }),
+          // a `mine` answer's projects, which its paints read
+          ...(args.mine && batch.projects ? { projects: batch.projects } : {}),
         },
       }
     },
@@ -4644,7 +4684,8 @@ export type MilestoneAnswer = {
 /** What milestone read `slot` holds (P.milestoneRead):
     - `loading`, nothing for the arguments asked;
     - `too_many`, more top-level projects than one read names
-      (MILESTONE_READS.projects), so nothing was asked;
+      (MILESTONE_READS.projects), so nothing was asked, or a `mine` read the
+      server refused for as many (MILESTONE_TOO_MANY), with no rows kept;
     - `refused`, a refusal the view shows in the server's words
       (MILESTONE_REFUSALS), with the answer kept from before, if any;
     - `failed`, any other error, which the view's Retry asks again, with
@@ -12163,17 +12204,23 @@ export const PLANNER = {
     const load = ownerLoads.loadOf(org, owner)
     return load.state === 'ok' && load.team ? ownerItemsOf(org, owner, load, ownerItemsCtx) : null
   },
-  /** Forgets the Roadmap's reads, their rows, its milestone reads and
-      their answers, and the owners Team utilization and the planning
-      panel registered: its page left. A kept page's reads only stop while
-      it hides, so their answers show again on its return; App calls this
-      once the page is no longer kept. */
+  /** Forgets the Roadmap's reads, their rows, its milestone reads and the
+      phone agenda's (AGENDA_MILESTONE_SLOTS) and their answers, and the
+      owners Team utilization and the planning panel registered: its page
+      left. A kept page's reads only stop while it hides, so their answers
+      show again on its return; App calls this once the page is no longer
+      kept. */
   releaseRoadmap: () => {
     slotExtraOwners.delete(ROADMAP_SLOT)
     releaseView(ROADMAP_SLOT)
     releaseView(ROADMAP_DEPS_SLOT)
     ownerLoads.release(PLAN_LOADS)
-    for (const slot of ROADMAP_MILESTONE_SLOTS) PLANNER.releaseMilestones(slot)
+    for (const slot of [
+      ...ROADMAP_MILESTONE_SLOTS,
+      ...AGENDA_MILESTONE_SLOTS.upcoming,
+      ...AGENDA_MILESTONE_SLOTS.past,
+    ])
+      PLANNER.releaseMilestones(slot)
   },
   /** Registers the Overview's reads for `key` (store/overviewLists.ts
       overviewKey: its scope and its clock), or none with null while its
@@ -12220,8 +12267,20 @@ export const PLANNER = {
       more's Retry). */
   overviewRetry: (list: ListKind | 'health', batch = 0) =>
     overviewStep(() => (list === 'health' ? overview.retryHealth() : overview.retry(list, batch))),
-  /** Forgets the Overview's reads and rows: its page left. */
-  releaseOverview: () => overviewStep(() => overview.release()),
+  /** Forgets the Overview's reads and rows, its milestone reads
+      (OVERVIEW_MILESTONE_SLOTS) among them: its page left. A kept page's
+      reads only stop while it hides; App calls this once the page is no
+      longer kept, and an All projects Overview, which reads none, when it
+      takes the place of another scope's. */
+  releaseOverview: () => {
+    overviewStep(() => overview.release())
+    for (const slot of [
+      ...OVERVIEW_MILESTONE_SLOTS.upcoming,
+      ...OVERVIEW_MILESTONE_SLOTS.past,
+      OVERVIEW_MILESTONE_SLOTS.next,
+    ])
+      PLANNER.releaseMilestones(slot)
+  },
   /** Registers milestone read `slot` (the milestone reads' header above):
       `ask`, one milestone by id, a section batch or a range of days of
       the milestones of top-level projects (convex/milestones.ts get,
@@ -12287,6 +12346,7 @@ export const PLANNER = {
     const kept = want === null || milestoneRows.keyOf(slot) === want ? milestoneAnswer(slot) : null
     if (held.error !== undefined && (want === null || held.key === want)) {
       const d = errData(held.error)
+      if (d.reason === MILESTONE_TOO_MANY) return { state: 'too_many' }
       if (d.reason !== undefined && MILESTONE_REFUSALS.has(d.reason))
         return {
           state: 'refused',

@@ -132,7 +132,10 @@ are not all shown because the window held more than Qivo reads at once (it
 says from which day, and that a shorter window, or in My view opening a
 project, can help), or belong to more projects than the app reads at once
 ([Limits](./limits.md)). Unlike for tasks, a shorter window reads fewer
-milestones.
+milestones. On a phone, the Roadmap's agenda lists milestones as the
+Overview does ([Overview
+milestones](./the-overview-project-health-at-a-glance.md)), not by the
+timeline's weeks.
 When a scope has nothing to schedule, for example a project without
 sub-projects or My view with nothing assigned to you, the Roadmap says why.
 In a project or sub-project, and in My view, the timeline stays behind that
