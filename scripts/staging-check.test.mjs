@@ -2368,7 +2368,12 @@ describe('task list pages', () => {
     expect(sweep).toContain(
       'window.PLANNER.removeLabel(l.id, { orgId: l.org, name: l.name, color: l.color })',
     )
-    expect(sweep).not.toContain('window.PLANNER.homeOrg')
+    // and no agent or label removal names the home organization, which
+    // only the managed-projects passes read, as Nora's managed lists are
+    // her home organization's
+    const removals = sweep.match(/\bremove(?:User|Label)\([^)]*\)/g) ?? []
+    expect(removals.length).toBeGreaterThanOrEqual(2)
+    for (const call of removals) expect(call).not.toContain('homeOrg')
   })
   it('searches a sweep by the run tag, or by the prefix every run tag shares', () => {
     expect(searchOf('stgchk-0a1b2c')).toBe('stgchk-0a1b2c')
