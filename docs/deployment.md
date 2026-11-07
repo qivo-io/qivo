@@ -2041,6 +2041,12 @@ organization from the store's project, and checks over REST that the
 backend saved the move. The release changes no table, field or index, and
 has no backfill and no release step.
 
+From the release after v0.1.158, organization admin status gives no access
+to project work, so this release is the backend's floor: a backend returned
+below it gives organization admins every project again, which widens
+access, so roll forward instead. The release sets no app floor and changes
+no table, field or index, with no backfill and no release step.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
