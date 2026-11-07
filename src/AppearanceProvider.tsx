@@ -85,6 +85,7 @@ function usePrivateImage(imageId: string | null, previewVersion: number | null, 
           shown.current = null
           setLease(null)
           setFailed(true)
+          setRenewalFailedRun(null)
           return
         }
         expiresAt = result.expires_at
