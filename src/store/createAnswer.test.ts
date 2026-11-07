@@ -692,6 +692,38 @@ describe('a create in a store that never asked for every task', () => {
     expect(toasts).toEqual(["You don't have permission for that. Change reverted."])
   })
 
+  it('says the window closed for a file whose window closed while its new task was on its way', async () => {
+    await boot()
+    const { uuid } = create()
+    P().watchComments(uuid, ORG)
+    P().showSections({}, true)
+    await settle()
+    const handle = P().taskDetail(uuid)?.view?.id ?? ''
+    // a photo whose re-encode still runs when the window closes
+    let encoded: (error: unknown) => void = () => {}
+    vi.stubGlobal(
+      'createImageBitmap',
+      () =>
+        new Promise((_, reject) => {
+          encoded = reject
+        }),
+    )
+    const photo = P().addAttachment(
+      handle,
+      new File([new Uint8Array(MIN_BYTES)], 'bench.jpg', { type: 'image/jpeg' }),
+    )
+    await settle()
+    P().watchComments(null)
+    await settle()
+    encoded(new Error('no decoder'))
+    expect(await photo).toBeNull()
+    // the create still waits, and nothing more went out
+    expect(waiting().map((s) => s.name)).toEqual(['issues:create'])
+    expect(toasts).toEqual([
+      'Couldn\'t upload "bench.jpg". The upload stopped because the window no longer shows its task.',
+    ])
+  })
+
   it("shows a new parent's number from its create's answer in a window opened on it, before the window's own read", async () => {
     await boot()
     await openBoard([...THREE(), viewRow('task-w', 80)])

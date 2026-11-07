@@ -12916,10 +12916,19 @@ export const PLANNER = {
   /** Whether a save to task `id` waits because the window shows the task
       from its own answer, which is not current now: its read failed or
       runs again (P.editsFromAnswer is false), so Qivo cannot tell whether
-      someone changed the task meanwhile. */
+      someone changed the task meanwhile. Only the watched task waits so.
+      P.taskShown also names the person's new task while no window
+      watches it, as before its window watches it or once that window
+      closed, and a save then is one whose window is gone (refuseUpload). */
   answerSaveWaits: (id: string): boolean => {
     const shown = PLANNER.taskShown(id)
-    return !!shown && !holdsIn(shown.uuid, shown.org) && answerTaskOf(id) === null
+    return (
+      !!shown &&
+      !holdsIn(shown.uuid, shown.org) &&
+      watchedComments === shown.uuid &&
+      watchedOrgOf() === shown.org &&
+      answerTaskOf(id) === null
+    )
   },
   /** Refuses a save to task `id` while it waits (P.answerSaveWaits), with
       a toast that says why, so the editor keeps its draft, as
