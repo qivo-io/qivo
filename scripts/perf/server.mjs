@@ -75,9 +75,9 @@
 //                        gathers at most and nine pages of the
 //                        directory), error (every read fails) and
 //                        favorites (the first two programs starred to
-//                        begin with) and empty (projectNav.page and search
-//                        list nothing, as for someone who sees no
-//                        project); several joined by commas. A star
+//                        begin with) and empty (projectNav.page, search
+//                        and children list nothing, as for someone who
+//                        sees no project); several joined by commas. A star
 //                        or an unstar (projectNav:setFavorite) changes the
 //                        starred set by the server's rule and sends the
 //                        reads again
