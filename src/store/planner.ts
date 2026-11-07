@@ -3216,9 +3216,9 @@ function dropProjectRows(id: string) {
 }
 
 /* The paint of a task delete in organization `org` at `at`: the tasks in
-   `gone` leave, and their subtasks outside it become top-level tasks, as
+   `deleted` leave, and their subtasks outside it become top-level tasks, as
    the server detaches them. A held task of another organization with an
-   id in `gone` is another task, which stays with its subtasks
+   id in `deleted` is another task, which stays with its subtasks
    (heldElsewhere). */
 function dropDeletedTasks(deleted: ReadonlySet<string>, at: string, org: string) {
   const gone = new Set([...deleted].filter((uuid) => !heldElsewhere(uuid, org)))
@@ -9837,7 +9837,7 @@ type AnswerTask = { uuid: string; org: string; answer: TaskOk; model: IssueVM }
     draws, not a newer delivery the window has yet to draw, so the write
     never sends another member's change as what the person saw. The
     workspace may hold another organization's task of the same id
-    instead (watchedRow), which is another task: then the window's handle
+    instead (watchedRow), which is another task. Then the window's handle
     names the watched task, a reference (P.handleNow), and the uuid alone
     names neither for certain, so a write by it fails closed. With `org`,
     it is the watched task of that organization only, which its uuid then
