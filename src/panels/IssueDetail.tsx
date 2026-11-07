@@ -141,7 +141,10 @@ const NO_PROFILE = '__none__'
    Plan on roadmap (Show on roadmap for a new parent), Move to
    sub-project… and Archive or delete…. Its
    fields, labels, files, comments and the eye take changes
-   at once, which go out behind the create. WAITS_FOR_CHECK says why a
+   at once, which go out behind the create. Once the server took the
+   create and the window's first read of it failed, they wait as for any
+   failed read (WAITS_FOR_CHECK, P.refuseStaleEdit), comments aside, until
+   a read answers. WAITS_FOR_CHECK says why a
    change to a task
    the window shows from its own read waits while that read failed or runs
    again, the Parent, Subtasks and Linked tasks changes included, and
