@@ -1657,7 +1657,10 @@ so many sub-projects that the call has no room left to read their counts,
 it is `{"status": "unavailable", "done": null, "total": null, "percent":
 null}` instead. Neither ever fails the read or `update_project`.
 `completion` is `null` for an archived project, and `create_project` answers
-`ok` with zeros, because a new project holds no tasks. `status` arrived in
+`ok` with zeros, because a new project holds no tasks, unless you manage it
+without reading it, such as a sub-project an organization admin creates
+under a project they only manage with someone else as its lead, which
+answers `unavailable` as described below. `status` arrived in
 November 2026, and `counting` later that month, so treat a `status` you do
 not know as no completion.
 `milestones` belong to the top-level
@@ -1672,9 +1675,10 @@ they take no part in. Admin status gives no access to a project's work, so
 it. `get_project` then answers its row with `access.read` `false`, its
 lead, settings and grants, `completion` as `unavailable` (`null` once it is
 archived) and `milestones` as `null`, because completion and milestones are
-planning data. `set_milestone` and `delete_milestone` need to read the
-project. A project you neither read nor manage answers `project "<ref>" not
-found (or not visible to you)`, exactly like an unknown one.
+planning data. `set_milestone`, `delete_milestone` and `list_project_users`
+need to read the project. A project you neither read nor manage answers
+`project "<ref>" not found (or not visible to you)`, exactly like an unknown
+one.
 
 **Names.** Project and milestone names are trimmed, may not be blank and hold
 at most 80 characters, counted as in [Limits](#limits), so most emoji count

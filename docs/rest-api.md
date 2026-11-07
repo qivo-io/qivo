@@ -569,7 +569,10 @@ A row of the list:
   "done": null, "total": null, "percent": null}` instead. Neither ever
   fails the read or a `PATCH`.
   `completion` is `null` for an archived project. A new project answers `ok`
-  with zeros, because it holds no tasks. `status` arrived in November 2026,
+  with zeros, because it holds no tasks, unless you manage it without
+  reading it, such as a sub-project an organization admin creates under a
+  project they only manage with someone else as its lead, which answers
+  `unavailable` as described below. `status` arrived in November 2026,
   and `counting` later that month, so treat a `status` you do not know as
   no completion.
 - `milestones` are the milestones of the top-level project, ordered by date.
