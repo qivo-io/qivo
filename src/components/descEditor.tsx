@@ -781,7 +781,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
           // closed while it was sent: the unmount held back its discard
           // toast in case the save went through. A comment on a new task
           // whose create the server refused went with the task, which the
-          // refusal and App's note said already (P.refusedCreate).
+          // create's refusal said already (P.refusedCreate).
           if (!saved && !(task && P.refusedCreate(task))) toast('Unsaved comment discarded')
           return
         }
