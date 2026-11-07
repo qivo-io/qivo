@@ -212,7 +212,7 @@ tasks** and, where you may add one, **New sub-project…**.
 
 **Overview** shows sortable health cards, 10 at a time with **Load more**,
 and a search once there are more than 10. **Roadmap** starts on milestones,
-listed as the Overview lists them: 10 upcoming at a time with **Load more**
+listed as the Overview lists them, 10 upcoming at a time with **Load more**
 and a collapsed **Past** ([Overview
 milestones](./the-overview-project-health-at-a-glance.md)), My view's from
 the projects that hold your own tasks, and none in All projects;

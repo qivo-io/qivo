@@ -91,7 +91,7 @@ midnight it counts again for the new day.
 **Milestones** lists the milestones of a project or sub-project's
 top-level project in two sections, with names, calendar weeks, dates and
 relative timing. **Upcoming** lists the milestones of the current week and
-later, nearest first: the first 10, and 10 more each time you select
+later, nearest first, 10 at first and 10 more each time you select
 **Load more**. Beyond 100 milestones, **Load more** moves on, and the
 section says that earlier milestones are not shown and offers **Show from
 the start**. **Past**, collapsed when the Overview opens, lists the earlier
