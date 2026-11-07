@@ -400,23 +400,35 @@ describe('the order', { timeout: 60_000 }, () => {
     expect(rowIds()).toEqual(reversed)
     await republish()
     expect(rowIds()).toEqual([ids[3], partner, ids[12], ...rest])
-    // the favorites in a group a screen reader names, each with its mark
-    // beside the name button, never inside it
-    const group = find('[data-sidebar-group="favorites"]')
-    expect(group.getAttribute('role')).toBe('group')
-    expect(group.getAttribute('aria-label')).toBe('Favorite projects')
+    // each favorite in a group a screen reader names, with its mark beside
+    // the name button, never inside it, and every row a sibling of the
+    // others in one sequence
+    const inGroup = (group: string) =>
+      [
+        ...document.querySelectorAll<HTMLElement>(
+          `[data-sidebar-group="${group}"] > [data-project-row]`,
+        ),
+      ].map((r) => r.dataset.projectRow)
+    expect(inGroup('favorites')).toEqual([ids[3], partner, ids[12]])
+    expect(inGroup('rest')).toEqual(rest)
+    for (const group of document.querySelectorAll('[data-sidebar-group="favorites"]')) {
+      expect(group.getAttribute('role')).toBe('group')
+      expect(group.getAttribute('aria-label')).toBe('Favorite projects')
+    }
+    for (const group of document.querySelectorAll('[data-sidebar-group="rest"]')) {
+      expect(group.getAttribute('role')).toBeNull()
+      expect(group.querySelector('[data-sidebar-favorite]')).toBeNull()
+    }
     expect(
-      [...group.querySelectorAll<HTMLElement>('[data-project-row]')].map(
-        (r) => r.dataset.projectRow,
-      ),
-    ).toEqual([ids[3], partner, ids[12]])
+      new Set([...document.querySelectorAll('[data-sidebar-group]')].map((g) => g.parentElement))
+        .size,
+    ).toBe(1)
     for (const id of [ids[3], partner, ids[12]]) {
       const mark = find('[data-sidebar-favorite]', row(id))
       expect(mark.getAttribute('aria-hidden')).toBe('true')
       expect(mark.closest('button')).toBeNull()
     }
     expect(row(ids[3]).querySelector('button')?.textContent).toBe(named(3))
-    expect(find('[data-sidebar-group="rest"]').querySelector('[data-sidebar-favorite]')).toBeNull()
     // another organization's row names it inside its name button
     const label = find('[data-sidebar-org]', row(partner))
     expect(label.textContent).toBe('Partner Co')
@@ -712,6 +724,58 @@ describe('the expanded list', { timeout: 60_000 }, () => {
     await render(cloud)
     expect(childrenEnd().textContent).toBe('You can no longer open this project.')
     expect(document.querySelector('[data-sidebar-children-end] button')).toBeNull()
+  })
+})
+
+describe('a star', { timeout: 60_000 }, () => {
+  it("keeps the scope's project, its loaded sub-projects and focus inside it as stars move rows between the groups", async () => {
+    const next0 = base()
+    const big = top(next0, 'Luma Sensor', { lead: true })
+    const boards = Array.from({ length: 30 }, (_, s) => sub(next0, big, named(s, 'Board')))
+    const cloud = top(next0, 'Luma Cloud')
+    const empty = top(next0, 'Luma Empty')
+    const mesh = top(next0, 'Mesh relay')
+    await load(next0)
+    await render(big)
+    await click(find('[data-sidebar-children-more]'))
+    expect(childNames()).toHaveLength(30)
+    // the two batches' reads, which no star asks again
+    const reads = asked('children').length
+    expect(open('projectNav:children')).toHaveLength(2)
+    // focus on the 30th sub-project, as a keyboard user leaves it
+    const focused = find(`[data-subproject-row="${boards[29]}"] > button`)
+    await act(async () => focused.focus())
+    /** Asserts the tree in `order`, Luma Sensor among `favorites`, with
+        its 30 sub-projects read once and focus where it was. */
+    const kept = (order: string[], favorites: string[]) => {
+      expect(rowIds()).toEqual(order)
+      expect(
+        [
+          ...document.querySelectorAll<HTMLElement>(
+            '[data-sidebar-group="favorites"] > [data-project-row]',
+          ),
+        ].map((r) => r.dataset.projectRow),
+      ).toEqual(favorites)
+      expect(childNames()).toHaveLength(30)
+      expect(asked('children')).toHaveLength(reads)
+      expect(open('projectNav:children')).toHaveLength(2)
+      expect(focused.isConnected).toBe(true)
+      expect(document.activeElement).toBe(focused)
+      expect(lit()).toEqual([big])
+    }
+    // a star of a project below it moves Luma Sensor's row in the page,
+    // and React gives focus back to the moved node
+    favorites.add(mesh)
+    await republish()
+    kept([mesh, cloud, empty, big], [mesh])
+    // a star of Luma Sensor itself moves it into the favorites
+    favorites.add(big)
+    await republish()
+    kept([big, mesh, cloud, empty], [big, mesh])
+    // and an unstar back among the rest
+    favorites.delete(big)
+    await republish()
+    kept([mesh, cloud, empty, big], [mesh])
   })
 })
 

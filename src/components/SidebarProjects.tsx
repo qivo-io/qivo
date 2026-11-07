@@ -6,11 +6,17 @@
 
    - The top-level list is projectNav.page: the person's favorites across
      every seat first, then the rest, each in the server's name order, each
-     project once. The favorites sit in a group named Favorite projects,
-     each with a star mark that is not a control; stars are set in All
-     projects. It loads 25 at first and 25 more as its end scrolls into
-     view or Load more is pressed, at most SIDEBAR_MOST.list
-     (lib/projectPick.ts), past which it points to All projects.
+     project once. Every row is one keyed sibling of the others, so a star
+     or an unstar that moves a row between the favorites and the rest
+     keeps it mounted, with its expanded list's loaded sub-projects and
+     focus inside it, which React gives back to a node it moved. Each
+     favorite's row sits in a group named Favorite projects
+     ([data-sidebar-group=favorites]), each other row in
+     [data-sidebar-group=rest], and a favorite carries a star mark that is
+     not a control; stars are set in All projects. It loads 25 at first and
+     25 more as its end scrolls into view or Load more is pressed, at most
+     SIDEBAR_MOST.list (lib/projectPick.ts), past which it points to All
+     projects.
    - The scope's top-level project, from the workspace (P.project), is the
      one expanded project once a loaded row holds it. Its sub-projects come
      from projectNav.children the same way, at most SIDEBAR_MOST.children,
@@ -102,6 +108,10 @@ export type FocusRow = { id: string; n: number }
 
 /** The top-level list's identity, one list across every seat. */
 const TREE_KEY = JSON.stringify(['sidebar'])
+
+/** What a favorite's row adds for a screen reader: the group of favorite
+    projects it belongs to, which no other row has. */
+const FAVORITE_GROUP = { role: 'group', 'aria-label': 'Favorite projects' } as const
 
 const noteClass = 'px-2 py-1 text-sm text-text-2'
 const childNoteClass = 'py-1 pr-2 pl-6 text-sm text-text-2'
@@ -303,7 +313,14 @@ export function SidebarProjects({
     const org = foreignOrg(row.org_id)
     const on = lit(row.id)
     return (
-      <div key={row.id} className="[margin-bottom:2px]">
+      // a star or an unstar changes only these attributes, so the row
+      // stays mounted
+      <div
+        key={row.id}
+        {...(row.favorite ? FAVORITE_GROUP : {})}
+        data-sidebar-group={row.favorite ? 'favorites' : 'rest'}
+        className="[margin-bottom:2px]"
+      >
         <div
           data-project-row={row.id}
           data-on={on ? '' : undefined}
@@ -419,17 +436,13 @@ export function SidebarProjects({
     )
   }
 
-  // the rows in the server's order, the leading favorites in their group,
-  // each batch's note after its rows in the group of its last row
-  const favorites: ReactNode[] = []
-  const rest: ReactNode[] = []
-  let group = rest
+  // the rows in the server's order, the favorites first, as one keyed
+  // sequence, so a row that moves between the groups keeps its place in
+  // React's tree, with each batch's note after its rows
+  const rows: ReactNode[] = []
   list.batches.forEach((batch, i) => {
-    for (const row of batch.rows) {
-      group = row.favorite ? favorites : rest
-      group.push(topRow(row))
-    }
-    group.push(
+    for (const row of batch.rows) rows.push(topRow(row))
+    rows.push(
       <BatchNote
         key={`note:${batch.id}`}
         list={list}
@@ -492,13 +505,7 @@ export function SidebarProjects({
           </Button>
         )}
       </div>
-      {favorites.length > 0 && (
-        // biome-ignore lint/a11y/useSemanticElements: a group of rows, not a form's fieldset
-        <div role="group" aria-label="Favorite projects" data-sidebar-group="favorites">
-          {favorites}
-        </div>
-      )}
-      {rest.length > 0 && <div data-sidebar-group="rest">{rest}</div>}
+      {rows}
       {/* the marker comes with the first rows, below them, so it is not
          taken as in view from before they landed, which would load the
          next batch at once */}
