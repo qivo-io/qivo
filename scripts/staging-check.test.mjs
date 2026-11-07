@@ -41,8 +41,11 @@ import {
   freePastMilestoneWeek,
   hasTag,
   historyRows,
+  IMAGE_ANSWER_DELAY_MS,
+  IMAGE_DOWNLOADS,
   IMAGE_SPACER,
   INBOX_BADGE_STEP,
+  imageDownloads,
   isSiteOf,
   LABEL_MENTION_NAMES,
   LABEL_MENTION_STEP,
@@ -730,9 +733,35 @@ describe('staging check REST contract', () => {
     )
     expect(step).toContain("img.naturalWidth > 0 && img.src.startsWith('blob:')")
     expect(step).toContain('the last image was asked for before it came near view')
-    expect(step).toContain('most <= 4')
+    // the gateway's answers wait, and in a window tall enough for all six
+    // the cap must be reached, not only kept
+    expect(step).toContain("app.route('**/files/**', hold)")
+    expect(step).toContain('sleep(IMAGE_ANSWER_DELAY_MS)')
+    expect(step).toContain('setViewportSize({ width: 1440, height: 8000 })')
+    expect(step).toContain(
+      "eq(downloads.most(), IMAGE_DOWNLOADS, 'description image downloads at once, the cap')",
+    )
+    expect(IMAGE_ANSWER_DELAY_MS).toBeGreaterThanOrEqual(1000)
+    expect(read('../src/lib/inlineImages.ts')).toContain(`downloads: ${IMAGE_DOWNLOADS},`)
     expect(step).toContain(`restOk(w, 'DELETE', \`/tasks/\${task.key}\`)`)
     expect(step).toContain(`\`\${run.tag} description images\``)
+  })
+
+  it('counts the most downloads of the step’s files in flight at once, and no other request', () => {
+    const downloads = imageDownloads(['a', 'b', 'c', 'd', 'e'])
+    for (const id of ['a', 'b', 'c', null, 'other']) downloads.start(id)
+    expect(downloads.most()).toBe(3)
+    downloads.end('a')
+    downloads.end(null)
+    downloads.start('d')
+    expect(downloads.most()).toBe(3)
+    downloads.start('e')
+    expect(downloads.most()).toBe(4)
+    // a file that ended and starts again counts once at a time
+    for (const id of ['b', 'c', 'd', 'e']) downloads.end(id)
+    downloads.start('b')
+    downloads.start('b')
+    expect(downloads.most()).toBe(4)
   })
 
   it("uploads through the task window's file input and finds the file by its row", () => {

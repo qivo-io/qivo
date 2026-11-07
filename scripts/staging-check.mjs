@@ -5072,19 +5072,52 @@ export const DESCRIPTION_IMAGES_STEP = 'ui/description-images'
 export const IMAGE_SPACER =
   'The bench rig ran the full thermal cycle overnight. Each probe logged its reading every ten seconds, and the enclosure held its seal through all twelve cycles. The fan curve kept the regulator under its limit, and the logs show no brown-out on any rail. The next run adds the humidity chamber and the second firmware build, so the results can be compared side by side before the review. Keep the cables routed behind the rack, as the photos show, and label each probe before the next run starts. Note any reading that drifts from nominal in the log, with the time and the rail it was on.'
 
+/** The most description and comment images the app downloads at once
+ *  (src/lib/inlineImages.ts INLINE_IMAGES.downloads). */
+export const IMAGE_DOWNLOADS = 4
+
+/** How long ui/description-images holds each of its files' gateway answers,
+ *  so the app's downloads overlap and its cap shows. */
+export const IMAGE_ANSWER_DELAY_MS = 1500
+
+/** Counts the downloads in flight of the files `ids` names, from the
+ *  browser's request events: `start` and `end` take a request's file id
+ *  (null for any other request), and `most` answers the most at once. */
+export function imageDownloads(ids) {
+  const wanted = new Set(ids)
+  const open = new Set()
+  let most = 0
+  return {
+    start(id) {
+      if (!wanted.has(id)) return
+      open.add(id)
+      most = Math.max(most, open.size)
+    },
+    end(id) {
+      open.delete(id)
+    },
+    most: () => most,
+  }
+}
+
 /** A task's description images load as they come near view, from the
- *  deployment's gateway through fetch. Over REST it makes a task in A with
- *  six small PNG attachments and a description that shows them one a
- *  paragraph with IMAGE_SPACER between (a description save shows the task's
- *  own files, model/descriptionImages.ts settleDescriptionImages). In the
- *  app at 390 by 844 it opens the task and its Details. The first image
+ *  deployment's gateway through fetch, at most IMAGE_DOWNLOADS at once. Over
+ *  REST it makes a task in A with six small PNG attachments and a
+ *  description that shows them one a paragraph with IMAGE_SPACER between
+ *  (a description save shows the task's own files,
+ *  model/descriptionImages.ts settleDescriptionImages). Each gateway answer
+ *  for those files waits IMAGE_ANSWER_DELAY_MS, so downloads overlap. In
+ *  the app at 390 by 844 it opens the task and its Details. The first image
  *  must show (naturalWidth above 0) from bytes, a blob: src, which only a
  *  fetch the gateway answers with the app's origin gives, while the last
  *  has asked the gateway for nothing yet. As the window scrolls to each in
- *  turn all six must show from blob: srcs, with at most four /files/
- *  downloads in flight at once. An image scrolled far away shows its
- *  placeholder again, so each is checked in its place. It deletes the task
- *  over REST. It runs after ui/attachment-upload. */
+ *  turn all six must show from blob: srcs. An image scrolled far away shows
+ *  its placeholder again, so each is checked in its place. Then it opens
+ *  the task afresh at 1440 by 8000, where the description's box (32vh, its
+ *  cap on a wide window) is tall enough that all six are near at once, and
+ *  the most downloads in flight must be IMAGE_DOWNLOADS, reached and not
+ *  passed. A phone's box is at most 400 pixels tall, which holds two. It deletes the task over REST. It runs after
+ *  ui/attachment-upload. */
 async function descriptionImagesCheck() {
   const w = run.creds.writeToken
   const { A } = run.projects
@@ -5116,38 +5149,43 @@ async function descriptionImagesCheck() {
     })
     // the gateway's downloads of these files, and the most at once
     const asked = new Set()
-    let open = 0
-    let most = 0
+    let downloads = imageDownloads(ids)
     const fileOf = (request) => {
       const { pathname } = new URL(request.url())
       return pathname.startsWith('/files/') ? pathname.slice('/files/'.length) : null
     }
     const started = (request) => {
       const id = fileOf(request)
-      if (!id || !ids.includes(id)) return
-      asked.add(id)
-      most = Math.max(most, ++open)
+      if (id && ids.includes(id)) asked.add(id)
+      downloads.start(id)
     }
-    const ended = (request) => {
-      const id = fileOf(request)
-      if (id && ids.includes(id)) open--
+    const ended = (request) => downloads.end(fileOf(request))
+    // each answer waits, so the downloads the app keeps in flight overlap
+    const hold = async (route) => {
+      if (ids.includes(fileOf(route.request()))) await sleep(IMAGE_ANSWER_DELAY_MS)
+      await route.continue()
     }
+    await app.route('**/files/**', hold)
     app.on('request', started)
     app.on('requestfinished', ended)
     app.on('requestfailed', ended)
-    await app.setViewportSize({ width: 390, height: 844 })
-    try {
+    const open = async (phone) => {
       await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${task.key.toLowerCase()}`, {
         waitUntil: 'domcontentloaded',
       })
       // a phone's task window opens on Activity; its description is under
       // Details
       await app.locator('[role="dialog"] [data-task-title]').first().waitFor({ timeout: 60_000 })
+      if (!phone) return
       const details = app.locator('[role="dialog"]').getByText('Details', { exact: true })
       if (await details.count()) await details.first().click()
-      const image = (id) => app.locator(`[role="dialog"] [data-att="${id}"]:visible img`)
-      const shows = (id) =>
-        image(id).evaluate((img) => img.naturalWidth > 0 && img.src.startsWith('blob:'))
+    }
+    const image = (id) => app.locator(`[role="dialog"] [data-att="${id}"]:visible img`)
+    const shows = (id) =>
+      image(id).evaluate((img) => img.naturalWidth > 0 && img.src.startsWith('blob:'))
+    await app.setViewportSize({ width: 390, height: 844 })
+    try {
+      await open(true)
       await image(ids[0]).waitFor({ timeout: 60_000 })
       expect(
         await until(() => shows(ids[0])),
@@ -5162,14 +5200,23 @@ async function descriptionImagesCheck() {
         await image(id).waitFor({ timeout: 60_000 })
         expect(await until(() => shows(id)), `image ${ids.indexOf(id) + 1} does not show`)
       }
-      expect(most <= 4, `${most} images downloaded at once`)
       eq(asked.size, 6, 'images downloaded')
+      // all six near at once in a fresh page, which holds no bytes yet
+      downloads = imageDownloads(ids)
+      await app.setViewportSize({ width: 1440, height: 8000 })
+      await open(false)
+      for (const id of ids) {
+        await image(id).waitFor({ timeout: 60_000 })
+        expect(await until(() => shows(id)), `image ${ids.indexOf(id) + 1} does not show at once`)
+      }
+      eq(downloads.most(), IMAGE_DOWNLOADS, 'description image downloads at once, the cap')
       eq((await restOk(w, 'DELETE', `/tasks/${task.key}`)).deleted, true, 'deleted')
-      return `the first image showed from a blob: URL before the last was asked for, and each of the six in its place, at most ${most} downloads at once`
+      return `the first image showed from a blob: URL before the last was asked for, each of the six in its place, and with all six near at once ${downloads.most()} downloads ran at once`
     } finally {
       app.off('request', started)
       app.off('requestfinished', ended)
       app.off('requestfailed', ended)
+      await app.unroute('**/files/**', hold)
       await app.setViewportSize({ width: 1360, height: 900 })
     }
   })
