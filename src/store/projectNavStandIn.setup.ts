@@ -9,14 +9,13 @@
    workspace's projects, grants, team shares and memberships, judging every
    seat by ordinary access, so an organization admin's lists hold only the
    projects their own leads, grants and team shares reach, as on the server
-   (lib/access.ts ordinaryOf). A top-level project shows when it is a live
+   (lib/access.ts levelUnder). A top-level project shows when it is a live
    meta of the seat's organization that the seat leads or holds a grant or
    a team share on, or under which a live sub-project gives the seat a
    level; a sub-project shows when it and its parent are live and the seat
    holds a level on it, its own or its parent's. The workspace sends every
-   project a seat sees, and every project of the organization to an admin,
-   with every grant and team share on each, so the rule finds every row
-   the reads would show.
+   project a seat sees, with every grant and team share on each, so the
+   rule finds every row the reads would show.
 
    The lists come in the reads' order: page and search put the favorites
    first, then the rest, each by the name key's bytes (convex/lib/nameKey.ts,
@@ -128,19 +127,17 @@ function navRule(w: NavWorkspace, favorites: ReadonlySet<string>) {
   const seats = w.profiles.filter((p) => w.myProfileIds.includes(p.id) && p.active !== false)
   const seatIn = (orgId: string) => seats.find((s) => s.org_id === orgId)
 
-  /* The seat's role as ordinary access judges it, an admin as a user. */
-  const roleOf = (me: Profile) => (me.org_role === 'admin' ? 'user' : me.org_role)
-  /* Whether `me` leads `p`, whose top-level project is `root`. */
-  const leads = (me: Profile, p: Project, root: Project) => {
-    const role = roleOf(me)
-    return (role === 'user' || role === 'guest') && (p.lead_id ?? root.lead_id) === me.id
-  }
+  /* Whether `me` leads `p`, whose top-level project is `root`, a role
+     that may lead (lib/access.ts canLeadProjects). */
+  const leads = (me: Profile, p: Project, root: Project) =>
+    (me.org_role === 'admin' || me.org_role === 'user' || me.org_role === 'guest') &&
+    (p.lead_id ?? root.lead_id) === me.id
   /* The seat's own grant and team share on `p`. */
   const direct = (me: Profile, p: Project): Level | null => {
     let level: Level | null = null
     for (const g of w.access)
       if (g.project_id === p.id && g.profile_id === me.id) level = higher(level, g.level)
-    if (roleOf(me) === 'guest') return level
+    if (me.org_role === 'guest') return level
     for (const g of w.teamAccess) {
       if (g.project_id !== p.id || teamOrg.get(g.team_id) !== me.org_id) continue
       if (w.teamMembers.some((m) => m.team_id === g.team_id && m.profile_id === me.id))
@@ -148,8 +145,8 @@ function navRule(w: NavWorkspace, favorites: ReadonlySet<string>) {
     }
     return level
   }
-  /* The seat's level on `p` without navigation (lib/access.ts levelUnder
-     of ordinaryOf(seat)), null outside a meta's tree or the organization. */
+  /* The seat's level on `p` without navigation (lib/access.ts
+     levelUnder), null outside a meta's tree or the organization. */
   const levelOf = (me: Profile, p: Project): Level | null => {
     const root = p.parent_id === undefined ? p : byId.get(p.parent_id)
     if (!root || p.org_id !== me.org_id || root.org_id !== me.org_id) return null
@@ -158,7 +155,7 @@ function navRule(w: NavWorkspace, favorites: ReadonlySet<string>) {
     if (leads(me, p, root)) return 'lead'
     let level = direct(me, p)
     if (p.id !== root.id) level = higher(level, leads(me, root, root) ? 'user' : direct(me, root))
-    return roleOf(me) === 'viewer' && level ? 'viewer' : level
+    return me.org_role === 'viewer' && level ? 'viewer' : level
   }
   const live = (p: Project | undefined): p is Project => !!p && p.archived_at === undefined
   /* The live sub-projects of `parent` in its organization. */

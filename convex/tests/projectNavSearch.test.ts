@@ -15,7 +15,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { ACCESS_UNCHECKED, accessOf, OWN_READS, ordinaryOf } from '../lib/access'
+import { ACCESS_UNCHECKED, accessOf, OWN_READS } from '../lib/access'
 import { newWindowKey } from '../lib/db'
 import type { Refusal } from '../lib/functions'
 import { LIMITS, LIST_BATCH } from '../lib/limits'
@@ -418,7 +418,7 @@ describe('access', () => {
     await t.run((ctx) => ctx.db.patch(f.sub._id, { archived_at: NOW }))
     await ready(t, f)
     await plantStar(t, pia, f.meta)
-    expect(await t.run((ctx) => accessOf(ctx, ordinaryOf(pia)).visible(f.meta.id))).toBe(true)
+    expect(await t.run((ctx) => accessOf(ctx, pia).visible(f.meta.id))).toBe(true)
     expect(await found(t, [pia], 'r')).toEqual([])
     // a live sub-project of their own shows the parent again
     await as(t, f.user).mutation(api.projects.setAccess, {
@@ -457,7 +457,7 @@ describe('access', () => {
       Object.assign(NAMED_READ, DEFAULT_READ)
       const matches = allWordsMatcher('mine')
       const standIn = await measured(t, async (ctx) => {
-        const access = accessOf(ctx, ordinaryOf(vic))
+        const access = accessOf(ctx, vic)
         // the first two streams are the sub-projects of the two parents
         const [ofParent, ofLed] = restCandidates(
           ctx,
@@ -614,7 +614,7 @@ describe('favorites', () => {
       Object.assign(NAMED_READ, { ranges: short ?? whole.read.ranges - 6 })
       const low = await read()
       Object.assign(NAMED_READ, DEFAULT_READ)
-      const check = await measured(t, (ctx) => accessOf(ctx, ordinaryOf(pia)).visible(lost.id))
+      const check = await measured(t, (ctx) => accessOf(ctx, pia).visible(lost.id))
       const shape = (answer: typeof whole) => {
         const batch = ok(answer.out)
         return {

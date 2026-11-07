@@ -11,7 +11,7 @@
  * top-level project by the navigation rule (projectNav.setup.ts navSees);
  * a live sub-project, with a search, when they hold a level on it; an
  * archived top-level meta when they hold a level on it for a reason of
- * their own (projectLevel without navigation of ordinaryOf(seat)) or on an
+ * their own (projectLevel without navigation) or on an
  * archived sub-project beneath it; an archived sub-project when they hold
  * a level on it. A right is management, which the writes ask
  * (model/projects.ts assertManages): an active organization admin, on any

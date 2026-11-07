@@ -16,9 +16,8 @@
  * (projects by_org_parent_state_name, by_org_state_name and
  * by_org_state_archived). It never asks ordinary access (accessOf,
  * projectLevelsOf, seatSight), so an admin with no lead, grant or share
- * lists every project, and the admin access split, which removes the admin
- * branches of ordinary access, changes nothing here; the split must not
- * route these reads through accessOf or ordinaryOf. Every other seat lists
+ * lists every project, and these reads must not go through accessOf, which
+ * gives an admin only their own rows. Every other seat lists
  * by ordinary sight, what it sees today, navigation included, judged by
  * the navigation reads' rules (model/projectNavReads.ts: seatSight,
  * rootShows, ownRoots, restCandidates, childRowShows, inheritedShows and

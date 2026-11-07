@@ -1,9 +1,9 @@
-/* The read-only admin transition report (internal/adminAccessReport.ts):
- * what each organization admin keeps and loses once admin status stops
- * giving access to project work. The ordinary level it judges by must be
- * the level a standard user with the same rows holds, so these tests
- * compare it with lib/access.ts projectLevel for such a user, over every
- * access shape and the Northstar seed. */
+/* The read-only admin access report (internal/adminAccessReport.ts):
+ * what each organization admin's ordinary access does not reach, now that
+ * admin status gives no access to project work. The ordinary level it
+ * judges by must be the level a standard user with the same rows holds, so
+ * these tests compare it with lib/access.ts projectLevel for such a user,
+ * over every access shape and the Northstar seed. */
 /// <reference types="vite/client" />
 
 import type { GenericDocument } from 'convex/server'
@@ -15,7 +15,6 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
   ADMINS,
   OWN,
-  ordinaryOf,
   PART,
   ROOM,
   RUN,
@@ -35,7 +34,8 @@ import {
 } from '../lib/access'
 import { byId, newWindowKey } from '../lib/db'
 import { ACCESS_LEVELS, type AccessLevel } from '../lib/enums'
-import { LIMITS } from '../lib/limits'
+import { LIMITS, NAME_MAX } from '../lib/limits'
+import { nameKey } from '../lib/nameKey'
 import { insertTask } from '../model/descriptions'
 import schema from '../schema'
 import { newTeam, SHAPES } from './accessShapes.setup'
@@ -251,7 +251,7 @@ async function compareWithUser(t: T, admin: Doc<'profiles'>, orgIds: readonly st
         ),
       )
     ).flat()
-    const ordinary = projectLevelsOf(ctx, ordinaryOf(admin))
+    const ordinary = projectLevelsOf(ctx, admin)
     const levels = async (
       level: (p: Doc<'projects'>, nav: boolean) => Promise<AccessLevel | null>,
     ) =>
@@ -454,12 +454,13 @@ describe("an admin's ordinary level", () => {
     // each role
     const t = newT()
     const f = await withOrg(t)
+    const twin = { ...f.admin, org_role: 'user' as const }
     expect(receivesTeamAccess(f.admin)).toBe(true)
-    expect(receivesTeamAccess(ordinaryOf(f.admin))).toBe(true)
+    expect(receivesTeamAccess(twin)).toBe(true)
     await shareThroughTeam(t, f, f.meta, f.admin, 'user')
     const shares = await t.run(async (ctx) => ({
       admin: (await accessRowsOf(ctx, f.admin)).shares.length,
-      user: (await accessRowsOf(ctx, ordinaryOf(f.admin))).shares.length,
+      user: (await accessRowsOf(ctx, twin)).shares.length,
     }))
     expect(shares).toEqual({ admin: 1, user: 1 })
   })
@@ -1405,6 +1406,43 @@ async function measuredPages(t: T, phase: Phase, size: number): Promise<Measured
 }
 
 describe('within Convex limits', () => {
+  it("reads an organization's ADMINS.most admins at the name caps within the half of a page's limits", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the widest name a person may have: NAME_MAX characters whose name key
+    // NFKD expands, as U+FDFA's to 18 characters, beside the longest email
+    const name = '\uFDFA'.repeat(NAME_MAX)
+    const size = await t.run(async (ctx) => {
+      const _id = await ctx.db.insert('profiles', {
+        id: uuid(),
+        auth_user_id: uuid(),
+        org_id: f.org.id,
+        email: `${'e'.repeat(LIMITS.email.max - '@testbed.test'.length)}@testbed.test`,
+        name,
+        initials: 'ﷺﷺﷺ',
+        color: '#7a7ad0',
+        org_role: 'admin',
+        active: true,
+        kind: 'person',
+        plannable_hours: LIMITS.plannableHours.max,
+        message_retention_days: LIMITS.messageRetention.max,
+        avatar_storage_id: await ctx.storage.store(new Blob([]) as never),
+        sample_avatar: 'daniel',
+        accepted_at: NOW,
+        can_create_projects: true,
+        created_at: NOW,
+        name_key: nameKey(name),
+      })
+      return getDocumentSize((await ctx.db.get(_id)) as Doc<'profiles'>)
+    })
+    console.info('admin access report: a profile at the name caps', { bytes: size })
+    // ADMINS' docstring states the figure
+    expect(size).toBeGreaterThan(3500)
+    expect(size).toBeLessThan(3700)
+    // a page's half of Convex's 16 MiB holds an organization's admins whole
+    expect(size * ADMINS.most).toBeLessThan(16 * 1024 * 1024 * ROOM.share)
+  })
+
   it('finishes a run past a project shared with more teams than a page reads, which the admin is in', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)

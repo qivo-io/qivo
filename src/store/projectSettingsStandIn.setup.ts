@@ -613,8 +613,7 @@ export function leadCandidatesStandIn(
     const parent = ws.projects.find((p) => p.id === args.parent_id)
     // model/projects.ts subProjectParent: a top-level meta the caller
     // manages passes without its level, any other parent by its level
-    const managed =
-      !!parent && parent.parent_id === undefined && manages(ws, me, parent)
+    const managed = !!parent && parent.parent_id === undefined && manages(ws, me, parent)
     const level =
       parent && parent.org_id === me.org_id && treeOf(ws, parent) !== null
         ? levelOf(ws, me, parent)

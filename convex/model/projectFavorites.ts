@@ -34,7 +34,7 @@
  * - its copies are the project's (copiesOf): its name_key is
  *   nameKey(project.name) and its live is true;
  * - the seat sees the project through ordinary access, judged as
- *   lib/access.ts accessOf of ordinaryOf(seat) judges it, by the
+ *   lib/access.ts accessOf of the seat judges it, by the
  *   navigation lists' rule (model/projectNavReads.ts seatSight shows): for
  *   a reason of its own (accessible), or through a live sub-project the
  *   seat sees that a live child reach row of the seat or of one of its
@@ -67,7 +67,7 @@
 
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { accessOf, inMetaTree, ordinaryOf } from '../lib/access'
+import { accessOf, inMetaTree } from '../lib/access'
 import { byId } from '../lib/db'
 import { badRequest, notFound } from '../lib/functions'
 import type { NamedIndex } from '../lib/namedPages'
@@ -247,8 +247,7 @@ export async function setFavoriteCore(
   }
   const project = await byId(ctx, 'projects', projectId)
   if (project === null || project.org_id !== me.org_id) throw notFound('project not found')
-  if (!(await accessOf(ctx, ordinaryOf(me), [project]).visible(project.id)))
-    throw notFound('project not found')
+  if (!(await accessOf(ctx, me, [project]).visible(project.id))) throw notFound('project not found')
   if (project.parent_id !== undefined) throw badRequest(TOP_LEVEL_ONLY)
   const want = { org_id: project.org_id, ...copiesOf(project) }
   let kept = false

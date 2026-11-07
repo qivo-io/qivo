@@ -13,7 +13,7 @@ import { compareValues } from 'convex/values'
 import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { ACCESS_UNCHECKED, accessOf, OWN_READS, ordinaryOf, projectLevel } from '../lib/access'
+import { ACCESS_UNCHECKED, accessOf, OWN_READS, projectLevel } from '../lib/access'
 import { newWindowKey } from '../lib/db'
 import { LIST_BATCH } from '../lib/limits'
 import {
@@ -255,7 +255,7 @@ describe('access', () => {
     await t.run((ctx) => ctx.db.patch(f.sub._id, { archived_at: NOW }))
     await ready(t, f)
     await plantStar(t, pia, f.meta)
-    expect(await t.run((ctx) => accessOf(ctx, ordinaryOf(pia)).visible(f.meta.id))).toBe(true)
+    expect(await t.run((ctx) => accessOf(ctx, pia).visible(f.meta.id))).toBe(true)
     expect(ok(await page(t, [pia])).rows).toEqual([])
     expect(await kids(t, [pia], f.meta.id)).toEqual({ state: 'unavailable' })
     expect(await resolved(t, [pia], { project_id: f.meta.id })).toEqual({ state: 'unavailable' })
@@ -355,7 +355,7 @@ describe('projects a person cannot open', () => {
       const low = await read()
       Object.assign(NAMED_READ, DEFAULT_READ)
       const standIn = await measured(t, async (ctx) => {
-        const access = accessOf(ctx, ordinaryOf(pia))
+        const access = accessOf(ctx, pia)
         return await readBatch(ctx, {
           stream: indexAfter(subProjectIndex(ctx, parent), null),
           keep: async (p: Doc<'projects'>) => ((await access.visible(p.id)) ? p.name : null),
@@ -408,7 +408,7 @@ describe('projects a person cannot open', () => {
       Object.assign(NAMED_READ, { ranges: short ?? whole.read.ranges - 6 })
       const low = await read()
       Object.assign(NAMED_READ, DEFAULT_READ)
-      const check = await measured(t, (ctx) => accessOf(ctx, ordinaryOf(pia)).visible(lost.id))
+      const check = await measured(t, (ctx) => accessOf(ctx, pia).visible(lost.id))
       const shape = (answer: typeof whole) => {
         const batch = ok(answer.out)
         return {
