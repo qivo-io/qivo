@@ -23,6 +23,12 @@
 // subscription result that waits for its turn takes the writes made
 // meanwhile, as the server sends each result's latest value.
 //
+// A create of the person's own (issues:create, P.addIssue) is stored as the
+// server stores it and answered with the stored row (createTask), so the
+// Board's answer and a task window's read hold the new task once it answers,
+// and refused with the server's sentence for a project the person does not
+// see or a top-level project. The benchmark's create phase times it.
+//
 // The workspace is realistic by default. Page parameters change it:
 //   tasks (100)          visible tasks
 //   descriptions (300)   average description length in characters
@@ -2716,6 +2722,15 @@ async function mutate(name, args) {
     writes++
     return null
   }
+  // the person's own create (P.addIssue), stored and answered as the server
+  // does (createTask), then every part, the Board's answer and a window's
+  // read of the task that it changed, before its answer
+  if (name === 'issues:create') {
+    const answer = createTask(args)
+    writes++
+    await emitWorkspace()
+    return answer
+  }
   // the writes the task window sends from its own answer besides an edit
   if (name === 'labels:toggle') {
     const has = snapshot.issueLabels.some(
@@ -2895,9 +2910,78 @@ async function mutate(name, args) {
   throw new Error(`Unimplemented benchmark mutation: ${name}`)
 }
 
+/** A refusal of a write as the server words it (a ConvexError's data),
+    which the page throws again as one. */
+const writeRefusal = (code, message) =>
+  Object.assign(new Error(message), { data: { code, message } })
+
+/** Stores the task issues.create makes from `args` as createIssueCore
+    stores it (convex/model/issues.ts): in a sub-project the person sees,
+    with the organization's next number, the person as its reporter and
+    creator, the server's stamps, and a task born In Review without hours
+    given the default review time. Answers the stored row without its text,
+    as issues.create does (convex/issues.ts pubFor); the person sees every
+    task's parent here. Refuses a project the person does not see, and a
+    top-level project, with the server's sentences. */
+function createTask(args) {
+  const project = snapshot.projects.find((p) => p.id === args.project_id)
+  if (!project) throw writeRefusal('forbidden', 'no write access to this project')
+  if (project.type !== 'project')
+    throw writeRefusal('rule', 'tasks can only be created in sub-projects, not meta-projects')
+  if (allTasks.some((row) => row.id === args.id))
+    throw writeRefusal('bad_request', 'A task with this id already exists.')
+  const at = new Date().toISOString()
+  const [orgRow] = snapshot.orgs
+  const status = args.status ?? 'backlog'
+  const hours = args.remaining_hours ?? (status === 'review' ? 4 : undefined)
+  const row = {
+    id: args.id,
+    org_id: org,
+    project_id: project.id,
+    num: orgRow.next_issue_num + 1,
+    title: String(args.title).trim(),
+    description: String(args.description ?? '').trim(),
+    status,
+    priority: args.priority ?? 'low',
+    assignee_id: args.assignee_id ?? undefined,
+    reviewer_id: args.reviewer_id ?? undefined,
+    parent_id: args.parent_id ?? undefined,
+    start_week: args.start_week ?? undefined,
+    end_week: args.end_week ?? undefined,
+    due_date: args.due_date ?? undefined,
+    remaining_hours: hours,
+    remaining_set_at: hours === undefined ? undefined : at,
+    paused: !!args.paused,
+    created_by: me.id,
+    reporter_id: me.id,
+    done_at: status === 'done' ? at : undefined,
+    // createIssueCore's hand-off stamp (convex/lib/review.ts reviewStamp)
+    review_at: status === 'review' ? at : undefined,
+    status_at: at,
+    created_at: at,
+    updated_at: at,
+  }
+  for (const key of Object.keys(row)) if (row[key] === undefined) delete row[key]
+  // deliverDelete takes it away again, as the benchmark's create phase does
+  created.push(row.id)
+  tasks.push(row)
+  allTasks.push(row)
+  shown.add(row.id)
+  wireRows.set(row.id, wireTask(row))
+  loadRows.set(row.id, loadRow(row))
+  snapshot.orgs = [
+    { ...orgRow, next_issue_num: row.num, active_tasks: orgRow.active_tasks + 1 },
+    ...snapshot.orgs.slice(1),
+  ]
+  settleTasks()
+  const { description: _text, ...answer } = row
+  return answer
+}
+
 /* What the benchmark asks the server to do, each answering once its
    results are sent. */
-/* The ids of the tasks deliverCreate made, oldest first. */
+/* The ids of the tasks deliverCreate and the person's creates
+   (createTask) made, oldest first. */
 const created = []
 const scenarios = {
   /* Delivers `n` new unread messages for the signed-in person, one per task,
@@ -3054,7 +3138,9 @@ async function write(data, turn) {
     // a Deleted items refusal or a star's comes with its data, as Convex
     // sends a ConvexError's, so the app words it as the server's
     const refusal =
-      data.name.startsWith('deletedItems:') || data.name === 'projectNav:setFavorite'
+      data.name.startsWith('deletedItems:') ||
+      data.name === 'projectNav:setFavorite' ||
+      data.name === 'issues:create'
         ? refusalOf(error).data
         : undefined
     post(
