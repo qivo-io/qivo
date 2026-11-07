@@ -25,13 +25,17 @@
    its answers while another page shows, as while the tab is hidden: React
    stops its effects then, which stops its reads, and when the page shows
    again it shows what it held at once and reads the same batches or page
-   again, `refreshing` until they answered. A batch or page whose read
-   failed reads again with them, and its failure goes once it answers. A
-   failed Next or Previous keeps its note until Retry or another move,
-   since its read stopped when it failed. Each visit counts position
-   refusals afresh: a list a second refusal failed starts again from its
-   first batch or page as the page shows, and its next refusal starts it
-   again rather than failing it. It imports nothing from the store.
+   again, `refreshing` until they answered. One that shows while the tab is
+   hidden reads once the tab shows; its effects first run with the
+   visibility it last rendered, so its reads may open and stop at once. A
+   key changed while it was kept opens the new list alone as it shows. A
+   batch or page whose read failed reads again with them, and its failure
+   goes once it answers. A failed Next or Previous keeps its note until
+   Retry or another move, since its read stopped when it failed. Each
+   visit counts position refusals afresh: a list a second refusal failed
+   starts again from its first batch or page as the page shows, and its
+   next refusal starts it again rather than failing it. It imports nothing
+   from the store.
 
    A list reads its batches from one of two sources (BatchSource):
 

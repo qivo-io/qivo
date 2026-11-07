@@ -650,6 +650,59 @@ describe('a list kept live a batch at a time', () => {
     expect(transport.handlers.size).toBe(0)
   })
 
+  it('reads nothing while a kept page shows over a hidden tab, and opens a key changed while it was kept', async () => {
+    plant('a', 60)
+    const kept = (mode: 'visible' | 'hidden', listKey = 'k') =>
+      act(async () =>
+        root.render(
+          <Activity mode={mode}>
+            <View listKey={listKey} source={LIVE(listKey)} />
+          </Activity>,
+        ),
+      )
+    await kept('visible')
+    await publish()
+    await act(async () => now().more())
+    await publish()
+    const asked = open()
+    expect(asked).toHaveLength(2)
+    // the tab hides and shows while the page is kept, then the page shows:
+    // each batch reads once
+    await kept('hidden')
+    await setVisibility('hidden')
+    await setVisibility('visible')
+    const made = transport.state.n
+    await kept('visible')
+    expect(open()).toEqual(asked)
+    expect(transport.state.n - made).toBe(asked.length)
+    await publish(true)
+    expect(now().refreshing).toBe(false)
+    // the page shows while the tab is still hidden: no read stays open
+    // until the tab shows (its effects first run with the visibility it
+    // last rendered, so its reads may open and stop at once, as a kept
+    // view's do when its arguments changed while it hid, lib/liveView.ts)
+    await kept('hidden')
+    await setVisibility('hidden')
+    await kept('visible')
+    expect(open()).toEqual([])
+    expect(names()).toHaveLength(50)
+    await setVisibility('visible')
+    expect(open()).toEqual(asked)
+    await publish(true)
+    // a key changed while the page was kept opens the new list alone, and
+    // shows no row of the old one, once the page shows
+    await kept('hidden')
+    await kept('hidden', 'j')
+    expect(open()).toEqual([])
+    const at = transport.state.n
+    await kept('visible', 'j')
+    expect(open()).toEqual([{ list: 'j' }])
+    expect(transport.state.n - at).toBe(1)
+    expect(now().rows).toEqual([])
+    await publish()
+    expect(names()).toHaveLength(25)
+  })
+
   it('waits on return for each batch of a Load more to answer again, so no answer from before the tab hid joins one from after', async () => {
     plant('a', 60)
     await render({ listKey: 'k', source: LIVE('k') })
@@ -1229,6 +1282,57 @@ describe('a list shown a page at a time', () => {
     expect(page().refreshing).toBe(false)
     expect(shown()[0]).toBe('a25')
     await act(async () => page().previous())
+    await publish()
+    expect(shown()[0]).toBe('a00')
+  })
+
+  it('reads nothing while a kept page shows over a hidden tab, and opens a key changed while it was kept', async () => {
+    plant('a', 60)
+    const kept = (mode: 'visible' | 'hidden', listKey = 'k') =>
+      act(async () =>
+        root.render(
+          <Activity mode={mode}>
+            <Pages listKey={listKey} />
+          </Activity>,
+        ),
+      )
+    await kept('visible')
+    await publish()
+    await act(async () => page().next())
+    await publish()
+    const asked = open()
+    expect(asked).toEqual([{ list: 'k', after: cursor('a24') }])
+    // the tab hides and shows while the page is kept, then the page shows:
+    // the page reads once
+    await kept('hidden')
+    await setVisibility('hidden')
+    await setVisibility('visible')
+    const made = transport.state.n
+    await kept('visible')
+    expect(open()).toEqual(asked)
+    expect(transport.state.n - made).toBe(1)
+    await publish(true)
+    expect(shown()[0]).toBe('a25')
+    // the page shows while the tab is still hidden: no read stays open
+    // until the tab shows
+    await kept('hidden')
+    await setVisibility('hidden')
+    await kept('visible')
+    expect(open()).toEqual([])
+    expect(shown()[0]).toBe('a25')
+    await setVisibility('visible')
+    expect(open()).toEqual(asked)
+    await publish(true)
+    // a key changed while the page was kept opens the new list alone, at
+    // its first page, once the page shows
+    await kept('hidden')
+    await kept('hidden', 'j')
+    expect(open()).toEqual([])
+    const at = transport.state.n
+    await kept('visible', 'j')
+    expect(open()).toEqual([{ list: 'j' }])
+    expect(transport.state.n - at).toBe(1)
+    expect(page().rows).toEqual([])
     await publish()
     expect(shown()[0]).toBe('a00')
   })
