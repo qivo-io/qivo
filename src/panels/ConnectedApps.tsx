@@ -80,7 +80,9 @@ export function ConnectedApps() {
   const [busy, setBusy] = useState(false)
   // where focus goes once the dialog has closed, taken as it opens: the
   // Delete that opened it, else, once its connection is gone, the next
-  // row's, else the nearest one before it, else the empty list's line
+  // row's, else the nearest one before it, else the empty list's line,
+  // else Try again, which shows only when the refresh failed and took
+  // every row
   const focusAfter = useRef<() => HTMLElement | null>(() => null)
   const focusAfterRender = useFocusAfterRender()
   const empty = useRef<HTMLParagraphElement>(null)
@@ -106,7 +108,8 @@ export function ConnectedApps() {
     setBusy(false)
   }
 
-  // A refresh that failed took every row away; focus goes to its Try again.
+  // A refresh that failed took every row away; focus goes to its Try again,
+  // here, or through focusAfter when the closing dialog still held focus.
   const endLine = useRef<HTMLDivElement>(null)
   const retryButton = () =>
     endLine.current?.querySelector<HTMLElement>('[data-connected-apps-retry]') ?? null
@@ -198,7 +201,7 @@ export function ConnectedApps() {
                       'data-oauth-connection',
                       connection.id,
                       (row) => row.querySelector('button'),
-                      () => empty.current,
+                      () => empty.current ?? retryButton(),
                     )
                     setDeleteError('')
                     setSelected(connection)

@@ -6,6 +6,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { LIMITS } from '../../convex/lib/limits'
 import { endClosing, playClosingAnimations } from '../lib/closingAnimation.setup'
 import { APP_LIST } from '../lib/credentialLists'
+import { isUpdateBlocked } from '../lib/updateSafety'
 import {
   credentialListsStandIn,
   type ForcedCredentialLists,
@@ -167,6 +168,38 @@ describe('the Connected apps delete question', () => {
     await endClosing()
     expect(document.activeElement?.textContent).toBe('No connected apps.')
   })
+
+  it.each([
+    ['while the dialog still closes', false],
+    ['after the dialog closed', true],
+  ])(
+    'gives focus to Try again when the refresh after a delete fails %s',
+    async (_, closedFirst) => {
+      await ask('claude')
+      await act(async () => button('Delete connection').click())
+      await answer(store.revokes, true)
+      if (closedFirst) await endClosing()
+      // the refresh fails, which takes every row away
+      await answer(store.lists, null)
+      if (!closedFirst) await endClosing()
+      expect(dialog()).toBeNull()
+      expect(document.querySelector('[data-connected-apps-note] [role="alert"]')?.textContent).toBe(
+        'Could not load connected apps. Try again.',
+      )
+      expect(document.querySelectorAll('[data-oauth-connection]')).toHaveLength(0)
+      expect(document.activeElement).toBe(button('Try again'))
+      expect(isUpdateBlocked()).toBe(false)
+      // the retry shows every row the server answers, none kept hidden, each
+      // Delete enabled
+      await act(async () => button('Try again').click())
+      await answer(store.lists, batch(APPS))
+      const deletes = [
+        ...document.querySelectorAll<HTMLButtonElement>('[data-oauth-connection] button'),
+      ]
+      expect(deletes).toHaveLength(2)
+      expect(deletes.every((b) => !b.disabled)).toBe(true)
+    },
+  )
 
   it('keeps a refused delete in the dialog, not on the page', async () => {
     await ask('claude')
