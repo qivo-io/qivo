@@ -475,7 +475,9 @@ describe('staging check REST contract', () => {
       .join('\n')
     for (const mark of [
       ADMIN_MANAGEMENT_MARKS.search,
+      ADMIN_MANAGEMENT_MARKS.list,
       ADMIN_MANAGEMENT_MARKS.row,
+      ADMIN_MANAGEMENT_MARKS.subRow,
       ADMIN_MANAGEMENT_MARKS.archived,
     ])
       expect(pages).toContain(mark)
@@ -491,6 +493,11 @@ describe('staging check REST contract', () => {
     const step = check.slice(
       check.indexOf('async function adminManagementCheck()'),
       check.indexOf('export const BILLING_STORAGE_STEP'),
+    )
+    // the row menu opens only once the search has answered, as the list
+    // before it goes with any menu opened on it
+    expect(step.indexOf('names.every((name) => name.includes(run.tag))')).toBeLessThan(
+      step.indexOf("getByRole('button', { name: 'Project actions', exact: true })"),
     )
     // Nora takes no part in the project before anything is checked
     expect(step.indexOf('/access/users/')).toBeLessThan(step.indexOf('eq(read.access?.read, false'))

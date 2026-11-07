@@ -7452,14 +7452,17 @@ async function projectDialogsCheck() {
  *  part in (adminManagementCheck). */
 export const ADMIN_MANAGEMENT_STEP = 'ui/admin-management'
 
-/** The marks and sentence the step waits for: Settings › Projects' search
- *  and rows (src/panels/settings/ProjectLists.tsx), Archived tasks' page
- *  and its note for a project the person cannot read
+/** The marks and sentence the step waits for: Settings › Projects' search,
+ *  its list and its project and sub-project rows
+ *  (src/panels/settings/ProjectLists.tsx), Archived tasks' page and
+ *  its note for a project the person cannot read
  *  (src/panels/settings/ArchivedTasks.tsx), and the Search palette's
  *  results (src/panels/Palette.tsx). */
 export const ADMIN_MANAGEMENT_MARKS = {
   search: 'data-settings-projects-search',
+  list: 'data-settings-projects',
   row: 'data-project-row',
+  subRow: 'data-subproject-row',
   archived: 'data-archived-tasks',
   unavailable:
     "This page can't show the tasks of the project it was opened for. The project list shows the projects you take part in.",
@@ -7531,7 +7534,17 @@ async function adminManagementCheck() {
         waitUntil: 'domcontentloaded',
       })
       await app.locator(`[${m.search}]`).fill(run.tag)
-      const row = app.locator(`[${m.row}="${project.id}"]`)
+      // the search's own rows, every one with the tag, not the list before
+      // it, whose row goes with a menu opened on it once the search answers
+      const listed = app.locator(`[${m.list}] [${m.row}], [${m.list}] [${m.subRow}]`)
+      expect(
+        await until(async () => {
+          const names = await listed.allTextContents()
+          return names.length > 0 && names.every((name) => name.includes(run.tag))
+        }, 60_000),
+        'Settings › Projects did not answer the search for the run tag',
+      )
+      const row = app.locator(`[${m.list}] [${m.row}="${project.id}"]`)
       await row.waitFor({ timeout: 60_000 })
       await row.hover()
       await row.getByRole('button', { name: 'Project actions', exact: true }).click()
