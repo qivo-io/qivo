@@ -1218,15 +1218,22 @@ describe('tasks on demand', { timeout: 30_000 }, () => {
         { timeout: 10_000 },
       )
       await press(row)
-      await press(q('[data-milestone-past-toggle]'))
-      await press(q('[data-milestone-section="past"] [data-milestone-more]'))
+      // the Overview under the window shows sections with the same marks
+      // (components/MilestoneSectionPart.tsx), so each locator scopes by
+      // the window's root
+      const inWindow = (selector: string) => q(`[data-milestone-window] ${selector}`)
+      await press(inWindow('[data-milestone-past-toggle]'))
+      await press(inWindow('[data-milestone-section="past"] [data-milestone-more]'))
       await typeInto(
-        q('[data-milestone-section="past"] [data-milestone-search]') as HTMLInputElement,
+        inWindow('[data-milestone-section="past"] [data-milestone-search]') as HTMLInputElement,
         'audit',
       )
       await searchSettles()
-      await press(q('[data-milestone-section="upcoming"] [data-milestone-more]'))
-      expect(shown('past').length).toBeGreaterThan(0)
+      await press(inWindow('[data-milestone-section="upcoming"] [data-milestone-more]'))
+      expect(
+        inWindow('[data-milestone-section="past"]')?.querySelectorAll('[data-milestone-row]')
+          .length,
+      ).toBeGreaterThan(0)
       expect(store.__layerProbe?.asks()).toEqual([])
       expect(store.__layerProbe?.faults()).toEqual([])
     } finally {

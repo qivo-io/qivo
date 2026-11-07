@@ -1,4 +1,3 @@
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
 /* Overview: a dashboard rollup of what to do, the scope's state in one box,
@@ -14,9 +13,13 @@ import { HoverTooltip } from '@/components/ui/tooltip'
    figure the server answers unavailable shows a dash or "unknown" and why,
    never a number. Each list shows the server's batches, and the health
    table the server's rows, in the server's order, never sorted or cut
-   here (views/overview/HealthTable.tsx). The milestones still read the
-   workspace until their own stage (t3/limits-milestone-overview), and so
-   do the lists' rows where the workspace holds their tasks. */
+   here (views/overview/HealthTable.tsx). The milestones come from the
+   server too (convex/milestones.ts section): Upcoming 10 at a time and a
+   collapsed Past 25 at a time, of the scope's top-level project, of My
+   view's projects with `mine`, and none in All projects
+   (views/useScopeMilestones.ts, views/overview/OverviewMilestones.tsx),
+   with Next milestone from Upcoming's first row. The lists' rows still
+   read the workspace where it holds their tasks. */
 
 import {
   type MouseEvent,
@@ -27,7 +30,6 @@ import {
   useRef,
   useState as useStateO,
 } from 'react'
-import { relativeWeek, weekToISO } from '@/lib/dates'
 import { focusAround, useFocusWhenGone } from '@/lib/focusWhenGone'
 import { StaticControlsContext, useLiveControls } from '@/lib/liveControls'
 import { SCROLL_ANCHORING } from '@/lib/scrollAnchoring'
@@ -60,12 +62,14 @@ import {
 } from '../components/qivo'
 import { ViewNote } from '../components/ViewNote'
 import { OVERVIEW_BATCH } from '../store/overviewLists'
-import { type IssueVM, type MilestoneVM, P, type ScopeInfo } from '../store/planner'
+import { type IssueVM, OVERVIEW_MILESTONE_SLOTS, P, type ScopeInfo } from '../store/planner'
 import { BOARD_SEARCH_DELAY_MS } from './board/boardArgs'
 import { type HealthOrder, OvHealthTable } from './overview/HealthTable'
+import { OverviewMilestones } from './overview/OverviewMilestones'
 import { overviewRequest } from './overview/overviewArgs'
 import { OvStatusBar } from './overview/StatusBar'
 import { useOverviewPanelClipping } from './useOverviewPanelClipping'
+import { type NextMilestone, useScopeMilestones } from './useScopeMilestones'
 import { useViewsNews } from './useViewsNews'
 import './Overview.css'
 import '../styles/mobile-views.css'
@@ -723,59 +727,36 @@ function OvList({
   )
 }
 
-function OvMilestoneRow({
-  m,
-  next,
-  owner,
-  onEdit,
-}: {
-  m: MilestoneVM
-  next: boolean
-  owner?: string | null
-  /** opens the milestone, naming the project it sits on */
-  onEdit: (id: string, project: string) => void
-}) {
-  const delta = relativeWeek(m.week)
+/** The Next milestone cell (data-ov-figure="next-milestone"): the
+    milestone's name with its week and date where it is known, the page's
+    placeholder while it loads, a dash with "None scheduled" where Upcoming
+    is whole and empty, and a dash with "Unavailable" where its read failed,
+    was refused, names too many projects or stopped before a row, which the
+    Milestones section says why. */
+function OvNextMilestone({ next }: { next: NextMilestone }) {
+  const shown: Shown<unknown> =
+    next.state === 'loading'
+      ? { state: 'loading' }
+      : next.state === 'unavailable'
+        ? { state: 'unavailable', reason: 'scope' }
+        : { state: next.state === 'none' ? 'ok' : next.state, value: null }
+  const row = 'row' in next ? next.row : null
   return (
-    <Button
-      type="button"
-      onClick={() => onEdit(m.id, m.project)}
-      title={`Edit “${m.name}”${owner ? `, ${owner}` : ''}`}
-      data-overview-milestone={m.id}
-      data-next={next ? '' : undefined}
-      className={cn(
-        'overview-milestone min-h-16 w-full justify-start gap-3 whitespace-normal rounded-md p-3 text-left font-sans',
-        next && 'border-primary bg-primary-soft hover:border-primary hover:bg-primary-soft',
-      )}
-    >
-      <span
-        aria-hidden="true"
-        className="size-[9px] shrink-0 rotate-45 rounded-[var(--r-2xs)] bg-[var(--milestone)]"
-      />
-      <span className="overview-milestone-text flex min-w-0 flex-1 flex-col gap-1">
-        {/* Project context stays with the name instead of competing with the dates. */}
-        {owner && <span className="break-words text-xs text-text-3">{owner}</span>}
-        <span
-          className={cn(
-            'break-words text-base leading-snug',
-            next ? 'font-semibold' : 'font-medium',
-          )}
-        >
-          {m.name}
-        </span>
-      </span>
-      <span className="overview-milestone-date flex shrink-0 flex-col items-end gap-1">
-        <Badge variant="secondary" className="bg-hover font-medium text-text-1">
-          {delta}
-        </Badge>
-        <time
-          dateTime={weekToISO(m.week)}
-          className="whitespace-nowrap font-mono text-xs text-text-2"
-        >
-          {P.weekLabel(m.week)}
-        </time>
-      </span>
-    </Button>
+    <OvStat
+      label="Next milestone"
+      figure={{ name: 'next-milestone', shown }}
+      value={row ? row.name : placeholder(shown)}
+      valueClassName="font-sans text-md"
+      sub={
+        row
+          ? `${P.weekNumLabel(row.week)}, ${P.fmtDate(P.weekToDate(row.week))}`
+          : next.state === 'none'
+            ? 'None scheduled'
+            : next.state === 'unavailable'
+              ? 'Unavailable'
+              : undefined
+      }
+    />
   )
 }
 
@@ -1133,10 +1114,10 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
   const unsearched = useRef(new Map<string, number>())
   /* The Milestones window opened from a row can delete that milestone, and
      the row with it. Focus then goes to the next row, the previous one, the
-     + or the empty list's line, else, once the last one went from a scope
+     + or Upcoming's empty line, else, once the last one went from a scope
      with no task to show, the note the page shows instead. */
   const newMilestone = useRef<HTMLButtonElement>(null)
-  const noMilestones = useRef<HTMLDivElement>(null)
+  const milestonesRoot = useRef<HTMLDivElement>(null)
   const editMilestone = (id: string, project?: string) =>
     actions.editMilestone(
       id,
@@ -1144,7 +1125,12 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
         'data-overview-milestone',
         id,
         (row) => row,
-        () => newMilestone.current ?? noMilestones.current ?? shownEmptyState(),
+        () =>
+          newMilestone.current ??
+          milestonesRoot.current?.querySelector<HTMLElement>(
+            '[data-milestone-section="upcoming"] [data-milestone-note="empty"]',
+          ) ??
+          shownEmptyState(),
       ),
       project,
     )
@@ -1161,6 +1147,9 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
     info,
     grouped ? { sort: sort.key, dir: sort.dir, search: rested } : null,
   )
+  // the milestone sections, read here, above the decision whether a note
+  // is the whole page, which waits for Upcoming's first answer
+  const ms = useScopeMilestones(info, OVERVIEW_MILESTONE_SLOTS)
   const health = read.health
   const healthAnswer = health?.value
   if (healthAnswer?.state === 'ok' && health?.table.search === '')
@@ -1184,11 +1173,15 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
 
   /* Why a scope has no task to summarize, once the answer that decides it
      arrived: a project without sub-projects, one without tasks, My view
-     with no project, no sub-project or nothing of the person's. Without a
-     milestone the note is the page. With one, the note takes the place of
-     the task sections and the Milestones section stays under it, as the
-     Roadmap keeps its flags behind the same note. The note says why
-     nothing is counted, not that the scope plans nothing. */
+     with no project, no sub-project or nothing of the person's. Until
+     Upcoming's first answer, and where it says the scope holds no
+     milestone at all, the note is the page. Once it holds a row or says
+     the scope holds a past milestone, or Upcoming failed, was refused or
+     stopped before a row, the note takes the place of the task sections
+     and the Milestones section stays under it (useScopeMilestones
+     `stands`), as the Roadmap keeps its flags behind the same note. All
+     projects reads no milestone, so its chooser is always the page. The
+     note says why nothing is counted, not that the scope plans nothing. */
   let emptyNote: ReactNode = null
   // a kept answer still decides it while it refreshes, so the note stays
   // through a return or a reconnect
@@ -1311,10 +1304,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
   // without a milestone the note is the page, as the chooser of All
   // projects and the note for a person who sees no project are too
   const replaced = note ?? emptyNote
-  const alone = replaced !== null && info.milestones.length === 0
-
-  const msSorted = info.milestones.slice().sort((a, b) => a.week - b.week)
-  const nextMs = msSorted.find((m) => m.week >= P.TODAY_WEEK)
+  const alone = replaced !== null && !ms.stands
   const c = given(counts)
   const leaves = c ? Object.values(c.leaves).reduce((n, v) => n + v, 0) : 0
   const done = c?.leaves.done ?? 0
@@ -1396,16 +1386,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
                     figure={{ name: 'paused', shown: counts }}
                     value={c ? c.paused : placeholder(counts)}
                   />
-                  <OvStat
-                    label="Next milestone"
-                    value={nextMs ? nextMs.name : '—'}
-                    valueClassName="font-sans text-md"
-                    sub={
-                      nextMs
-                        ? `${P.weekNumLabel(nextMs.week)}, ${P.fmtDate(P.weekToDate(nextMs.week))}`
-                        : 'None scheduled'
-                    }
-                  />
+                  <OvNextMilestone next={ms.next} />
                 </div>
                 {/* why a figure above or in the sentence is not given */}
                 <OvFigureNotes
@@ -1514,28 +1495,13 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
               )
             }
           >
-            <div className="[display:flex] [flex-direction:column] [gap:8px]">
-              {msSorted.map((m) => (
-                <OvMilestoneRow
-                  key={m.id}
-                  m={m}
-                  next={nextMs && m.id === nextMs.id}
-                  owner={wide ? P.projectLabelOf(m.project) : null}
-                  onEdit={editMilestone}
-                />
-              ))}
-              {msSorted.length === 0 && (
-                <div
-                  ref={noMilestones}
-                  tabIndex={-1}
-                  className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic] [padding:4px_2px]"
-                >
-                  {wide
-                    ? 'No milestones in any of your projects yet.'
-                    : 'No milestones yet. Add one with the + button.'}
-                </div>
-              )}
-            </div>
+            <OverviewMilestones
+              rootRef={milestonesRoot}
+              ms={ms}
+              mine={mine}
+              canAdd={!wide && P.canAddMilestone(info.id)}
+              onEdit={editMilestone}
+            />
           </OvSection>
         </div>
       )}

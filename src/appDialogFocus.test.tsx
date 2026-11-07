@@ -186,6 +186,7 @@ async function boot(
      a delete reads its milestone; that transition is a delivery that holds
      the delete, which the workspace delivered already. */
   let wrote = false
+  let creating = false
   // Settings › Projects reads the server's lists, which hold Plan, and New
   // sub-project checks its parent on the server (projectSettings.get)
   const lists = projectListsServer(() => snap)
@@ -215,7 +216,11 @@ async function boot(
       publish(snap)
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name.startsWith('overview:') && !wrote) answerOverview(snap, name, args, next, fail)
-    else if (isMilestoneRead(name)) answerMilestones(snap, name, args, next, fail)
+    // the milestone reads answer at any time but while a project create
+    // waits, which this double never commits: the section reads of the
+    // Overview App moves into would end that create's paint
+    else if (isMilestoneRead(name) && (!creating || name === 'milestones:get'))
+      answerMilestones(snap, name, args, next, fail)
     // the Roadmap's reads answer whenever they subscribe, for a project the
     // server holds: a milestone's write paints the workspace's rows, which
     // their answers do not hold, and a project still being created stays on
@@ -243,6 +248,7 @@ async function boot(
       snap.milestones = snap.milestones.filter((m) => !removed.includes(m.id))
       publish?.(snap)
     }
+    if (name === 'projects:create') creating = true
     if (name === 'projects:create')
       return new Promise((resolve, reject) => {
         saved = () => {
@@ -695,11 +701,12 @@ describe('Milestones', { timeout: 30_000 }, () => {
       phone(onPhone)
       await boot((snap) => {
         plan(snap)
-        // the Roadmap's flags show the weeks of its window, from this one on
-        if (attr === 'data-msflag')
-          snap.milestones.forEach((m, n) => {
-            m.week = mondayIn(n + 1)
-          })
+        // the Roadmap's flags show the weeks of its window, from this one
+        // on, and the Overview's and the agenda's Upcoming the weeks from
+        // this one on, as a collapsed Past shows no row
+        snap.milestones.forEach((m, n) => {
+          m.week = mondayIn(n + 1)
+        })
       })
       if (onPhone) await openOnPhone('Roadmap')
       if (where === 'Roadmap flag') await press(await find('Roadmap'))
@@ -759,6 +766,10 @@ describe('Milestones', { timeout: 30_000 }, () => {
         plan(snap)
         snap.projects = snap.projects.filter((p) => p.id === 'plan')
         snap.issues = []
+        // in Upcoming, as a collapsed Past shows no row
+        snap.milestones.forEach((m, n) => {
+          m.week = mondayIn(n + 1)
+        })
       })
       if (onPhone) await openOnPhone('Roadmap')
       // the Overview's note waits for the answer that says it has no
