@@ -215,6 +215,37 @@ describe('the window of a task just created', { timeout: 30_000 }, () => {
     expect(store.__layerProbe?.asks()).toEqual([])
   })
 
+  it("shows the new task on the window's first render, before the window watches it", async () => {
+    const store = await app('/app/testbed/board/p/2')
+    // the window watches its task from an effect, after its first render;
+    // held back here, the window shows what its first render shows
+    const watch = vi.spyOn(store.P, 'watchComments').mockImplementation(() => {})
+    // every text the page shows from the press of Create on
+    const shown: string[] = []
+    const note = (records: MutationRecord[]) => {
+      for (const record of records) {
+        if (record.type === 'characterData') shown.push(record.target.textContent ?? '')
+        for (const node of record.addedNodes) shown.push(node.textContent ?? '')
+      }
+    }
+    const observer = new MutationObserver(note)
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    try {
+      await createTask('Run the soak test')
+      await waitFor(
+        () =>
+          document.querySelector('[data-task-title]')?.textContent?.includes('Run the soak test'),
+        'the new task in its window',
+      )
+    } finally {
+      note(observer.takeRecords())
+      observer.disconnect()
+    }
+    expect(watch).toHaveBeenCalled()
+    expect(document.querySelector('[data-issue-key]')?.textContent).toBe('QN-41')
+    expect(shown.filter((text) => text.includes('Loading QN-41'))).toEqual([])
+  })
+
   it('takes a title change at once behind the create, and says why its waiting controls wait', async () => {
     await app('/app/testbed/board/p/2')
     await createTask('Run the soak test')

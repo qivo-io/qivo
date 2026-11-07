@@ -3224,6 +3224,40 @@ function taskDetailNow(): TaskDetailVM | null {
   })
 }
 
+/* The task detail of each creating answer that no window watched yet
+   (creatingDetailOf), by that answer. */
+const creatingDetails = new WeakMap<TaskOk, TaskDetailVM>()
+
+/** The person's own new task `uuid` as a window shows it before it watches
+    the task (P.taskDetail), from its creating answer (creatingAnswerOf)
+    shaped as taskDetailNow shapes it once watched, saving, and the same
+    object while that answer holds. The window's first render comes before
+    its effect watches the task (P.watchComments), so it shows the task
+    rather than a loading line. Null for a task that is no create of the person's
+    own on its way, or that the server refused. */
+function creatingDetailOf(uuid: string): TaskDetailVM | null {
+  if (refusedCreates.has(uuid)) return null
+  const answer = creatingAnswerOf(uuid)
+  if (!answer) return null
+  let detail = creatingDetails.get(answer)
+  if (!detail) {
+    detail = shapeTaskDetail({
+      task: uuid,
+      org: answer.task.org_id,
+      answer,
+      saving: true,
+      failure: 'none',
+      links: null,
+      attachments: null,
+      handleNow: PLANNER.handleNow,
+      labelName: (id) => rows.labels.get(id)?.name,
+      related: (row) => relatedTask(row.id, row),
+    })
+    creatingDetails.set(answer, detail)
+  }
+  return detail
+}
+
 /* Builds P.sections and P.detail again from the section answers and the
    rows on screen, keeping each old object while it holds the same data,
    after making the section sides run as the windows want them
@@ -15328,10 +15362,18 @@ export const PLANNER = {
       its organization is known, and with `org`, when that organization is
       `org`, as two organizations can hold one task id; else null. Its read
       is the task side of the sections, which runs while a window shows the
-      sections or the workspace does not hold the watched task. */
+      sections or the workspace does not hold the watched task. The
+      person's own new task on its way that no window watches yet shows
+      from its creating answer (creatingDetailOf), of organization `org`
+      when named, so a window App opens on it shows it on its first
+      render. */
   taskDetail: (uuid: string | null | undefined, org?: string): TaskDetailVM | null => {
+    if (!uuid) return null
     const detail = PLANNER.detail
-    return uuid && detail?.task === uuid && (!org || detail.org === org) ? detail : null
+    if (detail?.task === uuid) return !org || detail.org === org ? detail : null
+    if (watchedComments === uuid) return null
+    const creating = creatingDetailOf(uuid)
+    return creating && (!org || creating.org === org) ? creating : null
   },
 
   /** Retry for the window's read of the task it shows from its answer
