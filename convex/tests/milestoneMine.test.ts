@@ -156,10 +156,10 @@ type TreeShape = {
  * live sub-project and `archivedOf(i)` archived ones as archiving a
  * sub-project leaves it (model/projects.ts archiveProjectCore), archived
  * and listed under its live parent with its tasks untouched. With `closed`
- * each top-level project is archived whole, as archiving it leaves it and
- * its sub-projects: archived, listed, with every sub-project under it.
- * Each sub-project gets a grant to `me` and one open task `me` is
- * assigned, unless `shape` says otherwise (TreeShape). */
+ * each top-level project is archived whole, as archiving it leaves it,
+ * archived and listed with every sub-project archived under it. Each
+ * sub-project gets a grant to `me` and one open task `me` is assigned,
+ * unless `shape` says otherwise (TreeShape). */
 async function plantTrees(
   t: T,
   orgId: string,

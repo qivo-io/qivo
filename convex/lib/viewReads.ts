@@ -494,8 +494,8 @@ export function viewAccess(ctx: QueryCtx, guard: ViewBudget, me: Doc<'profiles'>
      * within the guard as `live` and `visible` ask, so a project asked
      * about before takes no more room. Each one that is counts its row at
      * its real size from then on, and so does its top-level project's row
-     * where that one is archived: the charges at the fixed size this seat
-     * made of them are undone, as the reader may be shown both rows (a
+     * where that one is archived. It undoes the charges at the fixed size
+     * this seat made of those rows, as the reader may be shown both (a
      * level on a sub-project shows its top-level project for navigation,
      * lib/access.ts levelUnder). Every other project, a live top-level
      * project above one included, keeps its fixed charge. Only a read
