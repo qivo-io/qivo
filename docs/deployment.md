@@ -1786,7 +1786,7 @@ own project's row. `milestones.between` first shipped in v0.1.97
 `access_unchecked` where a bound of the caller's own access reads stops a
 check; against an earlier backend such a check fails as an error, which the
 Roadmap shows with Retry, so it fails closed either way. So this app needs
-a backend from v0.1.97 on, which the floors above already hold: the release
+a backend from v0.1.97 on, which the floors above already hold. The release
 changes no server function, sets no new rollback floor and needs no release
 step. Returning the app alone to an earlier release is safe, because that
 app reads the workspace's milestones, which the backend still sends. There
