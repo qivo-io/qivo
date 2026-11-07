@@ -345,12 +345,12 @@ const MENTION_SEARCH = 'data-sync-mention-search'
     the chosen person `who` first, checked, whatever the batches hold, then
     the batches' rows, each once. On open it sends one pickers.canOwn check
     with the first batch, for the kept choice, else for `initial`. A kept
-    choice the check finds no longer eligible is cleared with `onLine`'s
-    line, but only while it is still the choice, so a person picked before
-    the answer keeps their pick. `initial` is chosen (`onWho` without a
-    press) once a batch row or an `eligible` answer holds them, while the
-    person has picked no one (`picked`). A failed or refused check chooses
-    nothing. */
+    choice the check finds no longer eligible goes to `onGone`, which
+    clears it, says why and leaves the choice to the person, but only while
+    it is still the choice, so a person picked before the answer keeps
+    their pick. `initial` is chosen (`onWho` without a press) once a batch
+    row or an `eligible` answer holds them, while the person has picked no
+    one (`picked`). A failed or refused check chooses nothing. */
 function MentionPeople({
   it,
   initial,
@@ -358,7 +358,7 @@ function MentionPeople({
   picked,
   locked,
   onWho,
-  onLine,
+  onGone,
 }: {
   it: IssueVM
   initial: string | null
@@ -366,7 +366,7 @@ function MentionPeople({
   picked: boolean
   locked: boolean
   onWho: (person: Recipient | null, pressed: boolean) => void
-  onLine: (line: string) => void
+  onGone: (person: Recipient) => void
 }) {
   const task = { uuid: it.uuid, org: it.org }
   const [text, setText] = useState('')
@@ -399,8 +399,7 @@ function MentionPeople({
       if (openedWith) {
         // a person picked since the window opened keeps their pick
         if (row.eligible || whoNow.current?.id !== openedWith.id) return
-        onLine(goneLine(openedWith.name))
-        onWho(null, false)
+        onGone(openedWith)
       } else if (row.eligible && row.person) setSuggested(row.person)
     })
   }, [])
@@ -489,13 +488,21 @@ export function MentionCtl({
 }) {
   const [open, setOpen] = useState(false)
   const [who, setWho] = useState<Recipient | null>(null)
-  // whether the person pressed a row, or a Send cleared their choice,
-  // since the window last opened without a kept note. After that `initial`
-  // is never chosen for them.
+  // whether the person pressed a row, or a check at Send or at a kept
+  // note's reopening cleared their choice, since the window last opened
+  // without a kept note. After that `initial` is never chosen for them.
   const [picked, setPicked] = useState(false)
   // why the last Send or the opening check posted nothing, which a kept
   // note keeps
   const [line, setLine] = useState<string | null>(null)
+  // Clears a chosen person the server says can no longer be mentioned,
+  // with the line that says why. The choice is then the person's to make
+  // again, never `initial`'s, though no row was pressed.
+  const drop = (gone: Recipient) => {
+    setWho(null)
+    setPicked(true)
+    setLine(goneLine(gone.name))
+  }
   const [text, setText] = useState('')
   // a note on its way to the server. The window locks it until the answer,
   // and after a save until the window has closed.
@@ -562,12 +569,8 @@ export function MentionCtl({
         answer?.state === 'ready' ? answer.rows.find((r) => r.id === person.id) : undefined
       if (!row?.eligible) {
         setSending(false)
-        if (row) {
-          // the choice is the person's to make again, never `initial`'s
-          setWho(null)
-          setPicked(true)
-          setLine(goneLine(person.name))
-        } else if (answer?.state === 'refused') setLine(sentence(answer.message))
+        if (row) drop(person)
+        else if (answer?.state === 'refused') setLine(sentence(answer.message))
         else if (answer?.state === 'unavailable') setLine('This task is no longer available.')
         else setLine(`Couldn't check ${firstName(person.name)}. Press Send to try again.`)
         return
@@ -649,7 +652,7 @@ export function MentionCtl({
             }
             setWho(next)
           }}
-          onLine={setLine}
+          onGone={drop}
         />
         <LimitedTextarea
           limit={LIMITS.comment}

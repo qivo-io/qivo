@@ -710,6 +710,29 @@ describe('the Team sync @ window’s Send', () => {
     expect(pressed()).toEqual([])
   })
 
+  it('leaves a kept choice the opening check cleared to the person, also once the suggestion changes', async () => {
+    await load(3)
+    await write('Can you check the soak report?', vi.fn())
+    await pressSend()
+    await toggle()
+    await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: RULE })))
+    force.add('check-ineligible')
+    await toggle()
+    await flush()
+    expect(pressed()).toEqual([])
+    await toggle()
+    // the task's other party is now Ben Carter, whom the server takes
+    force.delete('check-ineligible')
+    await mount(vi.fn(), undefined, 'person-0000')
+    await toggle()
+    await flush()
+    expect(reads('pickers:canOwn').at(-1)?.args.ids).toEqual(['person-0000'])
+    expect(people()).toContain('person-0000')
+    expect(pressed()).toEqual([])
+    expect(line()).toBe('Aisha can no longer be mentioned on this task. Pick someone else.')
+    expect(note()?.value).toBe('Can you check the soak report?')
+  })
+
   it('keeps a person picked before the check of a kept choice answers', async () => {
     await load(3)
     await write('Can you check the soak report?', vi.fn())
