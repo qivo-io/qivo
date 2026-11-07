@@ -136,9 +136,9 @@ async function program(t: T, orgId: string, name: string, over: Partial<Doc<'pro
 
 /* `n` top-level projects of `orgId` in a few transactions, each with one
  * live sub-project and `archivedOf(i)` archived ones as archiving a
- * sub-project leaves it (model/projects.ts archiveProjectCore): archived,
- * listed under its live parent, its tasks untouched. Each sub-project gets
- * a grant to `me` and one open task `me` is assigned. */
+ * sub-project leaves it (model/projects.ts archiveProjectCore), archived
+ * and listed under its live parent with its tasks untouched. Each
+ * sub-project gets a grant to `me` and one open task `me` is assigned. */
 async function plantTrees(
   t: T,
   orgId: string,
@@ -322,9 +322,10 @@ async function measureMine(
       ...(side === 'upcoming' ? { pastBefore: MONDAY } : {}),
     })
   // the finding under MILESTONE_MINE's ranges and documents and up to
-  // FINDING_BYTES, with the bytes its guard decides by: the real bytes with
-  // each row it charges at a fixed size (lib/viewReads.ts viewBudget
-  // charge) counted at that size, which MILESTONE_MINE.bytes bounds
+  // FINDING_BYTES, with the bytes its guard decides by, which
+  // MILESTONE_MINE.bytes bounds. They are the real bytes with each row it
+  // charges at a fixed size (lib/viewReads.ts viewBudget charge) counted at
+  // that size
   const finding = await tried(t, async (ctx) => {
     const reads = measuring()
     const { found, guard } = await resolveOnly(ctx, profiles, reads)

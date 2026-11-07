@@ -146,7 +146,7 @@ export function useScopeMilestones(
   if (!pastSearchable && (past.view.next !== null || past.text !== '' || past.view.dropped))
     setPastSearchable(true)
   const view = upcoming.view
-  // what Upcoming's answer or failure decides for this base: whether the
+  // what Upcoming's answer or failure decides for this base, whether the
   // sections stand under a note and whether Past's disclosure shows
   const key = base && JSON.stringify(base)
   const decided =
