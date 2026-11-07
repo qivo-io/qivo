@@ -18,7 +18,10 @@ import { answerRoadmap } from './store/roadmapStandIn.setup'
    on App and the real store. The Planner leads Plan. New sub-project opens
    from buttons that leave once the new sub-project shows, and from menu
    rows that leave with their menu; the server holds the create until the
-   test answers it, and App then moves into the new sub-project. Milestones
+   test answers it, and App then moves into the new sub-project. The
+   sidebar's tree lists the server's navigation reads, which take in an
+   accepted create and answer again before the create answers, as Convex
+   does, so the tree shows the new project only with the save. Milestones
    opens on a milestone that it then deletes. A store that boots without
    the tasks, as the app does, asks for every task only for a create with
    a starter task. */
@@ -45,6 +48,20 @@ let saved: () => void
 let refused: () => void
 // every write App sent, by name and arguments
 let sent: { name: string; args: Record<string, unknown> }[]
+/** A subscription of a navigation read, open until App drops it. */
+type NavRead = {
+  name: string
+  args: unknown
+  next: (value: unknown) => void
+  fail: (error: unknown) => void
+  open: boolean
+}
+// the navigation reads' subscriptions, which a create answers again, and
+// whether a new one waits for the test to answer it
+let navReads: NavRead[]
+let holdNav: boolean
+// what the server holds
+let server: Snapshot
 
 beforeEach(() => {
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
@@ -130,6 +147,7 @@ async function boot(
 ) {
   vi.resetModules()
   const snap = plannerFixture()
+  server = snap
   const base = snap.projects[0]
   snap.projects = [
     { ...base, id: 'plan', type: 'meta', key: 'PLAN', name: 'Plan', lead_id: snap.profiles[0].id },
@@ -137,8 +155,10 @@ async function boot(
   prepare(snap)
   /* The workspace is delivered once, and again only as a milestone's
      delete changes it (projects.removeMilestone, or roadmap.change during
-     a Roadmap visit), before the delete answers, as Convex delivers a
-     write; any other write's paint is the only copy of what it changed.
+     a Roadmap visit) or a project's create is accepted, before the write
+     answers, as Convex delivers a write, with the navigation reads that
+     list the new project; any other write's paint is the only copy of what
+     it changed.
      The Overview's reads answer from it until the first write: an answer
      after one would be a transition the store takes for a delivery that
      holds the write, which this double does not send, and the paint would
@@ -151,14 +171,24 @@ async function boot(
   // sub-project checks its parent on the server (projectSettings.get)
   const lists = projectListsServer(() => snap)
   const settings = projectSettingsServer(() => snap)
+  navReads = []
+  holdNav = false
   let publish: ((value: Snapshot) => void) | null = null
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (isProjectListRead(name)) return lists.watch(name, args, next, fail)
     if (isProjectSettingsRead(name)) return settings.watch(name, args, next, fail)
-    // the All projects directory lists the server's navigation reads
-    if (isProjectNavRead(name)) answerProjectNav(snap, name, args, next, fail)
-    else if (name === 'workspace:whole') {
+    // the All projects directory and the sidebar's tree list the server's
+    // navigation reads
+    if (isProjectNavRead(name)) {
+      const read = { name, args, next, fail, open: true }
+      navReads.push(read)
+      if (!holdNav) answerProjectNav(snap, name, args, next, fail)
+      return () => {
+        read.open = false
+      }
+    }
+    if (name === 'workspace:whole') {
       publish = (value) => {
         const copy = structuredClone(value)
         held(copy)
@@ -197,7 +227,27 @@ async function boot(
     }
     if (name === 'projects:create')
       return new Promise((resolve, reject) => {
-        saved = () => resolve({ num: 2, key: 'DOCS' })
+        saved = () => {
+          // the server stores the project and delivers the workspace and
+          // the navigation reads that hold it before the create answers
+          snap.projects.push({
+            ...snap.projects[0],
+            id: String(args.id),
+            type: args.type as 'meta' | 'project',
+            parent_id: (args.parent_id as string | null) ?? undefined,
+            key: 'DOCS',
+            num: 2,
+            name: String(args.name),
+            lead_id: (args.lead_id as string | null) ?? undefined,
+          })
+          publish?.(snap)
+          lists.rerun()
+          settings.rerun()
+          for (const read of navReads)
+            if (read.open)
+              answerProjectNav(snap, read.name as never, read.args, read.next, read.fail)
+          resolve({ num: 2, key: 'DOCS' })
+        }
         refused = () => reject(new ConvexError({ message: 'Qivo cannot save changes right now.' }))
       })
     // a starter task's create answers with its number, as the server's does
@@ -258,6 +308,12 @@ async function save() {
 }
 
 describe('New sub-project', { timeout: 30_000 }, () => {
+  /** The new sub-project's row in the sidebar's tree, named Docs. */
+  const treeRow = () =>
+    [...document.querySelectorAll<HTMLElement>('aside [data-subproject-row] > button')].find(
+      (button) => button.textContent === 'Docs',
+    )
+
   it.each([
     ["the sidebar's Add sub-project", async () => find('Add sub-project')],
     [
@@ -268,32 +324,37 @@ describe('New sub-project', { timeout: 30_000 }, () => {
       },
     ],
   ])(
-    "gives focus to the new sub-project's sidebar row after a create from %s",
-    async (_, opener) => {
+    "gives focus to the new sub-project's sidebar row once the server's list holds it, after a create from %s",
+    async (where, opener) => {
       await boot()
-      await press(await opener())
+      const button = await opener()
+      await press(button)
       await finish(true)
-      const row = await find('Docs', document.querySelector('aside') ?? document)
-      expect(document.activeElement).toBe(row)
-      // the row stays as App moves into the saved sub-project
+      // the tree shows the sub-project only once the server's list holds
+      // it, so the dialog gave focus back to its opener, where it stays
+      expect(treeRow()).toBeUndefined()
+      if (where === "the sidebar's Add sub-project") expect(document.activeElement).toBe(button)
       await save()
+      const row = await waitFor(treeRow, "Docs's row")
+      // App moved into the saved sub-project, and its row took focus
       expect(row.getAttribute('aria-current')).toBe('page')
       expect(document.activeElement).toBe(row)
     },
   )
 
-  it("gives focus to the project's sidebar row when the server refuses the sub-project", async () => {
+  it('keeps focus on Add sub-project when the server refuses the sub-project', async () => {
     await boot()
-    await press(await find('Add sub-project'))
+    const add = await find('Add sub-project')
+    await press(add)
     await finish(true)
-    const row = await find('Docs', document.querySelector('aside') ?? document)
-    expect(document.activeElement).toBe(row)
+    expect(document.activeElement).toBe(add)
     await act(async () => refused())
     await settle()
-    expect(row.isConnected).toBe(false)
-    expect(document.activeElement).toBe(
-      document.querySelector('aside [data-project-row="plan"] button'),
-    )
+    // the tree never showed the refused sub-project, and focus stays on
+    // its opener, which the refusal leaves in place
+    expect(treeRow()).toBeUndefined()
+    expect(add.isConnected).toBe(true)
+    expect(document.activeElement).toBe(add)
   })
 
   it("gives focus to the phone header's New task after a create from the Roadmap", async () => {
@@ -340,7 +401,7 @@ describe('New sub-project', { timeout: 30_000 }, () => {
       (snap) =>
         snap.projects.push({ ...snap.projects[0], id: 'ops', key: 'OPS', num: 3, name: 'Ops' }),
       (copy) => {
-        copy.projects = copy.projects.filter((p) => p.id !== 'ops')
+        copy.projects = copy.projects.filter((p) => p.id !== 'ops' && p.parent_id !== 'ops')
       },
     )
     const row = await waitFor(
@@ -661,4 +722,71 @@ describe('Milestones', { timeout: 30_000 }, () => {
       )
     },
   )
+})
+
+describe("the sidebar's tree across Settings", { timeout: 30_000 }, () => {
+  it('keeps its rows hidden while Settings shows, reads again on return, and takes no focus for a create made there', async () => {
+    await boot()
+    const row = await waitFor(
+      () => document.querySelector<HTMLElement>('aside [data-project-row="plan"]'),
+      "Plan's row",
+    )
+    const tree = () => document.querySelector<HTMLElement>('aside [data-sidebar-projects]')
+    const opened = () => navReads.filter((r) => r.open)
+    expect(opened().map((r) => r.name)).toEqual(['projectNav:page', 'projectNav:children'])
+    // Settings › Projects, from the rail
+    await press(await find('Settings'))
+    await press(
+      await waitFor(
+        () => document.querySelector<HTMLElement>('[data-settings-item="projects"]'),
+        'Projects',
+      ),
+    )
+    const list = await waitFor(() => document.querySelector('[data-settings-projects]'), 'the list')
+    // the tree stays, hidden with the workspace and out of use, its reads
+    // stopped
+    expect(row.isConnected).toBe(true)
+    expect(row.closest('[data-hidden-view]')).not.toBeNull()
+    expect(opened()).toEqual([])
+    // a sub-project made there takes the focus of Settings' own new row
+    await press(await find('Plan', list))
+    await press(await find('Add sub-project'))
+    await finish(true)
+    await save()
+    const made = await waitFor(
+      () =>
+        [
+          ...document.querySelectorAll<HTMLElement>(
+            '[data-settings-projects] [data-subproject-row] button',
+          ),
+        ].find((button) => button.textContent === 'Docs'),
+      "Settings' Docs row",
+    )
+    expect(document.activeElement).toBe(made)
+    // back in the workspace the tree shows what it held at once and reads
+    // the same lists again, refreshing until they answer
+    holdNav = true
+    await press(await find('Back'))
+    expect(document.querySelector('[data-settings-projects]')).toBeNull()
+    expect(row.isConnected).toBe(true)
+    expect(row.closest('[data-hidden-view]')).toBeNull()
+    expect(tree()?.dataset.sidebarProjectsState).toBe('refreshing')
+    await act(async () => {
+      for (const read of opened())
+        answerProjectNav(server, read.name as never, read.args, read.next, read.fail)
+    })
+    await settle()
+    expect(tree()?.dataset.sidebarProjectsState).toBe('ok')
+    // the create made in Settings moved App into Docs, whose row shows and
+    // lights, and takes no focus
+    const docs = await waitFor(
+      () =>
+        [...document.querySelectorAll<HTMLElement>('aside [data-subproject-row] > button')].find(
+          (button) => button.textContent === 'Docs',
+        ),
+      "the tree's Docs row",
+    )
+    expect(docs.getAttribute('aria-current')).toBe('page')
+    expect(document.activeElement).not.toBe(docs)
+  })
 })

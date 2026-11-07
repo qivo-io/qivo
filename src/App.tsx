@@ -12,7 +12,6 @@ import {
 import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import { DropdownChevron } from '@/components/ui/select'
-import { HoverTooltip } from '@/components/ui/tooltip'
 import { useInputIdle } from '@/lib/inputIdle'
 import {
   KEEP_IDLE_MS,
@@ -24,13 +23,13 @@ import {
   showsScope,
   withoutPage,
 } from '@/lib/keptPages'
-import { cn } from '@/lib/utils'
 import { BillingNotice } from './components/BillingNotice'
-import { ViewKeeper } from './components/KeptView'
+import { KeptInPlace, ViewKeeper } from './components/KeptView'
 import { MobileHeader, MobileNavigation, MobileTaskList } from './components/MobileWorkspace'
-import { navRow, navRowDiv } from './components/navRow'
+import { navRow } from './components/navRow'
 import { ProjectDirectory } from './components/ProjectDirectory'
-import { Icon, MenuItem, Popover, ProjectName, Seg } from './components/qivo'
+import { Icon, MenuItem, Popover, Seg } from './components/qivo'
+import { type FocusRow, SidebarProjects } from './components/SidebarProjects'
 import { TasksLoadingBar } from './components/TasksLoading'
 import { ViewBoundary } from './components/ViewBoundary'
 import { ViewFilters } from './components/viewFilters'
@@ -53,7 +52,6 @@ import { announce } from './lib/announce'
 import { closedBy, dropRefusedTask } from './lib/closingMoves'
 import { floatSlot } from './lib/floatStack'
 import { restoreFocus } from './lib/focusVisibility'
-import { menuTrigger } from './lib/focusWhenGone'
 import { inboxBadge } from './lib/inboxBadge'
 import { isLandscapeRoadmapOpen } from './lib/landscape'
 import { createUnsentScope, type UnsentScope, UnsentScopeContext } from './lib/leaveGuard'
@@ -145,8 +143,27 @@ let toastSeq = 0
 /* ---------- sidebar ---------- */
 /* Navigation rows share components/navRow.ts with Settings. */
 
-function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen, projectsOpen }) {
-  const scopeProj = P.project(scope)
+/** The desktop's rail. While `hidden`, as while Settings shows, it stays
+    mounted and inactive (KeptInPlace), so the project tree keeps its rows
+    and its place and reads again on return. `focusRow` is App's request to
+    focus a project's row once the tree shows it. */
+function Sidebar({
+  scope,
+  actions,
+  inboxOpen,
+  syncOpen,
+  projectsOpen,
+  hidden,
+  focusRow,
+}: {
+  scope: string
+  actions: Record<string, (...args: unknown[]) => void>
+  inboxOpen: boolean
+  syncOpen: boolean
+  projectsOpen: boolean
+  hidden: boolean
+  focusRow: FocusRow | null
+}) {
   // "My view" is a scope and lights up like a project row. "All projects"
   // opens the project directory, a page, and lights while it shows; it also
   // lights for the All projects scope the old paths still reach (the boot
@@ -155,19 +172,11 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen, projectsOpen }
   // where the person is. The inbox, which owns the screen, outranks every
   // one of them. Team sync is a page with a row of its own: while it is open
   // that row is the only lit one, and the scope underneath waits unlit for
-  // its return, as it does under the directory.
+  // its return, as it does under the directory. A row of the project tree
+  // (components/SidebarProjects.tsx) lights by scopeOn.
   const allOn = !inboxOpen && !syncOpen && (projectsOpen || P.isAllScope(scope))
   const mineOn = !inboxOpen && !syncOpen && !projectsOpen && P.isMineScope(scope)
   const scopeOn = (id: string) => !syncOpen && !projectsOpen && scope === id
-  const scopeOwner = scopeProj
-    ? scopeProj.type === 'meta'
-      ? scopeProj.id
-      : scopeProj.parent
-    : null
-  // flat navigation (0078): every project in the organization this user can
-  // see, in one list — no workspace silo and no switcher above it
-  const metas = P.visibleProjects()
-  const canCreateProject = P.canCreateProject()
   /* No rule down the rail's right edge (deviation #63): --chrome is darker
      than --bg, so the rail's own value separates it from the canvas. */
   return (
@@ -175,353 +184,146 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen, projectsOpen }
       aria-label="Workspace navigation"
       className="planner-sidebar [width:var(--sidebar-w)] [flex-shrink:0] [background:var(--chrome)] [display:flex] [flex-direction:column] [height:100vh]"
     >
-      <div className="planner-navigation">
-        {/* The same "Qivo" wordmark as the website header. */}
-        <div className="planner-brand [padding:20px_20px_0]">
-          <span className="wordmark [font-size:27px] [line-height:1]">Qivo</span>
-        </div>
-        {/* Home organization identity. A login without one can create its own
+      <KeptInPlace shown={!hidden}>
+        <div className="planner-navigation">
+          {/* The same "Qivo" wordmark as the website header. */}
+          <div className="planner-brand [padding:20px_20px_0]">
+            <span className="wordmark [font-size:27px] [line-height:1]">Qivo</span>
+          </div>
+          {/* Home organization identity. A login without one can create its own
             while the server would (P.orgCreate), not while an organization
             that deactivated it, or one being deleted, holds its home seat. */}
-        <div className="planner-org [padding:16px_12px_8px]">
-          {P.homeOrg ? (
-            <div
-              data-org-well
-              className="[display:flex] [align-items:center] [padding:0_8px] [min-height:32px]"
-            >
-              <div className="[font-weight:600] [font-size:var(--fs-base)] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
-                {P.org.name}
-              </div>
-            </div>
-          ) : (
-            P.orgCreate === 'now' && (
-              // a button, so the keyboard reaches it and it reads as one. The
-              // resets after the well's own classes keep its look
-              <Button
-                type="button"
-                variant="unstyled"
+          <div className="planner-org [padding:16px_12px_8px]">
+            {P.homeOrg ? (
+              <div
                 data-org-well
-                data-org-create
-                onClick={(e) => {
-                  const opener = e.currentTarget
-                  // the button leaves once the organization exists, and the
-                  // rail's New project comes, as its first admin can create one
-                  actions.createOrg(() =>
-                    opener.isConnected
-                      ? null
-                      : (document.querySelector<HTMLElement>('aside [aria-label="New project"]') ??
-                        document.querySelector<HTMLElement>('aside [data-mine-nav]')),
-                  )
-                }}
-                className="[display:flex] [align-items:center] [gap:8px] [padding:0_8px] [min-height:32px] [border-radius:var(--r-md)] [cursor:pointer] [color:var(--text-3)] [transition:background-color_var(--dur-fast)_var(--ease-out)] w-full border-0 bg-transparent text-left"
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = 'var(--hover)'
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'transparent'
-                }}
+                className="[display:flex] [align-items:center] [padding:0_8px] [min-height:32px]"
               >
-                <Icon name="plus" size={16} />
-                <span className="[font-weight:600] [font-size:var(--fs-base)] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
-                  Create your organization…
-                </span>
-              </Button>
-            )
-          )}
-        </div>
+                <div className="[font-weight:600] [font-size:var(--fs-base)] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
+                  {P.org.name}
+                </div>
+              </div>
+            ) : (
+              P.orgCreate === 'now' && (
+                // a button, so the keyboard reaches it and it reads as one. The
+                // resets after the well's own classes keep its look
+                <Button
+                  type="button"
+                  variant="unstyled"
+                  data-org-well
+                  data-org-create
+                  onClick={(e) => {
+                    const opener = e.currentTarget
+                    // the button leaves once the organization exists, and the
+                    // rail's New project comes, as its first admin can create one
+                    actions.createOrg(() =>
+                      opener.isConnected
+                        ? null
+                        : (document.querySelector<HTMLElement>(
+                            'aside [aria-label="New project"]',
+                          ) ?? document.querySelector<HTMLElement>('aside [data-mine-nav]')),
+                    )
+                  }}
+                  className="[display:flex] [align-items:center] [gap:8px] [padding:0_8px] [min-height:32px] [border-radius:var(--r-md)] [cursor:pointer] [color:var(--text-3)] [transition:background-color_var(--dur-fast)_var(--ease-out)] w-full border-0 bg-transparent text-left"
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'var(--hover)'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'transparent'
+                  }}
+                >
+                  <Icon name="plus" size={16} />
+                  <span className="[font-weight:600] [font-size:var(--fs-base)] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
+                    Create your organization…
+                  </span>
+                </Button>
+              )
+            )}
+          </div>
 
-        {/* search → the search palette. Search only: it lists no commands and
+          {/* search → the search palette. Search only: it lists no commands and
           no standing suggestions, so this is the one thing the box does */}
-        <div className="[padding:0_20px_8px]">
-          <Button
-            type="button"
-            onClick={actions.openPalette}
-            data-sidebar-search
-            className="[display:flex] [align-items:center] [gap:8px] h-control [width:100%] [padding:0_8px] [background:transparent] [border:1px_solid_var(--border)] [border-radius:var(--r-md)] [color:var(--text-3)] [font-size:var(--fs-sm)] [cursor:pointer] [transition:border-color_var(--dur-fast)_var(--ease-out),_color_var(--dur-fast)_var(--ease-out)]"
-            onMouseEnter={(e) => {
-              e.currentTarget.style.borderColor = 'var(--border-strong)'
-              e.currentTarget.style.color = 'var(--text-2)'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.borderColor = 'var(--border)'
-              e.currentTarget.style.color = 'var(--text-3)'
-            }}
-            variant="unstyled"
-          >
-            <Icon name="search" size={16} /> Search
-          </Button>
-        </div>
+          <div className="[padding:0_20px_8px]">
+            <Button
+              type="button"
+              onClick={actions.openPalette}
+              data-sidebar-search
+              className="[display:flex] [align-items:center] [gap:8px] h-control [width:100%] [padding:0_8px] [background:transparent] [border:1px_solid_var(--border)] [border-radius:var(--r-md)] [color:var(--text-3)] [font-size:var(--fs-sm)] [cursor:pointer] [transition:border-color_var(--dur-fast)_var(--ease-out),_color_var(--dur-fast)_var(--ease-out)]"
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = 'var(--border-strong)'
+                e.currentTarget.style.color = 'var(--text-2)'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'var(--border)'
+                e.currentTarget.style.color = 'var(--text-3)'
+              }}
+              variant="unstyled"
+            >
+              <Icon name="search" size={16} /> Search
+            </Button>
+          </div>
 
-        {/* My view (deviation #49): the three views across every project,
+          {/* My view (deviation #49): the three views across every project,
           narrowed to the tasks assigned to ME on any seat I hold (0081). The
           first row because it is the personal surface (the inbox, the other
           one, is the top bar's first tab); All projects follows it. */}
-        <div className="[padding:0_12px_4px]">
-          <Button
-            variant="quiet"
-            type="button"
-            aria-current={mineOn ? 'page' : undefined}
-            data-on={mineOn ? '' : undefined}
-            data-mine-nav
-            onClick={() => actions.openMine()}
-            className={navRow}
-          >
-            <Icon name="user" size={16} />
-            <span>My view</span>
-          </Button>
-        </div>
-
-        {/* All projects (deviation #47) opens the project directory, every
-          project this login can reach by its own access, home organization
-          and guest seats alike, its favorites first. It sits above the
-          per-project list because it lists them all. */}
-        <div className="[padding:0_12px_4px]">
-          <Button
-            variant="quiet"
-            type="button"
-            aria-current={allOn ? 'page' : undefined}
-            data-on={allOn ? '' : undefined}
-            data-all-nav
-            onClick={() => actions.openProjects()}
-            className={navRow}
-          >
-            <Icon name="layers" size={16} />
-            <span>All projects</span>
-          </Button>
-        </div>
-
-        {/* Team sync (deviation #316): the meeting page, always
-          about the home organization, so a login without one has no row.
-          No hover help, like every row of this rail. */}
-        {P.homeOrg && (
           <div className="[padding:0_12px_4px]">
             <Button
               variant="quiet"
               type="button"
-              aria-current={syncOpen ? 'page' : undefined}
-              data-on={syncOpen ? '' : undefined}
-              data-sync-nav
-              onClick={() => actions.openSync()}
+              aria-current={mineOn ? 'page' : undefined}
+              data-on={mineOn ? '' : undefined}
+              data-mine-nav
+              onClick={() => actions.openMine()}
               className={navRow}
             >
-              <Icon name="people" size={16} />
-              <span>Team sync</span>
+              <Icon name="user" size={16} />
+              <span>My view</span>
             </Button>
           </div>
-        )}
 
-        <div className="planner-project-list min-h-0 flex-[0_1_auto] overflow-y-auto overscroll-contain [padding:4px_12px_0]">
-          <div className="[display:flex] [align-items:center] [gap:8px] [min-height:32px] [padding:8px_8px]">
-            <span className="[font-size:var(--fs-xs)] [font-weight:600] [color:var(--text-3)]">
-              Projects
-            </span>
-            <div className="[flex:1]" />
-            {canCreateProject && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="w-control-xs h-control-xs"
-                aria-label="New project"
-                onClick={() => actions.newProject({ kind: 'program' })}
-              >
-                <Icon name="plus" size={16} />
-              </Button>
-            )}
+          {/* All projects (deviation #47) opens the project directory, every
+          project this login can reach by its own access, home organization
+          and guest seats alike, its favorites first. It sits above the
+          per-project list because it lists them all. */}
+          <div className="[padding:0_12px_4px]">
+            <Button
+              variant="quiet"
+              type="button"
+              aria-current={allOn ? 'page' : undefined}
+              data-on={allOn ? '' : undefined}
+              data-all-nav
+              onClick={() => actions.openProjects()}
+              className={navRow}
+            >
+              <Icon name="layers" size={16} />
+              <span>All projects</span>
+            </Button>
           </div>
-          {metas.map((meta, i) => {
-            // Selecting a project or one of its children reveals this branch.
-            const isOpen = scopeOwner === meta.id
-            const subs = meta.children
-              .map((c) => P.project(c))
-              .filter((sp) => !!sp && P.canSee(sp.id))
-            // Blended list (0081): home-org projects first, then each foreign
-            // organization's granted projects under a header with its name.
-            // A guest is in exactly one project of that org, so the header is
-            // the only thing naming where the work lives.
-            const foreign = meta.org !== P.homeOrg
-            const prev = i > 0 ? metas[i - 1] : null
-            const header =
-              foreign && (!prev || prev.org !== meta.org)
-                ? P.orgs.find((o) => o.id === meta.org)?.name
-                : null
-            return (
-              <div key={meta.id} className="[margin-bottom:2px]">
-                {header && (
-                  <HoverTooltip content={`Shared with you by ${header}`}>
-                    <div
-                      data-org-header={meta.org}
-                      className="[display:flex] [align-items:center] [gap:8px] [padding:12px_8px_4px] [font-size:var(--fs-xs)] [font-weight:600] [color:var(--text-3)]"
-                    >
-                      <Icon name="people" size={12} />
-                      {header}
-                    </div>
-                  </HoverTooltip>
-                )}
-                <div
-                  data-project-row={meta.id}
-                  data-on={scopeOn(meta.id) ? '' : undefined}
-                  className={cn(navRowDiv, 'hoverrow gap-1 font-semibold')}
-                  onClick={() => setScope(meta.id)}
-                >
-                  <Button
-                    variant="unstyled"
-                    type="button"
-                    aria-current={scopeOn(meta.id) ? 'page' : undefined}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setScope(meta.id)
-                    }}
-                    className="min-w-0 flex-1 truncate border-0 bg-transparent p-0 text-left"
-                  >
-                    <ProjectName project={meta} />
-                  </Button>
-                  {/* Keep one trailing action target so ordinary project names
-                    fit the rail. The menu retains New sub-project for leads. */}
-                  <Popover
-                    width={196}
-                    align="right"
-                    button={(t) => (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="w-control-xs h-control-xs"
-                        aria-label="Project actions"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          t()
-                        }}
-                      >
-                        <Icon name="more" size={16} />
-                      </Button>
-                    )}
-                  >
-                    {(close) => (
-                      <>
-                        {P.levelOn(meta.id) === 'lead' && (
-                          <MenuItem
-                            onClick={(e) => {
-                              const trigger = menuTrigger(e.currentTarget)
-                              close()
-                              actions.newProject({ parent: meta.id }, () => trigger)
-                            }}
-                          >
-                            <Icon name="plus" size={16} />
-                            New sub-project…
-                          </MenuItem>
-                        )}
-                        <MenuItem
-                          onClick={() => {
-                            close()
-                            actions.openSettings(`project:${meta.id}`)
-                          }}
-                        >
-                          <Icon name="cog" size={16} />
-                          Project settings
-                        </MenuItem>
-                        <MenuItem
-                          onClick={() => {
-                            close()
-                            actions.openArchivedTasks(meta.id)
-                          }}
-                        >
-                          <Icon name="inbox" size={14} />
-                          Archived tasks
-                        </MenuItem>
-                      </>
-                    )}
-                  </Popover>
-                </div>
-                {isOpen &&
-                  subs.map((sp) => (
-                    // Compact branch lines show the hierarchy beside the names.
-                    // ONE SELECTION IDIOM in the rail: a selected sub-project is
-                    // the same LIFTED TILE as a selected project row, the inbox
-                    // and the two sentinels — --surface-1 under --qivo-shadow-card.
-                    // Depth is carried by this indent and the 600 weight, not by a
-                    // second colour language, which is what frees --accent-soft
-                    // from doing six unrelated jobs at once.
-                    <div
-                      key={sp.id}
-                      data-subproject-row={sp.id}
-                      data-on={scopeOn(sp.id) ? '' : undefined}
-                      onClick={() => setScope(sp.id)}
-                      className={cn(navRowDiv, 'planner-subproject relative pl-6')}
-                    >
-                      <Button
-                        variant="unstyled"
-                        type="button"
-                        aria-current={scopeOn(sp.id) ? 'page' : undefined}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setScope(sp.id)
-                        }}
-                        className="min-w-0 flex-1 truncate border-0 bg-transparent p-0 text-left"
-                      >
-                        <ProjectName project={sp} wrap />
-                      </Button>
-                      <Popover
-                        width={206}
-                        align="right"
-                        button={(t) => (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="w-control-xs h-control-xs"
-                            aria-label="Sub-project actions"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              t()
-                            }}
-                          >
-                            <Icon name="more" size={16} />
-                          </Button>
-                        )}
-                      >
-                        {(close) => (
-                          <>
-                            <MenuItem
-                              onClick={() => {
-                                close()
-                                actions.openSettings(`project:${sp.id}`)
-                              }}
-                            >
-                              <Icon name="cog" size={16} />
-                              Sub-project settings
-                            </MenuItem>
-                            <MenuItem
-                              onClick={() => {
-                                close()
-                                actions.openArchivedTasks(sp.id)
-                              }}
-                            >
-                              <Icon name="inbox" size={14} />
-                              Archived tasks
-                            </MenuItem>
-                          </>
-                        )}
-                      </Popover>
-                    </div>
-                  ))}
-                {isOpen && subs.length === 0 && P.levelOn(meta.id) === 'lead' && (
-                  <Button
-                    type="button"
-                    onClick={() => actions.newProject({ parent: meta.id })}
-                    variant="ghost"
-                    className="[margin:8px_0_8px_24px] h-control-sm [font-size:var(--fs-sm)] [color:var(--text-3)]"
-                  >
-                    <Icon name="plus" size={16} />
-                    Add sub-project
-                  </Button>
-                )}
-              </div>
-            )
-          })}
-        </div>
 
-        {/* Settings follows the project list with the same section gap as the
+          {/* Team sync (deviation #316): the meeting page, always
+          about the home organization, so a login without one has no row.
+          No hover help, like every row of this rail. */}
+          {P.homeOrg && (
+            <div className="[padding:0_12px_4px]">
+              <Button
+                variant="quiet"
+                type="button"
+                aria-current={syncOpen ? 'page' : undefined}
+                data-on={syncOpen ? '' : undefined}
+                data-sync-nav
+                onClick={() => actions.openSync()}
+                className={navRow}
+              >
+                <Icon name="people" size={16} />
+                <span>Team sync</span>
+              </Button>
+            </div>
+          )}
+
+          <SidebarProjects scope={scope} lit={scopeOn} actions={actions} focusRow={focusRow} />
+
+          {/* Settings follows the project list with the same section gap as the
           brand and organization. The list shrinks to scroll only when needed;
           the footer stays outside it, without an expanding empty space.
           Lands on your own preferences; its own nav reaches the organization,
@@ -529,19 +331,20 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen, projectsOpen }
           top bar no longer carries a per-project gear. (The Archive that sat
           here is Settings › Archived tasks, which a project row's "…" menu
           opens on that project.) */}
-        <div className="planner-sidebar-footer shrink-0 px-3 pb-3 [padding-top:var(--sidebar-section-gap)]">
-          <Button
-            variant="ghost"
-            type="button"
-            data-settings-nav
-            onClick={() => actions.openSettings()}
-            className="w-full justify-start border-0 px-2 font-normal text-text-2 shadow-none has-[>svg]:px-2"
-          >
-            <Icon name="cog" size={16} />
-            Settings
-          </Button>
+          <div className="planner-sidebar-footer shrink-0 px-3 pb-3 [padding-top:var(--sidebar-section-gap)]">
+            <Button
+              variant="ghost"
+              type="button"
+              data-settings-nav
+              onClick={() => actions.openSettings()}
+              className="w-full justify-start border-0 px-2 font-normal text-text-2 shadow-none has-[>svg]:px-2"
+            >
+              <Icon name="cog" size={16} />
+              Settings
+            </Button>
+          </div>
         </div>
-      </div>
+      </KeptInPlace>
     </aside>
   )
 }
@@ -989,6 +792,13 @@ function App() {
      move hides, such as the Projects page with its New project or a row's
      menu button. A kept view hidden behind another page takes no focus. */
   const focusAfterMove = useRef<(() => HTMLElement | null) | null>(null)
+  /* The sidebar's request to focus a project's row once its tree shows it
+     (components/SidebarProjects.tsx), which the server's list brings only
+     after the save. It is never made while Settings hides the tree. */
+  const [focusRow, setFocusRow] = useState<FocusRow | null>(null)
+  const askFocusRow = (id: string) => {
+    if (!hereRef.current.settingsPage) setFocusRow((was) => ({ id, n: (was?.n ?? 0) + 1 }))
+  }
   useLayoutEffect(() => {
     const target = focusAfterMove.current
     focusAfterMove.current = null
@@ -1661,11 +1471,16 @@ function App() {
      the sidebar or in Settings › Projects, else the phone header's New
      task, or its Project actions while it holds no sub-project for a task.
      The sidebar and the header stay as App moves into a project once it is
-     saved, while the views and the Projects page go behind it. */
+     saved, while the views and the Projects page go behind it. A row out of
+     use, such as the sidebar's while Settings hides it, never counts. The
+     sidebar shows a new project once the server's list holds it, which its
+     focus request (focusRow) waits for. */
   const projectTarget = (id: string) =>
-    document.querySelector<HTMLElement>(
-      `[data-project-row="${id}"] button, [data-subproject-row="${id}"] button`,
-    ) ??
+    [
+      ...document.querySelectorAll<HTMLElement>(
+        `[data-project-row="${id}"] button, [data-subproject-row="${id}"] button`,
+      ),
+    ].find((control) => !control.closest(OUT_OF_USE)) ??
     document.querySelector<HTMLElement>('[data-mobile-new-task]') ??
     document.querySelector<HTMLElement>('[data-mobile-project-actions]')
   /* Where focus goes as New sub-project closes after a create, for an
@@ -2047,13 +1862,15 @@ function App() {
     navOpenIssue(key)
     return true
   }
-  // The new project shows in the sidebar at once, but the toast, the starter
-  // task and the move into the project wait for the server. A refused create
-  // must not leave the user inside a project that then disappears. `shown`
-  // is the organization New sub-project's parent check named, which the
-  // create goes to (P.addProject); under a parent the workspace does not
-  // hold nothing paints, and App moves into the new sub-project, and makes
-  // its starter task, only once the workspace holds it.
+  // The sidebar's tree shows the new project once the server's list holds
+  // it, which usually lands with the save's answer, and the toast, the
+  // starter task and the move into the project wait for the server too. A
+  // refused create must not leave the user inside a project that then
+  // disappears. `shown` is the organization New sub-project's parent check
+  // named, which the create goes to (P.addProject); under a parent the
+  // workspace does not hold nothing paints, and App moves into the new
+  // sub-project, and makes its starter task, only once the workspace holds
+  // it.
   const createProject = (
     p: NewProjectInput,
     { withStarter, shown }: { withStarter: boolean; shown?: ProjectShown },
@@ -2104,13 +1921,19 @@ function App() {
         setProjectsOpen(false)
         setSync(null)
         focusAfterMove.current = () => projectTarget(id)
+        // the tree's row may come a commit later than the move
+        askFocusRow(id)
       },
       () => {
         answered(false)
-        // the refusal takes away the sub-project's row, which the dialog gave
-        // focus to as it closed (afterNewSubProject), and its parent stays
+        // a refusal leaves the dialog's opener in place, which keeps focus;
+        // where the opener went, focus that is nowhere goes to the parent's
+        // row
         const { parent } = p
-        if (parent) focusAfterMove.current = () => projectTarget(parent)
+        if (parent) {
+          focusAfterMove.current = () => projectTarget(parent)
+          askFocusRow(parent)
+        }
       },
       shown,
     )
@@ -2524,22 +2347,27 @@ function App() {
           )
         }
         navigation={
-          settingsPage ? null : mobile ? (
-            <MobileNavigation
-              scope={scope}
-              inboxOpen={inboxOpen}
-              projectsOpen={projectsOpen}
-              syncOpen={!!sync}
-              actions={actions}
-            />
+          // the desktop's rail stays while Settings shows, hidden, so the
+          // project tree keeps its rows and its place
+          mobile ? (
+            settingsPage ? null : (
+              <MobileNavigation
+                scope={scope}
+                inboxOpen={inboxOpen}
+                projectsOpen={projectsOpen}
+                syncOpen={!!sync}
+                actions={actions}
+              />
+            )
           ) : (
             <Sidebar
               scope={scope}
-              setScope={navScope}
               actions={actions}
               inboxOpen={inboxOpen}
               syncOpen={!!sync}
               projectsOpen={projectsOpen}
+              hidden={!!settingsPage}
+              focusRow={focusRow}
             />
           )
         }

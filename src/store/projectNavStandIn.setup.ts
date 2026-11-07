@@ -1,7 +1,8 @@
 /* A stand-in for the project navigation reads (convex/projectNav.ts page,
    children, search and resolve) that answers from a workspace the app
-   holds, for the jsdom tests of the shared project picker and its callers
-   and for the browser benchmark's server (scripts/perf/server.mjs), as
+   holds, for the jsdom tests of the shared project picker and its callers,
+   the All projects directory and the sidebar's project tree, and for the
+   browser benchmark's server (scripts/perf/server.mjs), as
    store/labelPagesStandIn.setup.ts answers Settings › Labels.
 
    It applies the reads' rule (convex/model/projectNavReads.ts) to the

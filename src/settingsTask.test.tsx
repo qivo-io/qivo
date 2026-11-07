@@ -194,6 +194,12 @@ async function boot() {
     ),
   )
   await waitFor(() => document.querySelector('[data-archive-row="arch-42"]'), 'the rows')
+  // the closed picker gives focus back to its button in a task of its own,
+  // which lands before a person's next press
+  await waitFor(
+    () => (document.activeElement === find('[data-archive-project]') ? true : null),
+    "the picker's focus",
+  )
   return { address: location.pathname }
 }
 

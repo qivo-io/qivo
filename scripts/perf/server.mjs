@@ -78,8 +78,9 @@
 //                        so the cap note shows) and health-error (its read
 //                        fails); several joined by commas
 //   projectnav           a state the navigation reads of the project
-//                        picker and the All projects directory
-//                        (projectNav.page, children, search and resolve)
+//                        picker, the All projects directory and the
+//                        sidebar's project tree (projectNav.page,
+//                        children, search and resolve)
 //                        answer whatever the workspace says, for
 //                        screenshots of states a seeded backend cannot
 //                        reach: not-ready (every list not ready),
@@ -87,8 +88,9 @@
 //                        refusal), stopped (an open batch stops after two
 //                        projects looked at), small (batches of five, so
 //                        programs=45 reaches the eight batches a list
-//                        gathers at most and nine pages of the
-//                        directory), error (every read fails) and
+//                        gathers at most, nine pages of the directory and
+//                        the sidebar tree's bound line at 40 rows), error
+//                        (every read fails) and
 //                        favorites (the first two programs starred to
 //                        begin with) and empty (projectNav.page, search
 //                        and children list nothing, as for someone who
