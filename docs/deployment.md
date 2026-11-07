@@ -419,7 +419,15 @@ searching **Who counts toward your bill** for the run tag
 shows the deployment's usage aggregates are complete and that the page
 lists and searches the run's own accounts (`billing.apiAccounts` and
 `billing.accountList`). Against a backend from before the release after
-v0.1.144 that step fails. Back in the run's task window it attaches a small
+v0.1.144 that step fails. It then opens **MCP access** and searches
+**Connected apps** and **Personal access tokens** for its run tag, where
+the deployment's batches (`connectedApps.list` and `tokens.personalTokens`)
+list the run's two connections and two tokens alone, newest first, and a
+token search that matches nothing says so (`ui/mcp-access-lists`). A list
+shows its search only once it holds more than 25 rows, so on a deployment
+with fewer the step reads the run's rows from the list's first batch and
+asks the store's read for the search with no match. Against a backend from
+before the release after v0.1.158 that step fails. Back in the run's task window it attaches a small
 file, which must go on an upload ticket: its `POST` must go to
 `/attachment-uploads/` on the API origin and answer 200, the window must list
 the file and its download must match the bytes, and the step deletes it again
@@ -785,6 +793,12 @@ and its usage through `billing.currentUsage`, and the app before v0.1.135
 its usage through `billing.usageReport`. The release after v0.1.150 removed
 all three, so after such a rollback Billing shows the error of the missing
 function in place of its details and says "Usage could not be refreshed".
+
+The app before v0.1.147 reads an agent's keys on **Settings → Users**
+through `tokens.listAgentKeys`, which the release after v0.1.158 removed, so
+after such a rollback every agent's key line reads "no key, cannot sign in"
+and its key panel says it has no keys, though the keys still work;
+**Organization → API access** lists them.
 
 The app before v0.1.18 reads an activity list that the snapshot no longer
 sends, so it cannot load at all. Never return the app or the demo to a
@@ -1443,11 +1457,11 @@ app from it, against a backend before it, says on Users, on a user's page
 and on the creators line that it could not load them, also in a tab that
 was open when the backend went back, until the backend rolls forward. From
 that release on, never return the backend to a commit before it; roll
-forward instead. Returning the app alone to an earlier release is safe,
-because that app reads the workspace's roster and `tokens.listAgentKeys`,
-which this release keeps, deprecated, for it, and `invites.deliveries`
-without `profile_ids` answers as before. A later release removes
-`tokens.listAgentKeys` and adds it to the Instant Rollback list above.
+forward instead. Returning the app alone to an earlier release was safe
+while the backend kept `tokens.listAgentKeys`, which that app reads with the
+workspace's roster, and `invites.deliveries` without `profile_ids` answers
+as before. The release after v0.1.158 removed `tokens.listAgentKeys`, so it
+is on the Instant Rollback list above.
 The release adds the index `agent_keys.by_profile_created`, through which
 `tokens.agentKeys` reads an agent's newest keys by `created_at`, and which
 Convex builds at deploy with no backfill. There is no other schema change
@@ -1884,6 +1898,29 @@ Periods recorded afterwards are daily, and periods already open keep their
 basis. From the first daily period on, this release is the backend's floor.
 Removing the variable makes later periods sampled at their start again and
 leaves open daily periods daily.
+
+From the release after v0.1.158, **Settings → Your preferences → MCP
+access** lists its connected apps from `connectedApps.list` and its personal
+access tokens from `tokens.personalTokens`, 25 at a time each, newest first,
+each with a search and **Load more**, read once on opening and again from
+the first batch after a create, revoke or delete, never subscribed, instead
+of `oauthConnections.list` and `tokens.listMcpTokens`, which answer every
+row at once. That release first ships these reads, so it is the backend's
+floor for its app, a new floor the floors above do not hold. An app from
+it, against a backend before it, says on MCP access "Could not load
+connected apps" and "Couldn't load MCP tokens" and offers no **New token**,
+also in a tab that was open when the backend went back, until the backend
+rolls forward. From that release on, never return the backend to a commit
+before it; roll forward instead. Returning the app alone to an earlier
+release is safe for these lists, because that app reads
+`oauthConnections.list` and `tokens.listMcpTokens`, which this release
+keeps, deprecated and unchanged, for it; a later release removes them and
+adds them to the Instant Rollback list above. The release removes
+`tokens.listAgentKeys`, which no app has read since v0.1.147 (`cd7ff803`),
+so an app before v0.1.147 shows wrong key lines on Users, as the Instant
+Rollback list above says. It adds the index `mcp_tokens.by_profile_created`,
+which Convex builds at deploy with no backfill. There is no other schema
+change and no release step.
 
 ## Node.js version
 
