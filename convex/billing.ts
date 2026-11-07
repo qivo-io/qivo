@@ -56,9 +56,9 @@ export const details = orgQuery({
  * Billing's usage figures for an organization admin (model/billing.ts
  * usageFiguresOf): the bucket API calls are recorded in now, its calls,
  * the allowances and the charges recorded, current storage and the
- * period's storage sample, with no account. Refused in the demo, to anyone
- * but an admin with an active seat, and while the organization's deletion
- * runs (orgQuery's loadMember).
+ * period's storage, its sample or its daily average, with no account.
+ * Refused in the demo, to anyone but an admin with an active seat, and
+ * while the organization's deletion runs (orgQuery's loadMember).
  *
  * The app reads it once on opening Billing and on each Refresh
  * (convex.query) and never subscribes to it, because API usage changes
@@ -67,14 +67,19 @@ export const details = orgQuery({
  * null while they are not complete, never 0 in their place. Current
  * storage is the organization's stored-byte totals, files in Deleted items
  * included until they are deleted for good, or null while the totals are
- * not complete, never 0. The sample is what the current paid period's
- * storage charge uses, the same totals as the period's sample read them,
- * normally when the period started, files in Deleted items included, with
- * when it read them (`sampled_storage_at`, null for a sample an earlier
- * release finished, which scanned the attachment rows and left those files
- * out). Both are null for any other bucket or while the sample has not
- * finished. Billing's API calls by account reads billing.apiAccounts for
- * the period_key this answers.
+ * not complete, never 0. `storage_basis` says how the current paid
+ * period's storage is charged. For a period sampled at its start the
+ * sample is what its storage charge uses, the same totals as the period's
+ * sample read them, normally when the period started, files in Deleted
+ * items included, with when it read them (`sampled_storage_at`, null for a
+ * sample an earlier release finished, which scanned the attachment rows
+ * and left those files out). Both are null for any other bucket, for a
+ * daily period, or while the sample has not finished. A daily period
+ * answers `storage_average` instead: the recorded average with its
+ * measured and estimated days, or while it is open the average so far,
+ * never 0 for a day not measured yet (lib/billingTypes.ts). Billing's API
+ * calls by account reads billing.apiAccounts for the period_key this
+ * answers.
  *
  * It picks the bucket by the clock when it runs (usagePeriod). Convex can
  * answer a read from its cache of an identical earlier one while nothing
@@ -85,10 +90,12 @@ export const details = orgQuery({
  * when the subscription has no billed seats (usageAllowance), the bucket's
  * billing events, at most one usage row and the month's shards or the
  * bucket's totals row, and two single reads, the storage totals row and
- * the period row. At 1,000 people without a subscription, so the roster is
- * walked, with 15 accounts of usage over 30 usage rows, it read about
- * 1,040 documents (the month's shards the accounts hash to vary), 28
- * index ranges and about 377 KB in
+ * the period row, and for an open daily period one range of the
+ * organization's samples of its days so far, at most 31 documents; no
+ * other period reads a sample. At 1,000 people without a subscription, so
+ * the roster is walked, with 15 accounts of usage over 30 usage rows, it
+ * read about 1,040 documents (the month's shards the accounts hash to
+ * vary), 28 index ranges and about 377 KB in
  * convex/tests/billingLists.test.ts ("reads at the design size"), without
  * the caller's seat check; with billed seats it reads no profile, and more
  * usage rows add no read.

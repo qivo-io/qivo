@@ -27,8 +27,10 @@ const USAGE: BillingUsageFigures = {
   calls: 42,
   included_calls: null,
   storage_bytes: 0,
+  storage_basis: null,
   sampled_storage_bytes: null,
   sampled_storage_at: null,
+  storage_average: null,
   included_storage_bytes: null,
   api_overage_cents: 0,
   storage_overage_cents: 0,
@@ -36,7 +38,7 @@ const USAGE: BillingUsageFigures = {
   delivery_unconfirmed: false,
 }
 
-/* A paid period of a plan, with its allowance. */
+/* A paid period of a plan, with its allowance, sampled at its start. */
 const PAID: BillingUsageFigures = {
   ...USAGE,
   period_kind: 'paid',
@@ -45,6 +47,7 @@ const PAID: BillingUsageFigures = {
   included_calls: 1000,
   included_storage_bytes: 5_000_000_000,
   waived: false,
+  storage_basis: 'start',
 }
 
 let container: HTMLDivElement

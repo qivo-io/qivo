@@ -128,23 +128,47 @@ export type BillingPeriodHead = {
  * stored-byte totals (model/storageTotals.ts), files in Deleted items
  * included until they are deleted for good, or null while the totals are
  * not complete, which the page shows as being counted too.
- * `sampled_storage_bytes` is what a paid period's sample measured, which
- * the period's storage charge uses. It is the totals when the sample read
- * them, files in Deleted items included, or null for any other bucket and
- * for a period whose sample has not finished. `sampled_storage_at` is when
- * the sample read them, normally within a second of the period's start. A
- * sample that waited, as while the totals were counted again, or that was
- * started again later measures storage when it runs, files stored during
- * the wait included. It is null without a sample and for one an earlier
- * release finished, which scanned the attachment rows of live tasks stored
- * before the period began and left the files in Deleted items out. The
- * answer holds no account; billing.apiAccounts lists the bucket's accounts
- * 25 at a time. */
+ * `storage_basis` says how a paid period's storage is charged: `start` on
+ * the sample at its start, `daily` on the average of its daily samples
+ * (convex/billingSync.ts finalizeStorage), and null for any other bucket
+ * and a paid period without a row. An answer from a backend before this
+ * field reads as `start`.
+ * `sampled_storage_bytes` is what a period's sample at its start measured,
+ * which its storage charge uses. It is the totals when the sample read
+ * them, files in Deleted items included, or null for any other bucket, a
+ * daily period, and a period whose sample has not finished.
+ * `sampled_storage_at` is when the sample read them, normally within a
+ * second of the period's start. A sample that waited, as while the totals
+ * were counted again, or that was started again later measures storage
+ * when it runs, files stored during the wait included. It is null without
+ * a sample and for one an earlier release finished, which scanned the
+ * attachment rows of live tasks stored before the period began and left
+ * the files in Deleted items out.
+ * `storage_average` is a daily period's, null for any other: `final` once
+ * the period is recorded, with the average its charge uses, or null for a
+ * period recorded without any storage measurement, which has no storage
+ * charge; before that, the average so far over its days up to today, null
+ * until one resolves. `days` is the period's days, `measured` those with
+ * their own sample, `estimated` those that copied another day's sample,
+ * of them `estimated_earlier` an earlier day's at the cutoff, the others
+ * the next measured day's. While the period is open a day with no later
+ * sample yet is in none of them and not in the average, never 0.
+ * The answer holds no account; billing.apiAccounts lists the bucket's
+ * accounts 25 at a time. */
 export type BillingUsageFigures = BillingPeriodHead & {
   calls: number | null
   storage_bytes: number | null
+  storage_basis: 'start' | 'daily' | null
   sampled_storage_bytes: number | null
   sampled_storage_at: string | null
+  storage_average: {
+    bytes: number | null
+    days: number
+    measured: number
+    estimated: number
+    estimated_earlier: number
+    final: boolean
+  } | null
 }
 
 /* One project of Billing's Storage by project list

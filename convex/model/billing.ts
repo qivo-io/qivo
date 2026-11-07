@@ -20,6 +20,7 @@ import { limitedText } from '../lib/limitRules'
 import { grouped, LIMITS, PLAN_CURRENCIES, PLAN_CURRENCY } from '../lib/limits'
 import { polarConfigured } from '../lib/polar'
 import { allowanceSeats, includedApiCalls, periodCalls, usagePeriod } from './billingUsage'
+import { utcDate } from './demoMetrics'
 import {
   CHECKOUT_DAYS,
   checkoutDeadline,
@@ -28,6 +29,7 @@ import {
   syncOrgRemoval,
 } from './orgRetention'
 import { newUuid } from './orgs'
+import { periodAverage, periodDays, type StorageDay, samplesOfDays } from './storageSamples'
 import { storageTotalsOf } from './storageTotals'
 
 export const GB = 1_000_000_000
@@ -329,24 +331,61 @@ export const openDailyPeriods = (ctx: QueryCtx, until: string) =>
 export const openDailyPeriodBy = (ctx: QueryCtx, until: string) =>
   openDailyPeriods(ctx, until).first()
 
-/** The storage sample of the paid period `head` for organization `orgId`,
- * whose subscription is `sub`, as its billing_periods row holds it
- * (billingSync.ts storageStep), found by the provider subscription id and
- * the period's start. It answers the bytes the period's storage charge
- * uses, the organization's stored-byte totals when the sample read them,
- * files in Deleted items included, and when it read them. Both are null
- * for a calendar month or a pending interval, a subscription without a
- * provider id, a period without a row or of another organization, and a
- * sample that is running or stopped. The time is null too for a sample an
- * earlier release finished, which measured the period's start. One read at
- * most. */
-async function sampledStorage(
+/* The parts of Billing's usage figures about the current paid period's
+ * storage. */
+type PeriodStorage = Pick<
+  BillingUsageFigures,
+  'sampled_storage_bytes' | 'sampled_storage_at' | 'storage_basis' | 'storage_average'
+>
+
+/* How the average answers a daily period's days: the resolved days split
+ * into measured and estimated, and how many estimates took an earlier
+ * day's reading at the cutoff. */
+function averageOf(
+  days: readonly StorageDay[],
+): Omit<NonNullable<BillingUsageFigures['storage_average']>, 'bytes' | 'days' | 'final'> {
+  const estimates = days.filter((day) => day.from !== undefined)
+  return {
+    measured: days.filter((day) => day.bytes !== undefined && day.from === undefined).length,
+    estimated: estimates.length,
+    estimated_earlier: estimates.filter((day) => (day.from ?? '') < day.day).length,
+  }
+}
+
+/** The storage of the paid period `head` for organization `orgId`, whose
+ * subscription is `sub`, as its billing_periods row holds it, found by the
+ * provider subscription id and the period's start. Everything is null for
+ * a calendar month or a pending interval, a subscription without a
+ * provider id, and a period without a row or of another organization.
+ *
+ * A period sampled at its start (billingSync.ts storageStep) answers
+ * storage_basis 'start' and its sample: the bytes the period's storage
+ * charge uses, the organization's stored-byte totals when the sample read
+ * them, files in Deleted items included, and when it read them. Both are
+ * null while the sample runs or after it stopped, and the time is null for
+ * a sample an earlier release finished, which measured the period's start.
+ * That is one read.
+ *
+ * A daily period (billingSync.ts finalizeStorage) answers storage_basis
+ * 'daily', both sample fields null, and its average. Once recorded, the
+ * average, null for one recorded as unavailable, and its days come from
+ * the row. While open, it is the average so far of its days up to today
+ * without the cutoff's fallback (model/storageSamples.ts periodAverage), so
+ * a day with no later reading yet, today's before its sample included, is
+ * left out, never 0, and that reads the organization's samples of those
+ * days, at most 31 more documents in one range. */
+async function periodStorage(
   ctx: QueryCtx,
   orgId: string,
   sub: Doc<'billing_subscriptions'> | null,
   head: Pick<BillingPeriodHead, 'period_kind' | 'period_key'>,
-): Promise<Pick<BillingUsageFigures, 'sampled_storage_bytes' | 'sampled_storage_at'>> {
-  const none = { sampled_storage_bytes: null, sampled_storage_at: null }
+): Promise<PeriodStorage> {
+  const none: PeriodStorage = {
+    sampled_storage_bytes: null,
+    sampled_storage_at: null,
+    storage_basis: null,
+    storage_average: null,
+  }
   const subscriptionId = sub?.polar_subscription_id
   if (head.period_kind !== 'paid' || !subscriptionId) return none
   const period = await ctx.db
@@ -355,10 +394,48 @@ async function sampledStorage(
       q.eq('subscription_id', subscriptionId).eq('period_start', head.period_key),
     )
     .unique()
-  if (period?.org_id !== orgId || period.storage_bytes === undefined) return none
+  if (period?.org_id !== orgId) return none
+  if (period.storage_basis !== 'daily') {
+    const sampled = period.storage_bytes !== undefined
+    return {
+      ...none,
+      storage_basis: 'start',
+      sampled_storage_bytes: period.storage_bytes ?? null,
+      sampled_storage_at: sampled ? (period.storage_sampled_at ?? null) : null,
+    }
+  }
+  const days = periodDays(period.period_start, period.period_end)
+  if (period.storage_finalized_at !== undefined) {
+    const recorded = period.storage_days ?? []
+    return {
+      ...none,
+      storage_basis: 'daily',
+      storage_average: {
+        bytes: period.storage_unavailable ? null : (period.storage_bytes ?? null),
+        days: period.storage_days?.length ?? days.length,
+        ...averageOf(recorded),
+        final: true,
+      },
+    }
+  }
+  const today = utcDate(Date.now())
+  const sofar = days.filter((day) => day <= today)
+  const readings =
+    sofar.length === 0
+      ? new Map<string, number>()
+      : await samplesOfDays(ctx, orgId, sofar[0], sofar[sofar.length - 1])
+  const average = periodAverage(sofar, readings, { final: false })
   return {
-    sampled_storage_bytes: period.storage_bytes,
-    sampled_storage_at: period.storage_sampled_at ?? null,
+    ...none,
+    storage_basis: 'daily',
+    storage_average: {
+      bytes: average.bytes,
+      days: days.length,
+      measured: average.measured,
+      estimated: average.estimated,
+      estimated_earlier: average.estimated_earlier,
+      final: false,
+    },
   }
 }
 
@@ -368,12 +445,14 @@ async function sampledStorage(
  * figure API access shows, or null while they are not complete, never 0
  * in their place, current storage from the stored-byte totals, files in
  * Deleted items included until they are deleted for good, or null while
- * they are not complete, and the bytes the current paid period's sample
- * measured from the same totals, normally at the period's start, with when
- * it measured them (sampledStorage).
+ * they are not complete, and the current paid period's storage basis with,
+ * for a period sampled at its start, the bytes its sample measured from
+ * the same totals, normally at the period's start, with when it measured
+ * them, or for a daily period its average (periodStorage).
  * It reads at most one usage row (the ranked check), the month's shards or
- * the bucket's totals row, two single reads, and no account, profile
- * beyond the allowance's or attachment row. */
+ * the bucket's totals row, two single reads, for a daily period that is
+ * open the organization's samples of its days so far, at most 31, and no
+ * account, profile beyond the allowance's or attachment row. */
 export async function usageFiguresOf(ctx: QueryCtx, orgId: string): Promise<BillingUsageFigures> {
   const sub = await subscriptionFor(ctx, orgId)
   const head = await periodHead(ctx, orgId, sub)
@@ -382,7 +461,7 @@ export async function usageFiguresOf(ctx: QueryCtx, orgId: string): Promise<Bill
     ...head,
     calls: await periodCalls(ctx, orgId, head.period_key),
     storage_bytes: totals?.bytes ?? null,
-    ...(await sampledStorage(ctx, orgId, sub, head)),
+    ...(await periodStorage(ctx, orgId, sub, head)),
   }
 }
 
