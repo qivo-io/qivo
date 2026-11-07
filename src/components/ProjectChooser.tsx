@@ -107,8 +107,8 @@ export function ProjectChooser({
     >
       <div
         className={cn(
-          'mx-auto flex min-h-0 w-full max-w-[560px] flex-1 flex-col gap-3',
-          state !== 'empty' && 'project-chooser p-4',
+          'mx-auto flex min-h-0 w-full max-w-[560px] flex-1 flex-col',
+          state !== 'empty' && 'project-chooser gap-3 p-4',
         )}
       >
         {children}
