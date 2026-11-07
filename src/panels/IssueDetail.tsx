@@ -1189,16 +1189,19 @@ function TaskGone({
    task stays as that answer had it, with a comment typed for it, since the
    answer shows nothing the window did not show already and the server
    checks every write. The person's new task whose first read failed stays
-   so too, from what its create sent (TaskDetailVM saving). In
-   LoadFailure's style, without its control height, as it sits under the
-   task's title. */
+   so too, from its creating answer (TaskDetailVM saving), and the note says
+   it shows as the person made it (`created`), since the window never
+   loaded it. In LoadFailure's style, without its control height, as it
+   sits under the task's title. */
 function StaleTask({
   taskKey,
   retrying,
+  created,
   mobile,
 }: {
   taskKey: string
   retrying: boolean
+  created: boolean
   mobile: boolean
 }) {
   const noteRef = useRefID<HTMLSpanElement>(null)
@@ -1220,7 +1223,7 @@ function StaleTask({
       >
         {retrying
           ? `Checking ${taskKey} for changes…`
-          : `Couldn't check ${taskKey} for changes, so it shows as it was last loaded.`}
+          : `Couldn't check ${taskKey} for changes, so it shows as ${created ? 'you made it' : 'it was last loaded'}.`}
       </span>
       {!retrying && (
         <Button type="button" variant="ghost" onClick={retry}>
@@ -3664,12 +3667,14 @@ function IssueDetail({
                 ),
               })}
 
-              {/* the task as its last answer had it, while the read after
-                  that answer failed or runs again */}
+              {/* the task as its last answer had it, or a new task from its
+                  creating answer, while the read after that answer failed
+                  or runs again */}
               {stale && (
                 <StaleTask
                   taskKey={it.key}
                   retrying={detail?.state === 'retrying'}
+                  created={saving}
                   mobile={mobile}
                 />
               )}

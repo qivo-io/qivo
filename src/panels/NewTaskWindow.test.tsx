@@ -384,7 +384,9 @@ describe('the window of a task just created', { timeout: 30_000 }, () => {
       () => document.querySelector<HTMLElement>('[data-task-stale="failed"]'),
       'the failure line',
     )
-    expect(stale.textContent).toContain("Couldn't check QN-41 for changes")
+    expect(stale.textContent).toContain(
+      "Couldn't check QN-41 for changes, so it shows as you made it.",
+    )
     expect(input.isConnected).toBe(true)
     expect(input.value).toBe('Run the long soak test')
     expect((await editorOf('Leave a comment')).getText()).toBe('Drift is under 2%')
