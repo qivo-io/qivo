@@ -315,6 +315,69 @@ describe('the states', () => {
   })
 })
 
+describe("a section read with mine (My view's)", () => {
+  /** A task of mine in Docs, so Plan is My view's one project. */
+  const mineInDocs = () =>
+    server.issues.push({
+      id: 'docs-task',
+      org_id: server.orgs[0].id,
+      project_id: 'docs',
+      num: 9,
+      title: 'Write the guide',
+      description: '',
+      status: 'todo',
+      priority: 'low',
+      paused: false,
+      assignee_id: server.profiles[0].id,
+      created_at: AT,
+      updated_at: AT,
+      has_hidden_subtasks: false,
+      has_hidden_parent: false,
+    })
+
+  it("asks with mine and no projects apart from a named read, and paints a create by the answer's projects", async () => {
+    await boot()
+    mineInDocs()
+    await watch('mine', upcoming([], { mine: true }))
+    expect(subs.at(-1)?.args).toEqual({
+      projects: [],
+      mine: true,
+      from: FROM,
+      side: 'upcoming',
+      limit: 25,
+    })
+    expect(names('mine')).toEqual(['Alpha', 'Beta', 'Later'])
+    // an empty named ask is another read, which lists nothing
+    const before = milestoneSubs()
+    await watch('none', upcoming([]))
+    expect(milestoneSubs()).toBe(before + 1)
+    expect(names('none')).toEqual([])
+    // a create on Plan, which the answer lists, paints in; one on Ship
+    // does not
+    const P = store.P
+    void P.addMilestone({ project: 'docs', name: 'Gamma', week: P.isoToWeek('2026-10-05') })
+    void P.addMilestone({ project: 'ship', name: 'Mast', week: P.isoToWeek('2026-10-05') })
+    expect(names('mine')).toEqual(['Alpha', 'Beta', 'Gamma', 'Later'])
+  })
+
+  it('answers too_many for the refusal of too many projects, with no rows kept', async () => {
+    await boot()
+    mineInDocs()
+    await watch('mine', upcoming([], { mine: true }))
+    expect(store.P.milestoneRead('mine').state).toBe('ok')
+    force = { mine: 'too_many' }
+    await rerun()
+    expect(store.P.milestoneRead('mine')).toEqual({ state: 'too_many' })
+    // a read too large keeps its sentence and the answer from before
+    force = { mine: 'refused' }
+    await rerun()
+    expect(store.P.milestoneRead('mine')).toMatchObject({
+      state: 'refused',
+      reason: 'milestone_read_too_large',
+    })
+  })
+})
+
 describe('a repaint that waits', () => {
   it('shows the rows on screen with the answer they came from until the views repaint', async () => {
     await boot()

@@ -17,7 +17,9 @@
  * milestoneSection.ts) answer the same rows, a range of 26 weeks answers
  * the same rows, and
  * every milestone of the organization opens the same way, `can_write`
- * included. The stand-in answers `next` null once no milestone follows,
+ * included. My view's sections, read with `mine`, list the same projects
+ * and walk the same milestones. The stand-in answers `next` null once no
+ * milestone follows,
  * where the real read can answer a `next` that leads to an empty batch, so
  * the walks compare rows, not batches. The numbers the stand-in copies
  * equal the server's. */
@@ -65,6 +67,7 @@ type Batch = {
   rows: { id: string; name: string; week: string }[]
   next: MilestonePosition | null
   past?: boolean
+  projects?: string[]
 }
 
 /** Every row of a section from its start, following `next`, from the real
@@ -151,6 +154,24 @@ async function compare(
   for (const m of all) {
     const got = await caller.query(api.milestones.get, { id: m.id })
     expect(milestoneStandIn(snap, 'get', { id: m.id }), m.name).toEqual(got)
+  }
+  // My view's sections, whose projects the server finds from the
+  // person's own tasks
+  for (const side of ['upcoming', 'past'] as const) {
+    const base = { projects: [], mine: true as const, from, side, limit: 2 }
+    const real = await walk(
+      (after) =>
+        caller.query(api.milestones.section, {
+          ...base,
+          ...(after ? { after } : {}),
+        }) as Promise<Batch>,
+    )
+    const stand = await walk(async (after) => standIn(snap, 'section', { ...base, after }))
+    expect(stand.ids, `mine ${side}`).toEqual(real.ids)
+    expect(stand.past, `mine ${side} past`).toEqual(real.past)
+    const whole = { ...base, limit: 100 }
+    const got = (await caller.query(api.milestones.section, whole)) as Batch
+    expect(standIn(snap, 'section', whole).projects, `mine ${side} projects`).toEqual(got.projects)
   }
   return listed
 }

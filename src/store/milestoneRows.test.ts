@@ -329,6 +329,45 @@ describe('a create', () => {
   })
 })
 
+describe("a section read with mine (My view's)", () => {
+  /** My view's Upcoming, its projects found by the server. */
+  const mine = (over: Partial<Extract<MilestoneAsk, { kind: 'section' }>> = {}): MilestoneAsk =>
+    upcoming({ projects: [], mine: true, ...over })
+
+  it("paints a create, an edit and a past create by its answer's projects, a sub-project standing for its parent", () => {
+    const r = registry()
+    r.take('mine', 'm', mine(), answer([], null, { projects: ['plan'], past: false }))
+    r.take('pastMine', 'p', mine({ side: 'past' }), answer([], null, { projects: ['plan'] }))
+    r.beginPaint()
+    r.insert(ms('a', '2026-09-15'))
+    r.insert(ms('d', '2026-09-16', 'd', 'docs'))
+    // must fail: a project the answer does not list
+    r.insert(ms('s', '2026-09-15', 's', 'ship'))
+    expect(ids(r.shownOf('mine')?.rows)).toEqual(['a', 'd'])
+    // an edit moves a row out to Past by the same projects
+    r.update('a', { week: '2026-09-07' })
+    expect(ids(r.shownOf('mine')?.rows)).toEqual(['d'])
+    expect(ids(r.shownOf('pastMine')?.rows)).toEqual(['a'])
+    // the first batch's `past` turns true for a listed project's past create
+    expect(r.shownOf('mine')?.past).toBe(true)
+  })
+
+  it("must fail: covers nothing before its answer names projects, and nothing of another's", () => {
+    const r = registry()
+    // an answer with no projects, as an older backend's would be
+    r.take('bare', 'b', mine(), answer([], null, { past: false }))
+    r.take('ship', 's', mine(), answer([], null, { projects: ['ship'], past: false }))
+    r.beginPaint()
+    r.insert(ms('a', '2026-09-15'))
+    r.insert(ms('old', '2026-08-03'))
+    expect(ids(r.shownOf('bare')?.rows)).toEqual([])
+    expect(ids(r.shownOf('ship')?.rows)).toEqual([])
+    expect(r.shownOf('ship')?.past).toBe(false)
+    expect(r.covers('ship', ms('x', '2026-09-15', 'x', 'ship'))).toBe(true)
+    expect(r.covers('ship', ms('x', '2026-09-15'))).toBe(false)
+  })
+})
+
 describe('must fail', () => {
   it('an insert into a section of another project', () => {
     const r = registry()
