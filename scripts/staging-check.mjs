@@ -2286,11 +2286,8 @@ async function sweep(tag, label) {
       for (const agent of await taggedAgents()) {
         agentIds.add(agent.id)
         await step(`agent ${agent.name}`, async () => {
-          await evaluate(
-            app,
-            (id) => window.PLANNER.removeUser(id, { orgId: window.PLANNER.homeOrg }),
-            agent.id,
-          )
+          // in the agent's own organization, which the server removes it from
+          await evaluate(app, (a) => window.PLANNER.removeUser(a.id, { orgId: a.org }), agent)
           await settled()
           expect(
             await until(async () =>

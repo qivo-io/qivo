@@ -2356,6 +2356,20 @@ describe('task list pages', () => {
       '/labels?limit=20&cursor=a%2Bb%2Fc',
     )
   })
+  it('removes each tagged agent and label of a sweep in its own organization', () => {
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const sweep = check.slice(
+      check.indexOf('async function sweep(tag, label)'),
+      check.indexOf('async function removeTokenInApp('),
+    )
+    // each tagged agent carries its organization from the app's people
+    expect(sweep).toContain('.map((u) => ({ id: u.id, name: u.name, org: u.org }))')
+    expect(sweep).toContain('window.PLANNER.removeUser(a.id, { orgId: a.org })')
+    expect(sweep).toContain(
+      'window.PLANNER.removeLabel(l.id, { orgId: l.org, name: l.name, color: l.color })',
+    )
+    expect(sweep).not.toContain('window.PLANNER.homeOrg')
+  })
   it('searches a sweep by the run tag, or by the prefix every run tag shares', () => {
     expect(searchOf('stgchk-0a1b2c')).toBe('stgchk-0a1b2c')
     expect(searchOf(TAG_ANY)).toBe(TAG_PREFIX)
