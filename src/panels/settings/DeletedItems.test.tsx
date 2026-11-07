@@ -959,6 +959,35 @@ describe('restoring', () => {
     expect(toasts().some((t) => /Restored 2/.test(String(t)))).toBe(false)
   })
 
+  it('restores only the project of a task the admin cannot read, which stays in Deleted items', async () => {
+    const next = world({ tasks: 1 })
+    const fixture = deletedFixtureOf(next, { tasks: 1, at: NOW.toISOString() })
+    const task = fixture.items.find((i) => i.row.kind === 'task')
+    if (!task) throw new Error('no task item')
+    // QN-10 was deleted before Firmware, and the admin cannot read it
+    task.row = {
+      ...task.row,
+      hidden: true,
+      can_restore: false,
+      blocked: { reason: 'project_deleted', item_id: `deleted-${FW}` },
+    }
+    await load(next, fixture)
+    force.deferred = true
+    await open(undefined, undefined, true)
+    await choose(LUMA)
+    await click(find(`[data-deleted-row="${task.row.id}"] [data-restore]`))
+    expect(text('[data-project-first]')).toContain(
+      'QN-10 stays in Deleted items until you can open its project.',
+    )
+    expect(all('[role="dialog"] button').map((b) => b.textContent)).not.toContain(
+      'Restore Firmware and QN-10',
+    )
+    await click(button('Restore Firmware'))
+    // the project alone, and the store sends no task after it
+    expect(restores().map((c) => c.args.ids)).toEqual([[`deleted-${FW}`]])
+    expect(toasts().some((t) => String(t).includes('QN-10'))).toBe(false)
+  })
+
   it('says a failed read of the project an item waits for with Try again, and one it cannot see, apart from loading', async () => {
     const next = world({ tasks: 1 })
     const fixture = deletedFixtureOf(next, { tasks: 1, at: NOW.toISOString() })

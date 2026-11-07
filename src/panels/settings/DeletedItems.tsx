@@ -92,6 +92,7 @@ import {
   progressText,
   type RestoreRefusal,
   refusalText,
+  restoresWithProject,
   restoreToast,
   SELECT_MOST,
   stateText,
@@ -1117,9 +1118,11 @@ export function DeletedItemsPage() {
             setSaving(true)
             // a hit comes back with its item; an item that waits for its
             // project, a hit's or the line's own, goes in the same call
-            // after that project and is deferred
+            // after that project and is deferred, unless it is a task the
+            // person cannot read, which stays (restoresWithProject)
             const item = lineItem(line)
-            const outcome = await restore(holder.id === item.id ? [holder] : [holder, item], {
+            const alone = holder.id === item.id || !restoresWithProject(item)
+            const outcome = await restore(alone ? [holder] : [holder, item], {
               announce: [holder],
             })
             setSaving(false)
@@ -1405,7 +1408,10 @@ function comesBack(holder: DeletedRow): string {
     of a deleted task"). An item deleted before its project (for admins)
     comes back only after that project item, and so does a hit whose item
     was, so Restore brings that project back first, in the same call, and
-    the store sends the item again once the project is back. The project
+    the store sends the item again once the project is back. A task item the
+    person cannot read (restoresWithProject) is not sent: Restore brings the
+    project back alone and the window says the task stays in Deleted items
+    until they can open its project. The project
     item the line's item waits for is the page's when it holds it, and is
     read from deletedItems.item while the window shows otherwise, Restore
     waiting for it; a failed read says so with Try again, and an answer
@@ -1457,6 +1463,8 @@ function WholeItemWindow({
   // project item or the item itself
   const itemCalled = root?.key ?? (line.kind === 'hit' ? item.title : name)
   const project = waits ? (holder?.kind === 'project' ? holder.title : undefined) : undefined
+  // a task the person cannot read stays behind when its project comes back
+  const stays = waits && !restoresWithProject(item)
   const canRestore = holder?.can_restore === true
   const reason = !holder
     ? null
@@ -1467,8 +1475,7 @@ function WholeItemWindow({
   // item and the line itself
   const restores = [
     ...(waits ? [project ?? 'the project'] : []),
-    ...(line.kind === 'hit' ? [itemCalled] : []),
-    name,
+    ...(stays ? [] : [...(line.kind === 'hit' ? [itemCalled] : []), name]),
   ]
   /** The sentence of an item deleted before its project, which names it. */
   const before = (who: string) =>
@@ -1506,10 +1513,13 @@ function WholeItemWindow({
       Loading its project…
     </p>
   ) : null
-  // what the store sends once the project waited for is back
-  const follows = root
-    ? ` ${root.key} and its subtasks follow once the project is back.`
-    : ` ${itemCalled} follows once the project is back.`
+  // what the store sends once the project waited for is back, or what
+  // stays behind
+  const follows = stays
+    ? ` ${root?.key ?? itemCalled} stays in Deleted items until you can open its project.`
+    : root
+      ? ` ${root.key} and its subtasks follow once the project is back.`
+      : ` ${itemCalled} follows once the project is back.`
   return (
     <ModalShell
       icon="rotateCcw"
@@ -1571,7 +1581,8 @@ function WholeItemWindow({
           {waits && holderNote}
           {holder && (
             <p className="text-sm">
-              {reason ?? `${comesBack(holder)}${waits && line.kind === 'hit' ? follows : ''}`}
+              {reason ??
+                `${comesBack(holder)}${waits && (line.kind === 'hit' || stays) ? follows : ''}`}
             </p>
           )}
         </div>
