@@ -359,7 +359,18 @@ of which may subscribe the workspace's task windows (`workspace:tasks`).
 The Roadmap must reach its ok state and show that task's row, having
 subscribed its own read (`tasks:roadmap`) and never the planning panel's
 old read (`planning:assigneeLoad`) (`ui/tasks-on-demand`). It reads only,
-and an app from before the Roadmap read the server fails it. Next it makes a label
+and an app from before the Roadmap read the server fails it. Next it makes a
+sub-project of its own with its run tag under the run project over REST,
+records the frames the page sends and receives on its sync socket from a
+fresh load of that sub-project's Board, presses **New task in To Do**,
+creates a task with its run tag through the dialog and renames it in its
+window at once. No frame may subscribe the workspace's task windows, and
+no read of the new task (`taskWindow:task`, `snapshot:threadComments` or
+`inbox:item`) may be sent before the answer to the create's `issues:create`
+mutation arrives. The window must show the new title, and the task must
+hold it over REST (`ui/create-answer`). The run's sweep removes the task and
+the sub-project, and an app from before a create stopped loading every task
+fails it. Next it makes a label
 with its run tag over REST, puts it on one of its fixture tasks, opens
 **Settings → Labels** on the deployment's batches (`labels.settingsPage`),
 finds the label by search with **1 active task**, renames it in place and
@@ -1958,6 +1969,21 @@ went back, until the backend rolls forward. The workspace inbox part stays
 for the desktop alerts. The list shows only what the `inbox_items` rows
 hold. The release changes no server function, has no schema change, no
 backfill and no release step.
+
+From the release after v0.1.158, a create of a task no longer asks for every
+task. The new task shows at once in the Board's and the Roadmap's rows and
+in its window from what the create sends, and once the create answers,
+from the stored row `issues.create` answers. The window's changes go out
+behind the create on the same connection, and its reads of the task start
+once the server took it. The app relies on `issues.create` answering the
+stored row, which it has since v0.1.6 (`ce4cf109e`), and on
+`issues.createParent` answering the new parent's number (`parent_num`),
+which it has since v0.1.26 (`1dfbf802b`). The floors above already hold far
+newer backends, so the release changes no server function, sets no new
+rollback floor and needs no release step. Returning the app alone to an
+earlier release is safe, because that app asks for every task at a create
+and paints the task into the workspace. There is no schema change and no
+backfill.
 
 ## Node.js version
 
