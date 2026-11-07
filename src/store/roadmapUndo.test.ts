@@ -2,9 +2,9 @@ import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { milestoneWeekTaken } from '../../convex/lib/limits'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
+import { answerMilestones, isMilestoneRead } from './milestoneStandIn.setup'
+import type { Snapshot } from './plannerFixture.setup'
 
-type Snapshot = Workspace
 type Planner = typeof import('./planner')['P']
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -118,6 +118,8 @@ type Pending = {
 
 describe('roadmap undo through the client store', () => {
   let P: Planner
+  // the Roadmap's two slots of its range reads (ROADMAP_MILESTONE_SLOTS)
+  let roadmapSlots: readonly string[]
   let snap: Snapshot
   let publish: (value: Snapshot) => void
   let fail: (error: Error) => void
@@ -133,7 +135,14 @@ describe('roadmap undo through the client store', () => {
     snap = fixture()
     requests = []
     network.query.mockResolvedValue(null)
-    network.onUpdate.mockImplementation((_ref, _args, next, failed) => {
+    network.onUpdate.mockImplementation((ref, args, next, failed) => {
+      // the milestone reads answer from the server's milestones, which no
+      // workspace part sends
+      const name = getFunctionName(ref)
+      if (isMilestoneRead(name)) {
+        answerMilestones(snap, name, args, next, failed)
+        return () => {}
+      }
       publish = next
       fail = failed
       next(structuredClone(snap))
@@ -146,6 +155,7 @@ describe('roadmap undo through the client store', () => {
     })
     const store = await import('./planner')
     P = store.P
+    roadmapSlots = store.ROADMAP_MILESTONE_SLOTS
     await store.initStore()
     P.roadmapContext(true, false)
   })
@@ -226,10 +236,23 @@ describe('roadmap undo through the client store', () => {
       week: '2026-09-21',
       created_at: NOW,
     })
-    publish(structuredClone(snap))
+    // the Roadmap's range read of the weeks on screen shows its flag, the
+    // only copy of the milestone the store holds
+    const slot = roadmapSlots[0]
+    P.watchMilestones(slot, {
+      kind: 'between',
+      projects: [snap.projects[0].id],
+      from: '2026-09-07',
+      to: '2026-10-05',
+    })
+    await vi.waitFor(() => expect(P.milestoneRead(slot).state).toBe('ok'))
     await settled()
-    const milestone = () => P.milestones.find((m) => m.id === id)
+    const milestone = () => {
+      const read = P.milestoneRead(slot)
+      return read.state === 'ok' ? read.answer.rows.find((m) => m.id === id) : undefined
+    }
     const week = milestone()?.week ?? 0
+    expect(week).toBe(P.isoToWeek('2026-09-21'))
     P.setMilestone(id, week - 1)
     expect(latest()).toMatchObject({
       name: 'roadmap:change',
@@ -247,6 +270,7 @@ describe('roadmap undo through the client store', () => {
     )
     expect(milestone()?.week).toBe(week)
     expect(P.roadmapUndo).toEqual({ count: 1, busy: false, disabled: false })
+    P.releaseMilestones(slot)
   })
 
   it('keeps a late response from an earlier visit out of a newly entered roadmap', async () => {

@@ -33,7 +33,7 @@ const EMPTY = {
     truncated: false,
   },
   'workspace:people': ok({ profiles: [], teamMembers: [] }),
-  'workspace:projects': ok({ projects: [], access: [], teamAccess: [], milestones: [] }),
+  'workspace:projects': ok({ projects: [], access: [], teamAccess: [] }),
 }
 const tasksPart = (ids: string[], extra = {}) => ({
   ...ok({
@@ -179,6 +179,22 @@ describe('the live parts registry', () => {
     const w = reports.at(-1)?.workspace
     expect(w?.state === 'complete' && w.value?.issues.map((i) => i.id)).toEqual(['a', 'b', 'c'])
     expect(w?.state === 'complete' && w.tasks).toBe('all')
+  })
+
+  it("joins a projects part without milestones, and ignores the milestones an earlier backend's part still sends", async () => {
+    const { s, last } = await started()
+    const whole = { org_id: ORG, from: '', to: null }
+    const project = { id: 'p1', org_id: ORG, name: 'Plan', type: 'meta' }
+    const milestone = { id: 'm1', project_id: 'p1', name: 'Launch', week: '2026-11-02' }
+    s.set('workspace:projects', whole, {
+      value: ok({ projects: [project], access: [], teamAccess: [], milestones: [milestone] }),
+    })
+    s.send([s.keyOf('workspace:projects', whole)])
+    const w = last()
+    if (w?.state !== 'complete' || !w.value) throw new Error('not complete')
+    expect(w.value.projects.map((p) => p.id)).toEqual(['p1'])
+    expect(w.value).not.toHaveProperty('milestones')
+    expect(JSON.stringify(w.value)).not.toContain('Launch')
   })
 
   it('joins a part whose long lists came in chunks, in order', async () => {

@@ -1,13 +1,15 @@
 /* A stand-in for the app's three milestone reads (convex/milestones.ts get,
-   section and between) that answers from a workspace the app holds, for
-   the jsdom tests and the browser benchmark's server
-   (scripts/perf/server.mjs), as store/overviewStandIn.setup.ts answers the
-   Overview.
+   section and between) that answers from the whole a test or the browser
+   benchmark's server (scripts/perf/server.mjs) publishes
+   (store/guard/liveDouble.setup.ts Whole), as store/overviewStandIn.setup.ts
+   answers the Overview. The workspace parts send no milestones, so the
+   whole holds the server's milestones beside the workspace (`milestones`),
+   and the stand-in answers from them, none when it holds none.
 
    It applies the reads' rules (convex/model/milestones.ts readMilestones,
-   milestoneProjects and visibleMilestone) to the workspace's milestones:
-   the projects named, each sub-project standing for its top-level
-   project, only the active ones the workspace shows; the order by stored
+   milestoneProjects and visibleMilestone) to those milestones: the
+   projects named, each sub-project standing for its top-level project,
+   only the active ones the workspace shows; the order by stored
    day, name key and id; `from` and `to` by the day the app shows a stored
    day on (shownDay), read from OVERFLOW_DAYS before `from`; the search on
    name keys; `after`, `limit`, `next` (null once no milestone follows) and
@@ -29,7 +31,7 @@ import { ConvexError } from 'convex/values'
 import { LIMITS, MILESTONE_READ_PROJECTS, MILESTONE_READ_ROWS } from '../../convex/lib/limits'
 import { nameKey } from '../../convex/lib/nameKey'
 import { allWordsMatcher } from '../../convex/lib/search'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
+import type { Whole } from './guard/liveDouble.setup'
 import {
   comparePositions,
   type MilestonePosition,
@@ -38,6 +40,20 @@ import {
   shownDay,
 } from './milestoneRows'
 import { myViewProjects } from './overviewStandIn.setup'
+
+/** What the stand-in reads of a published whole, the workspace the
+    person holds and the server's milestones beside it. */
+type Server = Pick<
+  Whole,
+  | 'myProfileIds'
+  | 'profiles'
+  | 'projects'
+  | 'teamMembers'
+  | 'access'
+  | 'teamAccess'
+  | 'issues'
+  | 'milestones'
+>
 
 /** A state a section or a range answers whatever the workspace says. */
 type ForcedBatch = 'loading' | 'error' | 'refused' | 'unchecked' | 'stopped'
@@ -172,7 +188,7 @@ const higher = (a: Level | null, b: Level | null) => (rank(b) > rank(a) ? b : a)
     levelOnProject): an organization admin leads every project, a lead
     leads their own, and a grant or a team share gives its level, which a
     Viewer's role caps. A sub-project adds its parent's. */
-function ownLevel(workspace: Workspace, projectId: string): Level | null {
+function ownLevel(workspace: Server, projectId: string): Level | null {
   const project = workspace.projects.find((p) => p.id === projectId)
   if (!project) return null
   const me = workspace.profiles.find(
@@ -202,7 +218,7 @@ function ownLevel(workspace: Workspace, projectId: string): Level | null {
 
 /** The active top-level projects of `workspace` a read of `ids` lists,
     each once (convex/model/milestones.ts milestoneProjects). */
-function rootsOf(workspace: Workspace, ids: readonly string[]): Set<string> {
+function rootsOf(workspace: Server, ids: readonly string[]): Set<string> {
   const byId = new Map(workspace.projects.map((p) => [p.id, p]))
   const roots = new Set<string>()
   for (const id of ids) {
@@ -230,11 +246,11 @@ function stoppedAt(rows: MilestoneRow[], from: string) {
   return { rows: first ? [first] : [], next: at, stopped: at.week }
 }
 
-/** The answer of milestone read `query` with `args` over `workspace`, or
-    undefined for one `force` keeps from answering. Throws the server's
-    refusals. */
+/** The answer of milestone read `query` with `args` over `workspace`, the
+    published whole, from the server's milestones it holds, or undefined
+    for one `force` keeps from answering. Throws the server's refusals. */
 export function milestoneStandIn(
-  workspace: Workspace,
+  workspace: Server,
   query: 'get' | 'section' | 'between',
   args: MilestoneReadArgs,
   force: ForcedMilestones = {},
@@ -255,7 +271,7 @@ export function milestoneStandIn(
     )
   if (query === 'get') {
     if (forced === 'unavailable') return null
-    const row = workspace.milestones.find((m) => m.id === args.id)
+    const row = workspace.milestones?.find((m) => m.id === args.id)
     const project = row && workspace.projects.find((p) => p.id === row.project_id)
     if (!row || !project || project.parent_id || project.archived_at !== undefined) return null
     const level = ownLevel(workspace, project.id)
@@ -284,7 +300,7 @@ export function milestoneStandIn(
   const from = args.from ?? ''
   const roots = rootsOf(workspace, mineAsk ? found : projects)
   const listed = mineAsk ? { projects: [...roots].sort() } : {}
-  const mine = workspace.milestones.filter((m) => roots.has(m.project_id))
+  const mine = (workspace.milestones ?? []).filter((m) => roots.has(m.project_id))
   if (query === 'between') {
     const to = args.to ?? ''
     if (to <= from) throw badRequest('to must be after from')
@@ -350,10 +366,11 @@ export const isMilestoneRead = (name: string) =>
 
 /** Answers a test double's subscription to `name`, one of the milestone
     reads as Convex names it (`milestones:get` and so on), with `args`
-    over `workspace` through `next`, or through `fail` where the stand-in
-    refuses or fails, and not at all where `force` holds it back. */
+    over `workspace`, the published whole, through `next`, or through
+    `fail` where the stand-in refuses or fails, and not at all where
+    `force` holds it back. */
 export function answerMilestones(
-  workspace: Workspace,
+  workspace: Server,
   name: string,
   args: unknown,
   next: (value: unknown) => void,

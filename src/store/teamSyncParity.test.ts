@@ -50,13 +50,13 @@ import { countOrg } from '../../convex/tests/overviewCounts.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
 import { plantBlocks, plantStamp, plantTeam } from '../../convex/tests/teamSyncAgenda.setup'
 import type { SyncScope } from '../lib/teamSync'
-import type { Snapshot } from './plannerFixture.setup'
 import {
   type ForcedSync,
   SYNC_CONTEXT,
   type SyncArgs,
   teamSyncStandIn,
 } from './teamSyncStandIn.setup'
+import type { Snapshot } from './workspaceBase'
 
 vi.hoisted(() => {
   // the client's zone, set before any module reads the clock

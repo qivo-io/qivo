@@ -18,7 +18,8 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
    own copy of the workspace: their keys and states, the hidden tab and the
    reconnect, and the person's milestone writes, which paint every copy a
    read holds (the `milestones` part of store/layers.ts) until a delivery
-   holds them, also for a milestone only a read holds. */
+   holds them. The workspace parts send no milestone, so the reads hold
+   the only milestones the store keeps. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
@@ -41,10 +42,13 @@ const FROM = '2026-09-14'
 const TO = '2026-09-28'
 
 let store: typeof import('./planner')
-/* the workspace the projects part sends, and the server's own, which the
-   milestone reads answer from */
+/* the whole the store's workspace parts answer from, which send none of
+   its milestones, and the server's own, which the milestone reads answer
+   from */
 let snapshot: Snapshot
 let server: Snapshot
+/* publishes a new whole, as a change on the server does */
+let publishWhole: (value: unknown) => void
 let force: ForcedMilestones
 /* the milestone subscriptions, newest last */
 let subs: {
@@ -82,10 +86,9 @@ async function rerun() {
   await turns()
 }
 
-/** Boots the store. `withMilestones` false leaves the milestones out of the
-    projects part, so only a read holds them, as t3/limits-milestone-part
-    makes it. */
-async function boot(withMilestones = true) {
+/** Boots the store, with the projects Plan and Ship, Plan's sub-project
+    Docs, and the milestones of the server. */
+async function boot() {
   vi.resetModules()
   const org = snapshot.orgs[0].id
   for (const [id, key, name] of [
@@ -120,11 +123,12 @@ async function boot(withMilestones = true) {
     ms('sail', '2026-09-16', 'Sail', 'ship'),
   )
   server = structuredClone(snapshot)
-  if (!withMilestones) snapshot.milestones = []
   network.onUpdate.mockImplementation((ref, args, receive, fail) => {
     const name = getFunctionName(ref)
-    if (name === 'workspace:whole') receive(structuredClone(snapshot))
-    else if (isMilestoneRead(name)) {
+    if (name === 'workspace:whole') {
+      publishWhole = receive
+      receive(structuredClone(snapshot))
+    } else if (isMilestoneRead(name)) {
       subs.push({ name, args, receive, fail })
       answerMilestones(server, name, args, receive, fail, force)
     }
@@ -381,12 +385,16 @@ describe("a section read with mine (My view's)", () => {
 describe('a repaint that waits', () => {
   it('shows the rows on screen with the answer they came from until the views repaint', async () => {
     await boot()
+    // the window's read of Later, which the range does not hold, gives the
+    // write its row
+    await watch('open', { kind: 'get', id: 'later' })
     force = { between: 'stopped' }
     await watch('sync', range())
     const P = store.P
     expect(names('sync')).toEqual(['Alpha'])
     // a painted write that waits holds the views' repaint back a turn
     void P.updateMilestone('later', { name: 'Later 2' })
+    expect(writes.map((w) => w.name)).toEqual(['projects:updateMilestone'])
     force = {}
     const sub = subs.find((s) => s.name === 'milestones:between')
     if (!sub) throw new Error('no range read')
@@ -432,54 +440,58 @@ describe('the hidden tab and the reconnect', () => {
 })
 
 describe('the writes', () => {
-  it.each([
-    ['holds', true],
-    ['lacks', false],
-  ])(
-    'renames and moves a milestone the workspace %s, from what the read showed, painting every copy until a delivery holds it',
-    async (_, withMilestones) => {
-      await boot(withMilestones)
-      await watch('open', { kind: 'get', id: 'alpha' })
-      await watch('sync', range())
-      const P = store.P
-      const shown = P.milestoneRead('open')
-      if (shown.state !== 'ok') throw new Error('no answer')
-      const seen = shown.answer.stored.get('alpha')
-      const saved = P.updateMilestone('alpha', { name: 'Alpha 2' }, seen)
-      expect(writes.map((w) => w.name)).toEqual(['projects:updateMilestone'])
-      expect(writes[0].args).toEqual({
-        org_id: snapshot.orgs[0].id,
-        id: 'alpha',
-        patch: { name: 'Alpha 2' },
-        expected: { name: 'Alpha' },
-      })
-      expect(names('open')).toEqual(['Alpha 2'])
-      expect(names('sync')).toEqual(['Alpha 2', 'Beta'])
-      // accepted before any read delivered it: the paint stays
-      writes[0].resolve(null)
-      await expect(saved).resolves.toBe(true)
-      await turns()
-      expect(names('sync')).toEqual(['Alpha 2', 'Beta'])
-      // the reads deliver it, which holds the write, so someone's later
-      // rename shows
-      server.milestones[0].name = 'Alpha 2'
-      await rerun()
-      expect(names('sync')).toEqual(['Alpha 2', 'Beta'])
-      server.milestones[0].name = 'Alpha 3'
-      await rerun()
-      expect(names('sync')).toEqual(['Alpha 3', 'Beta'])
-      expect(names('open')).toEqual(['Alpha 3'])
-      // a move out of the two weeks takes it out of the range at once
-      const week = P.isoToWeek('2026-10-12')
-      void P.updateMilestone('alpha', { week })
-      expect(writes[1].args).toMatchObject({ patch: { week: '2026-10-12' } })
-      expect(names('sync')).toEqual(['Beta'])
-      expect(names('open')).toEqual(['Alpha 3'])
-    },
-  )
+  it('keeps no milestone outside the reads', async () => {
+    await boot()
+    const P = store.P
+    expect(P).not.toHaveProperty('milestones')
+    expect(P).not.toHaveProperty('milestonesIn')
+    expect(P.scopeInfo('plan')).not.toHaveProperty('milestones')
+    expect(P.scopeInfo('all')).not.toHaveProperty('milestones')
+    expect(JSON.stringify(store.__layerProbe?.rows())).not.toContain('Alpha')
+  })
+
+  it('renames and moves a milestone a read shows, from what the read showed, painting every copy until a delivery holds it', async () => {
+    await boot()
+    await watch('open', { kind: 'get', id: 'alpha' })
+    await watch('sync', range())
+    const P = store.P
+    const shown = P.milestoneRead('open')
+    if (shown.state !== 'ok') throw new Error('no answer')
+    const seen = shown.answer.stored.get('alpha')
+    const saved = P.updateMilestone('alpha', { name: 'Alpha 2' }, seen)
+    expect(writes.map((w) => w.name)).toEqual(['projects:updateMilestone'])
+    expect(writes[0].args).toEqual({
+      org_id: snapshot.orgs[0].id,
+      id: 'alpha',
+      patch: { name: 'Alpha 2' },
+      expected: { name: 'Alpha' },
+    })
+    expect(names('open')).toEqual(['Alpha 2'])
+    expect(names('sync')).toEqual(['Alpha 2', 'Beta'])
+    // accepted before any read delivered it: the paint stays
+    writes[0].resolve(null)
+    await expect(saved).resolves.toBe(true)
+    await turns()
+    expect(names('sync')).toEqual(['Alpha 2', 'Beta'])
+    // the reads deliver it, which holds the write, so someone's later
+    // rename shows
+    server.milestones[0].name = 'Alpha 2'
+    await rerun()
+    expect(names('sync')).toEqual(['Alpha 2', 'Beta'])
+    server.milestones[0].name = 'Alpha 3'
+    await rerun()
+    expect(names('sync')).toEqual(['Alpha 3', 'Beta'])
+    expect(names('open')).toEqual(['Alpha 3'])
+    // a move out of the two weeks takes it out of the range at once
+    const week = P.isoToWeek('2026-10-12')
+    void P.updateMilestone('alpha', { week })
+    expect(writes[1].args).toMatchObject({ patch: { week: '2026-10-12' } })
+    expect(names('sync')).toEqual(['Beta'])
+    expect(names('open')).toEqual(['Alpha 3'])
+  })
 
   it('deletes from every copy, and a refusal takes the paint back and keeps the draft', async () => {
-    await boot(false)
+    await boot()
     await watch('open', { kind: 'get', id: 'beta' })
     await watch('sync', range())
     const P = store.P
@@ -516,7 +528,7 @@ describe('the writes', () => {
     expect(notices.some((text) => text.includes('milestone “Beta”'))).toBe(true)
   })
 
-  it('creates into the workspace and every section that covers it, not one it falls past', async () => {
+  it('creates into every section that covers it, not one it falls past', async () => {
     await boot()
     await watch('up', upcoming())
     await watch('next', upcoming(['plan'], { limit: 1 }))
@@ -524,29 +536,166 @@ describe('the writes', () => {
     const P = store.P
     void P.addMilestone({ project: 'docs', name: 'Gamma', week: P.isoToWeek('2026-10-05') })
     expect(writes[0]).toMatchObject({ name: 'projects:addMilestone', args: { project_id: 'plan' } })
-    expect(P.milestones.some((m) => m.name === 'Gamma')).toBe(true)
+    expect(P).not.toHaveProperty('milestones')
     expect(names('up')).toEqual(['Alpha', 'Beta', 'Gamma', 'Later'])
     // the one-row section's next is Alpha, which Gamma falls past
     expect(names('next')).toEqual(['Alpha'])
   })
 
-  it('keeps a renamed next milestone in its one-row section until it moves past one the read lacks', async () => {
+  it('keeps a renamed next milestone in its one-row section until it moves past one another read shows it lacks', async () => {
     await boot()
     await watch('next', upcoming(['plan'], { limit: 1 }))
+    // the range of the two weeks holds Beta, which the section lacks
+    await watch('sync', range())
     expect(names('next')).toEqual(['Alpha'])
     const P = store.P
     void P.updateMilestone('alpha', { name: 'Zulu' })
     expect(names('next')).toEqual(['Zulu'])
-    // past Beta, which the workspace holds and the section does not
     void P.updateMilestone('alpha', { week: P.isoToWeek('2026-09-29') })
     expect(names('next')).toEqual([])
   })
 
-  it('sends nothing for a milestone neither the workspace nor a read holds', async () => {
-    await boot(false)
+  it("keeps a moved next milestone in its one-row section past one no read holds, until the section's delivery", async () => {
+    await boot()
+    await watch('next', upcoming(['plan'], { limit: 1 }))
+    const P = store.P
+    const saved = P.updateMilestone('alpha', { name: 'Zulu', week: P.isoToWeek('2026-09-29') })
+    // no read tells of Beta, so the section shows the person's own move a
+    // little longer, and no wrong value
+    expect(names('next')).toEqual(['Zulu'])
+    server.milestones[0].name = 'Zulu'
+    server.milestones[0].week = '2026-09-29'
+    await rerun()
+    // the delivery answers Beta, and the move's paint has no copy of Zulu
+    // left to put back
+    expect(names('next')).toEqual(['Beta'])
+    writes[0].resolve(null)
+    await expect(saved).resolves.toBe(true)
+    await turns()
+    expect(names('next')).toEqual(['Beta'])
+  })
+
+  it('paints a moved milestone into a read that never held it from the row another read shows, and paints nothing once no read shows it', async () => {
+    await boot()
+    await watch('open', { kind: 'get', id: 'alpha' })
+    // the range of 5 to 19 October, which holds none of Alpha
+    await watch('october', {
+      kind: 'between',
+      projects: ['plan'],
+      from: '2026-10-05',
+      to: '2026-10-19',
+    })
+    expect(names('october')).toEqual([])
+    const P = store.P
+    void P.updateMilestone('alpha', { week: P.isoToWeek('2026-10-12') })
+    expect(names('october')).toEqual(['Alpha'])
+    writes[0].reject(new ConvexError({ code: 'rule', message: 'no' }))
+    await turns()
+    expect(names('october')).toEqual([])
+    // once the window's read lets it go, no read shows Alpha, and a write
+    // finds no row to send from
+    store.P.releaseMilestones('open')
+    await turns()
+    await expect(P.updateMilestone('alpha', { week: P.isoToWeek('2026-10-12') })).resolves.toBe(
+      false,
+    )
+    expect(names('october')).toEqual([])
+    expect(writes).toHaveLength(1)
+  })
+
+  it('holds a write in a layer with only a milestones part, which drops once every read it paints delivered, and at once for a create no read covers', async () => {
+    await boot()
+    await watch('sync', range())
+    const P = store.P
+    const probe = store.__layerProbe
+    if (!probe) throw new Error('no probe')
+    const saved = P.updateMilestone('alpha', { name: 'Alpha 2' })
+    expect(probe.layerParts()).toEqual([['milestones']])
+    writes[0].resolve(null)
+    await expect(saved).resolves.toBe(true)
+    await turns()
+    // saved, and the range has not delivered it yet
+    expect(probe.layerCount()).toBe(1)
+    server.milestones[0].name = 'Alpha 2'
+    await rerun()
+    expect(probe.layerCount()).toBe(0)
+    expect(names('sync')).toEqual(['Alpha 2', 'Beta'])
+    // a create far past the range, which no read covers
+    const made = P.addMilestone({ project: 'plan', name: 'Far', week: P.isoToWeek('2027-01-04') })
+    expect(probe.layerParts()).toEqual([['milestones']])
+    expect(names('sync')).toEqual(['Alpha 2', 'Beta'])
+    writes[1].resolve(null)
+    await expect(made).resolves.toBe(true)
+    await turns()
+    expect(probe.layerCount()).toBe(0)
+  })
+
+  it('sends nothing for a milestone no read holds', async () => {
+    await boot()
     await expect(store.P.updateMilestone('alpha', { name: 'X' })).resolves.toBe(false)
     await expect(store.P.removeMilestone('alpha')).resolves.toBe(false)
     expect(writes).toEqual([])
+  })
+
+  it("must fail: sends nothing for a milestone a read shows whose organization neither a get answer nor the store's project gives, and sends once the store holds its project", async () => {
+    await boot()
+    // Hidden, a top-level project the server holds and the published
+    // workspace does not, with a milestone a range read shows
+    const hidden = {
+      ...snapshot.projects.find((p) => p.id === 'ship')!,
+      id: 'hidden',
+      key: 'HID',
+      num: 9,
+      name: 'Hidden',
+    }
+    server.projects.push(hidden)
+    server.milestones.push(ms('hid', '2026-09-17', 'Hid', 'hidden'))
+    await watch('sync', range(['plan', 'hidden']))
+    expect(names('sync')).toEqual(['Alpha', 'Hid', 'Beta'])
+    const P = store.P
+    await expect(P.updateMilestone('hid', { name: 'X' })).resolves.toBe(false)
+    await expect(P.removeMilestone('hid')).resolves.toBe(false)
+    expect(writes).toEqual([])
+    expect(names('sync')).toEqual(['Alpha', 'Hid', 'Beta'])
+    // once the workspace holds Hidden, the same writes send with its
+    // organization
+    snapshot.projects.push(hidden)
+    publishWhole({ ...structuredClone(snapshot), delivered_at: '2026-09-15T09:00:00.000Z' })
+    await turns()
+    void P.updateMilestone('hid', { name: 'X' })
+    expect(writes[0]).toMatchObject({
+      name: 'projects:updateMilestone',
+      args: { org_id: snapshot.orgs[0].id, id: 'hid', patch: { name: 'X' } },
+    })
+  })
+
+  it("names a refused move's milestone from the read that still shows it, and says a milestone once no read shows it", async () => {
+    await boot()
+    await watch('sync', range())
+    const P = store.P
+    const conflict = (id: string) =>
+      new ConvexError({
+        code: 'conflict',
+        reason: FIELD_CHANGED,
+        message: 'the date of the milestone changed since you read it',
+        changes: [{ record: 'milestone', id, field: 'week', by: 'someone', at: AT }],
+      })
+    const notices = () => vi.mocked(window.showToast).mock.calls.map(([text]) => String(text))
+    const first = P.updateMilestone('beta', { week: P.isoToWeek('2026-09-14') })
+    writes[0].reject(conflict('beta'))
+    await expect(first).resolves.toBe(false)
+    expect(notices().some((text) => text.includes('milestone “Beta”'))).toBe(true)
+    vi.mocked(window.showToast).mockClear()
+    // someone else's delete takes Alpha out of every read while its move
+    // waits; the refusal then names no milestone
+    const second = P.updateMilestone('alpha', { week: P.isoToWeek('2026-09-21') })
+    server.milestones = server.milestones.filter((m) => m.id !== 'alpha')
+    await rerun()
+    expect(names('sync')).toEqual(['Beta'])
+    writes[1].reject(conflict('alpha'))
+    await expect(second).resolves.toBe(false)
+    expect(notices().some((text) => text.includes('a milestone'))).toBe(true)
+    expect(notices().some((text) => text.includes('Alpha'))).toBe(false)
   })
 
   it('keeps a saved rename on a read that has not delivered since, and drops it once one did', async () => {
@@ -677,7 +826,7 @@ describe('the writes', () => {
 
 describe('the Roadmap journal', () => {
   it('records a rename with its milestone paint, and its Undo shows from the read', async () => {
-    await boot(false)
+    await boot()
     await watch('open', { kind: 'get', id: 'alpha' })
     const P = store.P
     P.roadmapContext(true, false)
@@ -719,7 +868,7 @@ describe('the Roadmap journal', () => {
   })
 
   it('folds the milestone paints of a batch into its one layer', async () => {
-    await boot(false)
+    await boot()
     await watch('sync', range())
     const P = store.P
     P.roadmapContext(true, false)

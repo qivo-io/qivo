@@ -134,7 +134,6 @@ function fixture() {
     access: [{ project_id: meta, profile_id: other.id, level: 'user' }],
     teamAccess: [],
     links: [],
-    milestones: [],
     labels: [],
     issueLabels: [],
     issueSubs: [],

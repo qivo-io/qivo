@@ -444,12 +444,13 @@ export async function readPeople(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow
 // --- projects -----------------------------------------------------------------
 
 /** The projects of window `w` (by window key) the caller can see, archived
- * ones included for navigation, oldest first, with every grant on them,
- * their team grants, and the milestones of the active ones. It reads the
- * window's projects in one range, the caller's levels on each and on its
- * parent, and up to three ranges per shown project. A check of the caller's
- * access that a bound stopped answers `overflow` or `refused`
- * (unlessUnchecked). */
+ * ones included for navigation, oldest first, with every grant on them and
+ * their team grants. It reads the window's projects in one range, the
+ * caller's levels on each and on its parent, and two ranges per shown
+ * project. It reads and sends no milestone, as the app reads every
+ * milestone it shows through milestones.ts (get, section and between). A
+ * check of the caller's access that a bound stopped answers `overflow` or
+ * `refused` (unlessUnchecked). */
 export const readProjects = (ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) =>
   unlessUnchecked(projectsOf(ctx, me, w), w)
 
@@ -470,9 +471,8 @@ async function projectsOf(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) {
     .sort((a, b) => a._creationTime - b._creationTime)
   const access: Doc<'project_access'>[][] = shown.map(() => [])
   const teamAccess: Doc<'project_team_access'>[][] = shown.map(() => [])
-  const milestones: Doc<'milestones'>[][] = shown.map(() => [])
   const done = await inBatches(ctx, shown, async (p, at) => {
-    ;[access[at], teamAccess[at], milestones[at]] = await Promise.all([
+    ;[access[at], teamAccess[at]] = await Promise.all([
       ctx.db
         .query('project_access')
         .withIndex('by_project', (q) => q.eq('project_id', p.id))
@@ -481,13 +481,6 @@ async function projectsOf(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) {
         .query('project_team_access')
         .withIndex('by_project', (q) => q.eq('project_id', p.id))
         .collect(),
-      // milestones belong to the active working set
-      p.archived_at === undefined
-        ? ctx.db
-            .query('milestones')
-            .withIndex('by_project', (q) => q.eq('project_id', p.id))
-            .collect()
-        : [],
     ])
   })
   if (!done) return overflow(w)
@@ -506,7 +499,6 @@ async function projectsOf(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) {
       // (model/cascade.ts removeProfile).
       access: access.flat().map((g) => keyFree(rowOf(g))),
       teamAccess: teamAccess.flat().map((g) => keyFree(rowOf(g))),
-      milestones: milestones.flat().map(rowOf),
     }),
     ...(await softSplit(ctx, w, read.split || shown.length > PAGE.projects.split, caller.shared)),
   }

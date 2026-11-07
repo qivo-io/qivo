@@ -1278,23 +1278,30 @@ describe('Team sync', () => {
   })
 })
 
-describe('parity with the projects part', () => {
-  it('lists for each Northstar person the milestones the workspace gives them', async () => {
+describe('parity with the stored milestones of the projects a person sees', () => {
+  it('lists for each Northstar person every stored milestone of the active top-level projects their workspace shows', async () => {
     const t = newT()
     const { profiles } = await plantNorthstar(t)
     const from = plus(NORTHSTAR_ANCHOR, 7 * 3)
+    // every milestone the database holds; Northstar stores none on a
+    // sub-project
+    const stored = await t.run((ctx) => ctx.db.query('milestones').collect())
     let pastSeen = 0
     let upcomingSeen = 0
     for (const person of profiles.filter((p) => p.kind === 'person')) {
       const caller = as(t, person)
       const snap = await workspaceOf(caller)
       if (snap === null) throw new Error(`${person.name} holds no seat`)
-      const projects = snap.projects.filter((p) => p.parent_id === undefined).map((p) => p.id)
+      const live = snap.projects.filter(
+        (p) => p.parent_id === undefined && p.archived_at === undefined,
+      )
+      const projects = live.map((p) => p.id)
+      const expected = stored.filter((m) => projects.includes(m.project_id))
       const base = { projects, from, limit: 25 }
       const upcoming = await walk(caller, { ...base, side: 'upcoming' })
       const past = await walk(caller, { ...base, side: 'past' })
-      expect([...upcoming.ids, ...past.ids].sort()).toEqual(snap.milestones.map((m) => m.id).sort())
-      for (const m of snap.milestones) expect(upcoming.ids.includes(m.id)).toBe(m.week >= from)
+      expect([...upcoming.ids, ...past.ids].sort()).toEqual(expected.map((m) => m.id).sort())
+      for (const m of expected) expect(upcoming.ids.includes(m.id)).toBe(m.week >= from)
       pastSeen += past.ids.length
       upcomingSeen += upcoming.ids.length
     }

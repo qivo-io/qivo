@@ -69,7 +69,6 @@ import {
   navSees,
 } from '../../convex/tests/projectNav.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
-import type { Snapshot } from './plannerFixture.setup'
 import {
   NAV_BLANK_SEARCH,
   NAV_EMPTY_ORG,
@@ -81,6 +80,7 @@ import {
   projectNavStandIn,
   setFavoriteStandIn,
 } from './projectNavStandIn.setup'
+import type { Snapshot } from './workspaceBase'
 
 vi.hoisted(() => {
   // cursors are sealed with a key derived from it (lib/archiveCursorSeal.ts)

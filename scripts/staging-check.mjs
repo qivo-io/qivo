@@ -190,9 +190,10 @@
  * a free week of the Roadmap's default window, and a task of Nora's in
  * Alpha, then a fresh load of the project's Roadmap must read the window's
  * flags from the deployment's range read (milestones.between) and show the
- * milestone in its header, and a fresh load of My view's Roadmap must show
- * it on the project's own row with no header band, and drop it once it is
- * deleted over REST (ui/roadmap-milestones). It makes another milestone
+ * milestone in its header, where the store's flag move must move it a week
+ * of the window later, which REST then shows, and a fresh load of My view's
+ * Roadmap must show it on the project's own row with no header band, and
+ * drop it once it is deleted over REST (ui/roadmap-milestones). It makes another milestone
  * over REST on its project from three weeks on, one in a past week and a
  * task of Nora's in Alpha, then a fresh load of the project's Overview
  * must read Upcoming from the deployment's section read
@@ -6416,12 +6417,17 @@ export function inDefaultWindow(week, today, weekStart) {
  *  sets her Roadmap window to the default. A fresh load of M's Roadmap by
  *  its address must subscribe MILESTONES_BETWEEN_QUERY, reach its ok state
  *  with its flags ok (data-roadmap-milestones) and show the milestone in
- *  the header's band; a fresh load of My view's Roadmap must reach the
- *  same states and show it inside M's row, with no band in the header, and
- *  drop it once the run deleted it over REST. It deletes the task at the
- *  end, and the cleanup that deletes M removes whatever a failure left. It
- *  runs while M is active, after ui/milestones, and leaves the saved view
- *  on M's Board. */
+ *  the header's band. The store's flag move (P.setMilestone, as a drag
+ *  sends it) then moves it to the next week M leaves free, also in the
+ *  window. The write takes the milestone's row from the Roadmap's range
+ *  read and its organization from the store's project, as the workspace
+ *  holds no milestone, so the flag must move later on the timeline and
+ *  REST must show the new date. A fresh load of My view's Roadmap must
+ *  reach the same states and show it inside M's row, with no band in the
+ *  header, and drop it once the run deleted it over REST. It deletes the
+ *  task at the end, and the cleanup that deletes M removes whatever a
+ *  failure left. It runs while M is active, after ui/milestones, and leaves
+ *  the saved view on M's Board. */
 async function roadmapMilestonesCheck() {
   const w = run.creds.writeToken
   const { M, A } = run.projects
@@ -6434,10 +6440,17 @@ async function roadmapMilestonesCheck() {
       todayUtc(),
       me.organization.week_start,
     )
-    expect(
-      inDefaultWindow(date, todayUtc(), me.organization.week_start),
-      `${M.key} leaves no week free from three weeks on in the Roadmap's default window (${date})`,
+    // the week the store's flag move takes it to
+    const moved = freeMilestoneWeek(
+      [...held.map((m) => m.date), date],
+      todayUtc(),
+      me.organization.week_start,
     )
+    for (const week of [date, moved])
+      expect(
+        inDefaultWindow(week, todayUtc(), me.organization.week_start),
+        `${M.key} leaves no two weeks free from three weeks on in the Roadmap's default window (${week})`,
+      )
     const made = await restOk(w, 'POST', `/projects/${M.id}/milestones`, {
       name: `${run.tag} Roadmap milestone`,
       date,
@@ -6472,7 +6485,43 @@ async function roadmapMilestonesCheck() {
         sent.some((f) => addsQuery(f, MILESTONES_BETWEEN_QUERY)),
         "M's Roadmap did not subscribe the range read",
       )
-      await app.locator(`[data-workspace-view] [data-msband] ${flag}`).waitFor({ timeout: 60_000 })
+      const banded = app.locator(`[data-workspace-view] [data-msband] ${flag}`)
+      await banded.waitFor({ timeout: 60_000 })
+      // a flag's move through the store, from the range read's row and the
+      // store's project's organization, as a drag sends it. The flag's
+      // diamond sits at the start of its box, or at its end where the name
+      // runs to the left (data-msflag-side), so its place on the timeline
+      // is that edge, whichever side the name takes in the new week.
+      const left = async () => {
+        const box = await banded.boundingBox()
+        if (!box) return Number.NaN
+        return (await banded.getAttribute('data-msflag-side')) === 'left'
+          ? box.x + box.width
+          : box.x
+      }
+      const before = await left()
+      await evaluate(
+        app,
+        ({ id, day }) => window.PLANNER.setMilestone(id, window.PLANNER.isoToWeek(day)),
+        {
+          id: made.id,
+          day: moved,
+        },
+      )
+      expect(
+        await until(async () => (await left()) > before + 10, 30_000),
+        `the flag of ${made.name} did not move later on M's Roadmap`,
+      )
+      expect(
+        await until(
+          async () =>
+            ((await restOk(w, 'GET', `/projects/${M.id}`)).milestones ?? []).some(
+              (m) => m.id === made.id && m.date === moved,
+            ),
+          30_000,
+        ),
+        `GET /projects/${M.key} does not show ${made.name} on ${moved}`,
+      )
       await fresh(`${cfg.appOrigin}/app/~/roadmap/mine`)
       const row = app.locator(`[data-workspace-view] [data-track="${M.id}"] ${flag}`)
       await row.waitFor({ timeout: 60_000 })
@@ -6483,7 +6532,7 @@ async function roadmapMilestonesCheck() {
       )
       await restOk(w, 'DELETE', `/projects/${M.id}/milestones/${made.id}`)
       await row.waitFor({ state: 'detached', timeout: 60_000 })
-      return `showed ${made.name} in ${M.key}'s header and on its row in My view from the deployment's range read, and dropped it once deleted over REST`
+      return `showed ${made.name} in ${M.key}'s header and on its row in My view from the deployment's range read, moved it from ${date} to ${moved} through the store's flag move, which REST then showed, and dropped it once deleted over REST`
     } finally {
       app.off('websocket', record)
       await rest(w, 'DELETE', `/tasks/${task.key}`)

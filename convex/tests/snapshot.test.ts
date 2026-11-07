@@ -75,6 +75,10 @@ const snapFor = async (profile: Doc<'profiles'>) => {
   return snap
 }
 
+/* The projects part's answer for one whole window, as `profile` reads it. */
+const projectsPartFor = (profile: Doc<'profiles'>) =>
+  as(t, profile).query(api.workspace.projects, { org_id: f.org.id, from: '', to: null })
+
 const plantLabel = (name: string) =>
   t.run(async (ctx) => {
     const _id = await ctx.db.insert('labels', {
@@ -367,9 +371,12 @@ describe('archived split', () => {
       snap.links.some((l) => l.source_id === archivedIssue.id || l.target_id === archivedIssue.id),
     ).toBe(false)
     expect(snap.issueSubs.some((row) => row.issue_id === archivedIssue.id)).toBe(false)
-    // milestones follow the project-not-archived fence
-    expect(snap.milestones.map((m) => m.project_id)).toContain(f.meta.id)
-    expect(snap.milestones.map((m) => m.project_id)).not.toContain(f.sub2.id)
+    // the projects part sends no milestone of a live or an archived project;
+    // the milestone reads keep the archived fence (milestoneReads.test.ts)
+    const part = await projectsPartFor(f.admin)
+    expect(part).toMatchObject({ state: 'ok' })
+    expect(part).not.toHaveProperty('milestones')
+    expect(snap).not.toHaveProperty('milestones')
   })
 })
 
@@ -1365,9 +1372,10 @@ describe('links', () => {
 })
 
 /* A grant on one sub-project shows its parent for navigation only. The
- * parent's grants, team grants and milestones still arrive, because the
- * sub-project inherits the grants and shows the milestones. A sibling
- * sub-project, its tasks, grants and milestones never arrive. */
+ * parent's grants and team grants still arrive, because the sub-project
+ * inherits them. A sibling sub-project, its tasks and grants never arrive.
+ * No milestone arrives with either, as the app reads them through
+ * milestones.ts, whose fences milestoneReads.test.ts checks. */
 describe('navigation-only parents', () => {
   it('send the parent row and what the sub-project inherits, and nothing of its siblings', async () => {
     const subOnly = await plantSeat(t, {
@@ -1461,7 +1469,10 @@ describe('navigation-only parents', () => {
       team_id: parentTeam,
       level: 'user',
     })
-    expect(snap.milestones.map((m) => m.name)).toEqual(['Parent launch'])
+    const part = await projectsPartFor(subOnly)
+    expect(part).toMatchObject({ state: 'ok' })
+    expect(part).not.toHaveProperty('milestones')
+    expect(snap).not.toHaveProperty('milestones')
   })
 })
 

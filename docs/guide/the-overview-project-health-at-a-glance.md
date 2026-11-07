@@ -146,7 +146,9 @@ says which milestones are no longer shown and offers
 could check only part of the list, in which case **Load more** continues. If
 loading fails, it says so with **Retry**, and if Qivo refuses to read the
 milestones, it gives the reason. A milestone you are editing keeps its place
-and your change while it moves, also into the other section.
+and your change while it moves, also into the other section. If a milestone
+you are editing moves out of every list the window shows, the window loads
+it again, and **Save** and **Delete** wait until it has.
 
 A project has at most one milestone in each calendar week, counting the
 milestones added from its sub-projects. Weeks begin on the organization's

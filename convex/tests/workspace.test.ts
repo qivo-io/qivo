@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { accessUnchecked, OWN_READS, projectLevel, projectLevelsOf } from '../lib/access'
+import { accessOf, accessUnchecked, OWN_READS, projectLevel, projectLevelsOf } from '../lib/access'
 import { newWindowKey } from '../lib/db'
 import {
   cut,
@@ -1414,7 +1414,7 @@ describe('the projects and people parts', () => {
         })
       }
     })
-    // above the window's own 9 ranges and below them with the reads of the
+    // above the window's own 8 ranges and below them with the reads of the
     // person's 5 teams, as 40 was with 60 teams
     PAGE.soft.ranges = 10
     // the organization's teams read at once, from a manyTeams lowered below
@@ -1425,14 +1425,174 @@ describe('the projects and people parts', () => {
         org_id: f.org.id,
         ...idWindows(16)[15],
       })
-      // shown for navigation, and not cut although navigation read past it
+      // shown for navigation, and not cut although navigation read past it,
+      // as the same window read in a transaction of its own shows
       expect(answer, `manyTeams ${manyTeams}`).toMatchObject({
         state: 'ok',
         projects: [expect.objectContaining({ id: parent.id })],
       })
       expect(answer, `manyTeams ${manyTeams}`).not.toHaveProperty('split')
+      const ranges = await t.run(async (ctx) => {
+        await readProjects(ctx, f.viewer, idWindows(16)[15])
+        return (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+      })
+      expect(ranges, `manyTeams ${manyTeams}`).toBeGreaterThan(PAGE.soft.ranges)
     }
   })
+
+  /* `tops` live top-level projects of `f`'s organization with `subs`
+   * sub-projects each, the person `member` holding a User grant on each
+   * top-level project and the fixture's team sharing the first `shared`
+   * (every one by default) with Viewer access, and the ids of the
+   * top-level projects. */
+  async function plantPortfolio(
+    t: T,
+    f: OrgFixture,
+    member: Doc<'profiles'>,
+    o: { tops: number; subs: number; shared?: number },
+  ) {
+    return await t.run(async (ctx) => {
+      const tops: string[] = []
+      let num = 5000
+      const project = async (extra: Partial<Doc<'projects'>>) => {
+        const id = uuid()
+        num++
+        await ctx.db.insert('projects', {
+          id,
+          org_id: f.org.id,
+          type: 'project',
+          key: `M${num}`,
+          name: `Portfolio ${num}`,
+          description: '',
+          sort_order: num,
+          num,
+          track_delay: false,
+          created_at: NOW,
+          window_key: newWindowKey(),
+          ...extra,
+        })
+        return id
+      }
+      for (let n = 0; n < o.tops; n++) {
+        const top = await project({ type: 'meta' })
+        tops.push(top)
+        await ctx.db.insert('project_access', {
+          project_id: top,
+          profile_id: member.id,
+          level: 'user',
+        })
+        if (n < (o.shared ?? o.tops))
+          await ctx.db.insert('project_team_access', {
+            project_id: top,
+            team_id: f.team.id,
+            level: 'viewer',
+          })
+        for (let k = 0; k < o.subs; k++) await project({ parent_id: top })
+      }
+      return tops
+    })
+  }
+
+  /* `each` milestones on each of the top-level projects `tops`, a month
+   * apart. */
+  const plantMilestones = (t: T, tops: readonly string[], each: number) =>
+    t.run(async (ctx) => {
+      for (const top of tops)
+        for (let i = 0; i < each; i++)
+          await ctx.db.insert('milestones', {
+            id: uuid(),
+            project_id: top,
+            name: `Milestone ${i + 1}`,
+            week: `2026-${String(3 + i).padStart(2, '0')}-02`,
+            created_at: NOW,
+          })
+    })
+
+  /* What one whole projects window answers `who`, with the index ranges and
+   * documents it read. */
+  const projectsWindow = (t: T, who: Doc<'profiles'>) =>
+    t.run(async (ctx) => {
+      const answer = await readProjects(ctx, who, whole)
+      const m = await ctx.meta.getTransactionMetrics()
+      return { answer, ranges: m.databaseQueries.used, documents: m.documentsRead.used }
+    })
+
+  it('a projects window answers the same projects, grants and team grants, and reads the same, whether its projects hold milestones or not', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // at everyday values, 20 live top-level projects of 3 sub-projects
+    // each, with 5 milestones on each top-level project
+    const member = await plantSeat(t, {
+      org_id: f.org.id,
+      org_role: 'user',
+      auth_user_id: `seat_${uuid()}`,
+    })
+    const tops = await plantPortfolio(t, f, member, { tops: 20, subs: 3 })
+    const before = [await projectsWindow(t, f.admin), await projectsWindow(t, member)]
+    for (const read of before) {
+      expect(read.answer).toMatchObject({ state: 'ok' })
+      expect(read.answer).not.toHaveProperty('milestones')
+    }
+    await plantMilestones(t, tops, 5)
+    const after = [await projectsWindow(t, f.admin), await projectsWindow(t, member)]
+    expect(after).toEqual(before)
+    for (const read of after) {
+      if (read.answer.state !== 'ok') throw new Error(read.answer.state)
+      expect(read.answer.projects.length).toBeGreaterThanOrEqual(80)
+      expect(read.answer.teamAccess.length).toBeGreaterThanOrEqual(20)
+      expect(read.answer).not.toHaveProperty('milestones')
+    }
+    // the public query and the joined workspace hold no milestones either
+    const part = await as(t, member).query(api.workspace.projects, { org_id: f.org.id, ...whole })
+    expect(part).toMatchObject({ state: 'ok' })
+    expect(part).not.toHaveProperty('milestones')
+    expect(await workspaceOf(as(t, member))).not.toHaveProperty('milestones')
+  })
+
+  it('a projects window of 200 live top-level projects and their 200 sub-projects reads two ranges a shown project and no milestone', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the live top-level projects of an organization and the sub-projects
+    // one person can read, each at its design size of 200, read in one
+    // window at their sum, 400, by a person holding a User grant on each
+    // top-level project, which holds 4 milestones. The fixture's team
+    // shares 20 of the top-level projects, which gives it the everyday 20
+    // sub-projects a team, so the case raises no other figure, such as the
+    // 50 projects shared with one team, and the person sees every project
+    // through the User grants.
+    await t.run(async (ctx) => {
+      for (const p of await ctx.db.query('projects').collect())
+        if (p.org_id === f.org.id) await ctx.db.delete(p._id)
+    })
+    const member = await plantSeat(t, { org_id: f.org.id, org_role: 'user' })
+    const tops = await plantPortfolio(t, f, member, { tops: 200, subs: 1, shared: 20 })
+    const before = await projectsWindow(t, member)
+    await plantMilestones(t, tops, 4)
+    const after = await projectsWindow(t, member)
+    if (after.answer.state !== 'ok') throw new Error(after.answer.state)
+    expect(after.answer.projects).toHaveLength(400)
+    expect(after.answer.access).toHaveLength(200)
+    expect(after.answer.teamAccess).toHaveLength(20)
+    expect(after.answer).not.toHaveProperty('milestones')
+    expect(after.answer).not.toHaveProperty('split')
+    expect(after).toEqual(before)
+    // the window's range and the person's access checks, read on their own
+    // as the window reads them, a batch at a time
+    const checks = await t.run(async (ctx) => {
+      const rows = await ctx.db
+        .query('projects')
+        .withIndex('by_org_window', (q) => q.eq('org_id', f.org.id))
+        .collect()
+      const caller = accessOf(ctx, member, rows)
+      for (let at = 0; at < rows.length; at += PAGE.batch)
+        await Promise.all(rows.slice(at, at + PAGE.batch).map((p) => caller.visible(p.id)))
+      return (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+    })
+    // and a grant range and a team grant range for each shown project,
+    // shared or not. That makes 1,235 ranges in all, 435 for the window and
+    // the checks and 800 for the 400 projects
+    expect(after.ranges).toBe(checks + 2 * 400)
+  }, 60_000)
 
   it('a people window too full to cut refuses with a sentence', async () => {
     const t = newT()

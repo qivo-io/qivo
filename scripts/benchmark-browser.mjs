@@ -16,7 +16,12 @@
 // checkout's dependencies and transport, runs its samples in turn with the
 // checkout's, and prints both medians side by side. Taking turns puts both
 // under the same machine load, which moves single numbers a lot. The App
-// render counts (*AppRenders) do not depend on load at all.
+// render counts (*AppRenders) do not depend on load at all. A revision from
+// after the workspace parts and before the projects part stopped sending
+// milestones joins the milestones of every projects part, which this
+// checkout's perf server no longer sends, so it cannot load here; measure
+// such a revision with its own checkout's benchmark on the same machine
+// instead.
 //
 // Every sample ends on the Overview and the Roadmap after the Board was
 // open (which stays loaded, hidden): the page's memory, and a remote change

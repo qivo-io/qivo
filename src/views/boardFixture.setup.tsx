@@ -46,8 +46,9 @@ import { type ForcedSync, type SyncArgs, teamSyncStandIn } from '../store/teamSy
    store/roadmapStandIn.setup.ts, `server.roadmap`), so renderView shows the
    Roadmap from the server's answer too, and the milestone reads
    (milestones:get, section and between, store/milestoneStandIn.setup.ts,
-   `server.milestones`), so the Roadmap shows its flags from its range
-   read. A task's people pickers (pickers:taskOwners, syncRecipients and
+   `server.milestones`), from the snapshot's milestones, which no workspace
+   part sends, so the Roadmap shows its flags from its range read. A
+   task's people pickers (pickers:taskOwners, syncRecipients and
    canOwn) answer through their stand-in
    (store/ownerPickersStandIn.setup.ts, `server.owners`), and people:byIds
    through store/peopleSettingsStandIn.setup.ts, so the owner lists and
