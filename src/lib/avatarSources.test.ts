@@ -396,20 +396,72 @@ describe('profile picture bounds', () => {
     expect(f.cache.downloading()).toBe(0)
   })
 
-  it.each([
-    ['300 KiB', 300 * KIB, 256],
-    ['512-pixel', 20 * KIB, 512],
-  ])('re-encodes a %s picture and keeps the result', async (_, bytes, edge) => {
+  it('re-encodes a 300 KiB picture without decoding it first, and keeps the result', async () => {
     const shrink = vi.fn(async () => face(18 * KIB))
     const f = fixture({ shrink })
-    f.fetcher.mockResolvedValue(new Response(face(bytes)))
-    f.decode.mockResolvedValueOnce({ width: edge, height: edge })
+    f.fetcher.mockResolvedValue(new Response(face(300 * KIB)))
+    f.decode.mockResolvedValue({ width: 256, height: 256 })
+    expect(await f.cache.prepare(KEY, LEASE)).toBe(true)
+    expect(shrink).toHaveBeenCalledOnce()
+    // only the re-encoded picture is decoded
+    expect(f.decode).toHaveBeenCalledExactlyOnceWith('blob:portrait-1')
+    expect(f.cache.url(KEY)).toBe('blob:portrait-1')
+    expect(f.cache.keptBytes()).toBe(18 * KIB)
+  })
+
+  it('re-encodes a 512-pixel picture of few bytes and keeps the result', async () => {
+    const shrink = vi.fn(async () => face(18 * KIB))
+    const f = fixture({ shrink })
+    f.fetcher.mockResolvedValue(new Response(face(20 * KIB)))
+    f.decode.mockResolvedValueOnce({ width: 512, height: 512 })
     f.decode.mockResolvedValueOnce({ width: 256, height: 256 })
     expect(await f.cache.prepare(KEY, LEASE)).toBe(true)
     expect(shrink).toHaveBeenCalledOnce()
     expect(f.cache.url(KEY)).toBe('blob:portrait-2')
     expect(f.cache.keptBytes()).toBe(18 * KIB)
     expect(f.revokeUrl).toHaveBeenCalledWith('blob:portrait-1')
+  })
+
+  it('tries a picture whose re-encode could not run again later, and keeps it as initials after a second failure', async () => {
+    const shrink = vi.fn(async (): Promise<Blob> => {
+      throw new Error('could not re-encode')
+    })
+    const f = fixture({ shrink })
+    f.fetcher.mockImplementation(async () => new Response(face(300 * KIB)))
+    f.decode.mockResolvedValue({ width: 256, height: 256 })
+    expect(await f.cache.prepare(KEY, LEASE)).toBe(false)
+    expect(f.cache.needsRefresh(KEY)).toBe(false)
+    f.time(30_000)
+    expect(f.cache.needsRefresh(KEY)).toBe(true)
+    // the second try re-encodes
+    shrink.mockResolvedValueOnce(face(18 * KIB))
+    expect(await f.cache.prepare(KEY, LEASE)).toBe(true)
+    expect(f.cache.keptBytes()).toBe(18 * KIB)
+    // another picture whose re-encode fails twice stays initials
+    const other = 'avatar:other:v1'
+    f.cache.sync([KEY, other])
+    expect(await f.cache.prepare(other, LEASE)).toBe(false)
+    f.time(60_000)
+    expect(await f.cache.prepare(other, LEASE)).toBe(false)
+    f.time(3_600_000)
+    expect(f.cache.needsRefresh(other)).toBe(false)
+    expect(f.fetcher).toHaveBeenCalledTimes(4)
+  })
+
+  it('keeps a picture whose type cannot be re-encoded as initials, without trying again', async () => {
+    vi.stubGlobal('createImageBitmap', async () => ({}))
+    try {
+      const f = fixture({})
+      f.fetcher.mockResolvedValue(
+        new Response(new Blob([new Uint8Array(300 * KIB)], { type: 'image/svg+xml' })),
+      )
+      expect(await f.cache.prepare(KEY, LEASE)).toBe(false)
+      f.time(3_600_000)
+      expect(f.cache.needsRefresh(KEY)).toBe(false)
+      expect(f.decode).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('keeps a picture that stays too large as initials, never kept or retried until its version changes', async () => {

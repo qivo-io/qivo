@@ -1,6 +1,6 @@
 import { MIB } from '../../convex/lib/limits'
 import type { AvatarImageCache } from './avatarImageCache'
-import { avatarImage } from './images'
+import { AVATAR_TYPES, avatarImage } from './images'
 
 const REFRESH_SKEW = 120_000
 const RETRY_DELAY = 30_000
@@ -14,7 +14,10 @@ const LOAD_TIMEOUT = 15_000
       of normally 10 to 30 KB (lib/images.ts avatarImage), so only a legacy
       picture an older browser could not re-encode passes them. Such a
       picture is re-encoded the same way, and kept only when the result
-      fits, so one kept picture decodes to at most 256 KiB of pixels.
+      fits, so one kept picture decodes to at most 256 KiB of pixels. One
+      past pictureBytes is not decoded before its re-encode, and a
+      re-encode that could not run is tried once more RETRY_DELAY later
+      before the picture stays as initials.
     - `keptBytes`: the bytes all kept pictures hold together. The design
       size's 1,000 pictures of 10 to 30 KB fit. Past it, a picture that
       would need room waits as the person's initials instead of evicting
@@ -53,6 +56,8 @@ type Entry = {
   waiting?: { due: boolean; lease: Lease }
   /** too large even re-encoded, so initials until the version changes */
   tooLarge?: boolean
+  /** its re-encode could not run once, so the next failure is final */
+  shrinkFailed?: boolean
   pending?: { controller: AbortController; source?: string }
 }
 
@@ -64,7 +69,10 @@ type Dependencies = {
   /** decodes the image at `url`, answering its size ({ width, height })
       when it can tell; any other answer means the size is unknown */
   decode: (url: string) => Promise<unknown>
-  /** re-encodes a picture that passes the bounds, as an upload does */
+  /** re-encodes a picture that passes the bounds, as an upload does.
+      Answers `blob` itself when it can never be re-encoded (a type the
+      browser's re-encode does not read), and rejects when the re-encode
+      could not run this time. */
   shrink: (blob: Blob) => Promise<Blob>
   /** a picture the source started by itself, when room freed, now shows */
   changed: () => void
@@ -94,7 +102,19 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
       if (!image.naturalWidth || !image.naturalHeight) throw new Error('Empty profile picture')
       return { width: image.naturalWidth, height: image.naturalHeight }
     },
-    shrink: (blob) => avatarImage(new File([blob], 'picture', { type: blob.type })),
+    shrink: async (blob) => {
+      const type = blob.type.toLowerCase().split(';')[0]?.trim() ?? ''
+      if (
+        !(AVATAR_TYPES as readonly string[]).includes(type) ||
+        typeof createImageBitmap !== 'function'
+      )
+        return blob
+      const file = new File([blob], 'picture', { type: blob.type })
+      const shrunk = await avatarImage(file)
+      // avatarImage hands back its input when the re-encode failed
+      if (shrunk === file) throw new Error('Profile picture could not be re-encoded')
+      return shrunk
+    },
     changed: () => {},
     ...overrides,
   }
@@ -316,13 +336,31 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
         return publish(lease.url, false, AVATAR_SOURCES.pictureBytes)
       }
       if (!current(key, ticket) || ticket.pending !== pending) return false
-      pending.source = deps.createUrl(blob)
-      let size = await Promise.race([deps.decode(pending.source), timedOut])
+      // a picture past pictureBytes is re-encoded whatever its size, so it
+      // is not decoded first
+      let size: unknown = null
+      if (blob.size <= AVATAR_SOURCES.pictureBytes) {
+        pending.source = deps.createUrl(blob)
+        size = await Promise.race([deps.decode(pending.source), timedOut])
+      }
       if (!fits(blob, size)) {
         // a legacy picture: re-encoded as an upload is, kept only if it fits
-        const shrunk = await Promise.race([deps.shrink(blob), timedOut])
+        let shrunk: Blob
+        try {
+          shrunk = await Promise.race([deps.shrink(blob), timedOut])
+        } catch (error) {
+          if (!current(key, ticket) || ticket.pending !== pending) return false
+          if (pending.controller.signal.aborted) throw error
+          // could not run: tried again once after RETRY_DELAY, then final
+          if (ticket.shrinkFailed) {
+            ticket.tooLarge = true
+            return false
+          }
+          ticket.shrinkFailed = true
+          throw error
+        }
         if (!current(key, ticket) || ticket.pending !== pending) return false
-        deps.revokeUrl(pending.source)
+        if (pending.source) deps.revokeUrl(pending.source)
         pending.source = undefined
         if (shrunk !== blob) {
           pending.source = deps.createUrl(shrunk)
