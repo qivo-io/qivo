@@ -1860,8 +1860,9 @@ row, its days' samples (at most 31), until two hours before the end the
 run row of each day without a sample in an index range of its own, and a
 few documents more, 37 documents and 8 index ranges for 31 days with the
 last one missing at 1,000 people in `convex/tests/billing.test.ts`, and
-writing the period and its charge, plus the run row of each stalled run the
-record fences, one more call each time a day's run finds it waiting, and one
+writing the period and its charge, plus one more read and a write of the
+run row of each stalled run the record fences, one more call each time a
+day's run finds it waiting, and one
 `billingSync:finalizeDue` call for each 25 periods a run or call lists. A
 period stopped after 3 days costs one write of its row and one audit row.
 `billing.usageFigures` reads at most 31 more documents for an admin of an

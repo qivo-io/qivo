@@ -1078,13 +1078,18 @@ async function daysClosed(
  * one index range and at most one row a day, so nothing while every day has
  * its sample and at most 31 ranges. Then it reads the plan, the
  * subscription, the charge's id when blocks are due and the period again
- * for the next reconciliation. When it fences stalled runs (daysClosed), it
- * also writes each of those run rows. A call before the deadline for 31
- * days with only the last one missing and blocks due, at 1,000 people, read
- * 37 documents over 8 index ranges, about 122 KB, most of it the period row
- * with its 1,000 profile ids, and wrote the period and the charge, about
- * 39 KB, in convex/tests/billing.test.ts ("reads the period, its days and a
- * few documents more"). Each other day without a sample reads its run row
+ * for the next reconciliation. It reads each stalled run it fences
+ * (daysClosed) again for its patch and writes it, about 500 bytes each, so
+ * a call that fences one run reads one document more and writes one more.
+ * convex/tests/billing.test.ts ("records a period from the next day's sample
+ * once its last day's run has stalled") pins that call's three writes, the
+ * period, the charge and the run row, and the run row's size. Without a
+ * fence, a call before the deadline for 31 days with only the last one
+ * missing and blocks due, at 1,000 people, read 37 documents over 8 index
+ * ranges, about 122 KB, most of it the period row with its 1,000 profile
+ * ids, and wrote the period and the charge, about 39 KB, in
+ * convex/tests/billing.test.ts ("reads the period, its days and a few
+ * documents more"). Each other day without a sample reads its run row
  * instead of its sample, in one more index range. */
 export const finalizeStorage = internalMutation({
   args: { period: v.id('billing_periods'), operator: v.optional(v.boolean()) },

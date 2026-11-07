@@ -1,4 +1,5 @@
 import { makeFunctionReference } from 'convex/server'
+import { getConvexSize } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { billingDate, storageSampleLine } from '../../src/lib/billingDisplay'
 import { api, internal } from '../_generated/api'
@@ -2859,6 +2860,26 @@ describe('storage charged on the daily average', () => {
     vi.advanceTimersToNextTimer()
     await t.finishInProgressScheduledFunctions()
   }
+  /* Runs finalizeStorage for `period` in one transaction, answering its
+   * outcome and what that transaction read and wrote, from Convex's
+   * metrics. */
+  const finalizeMeasured = (t: T, period: Id<'billing_periods'>) =>
+    t.run(async (ctx) => {
+      const out = await (
+        finalizeStorage as unknown as {
+          _handler: (ctx: unknown, args: { period: Id<'billing_periods'> }) => Promise<unknown>
+        }
+      )._handler(ctx, { period })
+      const m = await ctx.meta.getTransactionMetrics()
+      return {
+        out,
+        ranges: m.databaseQueries.used,
+        documents: m.documentsRead.used,
+        bytes: m.bytesRead.used,
+        written: m.documentsWritten.used,
+        written_bytes: m.bytesWritten.used,
+      }
+    })
 
   /* Plants a counted organization, enrolled on `planId` or the default
    * plan, holding `bytes` in one file of one project. */
@@ -3285,13 +3306,22 @@ describe('storage charged on the daily average', () => {
       // at SAMPLE_STALLED_MS it records the last day from the next day's
       // sample, and replaces the run's id in the same transaction
       vi.setSystemTime(stalledAt)
-      expect(await t.mutation(finalizeRef, { period: open._id })).toBe('recorded')
+      const fencing = await finalizeMeasured(t, open._id)
+      expect(fencing.out).toBe('recorded')
       const period = await periodAt(t, start)
       expect(period?.storage_days).toEqual([
         { day: '2026-09-29', bytes: 6 * GB },
         { day: '2026-09-30', bytes: 6 * GB, from: '2026-10-01' },
       ])
       expect(period).toMatchObject({ storage_bytes: 6 * GB, storage_blocks: 1 })
+      // it wrote the period, the charge and the run row, which it read again
+      // for its patch, about 500 bytes
+      const [charge] = await storageEvents(t)
+      if (period === null || charge === undefined) throw new Error('nothing recorded')
+      expect(fencing.written).toBe(3)
+      const runBytes = fencing.written_bytes - getConvexSize(period) - getConvexSize(charge)
+      expect(runBytes).toBeGreaterThan(400)
+      expect(runBytes).toBeLessThanOrEqual(600)
       // the old run's queued step, and every other call queued, then write
       // no sample of that day, so the record stays its days' average
       const before = await lastDaySamples(t)
@@ -3820,22 +3850,7 @@ describe('storage charged on the daily average', () => {
       // so the finalize before the deadline reads the period's 30 samples,
       // the next day's and the last day's run row, and writes the charge
       vi.setSystemTime(at('2026-09-01', '00:30'))
-      const read = await t.run(async (ctx) => {
-        const out = await (
-          finalizeStorage as unknown as {
-            _handler: (ctx: unknown, args: { period: Id<'billing_periods'> }) => Promise<unknown>
-          }
-        )._handler(ctx, { period: open._id })
-        const m = await ctx.meta.getTransactionMetrics()
-        return {
-          out,
-          ranges: m.databaseQueries.used,
-          documents: m.documentsRead.used,
-          bytes: m.bytesRead.used,
-          written: m.documentsWritten.used,
-          written_bytes: m.bytesWritten.used,
-        }
-      })
+      const read = await finalizeMeasured(t, open._id)
       console.log('daily finalize reads', JSON.stringify(read))
       expect(read.out).toBe('recorded')
       expect(await storageEvents(t)).toMatchObject([{ units: 452 }])
