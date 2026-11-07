@@ -169,21 +169,22 @@ if (!process.argv.includes('--serve'))
       process.exit(code)
     })
 // the timed phases, each with its script, layout and style time and the
-// number of App renders in it. Tasks load on demand: `startup` is the
-// startup without task windows, until the project the app opens shows a
-// view (startedOn), which on this branch follows the projectNav.resolve
-// check of the remembered project, one round trip more than a build from
-// before it, which opened the first project at once, and the phases before `taskLoad` (BEFORE_ASK)
-// run before any task is held, the Roadmap's navigation and drag among them,
-// since the Roadmap reads its tasks from the server (tasks.roadmap), and the
-// person's own create, timed from its send to its confirmation; taskLoad
-// times the ask for every task (P.askTasks) to every task held, and every
-// phase after it reads or edits held tasks. A build from before the Roadmap
-// read the server asks for every task as the Roadmap mounts, so its
-// navigation holds that load and its taskLoad finds every task held. A build
-// from before a create stopped asking (t3/limits-create-answer) asks for
-// every task as it creates, so its `create` holds the start of the task load
-// and its taskLoad only the rest
+// number of App renders in it. Tasks load on demand, so `startup` is the
+// startup without task windows. It lasts until the project the app opens
+// shows a view (startedOn). On this branch that follows the
+// projectNav.resolve check of the remembered project, one round trip more
+// than a build from before it, which opened the first project at once. The
+// phases before `taskLoad` (BEFORE_ASK) run before any task is held, the
+// Roadmap's navigation and drag among them, since the Roadmap reads its
+// tasks from the server (tasks.roadmap), and the person's own create, timed
+// from its send to its confirmation; taskLoad times the ask for every task
+// (P.askTasks) to every task held, and every phase after it reads or edits
+// held tasks. A build from before the Roadmap read the server asks for
+// every task as the Roadmap mounts, so its navigation holds that load and
+// its taskLoad finds every task held. A build from before a create stopped
+// asking (t3/limits-create-answer) asks for every task as it creates, so
+// its `create` holds the start of the task load and its taskLoad only the
+// rest
 const PHASES = [
   'searchOpen',
   'search',
