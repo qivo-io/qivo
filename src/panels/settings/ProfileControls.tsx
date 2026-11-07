@@ -51,9 +51,11 @@ function useAvatarUpload(user: PersonOk) {
 // before close(): opening a file dialog requires the original user activation.
 /** Person `person`'s portrait, with the menu that changes or removes their
     picture for whoever may (P.canSetAvatar), whether or not the store holds
-    them, or the plain portrait while they are not named yet. */
+    them, or the plain portrait while they are not named yet or known only
+    by a picker's name, which does not say what picture they have, so the
+    menu could not offer the right actions or send it as `expected`. */
 export function AvatarPicker({ person, size = 28 }: { person: PersonView; size?: AvatarSize }) {
-  if (person.state !== 'ok' || !P.canSetAvatar(person.id, person.org))
+  if (person.state !== 'ok' || person.nameOnly || !P.canSetAvatar(person.id, person.org))
     return <Avatar id={person.id} size={size} />
   return <AvatarMenu user={person} size={size} />
 }

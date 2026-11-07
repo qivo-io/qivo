@@ -1370,6 +1370,42 @@ describe("the phone's user page and Settings' check", () => {
   })
 })
 
+describe('the picture editor', () => {
+  it('offers the picture menu for a person whose picture the page knows, never for one known by name only', async () => {
+    await load()
+    const { AvatarPicker } = await import('./ProfileControls')
+    const org = snap.orgs[0].id
+    const known = {
+      state: 'ok' as const,
+      id: 'zed',
+      org,
+      name: 'Zed Unheld',
+      initials: 'ZU',
+      color: '#335577',
+      picture: null,
+      avatar: 'storage-zed',
+      sample: false,
+      kind: 'person' as const,
+      orgRole: 'user' as const,
+      active: true,
+      pending: false,
+      nameOnly: false,
+      plannableHours: 32,
+    }
+    // a face: the menu
+    await render(() => <AvatarPicker person={known} />)
+    expect(has('[data-avatar-pick="zed"]')).toBe(true)
+    // a picker's name: no picture is known, so no menu
+    await render(() => (
+      <AvatarPicker
+        person={{ ...known, avatar: null, color: '', nameOnly: true, plannableHours: undefined }}
+      />
+    ))
+    expect(has('[data-avatar-pick="zed"]')).toBe(false)
+    expect(has('[data-avatar="zed"]')).toBe(true)
+  })
+})
+
 /* ------------------------------------------------------------ the store */
 
 describe('P.agentKeys', () => {
