@@ -38,7 +38,7 @@ function fixture(): Snapshot {
   const profiles: Snapshot['profiles'] = ['One', 'Two'].map((name, index) => ({
     id: crypto.randomUUID(),
     org_id: org.id,
-    auth_user_id: index ? 'other-account' : 'portrait-account',
+    auth_user_id: `${name.toLowerCase()}-account`,
     name,
     initials: name[0],
     color: '#335577',
@@ -49,9 +49,25 @@ function fixture(): Snapshot {
     created_at: new Date(NOW.getTime() + index).toISOString(),
     avatar_storage_id: `storage-${index}` as Id<'_storage'>,
   }))
+  // the caller, last and without an uploaded picture: the store asks for
+  // the caller's own pictures whatever the views name, so the cases of
+  // One's and Two's pictures see only what their views name
+  const me: Snapshot['profiles'][number] = {
+    id: crypto.randomUUID(),
+    org_id: org.id,
+    auth_user_id: 'portrait-account',
+    name: 'Me',
+    initials: 'M',
+    color: '#335577',
+    org_role: 'admin',
+    active: true,
+    kind: 'person',
+    created_at: new Date(NOW.getTime() + 2).toISOString(),
+  }
+  profiles.push(me)
   return {
     auth_user_id: 'portrait-account',
-    myProfileIds: [profiles[0].id],
+    myProfileIds: [me.id],
     orgs: [org],
     profiles,
     projects: [],
@@ -126,9 +142,14 @@ describe('uploaded profile pictures through the planner store', () => {
       'every-person',
       snap.profiles.map((profile) => ({ org: profile.org_id, id: profile.id })),
     )
+  /* Waits until every person with an uploaded picture shows it. */
   const ready = async () =>
     vi.waitFor(() =>
-      expect(store.P.users.every((user) => user.avatarUrl?.startsWith('blob:'))).toBe(true),
+      expect(
+        store.P.users
+          .filter((user) => user.avatarPath)
+          .every((user) => user.avatarUrl?.startsWith('blob:')),
+      ).toBe(true),
     )
 
   beforeEach(async () => {
@@ -268,6 +289,8 @@ describe('uploaded profile pictures through the planner store', () => {
       created_at: new Date(NOW.getTime() + i).toISOString(),
       avatar_storage_id: `storage-${i}` as Id<'_storage'>,
     }))
+    // the caller is the first of them, with a picture of their own
+    snap.myProfileIds = [base.id]
     const asked: number[] = []
     network.query.mockImplementation((ref, args: { profile_ids?: string[] }) => {
       if (getFunctionName(ref) !== 'files:mintUrls') return Promise.resolve(null)
@@ -288,7 +311,8 @@ describe('uploaded profile pictures through the planner store', () => {
     )
     const frames = Math.ceil((Date.now() - start) / 16) + 1
     stop()
-    expect(asked).toEqual(Array(10).fill(100))
+    // the caller's own picture at boot, then the 999 others in calls of 100
+    expect(asked).toEqual([1, ...Array(9).fill(100), 99])
     expect(fetcher).toHaveBeenCalledTimes(1000)
     // a thousand ready pictures, one repaint a frame at most, far fewer
     // than one a picture
@@ -382,7 +406,46 @@ describe('uploaded profile pictures through the planner store', () => {
     expect(asked).toEqual([[two.id]])
   })
 
-  it('mints 25 pictures in one call for a page naming 25 of 1,000 people, and asks for no other', async () => {
+  it('mints the caller’s own new picture with no view naming anyone, as Settings › Account shows it', async () => {
+    await store.initStore()
+    await vi.advanceTimersByTimeAsync(20)
+    const me = snap.myProfileIds[0] ?? ''
+    expect(mint).not.toHaveBeenCalled()
+    const asked: string[][] = []
+    network.query.mockImplementation((ref, args: { profile_ids?: string[] }) => {
+      if (getFunctionName(ref) !== 'files:mintUrls') return Promise.resolve(null)
+      asked.push(args.profile_ids ?? [])
+      return mint()
+    })
+    // the upload: an address, the POST that stores the bytes, and the write
+    // that hangs them on the profile, which the server then holds
+    network.mutation.mockImplementation(async (ref) => {
+      const name = getFunctionName(ref)
+      if (name === 'files:avatarUploadUrl') return 'https://files.test/upload'
+      if (name === 'files:setAvatar') {
+        const mine = snap.profiles.find((profile) => profile.id === me)
+        if (mine) mine.avatar_storage_id = 'storage-mine' as Id<'_storage'>
+      }
+      return null
+    })
+    fetcher.mockImplementation(async (_url, init) =>
+      init?.method === 'POST'
+        ? Response.json({ storageId: 'storage-mine' })
+        : new Response(new Blob(['face'])),
+    )
+    const file = new File([new Uint8Array(64)], 'me.png', { type: 'image/png' })
+    await expect(store.P.setAvatar(me, file, null)).resolves.toBeNull()
+    await vi.waitFor(() =>
+      expect(store.P.person(me)).toMatchObject({ picture: expect.stringMatching(/^blob:/) }),
+    )
+    expect(asked).toEqual([[me]])
+    const downloads = fetcher.mock.calls.filter(([, init]) => init?.method !== 'POST')
+    expect(downloads.map(([url]) => String(url))).toEqual([
+      expect.stringContaining('v=storage-mine'),
+    ])
+  })
+
+  it('mints 25 pictures in one call for a page naming 25 of 1,000 people, and asks for no other but the caller’s own', async () => {
     const base = snap.profiles[0] as Snapshot['profiles'][number]
     snap.profiles = Array.from({ length: 1000 }, (_, i) => ({
       ...base,
@@ -392,6 +455,8 @@ describe('uploaded profile pictures through the planner store', () => {
       created_at: new Date(NOW.getTime() + i).toISOString(),
       avatar_storage_id: `storage-${i}` as Id<'_storage'>,
     }))
+    // the caller is the first of them, with a picture of their own
+    snap.myProfileIds = [base.id]
     const asked: string[][] = []
     network.query.mockImplementation((ref, args: { profile_ids?: string[] }) => {
       if (getFunctionName(ref) !== 'files:mintUrls') return Promise.resolve(null)
@@ -409,8 +474,9 @@ describe('uploaded profile pictures through the planner store', () => {
         page.map(() => expect.objectContaining({ picture: expect.stringMatching(/^blob:/) })),
       ),
     )
-    expect(asked).toEqual([page.map((p) => p.id)])
-    expect(fetcher).toHaveBeenCalledTimes(25)
+    // the caller's own picture at boot, then the page's 25 in one call
+    expect(asked).toEqual([[base.id], page.map((p) => p.id)])
+    expect(fetcher).toHaveBeenCalledTimes(26)
   })
 
   it('reads the face of a person the workspace does not hold and shows its picture', async () => {

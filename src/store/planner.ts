@@ -8110,10 +8110,11 @@ async function mintCredential(scheme: 'qva' | 'qvt') {
    per `avatar:<profileId>:<storageId>`, the version from the people part's
    profile or the profile cache's face (pictureKey). Renewing an unchanged
    portrait checks access without dropping its source or downloading its
-   bytes again. The store mints, renews and downloads only the pictures of
-   the people its open pages, pickers and views name (wantPictures), in
-   their order; a held picture nobody names keeps its bytes within the
-   budget and shows again on one renewal (lib/avatarSources.ts).
+   bytes again. The store mints, renews and downloads only the caller's own
+   pictures and those of the people its open pages, pickers and views name
+   (wantPictures), in that order; a held picture nobody names keeps its
+   bytes within the budget and shows again on one renewal
+   (lib/avatarSources.ts).
 
    Every mint of the store goes through one queue (lib/mintQueue.ts): at
    most 100 ids a call, two calls at once, attachments and pictures never
@@ -8396,18 +8397,24 @@ function pictureKey(id: string): string | null {
   return version ? `avatar:${id}:${version}` : null
 }
 
-/* The picture keys of the people the open views name, in their order
-   (profileCache named), the only ones the store mints, renews and
-   downloads. */
+/* The picture keys the store mints, renews and downloads, in order: the
+   caller's own seats first, then the people the open views name
+   (profileCache named). */
 let namedPictures: { id: string; key: string }[] = []
 
 /* Follows the people the open views name with the wanted pictures: hands
-   their keys to the picture source in order and mints the due ones. */
+   their keys to the picture source in order and mints the due ones. The
+   caller's own seats always count as named, since the app shows the
+   caller's portrait on pages that name nobody, such as Settings › Account
+   after an upload, the comment composer and the phone's header. */
 function wantPictures() {
   const next: { id: string; key: string }[] = []
-  for (const person of profileCache.named()) {
-    const key = pictureKey(person.id)
-    if (key) next.push({ id: person.id, key })
+  const seen = new Set<string>()
+  for (const id of [...myProfileSet, ...profileCache.named().map((person) => person.id)]) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    const key = pictureKey(id)
+    if (key) next.push({ id, key })
   }
   const same =
     next.length === namedPictures.length && next.every((p, i) => p.key === namedPictures[i]?.key)
@@ -9009,9 +9016,9 @@ function rebuild(now = new Date(), full = false) {
   // unread. The second pass finds nothing left to mint and stops there. Only
   // avatars pre-mint: attachment URLs are minted on demand (attachmentUrl),
   // because only the open issue's inline images ever render eagerly, while
-  // avatars render by the dozen per board. Only the pictures the open views
-  // name prime, in their order, and while the page is hidden the pictures
-  // hold and nothing primes.
+  // avatars render by the dozen per board. Only the caller's own pictures
+  // and those the open views name prime, in that order, and while the page
+  // is hidden the pictures hold and nothing primes.
   wantPictures()
   // the inline images out of reach whose files the rows no longer hold
   // drop their bytes, and near ones a clear left waiting ask again

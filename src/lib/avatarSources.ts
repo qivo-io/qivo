@@ -25,11 +25,11 @@ const LOAD_TIMEOUT = 15_000
       order, only while every held picture is named. A waiting picture
       keeps the lease it was minted with and starts by itself once room
       frees.
-    The store asks only for the pictures its open pages, pickers and views
-    name (`named`, store/planner.ts). Measured on the benchmark page
-    (scripts/perf, people=1000&pictures=1 at 1440 by 1000, each picture a
-    20 KB PNG answered after 150 ms, 7 November 2026), against the store
-    that asked for every picture of its roster:
+    The store asks only for the caller's own pictures and those its open
+    pages, pickers and views name (`named`, store/planner.ts). Measured on
+    the benchmark page (scripts/perf, people=1000&pictures=1 at 1440 by
+    1000, each picture a 20 KB PNG answered after 150 ms, 7 November 2026),
+    against the store that asked for every picture of its roster:
     - The Board of 100 tasks: 1 mint call of 100 people, 100 downloads,
       2.0 MB kept, 13.3 MiB of JS heap, the first 25 pictures 1.4 s after
       the page opened; before, 10 mint calls, 1,000 downloads, 20.2 MB,
