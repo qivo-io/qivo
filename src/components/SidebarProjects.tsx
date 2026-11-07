@@ -47,11 +47,13 @@
      for; the tree's own loads, as its end scrolls into view or the scope
      rule reads on, never move focus, also after a pressed batch landed.
    - App asks for focus on a row once the tree shows it (FocusRow), as
-     after a create whose row comes with the server's answer. The row's
-     name button takes focus in the first commit that renders it, if focus
-     is nowhere or in a hidden view, and the request goes once the row
-     rendered, the scope moved, nothing reads toward the row any more, or
-     the tree hides.
+     after a create whose row comes with the server's answer, and holds
+     the request itself (App.tsx focusRow), so a tree mounted again never
+     takes one twice. The row's name button takes focus in the first
+     commit that renders it, if focus is nowhere or in a hidden view, and
+     the tree tells App it is done with the request (onFocusRowDone) once
+     the row rendered or nothing reads toward the row any more. App drops
+     it itself when the scope moves or the rail leaves or hides.
 
    While Settings shows, App keeps the tree mounted and hidden
    (components/KeptView.tsx KeptInPlace): its reads stop and it keeps its
@@ -95,7 +97,7 @@ import { Button } from './ui/button'
 type Actions = Record<string, (...args: unknown[]) => void>
 
 /** App's request to focus row `id` once the tree shows it; `n` tells two
-    requests apart. */
+    requests apart, and the tree hands it back to App's onFocusRowDone. */
 export type FocusRow = { id: string; n: number }
 
 /** The top-level list's identity, one list across every seat. */
@@ -148,18 +150,22 @@ const reading = (list: Pick<PagedList<unknown, unknown>, 'phase' | 'refreshing'>
  * The sidebar's project tree, on the rules in the module header. `scope`
  * is App's scope, `lit` whether a row lights for it, `actions` App's
  * (openProject, openProjects, openSettings, openArchivedTasks and
- * newProject) and `focusRow` App's latest focus request.
+ * newProject), `focusRow` App's focus request while it lasts, and
+ * `onFocusRowDone` what the tree calls with the request's `n` once it is
+ * done with it.
  */
 export function SidebarProjects({
   scope,
   lit,
   actions,
   focusRow,
+  onFocusRowDone,
 }: {
   scope: string
   lit: (id: string) => boolean
   actions: Actions
   focusRow: FocusRow | null
+  onFocusRowDone: (n: number) => void
 }) {
   const tree = useRef<HTMLDivElement>(null)
   const { visible } = useViewVisibility()
@@ -233,21 +239,19 @@ export function SidebarProjects({
   // which its own layout effect writes before this component's run
   const childrenSeek = useRef(false)
 
-  // the scope the tree last looked at, whether the row it names still
-  // waits for its one-time reveal, and App's focus request, taken once for
-  // the scope it was made in
+  // the scope the tree last looked at, and whether the row it names still
+  // waits for its one-time reveal
   const seenScope = useRef<string | null>(null)
   const revealing = useRef(false)
-  const taken = useRef<number | null>(null)
-  const request = useRef<{ id: string; scope: string } | null>(null)
   /* Looks at the rows after each commit of the tree, and of its expanded
      list, which renders on its own as its batches land. Every scope change,
      the boot's included, also to a scope that names no row, such as My
      view or a sub-project the tree does not hold, asks for the reveal
      again, and the row the scope names scrolls into view the first time it
-     shows after it. The requested row takes focus the first time it shows.
-     It reads this render's values, which stay the tree's latest until it
-     renders again. */
+     shows after it. The row App's focus request names takes focus the
+     first time it shows, and App hears once the tree is done with the
+     request. It reads this render's values, which stay the tree's latest
+     until it renders again. */
   const settle = useRef(() => {})
   settle.current = () => {
     const box = tree.current
@@ -265,37 +269,19 @@ export function SidebarProjects({
         intoTreeView(box, row)
       }
     }
-    const asked = request.current
-    if (!asked) return
-    if (asked.scope !== scope) {
-      request.current = null
-      return
-    }
+    if (!focusRow) return
     const control = box.querySelector<HTMLElement>(
-      `[data-project-row="${asked.id}"] > button, [data-subproject-row="${asked.id}"] > button`,
+      `[data-project-row="${focusRow.id}"] > button, [data-subproject-row="${focusRow.id}"] > button`,
     )
     if (control) {
-      request.current = null
+      onFocusRowDone(focusRow.n)
       if (focusOutOfUse()) restoreFocus(control)
-      return
+    } else if (!seek && !reading(list, end) && !childrenSeek.current) {
+      // nothing reads toward the row any more
+      onFocusRowDone(focusRow.n)
     }
-    // nothing reads toward the row any more
-    if (!seek && !reading(list, end) && !childrenSeek.current) request.current = null
   }
-  useLayoutEffect(() => {
-    if (focusRow && taken.current !== focusRow.n) {
-      taken.current = focusRow.n
-      request.current = { id: focusRow.id, scope }
-    }
-    settle.current()
-  })
-  // a tree that hides drops the request, so it takes no focus on return
-  useLayoutEffect(
-    () => () => {
-      request.current = null
-    },
-    [],
-  )
+  useLayoutEffect(() => settle.current())
 
   // a row focused by anything but a press inside the tree scrolls into its
   // view, as a Tab focus does by itself

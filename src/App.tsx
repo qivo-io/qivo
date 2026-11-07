@@ -146,7 +146,8 @@ let toastSeq = 0
 /** The desktop's rail. While `hidden`, as while Settings shows, it stays
     mounted and inactive (KeptInPlace), so the project tree keeps its rows
     and its place and reads again on return. `focusRow` is App's request to
-    focus a project's row once the tree shows it. */
+    focus a project's row once the tree shows it, and `onFocusRowDone` ends
+    it (components/SidebarProjects.tsx). */
 function Sidebar({
   scope,
   actions,
@@ -155,6 +156,7 @@ function Sidebar({
   projectsOpen,
   hidden,
   focusRow,
+  onFocusRowDone,
 }: {
   scope: string
   actions: Record<string, (...args: unknown[]) => void>
@@ -163,6 +165,7 @@ function Sidebar({
   projectsOpen: boolean
   hidden: boolean
   focusRow: FocusRow | null
+  onFocusRowDone: (n: number) => void
 }) {
   // "My view" is a scope and lights up like a project row. "All projects"
   // opens the project directory, a page, and lights while it shows; it also
@@ -321,7 +324,13 @@ function Sidebar({
             </div>
           )}
 
-          <SidebarProjects scope={scope} lit={scopeOn} actions={actions} focusRow={focusRow} />
+          <SidebarProjects
+            scope={scope}
+            lit={scopeOn}
+            actions={actions}
+            focusRow={focusRow}
+            onFocusRowDone={onFocusRowDone}
+          />
 
           {/* Settings follows the project list with the same section gap as the
           brand and organization. The list shrinks to scroll only when needed;
@@ -794,11 +803,19 @@ function App() {
   const focusAfterMove = useRef<(() => HTMLElement | null) | null>(null)
   /* The sidebar's request to focus a project's row once its tree shows it
      (components/SidebarProjects.tsx), which the server's list brings only
-     after the save. It is never made while Settings hides the tree. */
-  const [focusRow, setFocusRow] = useState<FocusRow | null>(null)
-  const askFocusRow = (id: string) => {
-    if (!hereRef.current.settingsPage) setFocusRow((was) => ({ id, n: (was?.n ?? 0) + 1 }))
+     after the save, with the scope it was made in. App holds it, not the
+     tree, so a tree mounted again, as after the phone's layout, never takes
+     it twice.
+     It is made only while the desktop's rail shows (not on the phone, nor
+     while Settings hides the tree), and it ends once the tree is done with
+     it (doneFocusRow), or the scope moves or the rail leaves or hides
+     (focusRowLive below). */
+  const [focusRow, setFocusRow] = useState<(FocusRow & { scope: string }) | null>(null)
+  const askFocusRow = (id: string, at: string) => {
+    if (!hereRef.current.settingsPage && !mobileRef.current)
+      setFocusRow((was) => ({ id, scope: at, n: (was?.n ?? 0) + 1 }))
   }
+  const doneFocusRow = (n: number) => setFocusRow((was) => (was?.n === n ? null : was))
   useLayoutEffect(() => {
     const target = focusAfterMove.current
     focusAfterMove.current = null
@@ -808,6 +825,13 @@ function App() {
     if (nowhere || active.closest(OUT_OF_USE)) restoreFocus(target())
   })
   const [settingsPage, setSettingsPage] = useState(r0?.settings || null) // null | "account" | "org-*" | "team:<id>" | "project:<id>"
+  // the tree's focus request while the desktop's rail shows the scope it
+  // was made in; once not, it ends, so it never comes back
+  const focusRowLive =
+    focusRow && !mobile && !settingsPage && focusRow.scope === scope ? focusRow : null
+  useLayoutEffect(() => {
+    if (focusRow && !focusRowLive) setFocusRow(null)
+  })
   const [inboxOpen, setInboxOpen] = useState(!!r0?.inbox || (mobile && !r0)) // the message inbox (0074)
   const [projectsOpen, setProjectsOpen] = useState(!!r0?.projects)
   /* Team sync (the meeting page) while it is open: { scope, step }. It sits
@@ -1922,7 +1946,7 @@ function App() {
         setSync(null)
         focusAfterMove.current = () => projectTarget(id)
         // the tree's row may come a commit later than the move
-        askFocusRow(id)
+        askFocusRow(id, id)
       },
       () => {
         answered(false)
@@ -1932,7 +1956,7 @@ function App() {
         const { parent } = p
         if (parent) {
           focusAfterMove.current = () => projectTarget(parent)
-          askFocusRow(parent)
+          askFocusRow(parent, scopeRef.current)
         }
       },
       shown,
@@ -2367,7 +2391,8 @@ function App() {
               syncOpen={!!sync}
               projectsOpen={projectsOpen}
               hidden={!!settingsPage}
-              focusRow={focusRow}
+              focusRow={focusRowLive}
+              onFocusRowDone={doneFocusRow}
             />
           )
         }

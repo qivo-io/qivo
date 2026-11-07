@@ -102,6 +102,21 @@ function phone(on: boolean) {
   )
 }
 
+/** Lays the app out for a phone, or for a desktop, as phone does, and
+    answers what crosses the breakpoint while App runs. */
+function crossable(on: boolean) {
+  const list = Object.assign(new EventTarget(), { matches: on, media: '(max-width: 760px)' })
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn(() => list),
+  )
+  return async (next: boolean) => {
+    list.matches = next
+    await act(async () => list.dispatchEvent(new Event('change')))
+    await settle()
+  }
+}
+
 /** Waits for `find` to answer, through lazy modules that can take seconds
     to load on a busy worker. */
 function waitFor<T>(find: () => T | null | undefined, what: string) {
@@ -827,6 +842,66 @@ describe("the sidebar's tree across Settings", { timeout: 30_000 }, () => {
       "the tree's Docs row",
     )
     expect(docs.getAttribute('aria-current')).toBe('page')
+    expect(document.activeElement).toBe(document.body)
+  })
+})
+
+describe("the sidebar's focus request", { timeout: 30_000 }, () => {
+  /** The new project's row in the sidebar's tree, named Docs. */
+  const docsRow = () =>
+    [...document.querySelectorAll<HTMLElement>('aside [data-project-row] > button')].find(
+      (button) => button.textContent === 'Docs',
+    )
+  /** Makes the project Docs from the Projects page, after which App moves
+      into it. */
+  async function createDocs() {
+    history.replaceState(null, '', '/app/testbed/projects')
+    localStorage.clear()
+    await boot()
+    const page = await waitFor(
+      () => document.querySelector('.mobile-project-directory'),
+      'the page',
+    )
+    await press(
+      await waitFor(() => page.querySelector<HTMLElement>('[data-new-project]'), 'New project'),
+    )
+    await finish(true, 'Create project')
+    await save()
+  }
+  const blur = () => act(async () => (document.activeElement as HTMLElement | null)?.blur())
+
+  it('is taken once, so a later commit or a tree mounted again after the phone layout moves no focus', async () => {
+    const cross = crossable(false)
+    await createDocs()
+    const row = await waitFor(docsRow, "Docs's row")
+    expect(document.activeElement).toBe(row)
+    // with focus nowhere, a later commit of the tree leaves it there
+    await blur()
+    await act(async () => window.showToast?.('Saved'))
+    await settle()
+    expect(document.activeElement).toBe(document.body)
+    // as does the tree the desktop mounts again after the phone's layout
+    await cross(true)
+    expect(document.querySelector('aside [data-sidebar-projects]')).toBeNull()
+    await blur()
+    await cross(false)
+    const again = await waitFor(docsRow, "Docs's row again")
+    await settle()
+    expect(again).not.toBe(row)
+    expect(again.getAttribute('aria-current')).toBe('page')
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('is not made on the phone, so the tree the desktop mounts later moves no focus', async () => {
+    const cross = crossable(true)
+    await createDocs()
+    // the phone's header takes focus as App moves into Docs
+    expect(document.activeElement).toBe(document.querySelector('[data-mobile-project-actions]'))
+    await blur()
+    await cross(false)
+    const row = await waitFor(docsRow, "Docs's row")
+    await settle()
+    expect(row.getAttribute('aria-current')).toBe('page')
     expect(document.activeElement).toBe(document.body)
   })
 })

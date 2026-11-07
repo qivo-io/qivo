@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { getFunctionName } from 'convex/server'
-import { Activity, act } from 'react'
+import { Activity, act, useReducer } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
@@ -66,6 +66,11 @@ let store: typeof import('../store/planner')
 let actions: Record<string, ReturnType<typeof vi.fn<(...args: unknown[]) => void>>>
 // the tree's scrollTop writes, and every element's scrollTop
 let scrolled: number[]
+// App's focus request as the tree gets it, which lasts until the tree is
+// done with it, as App holds it, and the requests the tree said it is done
+// with
+let request: FocusRow | null
+let done: number[]
 const tops = new WeakMap<Element, number>()
 
 /** Lets answers and renders land. */
@@ -183,25 +188,32 @@ async function load(next: Snapshot) {
   version = await import('../store/usePlannerVersion')
 }
 
-/** The tree on the store's version, one component for every render. */
-function Harness({ scope, focusRow }: { scope: string; focusRow: FocusRow | null }) {
+/** The tree on the store's version, one component for every render, with
+    App's focus request, which ends once the tree is done with it. */
+function Harness({ scope }: { scope: string }) {
   version.usePlannerVersion()
+  const [, redraw] = useReducer((n: number) => n + 1, 0)
   return (
     <tree.SidebarProjects
       scope={scope}
       lit={(id) => id === scope}
       actions={actions}
-      focusRow={focusRow}
+      focusRow={request}
+      onFocusRowDone={(n) => {
+        done.push(n)
+        if (request?.n !== n) return
+        request = null
+        redraw()
+      }}
     />
   )
 }
 
 /** Renders the tree on `scope`, shown or hidden as App keeps it while
-    Settings shows (React's Activity). */
-async function render(
-  scope: string,
-  o: { mode?: 'visible' | 'hidden'; focusRow?: FocusRow | null } = {},
-) {
+    Settings shows (React's Activity), with App's new focus request
+    `focusRow`. */
+async function render(scope: string, o: { mode?: 'visible' | 'hidden'; focusRow?: FocusRow } = {}) {
+  if (o.focusRow) request = o.focusRow
   for (const name of [
     'openProject',
     'openProjects',
@@ -214,7 +226,7 @@ async function render(
     root.render(
       <TooltipProvider>
         <Activity mode={o.mode ?? 'visible'}>
-          <Harness scope={scope} focusRow={o.focusRow ?? null} />
+          <Harness scope={scope} />
         </Activity>
       </TooltipProvider>,
     ),
@@ -244,6 +256,8 @@ beforeEach(() => {
   // project row is 32px below the 40px header, moved by the tree's
   // scrollTop, which records what the tree writes
   scrolled = []
+  request = null
+  done = []
   Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
     configurable: true,
     get(this: HTMLElement) {
@@ -928,6 +942,9 @@ describe('focus', { timeout: 60_000 }, () => {
     await settle()
     const button = find('button', row(made))
     expect(document.activeElement).toBe(button)
+    // the tree told App it took the request, which App then ends
+    expect(done).toContain(1)
+    expect(request).toBeNull()
     // the row, the 21st, scrolled into the tree's view
     expect(tops.get(find('[data-sidebar-projects]'))).toBe(40 + 21 * 32 - 320)
     // a request whose row shows while focus is elsewhere moves nothing
@@ -940,9 +957,11 @@ describe('focus', { timeout: 60_000 }, () => {
     other.blur()
     const later = top(snap, 'Alpha later')
     await render(made, { focusRow: { id: later, n: 3 } })
+    expect(request).toBeNull()
     await republish()
     expect(find('button', row(later)).textContent).toBe('Alpha later')
     expect(document.activeElement).toBe(document.body)
+    expect([...new Set(done)]).toEqual([1, 2, 3])
   })
 
   it("brings a row focused by Load more's rule or a program into the tree's view, and leaves a pressed one", async () => {
