@@ -40,17 +40,22 @@ type ImageLease = NonNullable<FunctionReturnType<typeof api.appearance.mintCusto
    the provider starts no new fetch with its URL once it has ended. A
    failed renewal keeps it too and sets `renewalFailed` until a renewal
    answers, so Settings can show its preview as unavailable once it has
-   ended. A refusal, no image or another image, drops it. A new `attempt`
-   asks for the lease again at once, as Settings' Reload preview does
-   after a refusal or a failure. */
+   ended, or while a new derivative version has no lease of its own. The
+   flag holds only for the image, derivative version and attempt whose
+   renewal failed, so a change of any of them never shows the old failure.
+   A refusal, no image or another image, drops it. A new `attempt` asks
+   for the lease again at once, as Settings' Reload preview does after a
+   refusal or a failure. */
 function usePrivateImage(imageId: string | null, previewVersion: number | null, attempt: number) {
   const [lease, setLease] = useState<(ImageLease & { previewVersion: number | null }) | null>(null)
   const [failed, setFailed] = useState(false)
-  const [renewalFailed, setRenewalFailed] = useState(false)
+  // the inputs whose renewal failed, as `run` names them
+  const run = `${imageId}:${previewVersion}:${attempt}`
+  const [renewalFailedRun, setRenewalFailedRun] = useState<string | null>(null)
   const shown = useRef<string | null>(null)
   useEffect(() => {
     setFailed(false)
-    setRenewalFailed(false)
+    setRenewalFailedRun(null)
     if (!imageId) {
       shown.current = null
       setLease(null)
@@ -86,7 +91,7 @@ function usePrivateImage(imageId: string | null, previewVersion: number | null, 
         shown.current = imageId
         setLease({ ...result, previewVersion })
         setFailed(false)
-        setRenewalFailed(false)
+        setRenewalFailedRun(null)
         schedule(Math.max(1000, expiresAt - Date.now() - 60_000))
       } catch {
         if (!active) return
@@ -94,7 +99,7 @@ function usePrivateImage(imageId: string | null, previewVersion: number | null, 
           setLease(null)
           setFailed(true)
           expiresAt = 0
-        } else setRenewalFailed(true)
+        } else setRenewalFailedRun(run)
         schedule(60_000)
       } finally {
         renewing = false
@@ -113,7 +118,11 @@ function usePrivateImage(imageId: string | null, previewVersion: number | null, 
     }
     // attempt asks again after a refusal or a failure
   }, [imageId, previewVersion, attempt])
-  return { lease: lease?.image_id === imageId ? lease : null, failed, renewalFailed }
+  return {
+    lease: lease?.image_id === imageId ? lease : null,
+    failed,
+    renewalFailed: renewalFailedRun === run,
+  }
 }
 
 /** Mounted after socket authentication, before workspace initialization, and
@@ -426,8 +435,9 @@ export function AppearanceProvider({
         : customPreview && privateFailed
           ? { read: null, status: 'unavailable', url: null }
           : customPreview && !customLease
-            ? // the lease of this version is on its way
-              { read: null, status: 'loading', url: null }
+            ? // The lease of this version is on its way, or its mint failed
+              // while the lease of an older version stays shown.
+              { read: null, status: renewalFailed ? 'unavailable' : 'loading', url: null }
             : derivative
               ? { read: derivative, status: 'loading', url: null }
               : // A weekly image without a derivative shows the image the

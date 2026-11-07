@@ -534,6 +534,90 @@ describe('the Canvas background and its preview', () => {
     }
   })
 
+  it('shows a custom preview whose new derivative version could not get its lease as unavailable with Reload preview, never for an older version’s failed renewal', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const lease = (version: number) => ({
+        image_id: 'image-1',
+        url: `https://site.test/backgrounds/image-1?v=${version}&t=${Date.now()}`,
+        preview_url: `https://site.test/background-previews/image-1?v=${version}&t=${Date.now()}`,
+        expires_at: Date.now() + 600_000,
+      })
+      // every status the preview renders with
+      const statuses: string[] = []
+      function Statuses() {
+        statuses.push(usePreview().preview.status)
+        return null
+      }
+      store.mint.mockImplementation(async () => lease(1))
+      await act(async () =>
+        root.render(
+          <TooltipProvider>
+            <AppearanceProvider accountId="account-1">
+              <AppearanceSettings />
+              <Statuses />
+            </AppearanceProvider>
+          </TooltipProvider>,
+        ),
+      )
+      await settle()
+      await act(async () => store.deliver(preferences('custom', 1)))
+      await settle()
+      fetched('/backgrounds/')[0]?.answer()
+      fetched('/background-previews/')[0]?.answer()
+      await settle()
+      const painted = background()
+      expect(painted).toMatch(/^blob:/)
+      const shownPreview = () =>
+        container.querySelector('[data-appearance-preview]')?.getAttribute('src') ?? null
+      expect(shownPreview()).toMatch(/^blob:/)
+      // the renewal a minute before the end fails while the lease still holds
+      store.mint.mockRejectedValue(new Error('offline'))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(540_000)
+      })
+      expect(store.mint).toHaveBeenCalledTimes(2)
+      // A new derivative version keeps the shown lease and asks for its own.
+      // While that mint is on its way the preview loads; the failed renewal
+      // of version 1 never shows as unavailable.
+      let fail = (_error: Error) => {}
+      store.mint.mockImplementation(
+        () =>
+          new Promise((_resolve, reject) => {
+            fail = reject
+          }),
+      )
+      statuses.length = 0
+      await act(async () => store.deliver(preferences('custom', 2)))
+      await settle()
+      expect(store.mint).toHaveBeenCalledTimes(3)
+      expect(statuses).not.toContain('unavailable')
+      const text = () => container.querySelector('.aspect-video')?.textContent ?? ''
+      expect(text()).toBe('Loading preview…')
+      // its mint fails: unavailable with Reload preview, and nothing read
+      await act(async () => fail(new Error('offline')))
+      await settle()
+      expect(text()).toBe('Preview unavailable.')
+      const reload = () =>
+        [...container.querySelectorAll('button')].find((b) => b.textContent === 'Reload preview')
+      expect(reload()).toBeDefined()
+      expect(fetched('/background-previews/image-1?v=2')).toEqual([])
+      expect(background()).toBe(painted)
+      // Reload asks for the lease again, and the preview reads version 2
+      store.mint.mockImplementation(async () => lease(2))
+      await act(async () => reload()?.click())
+      await settle()
+      expect(store.mint).toHaveBeenCalledTimes(4)
+      expect(fetched('/background-previews/image-1?v=2')).toHaveLength(1)
+      fetched('/background-previews/image-1?v=2')[0]?.answer()
+      await settle()
+      expect(shownPreview()).toMatch(/^blob:/)
+      expect(background()).toBe(painted)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('hands the demo’s derivative URL to the preview and pauses its public feed while hidden', async () => {
     demo.on = true
     await render(true)
