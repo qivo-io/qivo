@@ -140,12 +140,32 @@ describe('useOwnerNames', () => {
     expect(text()).toEqual(['pat:loading'])
   })
 
-  it(`keeps at most ${1000} names, the oldest dropped first`, () => {
+  // the bound lowered to 3, so the case keeps four names, not 1,001
+  it('keeps at most its bound of names, the oldest dropped first', () => {
     const org = snap.orgs[0].id
-    for (let i = 0; i <= names.OWNER_NAMES_KEPT; i++)
-      names.keepOwnerName(org, { id: `p${i}`, name: `Person ${i}`, active: true })
-    expect(names.ownerNameKept(org, 'p0')).toBe(false)
-    expect(names.ownerNameKept(org, 'p1')).toBe(true)
-    expect(names.ownerNameKept(org, `p${names.OWNER_NAMES_KEPT}`)).toBe(true)
+    const keep = (id: string) => names.keepOwnerName(org, { id, name: `Person ${id}`, active: true })
+    const was = names.OWNER_NAMES.kept
+    expect(was).toBe(1000)
+    names.OWNER_NAMES.kept = 3
+    try {
+      for (const id of ['p0', 'p1', 'p2', 'p3']) keep(id)
+      expect(['p0', 'p1', 'p2', 'p3'].map((id) => names.ownerNameKept(org, id))).toEqual([
+        false,
+        true,
+        true,
+        true,
+      ])
+      // a name kept again is the newest
+      keep('p1')
+      keep('p4')
+      expect(['p1', 'p2', 'p3', 'p4'].map((id) => names.ownerNameKept(org, id))).toEqual([
+        true,
+        false,
+        true,
+        true,
+      ])
+    } finally {
+      names.OWNER_NAMES.kept = was
+    }
   })
 })

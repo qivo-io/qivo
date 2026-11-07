@@ -16,9 +16,11 @@ import type { PersonFaceRow } from '../../convex/model/peopleSettings'
 import { useLiveView } from '../lib/liveView'
 import { P } from '../store/planner'
 
-/** The most holder names kept after their read, by organization and id,
-    the oldest dropped first. */
-export const OWNER_NAMES_KEPT = 1000
+/** The bound of the holder names kept after their read, by organization
+    and id (`kept`), the oldest dropped first. Tests lower it and set it
+    back, so a case reaches the bound without seeding past the people
+    figure. */
+export const OWNER_NAMES = { kept: 1000 }
 
 /** A person's name as the map keeps it. */
 type KeptName = { id: string; name: string; active: boolean }
@@ -33,7 +35,7 @@ export function keepOwnerName(org: string, row: KeptName) {
   kept.delete(key)
   kept.set(key, { id: row.id, name: row.name, active: row.active })
   for (const oldest of kept.keys()) {
-    if (kept.size <= OWNER_NAMES_KEPT) break
+    if (kept.size <= OWNER_NAMES.kept) break
     kept.delete(oldest)
   }
 }
