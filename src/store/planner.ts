@@ -1504,13 +1504,14 @@ function watchedRow(): Row<'issues'> | undefined {
 /* Whether the workspace holds task `uuid` in organization `org`. It holds
    one task by an id, and two organizations can hold one task id, so a
    held task of another organization is another task, which no write or
-   paint of this one reaches. */
-const holdsIn = (uuid: string, org: string): boolean => rows.issues.get(uuid)?.org_id === org
+   paint of this one reaches. It reads the row without copying it, so a
+   paint that only asks copies no row (store/rowMap.ts peek). */
+const holdsIn = (uuid: string, org: string): boolean => rows.issues.peek(uuid)?.org_id === org
 
 /* Whether the workspace holds another organization's task than `org`'s
-   by id `uuid` (holdsIn). */
+   by id `uuid`, read as holdsIn reads it. */
 function heldElsewhere(uuid: string, org: string): boolean {
-  const row = rows.issues.get(uuid)
+  const row = rows.issues.peek(uuid)
   return !!row && row.org_id !== org
 }
 
