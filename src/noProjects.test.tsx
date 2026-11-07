@@ -45,10 +45,13 @@ vi.mock('./lib/auth', () => ({
 
 const MEMBER =
   'No active projects are shared with you. Ask an organization admin or a project lead for access.'
-// the chooser's empty state words it as the All projects directory does
+const ADMIN =
+  'You take part in no active projects. Settings › Projects › All projects lists every project of your organization.'
+// the chooser's empty state words it as the All projects directory does,
+// which tells a standard user this and an admin what every page does
+// (ADMIN)
 const CHOOSER_MEMBER =
   'You have no active projects. Ask an organization admin or a project lead for access.'
-const CHOOSER_ADMIN = `${CHOOSER_MEMBER} Settings › Projects › All projects lists every project of your organization.`
 
 let container: HTMLDivElement
 let root: Root
@@ -231,8 +234,8 @@ describe('a person who can see no project', () => {
   it('tells an admin where every project of the organization is listed', async () => {
     await app(noProjects('admin'))
     await chooser('empty')
-    await shows(CHOOSER_ADMIN)
-    expect(document.body.textContent).not.toContain('Your organization has no active projects.')
+    await shows(ADMIN)
+    expect(document.body.textContent).not.toContain(CHOOSER_MEMBER)
     expect(newProject()).toBeDefined()
   })
 

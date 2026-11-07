@@ -792,9 +792,11 @@ describe('the empty end', { timeout: 60_000 }, () => {
     await leave()
     await app(world({ role: 'admin', projects: false }), '/app/testbed')
     await chooser('empty')
+    // an admin, judged by ordinary access, takes part in none
     expect(q('[data-project-chooser]')?.textContent).toContain(
-      `${member} Settings › Projects › All projects lists every project of your organization.`,
+      'You take part in no active projects. Settings › Projects › All projects lists every project of your organization.',
     )
+    expect(q('[data-project-chooser]')?.textContent).not.toContain(member)
     // a list held back or failing never shows it
     for (const held of [{ notReady: true }, { fail: true }] as ForcedProjectNav[]) {
       await leave()

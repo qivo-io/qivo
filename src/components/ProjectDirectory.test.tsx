@@ -453,17 +453,20 @@ describe('browsing', { timeout: 60_000 }, () => {
     expect(rowIds()).toEqual([])
   })
 
-  it('says the person has no active projects, and where an admin finds every project', async () => {
+  it('says a standard user has no active projects, and an admin that they take part in none and where every project is', async () => {
+    const member =
+      'You have no active projects. Ask an organization admin or a project lead for access.'
     for (const role of ['user', 'admin'] as const) {
       await load(base(false, role))
       await render()
       expect(end()).toBe('empty')
-      expect(pageText()).toContain(
-        'You have no active projects. Ask an organization admin or a project lead for access.',
-      )
-      expect(pageText().includes('Settings › Projects › All projects lists every project')).toBe(
-        role === 'admin',
-      )
+      // an admin gets the sentence of every other page (noProjectsHint)
+      expect(pageText().includes(member)).toBe(role === 'user')
+      expect(
+        pageText().includes(
+          'You take part in no active projects. Settings › Projects › All projects lists every project of your organization.',
+        ),
+      ).toBe(role === 'admin')
       await act(async () => root.unmount())
       root = createRoot(container)
       vi.useRealTimers()

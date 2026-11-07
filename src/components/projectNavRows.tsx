@@ -18,6 +18,7 @@ import type {
   NavProject,
   NavSearch,
 } from '../../convex/model/projectNavReads'
+import { noProjectsHint } from '../lib/noProjects'
 import type { BatchAt } from '../lib/pagedList'
 import { useLatest } from '../lib/useLatest'
 import { P, type ProjectAsk } from '../store/planner'
@@ -146,12 +147,13 @@ export function navTags<Row extends NavProject>(
 }
 
 /** What a person with no active project to choose is told, in the All
-    projects directory and the project chooser: the lists judge an
-    organization admin by ordinary access too, so an admin is pointed to
-    the list of every project of their organization. */
+    projects directory and the project chooser. The lists judge an
+    organization admin by ordinary access, as every page does, so an admin
+    gets the pages' own sentence (noProjectsHint), which points to the list
+    of every project of their organization. */
 export function noNavProjectsHint(): string {
   return P.isAdmin()
-    ? 'You have no active projects. Ask an organization admin or a project lead for access. Settings › Projects › All projects lists every project of your organization.'
+    ? noProjectsHint()
     : 'You have no active projects. Ask an organization admin or a project lead for access.'
 }
 
