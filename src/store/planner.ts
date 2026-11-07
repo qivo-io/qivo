@@ -489,9 +489,9 @@ let watchedHeld: {
 /* The task and organization of the thread the parts watch, or null. */
 let threadWatched: { task: string; org: string } | null = null
 
+export type { InboxMark } from './viewModels'
 /** The unread summary across the login's seats, as convex/inbox.ts
     summary answers it. */
-export type { InboxMark } from './viewModels'
 export type InboxSummaryAnswer = FunctionReturnType<typeof api.inbox.summary>
 /** The open task's inbox item, as convex/inbox.ts item answers it. */
 export type InboxItemAnswer = FunctionReturnType<typeof api.inbox.item>
@@ -557,7 +557,7 @@ let holdWrites = 0
 
 /* The marks of the person's Inbox writes by `${org}:${task}`
    (inboxMarkKey), which P.inboxMarks shows. A write sets its mark as it
-   goes out, replacing any before, and settles only its own: a refusal or a
+   goes out, replacing any before, and settles only its own. A refusal or a
    failure ends it at once, and an acceptance keeps it until an Inbox shows
    an answer that is current after the settle (P.endInboxMarks), since a
    list that waits for a fresh answer, as after a hidden tab, a kept Inbox
@@ -1607,9 +1607,9 @@ function stopItem() {
 
 /* Holds off the read on open of the watched task while a write about the
    loaded messages `ids` waits, when they name one of its messages, as an
-   id-list Mark as unread or snooze does (holdWatched). Only the tests and
-   the focus smokes send those since the Inbox acts on items
-   (holdUnreadOfItem); it goes with them. */
+   id-list Mark as unread or snooze does (holdWatched). Only the store's
+   tests send those since the Inbox acts on items (holdUnreadOfItem); it
+   goes with them. */
 function holdUnreadOf(ids: readonly string[]): SendOptions<unknown> {
   const watched = threadWatched
   if (!watched) return {}
@@ -1684,7 +1684,7 @@ function setInboxMarks(
 }
 
 /* Settles `mark` of the item of task `task` in organization `org` once its
-   write was answered: an accepted one stays until an Inbox shows a current
+   write was answered. An accepted one stays until an Inbox shows a current
    answer (P.endInboxMarks), a refused or failed one ends at once. A mark a
    later write replaced is not touched. */
 function settleInboxMark(org: string, task: string, mark: InboxMark, accepted: boolean) {
@@ -10307,7 +10307,7 @@ function dropStopToast(key: string) {
    that the action changes in a planned seat, the unread ones that are not
    snoozed for Mark all as read and the read ones that are not snoozed for
    Remove all read, take a read or removed mark at their cutoff
-   (P.inboxMarks): a seat's marks settle when its lane ends, a stop ends
+   (P.inboxMarks). A seat's marks settle when its lane ends, a stop ends
    them at once, so a refused seat's rows come back, and a fault ends them
    all. The seats run on the shared runner
    (lib/batchRunner.ts runLanes), at most BULK_SEATS at once, a long action
@@ -10976,10 +10976,11 @@ export const PLANNER = {
   // server's budgets even when asked alone, so some of their cards lack marks
   lastCommentsCut: [] as string[],
   /* The workspace inbox part's messages, and their groups one per task.
-     No view reads them since the Inbox lists inbox.page; the desktop
-     alerts read the part (announceNewMessages), and the store's tests and
-     scripts/inbox-snooze-smoke.mjs's checks read these. They go with the
-     part (t3/limits-inbox-feed). */
+     No view reads them since the Inbox lists inbox.page. The desktop
+     alerts read the part (announceNewMessages), the store's tests read
+     these, and scripts/smoke.mjs reads P.messages to pick tasks it can
+     open without marking unread messages read. They go with the part
+     (t3/limits-inbox-feed). */
   messages: [] as MessageVM[],
   messageGroups: [] as MessageGroupVM[],
   /** The loaded message groups (P.messageGroups) that are unread and not
@@ -15326,29 +15327,31 @@ export const PLANNER = {
     })
   },
   /** The read on open of task `task`, which a window shows once it froze
-      where its unread part starts. It reads the task's inbox item through
-      P.readItem, with the organization, the task and the `through` of its
-      item answer (P.inboxItem), once that answer is ok and current with
-      unread messages and no snooze. Nothing goes out while the item loads,
-      while the seat's items are building, after a failure, for no item, a
-      read item or a snoozed one, or for a task the store does not watch.
-      Once the person marked the task unread from this client, with Mark as
-      unread, a snooze or its end, it sends nothing more until the thread
-      changes or stops, so their choice holds while the task stays open,
-      from the moment that write goes out. One the server refused or that
-      failed holds nothing once answered, and a read it turned away runs
-      again then (holdUnreadOf). It sends each `through` once a visit of
-      the watched task, so the Inbox pane and its pop-out send one read,
-      and once more when the server confirmed that read and the item's
-      answer, one that came after the read went out, still holds unread
-      messages at the same `through`, as for a message whose mutation
-      started before the read and committed after it. It checks that at
-      the confirmation too, since Convex brings the answer that holds the
-      read before the read's promise resolves, so the answer that came with
-      it may hold such a message, and no later answer may come. A paused
-      read is refused quietly and goes out once the pause ends, and a
-      refusal by the server is not sent again for its `through`. Answers
-      whether it sent one. */
+      where its unread part starts. It reads the task's inbox item with the
+      organization, the task and the `through` of its item answer
+      (P.inboxItem), once that answer is ok and current with unread
+      messages and no snooze. It sends that read with sendItemRead, never
+      P.readItem, whose acceptance frees the hold below. Nothing goes out
+      while the item loads, while the seat's items are building, after a
+      failure, for no item, a read item or a snoozed one, or for a task the
+      store does not watch. Once the person marked the task unread from
+      this client, with Mark as unread, a snooze or its end, it sends
+      nothing more until the thread changes or stops, or until a row's
+      accepted Mark as read of the task frees the hold (P.readItem), so
+      their choice holds while the task stays open, from the moment that
+      write goes out. One the server refused or that failed holds nothing
+      once answered, and a read it turned away runs again then
+      (holdWatched). It sends each `through` once a visit of the watched
+      task, so the Inbox pane and its pop-out send one read, and once more
+      when the server confirmed that read and the item's answer, one that
+      came after the read went out, still holds unread messages at the same
+      `through`, as for a message whose mutation started before the read
+      and committed after it. It checks that at the confirmation too, since
+      Convex brings the answer that holds the read before the read's
+      promise resolves, so the answer that came with it may hold such a
+      message, and no later answer may come. A paused read is refused
+      quietly and goes out once the pause ends, and a refusal by the server
+      is not sent again for its `through`. Answers whether it sent one. */
   readOnOpen: (task: string): boolean => {
     const shown = PLANNER.inboxItem
     if (!shown || shown.task !== task || shown.state !== 'ok' || !shown.current) return false
