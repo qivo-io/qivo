@@ -89,6 +89,10 @@
  * which names its period, and starts again 6 hours later. Once the count
  * has ended, start such a sample at once:
  *   "$H" TARGET npx convex run billingSync:restartStorage '{"period":"…"}'
+ * A paid period on the daily basis takes no such sample, and restartStorage
+ * leaves it alone. The days a recount covers have no daily sample of the
+ * organization, and its finalize fills them by the rules for missing days
+ * (billingSync.ts finalizeStorage).
  * An organization whose deletion has begun is listed as skipped and left to
  * its deletion.
  * A call that wrote adds one platform_audit_log row (action

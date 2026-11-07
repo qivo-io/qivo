@@ -41,14 +41,23 @@ export function billingBytes(bytes: number): string {
   return `${(bytes / 1_000_000_000).toFixed(2)} GB`
 }
 
+/** What the storage lines read of Billing's usage figures about the paid
+ * period's storage basis. Both fields are absent from a backend before
+ * them, which reads as a period sampled at its start. */
+type StorageBasis = Partial<Pick<BillingUsageFigures, 'storage_basis' | 'storage_average'>>
+
 /** The hints under the Billing page's API calls and storage figures: why
- * the current bucket is not charged, or what it has recorded so far.
- * `currency` is the plan's; a charged period always has one. */
+ * the current bucket is not charged, or what it has recorded so far. A
+ * period charged on its daily average (`storage_basis` 'daily') says so
+ * while it is open, and once it is recorded names its charge, or none when
+ * no measurement was available. `currency` is the plan's; a charged period
+ * always has one. */
 export function usageHints(
   usage: Pick<
     BillingPeriodHead,
     'period_kind' | 'waived' | 'api_overage_cents' | 'storage_overage_cents'
-  >,
+  > &
+    StorageBasis,
   currency: string | undefined,
 ): { api: string; storage: string } {
   if (usage.period_kind === 'month')
@@ -68,9 +77,28 @@ export function usageHints(
       api: 'API usage is covered by free access. It will not be charged later.',
       storage: 'Storage is covered by free access. It will not be charged later.',
     }
+  const api = `Extra API charges recorded this period: ${billingMoney(usage.api_overage_cents, currency)}. Added to the invoice at the end of this period.`
+  const charge = billingMoney(usage.storage_overage_cents, currency)
+  if (usage.storage_basis !== 'daily')
+    return {
+      api,
+      storage: `Extra storage charge recorded this period: ${charge}, based on the storage measured for this period. Added to the invoice at the end of this period.`,
+    }
+  const average = usage.storage_average
+  if (!average?.final)
+    return {
+      api,
+      storage:
+        'Storage is charged on the average of this period’s daily measurements, which is recorded about a day before the period ends, or within two hours of its end at the latest. Added to the invoice at the end of this period.',
+    }
+  if (average.bytes === null)
+    return {
+      api,
+      storage: 'No storage charge for this period, since no storage measurement was available.',
+    }
   return {
-    api: `Extra API charges recorded this period: ${billingMoney(usage.api_overage_cents, currency)}. Added to the invoice at the end of this period.`,
-    storage: `Extra storage charge recorded this period: ${billingMoney(usage.storage_overage_cents, currency)}, based on the storage measured for this period. Added to the invoice at the end of this period.`,
+    api,
+    storage: `Extra storage charge recorded this period: ${charge}, based on this period’s average storage. Added to the invoice at the end of this period.`,
   }
 }
 
@@ -131,21 +159,70 @@ export const SAMPLE_AT_START_MS = 24 * 60 * 60_000
     finished or an older backend answers without one, measured the start.
     The words name no files, so they stay true of a sample an earlier
     backend took from the attachment rows of live tasks. Null outside a
-    paid period, and for a trial, which never gets a sample
+    paid period, for a trial, which never gets a sample
     (convex/billingSync.ts apply records a period only for an active or
-    past-due subscription). `status` is the details'. */
+    past-due subscription), and for a period charged on its daily average,
+    which storageAverageLine describes instead. An answer without
+    `storage_basis`, from an older backend, reads as a sample. `status` is
+    the details'. */
 export function storageSampleLine(
   usage: Pick<
     BillingUsageFigures,
     'period_kind' | 'period_start' | 'sampled_storage_bytes' | 'sampled_storage_at'
-  >,
+  > &
+    StorageBasis,
   status: BillingDetails['status'] | undefined,
 ): string | null {
-  if (usage.period_kind !== 'paid' || status === 'trialing') return null
+  if (usage.period_kind !== 'paid' || status === 'trialing' || usage.storage_basis === 'daily')
+    return null
   const bytes = usage.sampled_storage_bytes
   if (bytes === null) return 'Not measured yet for this period.'
   const at = usage.sampled_storage_at
   return at == null || Date.parse(at) - Date.parse(usage.period_start) < SAMPLE_AT_START_MS
     ? `${billingBytes(bytes)} measured at the start of this period.`
     : `${billingBytes(bytes)} measured on ${billingDate(at)}.`
+}
+
+/* `n` days, in words. */
+const dayCount = (n: number) => `${n} day${n === 1 ? '' : 's'}`
+
+/* The sentence on a daily average's estimated days, those that copied the
+   next measured day's reading and, at the cutoff, those that copied the
+   most recent one before them, or nothing without any. */
+function estimatedDays(average: NonNullable<BillingUsageFigures['storage_average']>): string {
+  const { estimated, estimated_earlier: earlier } = average
+  const next = estimated - earlier
+  if (estimated === 0) return ''
+  if (earlier === 0) return ` ${estimated} of them estimated from the next measured day.`
+  if (next === 0) return ` ${estimated} of them estimated from the most recent measured day.`
+  return ` ${estimated} of them estimated, ${next} from the next measured day and ${earlier} from the most recent one.`
+}
+
+/** The line under current storage for a paid period charged on the
+    average of its daily storage measurements (`storage_basis` 'daily',
+    convex/billingSync.ts finalizeStorage), in place of the sample line.
+    Once the period is recorded it names the average its storage charge
+    uses over the period's days, how many days were estimated and from
+    which measured day, or that no measurement was available, so it has no
+    storage charge. While it is open it names the average so far and how
+    many of the period's days it covers, of them how many were estimated,
+    since a day without a later measurement yet is left out, never 0. Null
+    for every other period and bucket, for a trial, and for an answer
+    without `storage_basis` from an older backend. `status` is the
+    details'. */
+export function storageAverageLine(
+  usage: Pick<BillingUsageFigures, 'period_kind'> & StorageBasis,
+  status: BillingDetails['status'] | undefined,
+): string | null {
+  if (usage.period_kind !== 'paid' || status === 'trialing' || usage.storage_basis !== 'daily')
+    return null
+  const average = usage.storage_average
+  if (!average) return 'Not measured yet for this period.'
+  if (average.final)
+    return average.bytes === null
+      ? 'No storage measurement was available for this period.'
+      : `${billingBytes(average.bytes)} average over this period’s ${dayCount(average.days)}.${estimatedDays(average)}`
+  if (average.bytes === null) return 'Not measured yet for this period.'
+  const covered = average.measured + average.estimated
+  return `${billingBytes(average.bytes)} average so far, from ${covered} of this period’s ${dayCount(average.days)}.${estimatedDays(average)}`
 }

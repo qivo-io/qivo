@@ -6,7 +6,11 @@
  *      several sub-projects add up, a task in Deleted items still counts
  *      until it is purged, profile pictures and backgrounds never count, and
  *      an organization not counted yet or counting answers null, never 0.
- *   2. The period's sample answers a paid period's finished sample only.
+ *   2. The period's sample answers a paid period's finished sample only,
+ *      with its basis; a daily period answers no sample but its average,
+ *      while open from the job's samples so far, a missing day from the
+ *      next and today left out until sampled, once recorded from its row,
+ *      and never another subscription's or organization's.
  *   3. Storage by project pages 25 at a time, largest first, equal bytes
  *      each once, the rest of a cursor's creation instant included, adding
  *      up to the organization's total; labels active, archived, Deleted
@@ -38,6 +42,7 @@ import type { StorageProjectRow, StorageProjects } from '../lib/billingTypes'
 import type { Refusal } from '../lib/functions'
 import { LIMITS, LIST_BATCH } from '../lib/limits'
 import { namedCursor } from '../lib/namedPages'
+import { usageFiguresOf } from '../model/billing'
 import {
   NOT_STORAGE_CURSOR,
   STORAGE_PROJECTS,
@@ -440,6 +445,266 @@ describe("the period's storage sample", () => {
       period_key: 'month:2026-10',
       sampled_storage_bytes: null,
     })
+  })
+})
+
+/* ------------------------------------------------ the daily storage basis */
+
+describe("a period's storage basis and a daily period's average", () => {
+  /* A period of 31 days, 15 September to 15 October. */
+  const PERIOD = '2026-09-15T12:00:00.000Z'
+  const END = '2026-10-16T12:00:00.000Z'
+  const at = (day: string, time = '00:20') => Date.parse(`${day}T${time}:00.000Z`)
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(at('2026-09-15', '13:00'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllEnvs()
+  })
+
+  /** A counted organization with an active provider subscription in its
+   * period from PERIOD to END, holding `bytes`. */
+  async function subscribed(bytes = 0) {
+    const { t, f } = await counted()
+    if (bytes > 0)
+      await plantTotals(t, f.org.id, [
+        { project_id: f.sub.id, num: f.sub.num, name: 'Firmware', bytes },
+      ])
+    const sub = await t.run(async (ctx) => {
+      const plan_id = uuid()
+      await ctx.db.insert('billing_plans', {
+        id: plan_id,
+        name: 'Team',
+        currency: 'usd',
+        seat_price_cents: 100,
+        minimum_seats: 1,
+        storage_gb_per_seat: 1,
+        minimum_storage_gb: 5,
+        api_calls_per_seat: 2,
+        api_block_size: 2,
+        api_block_price_cents: 100,
+        storage_block_price_cents: 100,
+        archived: false,
+        created_at: PERIOD,
+      })
+      const id = await ctx.db.insert('billing_subscriptions', {
+        id: uuid(),
+        org_id: f.org.id,
+        plan_id,
+        status: 'active',
+        polar_subscription_id: 'provider-sub',
+        current_period_start: PERIOD,
+        current_period_end: END,
+        billed_seats: 2,
+        next_seats: 2,
+        cancel_at_period_end: false,
+        created_at: PERIOD,
+        updated_at: PERIOD,
+      })
+      return (await ctx.db.get(id))!
+    })
+    return { t, f, sub }
+  }
+
+  /** The billing_periods row of `sub` from PERIOD to END with `fields`,
+   * daily unless they say otherwise. */
+  const period = (
+    t: T,
+    f: OrgFixture,
+    sub: Doc<'billing_subscriptions'>,
+    fields: Partial<Doc<'billing_periods'>> = {},
+  ) =>
+    t.run((ctx) =>
+      ctx.db.insert('billing_periods', {
+        org_id: f.org.id,
+        subscription_id: 'provider-sub',
+        plan_id: sub.plan_id,
+        period_start: PERIOD,
+        period_end: END,
+        seats: 2,
+        profile_ids: [],
+        storage_basis: 'daily',
+        created_at: PERIOD,
+        ...fields,
+      }),
+    )
+
+  /** Runs the daily samples' run of UTC day `day` at 00:20, as the hourly
+   * tick starts it, with billing off, so no finalize runs. */
+  async function runDay(t: T, day: string) {
+    vi.setSystemTime(at(day))
+    await t.mutation(internal.storageSamples.tick, {})
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+  }
+
+  /** Adds `bytes` to organization `orgId`'s totals in one more file. */
+  const store = (t: T, f: OrgFixture, bytes: number) =>
+    plantTotals(t, f.org.id, [{ project_id: uuid(), num: 1, name: 'Files', bytes }])
+
+  it("answers a period sampled at its start as before, with its basis, and no basis outside a paid period's row", async () => {
+    const { t, f, sub } = await subscribed()
+    expect(await usageOf(t, f.admin)).toMatchObject({
+      period_kind: 'paid',
+      storage_basis: null,
+      storage_average: null,
+      sampled_storage_bytes: null,
+    })
+    await period(t, f, sub, {
+      storage_basis: undefined,
+      storage_bytes: 1234,
+      storage_blocks: 0,
+      storage_sampled_at: PERIOD,
+    })
+    expect(await usageOf(t, f.admin)).toMatchObject({
+      storage_basis: 'start',
+      storage_average: null,
+      sampled_storage_bytes: 1234,
+      sampled_storage_at: PERIOD,
+    })
+    // the pending interval after it, and a calendar month
+    vi.setSystemTime(Date.parse(END) + 1000)
+    expect(await usageOf(t, f.admin)).toMatchObject({
+      period_kind: 'pending',
+      storage_basis: null,
+      storage_average: null,
+    })
+    await t.run((ctx) =>
+      ctx.db.patch(sub._id, { status: 'pending', polar_subscription_id: undefined }),
+    )
+    expect(await usageOf(t, f.admin)).toMatchObject({
+      period_kind: 'month',
+      storage_basis: null,
+      storage_average: null,
+    })
+  })
+
+  it("answers an open daily period's average so far from the job's samples, a missing day from the next, and today left out until it is sampled, never 0", async () => {
+    const { t, f, sub } = await subscribed(100)
+    await period(t, f, sub)
+    await runDay(t, '2026-09-15')
+    // no run on 16 September, and 400 bytes from the 17th
+    await store(t, f, 300)
+    await runDay(t, '2026-09-17')
+    vi.setSystemTime(at('2026-09-17', '13:00'))
+    const average = { bytes: 300, days: 31, measured: 2, estimated: 1, estimated_earlier: 0 }
+    expect(await usageOf(t, f.admin)).toMatchObject({
+      storage_basis: 'daily',
+      sampled_storage_bytes: null,
+      sampled_storage_at: null,
+      storage_bytes: 400,
+      storage_average: { ...average, final: false },
+    })
+    // the next morning before its run, today has no sample and is left
+    // out, never counted as 0
+    vi.setSystemTime(at('2026-09-18', '00:10'))
+    await store(t, f, 600)
+    expect(await usageOf(t, f.admin)).toMatchObject({
+      storage_bytes: 1000,
+      storage_average: { ...average, final: false },
+    })
+    // the first day of the period before any sample has no average
+    const { t: t2, f: f2, sub: sub2 } = await subscribed(100)
+    await period(t2, f2, sub2)
+    expect(await usageOf(t2, f2.admin)).toMatchObject({
+      storage_basis: 'daily',
+      storage_average: { bytes: null, days: 31, measured: 0, estimated: 0, final: false },
+    })
+  })
+
+  it('answers a recorded daily period from its row, and one recorded without any measurement as null', async () => {
+    const { t, f, sub } = await subscribed()
+    const row = await period(t, f, sub, {
+      storage_bytes: 5_500_000_001,
+      storage_blocks: 1,
+      storage_sampled_at: '2026-10-15T00:20:00.000Z',
+      storage_finalized_at: '2026-10-15T00:20:00.000Z',
+      storage_days: [
+        { day: '2026-10-13', bytes: 7, from: '2026-10-14' },
+        { day: '2026-10-14', bytes: 7 },
+        { day: '2026-10-15', bytes: 7, from: '2026-10-14' },
+      ],
+    })
+    vi.setSystemTime(at('2026-10-15', '13:00'))
+    expect(await usageOf(t, f.admin)).toMatchObject({
+      storage_basis: 'daily',
+      sampled_storage_bytes: null,
+      sampled_storage_at: null,
+      storage_average: {
+        bytes: 5_500_000_001,
+        days: 3,
+        measured: 1,
+        estimated: 2,
+        estimated_earlier: 1,
+        final: true,
+      },
+    })
+    await t.run((ctx) =>
+      ctx.db.patch(row, {
+        storage_bytes: undefined,
+        storage_blocks: undefined,
+        storage_sampled_at: undefined,
+        storage_unavailable: true,
+        storage_days: [{ day: '2026-10-13' }, { day: '2026-10-14' }, { day: '2026-10-15' }],
+      }),
+    )
+    expect(await usageOf(t, f.admin)).toMatchObject({
+      storage_average: {
+        bytes: null,
+        days: 3,
+        measured: 0,
+        estimated: 0,
+        estimated_earlier: 0,
+        final: true,
+      },
+    })
+  })
+
+  it("never answers another subscription's or organization's daily row, or the other organization's samples", async () => {
+    const { t, f, sub } = await subscribed(100)
+    await t.run((ctx) => startOrgTotals(ctx, f.otherOrg.id))
+    await plantTotals(t, f.otherOrg.id, [
+      { project_id: uuid(), num: 1, name: 'Theirs', bytes: 900 },
+    ])
+    await runDay(t, '2026-09-15')
+    vi.setSystemTime(at('2026-09-15', '13:00'))
+    await period(t, f, sub, { subscription_id: 'another-sub' })
+    const theirs = await period(t, f, sub, { org_id: f.otherOrg.id })
+    expect(await usageOf(t, f.admin)).toMatchObject({
+      period_kind: 'paid',
+      storage_basis: null,
+      storage_average: null,
+    })
+    // the case that must answer, the organization's own row, from its own
+    // sample only
+    await t.run((ctx) => ctx.db.delete(theirs))
+    await period(t, f, sub)
+    expect(await usageOf(t, f.admin)).toMatchObject({
+      storage_basis: 'daily',
+      storage_average: { bytes: 100, measured: 1 },
+    })
+  })
+
+  it('reads at most 31 documents more for an open daily period on its last day with 31 samples than for a period sampled at its start', async () => {
+    const { t, f, sub } = await subscribed(1000)
+    const row = await period(t, f, sub)
+    for (let d = 0; d < 31; d++) {
+      await store(t, f, 10)
+      await runDay(t, new Date(at('2026-09-15') + d * 86_400_000).toISOString().slice(0, 10))
+    }
+    vi.setSystemTime(at('2026-10-15', '13:00'))
+    const daily = await measured(t, (ctx) => usageFiguresOf(ctx, f.org.id))
+    expect(daily.out.storage_average).toMatchObject({ days: 31, measured: 31, final: false })
+    // the same row sampled at its start
+    await t.run((ctx) =>
+      ctx.db.patch(row, { storage_basis: undefined, storage_bytes: 1310, storage_blocks: 0 }),
+    )
+    const start = await measured(t, (ctx) => usageFiguresOf(ctx, f.org.id))
+    expect(start.out).toMatchObject({ storage_basis: 'start', sampled_storage_bytes: 1310 })
+    console.log('usage figures reads', JSON.stringify({ daily: daily.read, start: start.read }))
+    expect(daily.read.documents - start.read.documents).toBeLessThanOrEqual(31)
+    expect(daily.read.ranges - start.read.ranges).toBeLessThanOrEqual(1)
   })
 })
 

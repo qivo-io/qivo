@@ -6,6 +6,7 @@ import {
   CALLS_COUNTING,
   STORAGE_COUNTING,
   STORAGE_COUNTS,
+  storageAverageLine,
   storageSampleLine,
   usageHints,
 } from '@/lib/billingDisplay'
@@ -41,16 +42,18 @@ function sectionLine(usage: BillingUsageFigures | null, measuredAt: number): str
  * last figures, or in their place before any answered. `currency` is the
  * plan's; amounts are only shown for a charged period, which always has
  * one, and `status` is the details', which says whether a paid period gets
- * a storage sample. API calls are the bucket's aggregates, shown as being
- * counted while they are not complete, never as 0, and so is current
- * storage, the server's stored-byte totals, files in Deleted items
- * included, with the paid period's sample of the same totals on a line of
- * its own. API calls by account (BillingApiAccounts) mounts once the
- * figures answered and reads the bucket they name; View credentials hands
- * `onViewCredentials` the organization `orgId`, the account and that
- * bucket. Storage by project reads its own batches (BillingStorage) at
- * once. Both lists start over when `refresh`, the page's Refresh count,
- * changes. */
+ * a storage sample or a daily average. API calls are the bucket's
+ * aggregates, shown as being counted while they are not complete, never
+ * as 0, and so is current storage, the server's stored-byte totals, files
+ * in Deleted items included, with the paid period's sample of the same
+ * totals on a line of its own, or for a period charged on the average of
+ * its daily measurements that average with its estimated days
+ * (storageAverageLine). API calls by account (BillingApiAccounts) mounts
+ * once the figures answered and reads the bucket they name; View
+ * credentials hands `onViewCredentials` the organization `orgId`, the
+ * account and that bucket. Storage by project reads its own batches
+ * (BillingStorage) at once. Both lists start over when `refresh`, the
+ * page's Refresh count, changes. */
 export function BillingUsage({
   usage,
   error,
@@ -114,6 +117,7 @@ function Figures({
   const month = usage.period_kind === 'month'
   const hints = usageHints(usage, currency)
   const sample = storageSampleLine(usage, status)
+  const average = storageAverageLine(usage, status)
   return (
     <>
       {usage.delivery_unconfirmed && (
@@ -159,6 +163,11 @@ function Figures({
         {sample !== null && (
           <p className="mt-2 text-sm text-text-1" data-billing-storage-sample="">
             {sample}
+          </p>
+        )}
+        {average !== null && (
+          <p className="mt-2 text-sm text-text-1" data-billing-storage-average="">
+            {average}
           </p>
         )}
         <FieldHint>{hints.storage}</FieldHint>
