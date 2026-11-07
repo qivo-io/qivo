@@ -453,6 +453,212 @@ describe('a list read once a batch', () => {
     expect(listEnd(now(), true)).toBe('more')
     expect(listEnd({ ...now(), next: false }, true)).toBe('partial')
   })
+
+  describe('refresh', () => {
+    /** A list of 60 labels with two batches answered. */
+    async function twoBatches() {
+      plant('a', 60)
+      const d = deferred()
+      await render({ listKey: 'k', source: d.source })
+      await d.reply()
+      await act(async () => now().more())
+      await d.reply()
+      return d
+    }
+
+    it('reads the first batch again while it shows what it holds, then holds that batch alone', async () => {
+      const d = await twoBatches()
+      expect(names()).toHaveLength(50)
+      let landed = false
+      await act(async () => {
+        void now()
+          .refresh()
+          .then(() => {
+            landed = true
+          })
+      })
+      expect(d.asked).toHaveLength(3)
+      expect(d.asked[2]?.at).toEqual({ after: null, through: null })
+      // the rows, batches and place stay, marked as refreshing
+      expect(names()).toHaveLength(50)
+      expect(now()).toMatchObject({ refreshing: true, phase: 'ready', next: true })
+      expect(now().batches).toHaveLength(2)
+      expect(listEnd(now(), false)).toBe('more')
+      // Load more and Retry read nothing meanwhile
+      await act(async () => {
+        now().more()
+        now().retry()
+      })
+      expect(d.asked).toHaveLength(3)
+      expect(landed).toBe(false)
+      server.labels.delete('a-0')
+      await d.reply()
+      expect(landed).toBe(true)
+      expect(now()).toMatchObject({ refreshing: false, phase: 'ready', next: true })
+      expect(now().batches).toHaveLength(1)
+      expect(names()).toHaveLength(25)
+      expect(names()[0]).toBe('a01')
+    })
+
+    it('drops a Load more on its way and its failed note, and a second refresh starts again', async () => {
+      const d = await twoBatches()
+      await act(async () => now().more())
+      const loadMore = d.asked[2]
+      await act(async () => {
+        void now().refresh()
+      })
+      // the Load more's answer is dropped
+      await act(async () =>
+        loadMore?.answer({ rows: [{ id: 'x', name: 'zz' }], next: null, stopped: false }),
+      )
+      expect(names()).toHaveLength(50)
+      expect(names()).not.toContain('zz')
+      expect(now().phase).toBe('ready')
+      // a second refresh reads again, still showing the same rows
+      const first = d.asked[3]
+      await act(async () => {
+        void now().refresh()
+      })
+      expect(d.asked).toHaveLength(5)
+      await act(async () =>
+        first?.answer({ rows: [{ id: 'y', name: 'old' }], next: null, stopped: false }),
+      )
+      expect(names()).toHaveLength(50)
+      expect(now().refreshing).toBe(true)
+      await d.reply()
+      expect(names()).toHaveLength(25)
+      expect(now().refreshing).toBe(false)
+      // a failed Load more's note goes with a refresh
+      await act(async () => now().more())
+      await d.reply(null)
+      expect(now().phase).toBe('failed')
+      await act(async () => {
+        void now().refresh()
+      })
+      expect(now()).toMatchObject({ phase: 'ready', refreshing: true })
+      expect(listEnd(now(), false)).toBe('more')
+    })
+
+    it('fails the list with no rows when the refresh fails, and Retry starts again', async () => {
+      const d = await twoBatches()
+      await act(async () => {
+        void now().refresh()
+      })
+      await d.reply(null)
+      expect(now()).toMatchObject({ phase: 'failed', refreshing: false, next: false })
+      expect(now().rows).toEqual([])
+      expect(now().batches).toEqual([])
+      expect(listEnd(now(), false)).toBe('failed')
+      await act(async () => now().retry())
+      expect(d.asked.at(-1)?.at).toEqual({ after: null, through: null })
+      await d.reply()
+      expect(names()).toHaveLength(25)
+    })
+
+    it('starts again while the first batch is on its way or after it failed', async () => {
+      plant('a', 30)
+      const d = deferred()
+      await render({ listKey: 'k', source: d.source })
+      const first = d.asked[0]
+      await act(async () => {
+        void now().refresh()
+      })
+      expect(d.asked).toHaveLength(2)
+      await act(async () =>
+        first?.answer({ rows: [{ id: 'x', name: 'old' }], next: null, stopped: false }),
+      )
+      expect(now().phase).toBe('first')
+      await d.reply(null)
+      expect(now().phase).toBe('failed')
+      await act(async () => {
+        void now().refresh()
+      })
+      expect(now()).toMatchObject({ phase: 'first', refreshing: false })
+      await d.reply()
+      expect(names()).toHaveLength(25)
+    })
+
+    it('opens a new key on a key change and drops the refresh', async () => {
+      const d = await twoBatches()
+      let landed = false
+      await act(async () => {
+        void now()
+          .refresh()
+          .then(() => {
+            landed = true
+          })
+      })
+      const refresh = d.asked[2]
+      await render({ listKey: 'j', source: d.source })
+      expect(landed).toBe(true)
+      expect(now()).toMatchObject({ phase: 'first', refreshing: false })
+      expect(now().rows).toEqual([])
+      await act(async () =>
+        refresh?.answer({ rows: [{ id: 'x', name: 'old' }], next: null, stopped: false }),
+      )
+      expect(now().phase).toBe('first')
+      await d.reply()
+      expect(names()).toHaveLength(25)
+    })
+
+    it('drops a refresh on stop and on leaving, and reads nothing after either', async () => {
+      plant('a', 30)
+      const d = deferred()
+      const list = onceList<ListBatch<Row>, Row>(
+        () => ({ key: null, source: d.source, batch: (a) => a, id: (row) => row.id, most: 200 }),
+        () => {},
+      )
+      list.open('k')
+      await d.reply()
+      let landed = false
+      void list.refresh().then(() => {
+        landed = true
+      })
+      list.stop()
+      await d.reply()
+      expect(landed).toBe(true)
+      expect(list.view().rows).toEqual([])
+      // nothing reads after stop until the list opens again
+      const asked = d.asked.length
+      await list.refresh()
+      list.more()
+      list.retry()
+      expect(d.asked).toHaveLength(asked)
+      list.open('k')
+      expect(d.asked).toHaveLength(asked + 1)
+
+      // a page that leaves drops its refresh, and a late answer renders nothing
+      const page = deferred()
+      await render({ listKey: 'k', source: page.source })
+      await page.reply()
+      const left = now()
+      await act(async () => {
+        void left.refresh()
+      })
+      await act(async () => root.unmount())
+      root = createRoot(container)
+      const shown = now()
+      await page.reply()
+      expect(now()).toBe(shown)
+      await act(async () => {
+        void shown.refresh()
+        shown.more()
+        shown.retry()
+      })
+      expect(page.asked).toHaveLength(2)
+    })
+
+    it('reads nothing for a live list', async () => {
+      plant('a', 30)
+      await render({ listKey: 'k', source: LIVE('k') })
+      await publish()
+      const watches = transport.watches.size
+      await act(async () => now().refresh())
+      expect(transport.watches.size).toBe(watches)
+      expect(now().refreshing).toBe(false)
+      expect(names()).toHaveLength(25)
+    })
+  })
 })
 
 /* ------------------------------------------------------------------ live */
