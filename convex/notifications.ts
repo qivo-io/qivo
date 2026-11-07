@@ -31,21 +31,24 @@
  *   now and names the switching session as the one that moved it
  *   (covered_by), so a mode change replays nothing and only another target's
  *   first claim is sent to summarize.
- * - beat: registers the caller's session and keeps it live, with whether
- *   it can notify (`can_notify`) and whether the person used it since the
- *   last report (`active`, written at most every NOTIFY.active_ms; a first
- *   beat never sets it). In 'recent', a beat after which the session can
- *   notify and its last report is after the checkpoint, while covered_by
- *   names another session, clears covered_by. The report made that session
- *   the target after the checkpoint, so no session was the target all
- *   along since it, and every session's next claim summarizes first, the
- *   earlier mover's too, also once that session stops notifying or signs
- *   out. It answers the pacing: `every_ms`, one minute while the mode is
- *   'recent' and the session can notify, else a 6-hour keep-alive;
+ * - beat: registers the caller's session and keeps it live, with whether it
+ *   can notify (`can_notify`) and whether the person used it since the last
+ *   report (`active`, written at most every NOTIFY.active_ms; a first beat
+ *   never sets it). In 'recent', once the login has a checkpoint, a beat
+ *   clears covered_by at a handoff. The session covered_by names hands off
+ *   when its beat turns can_notify off. Another session takes over when a
+ *   beat in which it can notify reports activity, which makes it the target,
+ *   or finds it the target as it enters, at its first beat, as can_notify
+ *   turns on or as it returns past liveness. No session was then the target
+ *   all along since the checkpoint, so every session's next claim summarizes
+ *   first, the earlier mover's too, also once the new target stops notifying
+ *   or signs out. It answers the pacing: `every_ms`, one minute while the
+ *   mode is 'recent' and the session can notify, else a 6-hour keep-alive;
  *   `live_ms`, how long a beat keeps it live; and the server's `now`. It
  *   reads the session and the login (one nested call), the session row and
- *   the account row, and writes the session row, and the account row once
- *   a handoff.
+ *   the account row, and as it enters while covered_by names another session
+ *   the session rows up to the target, and writes the session row, and the
+ *   account row once a handoff.
  * - end: hands delivery on at once when the caller's tab `instance` was the
  *   last to beat, by moving its beat back past liveness. It keeps the row
  *   and its checkpoint, and a later beat makes the session live again.
@@ -54,10 +57,12 @@
  *   `not_target` unless the caller is the target, and once the login has a
  *   checkpoint `summarize_first`, writing nothing, unless covered_by names
  *   the caller's session, which holds while its claim, summary or switch to
- *   'recent' moved the checkpoint last and no beat made another session the
- *   target by activity since. So a session that became the target
- *   summarizes before its claim can move the checkpoint past what arrived
- *   while it was not the target, even when it was the target before. It
+ *   'recent' moved the checkpoint last and no beat recorded a handoff since.
+ *   So a session that became the target after another session was, or after
+ *   it could not notify, summarizes before its claim can move the checkpoint
+ *   past what arrived in between, even when it was the target before. The
+ *   session that moved the checkpoint and returns past liveness with no other
+ *   target meanwhile summarizes by the client's resume rule (below). It
  *   grants an event once in its scope, never one at or before the latest of
  *   the live window (NOTIFY.live_window_ms) and NOTIFY.lag_ms before the
  *   last mode change and before the scope's last summary, and records each
@@ -119,17 +124,21 @@
  *   also one whose time is before the summary, since the server refuses
  *   what the summary announced and grants a notice stored late that the
  *   summary never saw.
+ * - After its capability turns on, it beats, then calls claimSummary, then
+ *   claims, as after a resume, so what arrived while it could not notify
+ *   reaches a summary. This holds in 'all' too.
  * - When a claim answers `summarize_first`, it calls claimSummary, then
  *   offers the same events again. The session became the target after another
- *   session moved the checkpoint or was the target, and the summary covers
- *   what arrived in between; its records refuse what it announced. No claim
- *   answers it before the login has a checkpoint. A switch to 'recent' names
- *   the switching session, so the first claim of any other target after it
- *   answers it. A report of activity that makes a session the target after
- *   another session moved the checkpoint makes the next claim of every
- *   session answer it, that session's own and the earlier mover's, also
- *   once that session stops notifying or signs out, since the account row
- *   keeps the handoff.
+ *   session moved the checkpoint or was the target, or after it could not
+ *   notify, and the summary covers what arrived in between; its records
+ *   refuse what it announced. No claim answers it before the login has a
+ *   checkpoint. A switch to 'recent' names the switching session, so the
+ *   first claim of any other target after it answers it. A handoff a beat
+ *   records makes the next claim of every session answer it, the new target's
+ *   and the earlier mover's, also once the new target stops notifying or
+ *   signs out, since the account row keeps the handoff. The mover's own
+ *   handoff is its beat that turns can_notify off, and another session's is
+ *   its report or its entering as the target (beat).
  * - It sends end when the last tab of its browser profile closes. A tab
  *   that took over beating sends it only after its first beat. End changes
  *   nothing unless that tab beat last, and a missed end leaves the session
@@ -148,6 +157,7 @@ import {
   deliveryOf,
   expireRows,
   forgetLoginRows,
+  isLive,
   liveMs,
   NOTIFY,
   record,
@@ -258,6 +268,14 @@ export const beat = sessionMutation({
     const account = await accountRow(ctx, ctx.authUserId)
     const delivery = deliveryOf(account)
     const now = Date.now()
+    // whether the session could not alert before this beat, as at a first
+    // beat, a return of can_notify or a return past liveness
+    const entered = row === null || !row.can_notify || !isLive(row, now)
+    // a first beat never sets active_at
+    const used =
+      row !== null &&
+      active &&
+      (row.active_at === undefined || now - row.active_at >= NOTIFY.active_ms)
     if (row === null)
       await ctx.db.insert('notification_sessions', {
         auth_user_id: ctx.authUserId,
@@ -266,30 +284,30 @@ export const beat = sessionMutation({
         can_notify,
         beat_at: now,
       })
-    else {
-      const used =
-        active && (row.active_at === undefined || now - row.active_at >= NOTIFY.active_ms)
+    else
       await ctx.db.patch(row._id, {
         instance,
         can_notify,
         beat_at: now,
         ...(used ? { active_at: now } : {}),
       })
-      // a report after the checkpoint another session moved made this one
-      // the target since, so every claim summarizes first, and the account
-      // row keeps that after this session stops notifying or signs out
-      const activeAt = used ? now : row.active_at
-      if (
-        delivery === 'recent' &&
-        can_notify &&
-        account?.covered_by !== undefined &&
-        account.covered_by !== ctx.sessionId &&
-        account.covered_at !== undefined &&
-        activeAt !== undefined &&
-        activeAt > account.covered_at
-      )
-        await ctx.db.patch(account._id, { covered_by: undefined })
-    }
+    // A handoff clears covered_by, so every claim summarizes first, and the
+    // account row keeps that after the new target stops notifying or signs
+    // out. The session that moved the checkpoint hands off when it stops
+    // notifying. Another takes over when it reports, which makes it the
+    // target, or when it enters as the target.
+    const mover = account?.covered_by
+    if (
+      delivery === 'recent' &&
+      account?.covered_at !== undefined &&
+      mover !== undefined &&
+      (mover === ctx.sessionId
+        ? !can_notify && row?.can_notify === true
+        : can_notify &&
+          (used ||
+            (entered && (await targetOf(ctx, ctx.authUserId, now))?.session_id === ctx.sessionId)))
+    )
+      await ctx.db.patch(account._id, { covered_by: undefined })
     return {
       every_ms: delivery === 'recent' && can_notify ? NOTIFY.beat_ms : NOTIFY.idle_beat_ms,
       live_ms: liveMs(),

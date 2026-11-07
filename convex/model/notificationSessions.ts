@@ -16,8 +16,10 @@ import { forbidden } from '../lib/functions'
  * with structuredClone.
  *
  * A beat reads the session in its token and its login (one nested call),
- * the session row and the account row, and writes the session row, and the
- * account row once a handoff (notifications.ts beat). A claim in the
+ * the session row and the account row, and the session rows up to the
+ * target when it enters while another session moved the checkpoint, and
+ * writes the session row, and the account row once a handoff
+ * (notifications.ts beat). A claim in the
  * default mode reads the account row, the session rows up to the first
  * live one and one record range a new event, and writes a record a grant
  * and the account row. Every call reads only the caller's login's rows.

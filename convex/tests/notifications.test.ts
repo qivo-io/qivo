@@ -558,9 +558,9 @@ describe('claimAlerts in the default mode', () => {
       clock(minute)
       await beat(b)
     }
-    const account = await accountOf(t, a.authUserId)
     clock(20)
     await beat(b)
+    const account = await accountOf(t, a.authUserId)
     const later = eventOf((await newsAt(t, f, 19.5)).message)
     expect(await claim(b, [later], later.at)).toEqual({ state: 'summarize_first' })
     expect(await accountOf(t, a.authUserId)).toEqual(account)
@@ -704,6 +704,73 @@ describe('claimAlerts in the default mode', () => {
       })
     },
   )
+
+  it('sends the session that moved the checkpoint to summarize first after it stopped notifying and came back', async () => {
+    const t = newT()
+    const { f, s } = await guestFixture(t)
+    await beat(s)
+    expect(await summary(s)).toEqual({ state: 'baseline' })
+    // s stops notifying, so no session alerts E
+    clock(1)
+    await beat(s, { can_notify: false })
+    const e = eventOf((await newsAt(t, f, 1.5)).message)
+    expect(await claim(s, [e], e.at)).toEqual({ state: 'not_registered' })
+    // s can notify again and offers only later news
+    clock(5)
+    await beat(s)
+    const later = eventOf((await newsAt(t, f, 5.25)).message)
+    clock(5.5)
+    expect(await claim(s, [later], later.at)).toEqual({ state: 'summarize_first' })
+    expect(await records(t)).toEqual([])
+    // the summary covers E, which nobody alerted, and records the later one
+    expect(await summary(s)).toEqual({ state: 'summary' })
+    expect(await claim(s, [later], later.at)).toEqual({
+      state: 'granted',
+      keys: [],
+      limited: false,
+    })
+  })
+
+  it('sends the session that moved the checkpoint to summarize first when another became the target as it could notify again', async () => {
+    const t = newT()
+    const { f, s: x } = await guestFixture(t)
+    const y = await signIn(t, x.authUserId)
+    // y cannot notify and reports after x does; x, the target, takes the
+    // checkpoint after y's report
+    await beat(y, { can_notify: false })
+    await beat(x)
+    clock(0.25)
+    await beat(x, { active: true })
+    clock(0.4)
+    await beat(y, { can_notify: false, active: true })
+    clock(0.5)
+    expect(await summary(x)).toEqual({ state: 'baseline' })
+    // y can notify again with no new report, and its report older than the
+    // checkpoint makes it the target
+    clock(1)
+    await beat(y)
+    const e = eventOf((await newsAt(t, f, 1.5)).message)
+    clock(2)
+    await beat(x)
+    expect(await claim(x, [e], e.at)).toEqual({ state: 'not_target' })
+    // y never claims and lapses at minute 4, so x is the target again
+    for (const minute of [3, 4]) {
+      clock(minute)
+      await beat(x)
+    }
+    clock(4.5)
+    await beat(x)
+    const later = eventOf((await newsAt(t, f, 4.25)).message)
+    expect(await claim(x, [later], later.at)).toEqual({ state: 'summarize_first' })
+    expect(await records(t)).toEqual([])
+    // the summary covers E, which nobody alerted, and records the later one
+    expect(await summary(x)).toEqual({ state: 'summary' })
+    expect(await claim(x, [later], later.at)).toEqual({
+      state: 'granted',
+      keys: [],
+      limited: false,
+    })
+  })
 
   it('answers not_registered for a session without a row or that cannot notify', async () => {
     const t = newT()

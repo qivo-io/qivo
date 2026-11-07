@@ -738,10 +738,10 @@ export default defineSchema({
     // the Better Auth session whose claim or summary last moved covered_at
     // in 'recent', or the switching session after a switch to 'recent', the
     // only session whose claim needs no summary first (notifications.ts
-    // claimAlerts); absent once a beat of another session that can notify
-    // reported activity after covered_at, which made it the target, so every
-    // claim summarizes first, also after that session stopped notifying or
-    // signed out (notifications.ts beat)
+    // claimAlerts); absent once a beat recorded a handoff, the named session
+    // turning can_notify off or another becoming the target by a report or
+    // as it entered, so every claim summarizes first, also after the new
+    // target stopped notifying or signed out (notifications.ts beat)
     covered_by: v.optional(v.string()),
     // the last summary in 'recent'; no live alert for an event at or before
     // NOTIFY.lag_ms before it, or one it recorded
