@@ -222,24 +222,29 @@ export function SidebarProjects({
   // which its own layout effect writes before this component's run
   const childrenSeek = useRef(false)
 
-  // the row the scope names scrolls into view once after a scope change
+  // the row the scope names, revealed once after a scope change, and App's
+  // focus request, taken once for the scope it was made in
   const revealed = useRef<string | null>(null)
-  useLayoutEffect(() => {
-    const box = tree.current
-    if (!box || revealed.current === scope) return
-    const row = box.querySelector(`[data-project-row="${scope}"], [data-subproject-row="${scope}"]`)
-    if (!row) return
-    revealed.current = scope
-    intoTreeView(box, row)
-  })
-
-  // App's focus request, taken once, for the scope it was made in
   const taken = useRef<number | null>(null)
   const request = useRef<{ id: string; scope: string } | null>(null)
-  useLayoutEffect(() => {
-    if (focusRow && taken.current !== focusRow.n) {
-      taken.current = focusRow.n
-      request.current = { id: focusRow.id, scope }
+  /* Looks at the rows after each commit of the tree, and of its expanded
+     list, which renders on its own as its batches land: the row the scope
+     names scrolls into view the first time it shows after a scope change,
+     and the requested row takes focus the first time it shows. It reads
+     this render's values, which stay the tree's latest until it renders
+     again. */
+  const settle = useRef(() => {})
+  settle.current = () => {
+    const box = tree.current
+    if (!box) return
+    if (revealed.current !== scope) {
+      const row = box.querySelector(
+        `[data-project-row="${scope}"], [data-subproject-row="${scope}"]`,
+      )
+      if (row) {
+        revealed.current = scope
+        intoTreeView(box, row)
+      }
     }
     const asked = request.current
     if (!asked) return
@@ -247,7 +252,7 @@ export function SidebarProjects({
       request.current = null
       return
     }
-    const control = tree.current?.querySelector<HTMLElement>(
+    const control = box.querySelector<HTMLElement>(
       `[data-project-row="${asked.id}"] > button, [data-subproject-row="${asked.id}"] > button`,
     )
     if (control) {
@@ -257,6 +262,13 @@ export function SidebarProjects({
     }
     // nothing reads toward the row any more
     if (!seek && !reading(list, end) && !childrenSeek.current) request.current = null
+  }
+  useLayoutEffect(() => {
+    if (focusRow && taken.current !== focusRow.n) {
+      taken.current = focusRow.n
+      request.current = { id: focusRow.id, scope }
+    }
+    settle.current()
   })
   // a tree that hides drops the request, so it takes no focus on return
   useLayoutEffect(
@@ -395,6 +407,7 @@ export function SidebarProjects({
             onSeeking={(on) => {
               childrenSeek.current = on
             }}
+            onCommit={settle}
           />
         )}
       </div>
@@ -636,7 +649,8 @@ function TreeEnd({
    marker and the end line follow it. It reads only while it is mounted, so
    a scope move away stops it. A scoped sub-project the rows do not hold is
    read on toward, as the top-level list reads on toward the scope's
-   project, and `onSeeking` tells the tree whether it still is. */
+   project, and `onSeeking` tells the tree whether it still is. After each
+   of its commits it hands the rows to the tree's `onCommit`. */
 function SidebarChildren({
   parent,
   scope,
@@ -645,6 +659,7 @@ function SidebarChildren({
   onOpen,
   onPress,
   onSeeking,
+  onCommit,
 }: {
   parent: NavProject
   scope: string
@@ -653,6 +668,7 @@ function SidebarChildren({
   onOpen: (row: NavProject) => void
   onPress: (e: MouseEvent<HTMLElement>, row: NavProject) => void
   onSeeking: (seeking: boolean) => void
+  onCommit: { current: () => void }
 }) {
   const { visible } = useViewVisibility()
   const list = usePagedList<NavChildren, NavChildRow>({
@@ -714,6 +730,8 @@ function SidebarChildren({
     )
   })
   useLayoutEffect(() => () => onSeeking(false), [])
+  // after onSeeking, so the tree reads this commit's seeking
+  useLayoutEffect(() => onCommit.current())
 
   const tags = navTags(list.rows, () => parent)
   const lead = P.levelOn(parent.id) === 'lead'

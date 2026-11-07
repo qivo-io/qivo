@@ -622,6 +622,9 @@ describe('the expanded list', { timeout: 60_000 }, () => {
     await render(boards[27])
     expect(childNames()).toHaveLength(30)
     expect(lit()).toEqual([boards[27]])
+    // its row, the 28th under the third project, came into the 320px
+    // tree once its batch landed in the expanded list
+    expect(scrolled).toEqual([40 + 31 * 32 - 320])
     expect(asked('children').filter((s) => s.open)).toHaveLength(2)
     // under a bound of 5, batches of five, the list asks for a search and
     // lights nothing
