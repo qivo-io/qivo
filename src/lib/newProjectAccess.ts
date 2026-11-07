@@ -1,4 +1,5 @@
-/* The create dialogs' rules for a creator who is not an org admin: when the
+/* The create dialogs' rules for every creator, an organization admin as
+   anyone, since admin status gives no access to a project's work: when the
    New project dialog shows the creator in Project access by itself, when it
    takes that entry away again, what the dialog sends, which note the footer
    shows, and what follows once the project is saved. The server stores the
@@ -18,20 +19,21 @@ export type SelfEntry = 'none' | 'auto' | 'own'
 /** The dialog's individual grants and where the creator's own entry came from. */
 export type AccessDraft = { access: Record<string, AccessLevel>; self: SelfEntry }
 
-/** Who is creating: their profile id, and whether they are an org admin. */
+/** Who is creating: their profile id, and whether they are an org admin,
+ * who keeps managing a project someone else leads, so their footer gives
+ * no 'lead' note (creatorNote). */
 export type Creator = { id: string; admin: boolean }
 
 /** The draft after the lead changes to `lead`. Whoever becomes lead loses
- * their individual entry, as before, except a creator who is not an org
- * admin:
+ * their individual entry, as before, except the creator, an organization
+ * admin as anyone:
  * - another lead adds the creator as User, so they keep sight of the
  *   project, unless they already have an entry or removed it themselves;
  * - leading again drops only the untouched automatic entry. An entry the
  *   creator changed stays beside the lead role, and the higher level wins. */
 export function afterLeadChange(draft: AccessDraft, lead: string, creator: Creator): AccessDraft {
   const access = { ...draft.access }
-  if (creator.admin || lead !== creator.id) delete access[lead]
-  if (creator.admin) return { access, self: draft.self }
+  if (lead !== creator.id) delete access[lead]
   if (lead === creator.id) {
     if (draft.self !== 'auto') return { access, self: draft.self }
     delete access[creator.id]
@@ -77,9 +79,12 @@ export function afterAccessChange(
   return { access, self: userId === creator.id ? 'own' : draft.self }
 }
 
-/** The footer note of a create dialog: 'hidden' when the creator would not
- * see the project, 'lead' when someone else leads it, null otherwise. Org
- * admins see every project and manage it, so they get none. */
+/** The footer note of a create dialog: 'hidden' when the creator will not
+ * see the project, an organization admin as anyone, 'lead' when someone
+ * else leads it and the creator will no longer manage it, null otherwise.
+ * An admin keeps managing every project, so gets no 'lead' note. `sees`
+ * null is unknown, as when the New sub-project dialog's parent check could
+ * not finish, and warns of nothing. */
 export function creatorNote({
   creator,
   lead,
@@ -87,30 +92,38 @@ export function creatorNote({
 }: {
   creator: Creator
   lead: string
-  sees: boolean
+  sees: boolean | null
 }): 'hidden' | 'lead' | null {
+  if (sees === false) return 'hidden'
   if (creator.admin) return null
-  if (!sees) return 'hidden'
   return lead && lead !== creator.id ? 'lead' : null
 }
 
 /** What follows a saved create: the toast, and whether to open the project.
  * A top-level project its creator cannot see is not opened; the toast says
  * so instead. A sub-project opens when `visible`, which App answers with
- * whether the workspace holds it once the create is answered. Its creator
- * manages the parent, which before the admin access split means they see
- * it, and a sub-project under a parent the workspace does not hold stays
- * closed with the same toast. */
+ * whether the workspace holds it once the create is answered, and `sees`,
+ * whether the server's navigation read confirmed that the creator sees it
+ * (projectNav.resolve). Its creator manages the parent, which an
+ * organization admin does without seeing it, so a sub-project they will
+ * not see (`sees` false) says so and stays closed, and one that could not
+ * be confirmed (`sees` null) stays closed with the plain toast. */
 export function afterProjectSaved({
   type,
   name,
   visible,
+  sees = true,
 }: {
   type: NewProjectInput['type']
   name: string
   visible: boolean
+  sees?: boolean | null
 }): { message: string; open: boolean } {
-  if (type === 'project') return { message: `Sub-project “${name}” created`, open: visible }
+  if (type === 'project') {
+    if (sees === false)
+      return { message: `Sub-project “${name}” created. You don't have access to it.`, open: false }
+    return { message: `Sub-project “${name}” created`, open: visible && sees === true }
+  }
   if (!visible) {
     return { message: `Project “${name}” created. You don't have access to it.`, open: false }
   }

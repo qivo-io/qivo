@@ -9,7 +9,11 @@ import { CONFIRM_IGNORE_MS } from './lib/useConfirmArm'
 import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
-import { answerProjectNav, isProjectNavRead } from './store/projectNavStandIn.setup'
+import {
+  answerProjectNav,
+  isProjectNavRead,
+  queryProjectNav,
+} from './store/projectNavStandIn.setup'
 import { isProjectListRead, projectListsServer } from './store/projectSettingsListsStandIn.setup'
 import { isProjectSettingsRead, projectSettingsServer } from './store/projectSettingsStandIn.setup'
 import { answerRoadmap } from './store/roadmapStandIn.setup'
@@ -232,7 +236,12 @@ async function boot(
       next(answerRoadmap(snap, name, args))
     return () => {}
   })
-  network.query.mockResolvedValue(null)
+  // a one-shot navigation read, such as App's check that the creator sees
+  // a new sub-project (P.resolveProject), answers from the server
+  network.query.mockImplementation((ref, args) => {
+    const name = getFunctionName(ref)
+    return isProjectNavRead(name) ? queryProjectNav(snap, name, args) : Promise.resolve(null)
+  })
   sent = []
   network.mutation.mockImplementation((ref, args) => {
     const name = getFunctionName(ref)

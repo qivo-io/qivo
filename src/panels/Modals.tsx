@@ -496,16 +496,18 @@ function FooterNote({ tone, children }: { tone: 'muted' | 'warn'; children: Reac
   )
 }
 
-/* The footer note for a non-admin creator (see creatorNote), naming the
-   lead the dialog shows. */
+/* The footer note of a create dialog (see creatorNote), naming the lead
+   the dialog shows, for a project or a sub-project (`kind`). */
 function CreatorNote({
   note,
   leadName,
+  kind = 'project',
 }: {
   note: ReturnType<typeof creatorNote>
   leadName: string
+  kind?: 'project' | 'sub-project'
 }) {
-  if (note === 'hidden') return <FooterNote tone="warn">You won't see this project.</FooterNote>
+  if (note === 'hidden') return <FooterNote tone="warn">You won't see this {kind}.</FooterNote>
   if (note === 'lead') {
     return (
       <FooterNote tone="muted">
@@ -536,8 +538,14 @@ function NameRow({ nameRef, name, setName, submit }) {
 
 /** What a create dialog hands App with its project: whether to make a
     starter task, and for a sub-project the organization its parent check
-    named (ProjectShown), which the create goes to. */
-type CreateOptions = { withStarter: boolean; shown?: { orgId: string } }
+    named (ProjectShown), which the create goes to, and whether its creator
+    will see it (`sees`, null while unknown), which App's toast and its
+    move into the sub-project use. */
+type CreateOptions = {
+  withStarter: boolean
+  shown?: { orgId: string }
+  sees?: boolean | null
+}
 
 /* New top-level project (program). A project is an organization-wide
    container, so it has a lead but no owning/managing team. Teams can still be
@@ -546,10 +554,11 @@ type CreateOptions = { withStarter: boolean; shown?: { orgId: string } }
    popovers are open (projectSettings.leadCandidates and candidates for a
    new project); the lead starts as the creator, named from their own
    profile, and Create needs no answer, as nothing else can be chosen.
-   A creator who is not an org admin and picks someone else as lead is shown
-   in Project access as User, the grant the server gives them
-   (lib/newProjectAccess.ts), and the footer says who will manage the project
-   or that the creator would not see it. Of the store it reads the
+   A creator who picks someone else as lead, an organization admin as
+   anyone, is shown in Project access as User, the grant the server gives
+   them (lib/newProjectAccess.ts), and the footer says who will manage the
+   project, which an admin keeps managing, or that the creator would not
+   see it. Of the store it reads the
    creator's own seat, the keys the name's preview avoids (genKey) and the
    creator's teams for the footer (P.seesNewProject). */
 function NewProjectModal({
@@ -733,10 +742,16 @@ function parentNote(read: ProjectSettingsRead, picked: ParentPick, opener: boole
    archived, unavailable or no. The create goes to the answer's
    organization (CreateOptions `shown`). A starter task is offered only
    under a parent the workspace holds, as P.addIssue creates tasks only in
-   a project it holds. Of the store it reads the caller's seats and their
-   names, the organizations' names, whether the workspace holds the parent,
-   the keys the name's preview avoids (genKey) and the creator's admin flag
-   for the footer; no list, choice or right. */
+   a project it holds, and only to a creator who may see the sub-project.
+   The creator sees it as its lead, or by their own level on the parent,
+   which the parent check answers without navigation (`accessible`), so an
+   organization admin who manages a parent they take no part in and names
+   someone else as lead reads "You won't see this sub-project.", and an
+   unknown answer, as from a check that stopped, warns of nothing. Of the
+   store it reads the caller's seats and their names, the organizations'
+   names, whether the workspace holds the parent, the keys the name's
+   preview avoids (genKey) and the creator's admin flag for the footer; no
+   list, choice or right. */
 function NewSubProjectModal({
   init = {},
   onClose,
@@ -792,6 +807,15 @@ function NewSubProjectModal({
     !!lead.id
   const note = parent ? parentNote(read, parent, parent.id === init.parent) : null
   const orgName = P.orgs.length > 1 && org ? P.orgs.find((o) => o.id === org)?.name : undefined
+  // whether the creator will see the new sub-project: as its lead, or by
+  // their own level on the parent, null while that is unknown
+  const sees: boolean | null =
+    seat && lead.id === seat
+      ? true
+      : answer && parent && answer.project.id === parent.id
+        ? answer.accessible
+        : null
+  const offersStarter = !!held && sees !== false
 
   const submit = () => {
     if (!canSave || !parent || !answer) return
@@ -803,7 +827,11 @@ function NewSubProjectModal({
         parent: parent.id,
         lead: lead.id,
       },
-      { withStarter: !!held && withStarter, shown: { orgId: answer.project.org_id } },
+      {
+        withStarter: offersStarter && withStarter,
+        shown: { orgId: answer.project.org_id },
+        sees,
+      },
     )
   }
 
@@ -819,14 +847,14 @@ function NewSubProjectModal({
       submitLabel="Create sub-project"
       width={480}
       footerLeft={
-        // the creator manages the parent, so they always see the sub-project
         <CreatorNote
           note={creatorNote({
             creator: { id: seat, admin: !!seat && P.isAdmin(seat) },
             lead: lead.id,
-            sees: true,
+            sees,
           })}
           leadName={lead.name}
+          kind="sub-project"
         />
       }
     >
@@ -874,7 +902,7 @@ function NewSubProjectModal({
           )}
         </div>
       )}
-      {held && (
+      {offersStarter && (
         <label
           htmlFor="subproject-starter"
           className="flex flex-wrap items-center gap-2 [font-size:var(--fs-base)] [color:var(--text-1)] [margin-bottom:24px] [cursor:pointer]"

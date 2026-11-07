@@ -56,13 +56,14 @@ describe('afterLeadChange', () => {
     expect(afterLeadChange(own, 'leo', me)).toEqual({ access: { aisha: 'viewer' }, self: 'own' })
   })
 
-  it('never adds an org admin, and drops the new lead’s entry as before', () => {
+  it('adds an org admin as anyone, since admin status gives no access, and drops the new lead’s entry as before', () => {
     const draft: AccessDraft = { access: { leo: 'user', ben: 'viewer' }, self: 'none' }
     expect(afterLeadChange(draft, 'leo', admin)).toEqual({
-      access: { ben: 'viewer' },
-      self: 'none',
+      access: { ben: 'viewer', nora: 'user' },
+      self: 'auto',
     })
-    expect(afterLeadChange(empty, 'nora', admin)).toEqual(empty)
+    // leading again drops the untouched entry
+    expect(afterLeadChange(afterLeadChange(empty, 'leo', admin), 'nora', admin)).toEqual(empty)
   })
 })
 
@@ -101,6 +102,7 @@ describe('requestedAccess', () => {
 
   it('sends nothing for the creator who never had an entry', () => {
     expect(requestedAccess(empty, me)).toEqual({})
+    // the admin's automatic entry is the server's own grant, so it goes unsent
     expect(requestedAccess(afterLeadChange(empty, 'leo', admin), admin)).toEqual({})
   })
 })
@@ -118,9 +120,14 @@ describe('creatorNote', () => {
     expect(creatorNote({ creator: me, lead: 'aisha', sees: true })).toBeNull()
   })
 
-  it('says nothing to an org admin', () => {
+  it('names no lead to an org admin, who keeps managing the project, and warns them they will not see it', () => {
     expect(creatorNote({ creator: admin, lead: 'leo', sees: true })).toBeNull()
-    expect(creatorNote({ creator: admin, lead: 'leo', sees: false })).toBeNull()
+    expect(creatorNote({ creator: admin, lead: 'leo', sees: false })).toBe('hidden')
+  })
+
+  it('warns of nothing it does not know', () => {
+    expect(creatorNote({ creator: admin, lead: 'leo', sees: null })).toBeNull()
+    expect(creatorNote({ creator: me, lead: 'leo', sees: null })).toBe('lead')
   })
 })
 
@@ -139,11 +146,25 @@ describe('afterProjectSaved', () => {
     })
   })
 
-  it('opens a sub-project the workspace holds', () => {
+  it('opens a sub-project the workspace holds and the creator is confirmed to see', () => {
     expect(afterProjectSaved({ type: 'project', name: 'Calibration', visible: true })).toEqual({
       message: 'Sub-project “Calibration” created',
       open: true,
     })
+    // an unconfirmed one stays closed with the plain toast
+    expect(
+      afterProjectSaved({ type: 'project', name: 'Calibration', visible: true, sees: null }),
+    ).toEqual({ message: 'Sub-project “Calibration” created', open: false })
+  })
+
+  it('says so and stays put for a sub-project the creator will not see, held or not', () => {
+    for (const visible of [true, false])
+      expect(
+        afterProjectSaved({ type: 'project', name: 'Calibration', visible, sees: false }),
+      ).toEqual({
+        message: "Sub-project “Calibration” created. You don't have access to it.",
+        open: false,
+      })
   })
 
   it('stays put with the same message for a sub-project the workspace does not hold', () => {

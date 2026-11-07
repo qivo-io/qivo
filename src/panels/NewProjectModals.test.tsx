@@ -423,11 +423,18 @@ describe('New project for a standard user', () => {
 describe('New project for an org admin', () => {
   beforeEach(() => load('admin'))
 
-  it('shows no note and adds no entry for another lead', async () => {
-    await render(<dialogs.NewProjectModal onClose={vi.fn()} onCreate={vi.fn()} />)
+  it('adds the admin to access when someone else leads, names no lead, and warns once they remove the entry', async () => {
+    const onCreate = vi.fn()
+    await render(<dialogs.NewProjectModal onClose={vi.fn()} onCreate={onCreate} />)
     await pickLead('leo')
+    // the server's default grant, as for anyone; the admin keeps managing
+    // the project, so no note names its lead
+    expect(accessField()).toBe('Aisha Rahman (you)')
     expect(note()).toBeNull()
-    expect(accessField()).toBe('Select teams and users…')
+    await click('[data-new-project-access]')
+    await click('[data-project-access-user-option="aisha"]')
+    expect(note()?.getAttribute('data-footer-note')).toBe('warn')
+    expect(note()?.textContent).toBe("You won't see this project.")
   })
 })
 
@@ -762,12 +769,55 @@ describe('New sub-project', () => {
     expect(note()).toBeNull()
   })
 
-  it('shows an org admin no note', async () => {
+  it('shows an org admin no note under a parent they lead', async () => {
     await load('admin')
     await openSub('sensor')
     await pickLead('leo')
     expect(note()).toBeNull()
     expect(P.isAdmin()).toBe(true)
+  })
+
+  it('tells an org admin under a parent they only manage that they will not see a sub-project someone else leads', async () => {
+    // Aisha, an admin, takes part in nothing of Beam, which Leo leads
+    await load('admin', (snap) => {
+      snap.access = []
+    })
+    const onCreate = await openSub('beam')
+    await type(nameField(), 'Docs')
+    // as its lead she sees it, and may make a starter task there
+    expect(note()).toBeNull()
+    expect(has('#subproject-starter')).toBe(true)
+    await pickLead('leo')
+    expect(note()?.getAttribute('data-footer-note')).toBe('warn')
+    expect(note()?.textContent).toBe("You won't see this sub-project.")
+    expect(has('#subproject-starter')).toBe(false)
+    await click(create())
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'project', parent: 'beam', lead: 'leo' }),
+      { withStarter: false, shown: { orgId: home }, sees: false },
+    )
+  })
+
+  it('counts a parent the admin sees only for navigation as one they will not see the sub-project under', async () => {
+    // Aisha, an admin, sees Beam only to reach its sub-project Specs
+    await load('admin', (snap) => {
+      const beam = snap.projects.find((p) => p.id === 'beam')
+      if (beam === undefined) throw new Error('no Beam')
+      snap.projects.push({
+        ...beam,
+        id: 'specs',
+        key: 'SPEC',
+        num: 11,
+        name: 'Specs',
+        type: 'project',
+        parent_id: 'beam',
+        lead_id: undefined,
+      })
+      snap.access = [{ project_id: 'specs', profile_id: 'aisha', level: 'user' }]
+    })
+    await openSub('beam')
+    await pickLead('leo')
+    expect(note()?.textContent).toBe("You won't see this sub-project.")
   })
 
   it('checks its parent on the server and turns Create on only once the answer allows it', async () => {
@@ -960,7 +1010,7 @@ describe('New sub-project', () => {
     await click(create())
     expect(onCreate).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'project', parent: 'test-b', lead: 'leo' }),
-      { withStarter: true, shown: { orgId: home } },
+      { withStarter: true, shown: { orgId: home }, sees: true },
     )
   })
 
@@ -1072,7 +1122,7 @@ describe('New sub-project', () => {
     await click(create())
     expect(onCreate).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'project', parent: 'beacon-plan', lead: 'aisha-b' }),
-      { withStarter: true, shown: { orgId: beacon } },
+      { withStarter: true, shown: { orgId: beacon }, sees: true },
     )
   })
 
@@ -1089,7 +1139,7 @@ describe('New sub-project', () => {
     await click(create())
     expect(onCreate).toHaveBeenCalledWith(
       expect.objectContaining({ parent: 'test-b', lead: 'aisha' }),
-      { withStarter: false, shown: { orgId: home } },
+      { withStarter: false, shown: { orgId: home }, sees: true },
     )
   })
 
