@@ -1112,17 +1112,18 @@ export async function milestoneProjects(
  * question read them, as one about a live sub-project under it does. A
  * top-level project archived whole, as archiving a project leaves its
  * sub-projects, has no live sub-project, so each such top-level project
- * takes a row and an index range more. Rows within the caps read fewer
- * real bytes than they count, so the step reads at most 4 MiB, the read
- * after it at most MILESTONE_READ's 4 MiB within what the request has left
- * (lib/archivedTasks.ts roomOf), and MILESTONE_RESERVE keeps 1 MiB back.
- * That is 9 MiB of Convex's 16 MiB, which leaves 7 MiB for the sign-in and
- * seats read before them. The two shares' 16,000 documents keep under
- * 32,000. The step's 3,000 ranges and the read's 2,000 pass 4,096
- * together, so the read takes at most what the step leaves, which is at
- * least 1,096 ranges less those of the sign-in and seats, and a read whose
- * projects' first days do not fit there is refused. The first batch of
- * each 200-project case below took 400 ranges.
+ * takes up to two ranges more, its row and that grant. Rows within the
+ * caps read fewer real bytes than they count, so the step reads at most
+ * 4 MiB, the read after it at most MILESTONE_READ's 4 MiB within what the
+ * request has left (lib/archivedTasks.ts roomOf), and MILESTONE_RESERVE
+ * keeps 1 MiB back. That is 9 MiB of Convex's 16 MiB, which leaves 7 MiB
+ * for the sign-in and seats read before them. The two shares' 16,000
+ * documents keep under 32,000. The step's 3,000 ranges and the read's
+ * 2,000 pass 4,096 together, so the read takes at most what the step
+ * leaves, which is at least 1,096 ranges less those of the sign-in and
+ * seats, and a read whose projects' first days do not fit there is
+ * refused. The first batch of each 200-project case below took 400
+ * ranges.
  *
  * Measured on 7 November 2026 under convex-test's transaction limits with
  * rows as the app writes them (tests/milestoneMine.test.ts, design size),
