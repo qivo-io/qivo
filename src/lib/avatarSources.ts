@@ -481,10 +481,17 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
     downloading: () => downloading,
     mostDownloading: () => mostDownloading,
     prepare,
+    /** Drops every picture and what is on its way, for sign-out, a demo's
+        end and reinitialization. The waiting keys go first, so the room
+        each release frees starts no download with the old session's lease. */
     clear() {
-      for (const entry of entries.values()) release(entry)
-      entries.clear()
       waitingKeys.clear()
+      const all = [...entries.values()]
+      entries.clear()
+      for (const entry of all) {
+        entry.waiting = undefined
+        release(entry)
+      }
       restoreGeneration++
     },
   }

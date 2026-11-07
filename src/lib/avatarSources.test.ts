@@ -476,6 +476,24 @@ describe('profile picture bounds', () => {
     expect(f.cache.keptBytes()).toBeLessThanOrEqual(AVATAR_SOURCES.keptBytes)
   })
 
+  it('starts no download for a waiting picture when a clear frees room', async () => {
+    AVATAR_SOURCES.keptBytes = 500 * KIB
+    const f = fixture()
+    f.fetcher.mockImplementation(async () => new Response(face(200 * KIB)))
+    const [a, b, c] = keys(3) as [string, string, string]
+    f.cache.sync([a, b, c])
+    expect(await f.cache.prepare(a, LEASE)).toBe(true)
+    expect(await f.cache.prepare(b, LEASE)).toBe(true)
+    expect(await f.cache.prepare(c, LEASE)).toBe(false)
+    expect(f.fetcher).toHaveBeenCalledTimes(2)
+    // sign-out: releasing a frees room while c still waits with its lease
+    f.cache.clear()
+    await Promise.resolve()
+    expect(f.fetcher).toHaveBeenCalledTimes(2)
+    expect(f.cache.downloading()).toBe(0)
+    expect(f.cache.keptBytes()).toBe(0)
+  })
+
   it('counts restored pictures in the kept bytes', async () => {
     const f = fixture()
     f.cache.setPersistent(persistentFixture(face(30 * KIB)).cache)
