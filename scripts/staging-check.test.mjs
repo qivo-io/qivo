@@ -126,6 +126,7 @@ import {
   WORKLOAD_REFUSALS,
   WRITE_CONFLICT,
   weekOf,
+  wholeBatchNames,
   withQuery,
   workloadPeople,
 } from './staging-check.mjs'
@@ -778,6 +779,22 @@ describe('staging check REST contract', () => {
     // it writes nothing, and falls back to the store's read without the box
     expect(step).not.toMatch(/restOk\(|\.mutation\(|\.click\(/)
     expect(step).toContain('window.PLANNER.personalTokens(search, null)')
+    // a list without its box is also searched for the run tag through the
+    // store, which must answer the run's two rows alone
+    expect(step).toMatch(
+      /if \(!appsSearched\)\s+same\(\s+wholeBatchNames\(\s+await evaluate\(app, \(search\) => window\.PLANNER\.connectedApps\(search, null\), tag\),\s+\(row\) => row\.clientName,\s+\),\s+appNames,/,
+    )
+    expect(step).toMatch(
+      /if \(!tokensSearched\)\s+same\(\s+wholeBatchNames\(\s+await evaluate\(app, \(search\) => window\.PLANNER\.personalTokens\(search, null\), tag\),\s+\(row\) => row\.name,\s+\),\s+tokenNames,/,
+    )
+    const rows = [{ name: 'a' }, { name: 'b' }]
+    expect(wholeBatchNames({ rows, next: null, stopped: false }, (row) => row.name)).toEqual([
+      'a',
+      'b',
+    ])
+    // a batch that does not end the list, or a failed read, names nothing
+    expect(wholeBatchNames({ rows, next: 'more', stopped: true }, (row) => row.name)).toBeNull()
+    expect(wholeBatchNames(null, (row) => row.name)).toBeNull()
   })
 
   it("waits for an MCP access list to answer the typed search, never the earlier list's end", () => {

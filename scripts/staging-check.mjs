@@ -141,8 +141,10 @@
  * its run tag when a list shows its search and read from its first batch
  * when not, must list the run's two connections and two tokens newest
  * first, and nothing else when it searched, from the deployment's batches
- * (connectedApps.list and tokens.personalTokens), and a token search that
- * matches nothing must say so (ui/mcp-access-lists). It makes a
+ * (connectedApps.list and tokens.personalTokens); a list without its
+ * search must also answer those two rows alone to the store's read for
+ * the run tag, and a token search that matches nothing must say so
+ * (ui/mcp-access-lists). It makes a
  * project of its own with two sub-projects, finds it by its run tag in
  * Settings › Projects from the deployment's list (projectSettings.projects)
  * and opens its sub-projects (subProjects), archives one sub-project alone
@@ -6779,6 +6781,12 @@ export const MCP_ACCESS_LISTS_STEP = 'ui/mcp-access-lists'
 /** What MCP access says when a token search matches nothing. */
 export const MCP_ACCESS_EXPECTED = { none: 'No tokens match.' }
 
+/** The names of the rows a batch `batch` answered, as `name` reads them,
+ *  when it is the whole answer (no `next`), else null. A failed read
+ *  answers null too. */
+export const wholeBatchNames = (batch, name) =>
+  batch && Array.isArray(batch.rows) && batch.next === null ? batch.rows.map(name) : null
+
 /** Checks MCP access's Connected apps and Personal access tokens on the
  *  deployment's batches (connectedApps.list and tokens.personalTokens)
  *  while the run's two OAuth connections and two personal tokens are live.
@@ -6788,10 +6796,14 @@ export const MCP_ACCESS_EXPECTED = { none: 'No tokens match.' }
  *  alone among the rows with its tag, newest first: the read-only
  *  connection, approved second, before the one that may make changes,
  *  and `<tag> read token`, made second, before `<tag> write token`. A
- *  token search that matches nothing must say so, in the page when the
- *  box shows, else in the store's read of the same batch. It writes
- *  nothing, and needs a backend from the release that ships these reads;
- *  against an older one the lists cannot load. */
+ *  list that shows no search is also asked through the store's read for
+ *  the run tag, which must answer those two rows alone, so every run
+ *  checks the server's search with a match, on which the cleanup's sweep
+ *  and its check for leftovers rely. A token search that matches nothing
+ *  must say so, in the page when the box shows, else in the store's read
+ *  of the same batch. It writes nothing, and needs a backend from the
+ *  release that ships these reads; against an older one the lists cannot
+ *  load. */
 async function mcpAccessListsCheck() {
   const m = MCP_ACCESS_MARKS
   const tag = run.tag
@@ -6804,24 +6816,44 @@ async function mcpAccessListsCheck() {
       const mine = texts.filter((text) => hasTag(tag, text))
       return { mine, alone: mine.length === texts.length }
     }
+    const appNames = [`${tag} OAuth read client`, `${tag} OAuth write client`]
     const appsSearched = await searchMcpList(MCP_LISTS.apps, tag)
     const apps = await tagged(m.app)
     expect(
       apps.mine.length === 2 &&
-        apps.mine[0].startsWith(`${tag} OAuth read client`) &&
-        apps.mine[1].startsWith(`${tag} OAuth write client`) &&
+        apps.mine[0].startsWith(appNames[0]) &&
+        apps.mine[1].startsWith(appNames[1]) &&
         (!appsSearched || apps.alone),
       `Connected apps lists ${short(apps.mine.map((t) => t.slice(0, 40)))} for the run`,
     )
+    if (!appsSearched)
+      same(
+        wholeBatchNames(
+          await evaluate(app, (search) => window.PLANNER.connectedApps(search, null), tag),
+          (row) => row.clientName,
+        ),
+        appNames,
+        'the connected apps batch for the run tag',
+      )
+    const tokenNames = [`${tag} read token`, `${tag} write token`]
     const tokensSearched = await searchMcpList(MCP_LISTS.tokens, tag)
     const tokens = await tagged(m.token)
     expect(
       tokens.mine.length === 2 &&
-        tokens.mine[0].startsWith(`${tag} read token`) &&
-        tokens.mine[1].startsWith(`${tag} write token`) &&
+        tokens.mine[0].startsWith(tokenNames[0]) &&
+        tokens.mine[1].startsWith(tokenNames[1]) &&
         (!tokensSearched || tokens.alone),
       `Personal access tokens lists ${short(tokens.mine.map((t) => t.slice(0, 40)))} for the run`,
     )
+    if (!tokensSearched)
+      same(
+        wholeBatchNames(
+          await evaluate(app, (search) => window.PLANNER.personalTokens(search, null), tag),
+          (row) => row.name,
+        ),
+        tokenNames,
+        'the personal tokens batch for the run tag',
+      )
     const nothing = `${tag} no such token`
     if (await searchMcpList(MCP_LISTS.tokens, nothing)) {
       eq(await app.locator(`[${m.token}]`).count(), 0, 'token rows for a search with no match')
@@ -6836,7 +6868,7 @@ async function mcpAccessListsCheck() {
         { rows: [], next: null, stopped: false },
         'the token batch for a search with no match',
       )
-    return `found the run's two connections and two tokens newest first${appsSearched || tokensSearched ? ' by the run tag' : ' in the first batches'}, and a token search with no match`
+    return `found the run's two connections and two tokens newest first${appsSearched || tokensSearched ? ' by the run tag' : " in the first batches and in the store's batches for the run tag"}, and a token search with no match`
   })
 }
 

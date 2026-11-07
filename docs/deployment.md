@@ -424,10 +424,11 @@ v0.1.144 that step fails. It then opens **MCP access** and searches
 the deployment's batches (`connectedApps.list` and `tokens.personalTokens`)
 list the run's two connections and two tokens newest first, alone when the
 list shows its search, and a token search that matches nothing says so
-(`ui/mcp-access-lists`). A list
-shows its search only once it holds more than 25 rows, so on a deployment
-with fewer the step reads the run's rows from the list's first batch and
-asks the store's read for the search with no match. Against a backend from
+(`ui/mcp-access-lists`). A list shows its search only once it holds more
+than 25 rows. On a deployment with fewer, the step reads the run's rows from
+the list's first batch, the store's read for the run tag must answer the
+run's two rows alone, and the store's read answers the token search with no
+match. Against a backend from
 before the release after v0.1.158 the run stops at setup
 (`setup/ui/personal-token-write`), and its cleanup cannot list tokens and
 connections. Back in the run's task window it attaches a small file, which
