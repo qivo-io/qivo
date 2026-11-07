@@ -1614,6 +1614,7 @@ describe('board-scale-seed --projects', () => {
     ])
     expect(new Set(plan.projects.map((p) => p.name)).size).toBe(196)
     expect(plan.stars).toEqual(PROJECT_STARS.map(projectSeedId))
+    expect(plan.short).toBe(0)
     // past the count nothing is made
     expect(planProjects({ org: 'org', count: 3, tops, present: new Set(tops) }).projects).toEqual(
       [],
@@ -1635,6 +1636,44 @@ describe('board-scale-seed --projects', () => {
       present: new Set([...present, ...plan.projects.map((p) => p.id)]),
     })
     expect(again.projects).toEqual([])
+  })
+
+  it('says how many it falls short once every number is taken, archived and deleted ones included', async () => {
+    // a first run made all 200 numbers; a check archived or deleted five
+    const made = Array.from({ length: 200 }, (_, n) => projectSeedId(n))
+    const live = made.slice(5)
+    const plan = planProjects({
+      org: 'org',
+      count: 200,
+      tops: ['luma', ...live],
+      present: new Set(['luma', ...made]),
+    })
+    // Luma Sensor and 195 live make 196, and no number is left for the rest
+    expect(plan.projects).toEqual([])
+    expect(plan.short).toBe(4)
+    // and a run says so
+    fake.projects = [
+      { id: 'luma', org_id: 'org', type: 'meta', sort_order: 1 },
+      { id: 'sub', org_id: 'org', type: 'project', parent_id: 'luma' },
+      ...live.map((id, n) => ({ id, org_id: 'org', type: 'meta', sort_order: 205 + n })),
+    ]
+    fake.projectRows = [...fake.projects, ...made.slice(0, 5).map((id) => ({ id, org_id: 'org' }))]
+    fake.issues = []
+    fake.calls = []
+    const said = []
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--projects', '200'], {
+        env,
+        log: (line) => said.push(line),
+      })
+    } finally {
+      fake.projects = null
+      fake.projectRows = []
+    }
+    expect(fake.calls.filter(([name]) => name === 'projects:create')).toEqual([])
+    expect(said).toContain(
+      '--projects fell 4 short of its count: all 200 of its numbers are taken, archived and deleted ones included.',
+    )
   })
 
   it('makes the projects as Nora and stars a few, and --files keeps to Northstar’s own projects', async () => {

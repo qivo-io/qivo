@@ -196,7 +196,9 @@
  * id comes from its number, and an id the backend holds anywhere, archived
  * or in Deleted items included, or keeps taken, counts as made, so a
  * second run adds only what is missing and makes no project again that a
- * check archived or deleted. It then stars three of them for Nora through
+ * check archived or deleted. Since there are 200 numbers, a rerun after
+ * such a check can make fewer than are missing, and it then says how many
+ * it fell short. It then stars three of them for Nora through
  * projectNav:setFavorite (PROJECT_STARS), which a repeated star leaves as
  * it is. N goes up to 200 (MOST_PROJECTS). --files and --deleted keep
  * their sub-projects under Northstar's own top-level projects, never under
@@ -590,13 +592,15 @@ export function seededProjectName(n) {
  * The --projects work in organization `org` to hold `count` live top-level
  * projects in all: `projects`, the projects:create calls of the projects
  * missing, numbered from 0 and skipping each number whose id `present`
- * holds (in any table or as a used id), led by the caller, Nora; and
- * `stars`, the ids of PROJECT_STARS among the --projects projects that
- * will be live. `tops` holds the ids of the organization's live top-level
- * projects now, which count toward `count` whatever made them.
+ * holds (in any table or as a used id), led by the caller, Nora; `stars`,
+ * the ids of PROJECT_STARS among the --projects projects that will be
+ * live; and `short`, how many are still missing once every number up to
+ * MOST_PROJECTS is taken, as after a check archived or deleted some.
+ * `tops` holds the ids of the organization's live top-level projects now,
+ * which count toward `count` whatever made them.
  */
 export function planProjects({ org, count, tops, present }) {
-  const plan = { projects: [], stars: [] }
+  const plan = { projects: [], stars: [], short: 0 }
   let missing = Math.max(0, count - tops.length)
   const live = new Set(tops)
   for (let n = 0; n < MOST_PROJECTS && missing > 0; n++) {
@@ -614,6 +618,7 @@ export function planProjects({ org, count, tops, present }) {
     live.add(id)
     missing--
   }
+  plan.short = missing
   for (const n of PROJECT_STARS) if (live.has(projectSeedId(n))) plan.stars.push(projectSeedId(n))
   return plan
 }
@@ -1943,6 +1948,10 @@ async function seedProjects(plan, { client, org, target, log }) {
   log(
     `Done: ${plan.projects.length} top-level projects added and ${plan.stars.length} starred in Northstar on ${target.url}.`,
   )
+  if (plan.short > 0)
+    log(
+      `--projects fell ${plan.short} short of its count: all ${MOST_PROJECTS} of its numbers are taken, archived and deleted ones included.`,
+    )
 }
 
 /** Makes the --files sub-projects, tasks and files of `plan` (planFiles)
