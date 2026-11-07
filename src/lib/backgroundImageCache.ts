@@ -18,6 +18,10 @@ export type BackgroundCacheStore = {
 const MAX_IMAGE_BYTES = LIMITS.backgroundSize.max * MIB
 const MAX_PREVIEW_BYTES = 4 * 1024 * 1024
 const STORAGE_TIMEOUT_MS = 750
+// How long the cached preview's bytes may take to decode before
+// restorePreview drops them, as it drops bytes that fail to decode, so a
+// decode that never settles cannot keep Settings' preview loading.
+const PREVIEW_DECODE_TIMEOUT_MS = 10_000
 
 function abortTransaction(tx: IDBTransaction) {
   try {
@@ -327,7 +331,8 @@ export function createBackgroundImageCache(
       })
     },
     /** The selection's cached preview, once its bytes decode (`validate`).
-        Bytes that no longer decode leave the cache, so a retry or the next
+        Bytes that no longer decode, or do not decode within
+        PREVIEW_DECODE_TIMEOUT_MS, leave the cache, so a retry or the next
         read fetches the derivative again instead of showing them. */
     async restorePreview() {
       const version = generation
@@ -335,7 +340,7 @@ export function createBackgroundImageCache(
       const blob = record?.preview
       if (!restored || !blob || urls.get(blob) !== restored.url) return restored
       try {
-        await validate(restored.url)
+        await bounded(validate(restored.url), PREVIEW_DECODE_TIMEOUT_MS)
         return restored
       } catch {
         if (disposed || generation !== version || record?.preview !== blob) return null

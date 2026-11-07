@@ -116,6 +116,8 @@ type Download = {
 let downloads: Download[] = []
 // blob URLs whose bytes no longer decode, as a damaged cached copy's
 const corrupt = new Set<string>()
+// blob URLs whose decode never settles
+const stalled = new Set<string>()
 let page: 'visible' | 'hidden' = 'visible'
 let container: HTMLDivElement
 let root: Root
@@ -172,6 +174,7 @@ beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   downloads = []
   corrupt.clear()
+  stalled.clear()
   weekly.subscriptions = []
   demo.on = false
   demo.polls = 0
@@ -208,6 +211,7 @@ beforeEach(() => {
       // an image named broken never decodes, as a failed original
       decode = async () => {
         if (this.src.includes('broken') || corrupt.has(this.src)) throw new Error('Broken image')
+        if (stalled.has(this.src)) await new Promise(() => {})
       }
     },
   )
@@ -305,6 +309,41 @@ describe('the Canvas background and its preview', () => {
     await settle()
     expect(shown()).toMatchObject({ status: 'ready', key: 'daily:week-1' })
     expect(shown().url).not.toBe(first)
+  })
+
+  it('drops a cached preview whose decode never settles after 10 s and reads the derivative again', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      await render(true)
+      await act(async () => store.deliver(preferences('daily')))
+      await deliverWeek(daily('week-1', 'https://storage.test/week-1/preview.webp'))
+      await settle()
+      fetched('preview')[0]?.answer()
+      await settle()
+      const first = shown().url as string
+      expect(shown()).toMatchObject({ status: 'ready', key: 'daily:week-1' })
+      // the cached bytes' decode stops answering; Settings opens again
+      stalled.add(first)
+      await render(false)
+      await render(true)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(9_999)
+      })
+      expect(shown().status).toBe('loading')
+      expect(fetched('preview')).toHaveLength(1)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1)
+      })
+      await settle()
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith(first)
+      expect(fetched('preview')).toHaveLength(2)
+      fetched('preview')[1]?.answer()
+      await settle()
+      expect(shown()).toMatchObject({ status: 'ready', key: 'daily:week-1' })
+      expect(shown().url).not.toBe(first)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('shows the canvas’s own image for a weekly image without a derivative, and unavailable while the canvas has none', async () => {
