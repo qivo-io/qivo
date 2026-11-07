@@ -11,8 +11,9 @@
      whitespace-separated word of it is in the name key of its name or of
      its shown prefix;
    - connectedApps:list: the caller's login's approved connections, newest
-     approval first, equal approvals newest row first by creation order,
-     each deleted one looked at and left out; a row names its seat and
+     approval first, equal approvals newest row first by creation time and
+     then by document id, as the server ties on [_creationTime, _id], each
+     deleted one looked at and left out; a row names its seat and
      organization, or "Removed member" and "Removed organization" when the
      world gives none; the search keeps a row when every word is in the
      name key of its app's, organization's or seat's shown name; a gone
@@ -55,6 +56,9 @@ export type StandInConnection = Omit<
   revocationReason: string | null
   /** its creation time, which orders equal approvals, newest first */
   created: number
+  /** its document id (_id), which orders equal approvals of one creation
+      time, last first */
+  docId: string
   /** its seat's name, or null when the seat is gone or another login's */
   profileName: string | null
   /** its organization's name, or null when the organization is gone */
@@ -199,7 +203,7 @@ export function credentialListsStandIn(
     world.connections
       .filter((c) => c.login === world.login && c.approvedAt !== null && c.approvedAt !== '')
       .map((c): Item<ConnectedAppRow> => {
-        const at = { key: c.approvedAt as string, tie: [c.created, c.id] }
+        const at = { key: c.approvedAt as string, tie: [c.created, c.docId] }
         if (c.revocationReason === 'deleted') return { at, row: null }
         const profileName = c.profileName || REMOVED_MEMBER
         const orgName = c.orgName || REMOVED_ORGANIZATION

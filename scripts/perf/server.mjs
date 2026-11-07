@@ -1047,6 +1047,7 @@ const appRows = Array.from({ length: appCount }, (_, n) => ({
   approvedAt: hoursAgo(appCount + 2, n),
   revocationReason: n === 1 ? 'admin' : null,
   created: n,
+  docId: `perf-connection-${n}`,
   profileName: me.name,
   orgName: 'Testbed Labs',
   clientGone: false,

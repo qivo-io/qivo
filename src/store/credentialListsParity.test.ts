@@ -92,6 +92,8 @@ async function plantTokens(
 
 type ConnectionSeed = {
   client: string
+  /** its public id, a fresh uuid when left out */
+  id?: string
   approved_at?: string
   seat?: Doc<'profiles'>
   revocation_reason?: string
@@ -109,7 +111,7 @@ async function plantConnections(
     for (const s of seeds) {
       const owner = s.seat ?? seat
       await ctx.db.insert('oauth_connections', {
-        id: uuid(),
+        id: s.id ?? uuid(),
         authorization_hash: uuid(),
         auth_user_id: login,
         profile_id: owner.id,
@@ -178,6 +180,7 @@ async function worldOf(
         approvedAt: r.approved_at ?? null,
         revocationReason: r.revocation_reason ?? null,
         created: r._creationTime,
+        docId: r._id,
         profileName: seat?.auth_user_id === r.auth_user_id ? seat.name : null,
         orgName: org?.name ?? null,
         clientGone: !clients.includes(r.client_id),
@@ -354,6 +357,37 @@ describe("MCP access's stand-in", () => {
       await same(t, login, world, 'connectedApps:list', search)
   })
 
+  it('answers connections approved at one time with one creation time across a batch boundary, tied on the document id', async () => {
+    const { t, login, seats } = await caller()
+    await runInAuth(t, (ctx) =>
+      ctx.db.insert('oauthClient', { clientId: 'client-Same', redirectUris: [] }),
+    )
+    // convex-test gives each insert a creation time 0.001 ms after the last;
+    // past 2^52 ms that step rounds away, so these rows share one. Their
+    // public ids fall as their document ids rise, so a tie on the public id
+    // would answer them in the opposite order.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(2 ** 52)
+    try {
+      await plantConnections(
+        t,
+        login,
+        seats[0],
+        Array.from({ length: 26 }, (_, n) => ({
+          client: 'Same',
+          id: `${String(99 - n).padStart(8, '0')}-0000-4000-8000-000000000000`,
+          approved_at: at(5),
+        })),
+      )
+    } finally {
+      clock.mockRestore()
+    }
+    const world = await worldOf(t, login, seats)
+    expect(new Set(world.connections.map((c) => c.created)).size).toBe(1)
+    const batches = await same(t, login, world, 'connectedApps:list')
+    expect(batches.map((b) => b.rows.length)).toEqual([LIST_BATCH, 1])
+    await same(t, login, world, 'connectedApps:list', 'same')
+  })
+
   it('refuses a long search and foreign cursors as the server does', async () => {
     const { t, f, login, seats } = await caller()
     await plantTokens(
@@ -430,6 +464,7 @@ describe("the stand-in's forced states", () => {
       approvedAt: at(i),
       revocationReason: null,
       created: i,
+      docId: `doc-${i}`,
       profileName: 'Nora Berg',
       orgName: 'Northstar Labs',
       clientGone: false,

@@ -965,6 +965,7 @@ describe('MCP access', () => {
     approvedAt: new Date(Date.UTC(2026, 8, 1) + n * 60_000).toISOString(),
     revocationReason: null,
     created: n,
+    docId: `doc-${n}`,
     profileName: 'Nora Berg',
     orgName: 'Northstar Labs',
     clientGone: false,

@@ -237,6 +237,7 @@ describe('the Connected apps list read from the server', () => {
       approvedAt: new Date(Date.UTC(2026, 8, 1) + i * 60_000).toISOString(),
       revocationReason: null,
       created: i,
+      docId: `doc-${i}`,
       profileName: 'Nora Berg',
       orgName: 'Northstar Labs',
       clientGone: false,
