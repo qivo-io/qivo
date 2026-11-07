@@ -56,17 +56,19 @@ import { LIMITS } from '../../convex/lib/limits'
     history counts only while a window shows All.
 
     The kept set can pass the figure. A release never takes the live
-    window (50 comments) or the live page (50 changes), the pages the last
-    press loaded (up to 50 a kind, 100 under All, where one press reads
-    both), the row the window measures to keep the reader's place, the rows
-    on screen around the place each window reported (the reported row and
-    the 50 after it), or the changes of one write that the live page starts
-    among, and it never splits an instant. So under All the store can hold
-    about 200 rows, past the figure of 150, until the next release. A row
-    at an instant only the other kind's live rows hold is held apart within
-    the count, so it never stops a release. A comment open in an editor is
-    held besides, outside the count, until its editor closes or a page
-    holds it again.
+    window (50 comments) or the live page (50 changes), the pages of the
+    last press, and of a press made while it still loaded (up to 50 a kind
+    each, 100 under All, where one press reads both), the row the window
+    measures to keep the reader's place, the rows on screen around the
+    place each window reported (the reported row and the 50 after it), or
+    the changes of one write that the live page starts among, and it never
+    splits an instant. So under All the store can hold about 200 rows after
+    one press, and the rows it held plus both pages after a Show newer
+    press made while Show earlier still loads, past the figure of 150,
+    until the next release. A row at an instant only the other kind's live
+    rows hold is held apart within the count, so it never stops a release.
+    A comment open in an editor is held besides, outside the count, until
+    its editor closes or a page holds it again.
 
     Measured on 6 November 2026 with the browser benchmark's thread phase
     (scripts/benchmark-browser.mjs --thread: 4 times CPU slowdown, 100 ms
