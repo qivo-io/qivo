@@ -5,7 +5,10 @@
    pictures never in one call, and attachment calls before picture calls,
    so an image someone is looking at overtakes the roster's pictures. The
    server refuses a call past its own caps (convex/files.ts MINT_IDS), which
-   these chunks stay under. While the page is hidden no call starts
+   these chunks stay under. A call that fails for any reason but a refusal
+   is asked again once as two halves before its ids answer failed, since a
+   backend from before the cap reads each image's project on its own and
+   can pass its read limit on a call of 100 (docs/deployment.md). While the page is hidden no call starts
    (pause); the calls on their way finish, and the waiting requests go once
    it shows. The planner builds one queue a store, with its query
    injected, so the tests need no store. */
@@ -26,8 +29,9 @@ export type MintLease = { url: string; exp: number }
 
 /** What a request answers: its lease, `missing` when the answer omitted
     the id (missing, foreign and invisible alike), `refused` when the call
-    was refused (a ConvexError), or `failed` for any other failure, the
-    call's timeout, or a queue cleared before the answer. */
+    was refused (a ConvexError), or `failed` for any other failure (after
+    the half of the call it was in failed too), the call's timeout, or a
+    queue cleared before the answer. */
 export type MintOutcome =
   | { state: 'lease'; lease: MintLease }
   | { state: 'missing' }
@@ -45,6 +49,10 @@ type Waiting = {
   answer: Promise<MintOutcome>
   settle: (outcome: MintOutcome) => void
 }
+
+/* One call's requests, of one kind and organization. `half` marks a half
+   of a call that failed, which is not split again. */
+type Chunk = { kind: MintRequest['kind']; org: string; items: Waiting[]; half?: boolean }
 
 type Options = {
   /** whether a failed call's error is a refusal (a ConvexError) */
@@ -69,6 +77,8 @@ export function createMintQueue(mint: MintCall, options: Options) {
     avatar: new Map<string, Waiting[]>(),
   }
   const known = new Map<string, Waiting>() // waiting or on their way, by key
+  // the halves of failed calls, to send before the waiting requests
+  const halves: Chunk[] = []
   let running = 0
   let mostRunning = 0
   let sent = 0
@@ -76,10 +86,13 @@ export function createMintQueue(mint: MintCall, options: Options) {
   let pumping = false
   let paused = false
 
-  /* The next chunk to send: attachments first, then pictures, each the
-     longest-waiting organization's first `batch` requests. */
-  const nextChunk = (): { kind: MintRequest['kind']; org: string; items: Waiting[] } | null => {
+  /* The next chunk to send: attachments first, then pictures, each a half
+     of a failed call first, else the longest-waiting organization's first
+     `batch` requests. */
+  const nextChunk = (): Chunk | null => {
     for (const kind of ['attachment', 'avatar'] as const) {
+      const half = halves.findIndex((chunk) => chunk.kind === kind)
+      if (half >= 0) return halves.splice(half, 1)[0] as Chunk
       for (const [org, list] of waiting[kind]) {
         const items = list.splice(0, MINT_QUEUE.batch)
         if (list.length === 0) waiting[kind].delete(org)
@@ -89,7 +102,7 @@ export function createMintQueue(mint: MintCall, options: Options) {
     return null
   }
 
-  const send = (chunk: { kind: MintRequest['kind']; org: string; items: Waiting[] }) => {
+  const send = (chunk: Chunk) => {
     const version = generation
     running++
     sent++
@@ -128,6 +141,19 @@ export function createMintQueue(mint: MintCall, options: Options) {
         },
         (error: unknown) => {
           const refused = options.refused(error)
+          if (!refused && !chunk.half && chunk.items.length > 1 && !answered) {
+            // asked again once as two halves, which go first; the requests
+            // stay known, so a new request with their key shares them
+            answered = true
+            clearTimer(timer)
+            if (version !== generation) return
+            const middle = Math.ceil(chunk.items.length / 2)
+            halves.push(
+              { ...chunk, items: chunk.items.slice(0, middle), half: true },
+              { ...chunk, items: chunk.items.slice(middle), half: true },
+            )
+            return
+          }
           answer(() => ({ state: refused ? 'refused' : 'failed' }))
         },
       )
@@ -201,6 +227,7 @@ export function createMintQueue(mint: MintCall, options: Options) {
         for (const w of list) w.settle({ state: 'failed' })
       waiting.attachment.clear()
       waiting.avatar.clear()
+      halves.length = 0
       for (const w of known.values()) w.settle({ state: 'failed' })
       known.clear()
     },

@@ -177,6 +177,38 @@ describe('the mint queue', () => {
     ])
   })
 
+  it('asks for each half of a call that failed once more, and answers failed when a half fails too', async () => {
+    MINT_QUEUE.batch = 4
+    const h = harness()
+    const answers = [0, 1, 2, 3].map((i) => h.queue.request(item('attachment', i)))
+    await flush()
+    // an older backend can pass its read limit on the whole call
+    ;(h.calls[0] as Call).reject(new Error('Too many reads'))
+    await flush()
+    expect(h.calls.map((c) => c.ids)).toEqual([
+      ['attachment-0', 'attachment-1', 'attachment-2', 'attachment-3'],
+      ['attachment-0', 'attachment-1'],
+      ['attachment-2', 'attachment-3'],
+    ])
+    // a request for a key in a half shares its answer
+    expect(h.queue.request(item('attachment', 0))).toBe(answers[0])
+    answer(h.calls[1] as Call)
+    ;(h.calls[2] as Call).reject(new Error('Too many reads'))
+    expect(await Promise.all(answers)).toEqual([
+      { state: 'lease', lease: { url: 'https://files.test/attachment-0', exp: 1 } },
+      { state: 'lease', lease: { url: 'https://files.test/attachment-1', exp: 1 } },
+      { state: 'failed' },
+      { state: 'failed' },
+    ])
+    // a half is not split again, and a refusal never is
+    expect(h.calls).toHaveLength(3)
+    const refusedOnes = [4, 5].map((i) => h.queue.request(item('attachment', i)))
+    await flush()
+    ;(h.calls[3] as Call).reject(new Refusal('forbidden'))
+    expect(await Promise.all(refusedOnes)).toEqual([{ state: 'refused' }, { state: 'refused' }])
+    expect(h.calls).toHaveLength(4)
+  })
+
   it('answers a call whose answer holds no leases failed, never missing', async () => {
     const h = harness()
     const asked = h.queue.request(item('avatar', 0))
