@@ -147,14 +147,15 @@ describe('afterProjectSaved', () => {
   })
 
   it('opens a sub-project the workspace holds and the creator is confirmed to see', () => {
-    expect(afterProjectSaved({ type: 'project', name: 'Calibration', visible: true })).toEqual({
-      message: 'Sub-project “Calibration” created',
-      open: true,
-    })
-    // an unconfirmed one stays closed with the plain toast
     expect(
-      afterProjectSaved({ type: 'project', name: 'Calibration', visible: true, sees: null }),
-    ).toEqual({ message: 'Sub-project “Calibration” created', open: false })
+      afterProjectSaved({ type: 'project', name: 'Calibration', visible: true, sees: true }),
+    ).toEqual({ message: 'Sub-project “Calibration” created', open: true })
+    // an unconfirmed one stays closed with the plain toast, also when the
+    // caller passes no confirmation at all
+    for (const sees of [null, undefined])
+      expect(
+        afterProjectSaved({ type: 'project', name: 'Calibration', visible: true, sees }),
+      ).toEqual({ message: 'Sub-project “Calibration” created', open: false })
   })
 
   it('says so and stays put for a sub-project the creator will not see, held or not', () => {
@@ -168,9 +169,8 @@ describe('afterProjectSaved', () => {
   })
 
   it('stays put with the same message for a sub-project the workspace does not hold', () => {
-    expect(afterProjectSaved({ type: 'project', name: 'Calibration', visible: false })).toEqual({
-      message: 'Sub-project “Calibration” created',
-      open: false,
-    })
+    expect(
+      afterProjectSaved({ type: 'project', name: 'Calibration', visible: false, sees: true }),
+    ).toEqual({ message: 'Sub-project “Calibration” created', open: false })
   })
 })

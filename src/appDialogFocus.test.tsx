@@ -22,8 +22,9 @@ import { answerRoadmap } from './store/roadmapStandIn.setup'
    on App and the real store. The Planner leads Plan. New sub-project opens
    from buttons that leave once the new sub-project shows, and from menu
    rows that leave with their menu; the server holds the create until the
-   test answers it, and App then moves into the new sub-project. The
-   sidebar's tree lists the server's navigation reads, which take in an
+   test answers it, and App then moves into the new sub-project, and makes
+   its starter task, only once the server confirms that its creator sees
+   it (P.resolveProject). The sidebar's tree lists the server's navigation reads, which take in an
    accepted create and answer again before the create answers, as Convex
    does, so the tree shows the new project only with the save, or only
    once the test answers the reads it holds. Milestones opens on a
@@ -472,6 +473,133 @@ describe('New sub-project', { timeout: 30_000 }, () => {
       false,
     )
     expect(sent.some((w) => w.name.startsWith('issues:'))).toBe(false)
+  })
+
+  /* The Planner, an organization admin, creates Docs, led by Leo, under
+     Ops from Settings › Projects. Leo leads Ops, and the Planner holds User
+     on its sub-project Bench alone, so the workspace holds Ops for
+     navigation and the Planner manages it as an admin. Ops' parent check
+     (projectSettings.get) stopped before it knew their level, as past a
+     read bound, and answers level and accessible null to a manager, so the
+     dialog cannot tell whether they will see Docs: it warns of nothing and
+     offers the starter task. The workspace then holds Docs, as the create's
+     kept paint under a held parent does, so only App's check that the
+     creator sees it (P.resolveProject) keeps App from opening it and
+     making the task. `resolve` answers that check from the navigation
+     stand-in, which finds no level of theirs on Docs, or fails it. */
+  async function createUnderOps(resolve: 'answered' | 'failed') {
+    history.replaceState(null, '', '/app/testbed/settings/projects')
+    await boot((snap) => {
+      const me = snap.profiles[0]
+      snap.profiles.push({
+        ...me,
+        id: 'leo',
+        auth_user_id: 'leo-account',
+        name: 'Leo',
+        initials: 'LE',
+        org_role: 'user',
+      })
+      snap.projects.push(
+        { ...snap.projects[0], id: 'ops', key: 'OPS', num: 3, name: 'Ops', lead_id: 'leo' },
+        {
+          ...snap.projects[0],
+          id: 'bench',
+          type: 'project',
+          parent_id: 'ops',
+          key: 'BEN',
+          num: 4,
+          name: 'Bench',
+          lead_id: undefined,
+        },
+      )
+      snap.access.push({ project_id: 'bench', profile_id: me.id, level: 'user' })
+    })
+    const watch = network.onUpdate.getMockImplementation()
+    network.onUpdate.mockImplementation((ref, args, next, fail) =>
+      getFunctionName(ref) === 'projectSettings:get' && (args as { id: string }).id === 'ops'
+        ? watch?.(
+            ref,
+            args,
+            (value: { state: string }) =>
+              next(value.state === 'ok' ? { ...value, level: null, accessible: null } : value),
+            fail,
+          )
+        : watch?.(ref, args, next, fail),
+    )
+    // the Lead picker's one-shot read (projectSettings.leadCandidates)
+    // answers from the stand-in too
+    const reads = projectSettingsServer(() => server)
+    const ask = network.query.getMockImplementation()
+    network.query.mockImplementation((ref, args) => {
+      const name = getFunctionName(ref)
+      if (resolve === 'failed' && name === 'projectNav:resolve')
+        return Promise.reject(new Error('the navigation read failed'))
+      return isProjectSettingsRead(name) ? reads.query(name, args) : ask?.(ref, args)
+    })
+    const row = await waitFor(
+      () => document.querySelector('[data-settings-projects] [data-project-row="ops"]'),
+      "Ops's row",
+    )
+    await press(await find('Project actions', row))
+    const menu = await waitFor(
+      () => document.querySelector('[data-slot="popover-content"]'),
+      'the menu',
+    )
+    await press(await find('New sub-project…', menu))
+    await waitFor(() => document.querySelector('[data-new-subproject-parent="ops"]'), 'the check')
+    await press(
+      await waitFor(
+        () => document.querySelector<HTMLElement>('[data-project-lead-picker]'),
+        'the Lead picker',
+      ),
+    )
+    await press(
+      await waitFor(
+        () => document.querySelector<HTMLElement>('[data-lead-choice="leo"]'),
+        "Leo's choice",
+      ),
+    )
+    // an unknown sight warns of nothing and keeps the starter task, checked
+    const shell = await waitFor(() => document.querySelector('[data-modal-shell]'), 'the dialog')
+    expect(shell.textContent).not.toContain("You won't see this sub-project.")
+    expect(document.querySelector<HTMLInputElement>('#subproject-starter')?.checked).toBe(true)
+    await finish(true)
+    const create = sent.find((w) => w.name === 'projects:create')
+    expect(create?.args).toMatchObject({ parent_id: 'ops', lead_id: 'leo', name: 'Docs' })
+    const id = String(create?.args.id)
+    const { P } = await import('./store/planner')
+    const scopes = vi.spyOn(P, 'saveUI')
+    await save()
+    // App asked the server whether the creator sees Docs, which the
+    // workspace holds
+    expect(
+      network.query.mock.calls.some(
+        ([ref, args]) =>
+          getFunctionName(ref) === 'projectNav:resolve' &&
+          (args as { project_id?: string }).project_id === id,
+      ),
+    ).toBe(true)
+    expect(P.project(id)).toBeDefined()
+    // it stays in Settings › Projects, never moves into Docs and makes no
+    // starter task
+    expect(document.querySelector('[data-settings-projects]')).not.toBeNull()
+    expect(scopes.mock.calls.some(([patch]) => (patch as { scope?: string }).scope === id)).toBe(
+      false,
+    )
+    expect(sent.some((w) => w.name.startsWith('issues:'))).toBe(false)
+  }
+
+  it("says the creator can't see a sub-project the server does not show them, without opening it or making its starter task", async () => {
+    await createUnderOps('answered')
+    expect(document.body.textContent).toContain(
+      "Sub-project “Docs” created. You don't have access to it.",
+    )
+  })
+
+  it('stays put with the plain toast when the check that the creator sees the sub-project fails', async () => {
+    await createUnderOps('failed')
+    expect(document.body.textContent).toContain('Sub-project “Docs” created')
+    expect(document.body.textContent).not.toContain("You don't have access to it.")
   })
 
   it.each([

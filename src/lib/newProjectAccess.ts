@@ -107,12 +107,13 @@ export function creatorNote({
  * (projectNav.resolve). Its creator manages the parent, which an
  * organization admin does without seeing it, so a sub-project they will
  * not see (`sees` false) says so and stays closed, and one that could not
- * be confirmed (`sees` null) stays closed with the plain toast. */
+ * be confirmed (`sees` null, also when a caller passes none) stays closed
+ * with the plain toast. A top-level project ignores `sees`. */
 export function afterProjectSaved({
   type,
   name,
   visible,
-  sees = true,
+  sees = null,
 }: {
   type: NewProjectInput['type']
   name: string
