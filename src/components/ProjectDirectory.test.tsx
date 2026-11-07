@@ -805,6 +805,28 @@ describe('the expanded list', { timeout: 60_000 }, () => {
     expect(open('projectNav:children')).toEqual([])
     expect(document.querySelector('[data-directory-children]')).toBeNull()
   })
+
+  it('says a batch that stopped where it began could not be checked, with Retry', async () => {
+    const next0 = base()
+    const big = top(next0, 'Luma Sensor')
+    for (let s = 0; s < 30; s++) sub(next0, big, named(s, 'Board'))
+    await load(next0)
+    await render()
+    await click(find('[data-directory-expand]', row(big)))
+    // the second batch's read stops where it began, checking nothing
+    holding = (s) => s.name === 'projectNav:children' && s.args.after !== undefined
+    await click(find('[data-directory-more]'))
+    const held = subs.find(
+      (s) => s.open && s.name === 'projectNav:children' && s.args.after !== undefined,
+    ) as Sub
+    await act(async () =>
+      held.next({ state: 'ok', rows: [], next: held.args.after, stopped: true }),
+    )
+    await settle()
+    const note = find('[data-directory-children-note]')
+    expect(note.dataset.directoryChildrenNote).toBe('stuck')
+    expect(note.textContent).toBe('Qivo could not check part of the sub-projects.Retry')
+  })
 })
 
 describe('opening and the menu', { timeout: 60_000 }, () => {

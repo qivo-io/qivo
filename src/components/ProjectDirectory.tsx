@@ -684,7 +684,7 @@ function BatchNote({
       className={cn('flex flex-wrap items-center gap-2', noteClass)}
     >
       {batch.note === 'stuck'
-        ? 'Qivo checked part of the sub-projects.'
+        ? 'Qivo could not check part of the sub-projects.'
         : "Couldn't load part of the sub-projects."}
       <Button
         variant="ghost"
