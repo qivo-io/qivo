@@ -555,6 +555,13 @@ export async function runDemoSmoke(env = process.env) {
     )
     mark('The private demo opens on the project chooser with Northstar’s projects')
     await pageA.locator('aside').getByText('Luma Sensor', { exact: true }).click()
+    // the project opens on the view shown, the Overview for a person with
+    // no saved view, and a status column's + is the Board's
+    await pageA
+      .locator('[data-view-switch]')
+      .getByRole('radio', { name: 'Board', exact: true })
+      .click()
+    await pageA.locator('[data-workspace-view="kanban"]').waitFor({ timeout: 30_000 })
     // the top bar carries no New task button (deviation #233): a status
     // column's + opens the same dialog
     await pageA
