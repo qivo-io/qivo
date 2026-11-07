@@ -17,7 +17,11 @@
    show included, a pick of one of them is refused, and picking the project
    drops their earlier picks. Each pick counts one of PICK_MOST. In one
    mode every pick replaces the last, so a sub-project of the picked
-   project narrows the pick to it. */
+   project narrows the pick to it.
+
+   Beside them are the bounds of the other lists on the navigation reads,
+   the All projects directory's expanded list (DIRECTORY_MOST) and the
+   sidebar's project tree (SIDEBAR_MOST). */
 
 import type { NavProject } from '../../convex/model/projectNavReads'
 
@@ -37,6 +41,17 @@ export const PROJECT_PICKER_MOST = { list: 200, children: 50 }
     design size's 30 live sub-projects under one project, then it asks for
     a search, as Settings' open lists do. Tests lower it and set it back. */
 export const DIRECTORY_MOST = { children: 100 }
+
+/** The most rows the sidebar's project tree gathers
+    (components/SidebarProjects.tsx): its top-level list holds the design
+    size's 200 live top-level projects of one organization, eight batches
+    as the picker's list, then points to All projects; the one expanded
+    project's list holds four batches, past the design size's 30 live
+    sub-projects under one project, as the directory's and Settings' do,
+    then asks for a search. The tree grows to these bounds and keeps what
+    it read, a fixed bound at the design size rather than a window that
+    drops rows. Tests lower them and set them back. */
+export const SIDEBAR_MOST = { list: 200, children: 100 }
 
 /** A project as the picker picks it: a navigation row with its top-level
     project, null for a top-level one. */

@@ -10932,11 +10932,14 @@ export const PLANNER = {
     const u = p ? actorIn(p.org, uid) : null
     return !!(u?.active && levelOnProject(p, uid) === 'lead')
   },
-  /* Navigation is flat: every project this user can see, in one list (0078
-     retired the per-workspace silo and its switcher). Since 0081 the list is
-     also BLENDED across organizations — home-org projects first, then each
-     foreign org's granted ones, so the sidebar can group them under a header
-     with the owning organization's name. */
+  /* Every top-level project this user can see in the workspace, in one
+     list (0078 retired the per-workspace silo and its switcher), blended
+     across organizations since 0081: home-org projects first, then each
+     foreign org's granted ones, each in sort order. The sidebar's tree no
+     longer reads it, as it lists the server's navigation reads
+     (components/SidebarProjects.tsx); the boot's first project and the
+     access guard (App.tsx), Settings' fallback after a project goes, Team
+     sync's scope menu and notes and the smoke drive's phone check do. */
   visibleProjects: (uid?: string) =>
     PLANNER.projects
       .filter((p) => p.type === 'meta' && PLANNER.canSee(p.id, uid))

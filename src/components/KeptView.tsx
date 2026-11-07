@@ -198,6 +198,53 @@ function undoDisplayNone(container: Element | null) {
       element.style.removeProperty('display')
 }
 
+/**
+ * Keeps `children` mounted while not `shown`, inactive in React's Activity
+ * as KeptView keeps a page, for a part of a hidden workspace shell
+ * (components/WorkspaceShell.tsx), such as the sidebar's navigation while
+ * Settings shows. While hidden it does not render for its parent's new
+ * props, and the commit that shows it renders them. Its own box is
+ * `display: contents`, so the children stay
+ * where the shell's grid and flex rules place them. Hiding takes two
+ * commits, its floating layers closing first, and the `display: none`
+ * Activity gives the children is taken back before the browser lays them
+ * out, so the shell's `content-visibility: hidden` keeps their layout and
+ * their scroll positions. It names no view (data-workspace-view), since
+ * what looks for the shown view must not find it; the hidden shell takes
+ * it out of use (lib/viewHidden.ts OUT_OF_USE).
+ */
+export function KeptInPlace({ shown, children }: { shown: boolean; children: ReactNode }) {
+  const box = useRef<HTMLDivElement>(null)
+  const [hidden] = useState(createHiddenState)
+  const [mode, setMode] = useState<'visible' | 'closing' | 'hidden'>('visible')
+  if (shown && mode !== 'visible') setMode('visible')
+  useLayoutEffect(() => {
+    if (shown) hidden.set(false)
+    else if (mode === 'visible') {
+      hidden.set(true)
+      setMode('closing')
+    } else if (mode === 'closing') setMode('hidden')
+    else undoDisplayNone(box.current)
+  }, [shown, mode, hidden])
+  useLayoutEffect(() => {
+    const element = box.current
+    if (mode !== 'hidden' || !element) return
+    // a render inside the hidden part commits on its own
+    const watch = new MutationObserver(() => undoDisplayNone(element))
+    watch.observe(element, { subtree: true, attributeFilter: ['style'] })
+    return () => watch.disconnect()
+  }, [mode])
+  return (
+    <div ref={box} className="contents">
+      <HiddenViewContext.Provider value={hidden}>
+        <Activity mode={mode === 'hidden' ? 'hidden' : 'visible'}>
+          <Frozen frozen={!shown && mode === 'hidden'}>{children}</Frozen>
+        </Activity>
+      </HiddenViewContext.Provider>
+    </div>
+  )
+}
+
 /** One kept view: `n` tells apart the times the same `id` was kept. */
 type Slot = { n: number; id: string }
 

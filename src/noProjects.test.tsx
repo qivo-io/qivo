@@ -195,6 +195,12 @@ describe('a person who can see no project', () => {
     expect(document.body.textContent).toContain(MEMBER)
     expect(location.pathname).toBe('/app/~/overview/all')
     expect(newProject()).toBeDefined()
+    // the sidebar's tree says so once the server's list ended empty
+    await vi.waitFor(() =>
+      expect(document.querySelector('aside [data-sidebar-end]')?.textContent).toBe(
+        'No active projects.',
+      ),
+    )
     // with no milestone to show, the note is the whole page
     expect(document.body.textContent).not.toContain('No milestones in any of your projects yet.')
   })

@@ -31,9 +31,11 @@
  * a bound stopped, each read answers the access_unchecked refusal, never a
  * loss of access. The app's shared project picker
  * (src/components/ProjectPicker.tsx), for Search in, Archived tasks and
- * Deleted items, calls page, children, search and resolve, and the All
+ * Deleted items, calls page, children, search and resolve, the All
  * projects directory (src/components/ProjectDirectory.tsx) calls page,
- * search and children and stars through setFavorite. */
+ * search and children and stars through setFavorite, and the sidebar's
+ * project tree (src/components/SidebarProjects.tsx) calls page and
+ * children. */
 
 import { v } from 'convex/values'
 import { authedQuery, orgMutation } from './lib/functions'

@@ -11,8 +11,10 @@
    (panels/settings/ProjectLists.tsx), Settings › Teams, a team's members
    and its Add member picker (panels/settings/TeamSettings.tsx), Settings ›
    Users (panels/settings/UsersSettings.tsx), the task label picker
-   (panels/LabelPicker.tsx) and the expanded sub-project list of the All
-   projects directory (components/ProjectDirectory.tsx). The editor's @
+   (panels/LabelPicker.tsx), the expanded sub-project list of the All
+   projects directory (components/ProjectDirectory.tsx) and the sidebar's
+   project tree and its expanded list (components/SidebarProjects.tsx),
+   which grow to their bounds as the person scrolls. The editor's @
    mention popup, plain DOM outside React, reads through the `once` engine
    itself (onceList, components/mentionSuggestion.ts). Beside it, a page
    mode (usePagedPages, at the end of this file) shows one page at a time,
@@ -21,7 +23,8 @@
    theirs, and useMoreOnScroll loads the next batch of a list as its end
    scrolls into view. It holds only what the page shows, in the page, and
    drops it when the page is left. A live list or page that a kept page
-   holds (components/KeptView.tsx), as the All projects directory is, keeps
+   holds (components/KeptView.tsx), as the All projects directory is, or
+   that App keeps while Settings shows, as the sidebar's tree is, keeps
    its answers while another page shows, as while the tab is hidden: React
    stops its effects then, which stops its reads, and when the page shows
    again it shows what it held at once and reads the same batches or page

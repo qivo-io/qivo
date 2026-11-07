@@ -8,10 +8,39 @@ organization name is not a switcher. If you only have a guest identity,
 not show while an organization that deactivated you, or one being deleted,
 still holds your member seat.
 
-Select a project to reveal its sub-projects. One project stays expanded at a
-time. Projects shared by another organization appear in the same tree under
-that organization's name. The project tree scrolls while navigation and
-Settings stay visible.
+The **Projects** tree lists the projects you can access through your own
+access: the projects you lead, those you hold a grant or a team share on,
+and the projects above the sub-projects you can open, including projects
+shared by other organizations. Your favorites come first, each with a star,
+and then the rest, each group by name. A project of another organization
+shows that organization's name under its own. You set stars in
+[All projects](#all-projects); the star in the tree is a mark, not a button.
+
+The tree loads 25 projects at first and more as you scroll to its end or
+press **Load more**, up to 200. Past that it says that more projects are in
+**All projects**, with a button that opens it. Select a project to reveal
+its sub-projects, 25 at first and more as you scroll or press **Load more**,
+up to 100, after which it asks you to search. One project stays expanded at
+a time, the one you are in. When you open a project from elsewhere, such as
+**All projects**, Search or a link, the tree loads on until it shows that
+project and brings its row into view. A project that has not loaded yet
+says so, and you can try again in a moment. The tree loads no tasks.
+
+The tree says so when its list is not ready yet, when Qivo could not finish
+checking which projects you can see, with **Retry**, and when it checked
+only part of them, in which case **Load more** goes on. It says you have no
+active projects only once the list has ended empty.
+
+The tree scrolls while navigation and Settings stay visible, without a
+scrollbar: use the mouse wheel, a trackpad, touch or the keyboard. A row
+that takes focus scrolls into view. Coming back from **Settings**, the tree
+shows the projects it held, where you left it.
+
+An organization admin's tree holds the projects they take part in, as
+anyone else's, while **Settings › Projects › All projects** lists every
+project of the organization. The Board, the Overview and the Roadmap still
+show an admin any project of the organization they open, also one the tree
+does not list.
 
 A project row's **…** menu opens settings, **Archived tasks** and, for leads,
 **New sub-project…**. Sub-project rows have settings and **Archived tasks**.
@@ -59,7 +88,8 @@ opening a project loads what its view needs.
 The star on a project adds it to your favorites or removes it. Your
 favorites are yours alone, in that organization alone. A star changes no
 one's access and sends no notification, and it cannot change while the
-organization is read-only. The project then moves between the two groups.
+organization is read-only. The project then moves between the two groups,
+here and in the sidebar's **Projects** tree ([Sidebar](#sidebar)).
 An archived project, one in Deleted items and one you lost access to leave
 the directory and keep their star, which shows again when the project is
 restored or your access returns. Removing your seat removes its stars.
@@ -85,8 +115,8 @@ them, in which case **Next** or **Load more** goes on. It never shows an
 empty list for any of these.
 
 An organization admin's directory holds the projects they take part in, as
-anyone else's. **Settings › Projects › All projects** lists every project of
-the organization, and the sidebar still shows every project to an admin.
+anyone else's, and so does their sidebar's **Projects** tree. **Settings ›
+Projects › All projects** lists every project of the organization.
 
 The Board, the Overview and the Roadmap show one project at a time
 ([Which tasks a Board shows](./the-board.md#which-tasks-a-board-shows),

@@ -1,9 +1,11 @@
 /* Load more for an open list read a batch at a time (lib/pagedList.ts
    usePagedList), with its focus rule and the marker that loads more as the
    list's end scrolls into view. Settings' sub-project lists
-   (panels/settings/ProjectLists.tsx and ProjectSettings.tsx) and the All
+   (panels/settings/ProjectLists.tsx and ProjectSettings.tsx), the All
    projects directory's expanded list (components/ProjectDirectory.tsx)
-   share it. Nothing here reads the store. */
+   and the sidebar's project tree and its expanded list
+   (components/SidebarProjects.tsx) share it. Nothing here reads the
+   store. */
 import { useRef } from 'react'
 import { useFocusWhenGone } from './focusWhenGone'
 import { type ListEnd, type PagedList, useMoreOnScroll } from './pagedList'

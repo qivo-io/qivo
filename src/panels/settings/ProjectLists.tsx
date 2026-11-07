@@ -804,11 +804,18 @@ function SettingsSubProjects({
     ...keptRows.map((r) => ({ ...r, parent: parent.id })),
     ...list.rows.map((r) => ({ ...r, parent: parent.id })),
   ])
+  // Settings' own rows, never the sidebar's that the hidden workspace keeps
   const { more, marker } = useLoadMore(
     list,
     end,
-    (id) => document.querySelector<HTMLElement>(`[data-subproject-row="${id}"] button`),
-    () => document.querySelector<HTMLElement>(`[data-project-row="${parent.id}"] button`),
+    (id) =>
+      document.querySelector<HTMLElement>(
+        `[data-settings-projects] [data-subproject-row="${id}"] button`,
+      ),
+    () =>
+      document.querySelector<HTMLElement>(
+        `[data-settings-projects] [data-project-row="${parent.id}"] button`,
+      ),
   )
   const row = (id: string, name: string) => (
     <SubProjectRow

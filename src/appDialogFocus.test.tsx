@@ -18,10 +18,14 @@ import { answerRoadmap } from './store/roadmapStandIn.setup'
    on App and the real store. The Planner leads Plan. New sub-project opens
    from buttons that leave once the new sub-project shows, and from menu
    rows that leave with their menu; the server holds the create until the
-   test answers it, and App then moves into the new sub-project. Milestones
-   opens on a milestone that it then deletes. A store that boots without
-   the tasks, as the app does, asks for every task only for a create with
-   a starter task. */
+   test answers it, and App then moves into the new sub-project. The
+   sidebar's tree lists the server's navigation reads, which take in an
+   accepted create and answer again before the create answers, as Convex
+   does, so the tree shows the new project only with the save, or only
+   once the test answers the reads it holds. Milestones opens on a
+   milestone that it then deletes. A store that boots without the tasks,
+   as the app does, asks for every task only for a create with a starter
+   task. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => ({
@@ -45,8 +49,25 @@ let saved: () => void
 let refused: () => void
 // every write App sent, by name and arguments
 let sent: { name: string; args: Record<string, unknown> }[]
+/** A subscription of a navigation read, open until App drops it. */
+type NavRead = {
+  name: string
+  args: unknown
+  next: (value: unknown) => void
+  fail: (error: unknown) => void
+  open: boolean
+}
+// the navigation reads' subscriptions, which a create answers again, and
+// whether they wait for the test to answer them, both a new one and the
+// answers a create would send; a test sets it before boot to hold the
+// first answers
+let navReads: NavRead[]
+let holdNav: boolean
+// what the server holds
+let server: Snapshot
 
 beforeEach(() => {
+  holdNav = false
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
   Range.prototype.getBoundingClientRect = () => new DOMRect()
   Element.prototype.scrollIntoView = () => {}
@@ -83,6 +104,21 @@ function phone(on: boolean) {
     'matchMedia',
     vi.fn(() => ({ matches: on, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
   )
+}
+
+/** Lays the app out for a phone, or for a desktop, as phone does, and
+    answers what crosses the breakpoint while App runs. */
+function crossable(on: boolean) {
+  const list = Object.assign(new EventTarget(), { matches: on, media: '(max-width: 760px)' })
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn(() => list),
+  )
+  return async (next: boolean) => {
+    list.matches = next
+    await act(async () => list.dispatchEvent(new Event('change')))
+    await settle()
+  }
 }
 
 /** Waits for `find` to answer, through lazy modules that can take seconds
@@ -130,6 +166,7 @@ async function boot(
 ) {
   vi.resetModules()
   const snap = plannerFixture()
+  server = snap
   const base = snap.projects[0]
   snap.projects = [
     { ...base, id: 'plan', type: 'meta', key: 'PLAN', name: 'Plan', lead_id: snap.profiles[0].id },
@@ -137,8 +174,10 @@ async function boot(
   prepare(snap)
   /* The workspace is delivered once, and again only as a milestone's
      delete changes it (projects.removeMilestone, or roadmap.change during
-     a Roadmap visit), before the delete answers, as Convex delivers a
-     write; any other write's paint is the only copy of what it changed.
+     a Roadmap visit) or a project's create is accepted, before the write
+     answers, as Convex delivers a write, with the navigation reads that
+     list the new project; any other write's paint is the only copy of what
+     it changed.
      The Overview's reads answer from it until the first write: an answer
      after one would be a transition the store takes for a delivery that
      holds the write, which this double does not send, and the paint would
@@ -151,14 +190,23 @@ async function boot(
   // sub-project checks its parent on the server (projectSettings.get)
   const lists = projectListsServer(() => snap)
   const settings = projectSettingsServer(() => snap)
+  navReads = []
   let publish: ((value: Snapshot) => void) | null = null
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (isProjectListRead(name)) return lists.watch(name, args, next, fail)
     if (isProjectSettingsRead(name)) return settings.watch(name, args, next, fail)
-    // the All projects directory lists the server's navigation reads
-    if (isProjectNavRead(name)) answerProjectNav(snap, name, args, next, fail)
-    else if (name === 'workspace:whole') {
+    // the All projects directory and the sidebar's tree list the server's
+    // navigation reads
+    if (isProjectNavRead(name)) {
+      const read = { name, args, next, fail, open: true }
+      navReads.push(read)
+      if (!holdNav) answerProjectNav(snap, name, args, next, fail)
+      return () => {
+        read.open = false
+      }
+    }
+    if (name === 'workspace:whole') {
       publish = (value) => {
         const copy = structuredClone(value)
         held(copy)
@@ -197,7 +245,28 @@ async function boot(
     }
     if (name === 'projects:create')
       return new Promise((resolve, reject) => {
-        saved = () => resolve({ num: 2, key: 'DOCS' })
+        saved = () => {
+          // the server stores the project and delivers the workspace and
+          // the navigation reads that hold it before the create answers,
+          // the reads only while the test does not hold them
+          snap.projects.push({
+            ...snap.projects[0],
+            id: String(args.id),
+            type: args.type as 'meta' | 'project',
+            parent_id: (args.parent_id as string | null) ?? undefined,
+            key: 'DOCS',
+            num: 2,
+            name: String(args.name),
+            lead_id: (args.lead_id as string | null) ?? undefined,
+          })
+          publish?.(snap)
+          lists.rerun()
+          settings.rerun()
+          for (const read of navReads)
+            if (read.open && !holdNav)
+              answerProjectNav(snap, read.name as never, read.args, read.next, read.fail)
+          resolve({ num: 2, key: 'DOCS' })
+        }
         refused = () => reject(new ConvexError({ message: 'Qivo cannot save changes right now.' }))
       })
     // a starter task's create answers with its number, as the server's does
@@ -258,6 +327,12 @@ async function save() {
 }
 
 describe('New sub-project', { timeout: 30_000 }, () => {
+  /** The new sub-project's row in the sidebar's tree, named Docs. */
+  const treeRow = () =>
+    [...document.querySelectorAll<HTMLElement>('aside [data-subproject-row] > button')].find(
+      (button) => button.textContent === 'Docs',
+    )
+
   it.each([
     ["the sidebar's Add sub-project", async () => find('Add sub-project')],
     [
@@ -268,32 +343,37 @@ describe('New sub-project', { timeout: 30_000 }, () => {
       },
     ],
   ])(
-    "gives focus to the new sub-project's sidebar row after a create from %s",
-    async (_, opener) => {
+    "gives focus to the new sub-project's sidebar row once the server's list holds it, after a create from %s",
+    async (where, opener) => {
       await boot()
-      await press(await opener())
+      const button = await opener()
+      await press(button)
       await finish(true)
-      const row = await find('Docs', document.querySelector('aside') ?? document)
-      expect(document.activeElement).toBe(row)
-      // the row stays as App moves into the saved sub-project
+      // the tree shows the sub-project only once the server's list holds
+      // it, so the dialog gave focus back to its opener, where it stays
+      expect(treeRow()).toBeUndefined()
+      if (where === "the sidebar's Add sub-project") expect(document.activeElement).toBe(button)
       await save()
+      const row = await waitFor(treeRow, "Docs's row")
+      // App moved into the saved sub-project, and its row took focus
       expect(row.getAttribute('aria-current')).toBe('page')
       expect(document.activeElement).toBe(row)
     },
   )
 
-  it("gives focus to the project's sidebar row when the server refuses the sub-project", async () => {
+  it('keeps focus on Add sub-project when the server refuses the sub-project', async () => {
     await boot()
-    await press(await find('Add sub-project'))
+    const add = await find('Add sub-project')
+    await press(add)
     await finish(true)
-    const row = await find('Docs', document.querySelector('aside') ?? document)
-    expect(document.activeElement).toBe(row)
+    expect(document.activeElement).toBe(add)
     await act(async () => refused())
     await settle()
-    expect(row.isConnected).toBe(false)
-    expect(document.activeElement).toBe(
-      document.querySelector('aside [data-project-row="plan"] button'),
-    )
+    // the tree never showed the refused sub-project, and focus stays on
+    // its opener, which the refusal leaves in place
+    expect(treeRow()).toBeUndefined()
+    expect(add.isConnected).toBe(true)
+    expect(document.activeElement).toBe(add)
   })
 
   it("gives focus to the phone header's New task after a create from the Roadmap", async () => {
@@ -340,7 +420,7 @@ describe('New sub-project', { timeout: 30_000 }, () => {
       (snap) =>
         snap.projects.push({ ...snap.projects[0], id: 'ops', key: 'OPS', num: 3, name: 'Ops' }),
       (copy) => {
-        copy.projects = copy.projects.filter((p) => p.id !== 'ops')
+        copy.projects = copy.projects.filter((p) => p.id !== 'ops' && p.parent_id !== 'ops')
       },
     )
     const row = await waitFor(
@@ -449,17 +529,52 @@ describe('a project saved from the Projects page', { timeout: 30_000 }, () => {
       (button) => button.textContent === 'Docs',
     )
   const header = (hook: string) => document.querySelector<HTMLElement>(`[${hook}]`)
+  /** 25 top-level projects the Planner leads, Alpha 00 to Alpha 24, which
+      sort before Docs and fill the tree's first batch. They come first in
+      the workspace, so the boot's scope is one of them and the tree reads
+      no further batch before the create. */
+  const alphas = (snap: Snapshot) => {
+    const plan = snap.projects[0]
+    snap.projects.unshift(
+      ...Array.from({ length: 25 }, (_, i) => ({
+        ...plan,
+        id: `alpha-${i}`,
+        key: `A${i}`,
+        num: 10 + i,
+        name: `Alpha ${String(i).padStart(2, '0')}`,
+      })),
+    )
+  }
   it.each([
-    ['desktop', 'New project', () => sidebarRow('data-project-row')],
-    ['phone', 'New project', () => header('data-mobile-project-actions')],
-    ['desktop', "a menu's New sub-project", () => sidebarRow('data-subproject-row')],
-    ['phone', "a menu's New sub-project", () => header('data-mobile-new-task')],
+    ['desktop', 'New project', '', () => sidebarRow('data-project-row')],
+    [
+      'desktop',
+      'New project',
+      ", a project the tree's first batch does not reach",
+      () => sidebarRow('data-project-row'),
+      alphas,
+    ],
+    ['phone', 'New project', '', () => header('data-mobile-project-actions')],
+    ['desktop', "a menu's New sub-project", '', () => sidebarRow('data-subproject-row')],
+    ['phone', "a menu's New sub-project", '', () => header('data-mobile-new-task')],
   ])(
-    "on a %s, gives focus to the project's own control once App has moved into it from %s",
-    async (layout, opener, target) => {
+    "on a %s, gives focus to the project's own control once App has moved into it from %s%s",
+    async (layout, opener, _past, target, prepare?: (snap: Snapshot) => void) => {
       phone(layout === 'phone')
       history.replaceState(null, '', '/app/testbed/projects')
-      await boot()
+      // the boot's scope is the workspace's first project, not one an
+      // earlier case saved
+      localStorage.clear()
+      await boot(prepare)
+      if (prepare) {
+        // the tree's first batch holds the 25 Alpha projects and not Plan,
+        // which sorts after them, as Docs will
+        await waitFor(
+          () => document.querySelectorAll('aside [data-project-row]').length === 25,
+          "the tree's first batch",
+        )
+        expect(document.querySelector('aside [data-project-row="plan"]')).toBeNull()
+      }
       const page = await waitFor(
         () => document.querySelector('.mobile-project-directory'),
         'the page',
@@ -488,7 +603,10 @@ describe('a project saved from the Projects page', { timeout: 30_000 }, () => {
       // which hides as App moves into the saved project
       await save()
       expect(held.closest('[data-hidden-view]')).not.toBeNull()
-      const own = target()
+      // a project past the tree's first batch shows once the scope rule
+      // has read the second, a commit after the move, where the tree's
+      // focus request gives its row focus
+      const own = prepare ? await waitFor(target, "Docs's row") : target()
       expect(own).toBeTruthy()
       expect(own?.closest('[data-hidden-view]')).toBeNull()
       expect(document.activeElement).toBe(own)
@@ -661,4 +779,203 @@ describe('Milestones', { timeout: 30_000 }, () => {
       )
     },
   )
+})
+
+describe("the sidebar's tree across Settings", { timeout: 30_000 }, () => {
+  it('keeps its rows hidden while Settings shows, reads again on return, and takes no focus for a create made there', async () => {
+    await boot()
+    const row = await waitFor(
+      () => document.querySelector<HTMLElement>('aside [data-project-row="plan"]'),
+      "Plan's row",
+    )
+    const tree = () => document.querySelector<HTMLElement>('aside [data-sidebar-projects]')
+    const opened = () => navReads.filter((r) => r.open)
+    expect(opened().map((r) => r.name)).toEqual(['projectNav:page', 'projectNav:children'])
+    // Settings › Projects, from the rail
+    await press(await find('Settings'))
+    await press(
+      await waitFor(
+        () => document.querySelector<HTMLElement>('[data-settings-item="projects"]'),
+        'Projects',
+      ),
+    )
+    const list = await waitFor(() => document.querySelector('[data-settings-projects]'), 'the list')
+    // the tree stays, hidden with the workspace and out of use, its reads
+    // stopped
+    expect(row.isConnected).toBe(true)
+    expect(row.closest('[data-hidden-view]')).not.toBeNull()
+    expect(opened()).toEqual([])
+    // a sub-project made there takes the focus of Settings' own new row
+    await press(await find('Plan', list))
+    await press(await find('Add sub-project'))
+    await finish(true)
+    await save()
+    const made = await waitFor(
+      () =>
+        [
+          ...document.querySelectorAll<HTMLElement>(
+            '[data-settings-projects] [data-subproject-row] button',
+          ),
+        ].find((button) => button.textContent === 'Docs'),
+      "Settings' Docs row",
+    )
+    expect(document.activeElement).toBe(made)
+    // back in the workspace the tree shows what it held at once and reads
+    // the same lists again, refreshing until they answer
+    holdNav = true
+    await press(await find('Back'))
+    expect(document.querySelector('[data-settings-projects]')).toBeNull()
+    expect(row.isConnected).toBe(true)
+    expect(row.closest('[data-hidden-view]')).toBeNull()
+    expect(tree()?.dataset.sidebarProjectsState).toBe('refreshing')
+    // with focus nowhere as the answers come, nothing in the tree takes it
+    await act(async () => (document.activeElement as HTMLElement | null)?.blur())
+    await act(async () => {
+      for (const read of opened())
+        answerProjectNav(server, read.name as never, read.args, read.next, read.fail)
+    })
+    await settle()
+    expect(tree()?.dataset.sidebarProjectsState).toBe('ok')
+    // the create made in Settings moved App into Docs, whose row shows and
+    // lights, and takes no focus
+    const docs = await waitFor(
+      () =>
+        [...document.querySelectorAll<HTMLElement>('aside [data-subproject-row] > button')].find(
+          (button) => button.textContent === 'Docs',
+        ),
+      "the tree's Docs row",
+    )
+    expect(docs.getAttribute('aria-current')).toBe('page')
+    expect(document.activeElement).toBe(document.body)
+  })
+})
+
+describe("the sidebar's focus request", { timeout: 30_000 }, () => {
+  /** The new project's row in the sidebar's tree, named Docs. */
+  const docsRow = () =>
+    [...document.querySelectorAll<HTMLElement>('aside [data-project-row] > button')].find(
+      (button) => button.textContent === 'Docs',
+    )
+  /** Makes the project Docs from the Projects page, after which App moves
+      into it; `hold` keeps every navigation read unanswered, so the tree
+      still loads as App asks it for Docs's row. */
+  async function createDocs(hold = false) {
+    history.replaceState(null, '', '/app/testbed/projects')
+    localStorage.clear()
+    holdNav = hold
+    await boot()
+    const page = await waitFor(
+      () => document.querySelector('.mobile-project-directory'),
+      'the page',
+    )
+    await press(
+      await waitFor(() => page.querySelector<HTMLElement>('[data-new-project]'), 'New project'),
+    )
+    await finish(true, 'Create project')
+    await save()
+  }
+  const blur = () => act(async () => (document.activeElement as HTMLElement | null)?.blur())
+  /** Stops holding the navigation reads and answers the open ones from
+      what the server holds, Docs among it. */
+  async function release() {
+    holdNav = false
+    await act(async () => {
+      for (const read of navReads)
+        if (read.open) answerProjectNav(server, read.name as never, read.args, read.next, read.fail)
+    })
+    await settle()
+  }
+
+  it('is taken once, so a later commit or a tree mounted again after the phone layout moves no focus', async () => {
+    const cross = crossable(false)
+    await createDocs()
+    const row = await waitFor(docsRow, "Docs's row")
+    expect(document.activeElement).toBe(row)
+    // with focus nowhere, a later commit of the tree leaves it there
+    await blur()
+    await act(async () => window.showToast?.('Saved'))
+    await settle()
+    expect(document.activeElement).toBe(document.body)
+    // as does the tree the desktop mounts again after the phone's layout
+    await cross(true)
+    expect(document.querySelector('aside [data-sidebar-projects]')).toBeNull()
+    await blur()
+    await cross(false)
+    const again = await waitFor(docsRow, "Docs's row again")
+    await settle()
+    expect(again).not.toBe(row)
+    expect(again.getAttribute('aria-current')).toBe('page')
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('waits while the tree still loads, so the row takes focus once it shows', async () => {
+    await createDocs(true)
+    const tree = document.querySelector<HTMLElement>('aside [data-sidebar-projects]')
+    expect(tree?.dataset.sidebarProjectsState).toBe('loading')
+    expect(docsRow()).toBeUndefined()
+    await blur()
+    await release()
+    const row = await waitFor(docsRow, "Docs's row")
+    expect(row.getAttribute('aria-current')).toBe('page')
+    expect(document.activeElement).toBe(row)
+  })
+
+  it.each([
+    [
+      'the rail goes to the phone and back',
+      async (cross: (next: boolean) => Promise<void>) => {
+        await cross(true)
+        expect(document.querySelector('aside [data-sidebar-projects]')).toBeNull()
+        await cross(false)
+      },
+    ],
+    [
+      'Settings opens and Back returns',
+      async () => {
+        await press(await find('Settings'))
+        await waitFor(() => document.querySelector('.settings-navigation'), 'Settings')
+        await press(await find('Back'))
+        expect(document.querySelector('.settings-navigation')).toBeNull()
+      },
+    ],
+    [
+      'the scope moves to My view and Back returns to Docs',
+      async () => {
+        const docs = location.pathname
+        await press(await find('My view'))
+        const mine = () => document.querySelector('aside [data-mine-nav]')
+        expect(mine()?.getAttribute('aria-current')).toBe('page')
+        await act(async () => history.back())
+        await waitFor(
+          () => location.pathname === docs && !mine()?.hasAttribute('aria-current'),
+          "Docs's address",
+        )
+      },
+    ],
+  ])('ends unseen once %s while the tree still loads, and never comes back', async (_, move) => {
+    const cross = crossable(false)
+    await createDocs(true)
+    expect(docsRow()).toBeUndefined()
+    await move(cross)
+    // focus nowhere, where the tree would give it to Docs's row
+    await blur()
+    await release()
+    const row = await waitFor(docsRow, "Docs's row")
+    await settle()
+    expect(row.getAttribute('aria-current')).toBe('page')
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('is not made on the phone, so the tree the desktop mounts later moves no focus', async () => {
+    const cross = crossable(true)
+    await createDocs()
+    // the phone's header takes focus as App moves into Docs
+    expect(document.activeElement).toBe(document.querySelector('[data-mobile-project-actions]'))
+    await blur()
+    await cross(false)
+    const row = await waitFor(docsRow, "Docs's row")
+    await settle()
+    expect(row.getAttribute('aria-current')).toBe('page')
+    expect(document.activeElement).toBe(document.body)
+  })
 })

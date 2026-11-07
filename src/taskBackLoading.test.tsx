@@ -251,7 +251,9 @@ async function bootLoading(
 }
 
 /** Makes the project at board/p/1 top-level, so the sidebar lists it, adds
-    another, Second project at board/p/2, and moves task QN-2 into it. */
+    another, Second project at board/p/2, and moves task QN-2 into it. The
+    Planner holds a grant on both, as the sidebar lists an admin's projects
+    by ordinary access. */
 function secondProject(snap: Snapshot) {
   snap.projects[0].type = 'meta'
   const project = {
@@ -262,6 +264,8 @@ function secondProject(snap: Snapshot) {
     name: 'Second project',
   }
   snap.projects.push(project)
+  for (const p of snap.projects)
+    snap.access.push({ project_id: p.id, profile_id: snap.profiles[0].id, level: 'user' })
   const soak = snap.issues.find((issue) => issue.id === 'fd000000-b')
   if (soak) soak.project_id = project.id
 }
