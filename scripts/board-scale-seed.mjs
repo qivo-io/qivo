@@ -208,7 +208,7 @@
  * adds none. A task that already carries the most labels a task can have
  * (LIMITS.labels), as --labels can leave it, has one of its own labels
  * taken off and put back instead, so it ends without that label when the
- * count of changes is odd. */
+ * step adds an odd number of changes. */
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
