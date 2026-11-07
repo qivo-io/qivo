@@ -1748,43 +1748,6 @@ export const recipes: Recipe[] = [
       snap.teamMembers = snap.teamMembers.filter((m) => m.profile_id !== PAT)
     },
   },
-  {
-    mutation: 'projects:addMilestone',
-    mutator: 'addMilestone',
-    what: 'a new milestone',
-    pause: 'P',
-    act: (P) => P.addMilestone({ project: 'work', name: 'Beta', week: P.isoToWeek('2026-11-09') }),
-    truth: (snap, args) =>
-      snap.milestones.push({
-        id: str(args.id),
-        project_id: 'plan',
-        name: 'Beta',
-        week: '2026-11-09',
-        created_at: SERVER,
-      }),
-  },
-  {
-    mutation: 'projects:updateMilestone',
-    mutator: 'updateMilestone',
-    what: 'a renamed milestone',
-    pause: 'P',
-    act: (P) => P.updateMilestone('ms-a', { name: 'Release' }),
-    truth: (snap) => {
-      snap.milestones[0].name = 'Release'
-    },
-  },
-  {
-    mutation: 'projects:removeMilestone',
-    mutator: 'removeMilestone',
-    what: 'a removed milestone',
-    pause: 'P',
-    act: (P) => P.removeMilestone('ms-a'),
-    truth: (snap) => {
-      snap.milestones = []
-    },
-  },
-  // the same writes from a milestone read, as the projects part will send
-  // no milestone (t3/limits-milestone-part)
   // the milestone writes, each from a milestone read, as the projects
   // part sends no milestone
   {
