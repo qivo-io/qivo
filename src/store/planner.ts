@@ -1638,8 +1638,11 @@ function tellPendingMoves() {
     its own task; a caller holding the reference follows it
     (movePendingRef). A create the server answered keeps the server's
     number, and one the server took or the workspace holds stays as it
-    is. Runs as a view takes an answer and as a create is sent, before
-    the views repaint. */
+    is. One that a view's answer already holds takes the number that
+    answer gives it, the server's, before any other number is looked
+    for, as when another create took the preview and both reach the views
+    in one answer before this create answers. Runs as a view takes an
+    answer and as a create is sent, before the views repaint. */
 function renumberPending() {
   const numbered = new Map<string, Map<number, string>>()
   const sent = new Set<string>()
@@ -1657,15 +1660,21 @@ function renumberPending() {
       const other = views.get(num) ?? keyByOrg.get(org)?.get(`${ISSUE_PREFIX}-${num}`)
       return other !== undefined && other !== uuid
     }
-    if (created.num === null && !pending.taken && !holdsIn(uuid, org) && held(row.num)) {
-      const counter = base.map('orgs').get(org)?.next_issue_num || 0
-      let num = Math.max(row.num + 1, counter + 1)
-      while (held(num)) num++
-      movePendingRef(uuid, taskRef({ org, num: row.num, uuid }), taskRef({ org, num, uuid }))
-      row.num = num
-      // a window on it shows the new number from its creating answer
-      pending.answer = null
-      moved = true
+    if (created.num === null && !pending.taken && !holdsIn(uuid, org)) {
+      const answered = viewRows.numberOf(uuid)
+      let num = answered ?? row.num
+      if (answered === undefined && held(row.num)) {
+        const counter = base.map('orgs').get(org)?.next_issue_num || 0
+        num = Math.max(row.num + 1, counter + 1)
+        while (held(num)) num++
+      }
+      if (num !== row.num) {
+        movePendingRef(uuid, taskRef({ org, num: row.num, uuid }), taskRef({ org, num, uuid }))
+        row.num = num
+        // a window on it shows the new number from its creating answer
+        pending.answer = null
+        moved = true
+      }
     }
     sent.add(`${org}:${created.num ?? row.num}`)
   }

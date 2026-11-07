@@ -284,6 +284,15 @@ export function createViewRows(
         for (const row of rows.values()) if (row.org_id === org) out.set(row.num, row.id)
       return out
     },
+    /** The number the views' last answers give task `uuid`, the server's,
+        or undefined where none brought it. */
+    numberOf(uuid: string): number | undefined {
+      for (const rows of anchors.values()) {
+        const row = rows.get(uuid)
+        if (row) return row.num
+      }
+      return undefined
+    },
     /** Whether view `slot`'s last answer brought task `uuid`, so its row
         there is no insert. */
     answered: (slot: ViewSlot, uuid: string): boolean => !!anchors.get(slot)?.has(uuid),

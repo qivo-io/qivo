@@ -812,6 +812,37 @@ describe('a create in a store that never asked for every task', () => {
     ])
   })
 
+  it("takes the number a view's answer gives a new task when that answer also brings the task that took its preview", async () => {
+    await boot()
+    const board = await openBoard()
+    const moves: [string, string][] = []
+    P().watchHandles((moved) => moves.push(...moved))
+    const { open: made, uuid } = create()
+    expect(refParts(made)?.num).toBe(4)
+    P().watchComments(uuid, ORG)
+    await settle()
+    // Pat's create took 4 and this one 5, and both reach the Board in one
+    // answer, after the organization's counter, before this create answers
+    const request = take('issues:create')
+    snap.orgs[0].next_issue_num = 5
+    deliverWhole()
+    await settle()
+    board.deliver(
+      boardOf([
+        ...THREE(),
+        viewRow('task-pat', 4, { title: "Pat's bench check" }),
+        asView(stored(request.args, 5)),
+      ]),
+    )
+    await settle()
+    expect(P().viewTask(BOARD, uuid)?.key).toBe('QN-5')
+    expect(P().taskDetail(uuid)).toMatchObject({ state: 'ok', saving: true, num: 5 })
+    expect(moves).toEqual([[made, P().openTask(uuid, ORG, 5)]])
+    request.resolve(answerOf(stored(request.args, 5)))
+    await settle()
+    expect(moves).toEqual([[made, P().openTask(uuid, ORG, 5)]])
+  })
+
   it('files a new subtask under its parent on the Board, the parent as a group, from a window shown from its answer', async () => {
     await boot()
     await openBoard([
