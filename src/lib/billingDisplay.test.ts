@@ -174,7 +174,7 @@ describe('usageHints for a period charged on its daily average', () => {
   it('says how an open period is charged, and names the charge once it is recorded', () => {
     const open = usageHints({ ...charged, ...daily({ final: false }) }, 'usd')
     expect(open.storage).toBe(
-      'Storage is charged on the average of this period’s daily measurements, which is recorded shortly before the period ends. Added to the invoice at the end of this period.',
+      'Storage is charged on the average of this period’s daily measurements, which is recorded about a day before the period ends, or within two hours of its end at the latest. Added to the invoice at the end of this period.',
     )
     expect(open.api).toBe(usageHints(charged, 'usd').api)
     expect(usageHints({ ...charged, ...daily() }, 'usd').storage).toBe(

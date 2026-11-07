@@ -1816,32 +1816,32 @@ its start's date to the day before its end's date. The run of its last day
 records it when that day has the organization's sample, normally about a
 day or more before the end. When that day has none, the next day's run
 records it from its own sample once the last day has no run, its run has
-finished or its run has taken no step for 15 minutes. The record stops
-such a stalled run in the same transaction, so the run writes no sample of
-that day afterwards. At the latest the first hourly call within two hours
-of the end records it, a day still without a sample taking the most recent
-one, an earlier period's included. Every later run and call tries a period
-that is still open, for up to 3 days after its end, then stops with an
-error log and a `billing.storage_finalize_stopped` audit row, and
-`billingSync:finalizeStorage` with the period and `"operator":true`
-records it by the same rules and writes a
-`billing.storage_finalize_requested` audit row, as that function's
-docstring shows. The average, rounded up to a whole
-byte, goes through the same allowance, blocks and single charge as a
+finished or its run has taken no step for 15 minutes. The record stops such
+a stalled run in the same transaction, so the run writes no sample of that
+day afterwards. At the latest the first hourly call within two hours of the
+end records it. A day still without a sample then takes the next reading
+after it, the next period's first day included, or else the most recent one
+before it, an earlier period's included. Every later run and call tries a
+period that is still open, for up to 3 days after its end, then stops with
+an error log and a `billing.storage_finalize_stopped` audit row, and
+`billingSync:finalizeStorage` with the period and `"operator":true` records
+it by the same rules and writes a `billing.storage_finalize_requested`
+audit row, as that function's docstring shows. The average, rounded up to a
+whole byte, goes through the same allowance, blocks and single charge as a
 sample. With no sample of the organization at all the period records no
 storage charge and a `billing.storage_unavailable` audit row, never 0. A
-subscription that ends or is revoked before the period's recorded end
-stops that period's storage charge only while the charge has not been
-delivered, since its delivery stops at the end. A charge delivered before
-the subscription ended stays, as the charge of a sample at the start,
-sent minutes after the start, always did. `billing.usageFigures` answers
-the basis and the average, which this release's app shows only for a
-daily period, with how many days were estimated. An app from v0.1.145 up
-to this release says "Not measured yet for this period." for a daily
-period until it reloads. Switching it on
-also changes what the pricing page and the administration and organization
-guides say about storage, so a docs change goes out before or with it;
-qivo-internal `docs/billing-operations.md` keeps the texts.
+subscription that ends or is revoked before the period's recorded end stops
+that period's storage charge only while the charge has not been delivered,
+since its delivery stops at the end. A charge delivered before the
+subscription ended stays, as the charge of a sample at the start, sent
+minutes after the start, always did. `billing.usageFigures` answers the
+basis and the average, which this release's app shows only for a daily
+period, with how many days were estimated. An app from v0.1.145 up to this
+release says "Not measured yet for this period." for a daily period until
+it reloads. Switching it on also changes what the pricing page and the
+administration and organization guides say about storage, so a docs change
+goes out before or with it; qivo-internal `docs/billing-operations.md`
+keeps the texts.
 
 The release adds the optional fields `storage_basis`, `storage_days`,
 `storage_unavailable` and `storage_finalized_at` and the index

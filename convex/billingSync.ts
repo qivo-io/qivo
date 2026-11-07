@@ -739,9 +739,11 @@ async function retryStoppedSample(ctx: MutationCtx, period: Doc<'billing_periods
  * (eventReady), so a restart after that records the bytes but charges
  * nothing. A daily period is left alone too, answering false, since it
  * takes no sample and the daily samples' run and tick finalize it. An
- * operator who must record one at once runs finalizeStorage with it and
+ * operator who must record one runs finalizeStorage with it and
  * `"operator":true`, as that function's docstring shows, which follows the
- * same rules and writes an audit row. */
+ * same rules and writes an audit row. So before the period's deadline,
+ * while its last day has no sample and no later one can stand for it, that
+ * call answers 'waiting' and records nothing. */
 export const restartStorage = internalMutation({
   args: { period: v.id('billing_periods') },
   handler: async (ctx, { period }): Promise<boolean> => {
@@ -1044,11 +1046,13 @@ async function dayClosed(ctx: MutationCtx, day: string, now: number): Promise<bo
  * runs the other again, which then finds it recorded, and the event's id
  * guards a second charge too. A period gone with its organization, not
  * daily or already recorded is left alone. An operator who must record a
- * period at once runs this with its id and `operator` set, which applies
- * the same rules, also for a period the triggers stopped trying, and also
- * writes a billing.storage_finalize_requested audit row with actor cli,
- * naming the period and the outcome (recorded, unavailable, waiting or
- * null), which the triggers' calls never write:
+ * period runs this with its id and `operator` set, which applies the same
+ * rules, also for a period the triggers stopped trying. So before the
+ * deadline, while the last day has no sample and no later one can stand
+ * for it, it answers 'waiting' and records nothing. It also writes a
+ * billing.storage_finalize_requested audit row with actor cli, naming the
+ * period and the outcome (recorded, unavailable, waiting or null), which
+ * the triggers' calls never write:
  *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
  *     TARGET npx convex run billingSync:finalizeStorage '{"period":"…","operator":true}'
  *

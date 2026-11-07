@@ -89,7 +89,7 @@ export function usageHints(
     return {
       api,
       storage:
-        'Storage is charged on the average of this period’s daily measurements, which is recorded shortly before the period ends. Added to the invoice at the end of this period.',
+        'Storage is charged on the average of this period’s daily measurements, which is recorded about a day before the period ends, or within two hours of its end at the latest. Added to the invoice at the end of this period.',
     }
   if (average.bytes === null)
     return {

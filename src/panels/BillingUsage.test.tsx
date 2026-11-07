@@ -179,7 +179,7 @@ describe('current storage', () => {
     )
     expect(text('[data-billing-storage-sample]')).toBeNull()
     expect(container.textContent).toContain(
-      'Storage is charged on the average of this period’s daily measurements, which is recorded shortly before the period ends.',
+      'Storage is charged on the average of this period’s daily measurements, which is recorded about a day before the period ends, or within two hours of its end at the latest.',
     )
     // recorded, and recorded without any measurement
     const recorded = { ...DAILY.storage_average!, final: true, measured: 31, estimated: 0 }
