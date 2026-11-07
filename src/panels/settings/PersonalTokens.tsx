@@ -163,6 +163,8 @@ export function PersonalTokens({ mcpUrl }: { mcpUrl: string }) {
   }
   const refresh = () => void list.refresh()
   const loaded = list.answers.length > 0 || list.refreshing
+  // the list or its end line shows, so New token keeps its space below them
+  const shows = list.rows.length > 0 || !['end', 'partial', 'held'].includes(end)
 
   return (
     <SettingsGroup legend="Personal access tokens" data-mcp-tokens="">
@@ -194,7 +196,7 @@ export function PersonalTokens({ mcpUrl }: { mcpUrl: string }) {
         ref={endLine}
         data-mcp-tokens-end={end}
         aria-busy={end === 'loading' || list.phase === 'more' || list.refreshing || undefined}
-        className={cn(loaded && 'mb-6')}
+        className={cn(shows && 'mb-6')}
       >
         {list.rows.length > 0 && (
           <div data-mcp-token-list="" className="flex flex-col gap-1.5">
