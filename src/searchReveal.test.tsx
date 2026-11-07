@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import type { TiptapEditorHTMLElement } from '@tiptap/core'
 import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -17,8 +18,9 @@ import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixt
    referenced task by (P.handleOfOpen). And an Inbox row of another
    organization's task with the id of a task the workspace holds, which
    the Inbox pane shows with that organization's New mark, reads on open,
-   comments on and saves a title to in that organization, through that
-   task's own answer, never as the held task. And two rows of one task id
+   comments on, saves a title to and uploads an image to in that
+   organization, through that task's own answer, never as the held task.
+   And two rows of one task id
    in two organizations, neither held, where the pane goes from the first
    row's task to the second's and reads the second's item. */
 
@@ -578,7 +580,16 @@ describe("an Inbox row of another organization's task with a held task's id", {
     await act(async () => send?.click())
     expect(sentArgs('comments:create').map((args) => args.org_id)).toEqual([GUEST])
     // a title saved there goes to that organization's task through its own
-    // answer, and the held task of the same id keeps its title
+    // answer. The server refuses the first save, and the field opens again
+    // with the draft, whose next save goes through, while the held task of
+    // the same id keeps its title
+    let refuse = true
+    network.mutation.mockImplementation((ref) => {
+      if (getFunctionName(ref) !== 'issues:update' || !refuse) return Promise.resolve(null)
+      refuse = false
+      return Promise.reject(new ConvexError({ code: 'rule', message: 'The title is locked.' }))
+    })
+    const held = () => store.P.issueById[store.P.handleOf(SOAK) ?? '']
     await act(async () => document.querySelector<HTMLElement>('[data-task-title]')?.click())
     const titleField = await waitFor(
       () => document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]'),
@@ -586,18 +597,75 @@ describe("an Inbox row of another organization's task with a held task's id", {
     )
     await typeInto(titleField, 'Calibrate the guest rig twice')
     await act(async () => titleField.blur())
+    const kept = await waitFor(
+      () => document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]'),
+      'the title field after the refusal',
+    )
+    expect(kept.value).toBe('Calibrate the guest rig twice')
+    await act(async () => kept.blur())
+    const save = { org_id: GUEST, id: SOAK, patch: { title: 'Calibrate the guest rig twice' } }
     expect(sentArgs('issues:update')).toEqual([
-      expect.objectContaining({
-        org_id: GUEST,
-        id: SOAK,
-        patch: { title: 'Calibrate the guest rig twice' },
-      }),
+      expect.objectContaining(save),
+      expect.objectContaining(save),
     ])
     expect(title()).toBe('Calibrate the guest rig twice')
-    expect(store.P.issueById[store.P.handleOf(SOAK) ?? '']?.title).toBe('Run the soak test')
+    expect(held()?.title).toBe('Run the soak test')
     // the id alone names either task, so a write by it fails closed
     expect(await store.P.updateIssue(SOAK, { title: 'Calibrate by id' })).toBe(false)
-    expect(sentArgs('issues:update')).toHaveLength(1)
+    expect(sentArgs('issues:update')).toHaveLength(2)
+    // an image pasted into its description uploads to that organization's
+    // task too, and its file never shows on the held task
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ storageId: 'st-1' }) })),
+    )
+    network.query.mockImplementation((ref) =>
+      Promise.resolve(
+        getFunctionName(ref) === 'files:mintUrls' ? { attachments: {}, avatars: {} } : null,
+      ),
+    )
+    network.mutation.mockImplementation((ref, args) => {
+      const name = getFunctionName(ref)
+      if (name === 'files:uploadUrl') return Promise.resolve('https://convex.example/upload')
+      if (name !== 'files:attach') return Promise.resolve(null)
+      return Promise.resolve({
+        attachment: {
+          id: args.id,
+          issue_id: args.issue_id,
+          name: args.name,
+          mime: args.mime,
+          size_bytes: 3,
+          storage_id: 'st-1',
+          inline: true,
+          created_at: AT,
+        },
+      })
+    })
+    await act(async () =>
+      document.querySelector<HTMLElement>('.inbox-detail-frame [data-desc-toggle]')?.click(),
+    )
+    const description = await waitFor(
+      () =>
+        document.querySelector<TiptapEditorHTMLElement>(
+          '[role="textbox"][aria-label="Task description"]',
+        )?.editor,
+      'the description editor',
+    )
+    const image = new File(['png'], 'photo.png', { type: 'image/png' })
+    await act(async () => {
+      description.view.pasteHTML('', {
+        clipboardData: { files: [image], getData: () => '' },
+        preventDefault: () => {},
+      } as unknown as ClipboardEvent)
+    })
+    await waitFor(() => sentArgs('files:attach').length === 1, "the image's attach")
+    expect(sentArgs('files:uploadUrl')).toEqual([
+      { org_id: GUEST, issue_id: SOAK, size: 3, name: 'photo.png' },
+    ])
+    expect(sentArgs('files:attach')).toEqual([
+      expect.objectContaining({ org_id: GUEST, issue_id: SOAK, inline: true }),
+    ])
+    expect(held()?.attachmentCount).toBe(0)
   })
 })
 

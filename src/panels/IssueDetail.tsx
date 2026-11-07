@@ -565,12 +565,13 @@ function AttachmentsSection({
   const note = sectionNote('attachments', section, canEdit ? null : 'No attachments.')
   // attach by uuid: on a just-created issue the derived key in the closure's
   // `it` can renumber while the INSERT is in flight, which would strand (or
-  // mis-target) every file after the first
+  // mis-target) every file after the first. The organization goes with it,
+  // as two organizations can hold one task id
   const addFiles = async (files: FileList | File[]) => {
     for (const f of Array.from(files || [])) {
       setUploading((u) => [...u, f.name])
       try {
-        await P.addAttachment(it.uuid, f)
+        await P.addAttachment(it.uuid, f, { org: it.org })
       } finally {
         setUploading((u) => {
           const n = u.slice()
@@ -3229,31 +3230,39 @@ function IssueDetail({
                   // does one from an answer that is not current
                   if (P.refusePausedEdit() || P.refuseStaleEdit(it.id)) return
                   // refused over someone else's rename, the field opens again
-                  // with this draft (keepDraft), unless the person has moved on
+                  // with this draft (keepDraft), unless the person has moved
+                  // on, and so it does after any other refusal, which its
+                  // toast says, or a save no task took
                   const session = titleSession.current
                   const task = it.uuid
+                  const reopen = () => {
+                    if (!mountedRef.current || titleSession.current !== session) return false
+                    if (shownUuid.current !== task) return false
+                    // the field takes focus when it opens, so only while
+                    // nothing else holds it
+                    const at = document.activeElement
+                    if (at && at !== document.body) return false
+                    setTitleDraft(v)
+                    setEditTitle(true)
+                    return true
+                  }
                   void P.updateIssue(
                     it.id,
                     { title: v },
                     {
                       seen: { title: titleSeen },
                       keepDraft: (shown) => {
-                        if (!mountedRef.current || titleSession.current !== session) return false
-                        if (shownUuid.current !== task) return false
-                        // the field takes focus when it opens, so only while
-                        // nothing else holds it
-                        const at = document.activeElement
-                        if (at && at !== document.body) return false
+                        if (!reopen()) return false
                         // the rename shown now is the title a second save
                         // replaces; until a delivery shows it, wait for it
                         if (typeof shown === 'string' && shown !== titleSeen) setTitleSeen(shown)
                         else titleRebase.current = true
-                        setTitleDraft(v)
-                        setEditTitle(true)
                         return true
                       },
                     },
-                  )
+                  ).then((saved) => {
+                    if (!saved) reopen()
+                  })
                 }
                 setEditTitle(false)
               }}

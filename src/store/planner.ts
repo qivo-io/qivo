@@ -9521,14 +9521,17 @@ type UploadTarget = { uuid: string; org: string; project: string; count: number;
 
 /** The workspace's task for an upload: its cap counts the larger of the
     workspace's rows and the whole section list (capInputs), and an image a
-    description save took out no longer counts. None while the window
-    watches another organization's task of the same id, which the
-    workspace does not hold. */
-function heldUploadTarget(issueKey: string): UploadTarget | null {
+    description save took out no longer counts. With `org`, only while the
+    workspace holds the task in that organization. Without one, none while
+    the window watches another organization's task of the same id, which
+    the workspace does not hold. */
+function heldUploadTarget(issueKey: string, org?: string): UploadTarget | null {
   const uuid = keyToUuid.get(issueKey) || (rows.issues.has(issueKey) ? issueKey : undefined)
   const row = uuid ? rows.issues.get(uuid) : undefined
   if (!row || !uuid) return null
-  if (uuid === watchedComments && watchedOrg && row.org_id !== watchedOrg) return null
+  if (org !== undefined && row.org_id !== org) return null
+  if (org === undefined && uuid === watchedComments && watchedOrg && row.org_id !== watchedOrg)
+    return null
   const held = PLANNER.issueById[uuidToKey.get(uuid) ?? '']
   const count = Math.max(
     [...rows.attachments.values()].filter((a) => a.issue_id === uuid && a.dropped_at === undefined)
@@ -9538,11 +9541,12 @@ function heldUploadTarget(issueKey: string): UploadTarget | null {
   return { uuid, org: row.org_id, project: row.project_id, count, answer: false }
 }
 
-/** The task the window shows from its own answer for an upload
-    (answerTaskOf): its cap counts the larger of the window's view and its
-    whole attachments answer (capInputs), with no walk of the workspace. */
-function answerUploadTarget(issueKey: string): UploadTarget | null {
-  const shown = answerTaskOf(issueKey)
+/** The task the window shows from its own answer for an upload, of
+    organization `org` when named (answerTaskOf): its cap counts the larger
+    of the window's view and its whole attachments answer (capInputs), with
+    no walk of the workspace. */
+function answerUploadTarget(issueKey: string, org?: string): UploadTarget | null {
+  const shown = answerTaskOf(issueKey, org)
   return shown
     ? {
         uuid: shown.uuid,
@@ -9555,10 +9559,11 @@ function answerUploadTarget(issueKey: string): UploadTarget | null {
 }
 
 /* The task a file for `issueKey`, a handle or a uuid, goes to now, for
-   P.addAttachment. It is the workspace's task, else the one the window
-   shows from a current answer. */
-const uploadTarget = (issueKey: string) =>
-  heldUploadTarget(issueKey) ?? answerUploadTarget(issueKey)
+   P.addAttachment, of organization `org` when named, as two organizations
+   can hold one task id. It is the workspace's task, else the one the
+   window shows from a current answer. */
+const uploadTarget = (issueKey: string, org?: string) =>
+  heldUploadTarget(issueKey, org) ?? answerUploadTarget(issueKey, org)
 
 /* Says why task `id` takes no file now, for an upload of file `name`.
    Either the window shows it from an answer that is not current
@@ -9595,7 +9600,7 @@ function removeUnheldAttachment(
   }
   if (refusePausedEdit()) return Promise.resolve(false)
   return send(api.files.removeAttachment, { org_id: org, id: attId }, 'none', {
-    about: { task, ...(rows.issues.has(task) ? {} : { answer: true }) },
+    about: { task, ...(holdsIn(task, org) ? {} : { answer: true }) },
   })
 }
 
@@ -9831,13 +9836,16 @@ type AnswerTask = { uuid: string; org: string; answer: TaskOk; model: IssueVM }
     workspace may hold another organization's task of the same id
     instead (watchedRow), which is another task: then the window's handle
     names the watched task, a reference (P.handleNow), and the uuid alone
-    names neither for certain, so a write by it fails closed. */
-function answerTaskOf(id: string): AnswerTask | null {
+    names neither for certain, so a write by it fails closed. With `org`,
+    it is the watched task of that organization only, which its uuid then
+    names, as an upload names its task (uploadTarget). */
+function answerTaskOf(id: string, org?: string): AnswerTask | null {
   const t = watchedComments
   const detail = PLANNER.detail
   if (!t || !detail || detail.task !== t || watchedRow()) return null
   if (detail.state !== 'ok' || !detail.view || sectionsWatched.task?.task !== t) return null
-  const byUuid = id === t && !rows.issues.has(t)
+  if (org !== undefined && org !== detail.org) return null
+  const byUuid = id === t && (org !== undefined || !rows.issues.has(t))
   if (!byUuid && id !== detail.view.id) return null
   const answer = drawnAnswer
   if (!answer || answer.task.id !== t || answer.task.org_id !== detail.org) return null
@@ -12257,27 +12265,31 @@ export const PLANNER = {
       because a new task's handle can move to another task meanwhile. */
   handleOf: (uuid: string): string | null => uuidToKey.get(uuid) ?? null,
   /** The handle task `uuid` shows by now: the workspace's, else the
-      window's while it shows the task from its own answer, or null. The
-      description editor follows its uploads by it (P.handleOf answers
-      only the workspace's, which the views read as whether it holds the
-      task). */
-  shownHandleOf: (uuid: string): string | null => {
-    const held = uuidToKey.get(uuid)
+      window's while it shows the task from its own answer, or null. With
+      `org`, of that organization's task only, as two organizations can
+      hold one task id (heldHandle). The description editor follows its
+      uploads by it (P.handleOf answers only the workspace's, which the
+      views read as whether it holds the task). */
+  shownHandleOf: (uuid: string, org?: string): string | null => {
+    const held = heldHandle(uuid, org)
     if (held !== undefined) return held
     const detail = PLANNER.detail
-    return detail?.task === uuid && detail.answered === 'ok' ? (detail.view?.id ?? null) : null
+    const ours = detail?.task === uuid && (!org || detail.org === org)
+    return ours && detail.answered === 'ok' ? (detail.view?.id ?? null) : null
   },
   /** The task handle or uuid `id` names as the window shows it: the
       workspace's view, else the window's view from its own answer while
-      the workspace does not hold the task (P.taskDetail), or undefined. */
+      the workspace does not hold the task in its organization
+      (P.taskDetail), or undefined. While the workspace holds another
+      organization's task of the same id, the window's handle names the
+      window's task and the uuid alone names neither (answerTaskOf). */
   taskShown: (id: string): IssueVM | undefined => {
     const held = PLANNER.issueById[id]
     if (held) return held
     const detail = PLANNER.detail
     const view = detail?.answered === 'ok' ? detail.view : null
-    return view && (view.id === id || view.uuid === id) && !rows.issues.has(view.uuid)
-      ? view
-      : undefined
+    if (!view || holdsIn(view.uuid, view.org)) return undefined
+    return view.id === id || (view.uuid === id && !rows.issues.has(id)) ? view : undefined
   },
   /** The watched task the workspace does not hold, as a window names it,
       when handle `id` is the one it opens by now (P.handleNow): its uuid,
@@ -12310,7 +12322,7 @@ export const PLANNER = {
       someone changed the task meanwhile. */
   answerSaveWaits: (id: string): boolean => {
     const shown = PLANNER.taskShown(id)
-    return !!shown && !rows.issues.has(shown.uuid) && answerTaskOf(id) === null
+    return !!shown && !holdsIn(shown.uuid, shown.org) && answerTaskOf(id) === null
   },
   /** Refuses a save to task `id` while it waits (P.answerSaveWaits), with
       a toast that says why, so the editor keeps its draft, as
@@ -14359,13 +14371,21 @@ export const PLANNER = {
       organization, project and cap from that answer (answerUploadTarget),
       and none while that answer is not current (P.refuseStaleEdit). The
       upload follows the task `issueKey` names when it starts, by its uuid
-      and organization, whatever that handle names later. */
+      and organization, whatever that handle names later. With `opts.org`
+      it is that organization's task, as two organizations can hold one
+      task id, so the window's task shown from its answer takes a file by
+      its uuid while the workspace holds another organization's task of
+      that id. */
   addAttachment: withUpdateBlock(
-    async (issueKey: string, input: File, opts?: { inline?: boolean }): Promise<string | null> => {
+    async (
+      issueKey: string,
+      input: File,
+      opts?: { inline?: boolean; org?: string },
+    ): Promise<string | null> => {
       // issueKey may be a derived key ("QN-482") or the issue uuid — the
       // New-issue modal and the drawer attach by uuid, which survives the rare
       // INSERT renumbering that reassigns the derived key mid-flight
-      const first = uploadTarget(issueKey)
+      const first = uploadTarget(issueKey, opts?.org)
       // a task the window shows from an answer that is not current takes no
       // file yet, and says why, as does one the window no longer shows
       if (!first) {
@@ -14380,9 +14400,10 @@ export const PLANNER = {
       // name the file) hand over WebP, which comes straight back out.
       // Re-encoding is real wall-clock work — re-check the issue after it: the
       // row can be deleted from another tab while we encode, and a handle
-      // can move to another task, so it is checked by the uuid found first.
+      // can move to another task, so it is checked by the uuid and the
+      // organization found first.
       const file = await compressImage(input)
-      const target = uploadTarget(first.uuid)
+      const target = uploadTarget(first.uuid, first.org)
       if (!target) {
         refuseUpload(first.uuid, file.name)
         return null
@@ -14432,15 +14453,16 @@ export const PLANNER = {
           'none',
           {
             about,
-            // a file of a task the workspace does not hold shows with the
-            // attachments answer, which Convex delivers before the write
-            // resolves (lib/convexOrdering.test.ts); this paint skips then
+            // a file of a task the workspace does not hold in its
+            // organization shows with the attachments answer, which Convex
+            // delivers before the write resolves (lib/convexOrdering.test.ts);
+            // this paint skips then
             keep: (answer) =>
               'refused' in answer
                 ? null
                 : {
                     workspace: () => {
-                      if (!rows.issues.has(uuid) || rows.attachments.has(attId)) return
+                      if (!holdsIn(uuid, org) || rows.attachments.has(attId)) return
                       rows.attachments.set(attId, { ...answer.attachment })
                     },
                   },
