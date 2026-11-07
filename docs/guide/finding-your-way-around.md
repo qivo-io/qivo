@@ -195,7 +195,7 @@ projects** and Team sync do not change the project Qivo remembers, and
 neither does a task you open from the Inbox or by its link. If Qivo could
 not finish the check, it says so with **Retry**, which checks again. The top
 bar stays meanwhile, so the Inbox and the view you will open are one click
-away. On a phone, Qivo opens the Inbox, as before.
+away. On a phone, Qivo opens the Inbox.
 
 ## Pages stay as you left them
 
