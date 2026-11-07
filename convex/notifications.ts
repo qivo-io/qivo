@@ -28,9 +28,11 @@
  *   changed_at, NOTIFY.lag_ms before which no live alert is granted; a switch
  *   to 'all' keeps the account's checkpoint as every session's floor
  *   (all_from), and a switch to 'recent' takes the checkpoint and a baseline
- *   now and names the switching session as the one that moved it
- *   (covered_by), so a mode change replays nothing and only another target's
- *   first claim is sent to summarize.
+ *   now and names the target at the switch in covered_by, or nobody when
+ *   there is none, so a mode change replays nothing and the claims of every
+ *   session but that target summarize first, the switcher's included. It
+ *   reads the account row, and on a switch to 'recent' the session rows up
+ *   to the target.
  * - beat: registers the caller's session and keeps it live, with whether it
  *   can notify (`can_notify`) and whether the person used it since the last
  *   report (`active`, written at most every NOTIFY.active_ms; a first beat
@@ -56,13 +58,14 @@
  *   answers `not_registered` without a row that can notify, and in 'recent'
  *   `not_target` unless the caller is the target, and once the login has a
  *   checkpoint `summarize_first`, writing nothing, unless covered_by names
- *   the caller's session, which holds while its claim, summary or switch to
- *   'recent' moved the checkpoint last and no beat recorded a handoff since.
- *   So a session that became the target after another session was, or after
- *   it could not notify, summarizes before its claim can move the checkpoint
- *   past what arrived in between, even when it was the target before. The
- *   session that moved the checkpoint and returns past liveness with no other
- *   target meanwhile summarizes by the client's resume rule (below). It
+ *   the caller's session, which holds while its claim or summary moved the
+ *   checkpoint last, or a switch to 'recent' found it the target, and no beat
+ *   recorded a handoff since. So a session that became the target after
+ *   another session was, or after it could not notify, summarizes before its
+ *   claim can move the checkpoint past what arrived in between, even when it
+ *   was the target before. The session that moved the checkpoint and returns
+ *   past liveness with no other target meanwhile summarizes by the client's
+ *   resume rule (below). It
  *   grants an event once in its scope, never one at or before the latest of
  *   the live window (NOTIFY.live_window_ms) and NOTIFY.lag_ms before the
  *   last mode change and before the scope's last summary, and records each
@@ -132,13 +135,14 @@
  *   session moved the checkpoint or was the target, or after it could not
  *   notify, and the summary covers what arrived in between; its records
  *   refuse what it announced. No claim answers it before the login has a
- *   checkpoint. A switch to 'recent' names the switching session, so the
- *   first claim of any other target after it answers it. A handoff a beat
- *   records makes the next claim of every session answer it, the new target's
- *   and the earlier mover's, also once the new target stops notifying or
- *   signs out, since the account row keeps the handoff. The mover's own
- *   handoff is its beat that turns can_notify off, and another session's is
- *   its report or its entering as the target (beat).
+ *   checkpoint. A switch to 'recent' names the target at the switch, or
+ *   nobody, so the first claim of any other session after it, the switcher's
+ *   included, answers it. A handoff a beat records makes the next claim of
+ *   every session answer it, the new target's and the earlier mover's, also
+ *   once the new target stops notifying or signs out, since the account row
+ *   keeps the handoff. The mover's own handoff is its beat that turns
+ *   can_notify off, and another session's is its report or its entering as
+ *   the target (beat).
  * - It sends end when the last tab of its browser profile closes. A tab
  *   that took over beating sends it only after its first beat. End changes
  *   nothing unless that tab beat last, and a missed end leaves the session
@@ -190,7 +194,7 @@ type Checkpoint = Partial<
  * the account row in 'recent', which it adds when the login has none. On
  * the account row a move of covered_at also names the caller's session in
  * covered_by, which claimAlerts compares with the next target's, as
- * setDelivery does on a switch to 'recent'. */
+ * setDelivery names the target on a switch to 'recent'. */
 async function saveHolder(
   ctx: MutationCtx & { authUserId: string; sessionId: string },
   holder: Holder | null,
@@ -247,9 +251,10 @@ export const setDelivery = sessionMutation({
             changed_at: now,
             covered_at: now,
             baseline_at: now,
-            // so another target's first claim summarizes what arrived after
-            // the switch while it was not the target
-            covered_by: ctx.sessionId,
+            // the target at the switch, or nobody, so every other session,
+            // the switcher too, summarizes before its claim moves the
+            // checkpoint past what arrived while that target alerted
+            covered_by: (await targetOf(ctx, ctx.authUserId, now))?.session_id,
           }
     if (account === null)
       await ctx.db.insert('account_notifications', { auth_user_id: ctx.authUserId, ...change })

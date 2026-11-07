@@ -581,8 +581,8 @@ describe('claimAlerts in the default mode', () => {
     })
     clock(21)
     expect(await summary(b)).toEqual({ state: 'none' })
-    // a switch to 'recent' names the switching session, so another target's
-    // first claim after it summarizes first
+    // a switch to 'recent' names the target, here the switching session, so
+    // another target's first claim after it summarizes first
     clock(22)
     await setDelivery(b, 'all')
     await setDelivery(b, 'recent')
@@ -704,6 +704,38 @@ describe('claimAlerts in the default mode', () => {
       })
     },
   )
+
+  it('sends the switching session to summarize first when another was the target at a switch to recent', async () => {
+    const t = newT()
+    const { f, s: a } = await guestFixture(t)
+    const b = await signIn(t, a.authUserId)
+    await beat(a)
+    await beat(b)
+    await setDelivery(a, 'all')
+    // b reports in 'all', so it is the target at a's switch to 'recent'
+    clock(0.5)
+    await beat(b, { active: true })
+    clock(1)
+    await setDelivery(a, 'recent')
+    expect((await accountOf(t, a.authUserId))?.covered_by).toBe(b.sessionId)
+    const e = eventOf((await newsAt(t, f, 1.5)).message)
+    clock(2)
+    await beat(a)
+    expect(await claim(a, [e], e.at)).toEqual({ state: 'not_target' })
+    // b never claims and lapses at minute 3.5, so a is the target
+    clock(4.5)
+    await beat(a)
+    const later = eventOf((await newsAt(t, f, 4.25)).message)
+    expect(await claim(a, [later], later.at)).toEqual({ state: 'summarize_first' })
+    expect(await records(t)).toEqual([])
+    // the summary covers E, which nobody alerted, and records the later one
+    expect(await summary(a)).toEqual({ state: 'summary' })
+    expect(await claim(a, [later], later.at)).toEqual({
+      state: 'granted',
+      keys: [],
+      limited: false,
+    })
+  })
 
   it('sends the session that moved the checkpoint to summarize first after it stopped notifying and came back', async () => {
     const t = newT()
@@ -980,6 +1012,8 @@ describe('mode changes', () => {
     // counts, what 'all' alerted is refused and what no session alerted in
     // its last minute is still live
     const third = eventOf((await newsAt(t, f, 5)).message)
+    // a beats first, so it is the target the switch names
+    await beat(a)
     await setDelivery(a, 'recent')
     expect(await accountOf(t, a.authUserId)).toMatchObject({
       delivery: 'recent',

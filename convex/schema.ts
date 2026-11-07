@@ -735,13 +735,13 @@ export default defineSchema({
     // the checkpoint in 'recent', every eligible event before it alerted,
     // summarized or taken as a baseline
     covered_at: v.optional(v.number()),
-    // the Better Auth session whose claim or summary last moved covered_at
-    // in 'recent', or the switching session after a switch to 'recent', the
-    // only session whose claim needs no summary first (notifications.ts
-    // claimAlerts); absent once a beat recorded a handoff, the named session
-    // turning can_notify off or another becoming the target by a report or
-    // as it entered, so every claim summarizes first, also after the new
-    // target stopped notifying or signed out (notifications.ts beat)
+    // the Better Auth session whose claim or summary last moved covered_at in
+    // 'recent', or the target at a switch to 'recent', the only session whose
+    // claim needs no summary first (notifications.ts claimAlerts); absent
+    // after a switch with no target, and once a beat recorded a handoff, the
+    // named session turning can_notify off or another becoming the target by
+    // a report or as it entered, so every claim summarizes first, also after
+    // the new target stopped notifying or signed out (notifications.ts beat)
     covered_by: v.optional(v.string()),
     // the last summary in 'recent'; no live alert for an event at or before
     // NOTIFY.lag_ms before it, or one it recorded
