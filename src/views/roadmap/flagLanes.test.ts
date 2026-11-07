@@ -202,7 +202,7 @@ describe('flagLanesShown', () => {
 /* My view's flags on a track row: the rows of flags its height holds,
    names cut short rather than run into the next flag, every flag of a
    crowded week in sight, apart and drawn so each keeps a strip to point
-   at. */
+   at, and a drag that moves one flag alone. */
 describe('layoutTrackFlags', () => {
   const row = { w0: 0, weekW: WEEK_W, end: 20 * WEEK_W }
   type TrackFlag = Parameters<typeof layoutTrackFlags>[0][number]
@@ -352,6 +352,41 @@ describe('layoutTrackFlags', () => {
         expect(uncovered(diamond, over)).toBeGreaterThanOrEqual(strip)
       }
     }
+  })
+
+  it('moves a dragged flag of a crowded week alone, to its new week, with a place every time', () => {
+    // three in week 4 and two in week 12, each drawn at the week trackFlags
+    // passes as live, its saved week until dragged
+    const still = (id: string, week: number, name: string) => ({
+      ...flag(id, week, name),
+      live: week,
+    })
+    const crowded = [still('a', 4, 'Alpha'), still('b', 4, 'Beta'), still('c', 4, 'Gamma')]
+    const other = [still('p', 12, 'Pilot'), still('q', 12, 'Quality')]
+    const before = layoutTrackFlags([...crowded, ...other], row)
+    expect(before.get('c')?.shift).toBeGreaterThan(0)
+    const during = (id: string, live: number) => {
+      const flags = [...crowded, ...other].map((f) => (f.id === id ? { ...f, live } : f))
+      const places = layoutTrackFlags(flags, row)
+      // must fail: a flag with no place, which the row does not draw
+      expect([...places.keys()].sort()).toEqual(flags.map((f) => f.id).sort())
+      // must fail: another flag that moves, or loses its nudge, meanwhile
+      for (const f of flags) if (f.id !== id) expect(places.get(f.id)).toEqual(before.get(f.id))
+      return places.get(id)
+    }
+    // the nudged one, to an empty week and to the other crowded week, on
+    // the week's line in the row's rows
+    for (const live of [9, 12]) {
+      const place = during('c', live)
+      expect(place?.lane).toBeLessThan(TRACK_FLAG_LANES)
+      // must fail: a nudge kept from the week it left
+      expect(place?.shift).toBeUndefined()
+    }
+    expect(during('c', 9)?.room).toBeGreaterThanOrEqual(wants('Gamma'))
+    // one of the first two, to an empty week, with room for its name
+    const alpha = during('a', 9)
+    expect(alpha?.lane).toBeLessThan(TRACK_FLAG_LANES)
+    expect(alpha?.room).toBeGreaterThanOrEqual(wants('Alpha'))
   })
 
   it("keeps the name of a week's only milestone after a crowded week", () => {
