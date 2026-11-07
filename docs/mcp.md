@@ -2248,10 +2248,11 @@ A move within the task's top-level project moves only the task. A move to a
 sub-project of another top-level project also moves every subtask,
 archived ones included, that is not already in that top-level
 project. You need Edit access on each of their projects (otherwise `moving
-this task would move a subtask in a project you cannot edit; an organization
-admin can move it`). A subtask in a project that is being moved to Deleted
-items refuses the move for everyone, admins included, with `a subtask of
-this task is being moved to Deleted items; try again when that finishes`.
+this task would move a subtask in a project you cannot edit; someone who can
+edit that project can move it`). A subtask in a project that is being moved
+to Deleted items refuses the move for everyone, admins included, with `a
+subtask of this task is being moved to Deleted items; try again when that
+finishes`.
 The assignee and the reviewer of each active subtask must be able to work
 in the destination (otherwise `someone assigned to or reviewing a subtask of
 this task cannot edit that sub-project; give them Edit access there, or

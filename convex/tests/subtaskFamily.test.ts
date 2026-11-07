@@ -5,6 +5,7 @@
  * its parent in the same change. withOrg's TBED holds FW (f.sub) and PCB
  * (f.sub2); the scene adds a second top-level project, Cloud, with the
  * Backend and Frontend sub-projects. */
+/// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
@@ -338,6 +339,15 @@ describe('moving a task to another top-level project', () => {
     })
     expect((await expectRefusal(asEditor, 'rule')).data.message).toBe(MOVE_SUBTREE_EDIT_RULE)
     expect(await row(t, root.id)).toEqual(root)
+    // the public docs quote it as it is sent, a wrapped line as one space
+    const docs = import.meta.glob(['../../docs/rest-api.md', '../../docs/mcp.md'], {
+      eager: true,
+      query: '?raw',
+      import: 'default',
+    }) as Record<string, string>
+    expect(Object.keys(docs)).toHaveLength(2)
+    for (const [path, text] of Object.entries(docs))
+      expect(text.replace(/\s+/g, ' '), path).toContain(MOVE_SUBTREE_EDIT_RULE)
     // the guest edits TBED but nothing in Cloud
     await t.run(async (ctx) => {
       await ctx.db.patch(inPcb._id, { assignee_id: f.guest.id })
