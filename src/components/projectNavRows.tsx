@@ -250,9 +250,10 @@ const navMoves = new Set<() => void>()
 
 /** Tells every open that waits, and startup's check, that the person moved
     elsewhere, so each drops its wait with its "Opening" line and its
-    answer changes nothing. App calls it for each move and each Back or
-    Forward it accepts, and an open that starts to wait calls it first, so
-    another list's open gives way to it. */
+    answer changes nothing. App calls it for each move it accepts and for
+    each Back or Forward it accepts that changes the page or the open task,
+    and an open that starts to wait calls it first, so another list's open
+    gives way to it. */
 export function navMoved() {
   // one heard removes at most itself, which a walk of a Set allows
   for (const heard of navMoves) heard()
