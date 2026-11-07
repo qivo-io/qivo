@@ -1536,10 +1536,10 @@ function App() {
     }
   }, [])
 
-  /* access guard — keep the scope within what the current user can see. Both
-     sentinels ARE "what the user can see", so neither needs rescuing — and
-     each resolves to no project row, which would otherwise bounce it away
-     one commit after it was entered — and no scope is the chooser's. A
+  /* The access guard keeps the scope within what the current user can see.
+     Both sentinels ARE "what the user can see", so neither needs rescuing,
+     and each resolves to no project row, which would otherwise bounce it
+     away one commit after it was entered. No scope is the chooser's. A
      project scope stays while the workspace holds it and its top-level
      project and the person sees both (P.canSee), so a sub-project they lost
      under a parent they still see goes too. A lost one leaves no scope and

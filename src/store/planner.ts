@@ -11909,8 +11909,8 @@ export const PLANNER = {
      longer reads it, as it lists the server's navigation reads
      (components/SidebarProjects.tsx), nor does App, which opens a project
      only once the server checked it (App.tsx startup). Its readers are
-     scopeInfo's wide scopes, Team sync's scope menu and notes and the
-     smoke drive's phone check. */
+     scopeInfo's wide scopes, Team sync's scope menu and notes, and the
+     smoke drive's startup block and phone check (scripts/smoke.mjs). */
   visibleProjects: (uid?: string) =>
     PLANNER.projects
       .filter((p) => p.type === 'meta' && PLANNER.canSee(p.id, uid))
