@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { TiptapEditorHTMLElement } from '@tiptap/core'
 import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -30,9 +31,21 @@ vi.mock('../lib/auth', () => ({
 let container: HTMLDivElement
 let root: Root
 let toast: MockInstance
-/* The writes the store sent, in order, and the create's answer. */
+/* The writes the store sent, in order, with their arguments, and the
+   create's answer. */
 let sent: string[]
+let sentArgs: { name: string; args: Record<string, unknown> }[]
 let accept: (num: number) => void
+/* The window's reads of its task (taskWindow:task), oldest first, and the
+   row the server stored for the create once it answered. */
+let taskReads: {
+  args: Record<string, unknown>
+  next: (value: unknown) => void
+  fail: (error: unknown) => void
+}[]
+let storedRow: Snapshot['issues'][number] | null
+/* When the server stored the create. */
+const STORED_AT = '2026-10-20T10:00:05.000Z'
 
 beforeEach(() => {
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
@@ -109,33 +122,49 @@ async function app(path: string) {
       boards.add(read)
       next(boardStandIn(server, read.args))
       return () => boards.delete(read)
-    } else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
+    } else if (name === 'taskWindow:task') taskReads.push({ args, next, fail })
+    else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
     return () => {}
   })
   network.query.mockResolvedValue(null)
   sent = []
+  sentArgs = []
+  taskReads = []
+  storedRow = null
   // Convex answers one client's writes in the order sent: a write sent
   // behind the create answers after it
   let behind: Promise<unknown> = Promise.resolve()
   network.mutation.mockImplementation((ref, args) => {
     const name = getFunctionName(ref)
     sent.push(name)
+    sentArgs.push({ name, args })
     if (name.startsWith('issues:') && name !== 'issues:create') return behind.then(() => null)
     if (name !== 'issues:create')
       return name.startsWith('comments:') ? new Promise(() => {}) : Promise.resolve(null)
     const answered = new Promise((resolve) => {
       accept = (num) => {
-        // the Board's answer holds the stored task before the create answers
+        // the Board's answer holds the stored task before the create
+        // answers; the server stores no field the create sent as null, and
+        // stamps the row
+        const kept = Object.entries(args as Record<string, unknown>).filter(
+          ([, value]) => value !== null,
+        )
         const row = {
-          ...(args as Snapshot['issues'][number]),
+          ...(Object.fromEntries(kept) as Snapshot['issues'][number]),
           num,
           org_id: snap.orgs[0].id,
+          status_at: STORED_AT,
+          created_at: STORED_AT,
+          updated_at: STORED_AT,
           has_hidden_subtasks: false,
           has_hidden_parent: false,
         }
+        storedRow = row
         server = { ...server, issues: [...server.issues, row] }
         for (const read of boards) read.next(boardStandIn(server, read.args))
-        resolve({ ...args, num })
+        // issues.create answers the stored row without its text
+        const { description: _text, ...answer } = row
+        resolve(answer)
       }
     })
     behind = answered
@@ -176,6 +205,42 @@ async function createTask(title: string) {
 }
 
 const toasts = () => toast.mock.calls.map(([text]) => text)
+
+/** The editor labelled `label`, once its lazy module has loaded. */
+const editorOf = (label: string) =>
+  waitFor(
+    () =>
+      document.querySelector<TiptapEditorHTMLElement>(`[role="textbox"][aria-label="${label}"]`)
+        ?.editor,
+    `the ${label} editor`,
+  )
+
+/** Presses Enter in title editor `field`, which saves from the focused
+    field as it blurs. */
+const enterIn = (field: HTMLTextAreaElement) =>
+  act(async () => {
+    field.focus()
+    field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  })
+
+/** Opens the window's title editor and types `text` in it, unsaved. */
+async function typeTitle(text: string) {
+  const title = await waitFor(
+    () => document.querySelector<HTMLElement>('[data-task-title]'),
+    'the title',
+  )
+  await act(async () => title.click())
+  const input = await waitFor(
+    () => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Task title"]'),
+    'the title editor',
+  )
+  const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+  await act(async () => {
+    set?.call(input, text)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  return input
+}
 
 /** The tooltip of `element`, which a Button draws from its title, as a
     pointer over it opens it; a disabled control takes no focus. */
@@ -299,5 +364,77 @@ describe('the window of a task just created', { timeout: 30_000 }, () => {
     expect(
       document.querySelector<HTMLButtonElement>('button[aria-label="Add subtask"]')?.disabled,
     ).toBe(true)
+  })
+
+  it('keeps the text typed in it when its first read fails after the create, and saves it once Retry reads the task', async () => {
+    const store = await app('/app/testbed/board/p/2')
+    await createTask('Run the soak test')
+    const uuid = await waitFor(() => store.P.detail?.task, 'the watched task')
+    // a title and a comment typed while the create waits, neither sent
+    const input = await typeTitle('Run the long soak test')
+    const composer = await editorOf('Leave a comment')
+    await act(async () => composer.commands.insertContent('Drift is under 2%'))
+    await act(async () => accept(41))
+    const own = () => taskReads.filter((read) => read.args.ref === uuid).at(-1)
+    const first = await waitFor(own, "the window's read of its task")
+    await act(async () => first.fail(new Error('Server Error')))
+    // the window goes on showing the task with the typed text, says that
+    // its read failed and offers Retry
+    const stale = await waitFor(
+      () => document.querySelector<HTMLElement>('[data-task-stale="failed"]'),
+      'the failure line',
+    )
+    expect(stale.textContent).toContain("Couldn't check QN-41 for changes")
+    expect(input.isConnected).toBe(true)
+    expect(input.value).toBe('Run the long soak test')
+    expect((await editorOf('Leave a comment')).getText()).toBe('Drift is under 2%')
+    expect(toasts().filter((text) => String(text).startsWith('Unsaved'))).toEqual([])
+    // its controls that read the server still wait for the saved task
+    expect(
+      document.querySelector<HTMLButtonElement>('button[aria-label="Add subtask"]')?.disabled,
+    ).toBe(true)
+    // a save that needs the stored task waits, and the draft stays
+    await enterIn(input)
+    expect(sent.filter((name) => name === 'issues:update')).toEqual([])
+    expect(toasts()).toContain(
+      "Couldn't save yet. Saving is available once Qivo can check this task for changes.",
+    )
+    expect(input.value).toBe('Run the long soak test')
+    // Retry reads the task again, and the server's answer serves the window
+    const retry = [...stale.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Retry'),
+    )
+    await act(async () => retry?.click())
+    const again = await waitFor(() => (own() !== first ? own() : null), 'the read run again')
+    const row = storedRow
+    if (!row) throw new Error('the create was not stored')
+    await act(async () =>
+      again.next({
+        state: 'ok',
+        task: { ...row, has_subtasks: false },
+        level: 'lead',
+        labels: [],
+        follow: null,
+        parent: null,
+        subtasks: { rows: [], complete: true },
+      }),
+    )
+    await waitFor(() => !document.querySelector('[data-task-stale]'), 'the failure line gone')
+    expect(store.P.taskDetail(uuid)).toMatchObject({ state: 'ok', saving: false })
+    // the typed text saves now
+    const field = await waitFor(
+      () => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Task title"]'),
+      'the title editor',
+    )
+    expect(field.value).toBe('Run the long soak test')
+    await enterIn(field)
+    const update = sentArgs.filter((write) => write.name === 'issues:update')
+    expect(update.map((write) => write.args.patch)).toEqual([{ title: 'Run the long soak test' }])
+    const post = buttonNamed('Comment')
+    await act(async () => post?.click())
+    const comment = sentArgs.filter((write) => write.name === 'comments:create')
+    expect(comment.map((write) => [write.args.issue_id, write.args.body])).toEqual([
+      [uuid, 'Drift is under 2%'],
+    ])
   })
 })

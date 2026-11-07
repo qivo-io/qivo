@@ -1569,7 +1569,8 @@ const tookCreates = new Map<string, string>()
     does not exist there before. The entry goes when the server refuses
     the create (refusedCreates), and once the server took it, at once when
     no window shows the creating answer, else with that window's first own
-    answer (receiveSection) or when another task is watched. */
+    answer, which a failed read is not (receiveSection), or when another
+    task is watched. */
 type PendingCreate = {
   org: string
   row: Row<'issues'>
@@ -2341,19 +2342,21 @@ function receiveSection(side: SectionSide, news: SideNews): boolean {
   } else if ('error' in news) {
     console.error(`[qivo] ${side} subscription of the task window failed:`, news.error)
     sectionFailure[side] = 'failed'
-    // a failure holds no write, and the answer before it stays, but for a
-    // creating answer, which no read of the server's stands behind
-    if (side === 'task') {
-      detailFresh = false
-      if (creatingShown()) sectionAnswers = { ...sectionAnswers, task: null }
-    }
+    // a failure holds no write, and the answer before it stays, a
+    // creating answer too: the window goes on showing the person's new
+    // task with what they type in it, its saves wait until a read
+    // answers (P.refuseStaleEdit) and its controls that read the server
+    // go on waiting (TaskDetailVM saving), while the writes sent behind
+    // the create go on as sent
+    if (side === 'task') detailFresh = false
   } else {
     sectionFailure[side] = 'none'
     sectionAnswers = { ...sectionAnswers, [side]: anchor(news.value) }
     if (side === 'task') taskDelivered(watched.task)
   }
   // the window's own read answered the person's new task: its creating
-  // answer is gone, and with it the pending create
+  // answer is gone, and with it the pending create, which a failed read
+  // keeps
   if (side === 'task' && !creatingShown()) {
     const pending = pendingCreates.get(watched.task)
     if (pending?.taken) pendingCreates.delete(watched.task)

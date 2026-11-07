@@ -956,12 +956,65 @@ describe('a create in a store that never asked for every task', () => {
     // the read never answers: the window keeps the creating answer, saving
     expect(P().taskDetail(uuid)).toMatchObject({ state: 'ok', saving: true })
     expect(P().familyOf(P().taskDetail(uuid)?.view as never)).toBeNull()
-    // a failed read shows the failure, never the creating answer
-    open('taskWindow:task')
-      .find((s) => s.args.ref === uuid)
-      ?.fail(new Error('Server Error'))
+  })
+
+  it('keeps the creating answer through a failed first read, its saves waiting, until Retry reads the task', async () => {
+    await boot()
+    const { uuid } = create()
+    P().watchComments(uuid, ORG)
     await settle()
-    expect(P().taskDetail(uuid)).toMatchObject({ state: 'failed', view: null, saving: false })
+    const handle = P().taskDetail(uuid)?.view?.id ?? ''
+    // a rename sent behind the create, which the server takes after it
+    void P().updateIssue(handle, { title: 'Order the spare sensors' })
+    await settle()
+    const request = take('issues:create')
+    const row = { ...stored(request.args, 4), title: 'Order the spare sensors' }
+    request.resolve(answerOf(stored(request.args, 4)))
+    await settle()
+    const own = () => {
+      const read = open('taskWindow:task').find((s) => s.args.ref === uuid)
+      if (!read) throw new Error('the window did not read its task')
+      return read
+    }
+    own().fail(new Error('Server Error'))
+    await settle()
+    // the window goes on showing the task from what its create sent, with
+    // the rename on it, and its controls that read the server still wait
+    expect(P().taskDetail(uuid)).toMatchObject({
+      state: 'failed',
+      answered: 'ok',
+      saving: true,
+      view: { title: 'Order the spare sensors' },
+    })
+    expect(P().familyOf(P().taskDetail(uuid)?.view as never)).toBeNull()
+    // the write sent behind the create goes on and is saved
+    take('issues:update').resolve(null)
+    await settle()
+    expect(P().hasUnconfirmed()).toBe(false)
+    // a save that needs the stored task waits until a read answers, and
+    // the editors keep their drafts (P.refuseStaleEdit)
+    toasts = []
+    expect(P().editsFromAnswer(handle)).toBe(false)
+    expect(P().refuseStaleEdit(handle)).toBe(true)
+    expect(toasts).toEqual([
+      "Couldn't save yet. Saving is available once Qivo can check this task for changes.",
+    ])
+    // Retry reads the task again, and its answer ends the creating answer
+    P().retryTask()
+    await settle()
+    expect(P().taskDetail(uuid)).toMatchObject({ state: 'retrying', saving: true })
+    own().deliver(asWindow(row))
+    await settle()
+    expect(P().taskDetail(uuid)).toMatchObject({
+      state: 'ok',
+      saving: false,
+      view: { title: 'Order the spare sensors' },
+    })
+    expect(P().createOnItsWay(uuid)).toBe(false)
+    expect(P().refuseStaleEdit(handle)).toBe(false)
+    void P().updateIssue(handle, { title: 'Order the spare humidity sensors' })
+    await settle()
+    expect(take('issues:update').args.patch).toEqual({ title: 'Order the spare humidity sensors' })
   })
 })
 

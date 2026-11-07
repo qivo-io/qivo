@@ -302,7 +302,11 @@ and **Linked tasks**, **Subscribers**, **Plan on roadmap** (**Show on
 roadmap** on a new parent), **Move to sub-project…** and **Archive or
 delete…** read the task on the server, so
 they wait with **Available once this task is saved** until Qivo has saved
-it and the window has read it, a moment later. The owner's portrait on its card waits the same way. If
+it and the window has read it, a moment later. The owner's portrait on its card waits the same way.
+If Qivo has saved the task but the window cannot read it, the window keeps
+showing the task as you made it and says so, with **Retry**, and its fields
+wait with **Available once Qivo can check this task for changes**. A title,
+description, hours or comment you are typing stays. If
 Qivo cannot save the task, as when you no longer have access to its
 sub-project, the task leaves the Board, the window Qivo opened for it
 closes and a message says why, and the changes you made in it meanwhile go

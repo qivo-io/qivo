@@ -1188,8 +1188,10 @@ function TaskGone({
    read after that answer failed, with Retry, or runs again from Retry. The
    task stays as that answer had it, with a comment typed for it, since the
    answer shows nothing the window did not show already and the server
-   checks every write. In LoadFailure's style, without its control height,
-   as it sits under the task's title. */
+   checks every write. The person's new task whose first read failed stays
+   so too, from what its create sent (TaskDetailVM saving). In
+   LoadFailure's style, without its control height, as it sits under the
+   task's title. */
 function StaleTask({
   taskKey,
   retrying,
@@ -1784,7 +1786,8 @@ function IssueDetail({
   const fromAnswer = !held && !!it
   const archived = fromAnswer && detail?.answered === 'archived'
   // the window shows the task as its last answer had it, because the read
-  // after it failed, or runs again from Retry (the note above the task)
+  // after it failed, or runs again from Retry (the note above the task); a
+  // new task whose first read failed shows as its create sent it
   const stale = fromAnswer && (detail?.state === 'failed' || detail?.state === 'retrying')
   // the window shows an active task: the workspace's, or one from its answer
   const active = !!held || (fromAnswer && !archived)
