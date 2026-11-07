@@ -34,6 +34,7 @@
     "src/lib/search.ts",
     "src/lib/searchNote.ts",
     "src/lib/taskSections.ts",
+    "src/lib/threadBudget.ts",
     "src/lib/tokenExpiry.ts",
     "src/lib/viewVisibility.ts",
     "src/lib/weekDrafts.ts",

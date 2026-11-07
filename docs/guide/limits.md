@@ -50,6 +50,7 @@ A view never shows a number it could not count whole as if it were complete. Whe
 | Labels per task | 20 labels | This task already has 20 labels, the most a task can have. Remove one first. |
 | Comments per task | 1,000 comments | This task has reached 1,000 comments, the most a task can have. Ask a project lead to delete comments until it has fewer than 1,000, then post again. |
 | Comments one person or agent posts on one task | 10 comments in any 60 seconds | Too many comments on this task, at most 10 in any 60 seconds from one person or agent. Try again in 60 seconds. |
+| Comments and changes the task window keeps loaded | 150 comments and changes of the open task | The task window keeps about 150 comments and changes of a task loaded and lets go of those farthest from where you read. The page it loaded last and the rows on screen stay until it next lets rows go, so it can hold more for a while. Show earlier and Show newer load them again. |
 | Followers per task | 100 followers | This task already has 100 followers, the most a task can have. Someone must unfollow it first. |
 | People mentioned in one text | 100 people | A text can mention at most 100 people. Remove some mentions and save again. |
 | Invitation emails per organization | 50 emails per hour | This organization sent 50 invitation emails in the last hour, the most it can send. Send this one again once the hour has passed. |

@@ -54,6 +54,23 @@
 // Each sample records the machine's load average in `loads`. --serve only
 // builds and serves the pages, on --host (127.0.0.1 by default), until it
 // is stopped.
+//
+// --thread 100,200,300,500,1000 measures only the task window's thread, for
+// each figure the comments and changes it keeps loaded (THREAD_KEEP,
+// src/lib/threadBudget.ts, which the page lowers with threadkeep). Each case
+// raises one figure: Comments on a task with 1,000 comments, and All on a
+// task with 30 comments and 1,000 changes, ordinary text throughout
+// (scripts/perf/server.mjs thread). It opens the task from the Roadmap and
+// presses Show earlier until the store holds the figure, then times the
+// press made while it holds it, or the last press when nothing earlier is
+// left (threadEarlier), a comment another person posts (threadArrival) and
+// Show newer when it shows (threadNewer), each until its rows show, with
+// the longest animation frame from the press or the delivery on
+// (*LongestFrameMs), and records the heap and the page's elements after
+// them. The figures take turns in each sample, so every figure runs under
+// the same load. --phone runs the same with the window at the phone's 390
+// by 844, which it narrows to once the task is open, as the phone phases
+// above do.
 import assert from 'node:assert/strict'
 import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -85,6 +102,9 @@ const timeout = Number(option('timeout', '60000'))
 const messages = Number(option('messages', '500'))
 const host = option('host', '127.0.0.1')
 const varied = option('fixture', 'default') === 'varied'
+// --thread: the figures the task window's thread phase measures, alone
+const threadFigures = option('thread', null)?.split(',').map(Number) ?? null
+const phone = process.argv.includes('--phone')
 // --baseline, with the revision when one follows it
 const baselineAt = process.argv.indexOf('--baseline')
 const baselineRevision =
@@ -1264,6 +1284,203 @@ async function runSyncSample(origin, metrics, query = '') {
   await context.close()
 }
 
+/* The metrics of the thread phase (--thread), for one figure and case. */
+const THREAD_METRICS = [
+  'threadHeldAfterEarlier',
+  'threadEarlierMs',
+  'threadEarlierLongestFrameMs',
+  'threadArrivalMs',
+  'threadArrivalLongestFrameMs',
+  'threadNewerMs',
+  'threadNewerLongestFrameMs',
+  'threadHeldRows',
+  'threadHeapMb',
+  'threadDomNodes',
+]
+
+/** The rows the task window's store holds for the open task: its comments,
+    and under All its changes too. */
+const heldRows = (page, all) =>
+  page.evaluate(
+    (all) => window.PLANNER.comments.length + (all ? window.PLANNER.threadEvents.length : 0),
+    all,
+  )
+
+/** Times one press of the thread's control `selector` (Show earlier or Show
+    newer) until no page loads and the thread's first row, or the row above
+    Show newer, changed, as `prefix`Ms, with the longest animation frame
+    from the press on as `prefix`LongestFrameMs. */
+async function timedThreadPress({ page, timed }, metrics, prefix, selector, all) {
+  const button = await handle(page.locator(`${selector} button`))
+  const before = await page.evaluate(() =>
+    [
+      ...document.querySelectorAll(
+        '[data-spine-feed] [data-comment], [data-spine-feed] [data-event]',
+      ),
+    ]
+      .map((row) => row.getAttribute('data-comment') ?? row.getAttribute('data-event'))
+      .join(' '),
+  )
+  const watch = await watchInput(page)
+  let pressedAt = Number.POSITIVE_INFINITY
+  try {
+    phase(prefix)
+    metrics[`${prefix}Ms`].push(
+      await timed(async () => {
+        pressedAt = await page.evaluate(() => performance.now())
+        await button.click({ timeout: timeout * 10 })
+        await page.waitForFunction(
+          ({ was, all }) => {
+            const P = window.PLANNER
+            const states = all
+              ? [P.commentsEarlier, P.historyEarlier, P.commentsNewer, P.historyNewer]
+              : [P.commentsEarlier, P.commentsNewer]
+            if (states.includes('loading')) return false
+            const now = [
+              ...document.querySelectorAll(
+                '[data-spine-feed] [data-comment], [data-spine-feed] [data-event]',
+              ),
+            ]
+              .map((row) => row.getAttribute('data-comment') ?? row.getAttribute('data-event'))
+              .join(' ')
+            return now !== was
+          },
+          { was: before, all },
+          { timeout: timeout * 10 },
+        )
+      }),
+    )
+  } finally {
+    await watch.stop()
+  }
+  metrics[`${prefix}LongestFrameMs`].push((await watch.read(pressedAt)).frame)
+}
+
+/** One sample of the thread phase at `figure` for `kind`, 'comments' or
+    'all': the task opened from the Roadmap with the thread its case raises,
+    Show earlier pressed until the store holds the figure, then the timed
+    press, a delivered comment and Show newer. */
+async function runThreadSample(origin, figure, kind, metrics) {
+  const all = kind === 'all'
+  const thread = all ? '&thread=30&threadchanges=1000' : '&thread=1000&threadchanges=30'
+  phase(`thread${all ? 'All' : 'Comments'}Startup`)
+  const opened = await openPage(origin, 100, metrics, `${thread}&threadkeep=${figure}`)
+  const { context, page, cdp, errors, settle, timed } = opened
+  await page.locator('[data-view-switch]').waitFor()
+  await settle()
+  await (await viewButton(page, 'Roadmap')).click()
+  await page.locator('[data-roadmap-task-open]').first().click()
+  await page.locator('[data-task-close]').waitFor()
+  await page.waitForFunction(() => window.PLANNER.commentsLoaded)
+  if (all) {
+    await page.getByRole('radio', { name: 'All', exact: true }).click()
+    await page.waitForFunction(() => window.PLANNER.historyLoaded)
+  }
+  // the phone's window, on its Activity tab
+  if (phone) await page.setViewportSize({ width: 390, height: 844 })
+  await page.locator('[data-earlier-comments]').waitFor()
+  await settle()
+  // Show earlier until the store holds the figure, then the press made
+  // while it holds it, or, when nothing earlier is left by then, the press
+  // that reached the figure. Every press is timed, and the one judged is
+  // kept.
+  const earlier = '[data-earlier-comments="more"]'
+  let last = null
+  for (let press = 0; press < 100; press++) {
+    if ((await page.locator(earlier).count()) === 0) break
+    const held = await heldRows(page, all)
+    const scratch = Object.fromEntries(
+      ['threadEarlierMs', 'threadEarlierLongestFrameMs'].map((key) => [key, []]),
+    )
+    await timedThreadPress({ page, timed }, scratch, 'threadEarlier', earlier, all)
+    last = scratch
+    await settle()
+    if (held >= figure) break
+  }
+  assert.ok(last, 'Show earlier showed at least once')
+  metrics.threadEarlierMs.push(last.threadEarlierMs[0])
+  metrics.threadEarlierLongestFrameMs.push(last.threadEarlierLongestFrameMs[0])
+  metrics.threadHeldAfterEarlier.push(await heldRows(page, all))
+  await settle()
+  // a comment another person posts while the reader is up the thread
+  const watch = await watchInput(page)
+  let deliveredAt = Number.POSITIVE_INFINITY
+  try {
+    phase('threadArrival')
+    metrics.threadArrivalMs.push(
+      await timed(async () => {
+        deliveredAt = await page.evaluate(() => performance.now())
+        const body = await page.evaluate(() => window.__perf.deliverComments())
+        await page.waitForFunction(
+          (text) =>
+            [...document.querySelectorAll('[data-comment]')].some(
+              (comment) => comment.textContent.includes(text) && comment.checkVisibility(),
+            ),
+          body,
+          { timeout: timeout * 10 },
+        )
+      }),
+    )
+  } finally {
+    await watch.stop()
+  }
+  metrics.threadArrivalLongestFrameMs.push((await watch.read(deliveredAt)).frame)
+  await settle()
+  // Show newer, which shows once the store let rows go
+  const newer = '[data-newer-comments="more"]'
+  if ((await page.locator(newer).count()) > 0)
+    await timedThreadPress(opened, metrics, 'threadNewer', newer, all)
+  await settle()
+  metrics.threadHeldRows.push(await heldRows(page, all))
+  const size = await pageSize(page, cdp)
+  metrics.threadHeapMb.push(size.heapMb)
+  metrics.threadDomNodes.push(size.domNodes)
+  assert.deepEqual(errors, [], 'Browser errors in the thread phase')
+  await context.close()
+}
+
+/** Runs the thread phase (--thread): `samples` samples, each taking every
+    figure in turn under Comments and then under All, and reports the
+    medians per figure and case. */
+async function runThreadPhase(origin) {
+  const metrics = new Map()
+  for (const figure of threadFigures)
+    for (const kind of ['comments', 'all'])
+      metrics.set(`${figure}:${kind}`, Object.fromEntries(THREAD_METRICS.map((key) => [key, []])))
+  report.thread = { figures: threadFigures, phone, scenarios: [] }
+  for (let sample = 0; sample < samples; sample++) {
+    for (const figure of threadFigures)
+      for (const kind of ['comments', 'all']) {
+        running = { label: `thread ${kind}`, tasks: figure, sample: sample + 1, phase: 'startup' }
+        await runThreadSample(origin, figure, kind, metrics.get(`${figure}:${kind}`))
+      }
+    const load = loadavg()[0]
+    report.loads.push({ target: 'thread', sample: sample + 1, load })
+    console.log(`thread phase: sample ${sample + 1}/${samples}, load ${load.toFixed(2)}`)
+  }
+  for (const figure of threadFigures)
+    for (const kind of ['comments', 'all']) {
+      report.thread.scenarios.push({
+        figure,
+        kind,
+        ...summarized(figure, metrics.get(`${figure}:${kind}`)),
+      })
+    }
+  await writeFile(output, `${JSON.stringify(report, null, 2)}\n`)
+  console.table(
+    report.thread.scenarios.map(({ figure, kind, metrics: m }) => ({
+      figure,
+      kind,
+      ...Object.fromEntries(
+        THREAD_METRICS.filter((key) => m[key]).map((key) => [
+          key,
+          Math.round(m[key].p50 * 10) / 10,
+        ]),
+      ),
+    })),
+  )
+}
+
 /** Empty metric lists for one size. */
 const emptyMetrics = () =>
   Object.fromEntries(
@@ -1346,7 +1563,8 @@ try {
   } else {
     // the handlers above stop the run; the browser goes with the process
     browser = await chromium.launch({ headless: true, handleSIGINT: false, handleSIGTERM: false })
-    for (const tasks of sizes) {
+    if (threadFigures) await runThreadPhase(targets[0].origin)
+    for (const tasks of threadFigures ? [] : sizes) {
       for (const target of targets) target.metrics = emptyMetrics()
       for (let sample = 0; sample < samples; sample++) {
         // the targets take turns, so both run under the same load

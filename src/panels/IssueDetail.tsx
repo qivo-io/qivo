@@ -65,10 +65,14 @@ import { parentBlock, subtaskBlock } from '../lib/relationCandidates'
 import { remainingPatchFromInput, remainingValue } from '../lib/remaining'
 import { DONE_WITHOUT_DATES, doneWithoutDates } from '../lib/roadmapVisibility'
 import { buildPath, issueLink, sameTask } from '../lib/router'
+import { SCROLL_ANCHORING } from '../lib/scrollAnchoring'
 import {
   itemUnreadStart,
   mergeSpine,
+  newerRow,
+  spineGap,
   spineWindow,
+  splitSpine,
   type UnreadStart,
   unreadMark,
 } from '../lib/spine'
@@ -780,7 +784,8 @@ function EditedGlyph({ c, it }: { c: CommentVM; it: IssueVM }) {
    button above the oldest loaded comment, or "Show earlier activity" above
    the oldest loaded row under All, static text while the page above loads,
    and Retry when it failed. Each is one control tall, so the rows under it
-   do not move when it changes. */
+   do not move when it changes. Its sibling NewerComments stands where the
+   store let rows go between the two runs it keeps. */
 function EarlierComments({
   state,
   what,
@@ -831,6 +836,68 @@ function EarlierComments({
       >
         <Icon name="chevronsUp" size={16} />
         Show earlier {what}
+      </Button>
+    </div>
+  )
+}
+
+/* The row where the store let comments go between the two runs it keeps of
+   a thread past its budget (P.commentsNewer, and under All
+   P.historyNewer): a muted "Show newer comments" button, or "Show newer
+   activity" under All, between the last row kept above the gap and the
+   first kept below it, static text while the page under it loads, and
+   Retry when it failed, in EarlierComments' style and height, so the rows
+   around it do not move when it changes. */
+function NewerComments({
+  state,
+  what,
+  onLoad,
+}: {
+  state: Exclude<CommentsEarlier, 'none'>
+  what: 'comments' | 'activity'
+  onLoad: (control: HTMLElement) => void
+}) {
+  if (state === 'loading') {
+    return (
+      <div
+        data-newer-comments="loading"
+        className="flex min-h-control-sm items-center text-sm italic text-text-3"
+      >
+        Loading newer {what}…
+      </div>
+    )
+  }
+  if (state === 'failed') {
+    return (
+      <div
+        data-newer-comments="failed"
+        className="flex min-h-control-sm items-center gap-2 text-sm text-text-2"
+      >
+        Couldn't load newer {what}.
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="px-2"
+          onClick={(e) => onLoad(e.currentTarget)}
+        >
+          <Icon name="rotateCcw" size={16} />
+          Retry
+        </Button>
+      </div>
+    )
+  }
+  return (
+    <div data-newer-comments="more" className="-ml-2 flex min-h-control-sm items-center">
+      <Button
+        type="button"
+        variant="quiet"
+        size="sm"
+        className="gap-1.5 px-2"
+        onClick={(e) => onLoad(e.currentTarget)}
+      >
+        <Icon name="chevronsDown" size={16} />
+        Show newer {what}
       </Button>
     </div>
   )
@@ -1229,7 +1296,19 @@ function refShownTask(ref: RefParts, read: TaskRefVM | null): ShownTask {
 /* The first row of the thread in `feed`, focusable until it loses focus, so
    it can take keyboard focus once without staying focusable to a click. */
 function firstRowForFocus(feed: Element): HTMLElement | null {
-  const row = feed.querySelector<HTMLElement>('[data-comment], [data-event]')
+  return focusableOnce(feed.querySelector<HTMLElement>('[data-comment], [data-event]'))
+}
+
+/* The thread's row after `row`, the first a Show newer page brought in once
+   the gap closed, focusable once as firstRowForFocus makes the first row. */
+function rowAfterForFocus(row: Element | null): HTMLElement | null {
+  let next = row?.nextElementSibling ?? null
+  while (next && !next.matches('[data-comment], [data-event]')) next = next.nextElementSibling
+  return next instanceof HTMLElement ? focusableOnce(next) : null
+}
+
+/* `row`, focusable until it loses focus. */
+function focusableOnce(row: HTMLElement | null): HTMLElement | null {
   if (row && !row.hasAttribute('tabindex')) {
     row.tabIndex = -1
     row.addEventListener('blur', () => row.removeAttribute('tabindex'), { once: true })
@@ -1886,6 +1965,17 @@ function IssueDetail({
     P.showHistory(owner, true)
     return () => P.showHistory(owner, false)
   }, [showsAll, watchUuid])
+  // The comment open in this window's editor stays through every release
+  // of rows past the store's budget (P.holdComment), so its editor and its
+  // draft stay too; none once the editor closes or the window goes.
+  const holdOwner = useRefID({})
+  useEffectID(() => {
+    P.holdComment(holdOwner.current, editingComment)
+  }, [editingComment])
+  useEffectID(() => {
+    const owner = holdOwner.current
+    return () => P.holdComment(owner, null)
+  }, [])
   // Subtasks, Linked tasks and Attachments load their own lists, which the
   // store asks for only while some window shows them: a window with the
   // details column on an active task, and on a phone only while its Details
@@ -2449,13 +2539,28 @@ function IssueDetail({
   // loaded, rows older than the later of the two oldest loaded rows stay
   // hidden, so All never shows one beside a gap in the other (spineWindow).
   // History that has not arrived, or failed before it did, is no whole
-  // history, so All then shows nothing beside it.
-  const comments = it ? P.comments.filter((c) => c.issue === it.uuid) : []
+  // history, so All then shows nothing beside it. A comment the store holds
+  // apart for another window's editor (P.pinnedComments) shows only there.
+  // A row it holds apart at an instant only the other kind's live rows hold
+  // (P.threadApart) sits among the rows it let go, so it shows nowhere,
+  // unless this window has it open in its editor.
+  const pinned = new Set(P.pinnedComments)
+  const apart = new Set(P.threadApart)
+  const comments = it
+    ? P.comments.filter(
+        (c) =>
+          c.issue === it.uuid &&
+          ((!pinned.has(c.id) && !apart.has(c.id)) || c.id === editingComment),
+      )
+    : []
   // a row names a task the workspace holds by its handle, and one it does
   // not hold by its uuid (store/viewModels.ts shapeActivity)
   const history = it
     ? P.threadEvents.filter(
-        (e) => e.targetType === 'issue' && (e.targetId === it.id || e.targetId === it.uuid),
+        (e) =>
+          !apart.has(e.id) &&
+          e.targetType === 'issue' &&
+          (e.targetId === it.id || e.targetId === it.uuid),
       )
     : []
   const all = actFilter === 'all'
@@ -2468,7 +2573,10 @@ function IssueDetail({
     ? (waitingComments || !P.historyLoaded) && P.historyFailure === 'none'
     : waitingComments
   const from = spineWindow(
-    { rows: comments, whole: P.commentsLoaded && P.commentsEarlier === 'none' },
+    {
+      rows: comments.filter((c) => !pinned.has(c.id) && !apart.has(c.id)),
+      whole: P.commentsLoaded && P.commentsEarlier === 'none',
+    },
     { rows: history, whole: P.historyLoaded && P.historyEarlier === 'none' },
   )
   // The comment being edited in place stays whatever the window, so neither
@@ -2480,6 +2588,25 @@ function IssueDetail({
         history.filter((e) => e.ts >= from.start),
       )
     : mergeSpine(comments, [])
+  // Past its budget the store lets go of rows between the two runs it keeps
+  // (P.threadGap), and the newer row stands where they were. Under All rows
+  // strictly between the two kinds' gaps stay hidden, so none shows beside a
+  // gap in the other kind, and the comment in this window's editor shows
+  // whatever the gap hides (spineGap, splitSpine). A gap wholly above where
+  // All's spine starts shows no row, since nothing above it shows
+  // (newerRow).
+  const gapSides = {
+    comments: P.threadGap?.comments ?? null,
+    events: all ? (P.threadGap?.history ?? null) : null,
+  }
+  const gap = spineGap(gapSides.comments, gapSides.events)
+  const parts = splitSpine(spine, gap, gapSides, editingComment)
+  const shown = [...parts.above, ...parts.below]
+  const newer = newerRow(
+    gap,
+    all ? from.start : Number.NEGATIVE_INFINITY,
+    all ? [P.commentsNewer, P.historyNewer] : [P.commentsNewer],
+  )
   // What the first row says: Comments pages its comments, All both.
   const sides = all ? [P.commentsEarlier, P.historyEarlier] : [P.commentsEarlier]
   const earlier: CommentsEarlier = sides.includes('loading')
@@ -2535,12 +2662,137 @@ function IssueDetail({
         firstRowForFocus(pressed.feed)
       next?.focus({ preventScroll: true })
     }
-  }, [earlier, spine.length])
+  }, [earlier, shown.length])
+  // "Show newer comments" adds a page under the row above it and lets go of
+  // rows at the oldest end. That row stays where it was on screen, measured
+  // and shifted as for Show earlier, so a release above it does not move
+  // what the reader sees. Focus that went with the pressed control moves to
+  // the control that replaces it, or once the gap closed to the first row
+  // that came in, unless the reader moved it meanwhile.
+  const newerFrom = useRefID<{
+    feed: Element
+    row: Element | null
+    top: number
+    focused: boolean
+  } | null>(null)
+  const loadNewer = (control: HTMLElement) => {
+    const feed = control.closest('[data-spine-feed]')
+    const box = control.closest('[data-newer-comments]')
+    if (feed && box) {
+      let row = box.previousElementSibling
+      while (row && !row.matches('[data-comment], [data-event]')) row = row.previousElementSibling
+      const focused = document.activeElement === control && !lastInputWasPointer()
+      newerFrom.current = { feed, row, top: 0, focused }
+    }
+    // the kinds whose page moves the gap's start on, and any that failed
+    if (!all || gap?.load.comments || P.commentsNewer === 'failed') void P.loadNewerComments()
+    if (all && (gap?.load.events || P.historyNewer === 'failed')) void P.loadNewerHistory()
+  }
+  const newerPending = newerFrom.current
+  if (newerPending?.row?.isConnected && newer !== 'loading') {
+    newerPending.top = newerPending.row.getBoundingClientRect().top
+  }
+  useLayoutEffectID(() => {
+    const pressed = newerFrom.current
+    if (!pressed || newer === 'loading') return
+    newerFrom.current = null
+    if (pressed.row?.isConnected) {
+      const shift = pressed.row.getBoundingClientRect().top - pressed.top
+      if (shift !== 0) scrollerOf(pressed.row).scrollTop += shift
+    }
+    const active = document.activeElement
+    if (pressed.focused && (active === null || active === document.body)) {
+      const next =
+        pressed.feed.querySelector<HTMLElement>('[data-newer-comments] button') ??
+        rowAfterForFocus(pressed.row)
+      next?.focus({ preventScroll: true })
+    }
+  }, [newer, shown.length])
+  // The window reports the first comment or change on screen as the reader
+  // scrolls (P.threadPlace), or null while the newest row shows, or the
+  // composer where it scrolls with the rows, so a release keeps the rows
+  // the reader sees and a comment that arrives past the budget lets go of
+  // rows away from them. An IntersectionObserver rooted at the viewport
+  // sees the rows of the floating window's spine, the phone's feed and the
+  // Inbox pane alike. It watches the row elements shown when it starts, so
+  // it starts again whenever any shown row changes, also in the middle of
+  // the thread, as when All replaces older comments with changes while the
+  // first and last rows stay.
+  const placeOwner = useRefID({})
+  const placeRow = useRefID<Element | null>(null)
+  const spineKey = `${shown.map((row) => row.id).join(' ')}:${newer}`
+  useEffectID(() => {
+    const owner = placeOwner.current
+    const scroller = actScrollRef.current
+    const feed = scroller?.matches('[data-spine-feed]')
+      ? scroller
+      : scroller?.querySelector('[data-spine-feed]')
+    if (!feed || typeof IntersectionObserver === 'undefined') return
+    // The composer marks the newest end only where it scrolls with the
+    // rows, inside the scroller. On a phone the feed scrolls on its own
+    // above a composer that always shows, so the place comes from the
+    // feed's rows alone.
+    const composer = scroller?.querySelector('[data-composer]') ?? null
+    const rows = [...feed.querySelectorAll('[data-comment], [data-event]')]
+    const seen = new Set<Element>()
+    const report = () => {
+      const first = rows.find((row) => seen.has(row)) ?? null
+      placeRow.current = first
+      const newest = rows.at(-1)
+      const atEnd =
+        first === null ||
+        (newest !== undefined && seen.has(newest)) ||
+        (composer !== null && seen.has(composer))
+      P.threadPlace(
+        owner,
+        atEnd ? null : (first.getAttribute('data-comment') ?? first.getAttribute('data-event')),
+      )
+    }
+    const watch = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) seen.add(entry.target)
+        else seen.delete(entry.target)
+      }
+      report()
+    })
+    for (const row of rows) watch.observe(row)
+    if (composer) watch.observe(composer)
+    return () => watch.disconnect()
+  }, [spineKey, focus, mobile, watchUuid])
+  useEffectID(() => {
+    const owner = placeOwner.current
+    return () => P.threadPlace(owner)
+  }, [])
+  // A comment that arrives past the budget lets go of rows above the screen.
+  // Chromium and Firefox keep the reader's place themselves through CSS
+  // scroll anchoring; where the browser does not, as in Safari, the first
+  // row on screen stays where it was, measured while rendering and shifted
+  // after layout as a press does, except while a press keeps its own row.
+  const placeTop = useRefID<number | null>(null)
+  placeTop.current = null
+  if (
+    !SCROLL_ANCHORING &&
+    !earlierFrom.current &&
+    !newerFrom.current &&
+    placeRow.current?.isConnected
+  )
+    placeTop.current = placeRow.current.getBoundingClientRect().top
+  useLayoutEffectID(() => {
+    const top = placeTop.current
+    const row = placeRow.current
+    placeTop.current = null
+    if (top === null || !row?.isConnected) return
+    const shift = row.getBoundingClientRect().top - top
+    if (shift !== 0) scrollerOf(row).scrollTop += shift
+  })
   // nothing is said until the thread is in, and under All its history too:
   // watchComments empties the cache first, and against an empty spine every
   // mark degrades to 'tail' — which would flash "New activity on this task"
   // over "Loading comments…" and then resolve into a rule somewhere else
-  const mark = loaded ? unreadMark(spine, unreadTs) : { place: 'none', index: -1 }
+  // It is placed in the rows as shown, so when the unread part starts among
+  // released rows it sits under Show newer comments, above the first row
+  // after the gap, as it sits under Show earlier comments at the top.
+  const mark = loaded ? unreadMark(shown, unreadTs) : { place: 'none', index: -1 }
   // 'tail': something is unread but nothing on screen is at or after it — say
   // so in words rather than drawing a rule with nothing under it. Under
   // Comments, name the All filter when the unread messages tell of a change,
@@ -2682,7 +2934,7 @@ function IssueDetail({
               onLoad={loadEarlier}
             />
           )}
-          {spine.flatMap((s, i) => {
+          {shown.flatMap((s, i) => {
             const row =
               s.kind === 'c' ? (
                 <CommentRow
@@ -2699,15 +2951,32 @@ function IssueDetail({
                 <EventRow key={s.id} e={s.e} />
               )
             // one index, so the mark can only ever be drawn once
-            return mark.place === 'mark' && i === mark.index
-              ? [<UnreadDivider key="unread" />, row]
-              : [row]
+            const rows =
+              mark.place === 'mark' && i === mark.index
+                ? [<UnreadDivider key="unread" />, row]
+                : [row]
+            // the newer row stands between the two parts, over the mark
+            return loaded && newer !== 'none' && i === parts.above.length
+              ? [
+                  <NewerComments
+                    key="newer"
+                    state={newer}
+                    what={all ? 'activity' : 'comments'}
+                    onLoad={loadNewer}
+                  />,
+                  ...rows,
+                ]
+              : rows
           })}
+          {loaded && newer !== 'none' && parts.below.length === 0 && (
+            <NewerComments state={newer} what={all ? 'activity' : 'comments'} onLoad={loadNewer} />
+          )}
           {loaded &&
             P.commentsFailure === 'none' &&
             (!all || P.historyFailure === 'none') &&
-            spine.length === 0 &&
-            earlier === 'none' && (
+            shown.length === 0 &&
+            earlier === 'none' &&
+            newer === 'none' && (
               <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic]">
                 {actFilter === 'comments' ? 'No comments yet.' : 'No activity yet.'}
               </div>
@@ -2719,7 +2988,7 @@ function IssueDetail({
           {P.commentsFailure !== 'none' && (
             <ThreadFailure
               state={P.commentsFailure}
-              shown={spine.some((s) => s.kind === 'c')}
+              shown={shown.some((s) => s.kind === 'c')}
               onRetry={P.retryComments}
             />
           )}
@@ -2729,7 +2998,7 @@ function IssueDetail({
             <ThreadFailure
               state={P.historyFailure}
               what="activity"
-              shown={spine.some((s) => s.kind === 'e')}
+              shown={shown.some((s) => s.kind === 'e')}
               onRetry={P.retryHistory}
             />
           )}

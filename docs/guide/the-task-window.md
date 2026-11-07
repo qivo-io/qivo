@@ -53,9 +53,21 @@ discussion opens at its newest 50 comments, and fewer when they are very long.
 **Show earlier comments** above the oldest one loads up to 50 more and keeps
 your place in the thread. It disappears once the first comment is loaded. If
 loading fails, **Retry** asks again. Comments that arrive while the task is
-open add to the end, and the earlier ones stay loaded. Edits and deletions
-that other people, or your other tabs, make to comments older than the newest
-50 show the next time you open the task.
+open add to the end. The window keeps about 150 comments and changes of the
+task loaded, and lets go of the ones farthest from where you read
+([Limits](./limits.md#tasks-and-organizations)). The page it loaded last and
+the comments on your screen stay until it next lets comments go, so for a
+while it can hold more. As you walk back with **Show
+earlier comments**, it lets go of comments near the newest end, and **Show
+newer comments** stands where they were. It loads up to 50 of them again
+under the comment above it, keeps your place and lets go of the oldest ones,
+so **Show earlier comments** comes back at the top. A comment that arrives
+while you read further up lets go of comments away from the ones you read.
+Comments that load again show the edits and deletions other people made
+meanwhile. A comment you are editing stays, and so does the comment you are
+writing. Edits and deletions that other people, or your other tabs, make to
+the comments older than the newest 50 show the next time those comments
+load.
 
 A task holds at most 1,000 comments, counted across everyone who comments
 and every way of posting, archive reasons included. At 1,000 Qivo refuses a
@@ -84,19 +96,28 @@ stay. A task that was deleted or hidden from you shows an empty thread
 instead.
 **Comments** is the default filter, and loads no changes. **All** adds changes
 such as assignments, status moves, dates, labels and attachments, which Qivo
-loads when you choose **All**, starting with the newest 50. Until they arrive
-the thread says **Loading activity…**, and if they cannot load it says so with
-**Retry** instead of showing the comments alone. Going back to **Comments**
-stops loading changes. A task keeps all its changes. **Show earlier activity**
-above the oldest row loads what comes before it: earlier comments or up to 50
-earlier changes, whichever the oldest row needs, or both. Until the first
-comment and the first change are loaded, **All** shows only the rows since the
-later of the oldest loaded comment and the oldest loaded change, so it never
-shows comments beside a gap in the changes, or changes beside a gap in the
-comments. A comment you are editing stays on screen either way. Field-change
-entries show before and after values, including short description excerpts. A
-**New** line marks unread activity, and sits at the top of the loaded comments
-when the first unread one is earlier ([Your inbox](./working-together.md#your-inbox)).
+loads when you choose **All**, starting with the newest 50 each time you
+choose it. Until they arrive the thread says **Loading activity…**, and if
+they cannot load it says so with **Retry** instead of showing the comments
+alone. Going back to **Comments** stops loading changes. Choosing **All** or
+**Comments** opens the thread at its newest end, and lets go of the comments
+above **Show newer comments** if it showed. A task keeps all its changes.
+**Show earlier activity** above the oldest row loads what comes before it:
+earlier comments or up to 50 earlier changes, whichever the oldest row needs,
+or both. The comments and changes count together toward what the window keeps
+loaded, and past it **Show newer activity** stands where the window let rows
+go and loads them again. Until the first comment and the first change are
+loaded, **All** shows only the rows since the later of the oldest loaded
+comment and the oldest loaded change, and around **Show newer activity** it
+leaves out the rows beside the other kind's gap, so it never shows comments
+beside a gap in the changes, or changes beside a gap in the comments. A
+comment you are editing stays on screen either way. At one moment, changes
+show before comments, in the order they were made. Field-change entries show
+before and after values, including short description excerpts. A **New** line
+marks unread activity. It sits at the top of the loaded comments when the
+first unread one is earlier, and under **Show newer comments** when the first
+unread one is among the rows the window let go
+([Your inbox](./working-together.md#your-inbox)).
 When nothing unread is on screen, such as a change under **Comments** or a
 comment that was deleted, a note at the end of the thread says there is new
 activity. Under **Comments** it adds that changes show only under **All** when

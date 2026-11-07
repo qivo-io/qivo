@@ -16,6 +16,7 @@ import {
   planLabels,
   planRelations,
   planSeed,
+  planThread,
   relationId,
   runBoardScaleSeed,
   seededAgentName,
@@ -25,6 +26,9 @@ import {
   seededLabelName,
   seededTask,
   seededTasks,
+  THREAD_LABEL,
+  threadCommentBody,
+  threadCommentId,
   threeByteText,
   windowKeyNote,
 } from './board-scale-seed.mjs'
@@ -70,6 +74,13 @@ const fake = vi.hoisted(() => ({
   usedRows: [],
   // the deleted_tasks table, the tasks Deleted items stores, for --deleted
   deletedTasks: [],
+  // the --thread task's comments and history as the thread reads page them,
+  // and how many posts the next comments:create calls refuse at the rate
+  threadComments: [],
+  threadHistory: [],
+  rateRefusals: 0,
+  // the issue_labels rows the workspace's tasks part answers
+  issueLabels: [],
 }))
 vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
@@ -138,6 +149,24 @@ vi.mock('convex/browser', () => ({
           }[args.table],
           isDone: true,
         }
+      // the task window's thread reads, 50 a page
+      const pageBefore = (rows, before) => {
+        const end = before === undefined ? rows.length : rows.findIndex((r) => r.id === before)
+        const from = Math.max(0, end - 50)
+        return { rows: rows.slice(from, end), earlier: from > 0 }
+      }
+      if (name === 'snapshot:threadComments' || name === 'snapshot:commentsBefore') {
+        const page = pageBefore(fake.threadComments, args.before)
+        return { comments: page.rows, earlier: page.earlier }
+      }
+      if (name === 'snapshot:threadHistory' || name === 'snapshot:historyBefore') {
+        const page = pageBefore(fake.threadHistory, args.before)
+        return {
+          events: page.rows,
+          earlier: page.earlier,
+          next: page.earlier ? page.rows[0].id : null,
+        }
+      }
       // the workspace parts (convex/workspace.ts), one window of each kind
       return {
         'workspace:root': {
@@ -159,7 +188,7 @@ vi.mock('convex/browser', () => ({
           state: 'ok',
           issues: fake.issues,
           links: [],
-          issueLabels: [],
+          issueLabels: fake.issueLabels,
           attachments: [],
           issueSubs: [],
           orgLoad: [],
@@ -200,6 +229,15 @@ vi.mock('convex/browser', () => ({
         return `http://127.0.0.1:3214/api/storage/upload?token=${fields.issue_id}`
       if (name === 'files:attach') return { attachment: { id: fields.id } }
       if (name !== 'comments:create') return
+      if (fake.rateRefusals > 0) {
+        fake.rateRefusals--
+        throw Object.assign(new Error('rate'), {
+          data: {
+            message:
+              'too many comments on this task, at most 10 in any 60 seconds from one person or agent. Try again in 0 seconds.',
+          },
+        })
+      }
       if (fake.comments.has(fields.id))
         throw Object.assign(new Error('taken'), {
           data: { message: 'a comment with this id already exists' },
@@ -1997,5 +2035,184 @@ describe('board-scale-seed --deleted', () => {
       fake.deletedTasks = []
       fake.usedRows = []
     }
+  })
+})
+
+describe('board-scale-seed --thread', () => {
+  const task = { id: 'task-1', org_id: 'org', title: 'Calibrate the pilot sensors', num: 1 }
+  const posters = [{ id: 'aisha' }, { id: 'leo' }, { id: 'nora' }]
+
+  beforeEach(() => {
+    fake.calls = []
+    fake.issues = []
+    fake.people = []
+    fake.comments = new Set()
+    fake.threadComments = []
+    fake.threadHistory = []
+    fake.rateRefusals = 0
+    fake.issueLabels = []
+  })
+
+  it('takes a comment count up to the comment cap', () => {
+    expect(parseSeedArgs([...local, '--thread', '300']).thread).toBe(300)
+    expect(parseSeedArgs([...local, '--thread', String(LIMITS.comments.max)]).thread).toBe(1000)
+    for (const bad of [String(LIMITS.comments.max + 1), '-1', '2.5', 'x'])
+      expect(() => parseSeedArgs([...local, '--thread', bad])).toThrow(
+        '--thread takes a whole number from 0 to 1000, the comment cap.',
+      )
+  })
+
+  it('plans the missing comments in ordinary text, posters in turn, and toggles up to the count', () => {
+    const plan = planThread(6, { task, present: new Set(), posters, history: 2, labels: [] })
+    expect(plan.comments.map((c) => c.poster.id)).toEqual([
+      'aisha',
+      'leo',
+      'nora',
+      'aisha',
+      'leo',
+      'nora',
+    ])
+    expect(plan.comments.map((c) => c.fields.id)).toEqual(
+      Array.from({ length: 6 }, (_, n) => threadCommentId('task-1', n)),
+    )
+    for (const { fields } of plan.comments) {
+      expect(fields).toMatchObject({ org_id: 'org', issue_id: 'task-1' })
+      expect(fields.body.length).toBeGreaterThan(100)
+      expect(fields.body.length).toBeLessThan(LIMITS.comment.max)
+    }
+    expect(threadCommentBody(4)).toContain('\n- ')
+    expect(threadCommentBody(2)).toContain('](https://')
+    // four changes bring a history of two to six, on and off in turn
+    expect(plan.toggles.map((t) => t.on)).toEqual([true, false, true, false])
+    expect(plan.toggles.every((t) => t.label_id === THREAD_LABEL)).toBe(true)
+    // a rerun posts only what is missing and adds no change
+    const again = planThread(6, {
+      task,
+      present: new Set(plan.comments.slice(0, 4).map((c) => c.fields.id)),
+      posters,
+      history: 6,
+      labels: [],
+    })
+    expect(again.comments.map((c) => c.fields.id)).toEqual(
+      plan.comments.slice(4).map((c) => c.fields.id),
+    )
+    expect(again.toggles).toEqual([])
+  })
+
+  it('refuses a count that would take the task past the cap with the comments it holds', () => {
+    const others = new Set(Array.from({ length: 30 }, (_, n) => `northstar-${n}`))
+    expect(() =>
+      planThread(971, { task, present: others, posters, history: 0, labels: [] }),
+    ).toThrow(
+      '--thread 971 would take "Calibrate the pilot sensors" past 1000 comments; it holds 30 already.',
+    )
+    expect(
+      planThread(970, { task, present: others, posters, history: 0, labels: [] }).comments,
+    ).toHaveLength(970)
+    expect(() =>
+      planThread(5, { task, present: new Set(), posters: [], history: 0, labels: [] }),
+    ).toThrow('Nobody with a login can post on')
+  })
+
+  it('toggles the first of the task’s own labels by id when the task has no free label slot', () => {
+    const full = Array.from(
+      { length: LIMITS.labels.max },
+      (_, n) => `label-${String(n).padStart(2, '0')}`,
+    ).reverse()
+    const plan = (labels) =>
+      planThread(3, { task, present: new Set(), posters, history: 0, labels }).toggles.map((t) => [
+        t.label_id,
+        t.on,
+      ])
+    // label-00 is on the task, so it goes off first
+    expect(plan(full)).toEqual([
+      ['label-00', false],
+      ['label-00', true],
+      ['label-00', false],
+    ])
+    // a free slot keeps it
+    expect(plan(full.slice(1))).toEqual([
+      [THREAD_LABEL, true],
+      [THREAD_LABEL, false],
+      [THREAD_LABEL, true],
+    ])
+    // so does the seed's own label among the full set; a-label-NN sorts
+    // before THREAD_LABEL, so only the carried check keeps it
+    const early = full.slice(1).map((id) => `a-${id}`)
+    expect(plan([...early, THREAD_LABEL])).toEqual([
+      [THREAD_LABEL, false],
+      [THREAD_LABEL, true],
+      [THREAD_LABEL, false],
+    ])
+  })
+
+  it('posts as Nora and the sub-project owners in turn, waits out the posting rate, and toggles the label', async () => {
+    fake.people = [
+      { id: 'aisha', auth_user_id: 'aisha-login', org_id: 'org', name: 'Aisha', active: true },
+      { id: 'viewer', auth_user_id: 'viewer-login', org_id: 'org', name: 'V', org_role: 'viewer' },
+    ]
+    fake.issues = [
+      {
+        id: 'task-2',
+        org_id: 'org',
+        project_id: 'sub',
+        num: 2,
+        title: 'Second',
+        assignee_id: 'viewer',
+      },
+      {
+        id: 'task-1',
+        org_id: 'org',
+        project_id: 'sub',
+        num: 1,
+        title: 'First',
+        assignee_id: 'aisha',
+      },
+    ]
+    fake.threadHistory = Array.from({ length: 3 }, (_, n) => ({ id: `event-${n}` }))
+    fake.rateRefusals = 1
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
+    const run = runBoardScaleSeed([...local, '--tasks', '0', '--thread', '5'], {
+      env,
+      log: () => {},
+    })
+    await vi.runAllTimersAsync()
+    await run
+    vi.useRealTimers()
+    const posts = fake.calls.filter(([name]) => name === 'comments:create')
+    // the refused post came again, so six calls made five comments, on the
+    // first task by number, as Aisha and Nora in turn, never the viewer
+    expect(posts).toHaveLength(6)
+    expect(posts.every(([, fields]) => fields.issue_id === 'task-1')).toBe(true)
+    expect(new Set(posts.map(([, , login]) => login))).toEqual(
+      new Set(['aisha-login', 'nora-login']),
+    )
+    expect(fake.comments.size).toBe(5)
+    const toggles = fake.calls.filter(([name]) => name === 'labels:toggle')
+    expect(toggles.map(([, call]) => call.on)).toEqual([true, false])
+    expect(
+      fake.calls.some(([name, call]) => name === 'labels:create' && call.id === THREAD_LABEL),
+    ).toBe(true)
+  })
+
+  it('toggles one of the task’s own labels and makes none when the task carries the most labels', async () => {
+    fake.issues = [
+      { id: 'task-1', org_id: 'org', project_id: 'sub', num: 1, title: 'First', assignee_id: 'x' },
+    ]
+    // --labels can fill the task's slots before the thread step runs
+    fake.issueLabels = Array.from({ length: LIMITS.labels.max }, (_, n) => ({
+      org_id: 'org',
+      issue_id: 'task-1',
+      label_id: `label-${String(n).padStart(2, '0')}`,
+    }))
+    await runBoardScaleSeed([...local, '--tasks', '0', '--thread', '3'], { env, log: () => {} })
+    expect(fake.comments.size).toBe(3)
+    const toggles = fake.calls.filter(([name]) => name === 'labels:toggle')
+    expect(toggles.map(([, call]) => [call.issue_id, call.label_id, call.on])).toEqual([
+      ['task-1', 'label-00', false],
+      ['task-1', 'label-00', true],
+      ['task-1', 'label-00', false],
+    ])
+    expect(fake.calls.some(([name]) => name === 'labels:create')).toBe(false)
   })
 })

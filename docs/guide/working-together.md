@@ -44,6 +44,8 @@ Qivo undoes only that edit and shows an error, and your other changes stay.
 
 A task's **Activity** lists comments and changes from oldest to newest. Qivo
 keeps every change of a task, and **Show earlier activity** loads older ones.
+In a long thread the task window lets go of rows far from where you read, and
+**Show newer activity** loads them again ([The task window](./the-task-window.md)).
 Changes name the
 person or agent responsible and show old and new field values. Description
 changes include short excerpts. Departed members appear as **Someone**.

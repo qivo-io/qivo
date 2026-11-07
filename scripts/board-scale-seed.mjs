@@ -7,7 +7,7 @@
  *       [--sub-project FW] [--archived 160] [--deleted 70] [--inbox 600] \
  *       [--credentials 45 --api-url http://127.0.0.1:<site port>] [--relations] \
  *       [--api-accounts 90 --api-url http://127.0.0.1:<site port>] \
- *       [--labels 60] [--files 60]
+ *       [--labels 60] [--files 60] [--thread 300]
  *
  * It takes the same loopback-only target as `marketing-demo.mjs --local`, and
  * the same refusals: no deploy key, no staging, production or demo
@@ -183,7 +183,32 @@
  * Five of the linked tasks are groups with one subtask each. Every id comes
  * from what it is for, so a rerun adds only what is missing. It leaves
  * archived ones as they are, restoring and recreating none, and says how
- * many of the task's subtasks and linked tasks that leaves out. */
+ * many of the task's subtasks and linked tasks that leaves out.
+ *
+ * `--thread N` gives one task N comments and about N changes in its
+ * history, for checking how the task window keeps a long thread
+ * (src/lib/threadBudget.ts THREAD_KEEP) and reads it back (planThread). The
+ * task is the one --labels starts with: the first seeded task still active,
+ * or Northstar's own first active task by number where the run holds none
+ * (--tasks 0), and the run says which. The comments are ordinary text, a
+ * few sentences each, some with a list or a link, posted through
+ * comments:create as Nora and the people with a login who own work in the
+ * task's sub-project, in turn, so every post passes the app's own checks.
+ * The posting rate lets each of them post 10 a minute on one task, so the
+ * run waits when the server says to, and takes about N ÷ (10 × posters)
+ * minutes; a sandbox's auto-stop must cover that. Each comment's id comes
+ * from its number, so a rerun posts only what is missing. N goes up to the
+ * 1,000-comment cap (LIMITS.comments). The arguments' check refuses a
+ * larger N before anything is seeded. The thread step runs last, after
+ * every other option has seeded, and refuses an N that would take the task
+ * past the cap with the comments it holds already before it posts any. The
+ * changes come from putting one label the seed makes on the task and
+ * taking it off again through labels:toggle, one change each, until the
+ * task's history, counted as Nora reads it first, holds N rows, so a rerun
+ * adds none. A task that already carries the most labels a task can have
+ * (LIMITS.labels), as --labels can leave it, has one of its own labels
+ * taken off and put back instead, so it ends without that label when the
+ * step adds an odd number of changes. */
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -283,6 +308,22 @@ const MOST_LABELS = 500
 /* The most agents --api-accounts makes: four batches of Billing's API calls
    by account, and well inside the design size's 1,000 people. */
 const MOST_API_ACCOUNTS = 100
+/* What one --thread comment says, a few of these in turn, as a team's
+   thread on a hardware pilot reads. */
+const THREAD_LINES = [
+  'I reran the drop test on the pilot units this morning and two of the twelve housings cracked at the same corner.',
+  'The supplier says the new gasket ships next Tuesday, so the second build can start the week after.',
+  'Firmware 2.4 fixes the sensor drift we saw at low temperatures, but the battery estimate is still off by about ten percent.',
+  'Can we keep the old calibration jig until the pilot ends? The field team knows how to use it.',
+  'I measured the boot time on the slow boards and it is a little under three seconds now.',
+  'The pilot customer asked for weekly reports instead of daily ones, which suits the support team too.',
+  'Packaging signed off on the new insert, so the shipping test can go ahead with it.',
+  'Let us not block the release on the dashboard redesign; the current one is fine for the pilot.',
+]
+/* Lists and links some --thread comments carry. */
+const THREAD_LIST =
+  '\n\n- recheck the torque on the corner screws\n- log the batch numbers\n- send photos to the supplier'
+const THREAD_LINK = ' The notes are in [the pilot log](https://example.com/pilot/log).'
 /* What the --api-accounts agents do, in turn, as a team names its agents.
    The first two names are the searches' (planApiAccounts). */
 const AGENT_JOBS = [
@@ -354,6 +395,7 @@ export function parseSeedArgs(args) {
     subProject: null,
     labels: 0,
     files: 0,
+    thread: 0,
   }
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -378,6 +420,7 @@ export function parseSeedArgs(args) {
     else if (arg === '--sub-project') options.subProject = value()
     else if (arg === '--labels') options.labels = Number(value())
     else if (arg === '--files') options.files = Number(value())
+    else if (arg === '--thread') options.thread = Number(value())
     else throw new DemoCliError(`Unknown option ${arg}.`)
   }
   if (options.target !== 'local')
@@ -403,6 +446,9 @@ export function parseSeedArgs(args) {
     throw new DemoCliError(`--labels takes a whole number from 0 to ${MOST_LABELS}.`)
   if (!Number.isInteger(options.files) || options.files < 0 || options.files > MOST_FILES)
     throw new DemoCliError(`--files takes a whole number from 0 to ${MOST_FILES}.`)
+  const most = LIMITS.comments.max
+  if (!Number.isInteger(options.thread) || options.thread < 0 || options.thread > most)
+    throw new DemoCliError(`--thread takes a whole number from 0 to ${most}, the comment cap.`)
   return options
 }
 
@@ -416,6 +462,65 @@ const uuidOf = (text) => {
 /** The id of the --inbox comment on task `taskId`: the same for every run,
     so a second create of it is refused as taken. */
 export const inboxCommentId = (taskId) => uuidOf(`board-scale-seed inbox ${taskId}`)
+
+/** The id of --thread comment `n`, from 0, on task `taskId`: the same for
+    every run, so a second create of it is refused as taken. */
+export const threadCommentId = (taskId, n) => uuidOf(`board-scale-seed thread ${taskId} ${n}`)
+
+/** The id of the label --thread puts on its task and takes off again. */
+export const THREAD_LABEL = uuidOf('board-scale-seed thread label')
+
+/** What --thread comment `n` says: two to four of THREAD_LINES in turn,
+    every fifth with a short list and every seventh with a link. */
+export function threadCommentBody(n) {
+  const lines = Array.from(
+    { length: 2 + (n % 3) },
+    (_, k) => THREAD_LINES[(n * 3 + k) % THREAD_LINES.length],
+  )
+  let text = lines.join(' ')
+  if (n % 7 === 2) text += THREAD_LINK
+  if (n % 5 === 4) text += THREAD_LIST
+  return text
+}
+
+/** The --thread plan for `task`: the comments still missing of `count`,
+    each with its poster in turn among `posters`, given the ids of the
+    comments the task holds (`present`), and the label toggles that bring
+    its history, `history` rows now, to `count`, given the ids of the
+    labels the task carries (`labels`). The toggles use THREAD_LABEL when
+    the task carries it or has a free label slot, and otherwise the first
+    of the task's own labels by id, starting from whether that label is on
+    the task. Refuses a count that would take the task past the comment cap
+    with the comments it holds that are not the seed's. */
+export function planThread(count, { task, present, posters, history, labels }) {
+  const own = new Set(Array.from({ length: count }, (_, n) => threadCommentId(task.id, n)))
+  const others = [...present].filter((id) => !own.has(id)).length
+  if (others + count > LIMITS.comments.max)
+    throw new DemoCliError(
+      `--thread ${count} would take "${task.title}" past ${LIMITS.comments.max} comments; it holds ${others} already.`,
+    )
+  if (!posters.length) throw new DemoCliError(`Nobody with a login can post on "${task.title}".`)
+  const comments = []
+  for (let n = 0; n < count; n++) {
+    const id = threadCommentId(task.id, n)
+    if (present.has(id)) continue
+    comments.push({
+      poster: posters[n % posters.length],
+      fields: { id, org_id: task.org_id, issue_id: task.id, body: threadCommentBody(n) },
+    })
+  }
+  const label =
+    labels.includes(THREAD_LABEL) || labels.length < LIMITS.labels.max
+      ? THREAD_LABEL
+      : [...labels].sort()[0]
+  const toggles = []
+  let state = labels.includes(label)
+  for (let n = history; n < count; n++) {
+    state = !state
+    toggles.push({ org_id: task.org_id, issue_id: task.id, label_id: label, on: state })
+  }
+  return { comments, toggles }
+}
 
 /** The id of --relations row `what`, such as "project" or "link 40". */
 export const relationId = (what) => uuidOf(`board-scale-seed relations ${what}`)
@@ -1422,6 +1527,113 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   }
   if (options.inbox > 0)
     await seedInbox(options.inbox, { client, target, people: people.page, actor, org, log })
+  if (options.thread > 0)
+    await seedThread(options.thread, { client, target, people: people.page, actor, org, log })
+}
+
+/* The comment-rate refusal (convex/lib/limits.ts tooManyComments), with
+   the seconds it asks the poster to wait. */
+const RATE_REFUSAL = /^too many comments on this task.*Try again in (\d+) seconds?\.$/
+
+/* Gives the --thread task its comments and changes (planThread): the task
+   --labels starts with, its comments and history read as Nora first, the
+   comments posted as their posters' logins, waiting out the posting rate
+   when the server refuses one, then THREAD_LABEL made if the toggles use
+   it and it is missing, and the label toggled. */
+async function seedThread(count, { client, target, people, actor, org, log }) {
+  const snapshot = await readWorkspace((name, args) => client.query(ref(name), args))
+  const joined = (name) =>
+    [...snapshot[name], ...(snapshot.more?.[name] ?? []).flat()].filter((row) => row.org_id === org)
+  const active = joined('issues')
+  const live = new Set(active.map((task) => task.id))
+  const fromSeed = [...seededTasks(active).entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, { task }]) => task)
+    .filter((task) => live.has(task.id))
+  const task = fromSeed[0] ?? [...active].sort((a, b) => a.num - b.num)[0]
+  if (!task) throw new DemoCliError('Northstar has no active task for --thread.')
+  const thread = { org_id: org, issue_id: task.id }
+  // the task's comments and history, page by page, as the task window reads them
+  const present = new Set()
+  for (let page = await client.query(ref('snapshot:threadComments'), thread); ; ) {
+    for (const comment of page.comments) present.add(comment.id)
+    if (!page.earlier || !page.comments.length) break
+    page = await client.query(ref('snapshot:commentsBefore'), {
+      ...thread,
+      before: page.comments[0].id,
+    })
+  }
+  let history = 0
+  for (let page = await client.query(ref('snapshot:threadHistory'), thread); ; ) {
+    history += page.events.length
+    if (!page.earlier || !page.next) break
+    page = await client.query(ref('snapshot:historyBefore'), { ...thread, before: page.next })
+  }
+  // Nora and the people with a login who own work in the task's sub-project
+  const owners = new Set(
+    active.filter((issue) => issue.project_id === task.project_id).map((i) => i.assignee_id),
+  )
+  const posters = people
+    .filter(
+      (p) =>
+        p.org_id === org &&
+        p.auth_user_id &&
+        p.active !== false &&
+        p.org_role !== 'viewer' &&
+        (p.id === actor.id || owners.has(p.id)),
+    )
+    .sort((a, b) => (a.id < b.id ? -1 : 1))
+  const labels = [...snapshot.issueLabels, ...(snapshot.more?.issueLabels ?? []).flat()]
+    .filter((row) => row.issue_id === task.id)
+    .map((row) => row.label_id)
+  const plan = planThread(count, { task, present, posters, history, labels })
+  log(
+    `--thread: QN-${task.num} "${task.title}" holds ${present.size} comments and ${history} changes; ${plan.comments.length} comments and ${plan.toggles.length} changes to add, posted by ${posters.length} people.`,
+  )
+  const clients = new Map()
+  const clientOf = (poster) => {
+    let as = clients.get(poster.auth_user_id)
+    if (!as) {
+      as = new ConvexHttpClient(target.url, { logger: false })
+      as.setAdminAuth(target.key, identityOf(poster.auth_user_id))
+      clients.set(poster.auth_user_id, as)
+    }
+    return as
+  }
+  let posted = 0
+  for (const { poster, fields } of plan.comments) {
+    for (;;) {
+      try {
+        await clientOf(poster).mutation(ref('comments:create'), fields)
+        posted++
+        break
+      } catch (error) {
+        const message = error.data?.message ?? ''
+        if (message === COMMENT_TAKEN) break
+        const wait = RATE_REFUSAL.exec(message)
+        if (!wait)
+          throw new DemoCliError(
+            `comments:create refused a --thread comment: ${message || error.message}`,
+          )
+        await new Promise((done) => setTimeout(done, Number(wait[1]) * 1000))
+      }
+    }
+    if (posted % 100 === 0 && posted) log(`${posted} --thread comments posted`)
+  }
+  if (
+    plan.toggles[0]?.label_id === THREAD_LABEL &&
+    !joined('labels').some((label) => label.id === THREAD_LABEL)
+  )
+    await client.mutation(ref('labels:create'), {
+      org_id: org,
+      id: THREAD_LABEL,
+      name: 'Thread check',
+      color: LABEL_COLORS[0],
+    })
+  for (const call of plan.toggles) await client.mutation(ref('labels:toggle'), call)
+  log(
+    `Done: ${posted} comments and ${plan.toggles.length} changes added on QN-${task.num} in Northstar on ${target.url}.`,
+  )
 }
 
 /** Moves the --deleted tasks to Deleted items (planDelete) and makes and
