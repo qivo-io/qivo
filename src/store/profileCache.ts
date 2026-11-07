@@ -23,8 +23,8 @@
      A failed chunk marks its ids `failed`, except those that hold a face or
      a name, which stay as they are. A name says whether the read that
      brings the face is still on its way (`reading`), false once it failed,
-     so the planning panel tells hours on their way from hours that will
-     not come.
+     so the planning panel tells hours on their way from hours whose read
+     failed.
    - A picker's rows and picks are taken as names (`take`), which name a
      person at once until a face arrives and never replace one, nor a
      current answer that leaves the person out.
