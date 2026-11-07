@@ -32,7 +32,7 @@ await page.addInitScript(() => {
       planner = value
       if (!value || window.__focusControlsOriginals) return
       const originals = Object.fromEntries(
-        ['loadUI', 'saveUI', 'saveUINow', 'markMessagesRead'].map((name) => [name, value[name]]),
+        ['loadUI', 'saveUI', 'saveUINow', 'readOnOpen'].map((name) => [name, value[name]]),
       )
       window.__focusControlsOriginals = originals
       let prefs
@@ -43,7 +43,8 @@ await page.addInitScript(() => {
       value.loadUI = () => structuredClone(currentPrefs())
       value.saveUI = (patch) => Object.assign(currentPrefs(), patch)
       value.saveUINow = value.saveUI
-      value.markMessagesRead = () => {}
+      // opening a task reads its inbox item; this drive leaves the Inbox as it was
+      value.readOnOpen = () => false
     },
   })
 })

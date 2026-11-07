@@ -114,10 +114,11 @@ try {
   await signInDemo(page, demo)
   initialUI = await page.evaluate(() => {
     const P = window.PLANNER
-    // Opening a task normally reads notifications. Preserve the demo's Inbox
-    // for this visual-only drive; the original function is restored below.
-    window.__focusSmokeMarkRead = P.markMessagesRead
-    P.markMessagesRead = () => {}
+    // Opening a task reads its inbox item (P.readOnOpen). Preserve the
+    // demo's Inbox for this visual-only drive; the original function is
+    // restored below.
+    window.__focusSmokeReadOnOpen = P.readOnOpen
+    P.readOnOpen = () => false
     return P.loadUI()
   })
 
@@ -308,9 +309,9 @@ try {
     if (initialUI) {
       await page.evaluate(async (prefs) => {
         const P = window.PLANNER
-        if (window.__focusSmokeMarkRead) {
-          P.markMessagesRead = window.__focusSmokeMarkRead
-          delete window.__focusSmokeMarkRead
+        if (window.__focusSmokeReadOnOpen) {
+          P.readOnOpen = window.__focusSmokeReadOnOpen
+          delete window.__focusSmokeReadOnOpen
         }
         P.saveUINow(prefs)
         const { convex } = await import('/src/lib/convex.ts')

@@ -1,10 +1,14 @@
 /* Inbox snooze regression against the Northstar development demo.
  * Usage: node scripts/inbox-snooze-smoke.mjs [baseURL]
- * Requires a running dev server whose backend carries the snooze functions.
+ * Requires a running dev server whose backend carries the snooze functions
+ * and the Inbox's pages (inbox.page, v0.1.123 on).
  * Drives the row menu's Hours/Days steppers, Show snoozed, Unsnooze, a
  * two-window sync, the phone actions button and one REAL scheduled wake (a
- * 20-second snooze through the API). Touches only Nora's own inbox rows and
- * puts every one of them back: unsnoozed, and read again if it was read. */
+ * 20-second snooze through the API). It reads the rows from the Inbox's
+ * page as the list shows them (src/panels/Inbox.tsx), each by its task and
+ * organization, and acts on an item as the row does (messages.snoozeItem,
+ * readItem). Touches only Nora's own inbox rows and puts every one of them
+ * back: unsnoozed, and read again if it was read. */
 import { mkdirSync } from 'node:fs'
 import { chromium } from 'playwright'
 import { loadBrowserDemo, signInBrowser, signInDemo } from './browser-demo.mjs'
@@ -21,18 +25,31 @@ const fail = (m) => {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+/* The rows the Inbox shows now, in its page's order: each task's uuid and
+   organization, title, and whether it is read and snoozed. */
 const groups = (page) =>
   page.evaluate(() =>
-    window.PLANNER.messageGroups.map((g) => ({
-      id: g.id,
-      title: g.issueTitle,
-      read: g.read,
-      snoozed: g.snoozed,
-      snoozedUntil: g.snoozedUntil,
-      wokeAt: g.wokeAt,
-      ids: g.ids,
+    [...document.querySelectorAll('[data-message-key]')].map((row) => ({
+      id: row.dataset.message,
+      org: row.dataset.messageOrg,
+      title: row.querySelector('[data-msg-title]')?.textContent ?? '',
+      read: !row.hasAttribute('data-unread'),
+      snoozed: row.hasAttribute('data-snoozed'),
     })),
   )
+/* Records each return time the Inbox's Snooze sends (P.snoozeItem), so
+   the drive can check it, and passes the write on. */
+const recordSnoozes = (page) =>
+  page.evaluate(() => {
+    const P = window.PLANNER
+    const real = P.snoozeItem
+    window.__snoozes = []
+    P.snoozeItem = (target, until) => {
+      window.__snoozes.push({ task: target.task, until })
+      return real(target, until)
+    }
+  })
+const rowOf = (g) => `[data-message="${g.id}"][data-message-org="${g.org}"]`
 /* The badge's count, the unread summary's (P.inboxSummary) once it is
    current, which the top bar's chip must show, as lib/inboxBadge.ts says. */
 const unreadBadge = async (page) => {
@@ -76,7 +93,7 @@ const openInbox = async (page) => {
 }
 
 const browser = await chromium.launch()
-const restore = [] // { ids, read } for every row this drive touched
+const restore = [] // { org, task, read } for every row this drive touched
 let ctxA
 let ctxB
 let ctxPhone
@@ -87,13 +104,14 @@ try {
   pageA = A
   await signInDemo(A, demo)
   await openInbox(A)
+  await recordSnoozes(A)
 
   // ---- 1. snooze 2 days from the row menu (desktop) -----------------------
   let list = await groups(A)
   const target = list[0]
-  restore.push({ ids: target.ids, read: target.read })
+  restore.push({ org: target.org, task: target.id, read: target.read })
   const badgeBefore = await unreadBadge(A)
-  await A.click(`[data-message="${target.id}"]`, { button: 'right' })
+  await A.click(rowOf(target), { button: 'right' })
   await A.waitForSelector('[data-msg-menu]')
   if ((await A.locator('[data-msg-menu-snooze]').textContent())?.trim() !== 'Snooze')
     fail('the Snooze heading is missing or not sentence case')
@@ -108,17 +126,11 @@ try {
   await days.getByLabel('More days').hover()
   await A.screenshot({ path: `${SHOTS}/inbox-snooze-1-menu.png` })
   await days.locator('[data-msg-snooze-go]').click()
-  await A.waitForSelector(`[data-message="${target.id}"]`, { state: 'detached', timeout: 10000 })
-  await A.waitForFunction(
-    (id) => window.PLANNER.messageGroups.find((g) => g.id === id)?.snoozed === true,
-    target.id,
-  )
-  list = await groups(A)
-  const snoozed = list.find((g) => g.id === target.id)
+  await A.waitForSelector(rowOf(target), { state: 'detached', timeout: 10000 })
+  const sent = await A.evaluate(() => window.__snoozes.at(-1))
   const expectMs = Date.now() + 2 * 86_400_000
-  if (Math.abs(snoozed.snoozedUntil - expectMs) > 60_000)
-    fail(`snoozedUntil is not ~2 days out: ${snoozed.snoozedUntil}`)
-  if (snoozed.read) fail('the snoozed row is not unread')
+  if (sent?.task !== target.id || Math.abs(Date.parse(sent.until) - expectMs) > 60_000)
+    fail(`the snooze is not ~2 days out: ${JSON.stringify(sent)}`)
   if ((await A.locator('[data-msg-menu]').count()) !== 0) fail('the menu stayed open after Snooze')
   await badgeReaches(A, badgeBefore - (target.read ? 0 : 1))
   const badgeAfter = await unreadBadge(A)
@@ -133,17 +145,15 @@ try {
   await A.click('[data-inbox-filter]')
   await A.click('[data-inbox-show-snoozed]')
   await A.keyboard.press('Escape')
-  await A.waitForSelector(`[data-message="${target.id}"][data-snoozed]`, { timeout: 10000 })
-  const untilText = (
-    await A.locator(`[data-message="${target.id}"] [data-msg-until]`).textContent()
-  )?.trim()
+  await A.waitForSelector(`${rowOf(target)}[data-snoozed][data-unread]`, { timeout: 10000 })
+  const untilText = (await A.locator(`${rowOf(target)} [data-msg-until]`).textContent())?.trim()
   if (!untilText) fail('the sleeping row shows no return time')
   if (!(await A.locator('[data-inbox-filter]').textContent())?.includes('(1)'))
     fail('Filter does not count Show snoozed')
   await A.screenshot({ path: `${SHOTS}/inbox-snooze-3-show-snoozed.png` })
   log(`Show snoozed lists it, dimmed, with "${untilText}"`)
   // opening the sleeping row must not read it
-  await A.click(`[data-message="${target.id}"] .inbox-message-open`)
+  await A.click(`${rowOf(target)} .inbox-message-open`)
   await A.waitForSelector('[data-inbox-detail], [data-issue-detail], .inbox-detail-frame', {
     timeout: 10000,
   })
@@ -156,7 +166,7 @@ try {
   // as it arrives, unless this client marked it unread or snoozed it)
   await A.keyboard.press('Escape')
   await A.waitForFunction(() => !location.pathname.includes('/tasks/'))
-  await A.click(`[data-message="${target.id}"]`, { button: 'right' })
+  await A.click(rowOf(target), { button: 'right' })
   await A.waitForSelector('[data-msg-menu-unsnooze]')
   const unsnoozeText = (await A.locator('[data-msg-menu-unsnooze]').textContent())?.trim()
   if (!/^Unsnooze\s*until /.test(unsnoozeText)) fail(`Unsnooze row reads "${unsnoozeText}"`)
@@ -164,14 +174,12 @@ try {
     fail('steppers shown on a sleeping row')
   await A.screenshot({ path: `${SHOTS}/inbox-snooze-4-unsnooze.png` })
   await A.click('[data-msg-menu-unsnooze]')
-  await A.waitForFunction(
-    (id) => window.PLANNER.messageGroups.find((g) => g.id === id)?.snoozed === false,
-    target.id,
-  )
+  await A.waitForSelector(`${rowOf(target)}:not([data-snoozed])`, { timeout: 10000 })
   list = await groups(A)
-  const back = list.find((g) => g.id === target.id)
-  if (back.read || back.snoozed || back.wokeAt !== null)
-    fail('Unsnooze did not return the row unread without a wake stamp')
+  const back = list.find((g) => g.id === target.id && g.org === target.org)
+  if (!back || back.read || back.snoozed) fail('Unsnooze did not return the row unread and awake')
+  if ((await A.evaluate(() => window.__snoozes.at(-1)?.until)) !== null)
+    fail('Unsnooze did not send a return of null')
   log(`Unsnooze: "${unsnoozeText}" → back, unread`)
   await A.click('[data-inbox-filter]')
   await A.click('[data-inbox-show-snoozed]')
@@ -183,20 +191,20 @@ try {
   await signInDemo(B, demo)
   await openInbox(B)
   const second = (await groups(A)).find((g) => !g.snoozed && g.id !== target.id) ?? target
-  restore.push({ ids: second.ids, read: second.read })
-  await B.waitForSelector(`[data-message="${second.id}"]`)
-  await A.click(`[data-message="${second.id}"]`, { button: 'right' })
+  restore.push({ org: second.org, task: second.id, read: second.read })
+  await B.waitForSelector(rowOf(second))
+  await A.click(rowOf(second), { button: 'right' })
   await A.waitForSelector('[data-msg-snooze-row="hours"]')
   await A.locator('[data-msg-snooze-row="hours"] [data-msg-snooze-go]').click()
-  await B.waitForSelector(`[data-message="${second.id}"]`, { state: 'detached', timeout: 15000 })
+  await B.waitForSelector(rowOf(second), { state: 'detached', timeout: 15000 })
   log(`window B lost "${second.title}" when A snoozed it (no reload)`)
   await B.click('[data-inbox-filter]')
   await B.click('[data-inbox-show-snoozed]')
   await B.keyboard.press('Escape')
-  await B.click(`[data-message="${second.id}"]`, { button: 'right' })
+  await B.click(rowOf(second), { button: 'right' })
   await B.waitForSelector('[data-msg-menu-unsnooze]')
   await B.click('[data-msg-menu-unsnooze]')
-  await A.waitForSelector(`[data-message="${second.id}"]`, { timeout: 15000 })
+  await A.waitForSelector(rowOf(second), { timeout: 15000 })
   log('window A regained it when B unsnoozed')
   await B.close()
   await ctxB.close()
@@ -204,26 +212,25 @@ try {
 
   // ---- 4. the real scheduled wake: a 20-second snooze through the API ------
   const third = (await groups(A)).find((g) => !g.snoozed) ?? target
-  if (!restore.some((r) => r.ids.join() === third.ids.join()))
-    restore.push({ ids: third.ids, read: third.read })
+  if (!restore.some((r) => r.task === third.id && r.org === third.org))
+    restore.push({ org: third.org, task: third.id, read: third.read })
   const wakeAt = new Date(Date.now() + 20_000).toISOString()
   await A.evaluate(
-    async ({ ids, until }) => {
+    async ({ org, task, until }) => {
       const { convex } = await import('/src/lib/convex.ts')
-      const org = window.PLANNER.org
-      await convex.mutation('messages:snooze', { org_id: org.id, ids, until })
+      await convex.mutation('messages:snoozeItem', { org_id: org, issue_id: task, until })
     },
-    { ids: third.ids, until: wakeAt },
+    { org: third.org, task: third.id, until: wakeAt },
   )
-  await A.waitForSelector(`[data-message="${third.id}"]`, { state: 'detached', timeout: 15000 })
+  await A.waitForSelector(rowOf(third), { state: 'detached', timeout: 15000 })
   await A.evaluate(() => {
     window.__qivoNotes = []
   })
   const t0 = Date.now()
-  await A.waitForSelector(`[data-message="${third.id}"]`, { timeout: 60000 })
-  const woke = (await groups(A)).find((g) => g.id === third.id)
-  if (woke.snoozed || woke.read || !woke.wokeAt)
-    fail('the wake did not return the row unread with a wake stamp')
+  await A.waitForSelector(rowOf(third), { timeout: 60000 })
+  const woke = (await groups(A)).find((g) => g.id === third.id && g.org === third.org)
+  if (woke.snoozed || woke.read) fail('the wake did not return the row unread')
+  // the wake moves it to the top of Newest first, as its list time is the wake's
   if ((await groups(A))[0].id !== third.id) fail('the woken row is not at the top of the list')
   const notes = await A.evaluate(() => window.__qivoNotes ?? [])
   if (!notes.some((n) => n.title.startsWith('Back from snooze, ')))
@@ -246,7 +253,7 @@ try {
   await signInBrowser(M, demo.account('nora'))
   await M.waitForSelector('[data-message]', { timeout: 30000 })
   const first = (await groups(M)).find((g) => !g.snoozed)
-  await M.locator(`[data-message="${first.id}"] .inbox-message-actions`).click()
+  await M.locator(`${rowOf(first)} .inbox-message-actions`).click()
   await M.waitForSelector('[data-msg-snooze-row="days"]')
   await M.locator('[data-msg-snooze-row="days"]').getByLabel('More days').click()
   await M.screenshot({ path: `${SHOTS}/inbox-snooze-6-phone.png` })
@@ -262,10 +269,10 @@ try {
     try {
       await pageA.evaluate(async (entries) => {
         const { convex } = await import('/src/lib/convex.ts')
-        const org = window.PLANNER.org
         for (const e of entries) {
-          await convex.mutation('messages:snooze', { org_id: org.id, ids: e.ids, until: null })
-          if (e.read) await convex.mutation('messages:markRead', { org_id: org.id, ids: e.ids })
+          const item = { org_id: e.org, issue_id: e.task }
+          await convex.mutation('messages:snoozeItem', { ...item, until: null })
+          if (e.read) await convex.mutation('messages:readItem', item)
         }
       }, restore)
       await sleep(1000)
