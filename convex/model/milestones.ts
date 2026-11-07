@@ -1093,32 +1093,56 @@ export async function milestoneProjects(
  * holds the person's own tasks in every status across every seat, the
  * group checks the Reviewer rule needs and the access questions about
  * their sub-projects and top-level projects (lib/viewReads.ts viewAccess,
- * PROJECT_ASK each). The read after it takes MILESTONE_READ within what the
- * request has left (lib/archivedTasks.ts roomOf), so the two fit Convex's
- * 4,096 ranges, 32,000 documents and 16 MiB together. Measured on 7
- * November 2026 under convex-test's transaction limits with rows as the app
- * writes them (tests/milestoneMine.test.ts, design size), in ranges,
- * documents and MiB, the finding alone and then the whole request with a
- * first batch of 10 rows and its `past` probe:
+ * PROJECT_ASK each).
+ *
+ * Its guard decides by the bytes the step read with each project row the
+ * access read, and each task in a project the person is not shown, counted
+ * at its fixed size (lib/viewReads.ts viewBudget charge), so no row's text
+ * moves the answer. These decision bytes run far above the real bytes. A
+ * sub-project archived with one of the person's open tasks still in it
+ * counts a project row and a task at their fixed sizes, 8 KiB, so the
+ * design size's 500 archived sub-projects alone decide at about 4 MiB.
+ * Rows within the caps read fewer real bytes than they count, so the step
+ * reads at most 8 MiB, the read after it at most MILESTONE_READ's 4 MiB
+ * within what the request has left (lib/archivedTasks.ts roomOf), and
+ * MILESTONE_RESERVE keeps 1 MiB back. That is 13 MiB of Convex's 16 MiB,
+ * which leaves 3 MiB for the sign-in and seats read before them, and the
+ * two shares' 4,000 ranges and 16,000 documents keep under 4,096 and
+ * 32,000.
+ *
+ * Measured on 7 November 2026 under convex-test's transaction limits with
+ * rows as the app writes them (tests/milestoneMine.test.ts, design size),
+ * the finding alone in ranges, documents, MiB and decision MiB, and the
+ * whole request with a first batch of 10 rows and its `past` probe in
+ * ranges, documents and MiB:
  *
  * - One open task of the caller in each of 200 top-level projects of one
  *   sub-project each, through the shares of the caller's three teams (the
  *   200 top-level projects and the 200 sub-projects one person can read at
- *   their sum), one upcoming milestone each: 484, 829 and 0.31, and 884, 1,029 and 0.35.
+ *   their sum), one upcoming milestone each. The finding takes 482, 827,
+ *   0.31 and 2.49, the request 882, 1,027 and 0.35.
  * - The same 200 projects where the caller's access comes through a grant
  *   on each sub-project alone, so every top-level project shows only for
- *   navigation: 1,247, 1,568 and 0.47, and 1,647, 1,768 and 0.51. The
- *   check of named projects alone would read 1,434 ranges more for these
- *   200 projects, more than the half of the 2,849 left that it may take
- *   (scopeCeiling), so a `mine` read does not ask it.
+ *   navigation. The finding takes 1,245, 1,566, 0.47 and 2.67, the request
+ *   1,645, 1,766 and 0.51. The check of named projects alone would read
+ *   1,434 ranges more for these 200 projects, more than the half of the
+ *   2,851 left that it may take (scopeCeiling), so a `mine` read does not
+ *   ask it.
+ * - The same shape with 2 or 3 sub-projects archived beside each live one,
+ *   each by a grant and with one of the caller's open tasks, which
+ *   archiving leaves in place (the 200 live and 500 archived sub-projects
+ *   one person can read at their sum). The finding takes 1,753, 3,074, 1.03
+ *   and 6.74, the request 2,155, 3,276 and 1.07. The 4 MiB this share held
+ *   before refused it.
  * - 300 open and 150 Done tasks of the caller in one sub-project (open and
- *   Done at their sum): 101, 467 and 0.28, and 103, 478 and 0.28.
+ *   Done at their sum). The finding takes 100, 466, 0.27 and 0.29, the
+ *   request 107, 482 and 0.28.
  *
  * Tests lower these. */
 export const MILESTONE_MINE: ReadCeiling = {
   ranges: 2000,
   documents: 8000,
-  bytes: 4 * 1024 * 1024,
+  bytes: 8 * 1024 * 1024,
 }
 
 /** The reason of the refusal of a section read with `mine` whose person's
