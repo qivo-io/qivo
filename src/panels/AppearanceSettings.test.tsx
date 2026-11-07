@@ -188,6 +188,17 @@ describe('Settings › Appearance', () => {
     expect(context.retries).toBe(1)
   })
 
+  it('says the weekly preview loads while the provider waits for the week’s image', async () => {
+    context.preview = { status: 'loading', url: null, key: null, previewVersion: null }
+    await draw()
+    await deliver({ mode: 'dark', image_source: 'daily', custom_image: null })
+    expect(previewText()).toBe('Loading preview…')
+    // nothing asked for or nothing to show is no loading
+    context.preview = { status: 'unavailable', url: null, key: null, previewVersion: null }
+    await draw()
+    expect(previewText()).toBe('Preview unavailable.')
+  })
+
   it('shows the weekly preview from the provider and never the original image', async () => {
     context.dailyImage = {
       id: 'week-1',

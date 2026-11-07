@@ -26,7 +26,8 @@ import { type AppearancePreferences, P } from '../store/planner'
    the canvas already shows. Settings never fetches the original for it.
    Settings and the renderer subscribe to the preference independently, so
    the thumbnail and the credit under it appear once the local selection
-   and the painted background agree. */
+   and the painted background agree. While the provider has no selection
+   yet, as before the week's image answers, it says the preview loads. */
 function WeeklyPreview({ preferences }: { preferences: AppearancePreferences }) {
   const { dailyImage } = useAppearance()
   const { preview, retry } = usePreview()
@@ -34,6 +35,8 @@ function WeeklyPreview({ preferences }: { preferences: AppearancePreferences }) 
   if (preferences.image_source !== 'daily') return null
   const ours = preview.key?.startsWith('daily:') ?? false
   const url = ours && preview.status === 'ready' && preview.url !== broken ? preview.url : null
+  // no key yet: the provider's selection waits for the week's image
+  const loading = preview.status === 'loading' && (ours || preview.key === null)
   const title = dailyImage?.title?.trim()
   const location = dailyImage?.location?.trim()
   const creator = dailyImage?.creator?.trim()
@@ -54,7 +57,7 @@ function WeeklyPreview({ preferences }: { preferences: AppearancePreferences }) 
         ) : (
           <span className="flex aspect-video items-center justify-center gap-2 p-4 text-sm text-text-2">
             <ImageIcon className="size-5 shrink-0" aria-hidden="true" />
-            {ours && preview.status === 'loading' ? 'Loading preview…' : 'Preview unavailable.'}
+            {loading ? 'Loading preview…' : 'Preview unavailable.'}
           </span>
         )}
       </div>
