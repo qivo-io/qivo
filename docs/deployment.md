@@ -1954,16 +1954,10 @@ server and loads no task. This makes v0.1.123 the backend's floor for this
 app, which the floors above already hold, so the release sets no new
 rollback floor. Against a backend before v0.1.123 the Inbox says it
 couldn't load your messages, also in a tab that was open when the backend
-went back, until the backend rolls forward. Returning the app alone to an
-earlier release is safe, because that app lists the workspace inbox part,
-which the backend still sends, and its writes by message id stay. The
-workspace inbox part stays for the desktop alerts. The list shows only what
-the `inbox_items` rows hold, so the gate of the inbox items backfill below
-applies. Every hosted deployment reported its backfill complete with
-v0.1.96, and before this release reaches staging and production the
-read-only dry run there must again report no rows that differ, are missing
-or are extra, as before v0.1.148. The release changes no server function,
-has no schema change, no backfill and no release step.
+went back, until the backend rolls forward. The workspace inbox part stays
+for the desktop alerts. The list shows only what the `inbox_items` rows
+hold. The release changes no server function, has no schema change, no
+backfill and no release step.
 
 ## Node.js version
 
