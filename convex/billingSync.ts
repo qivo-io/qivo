@@ -979,7 +979,7 @@ const readingOf = (row: Doc<'storage_daily_samples'> | null): DayReading | null 
 /* Whether no step of UTC day `day`'s run of the daily samples can write a
  * sample of that day once this transaction commits. That holds when the
  * day has no run row or its run finished. A run whose last step is
- * SAMPLE_STALLED_MS old or older at `now` is fenced first: its id is
+ * SAMPLE_STALLED_MS old or older at `now` is fenced first. Its id is
  * replaced, as a tick's resume does, keeping its cursor, counters and
  * step_at, so a step still queued under the old id stops at its run check
  * (storageSamples.ts step) and writes nothing. The fence commits in the
@@ -1010,18 +1010,18 @@ async function dayClosed(ctx: MutationCtx, day: string, now: number): Promise<bo
  * the last day and that day's run has no row, has finished or has taken no
  * step for SAMPLE_STALLED_MS. A stalled run is fenced in the same
  * transaction as the record, so its queued step writes nothing after it
- * (dayClosed). Otherwise it waits and writes nothing. At or after the deadline it
- * records the period whatever is missing. A day without a sample takes the
- * first later one, the next period's first day included, else the most
- * recent one before it, an earlier period's included. With a reading, the
- * average rounded up to a whole byte goes through finishStorageSample, so
- * the allowance is subtracted once, the blocks are one ceiling, and the
+ * (dayClosed). Otherwise it waits and writes nothing. At or after the
+ * deadline it records the period whatever is missing. A day without a sample
+ * takes the first later one, the next period's first day included, else the
+ * most recent one before it, an earlier period's included. With a reading,
+ * the average rounded up to a whole byte goes through finishStorageSample,
+ * so the allowance is subtracted once, the blocks are one ceiling, and the
  * charge keeps its event id `${subscription_id}:${period_start}:storage`,
  * its complimentary rule and its single insert, together with the days and
- * storage_finalized_at in one patch. With no reading of the organization
- * in, after or before the period, it records the days and
- * storage_unavailable, no bytes, blocks or event, never 0, with a warning
- * and a billing.storage_unavailable audit row naming the period.
+ * storage_finalized_at in one patch. With no reading of the organization in,
+ * after or before the period, it records the days and storage_unavailable,
+ * no bytes, blocks or event, never 0, with a warning and a
+ * billing.storage_unavailable audit row naming the period.
  *
  * The daily samples' run of the period's last day (storageSamples.ts step)
  * normally finalizes it about a day or more before its end, and the run
@@ -1058,15 +1058,16 @@ async function dayClosed(ctx: MutationCtx, day: string, now: number): Promise<bo
  *
  * It reads the period, the samples of its days, at most 31, the
  * organization's first sample after its last day and, before the deadline,
- * the last day's run row when the last day has no sample, its latest
- * sample before its first day only when it has none in or after it, then
- * the plan, the subscription, the charge's id when blocks are due and the
- * period again for the next reconciliation. Its largest call, before the
- * deadline for 31 days with the last one missing and blocks due, at 1,000
- * people, read 37 documents over 8 index ranges, about 122 KB, most of it
- * the period row with its 1,000 profile ids, and wrote the period and the
- * charge, about 39 KB, in convex/tests/billing.test.ts ("reads the period,
- * its days and a few documents more"). */
+ * the last day's run row when the last day has no sample, its latest sample
+ * before its first day only when it has none in or after it, then the plan,
+ * the subscription, the charge's id when blocks are due and the period again
+ * for the next reconciliation. When it fences a stalled run of the last day
+ * (dayClosed), it also writes that run row, about 500 bytes. Its largest
+ * call, before the deadline for 31 days with the last one missing and blocks
+ * due, at 1,000 people, read 37 documents over 8 index ranges, about 122 KB,
+ * most of it the period row with its 1,000 profile ids, and wrote the period
+ * and the charge, about 39 KB, in convex/tests/billing.test.ts ("reads the
+ * period, its days and a few documents more"). */
 export const finalizeStorage = internalMutation({
   args: { period: v.id('billing_periods'), operator: v.optional(v.boolean()) },
   handler: async (ctx, { period: periodId, operator }): Promise<FinalizeOutcome> => {
