@@ -525,6 +525,32 @@ describe('the star', { timeout: 60_000 }, () => {
     expect(pageText()).toContain(`${named(6)} is no longer a favorite.`)
   })
 
+  it('sends focus to the star at its place among a search page’s stars, which sub-project rows lack', async () => {
+    const next0 = base()
+    const parent = top(next0, 'Base')
+    // twelve matches by name, top-level projects 7, 9, 10 and 11 among
+    // sub-projects of Base, in pages of five
+    const ids = Array.from({ length: 12 }, (_, n) =>
+      [7, 9, 10, 11].includes(n)
+        ? top(next0, named(n, 'Rig'))
+        : sub(next0, parent, named(n, 'Rig')),
+    )
+    await load(next0)
+    force.batch = 5
+    await render()
+    await type('rig')
+    await next()
+    const under = (n: number) => `Base › ${named(n, 'Rig')}`
+    expect(rowNames()).toEqual([under(5), under(6), named(7, 'Rig'), under(8), named(9, 'Rig')])
+    const button = starOf(ids[7])
+    button.focus()
+    await click(button)
+    // the row left this page for the favorites on the first; the star at
+    // its place among the stars is the next top-level row's
+    expect(rowNames()).toEqual([under(5), under(6), under(8), named(9, 'Rig'), named(10, 'Rig')])
+    expect(document.activeElement).toBe(starOf(ids[9]))
+  })
+
   it('puts a refused star back and says why, the read-only refusal included', async () => {
     const ids = await second()
     for (const [refusal, said] of [

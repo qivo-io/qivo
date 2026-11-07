@@ -231,7 +231,9 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
       if (!row || row.favorite === p.want) edit(id, null)
     }
   })
-  // the star focus follows when its row leaves the page: its place on it
+  // when a focused star's row leaves the page, focus goes to the star at
+  // its place among the page's stars, which a search's sub-project rows
+  // do not have
   const follow = useRef<{ id: string; index: number } | null>(null)
   useLayoutEffect(() => {
     const f = follow.current
@@ -250,7 +252,10 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
     if (pending.has(row.id)) return
     const want = !row.favorite
     edit(row.id, { want, busy: true })
-    follow.current = { id: row.id, index: rows.findIndex((r) => r.id === row.id) }
+    follow.current = {
+      id: row.id,
+      index: rows.filter((r) => r.favorite !== null).findIndex((r) => r.id === row.id),
+    }
     void P.setFavorite({ id: row.id, org_id: row.org_id }, want).then((ok) => {
       // a refused or paused star goes back, and the store says why
       if (!ok) return edit(row.id, null)
