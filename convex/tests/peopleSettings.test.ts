@@ -591,6 +591,9 @@ describe('byIds', () => {
       // an older non-hex color goes out as gray, as the workspace sends it
       color: expect.stringMatching(/^#[0-9a-f]{6}$/i),
       initials: 'OP',
+      avatar: null,
+      sample_avatar: null,
+      plannable_hours: 40,
     })
     expect(row(pending.id)).toMatchObject({ pending: true, active: true })
     expect(row(fx.admin.id)).toMatchObject({ color: '#7a7ad0', initials: 'AD' })
@@ -620,6 +623,45 @@ describe('byIds', () => {
         )
       ).rows,
     ).toHaveLength(1)
+  })
+
+  it("answers each person's picture, sample portrait and stored hours, null for none", async () => {
+    const fx = await setup()
+    const picture = await fx.t.run((ctx) =>
+      ctx.storage.store(new Blob([new Uint8Array(64)], { type: 'image/png' })),
+    )
+    const [pictured, plain, sampled] = await plantPeople(fx.t, fx.org.id, [
+      { name: 'Pia Pictured', avatar_storage_id: picture, plannable_hours: 32 },
+      { name: 'Paul Plain', plannable_hours: undefined },
+      { name: 'Sam Sample', sample_avatar: 'nora', plannable_hours: 0 },
+    ])
+    const asked = [pictured.id, plain.id, sampled.id, fx.agent.id]
+    // a guest and a Viewer read the same fields an admin reads
+    for (const who of [fx.guest, fx.viewer, fx.admin]) {
+      const { rows } = await read.byIds(fx.t, who, asked)
+      const row = (id: string) => rows.find((r) => r.id === id)
+      expect(row(pictured.id)).toMatchObject({
+        avatar: picture,
+        sample_avatar: null,
+        plannable_hours: 32,
+      })
+      // a seat that stores no hours plans the organization's default
+      expect(row(plain.id)).toMatchObject({
+        avatar: null,
+        sample_avatar: null,
+        plannable_hours: null,
+      })
+      expect(row(sampled.id)).toMatchObject({
+        avatar: null,
+        sample_avatar: 'nora',
+        plannable_hours: 0,
+      })
+      // an agent has no hours
+      expect(row(fx.agent.id)).toMatchObject({ kind: 'agent', plannable_hours: null })
+    }
+    // a profile of another organization stays out with its picture
+    await fx.t.run((ctx) => ctx.db.patch(fx.otherAdmin._id, { avatar_storage_id: picture }))
+    expect(ids((await read.byIds(fx.t, fx.user, [fx.otherAdmin.id])).rows)).toEqual([])
   })
 })
 
