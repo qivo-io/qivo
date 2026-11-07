@@ -1777,7 +1777,7 @@ one call, which inside the design size is at most 1,000, and a tab whose
 organizations together hold more pictures shows initials until it reloads.
 The release changes no table, field or index, and there is no backfill.
 
-From the release after v0.1.152, the Roadmap reads its milestone flags for
+From the release after v0.1.157, the Roadmap reads its milestone flags for
 the weeks on screen from `milestones.between`, over the scope's top-level
 project or, in My view, the top-level projects of its rows, instead of the
 workspace's copy of every milestone, and My view draws each milestone on its
