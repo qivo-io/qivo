@@ -118,7 +118,7 @@ export function MobileHeader({
                       >
                         <Icon name="people" size={16} /> People & settings
                       </MenuItem>
-                      {project.type === 'meta' && P.levelOn(project.id) === 'lead' && (
+                      {project.type === 'meta' && P.canManageOwnProjectAccess(project.id) && (
                         <MenuItem
                           onClick={(e) => {
                             const trigger = menuTrigger(e.currentTarget)

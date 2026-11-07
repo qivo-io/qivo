@@ -195,7 +195,6 @@ function ownLevel(workspace: Server, projectId: string): Level | null {
     (p) => p.org_id === project.org_id && workspace.myProfileIds.includes(p.id),
   )
   if (!me?.active) return null
-  if (me.org_role === 'admin') return 'lead'
   const teams = new Set(
     workspace.teamMembers.filter((m) => m.profile_id === me.id).map((m) => m.team_id),
   )

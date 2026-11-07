@@ -124,7 +124,8 @@ const many = (from: number, n: number, days = 2) =>
 function fixture(partner: boolean): Snapshot {
   const next = plannerFixture()
   const org = next.orgs[0].id
-  const base = next.projects[0]
+  // the fixture's lead stays with its own project, which this replaces
+  const { lead_id: _lead, ...base } = next.projects[0]
   // the person leads Luma Sensor, so the navigation reads, which judge an
   // admin by ordinary access, list it and its sub-projects
   const meta = {

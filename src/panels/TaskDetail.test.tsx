@@ -166,7 +166,8 @@ function fixture(loading: boolean) {
   Object.assign(me, { id: 'mira', name: 'Mira Holm', org_role: 'user' })
   next.myProfileIds = ['mira']
   next.profiles.push({ ...me, id: 'leo', name: 'Leo Park', auth_user_id: 'account-leo' })
-  const base = next.projects[0]
+  // the fixture's lead stays with its own project, which this replaces
+  const { lead_id: _lead, ...base } = next.projects[0]
   next.projects = [
     { ...base, id: 'plan', type: 'meta', key: 'PLAN', name: 'Plan', lead_id: 'mira' },
     {

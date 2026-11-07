@@ -8448,6 +8448,11 @@ const grantOnProject = (p: ProjectGrants, user: UserVM): string | null => {
   }
   return level
 }
+/* The level of `uid` (me by default) on `p` by ordinary access, the rule of
+   convex/lib/access.ts levelUnder: the lead role, the person's own grant and
+   their teams' shares on the project and its parent. An organization admin
+   is judged by their own rows like anyone; only the management rule
+   (P.canManageOwnProjectAccess) knows the role. */
 const levelOnProject = (
   p: ProjectGrants | null | undefined,
   uid?: string,
@@ -8456,7 +8461,6 @@ const levelOnProject = (
   if (!p) return null
   const user = actorIn(p.org, uid)
   if (!user?.active) return null
-  if (user.orgRole === 'admin') return 'lead'
   const parent = p.parent ? projectById(p.parent) : null
   let level = grantOnProject(p, user)
   if (parent?.org === p.org) {
@@ -11832,8 +11836,9 @@ export const PLANNER = {
      home organization with this lead and access? The New project dialog asks
      before saving. The draft goes through the same level rules P.canSee
      applies once addProject has painted the project, so the dialog's warning
-     and the outcome agree: org admins, the lead, an individual grant at any
-     level or a share with one of the user's teams can see it. */
+     and the outcome agree: the lead, an individual grant at any level or a
+     share with one of the user's teams can see it, for an org admin as for
+     anyone. */
   seesNewProject: (
     draft: Pick<NewProjectInput, 'lead' | 'access' | 'teamAccess'>,
     uid?: string,
@@ -11860,11 +11865,20 @@ export const PLANNER = {
     const meta = PLANNER.metaOf(pid)
     return !!meta && PLANNER.canWrite(meta.id, uid)
   },
-  /** Project leads and organization admins control project permissions. */
+  /** Whether `uid` (me by default) manages project `pid`, the server's
+      management rule (convex/lib/access.ts managesIn): an active seat of
+      the project's organization, the project a top-level meta or a
+      sub-project of one, and an organization admin or the project's
+      effective lead. Settings, the access editors and every New
+      sub-project opener ask it; it gives no level. */
   canManageOwnProjectAccess: (pid: string, uid?: string): boolean => {
     const p = PLANNER.project(pid)
-    const u = p ? actorIn(p.org, uid) : null
-    return !!(u?.active && levelOnProject(p, uid) === 'lead')
+    if (!p) return false
+    const root = p.parent ? PLANNER.project(p.parent) : p
+    if (!root || root.org !== p.org || root.parent || root.type !== 'meta') return false
+    const u = actorIn(p.org, uid)
+    if (!u?.active) return false
+    return u.orgRole === 'admin' || levelOnProject(p, uid) === 'lead'
   },
   /* Every top-level project this user can see in the workspace, in one
      list (0078 retired the per-workspace silo and its switcher), blended

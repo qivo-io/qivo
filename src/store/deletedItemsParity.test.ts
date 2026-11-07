@@ -26,7 +26,7 @@ import {
   plantIssue,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from '../../convex/tests/helpers.setup'
 import { keyOrg } from '../../convex/tests/nameKeys.setup'
 import { installTrashTimers, itemFor, runSteps } from '../../convex/tests/trash.setup'
@@ -49,7 +49,7 @@ const later = () => vi.setSystemTime(Date.now() + 60_000)
 /** The trash fixture with its deletes: what each test reads. */
 async function world() {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const org_id = f.org.id
   // the people batches read the name keys
   await keyOrg(t, org_id)
@@ -119,7 +119,8 @@ async function fixtureFor(t: T, f: OrgFixture, who: Doc<'profiles'>): Promise<De
         me: who.id,
         role: admin ? 'admin' : leads ? 'lead' : 'user',
         can_purge: admin,
-        reads_all: admin,
+        // no role reads every task since the admin access split
+        reads_all: false,
       },
     ],
     items: rows.map((row) => {

@@ -52,7 +52,8 @@ describe('moving a task that has subtasks to Deleted items', () => {
     org = server.orgs[0].id
     const me = server.profiles[0]
     me.org_role = 'user'
-    const base = server.projects[0]
+    // the fixture's lead stays with its own project, which this replaces
+    const { lead_id: _lead, ...base } = server.projects[0]
     server.projects = [
       { ...base, id: 'plan', type: 'meta', key: 'PLAN', name: 'Plan' },
       {

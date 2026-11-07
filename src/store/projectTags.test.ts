@@ -184,6 +184,15 @@ describe('project labels in the store', () => {
       if (snap === null) throw new Error(`no snapshot for ${profile.name}`)
       return snap
     }
+    // the admin holds a grant on each, as admin status gives no sight
+    await t.run(async (ctx) => {
+      for (const p of [mine, theirs])
+        await ctx.db.insert('project_access', {
+          project_id: p.id,
+          profile_id: f.admin.id,
+          level: 'viewer',
+        })
+    })
     const forUser = await snapshotOf(f.user)
     const forColleague = await snapshotOf(colleague)
     const forAdmin = await snapshotOf(f.admin)
@@ -196,7 +205,7 @@ describe('project labels in the store', () => {
     expect(P.project(mine.id)).toBeUndefined()
     expect(P.projectLabelOf(theirs.id)).toBe('Test')
 
-    // an organization admin sees both, so both carry their numbers
+    // the admin sees both, so both carry their numbers
     P = await start(forAdmin)
     expect(P.projectLabelOf(mine.id)).toBe(`Test #${mine.num}`)
     expect(P.projectLabelOf(theirs.id)).toBe(`Test #${theirs.num}`)

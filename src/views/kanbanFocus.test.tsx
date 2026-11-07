@@ -135,6 +135,8 @@ describe('focus on a Board card', { timeout: BOARD_TEST_TIMEOUT }, () => {
           name: 'Second Person',
           initials: 'SP',
         })
+        // a grant makes them an owner the picker offers
+        snap.access.push({ project_id: snap.projects[0].id, profile_id: 'second', level: 'user' })
         snap.issues.push(taskRow(snap, 'a', 'todo', 1), taskRow(snap, 'b', 'todo', 2))
       },
       { metaViz: 'assignees' },

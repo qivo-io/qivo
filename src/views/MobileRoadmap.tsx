@@ -418,7 +418,7 @@ export function MobileRoadmap({
               New task
             </Button>
           )}
-          {!info.wide && P.levelOn(info.id) === 'lead' && info.subIds.length === 0 && (
+          {!info.wide && P.canManageOwnProjectAccess(info.id) && info.subIds.length === 0 && (
             <Button type="button" onClick={() => actions.newProject({ parent: info.id })}>
               <Icon name="plus" size={16} />
               New sub-project

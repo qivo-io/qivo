@@ -1248,7 +1248,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
           icon="chart"
           title="Nothing to summarize yet"
           hint="Tasks live in sub-projects."
-          actionLabel={P.levelOn(info.id) === 'lead' ? 'New sub-project' : undefined}
+          actionLabel={P.canManageOwnProjectAccess(info.id) ? 'New sub-project' : undefined}
           onAction={() => actions.newProject({ parent: info.id })}
         />
       )

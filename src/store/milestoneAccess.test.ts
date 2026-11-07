@@ -118,13 +118,14 @@ describe('who may add a milestone', () => {
   })
 
   it('needs edit access on the meta project, from either scope', () => {
-    for (const uid of ['admin', 'metaUser']) {
-      expect(P.canAddMilestone(meta, uid)).toBe(true)
-      expect(P.canAddMilestone(sub, uid)).toBe(true)
-    }
+    expect(P.canAddMilestone(meta, 'metaUser')).toBe(true)
+    expect(P.canAddMilestone(sub, 'metaUser')).toBe(true)
   })
 
   it('refuses a person who can edit only the sub-project, or only view the meta', () => {
+    // and an organization admin without a grant, as admin status gives no Edit
+    expect(P.canAddMilestone(meta, 'admin')).toBe(false)
+    expect(P.canAddMilestone(sub, 'admin')).toBe(false)
     expect(P.canWrite(sub, 'subUser')).toBe(true)
     expect(P.canAddMilestone(sub, 'subUser')).toBe(false)
     expect(P.canAddMilestone(meta, 'subUser')).toBe(false)

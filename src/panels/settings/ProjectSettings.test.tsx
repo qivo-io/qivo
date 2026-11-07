@@ -109,7 +109,8 @@ function fixture(): Snapshot {
   ])
     snap.teams.push({ id, org_id: org, name, track_delay_default: false, created_at: NOW })
   snap.teamMembers.push({ team_id: 'crew', profile_id: 'leo', is_leader: false })
-  const base = snap.projects[0]
+  // the fixture's lead stays with its own project, which this replaces
+  const { lead_id: _lead, ...base } = snap.projects[0]
   snap.projects = [
     {
       ...base,

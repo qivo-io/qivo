@@ -87,6 +87,8 @@ const people =
   (snap: Snapshot) => {
     const me = snap.profiles[0]
     snap.profiles.push({ ...me, id: AISHA, name: 'Aisha Rahman', auth_user_id: 'account-aisha' })
+    // a grant, as admin status gives her no sight of the project
+    snap.access.push({ project_id: snap.projects[0].id, profile_id: AISHA, level: 'user' })
     rows.forEach((over, i) => {
       snap.issues.push({ ...taskRow(snap, `t${i + 1}`, 'progress', i + 1), ...over })
     })

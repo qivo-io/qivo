@@ -20,10 +20,11 @@
    store/ownerLoadsStandIn.setup.ts gives it, none needing a load for an
    organization Viewer, who gets `unknown` there; each walker's week at
    tenths on the client's clock, unavailable (`loads`) for a Viewer; the
-   sub-projects the reader may edit; and `hidden`. It reads no access rule
-   of its own: `sees` tells the projects the person sees, by default every
-   live one the workspace holds, and `writes` those they may edit, by
-   default every one for an admin and none for anyone else. It has no read
+   sub-projects the reader may edit; and `hidden`. `sees` tells the
+   projects the person sees, by default every live one the workspace holds,
+   and `writes` those they may edit, by default the level rule of
+   convex/lib/access.ts levelUnder over the workspace's leads, grants and
+   team shares, for an organization admin as for anyone. It has no read
    budget, so it answers over_budget, unavailable or unknown loads only
    where the workspace says so or `force` asks for them, and a lowered
    `ceiling` reaches over_ceiling without seeding past it.
@@ -161,6 +162,27 @@ export function teamSyncStandIn(
   if (force.state === 'access_unchecked')
     return { state: 'unavailable', reason: 'access_unchecked', message: SYNC_ACCESS_UNCHECKED }
   const projectById = new Map(workspace.projects.map((p) => [p.id, p]))
+  const myTeams = new Set(
+    workspace.teamMembers.filter((m) => m.profile_id === me.id).map((m) => m.team_id),
+  )
+  /* Whether `me` holds User on `p` by a grant or a team share. */
+  const writesOn = (p: Project | undefined) =>
+    p !== undefined &&
+    (workspace.access.some(
+      (a) => a.project_id === p.id && a.profile_id === me.id && a.level === 'user',
+    ) ||
+      workspace.teamAccess.some(
+        (s) => s.project_id === p.id && myTeams.has(s.team_id) && s.level === 'user',
+      ))
+  /* Whether `me` may edit sub-project `id` by the level rule: its lead or
+     its parent's, or User on it or its parent, never for a Viewer. */
+  const editsByLevel = (id: string) => {
+    const sub = projectById.get(id)
+    if (me.org_role === 'viewer' || sub === undefined) return false
+    const parent = sub.parent_id === undefined ? undefined : projectById.get(sub.parent_id)
+    const lead = (sub.lead_id ?? parent?.lead_id) === me.id || parent?.lead_id === me.id
+    return lead || writesOn(sub) || writesOn(parent)
+  }
   const live = (p: Project | undefined): p is Project =>
     p !== undefined && p.org_id === org && p.archived_at === undefined
   const seen = (p: Project | undefined): p is Project => live(p) && (sees ? sees(p.id) : true)
@@ -428,7 +450,7 @@ export function teamSyncStandIn(
     state: 'ok',
     sub_projects: subIds,
     top_projects: [...tops].sort(order),
-    editable: subIds.filter((id) => (writes ? writes(id) : me.org_role === 'admin')),
+    editable: subIds.filter((id) => (writes ? writes(id) : editsByLevel(id))),
     rows: rows.sort(byNumber).map((t) => ({
       ...out(t),
       blocked_by: blockedBy.get(t.id) ?? [],

@@ -181,6 +181,8 @@ async function reload(type?: 'reload' | 'back_forward') {
 function member(): Snapshot {
   const snap = plannerFixture()
   const base = snap.projects[0]
+  // the share alone gives access, so its removal takes it away
+  delete base.lead_id
   snap.projects.push({ ...base, id: 'plan', type: 'meta', key: 'PLAN', num: 2, name: 'Plan' })
   base.parent_id = 'plan'
   snap.profiles[0].org_role = 'user'
@@ -401,6 +403,33 @@ function bare(): Snapshot {
   snap.access.push({ project_id: 'bare', profile_id: me, level: 'user' })
   return snap
 }
+
+/** bare() without Bare's lead, so the person, holding `role`, sees it by
+    their User grant alone. */
+function granted(role: 'admin' | 'user'): Snapshot {
+  const snap = bare()
+  const project = snap.projects.find((p) => p.id === 'bare')
+  if (project) delete project.lead_id
+  snap.profiles[0].org_role = role
+  return snap
+}
+
+describe('New sub-project in a project without one', () => {
+  // whoever manages the project gets it: an organization admin by their
+  // role, and a standard user only as its lead, never by a grant
+  for (const [role, offered] of [
+    ['admin', true],
+    ['user', false],
+  ] as const)
+    it(`${offered ? 'offers' : 'does not offer'} it to ${role === 'admin' ? 'an admin' : 'a standard user'} who sees the project by a grant without leading it`, async () => {
+      for (const view of ['overview', 'roadmap', 'board']) {
+        await app(granted(role), `/app/testbed/${view}/p/3`)
+        await shows('Tasks live in sub-projects.')
+        expect(button('New sub-project') !== undefined, view).toBe(offered)
+        await reload()
+      }
+    })
+})
 
 /** `snap` with a milestone `name` on `project` a week from now, inside the
     Roadmap's default window. Several may share the week. */

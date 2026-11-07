@@ -42,7 +42,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from '../../convex/tests/helpers.setup'
 import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
@@ -419,15 +419,15 @@ async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
 }
 
 /** One access case, `shape` planted for a fresh seat of `role`, or the
- * fixture's admin without a shape, compared over every scope. */
+ * fixture's admin, who reads by grants, without a shape, compared over every scope. */
 async function compareShape(
   shape: (typeof SHAPES)[number] | null,
   role: 'user' | 'guest' | 'viewer' | 'admin',
 ) {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const subject =
-    role === 'admin'
+    role === 'admin' && shape === null
       ? f.admin
       : await plantSeat(t, { org_id: f.org.id, org_role: role, auth_user_id: `auth_${uuid()}` })
   if (shape !== null) await t.run((ctx) => shape[1](ctx, f, subject))
@@ -448,7 +448,7 @@ async function compareShape(
 }
 
 describe('access shapes', () => {
-  it('answers what the page derives for the admin', async () => {
+  it('answers what the page derives for the fixture’s admin, who reads by grants', async () => {
     const { found } = await compareShape(null, 'admin')
     expect(found?.rows).toBeGreaterThan(0)
     expect(found?.asks).toBeGreaterThan(0)
@@ -456,8 +456,9 @@ describe('access shapes', () => {
     expect(found?.blocked).toBeGreaterThan(0)
   })
 
-  for (const role of ['user', 'guest', 'viewer'] as const)
-    it(`answers what the page derives for a ${role} in every shape`, async () => {
+  // an admin's seat is judged by its own rows, as any member's
+  for (const role of ['admin', 'user', 'guest', 'viewer'] as const)
+    it(`answers what the page derives for ${role === 'admin' ? 'an' : 'a'} ${role} in every shape`, async () => {
       let showing = 0
       for (const shape of SHAPES) {
         const { found } = await compareShape(shape, role)
