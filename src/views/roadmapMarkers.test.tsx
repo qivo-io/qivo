@@ -386,9 +386,14 @@ describe("My view's milestones", { timeout: 30_000 }, () => {
   })
 
   it('keeps the read and its flags through a Priority change, which reloads the tasks', async () => {
-    await app(world(), '/app/~/roadmap/mine')
+    const snap = world()
+    // Luma's task is Low, so the Medium filter prunes Luma's track
+    const lumaTask = snap.issues.find((t) => t.id === 't-luma')
+    if (lumaTask) lumaTask.priority = 'low'
+    await app(snap, '/app/~/roadmap/mine')
     await roadmap()
     await waitFor(() => flag('m-plan'), "Plan's flag")
+    await waitFor(() => flag('m-luma'), "Luma's flag")
     expect(ranges()).toHaveLength(1)
     // the Roadmap's answer for the new filter row waits
     holdRoadmap = true
@@ -406,7 +411,7 @@ describe("My view's milestones", { timeout: 30_000 }, () => {
       () => document.querySelector('[data-workspace-view] [data-roadmap-state="loading"]'),
       'the reload',
     )
-    // the tracks of the last answer hold: the read stays the one live read
+    // the tracks of the last answer hold, so the read stays the one live read
     expect(ranges()).toHaveLength(1)
     expect(liveRanges()).toHaveLength(1)
     holdRoadmap = false
@@ -416,6 +421,20 @@ describe("My view's milestones", { timeout: 30_000 }, () => {
     await roadmap()
     // the flags return with the rows, on the same read
     await waitFor(() => flag('m-plan'), "Plan's flag again")
+    expect(ranges()).toHaveLength(1)
+    // must fail: a read that follows the pruned tracks names Plan alone
+    expect(liveRanges()).toHaveLength(1)
+    expect(liveRanges()[0].args.projects).toEqual(['luma', 'plan'])
+    // the filter pruned Luma's track, and its flag with it
+    expect(flag('m-luma')).toBeNull()
+    // cleared, Luma's flag returns from the same read
+    const clear = await waitFor(
+      () => document.querySelector<HTMLElement>('[aria-label="Clear priority filter"]'),
+      'the clear button',
+    )
+    await act(async () => clear.click())
+    await roadmap()
+    await waitFor(() => flag('m-luma'), "Luma's flag again")
     expect(ranges()).toHaveLength(1)
   })
 
