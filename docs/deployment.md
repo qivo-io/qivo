@@ -1777,6 +1777,21 @@ one call, which inside the design size is at most 1,000, and a tab whose
 organizations together hold more pictures shows initials until it reloads.
 The release changes no table, field or index, and there is no backfill.
 
+From the release after v0.1.157, the Roadmap reads its milestone flags for
+the weeks on screen from `milestones.between`, over the scope's top-level
+project or, in My view, the top-level projects of its rows, instead of the
+workspace's copy of every milestone, and My view draws each milestone on its
+own project's row. `milestones.between` first shipped in v0.1.97
+(`92434062`), and v0.1.103 (`fbcf0214`) made it refuse with
+`access_unchecked` where a bound of the caller's own access reads stops a
+check; against an earlier backend such a check fails as an error, which the
+Roadmap shows with Retry, so it fails closed either way. So this app needs
+a backend from v0.1.97 on, which the floors above already hold. The release
+changes no server function, sets no new rollback floor and needs no release
+step. Returning the app alone to an earlier release is safe, because that
+app reads the workspace's milestones, which the backend still sends. There
+is no schema change and no backfill.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.

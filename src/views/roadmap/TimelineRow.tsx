@@ -41,7 +41,13 @@ type Props = {
   context: StoreVersion
   observer: RowObserver
   guidesKey: string
+  /** the row's grid lines and dashed milestone guides, which render again
+      only when `guidesKey` changes */
   renderGuides: () => ReactNode
+  /** a track row's milestone flags in My view, which render again only
+      when `flagsKey` changes; other rows have none */
+  flagsKey?: string
+  renderFlags?: () => ReactNode
   onToggle: (id: string) => void
   onScope: (id: string) => void
   onOpen: (id: string) => void
@@ -70,6 +76,7 @@ function TimelineRowView({
   hasSubHeads,
   observer,
   renderGuides,
+  renderFlags,
   onToggle,
   onScope,
   onOpen,
@@ -311,6 +318,7 @@ function TimelineRowView({
             className="[position:relative]"
           >
             {renderGuides()}
+            {renderFlags?.()}
             {/* The due hover strip stays below bars and inside the grid. */}
             {due && (
               <HoverTooltip content={`Due ${P.fmtISO(row.issue.due)}, ${due.state}`}>
@@ -394,8 +402,11 @@ function TimelineRowView({
 // tooltip/popover trees. A task's view model keeps its identity while it, its
 // delay and its family stay the same (the workspace's model, or the one the
 // store shaped from the Roadmap's answer), and P.contextVersion covers
-// what else a row reads: permissions, dates and owner portraits. Guide
-// identity covers everything renderGuides reads.
+// what else a row reads: permissions, dates and owner portraits. The
+// milestone flags and guides come from the Roadmap's milestone read, whose
+// answers never join that context, so `guidesKey` and `flagsKey` cover
+// everything renderGuides and renderFlags read, each flag's id, week and
+// name among it, and only for the row's own track in My view.
 export const TimelineRow = memo(TimelineRowView, (before, after) => {
   if (
     before.row.kind !== after.row.kind ||
@@ -415,6 +426,7 @@ export const TimelineRow = memo(TimelineRowView, (before, after) => {
       key === 'row' ||
       key === 'due' ||
       key === 'renderGuides' ||
+      key === 'renderFlags' ||
       Object.is(before[key], after[key]),
   )
 })

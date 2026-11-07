@@ -115,6 +115,10 @@ let answersTasks = false
    `holdRoadmaps` is on. */
 let holdRoadmaps = false
 let answerRoadmaps = () => {}
+/* The milestone reads boot's server holds back while `holdMilestones` is
+   on, each sent by its entry in `heldMilestones` once a test calls it. */
+let holdMilestones = false
+const heldMilestones: (() => void)[] = []
 
 /** The task window's read (convex/taskWindow.ts task) of the task `ref`
     names in `snap`, by its number (QN-n) or uuid, as an editor's, with its
@@ -152,6 +156,8 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
   prepare(snap)
   threads.length = 0
   milestoneWatches.length = 0
+  holdMilestones = false
+  heldMilestones.length = 0
   // the store, once it loaded, for what the person sees and may edit
   let P: typeof import('./store/planner')['P'] | null = null
   // sends the workspace as the server holds it now
@@ -181,8 +187,12 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
       }
     } else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
     else if (isMilestoneRead(name)) {
-      answerMilestones(snap, name, args, next, fail)
       const watch = { name, stopped: false }
+      const answer = () => {
+        if (!watch.stopped) answerMilestones(snap, name, args, next, fail)
+      }
+      if (holdMilestones) heldMilestones.push(answer)
+      else answer()
       milestoneWatches.push(watch)
       return () => {
         watch.stopped = true
@@ -409,6 +419,118 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     await act(async () => vi.advanceTimersByTime(30 * MINUTE))
     await waitFor(() => !sync.isConnected, 'the released Team sync page')
     for (const slot of Object.values(SYNC_MILESTONE_SLOTS))
+      expect(P.milestoneRead(slot)).toEqual({ state: 'loading' })
+    expect(live()).toEqual([])
+  })
+
+  it("keeps the Roadmap's milestone reads while it is kept, two at most through a scope switch, and forgets them once it is not", async () => {
+    const org = await boot((snap) => {
+      // the fixture's project as a sub-project (p/1) of a top-level one,
+      // and another top-level project with a sub-project of its own (p/51),
+      // each with a milestone next week
+      const program = underProgram(snap).projects[1]
+      const day = new Date()
+      day.setDate(day.getDate() + 7 - ((day.getDay() + 6) % 7))
+      const week = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`
+      for (const [id, project, name] of [
+        ['ms-1', program.id, 'Program launch'],
+        ['ms-2', 'other', 'Other launch'],
+      ])
+        snap.milestones.push({
+          id,
+          project_id: project,
+          name,
+          week,
+          created_at: '2026-09-14T08:00:00.000Z',
+        })
+      snap.projects.push(
+        { ...program, id: 'other', key: 'OTH', num: 50, name: 'Other' },
+        {
+          ...snap.projects[0],
+          id: 'other-a',
+          key: 'OTA',
+          num: 51,
+          name: 'Other work',
+          parent_id: 'other',
+        },
+      )
+    })
+    const { P, ROADMAP_MILESTONE_SLOTS } = await import('./store/planner')
+    const live = () => milestoneWatches.filter((w) => !w.stopped && w.name === 'milestones:between')
+    // the answers the Roadmap's two slots hold
+    const held = () =>
+      ROADMAP_MILESTONE_SLOTS.map((slot) => P.milestoneRead(slot)).filter(
+        (read) => read.state !== 'loading',
+      )
+    await go(`/app/${org}/roadmap/p/1`)
+    const first = await shownPage('roadmap')
+    await waitFor(() => first.querySelector('[data-msflag="ms-1"]'), 'the flag')
+    expect(live()).toHaveLength(1)
+    // a pan reads the new window, then lets the old one go
+    await act(async () => first.querySelector<HTMLElement>('[data-win="fwd"]')?.click())
+    await waitFor(() => live().length === 1 && held().length === 1, 'the new window alone')
+    // another scope mounts a Roadmap anew, which takes the two slots over
+    await go(`/app/${org}/roadmap/p/51`)
+    const other = await waitFor(
+      () =>
+        document.querySelector('[data-workspace-view="roadmap"] [data-roadmap-milestones="ok"]'),
+      "the other project's flags",
+    )
+    expect(other.querySelector('[data-msflag="ms-2"]')).not.toBeNull()
+    expect(live()).toHaveLength(1)
+    expect(held()).toHaveLength(1)
+    // the slot that holds the shown answer
+    const holding = () =>
+      ROADMAP_MILESTONE_SLOTS.filter((slot) => P.milestoneRead(slot).state !== 'loading')
+    const [shown] = holding()
+    /** Hides the Roadmap behind the same scope's Board: its read stops and
+        keeps its answer, as a kept page's effects stop while it hides. */
+    const hide = async () => {
+      await go(`/app/${org}/board/p/51`)
+      await shownPage('kanban')
+      await waitFor(() => live().length === 0, 'the stopped read')
+      expect(held()).toEqual([expect.objectContaining({ state: 'ok', current: false })])
+      expect(document.querySelector('[data-hidden-view="roadmap"]')).not.toBeNull()
+    }
+    await hide()
+    // back on the Roadmap, while the server holds the read's answer back,
+    // the kept flag shows at once, refreshing, and the same slot reads again
+    holdMilestones = true
+    const watched = milestoneWatches.length
+    await go(`/app/${org}/roadmap/p/51`)
+    const back = await waitFor(
+      () =>
+        document.querySelector(
+          '[data-workspace-view="roadmap"] [data-roadmap-milestones="refreshing"]',
+        ),
+      'the kept flags, refreshing',
+    )
+    // must fail: a show that releases the shown slot, so the flag goes and
+    // the read starts again from loading
+    expect(back.querySelector('[data-msflag="ms-2"]')).not.toBeNull()
+    expect(live()).toHaveLength(1)
+    expect(milestoneWatches).toHaveLength(watched + 1)
+    expect(holding()).toEqual([shown])
+    expect(held()).toEqual([expect.objectContaining({ state: 'ok', current: false })])
+    holdMilestones = false
+    await act(async () => {
+      for (const send of heldMilestones.splice(0)) send()
+    })
+    await waitFor(
+      () =>
+        document.querySelector('[data-workspace-view="roadmap"] [data-roadmap-milestones="ok"]'),
+      'the current flags',
+    )
+    expect(holding()).toEqual([shown])
+    await hide()
+    // 30 minutes without input: the Roadmap is no longer kept, and its reads go
+    await act(async () => vi.advanceTimersByTime(30 * MINUTE))
+    await waitFor(
+      () => !document.querySelector('[data-hidden-view="roadmap"]'),
+      'the released Roadmap',
+    )
+    expect(held()).toEqual([])
+    for (const slot of ROADMAP_MILESTONE_SLOTS)
       expect(P.milestoneRead(slot)).toEqual({ state: 'loading' })
     expect(live()).toEqual([])
   })

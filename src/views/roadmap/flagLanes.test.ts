@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
   FLAG_LABEL_MAX_W,
+  FLAG_LANE_H,
   flagBandHeight,
   flagLanesShown,
   labelWidth,
   layoutFlags,
+  layoutTrackFlags,
+  TRACK_FLAG_LANES,
+  TRACK_FLAGS_H,
 } from './flagLanes'
+import { ROW_H } from './layout'
 
 /* The Roadmap header's milestone flags: no two flags of one week share a
    row, no label runs into the next flag of its row, a label near the
@@ -191,5 +196,215 @@ describe('flagLanesShown', () => {
     expect(flagLanesShown(6, 8, band)).toEqual({ lo: 1, hi: 1 })
     expect(flagLanesShown(6, 2 * 16, band)).toEqual({ lo: 2, hi: 3 })
     expect(flagLanesShown(3, 0, flagBandHeight(3))).toEqual({ lo: 0, hi: 2 })
+  })
+})
+
+/* My view's flags on a track row: the rows of flags its height holds,
+   names cut short rather than run into the next flag, every flag of a
+   crowded week in sight, apart and drawn so each keeps a strip to point
+   at, and a drag that moves one flag alone. */
+describe('layoutTrackFlags', () => {
+  const row = { w0: 0, weekW: WEEK_W, end: 20 * WEEK_W }
+  type TrackFlag = Parameters<typeof layoutTrackFlags>[0][number]
+  /** Each flag's box, diamond and label at its room, [from, to] in pixels,
+      by row and sorted, from the places layoutTrackFlags gives, at the week
+      each is drawn in. */
+  const trackBoxes = (flags: TrackFlag[], g = row) => {
+    const places = layoutTrackFlags(flags, g)
+    const rows = new Map<number, [number, number][]>()
+    for (const f of flags) {
+      const p = places.get(f.id)
+      if (!p) throw new Error(`no place for ${f.id}`)
+      const x = ((f.live ?? f.week) - g.w0) * g.weekW + (p.shift ?? 0)
+      const from = p.side === 'right' ? x - 4.5 : x + 4.5 - p.room
+      rows.set(p.lane, [...(rows.get(p.lane) ?? []), [from, from + p.room]])
+    }
+    return [...rows.values()].map((lane) => lane.sort((a, b) => a[0] - b[0]))
+  }
+  /** How much of `box` none of `over` covers, in pixels. */
+  const uncovered = (box: [number, number], over: [number, number][]) => {
+    let free = [box]
+    for (const [a, b] of over)
+      free = free.flatMap(([s, e]) => {
+        const left: [number, number] = [s, Math.min(e, a)]
+        const right: [number, number] = [Math.max(s, b), e]
+        return [left, right].filter(([x, y]) => y > x)
+      })
+    return free.reduce((sum, [s, e]) => sum + e - s, 0)
+  }
+  /** Each flag's diamond box, [from, to] in pixels, and its bottom. */
+  const diamonds = (flags: ReturnType<typeof flag>[], over: Partial<typeof row> = {}) => {
+    const g = { ...row, ...over }
+    const places = layoutTrackFlags(flags, g)
+    return flags.map((f) => {
+      const p = places.get(f.id)
+      if (!p) throw new Error(`no place for ${f.id}`)
+      const x = (f.week - g.w0) * g.weekW + (p.shift ?? 0)
+      return { id: f.id, from: x - 4.5, to: x + 4.5, bottom: p.bottom, lane: p.lane, room: p.room }
+    })
+  }
+
+  it('holds the two rows of flags a track row has room for', () => {
+    expect(TRACK_FLAG_LANES).toBe(2)
+    expect(TRACK_FLAGS_H).toBeLessThanOrEqual(ROW_H.track)
+    // must fail: a third row would not fit the row
+    expect(flagBandHeight(TRACK_FLAG_LANES + 1)).toBeGreaterThan(ROW_H.track)
+  })
+
+  it('puts two long names of neighbouring weeks in two rows, each whole', () => {
+    const a = 'Supplier contract review signed off'
+    const b = 'Pilot batch ready for the field test'
+    const places = layoutTrackFlags([flag('a', 3, a), flag('b', 4, b)], row)
+    expect(places.get('a')?.lane).not.toBe(places.get('b')?.lane)
+    expect(places.get('a')?.room).toBeGreaterThanOrEqual(wants(a))
+    expect(places.get('b')?.room).toBeGreaterThanOrEqual(wants(b))
+  })
+
+  it('cuts a third nearby name short in a shared row, never past the row', () => {
+    const long = 'A milestone with a long name'
+    const flags = [flag('a', 3, long), flag('b', 4, long), flag('c', 5, long)]
+    const places = layoutTrackFlags(flags, row)
+    const lanes = [...places.values()].map((p) => p.lane)
+    expect(Math.max(...lanes)).toBeLessThan(TRACK_FLAG_LANES)
+    expect([...places.values()].some((p) => p.room < wants(long))).toBe(true)
+    // must fail: a label of the track row that runs into the next flag of
+    // its row
+    for (const lane of trackBoxes(flags))
+      for (let i = 1; i < lane.length; i++) expect(lane[i - 1][1]).toBeLessThanOrEqual(lane[i][0])
+  })
+
+  it('keeps each of three milestones of one week in sight, apart and inside its week', () => {
+    const week = [
+      flag('a', 4, 'Pilot batch ready'),
+      flag('b', 4, 'Cloud beta'),
+      flag('c', 4, 'Audit'),
+    ]
+    for (const weekW of [WEEK_W, 24]) {
+      const shown = diamonds(week, { weekW })
+      for (const d of shown) {
+        expect(d.bottom).toBeGreaterThanOrEqual(0)
+        expect(d.bottom + FLAG_LANE_H).toBeLessThanOrEqual(TRACK_FLAGS_H)
+        expect(d.lane).toBeLessThan(TRACK_FLAG_LANES)
+        // within the week's column
+        expect(d.from).toBeGreaterThanOrEqual(4 * weekW - 4.5)
+        expect(d.to).toBeLessThanOrEqual(5 * weekW)
+      }
+      // must fail: two diamonds stacked on one spot, where one hides the other
+      const spots = shown.map((d) => `${d.from}|${d.bottom}`)
+      expect(new Set(spots).size).toBe(3)
+      // the nudged ones show their diamonds alone, beside the one in the top row
+      const top = shown.filter((d) => d.lane === TRACK_FLAG_LANES - 1)
+      expect(top).toHaveLength(2)
+      expect(top.every((d) => d.room === 9)).toBe(true)
+    }
+  })
+
+  it("stops a later week's label short of a crowded week's nudged diamonds", () => {
+    // four in week 4, of milestones stored before the weekly rule, and one
+    // in each of the next two weeks, near the timeline's end so names run
+    // left
+    const flags = [
+      flag('a', 4, 'Alpha supplier contract review'),
+      flag('b', 4, 'Beta supplier contract review'),
+      flag('g', 4, 'Gamma check'),
+      flag('z', 4, 'Zeta check'),
+      flag('d', 5, 'Delta field test'),
+      flag('e', 6, 'Epsilon supplier contract review'),
+    ]
+    const g = { w0: 0, weekW: 36, end: 252 }
+    const places = layoutTrackFlags(flags, g)
+    expect(places.get('g')?.shift).toBeGreaterThan(0)
+    expect(places.get('z')?.shift).toBeGreaterThan(0)
+    // must fail: Epsilon's left-running label over Zeta's diamond, where it
+    // takes Zeta's clicks
+    for (const lane of trackBoxes(flags, g))
+      for (let i = 1; i < lane.length; i++) expect(lane[i - 1][1]).toBeLessThanOrEqual(lane[i][0])
+    expect(places.get('e')?.room).toBeGreaterThan(9)
+  })
+
+  it('draws a crowded week in the order of its shifts, each diamond with a strip to point at', () => {
+    // six in one week, saved before the weekly rule, the days in another
+    // order than the names, as the server answers them by day
+    const byDay = ['Zeta', 'Epsilon', 'Alpha', 'Delta', 'Beta', 'Gamma'].map((name, i) =>
+      flag(`d${i}`, 4, name),
+    )
+    for (const [weekW, strip] of [
+      [WEEK_W, 9],
+      [24, 3.75],
+    ] as const) {
+      const g = { ...row, weekW, end: 20 * weekW }
+      const places = layoutTrackFlags(byDay, g)
+      expect([...places.keys()].sort()).toEqual(byDay.map((f) => f.id).sort())
+      // the order to draw them in, each diamond's box
+      const drawn = [...places].map(([id, p]) => {
+        const x = 4 * weekW + (p.shift ?? 0)
+        const from = p.side === 'right' ? x - 4.5 : x + 4.5 - p.room
+        return { id, lane: p.lane, x, box: [from, from + p.room] as [number, number] }
+      })
+      const top = drawn.filter((d) => d.lane === TRACK_FLAG_LANES - 1)
+      expect(top).toHaveLength(5)
+      // must fail: drawn by day, a diamond before both its neighbours
+      for (let i = 1; i < top.length; i++) expect(top[i].x).toBeGreaterThan(top[i - 1].x)
+      for (const [i, d] of drawn.entries()) {
+        const later = drawn.slice(i + 1).filter((o) => o.lane === d.lane)
+        const diamond: [number, number] = [d.x - 4.5, d.x + 4.5]
+        const over = later.map((o) => o.box)
+        expect(uncovered(diamond, over)).toBeGreaterThanOrEqual(strip)
+      }
+    }
+  })
+
+  it('moves a dragged flag of a crowded week alone, to its new week, with a place every time', () => {
+    // three in week 4 and two in week 12, each drawn at the week trackFlags
+    // passes as live, its saved week until dragged
+    const still = (id: string, week: number, name: string) => ({
+      ...flag(id, week, name),
+      live: week,
+    })
+    const crowded = [still('a', 4, 'Alpha'), still('b', 4, 'Beta'), still('c', 4, 'Gamma')]
+    const other = [still('p', 12, 'Pilot'), still('q', 12, 'Quality')]
+    const before = layoutTrackFlags([...crowded, ...other], row)
+    expect(before.get('c')?.shift).toBeGreaterThan(0)
+    const during = (id: string, live: number) => {
+      const flags = [...crowded, ...other].map((f) => (f.id === id ? { ...f, live } : f))
+      const places = layoutTrackFlags(flags, row)
+      // must fail: a flag with no place, which the row does not draw
+      expect([...places.keys()].sort()).toEqual(flags.map((f) => f.id).sort())
+      // must fail: another flag that moves, or loses its nudge, meanwhile
+      for (const f of flags) if (f.id !== id) expect(places.get(f.id)).toEqual(before.get(f.id))
+      return places.get(id)
+    }
+    // the nudged one, to an empty week and to the other crowded week, on
+    // the week's line in the row's rows
+    for (const live of [9, 12]) {
+      const place = during('c', live)
+      expect(place?.lane).toBeLessThan(TRACK_FLAG_LANES)
+      // must fail: a nudge kept from the week it left
+      expect(place?.shift).toBeUndefined()
+    }
+    expect(during('c', 9)?.room).toBeGreaterThanOrEqual(wants('Gamma'))
+    // one of the first two, to an empty week, with room for its name
+    const alpha = during('a', 9)
+    expect(alpha?.lane).toBeLessThan(TRACK_FLAG_LANES)
+    expect(alpha?.room).toBeGreaterThanOrEqual(wants('Alpha'))
+  })
+
+  it("keeps the name of a week's only milestone after a crowded week", () => {
+    const flags = [
+      flag('a', 4, 'Alpha supplier contract review'),
+      flag('b', 4, 'Beta supplier contract review'),
+      flag('c', 4, 'Gamma check'),
+      flag('d', 5, 'Delta field test'),
+      flag('e', 6, 'Epsilon'),
+    ]
+    const places = layoutTrackFlags(flags, { ...row, weekW: 36, end: 20 * 36 })
+    expect([...places.values()].every((p) => p.lane < TRACK_FLAG_LANES)).toBe(true)
+    // the crowded week's third is nudged beside the one in the top row
+    expect(places.get('c')?.shift).toBeGreaterThan(0)
+    // must fail: a later week's only milestone nudged, its name gone
+    for (const id of ['d', 'e']) {
+      expect(places.get(id)?.shift).toBeUndefined()
+      expect(places.get(id)?.room).toBeGreaterThan(9)
+    }
   })
 })

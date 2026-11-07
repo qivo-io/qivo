@@ -603,6 +603,33 @@ describe('Milestones', { timeout: 30_000 }, () => {
     },
   )
 
+  it("gives focus to the next flag on My view's row, else the previous one, else the filter field, after the flag deleted its milestone", async () => {
+    // My view, where Plan's task is the person's, so Plan has a row
+    history.replaceState(null, '', '/app/~/roadmap/mine')
+    await boot((snap) => {
+      plan(snap)
+      snap.issues[0].assignee_id = snap.profiles[0].id
+      snap.milestones.forEach((m, n) => {
+        m.week = mondayIn(n + 1)
+      })
+    })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const row = (id: string) =>
+      waitFor(
+        () => document.querySelector<HTMLElement>(`[data-track="plan"] [data-msflag="${id}"]`),
+        id,
+      )
+    await deleteFrom(await row('alpha'))
+    expect(document.activeElement).toBe(await row('beta'))
+    await deleteFrom(await row('beta'))
+    expect(document.querySelector('[data-msflag]')).toBeNull()
+    // My view's toolbar has no Milestone, so its filter field takes focus
+    expect(named('Milestone')).toBeUndefined()
+    const field = document.querySelector('[data-roadmap-toolbar] [data-filter-group] input')
+    expect(field).not.toBeNull()
+    expect(document.activeElement).toBe(field)
+  })
+
   it.each([
     ['Overview', false, 'data-overview-milestone', 'New sub-project'],
     ['phone agenda', true, 'data-agenda-milestone', 'New milestone'],

@@ -325,11 +325,23 @@
 //                        (Upcoming stops after its first row),
 //                        past-loading and past-error (Past alone), and
 //                        more-error (a Load more fails while the read it
-//                        grows answers); several joined by commas
+//                        grows answers); for the Roadmap's flags, which
+//                        read milestones:between for the weeks on screen,
+//                        roadmap-loading, roadmap-error, roadmap-refused,
+//                        roadmap-unchecked (the access_unchecked refusal),
+//                        roadmap-partial (the read stops after its first
+//                        row) and roadmap-too-many (the page lowers the
+//                        store's cap of projects one read names to none,
+//                        scripts/perf/entry.tsx, so the Roadmap asks
+//                        nothing); several joined by commas
 //   milestoneweeks (0)   plants that many weekly milestones from this week
 //                        on and as many in the weeks before it on the
 //                        visible program, instead of four two weeks apart,
 //                        for the window's Load more, Past and search
+//   milestoneprograms (1) plants the milestones of milestoneweeks, or the
+//                        four two weeks apart, on each of the first that
+//                        many programs instead of the visible one alone,
+//                        so My view's Roadmap shows flags on several rows
 //   milestonecap         the window's sections read batches of that many
 //                        and hold at most twice that (the page lowers
 //                        src/lib/milestoneSection.ts MILESTONE_SECTION,
@@ -725,11 +737,20 @@ const forcedInbox = (() => {
   return ['loading', 'failed', 'incomplete', 'more'].includes(state) ? state : undefined
 })()
 /* The milestone reads' forced states (the `milestones` parameter), as the
-   stand-in's `force` takes them; sync-too-many is the page's
-   (scripts/perf/entry.tsx). */
+   stand-in's `force` takes them; sync-too-many and roadmap-too-many are
+   the page's (scripts/perf/entry.tsx). The roadmap-* states force the
+   range read alone, which Team sync's opening also reads for this week and
+   next. */
 const forcedMilestones = (() => {
   const force = {}
   const sync = { 'sync-loading': 'loading', 'sync-error': 'error', 'sync-partial': 'stopped' }
+  const roadmap = {
+    'roadmap-loading': 'loading',
+    'roadmap-error': 'error',
+    'roadmap-refused': 'refused',
+    'roadmap-unchecked': 'unchecked',
+    'roadmap-partial': 'stopped',
+  }
   // the window's sections: Upcoming, Past and a Load more, each alone
   const sections = {
     'window-loading': ['upcoming', 'loading'],
@@ -747,6 +768,7 @@ const forcedMilestones = (() => {
     else if (state === 'open-refused') force.get = 'refused'
     else if (state === 'sync-refused') force.section = force.between = 'refused'
     else if (state in sync) force.section = force.between = sync[state]
+    else if (state in roadmap) force.between = roadmap[state]
     else if (state in sections) force[sections[state][0]] = sections[state][1]
   }
   // a Load more is an ask above the page's first batch (milestonecap)
@@ -1059,27 +1081,36 @@ const unheldLabels = new Set(
 /* What the planted weekly milestones are called, by turns. */
 const MILESTONE_NAMES = ['Design review', 'Prototype build', 'Field test', 'Supplier audit']
 const milestoneWeeks = option('milestoneweeks', 0)
-const milestones =
+/* The programs the milestones are planted on (`milestoneprograms`), the
+   visible one first. */
+const milestoneHosts = programs.slice(
+  0,
+  Math.min(programCount, Math.max(1, option('milestoneprograms', 1))),
+)
+/* How many milestones each program holds. */
+const milestonesEach = milestoneWeeks > 0 ? 2 * milestoneWeeks : 4
+const milestones = milestoneHosts.flatMap((host, p) =>
   milestoneWeeks > 0
     ? Array.from({ length: 2 * milestoneWeeks }, (_, n) => {
         // from this week on, then back from last week
         const k = n % milestoneWeeks
         const upcoming = n < milestoneWeeks
         return {
-          id: id('9', n),
-          project_id: visible.meta.id,
+          id: id('9', p * milestonesEach + n),
+          project_id: host.meta.id,
           name: `${MILESTONE_NAMES[k % MILESTONE_NAMES.length]} ${Math.floor(k / MILESTONE_NAMES.length) + 1}${upcoming ? '' : ' signed off'}`,
           week: day(upcoming ? 7 * k : -7 * (k + 1)),
           created_at: now,
         }
       })
     : Array.from({ length: 4 }, (_, n) => ({
-        id: id('9', n),
-        project_id: visible.meta.id,
+        id: id('9', p * milestonesEach + n),
+        project_id: host.meta.id,
         name: `Milestone ${n + 1}`,
         week: day(n * 14),
         created_at: now,
-      }))
+      })),
+)
 // no Backlog: the Roadmap leaves some of those out, and every phase wants them all
 const STATUSES = ['todo', 'todo', 'progress', 'progress', 'review', 'done']
 /* Ten tasks a block in one project. Inside a block the task at 5 is a

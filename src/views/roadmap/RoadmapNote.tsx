@@ -3,11 +3,13 @@
    narrowing message of a selection past the Roadmap's limits, a Roadmap
    that is not available or did not load, a text filter past its limit, a
    wait, and a row source that did not bring a task. Each is an empty state
-   (components/ViewNote.tsx). The Roadmap keeps its toolbar, and where the
-   scope has milestones its timeline frame, beside every one, and none
-   names a shorter window as a way to narrow. The window bounds only Done
-   tasks, since unfinished work shows whatever its dates. None shows part
-   of a Roadmap. */
+   (components/ViewNote.tsx). The Roadmap keeps its toolbar beside every
+   one, and its timeline frame in a project, a sub-project and My view, and
+   none names a shorter window as a way to narrow. The window bounds only
+   Done tasks, since unfinished work shows whatever its dates; the line
+   about the milestone flags may offer it (roadmapMilestones.ts
+   markerLine), as the window bounds their range read. None shows part of
+   a Roadmap. */
 
 import type { ReactNode } from 'react'
 import { LIMITS } from '../../../convex/lib/limits'

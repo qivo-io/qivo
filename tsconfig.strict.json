@@ -40,6 +40,7 @@
     "src/lib/weekDrafts.ts",
     "src/lib/workload.ts",
     "src/views/roadmap/autoMoveInputs.ts",
+    "src/views/roadmap/roadmapMilestones.ts",
     "src/store/boardStandIn.setup.ts",
     "src/store/deletedItemsStandIn.setup.ts",
     "src/store/entityLookup.ts",

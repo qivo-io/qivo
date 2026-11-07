@@ -261,6 +261,60 @@ describe('memoized task rows', () => {
     expect(await renderedBy(renamePerson)).toEqual(['one', 'three', 'two'])
   })
 
+  it("render a Roadmap track row's flags again only when its flags key changes", async () => {
+    // what the Roadmap holds of My view's flags on the track, by key
+    const page = { flagsKey: 'one flag', guidesKey: 'grid' }
+    const drawn: string[] = []
+    const observer = { setRoot: noop, observe: () => noop, dispose: noop }
+    await mount(({ P, TimelineRow }) => {
+      const proj = P.projects[0]
+      return (
+        <TimelineRow
+          row={{ kind: 'track', pid: proj.id, proj }}
+          top={0}
+          h={40}
+          remH={0}
+          open
+          planning={false}
+          revealing={false}
+          fade={1}
+          due={null}
+          start={null}
+          end={null}
+          w0={0}
+          w1={12}
+          weekW={36}
+          timelineW={468}
+          hasSubHeads={false}
+          context={P.contextVersion}
+          observer={observer}
+          guidesKey={page.guidesKey}
+          renderGuides={() => null}
+          flagsKey={page.flagsKey}
+          renderFlags={() => {
+            drawn.push(page.flagsKey)
+            return null
+          }}
+          onToggle={noop}
+          onScope={noop}
+          onOpen={noop}
+          onSchedule={noop}
+          onCommit={noop}
+          onEdgeReveal={noop}
+        />
+      )
+    })
+    expect(drawn).toEqual(['one flag'])
+    // a render of the page with the same keys skips the row
+    await rerenderedBy(noop)
+    expect(drawn).toEqual(['one flag'])
+    // a renamed or moved flag of the track renders it again
+    await rerenderedBy(() => {
+      page.flagsKey = 'renamed'
+    })
+    expect(drawn).toEqual(['one flag', 'renamed'])
+  })
+
   it('render a Team sync card again only for its task, its verdict and its blockers', async () => {
     // what the page holds besides the store, as TeamSync keeps it: the
     // agenda's verdicts and blockers by task, each blockers array the same

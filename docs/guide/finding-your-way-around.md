@@ -208,7 +208,8 @@ Press **My tasks**, **Stale** or **Focus** again to turn it off. Use the
 **×** on Assignee, Priority or the text field to clear that filter.
 
 Filtering hides lanes, tracks and sub-project bands with no matches. Status
-columns, the Roadmap grid and milestones remain. When nothing matches, use
+columns, the Roadmap grid and a project's milestones remain. In My view a
+track the filters hide takes its milestones with it. When nothing matches, use
 **Clear filters** in the empty-state message. This keeps your scope and
 **Focus** setting.
 

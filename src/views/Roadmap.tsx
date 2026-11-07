@@ -5,7 +5,11 @@
    Which tasks it shows, their headings' Remaining, the arrows and Auto-move's
    inputs come from the server's Roadmap reads (roadmap/useRoadmapView.ts),
    never from the workspace's task lists, and Team utilization and the
-   planning panel read people's loads from the owner-load cache. */
+   planning panel read people's loads from the owner-load cache. Its
+   milestone flags come from the server's range read for the weeks on
+   screen (roadmap/useRoadmapMilestones.ts), never from the workspace's
+   milestones. In a project or sub-project they sit in the header, and in
+   My view each sits on its own project's track row. */
 import type React from 'react'
 import {
   memo,
@@ -35,7 +39,14 @@ import { isIssueGroup } from '../lib/issueGroups'
 import { type AutoMove, autoMoveTitle } from '../lib/schedule'
 import { captureWeekDates, restoreWeekDates } from '../lib/weekDrafts'
 import { fitEndWeekAgainst, type LoadItem, plannableHoursOf } from '../lib/workload'
-import { type IssueFilters, type IssueVM, P, ROADMAP_SLOT, type ScopeInfo } from '../store/planner'
+import {
+  type IssueFilters,
+  type IssueVM,
+  type MilestoneVM,
+  P,
+  ROADMAP_SLOT,
+  type ScopeInfo,
+} from '../store/planner'
 import { planItemsOf } from '../store/viewDelay'
 import { LandscapeRoadmap } from './LandscapeRoadmap'
 import { MobileRoadmap } from './MobileRoadmap'
@@ -43,13 +54,22 @@ import { ResourceStrip, type TeamPerson } from './Resources'
 import { STRIP_HEAD_H, stripHeight } from './resourcesLayout'
 import { autoMoveKey, autoMoveMoves, autoMoveTasks } from './roadmap/autoMoveInputs'
 import { type ChunkMemory, type LaidRow, stableChunks } from './roadmap/chunks'
-import { type FlagView, flagBandHeight, flagLanesIn, layoutFlags } from './roadmap/flagLanes'
+import {
+  type FlagView,
+  flagBandHeight,
+  flagLanesIn,
+  layoutFlags,
+  layoutTrackFlags,
+  TRACK_FLAGS_H,
+} from './roadmap/flagLanes'
 import { GRID_X, GUTTER_W, HEAD_STICK, LABEL_W, ROW_H, SUB_STICK } from './roadmap/layout'
 import { PlanCard, type PlanSession } from './roadmap/PlanCard'
 import { RoadmapNote } from './roadmap/RoadmapNote'
+import { type MarkerState, markerLine, markerProjects } from './roadmap/roadmapMilestones'
 import { createRowObserver } from './roadmap/rowObserver'
 import { FlagBand, MilestoneFlag } from './roadmap/TimelineMarks'
 import { TimelineRow } from './roadmap/TimelineRow'
+import { useRoadmapMilestones } from './roadmap/useRoadmapMilestones'
 import {
   arrowsMissing,
   autoMoveUnavailable,
@@ -65,10 +85,12 @@ const BASE_WEEK_W = 36
 // Below this width the grid scrolls; wider weeks fill the selected window.
 const MIN_WEEK_W = 24
 
-// Week labels and milestone flags share a header above the task grid. The
-// flag band under the week numbers is two rows of flags tall, and taller when
-// milestones need more rows (roadmap/flagLanes.ts), up to what the panel
-// leaves after its smallest share of task rows and Team.
+// Week labels and, in a project or sub-project, milestone flags share a
+// header above the task grid. The flag band under the week numbers is two
+// rows of flags tall, and taller when milestones need more rows
+// (roadmap/flagLanes.ts), up to what the panel leaves after its smallest
+// share of task rows and Team. My view has no flag band, as its flags sit
+// on their projects' track rows.
 const HEAD_PAD_T = 6 // breathing room above the week numbers
 const WEEK_BAND_H = 33 // calendar week number over the week's first workday
 
@@ -106,14 +128,24 @@ type PendingRequest = RoadmapRequest & { kind: 'plan' | 'reveal' }
 /* No request of either kind. */
 const NO_REQUESTS = { plan: null, reveal: null }
 
-/** The Roadmap's own root, which names its state for drives, tests and the
-    benchmark (data-roadmap-root, data-roadmap-state) and is busy while it
-    waits for an answer. */
-function RoadmapRoot({ view, children }: { view: RoadmapView; children: React.ReactNode }) {
+/** The Roadmap's own root, which names its state and its milestone flags'
+    for drives, tests and the benchmark (data-roadmap-root,
+    data-roadmap-state, data-roadmap-milestones) and is busy while it waits
+    for an answer. */
+function RoadmapRoot({
+  view,
+  milestones,
+  children,
+}: {
+  view: RoadmapView
+  milestones: MarkerState
+  children: React.ReactNode
+}) {
   return (
     <div
       data-roadmap-root
       data-roadmap-state={view.state}
+      data-roadmap-milestones={milestones}
       aria-busy={view.busy || undefined}
       // the root lays nothing out: the timeline, the landscape portal and the
       // phone's agenda keep the places they had in the page
@@ -415,24 +447,6 @@ function Roadmap({
     const m = P.metaOf(projectId)
     return m ? m.id : projectId
   }
-  /* A milestone flag draws a full-height guide line down the grid, so it reads
-     as a deadline for the tracks it crosses — and a flag whose project has no
-     track left would rule that line through somebody else's rows. Only a scope
-     whose tracks ARE projects can ask that, which is exactly `wide`: inside one
-     project the tracks are its sub-projects while its milestones belong to the
-     project itself, so there would be no id to match and every flag would
-     vanish. With nothing pruned the test is a no-op — every visible project
-     has a track, and `info.milestones` holds only those projects' flags.
-     The Overview's milestone list is unaffected: it names each one's project
-     on the row, so there it is context rather than a claim.
-     `tracks.length` guards the one case where the rule has nothing to protect:
-     a filter that pruned the rail to nothing leaves no rows for a stray line
-     to run through, and the timeline that stays behind the "nothing matches"
-     note should be the same frame at every scope — week grid, window, flags. */
-  const trackIds = new Set(tracks.map((tr) => tr.proj.id))
-  const projMilestones =
-    wide && tracks.length ? info.milestones.filter((m) => trackIds.has(m.project)) : info.milestones
-
   const jump = Math.max(1, Math.ceil(NW * 0.2)) // pan = 20% of the span
   const isDefaultWin = P.sameWin(win, winDefault)
   // whether the DEFAULT itself has been moved off the one everybody starts on
@@ -778,6 +792,11 @@ function Roadmap({
     msLiveRef.current = n
     setMsLive(n)
   }
+  /* A drop sends the flag's new week with the stored name and day of the
+     answer it came from as what the person saw (P.setMilestone `seen`),
+     read when it drops (storedOf), as a flag in a row that did not render
+     again since may hold an older render's commit. A move sends only the
+     day, so its expected value is that answer's stored day. */
   const msCommit = (id, epoch) => {
     const w = msLiveRef.current[id]
     msLiveRef.current = {}
@@ -787,7 +806,7 @@ function Roadmap({
       window.showToast?.('The week grid changed mid-drag. Move discarded.', 'error')
       return
     }
-    if (w != null) P.setMilestone(id, w)
+    if (w != null) P.setMilestone(id, w, markers.storedOf(id))
   }
   // what the flag band shows while it scrolls (FlagBand), kept only when
   // its rows in sight or its scrollbar change, so scrolling it seldom renders
@@ -806,6 +825,57 @@ function Roadmap({
     setMsLive({})
     setResourceWeek(null)
   }, [P.gridEpoch])
+
+  /* ---------- milestone flags, from the server's range read ----------
+     The flags of the weeks on screen come from milestones.between over the
+     projects markerProjects names (roadmap/roadmapMilestones.ts), a
+     project or sub-project's top-level project, or in My view the top-level
+     projects of the scope's tracks before the toolbar's filters prune them,
+     so a filter never asks again. While My view's answer reloads for the
+     same scope, as after a Priority change, the projects it named last
+     hold, so the read neither drops nor asks again. The read stops, keeping
+     its flags, while the page or the tab hides, while the phone's agenda
+     shows in place of the timeline, and while Team fills My view's panel,
+     whose rows the flags sit on; it reads nothing in All projects, which
+     asks to choose a project. */
+  const lastNamed = useRefR<{ scope: string; projects: string[] } | null>(null)
+  const markerScope = markerProjects(
+    info,
+    allTracks,
+    held,
+    view.state === 'loading' && lastNamed.current?.scope === info.id
+      ? lastNamed.current.projects
+      : null,
+  )
+  if (mine && held && markerScope) lastNamed.current = { scope: info.id, projects: markerScope }
+  const showMobileAgenda =
+    mobile && mobileLayout !== 'timeline' && !session && !focusPlan && !revealTask
+  // whether the flags show at all, which they do neither under the
+  // phone's agenda nor on My view's rows while Team fills the panel
+  const markersActive = !showMobileAgenda && !(wide && stripMode === 'max')
+  const markers = useRoadmapMilestones(markerScope, w0, w1, markersActive)
+  /* Where the flags draw. In a project or sub-project, every flag of the
+     read sits in the header and its guide runs through every row. In My
+     view each sits on its own project's track row, with its guide through
+     that track's rows only, so a project's guide never crosses another
+     project's rows. A milestone whose project has no track on screen, as
+     one a filter pruned, draws nowhere. */
+  const projMilestones: readonly MilestoneVM[] = wide ? [] : markers.view.rows
+  const trackMilestones = new Map<string, MilestoneVM[]>()
+  if (wide) {
+    const shown = new Set(tracks.map((tr) => tr.proj.id))
+    for (const m of markers.view.rows)
+      if (shown.has(m.project))
+        trackMilestones.set(m.project, [...(trackMilestones.get(m.project) ?? []), m])
+  }
+  // the line beside the toolbar, which says nothing while the flags show
+  // nowhere and their read stops, and stands down where the Roadmap's own
+  // note already says that access could not be checked
+  const markersLine =
+    !markersActive ||
+    (view.answer?.state === 'unavailable' && view.answer.reason === 'access_unchecked')
+      ? null
+      : markerLine(markers.view, mine, P.fmtISO)
 
   /* Tracks and their sub-project headers both start open, and both fold from
      this ONE set (a project id and a sub-project id can never collide). It
@@ -1402,6 +1472,22 @@ function Roadmap({
           {depsLine}
         </p>
       )}
+      {/* why the milestone flags are not whole, while the timeline shows;
+          the flags it has stay meanwhile */}
+      {markersLine && (
+        <p
+          data-roadmap-milestones={markers.view.state}
+          role="status"
+          className="[flex-basis:100%] [display:flex] [flex-wrap:wrap] [align-items:center] [justify-content:center] [gap:0_8px] [text-align:center] [font-size:var(--fs-xs)] [color:var(--text-3)]"
+        >
+          {markersLine}
+          {markers.view.state === 'failed' && (
+            <Button type="button" variant="ghost" size="sm" onClick={markers.retry}>
+              Retry
+            </Button>
+          )}
+        </p>
+      )}
     </div>
   )
 
@@ -1449,10 +1535,9 @@ function Roadmap({
 
   /* The frame an empty roadmap keeps: the toolbar, everything that still has
      something to do when there is no grid under it. The window controls are
-     NOT here: they live in the timeline's header, and an empty scope without
-     milestones has no timeline. */
-  const showMobileAgenda =
-    mobile && mobileLayout !== 'timeline' && !session && !focusPlan && !revealTask
+     NOT here: they live in the timeline's header, which All projects and a
+     person with no project do without (emptyNote below). The phone shows
+     its agenda in place of the timeline (showMobileAgenda above). */
   const mobileAgenda = (
     corrections: number,
     onAutoCorrect: () => void,
@@ -1495,7 +1580,9 @@ function Roadmap({
   /** `timeline` with the Roadmap's root around it, the landscape portal
       on a phone. */
   const withRoot = (timeline: React.ReactNode) => (
-    <RoadmapRoot view={view}>{withMobileTimeline(timeline)}</RoadmapRoot>
+    <RoadmapRoot view={view} milestones={markers.view.state}>
+      {withMobileTimeline(timeline)}
+    </RoadmapRoot>
   )
   const timelineToolbar = (moves: { id: string; start: number; end: number }[]) =>
     mobile ? (
@@ -1554,11 +1641,15 @@ function Roadmap({
   }, [teamKey])
 
   /* ---------- empty state ---------- */
-  /* Why a scope has nothing to schedule. Without a milestone the note is the
-     page (emptyFrame). With one, the timeline stays behind the note, as it
-     does behind "Nothing matches your filters", so its flags still show
-     (and the phone's agenda lists them): the empty state says why there are
-     no rows, not that the scope plans nothing. */
+  /* Why a scope has nothing to schedule. In a project or sub-project, and
+     in My view, the timeline stays behind the note, as it does behind
+     "Nothing matches your filters", with its week header and window
+     controls, and in a project with its header's flags of the window. The
+     empty state says why there are no rows, not that the scope plans
+     nothing. My view has no flags then, as they sit on the rows. All
+     projects, which asks to choose a project, and a person with no
+     project show the note alone (emptyFrame). The phone's agenda lists
+     the scope's milestones under its note. */
   const note = <RoadmapNote view={view} info={info} actions={actions} phone={mobile} />
   let emptyNote: React.ReactNode = null
   if (info.subIds.length === 0) {
@@ -1599,8 +1690,12 @@ function Roadmap({
        Only a current answer says so, never a wait or a refusal. */
     emptyNote = <EmptyState icon="user" title="Nothing assigned to you" />
   }
-  if (emptyNote && info.milestones.length === 0)
-    return <RoadmapRoot view={view}>{emptyFrame(emptyNote)}</RoadmapRoot>
+  if (emptyNote && wide && (!mine || info.metas.length === 0))
+    return (
+      <RoadmapRoot view={view} milestones={markers.view.state}>
+        {emptyFrame(emptyNote)}
+      </RoadmapRoot>
+    )
 
   /* Build rows; tasks within a group ordered by COMMITTED start date, so the
      list re-sorts only when a drag is released, never mid-drag.
@@ -1662,11 +1757,13 @@ function Roadmap({
   // header only where the roadmap actually has them
   const hasSubHeads = rows.some((r) => r.kind === 'sub')
   /* Every track hides itself when a filter empties it, so a zero-match filter
-     leaves the rail bare — say so, the same words and the same one action the
-     board's note carries. It stays INSIDE the timeline rather than replacing
-     it with a full-screen empty state: the window controls, the week grid and
-     the milestone flags are still the answer to "what am I looking at", and a
-     filter is a thing you undo, not a state you are in. */
+     leaves the rail bare. Say so, with the same words and the same one
+     action the board's note carries. It stays INSIDE the timeline rather
+     than replacing it with a full-screen empty state. The window controls
+     and the week grid are still the answer to "what am I looking at", and a
+     filter is a thing you undo, not a state you are in. In a project or
+     sub-project the header's milestone flags stay too. My view's flags sit
+     on the tracks' rows, so they go with the tracks the filter prunes. */
   // only a current answer says nothing matches, never one on its way
   const noMatches = clearable && tracks.length === 0 && view.current
 
@@ -1717,15 +1814,16 @@ function Roadmap({
       ? resourceWeek
       : null
   const splitT = splitAreaH || 480
-  /* The header's milestone flags, each in the row that keeps its label
-     readable (roadmap/flagLanes.ts), and the header's height for them. The
-     flag rows take at most what the split area leaves after Team's
-     smallest strip, the week numbers and a project, a sub-project and a
-     task row (or every row, when there are fewer), so a short screen, such
-     as a phone turned to landscape, keeps tasks in view. Rows past that,
-     for a week with more milestones, scroll in the band, and its labels end
-     before the band's scrollbar. Rows come from the saved weeks, so a drag
-     moves only its flag. */
+  /* A project's or sub-project's milestone flags in the header, each in
+     the row that keeps its label readable (roadmap/flagLanes.ts), and the
+     header's height for them. The flag rows take at most what the split
+     area leaves after Team's smallest strip, the week numbers and a
+     project, a sub-project and a task row (or every row, when there are
+     fewer), so a short screen, such as a phone turned to landscape, keeps
+     tasks in view. Rows past that, for a week with more milestones, scroll
+     in the band, and its labels end before the band's scrollbar. Rows come
+     from the saved weeks, so a drag moves only its flag. My view's header
+     has no band, and is the band's height shorter. */
   const flagLanes = flagLanesIn(
     splitT -
       PANEL_GAP -
@@ -1742,7 +1840,7 @@ function Roadmap({
     { w0, weekW, end: NW * weekW, maxLanes: flagLanes, view: msView },
   )
   const flagsScroll = flagRows.lanes > flagLanes
-  const msBandH = flagBandHeight(Math.min(flagRows.lanes, flagLanes))
+  const msBandH = wide ? 0 : flagBandHeight(Math.min(flagRows.lanes, flagLanes))
   const headH = HEAD_PAD_T + WEEK_BAND_H + msBandH
   // Fit all visible people in the heatmap up to a 620px
   // panel. Leave the actual timeline's header, project/sub-project bands and
@@ -1858,17 +1956,36 @@ function Roadmap({
         style={{ left: (activeResourceWeek - w0) * weekW, width: weekW }}
       />
     )
-  const guidesKey = JSON.stringify([
-    P.gridEpoch,
-    P.TODAY_ISO,
-    P.TODAY_POS,
-    w0,
-    w1,
-    weekW,
-    activeResourceWeek,
-    projMilestones.map((milestone) => [milestone.id, msWeek(milestone)]),
-  ])
-  const guides = () => (
+  /* The milestones whose guides and flags a row of track `track` draws:
+     in My view that track's own, elsewhere the header's, through every
+     row. */
+  const milestonesOf = (track: string): readonly MilestoneVM[] =>
+    wide ? (trackMilestones.get(track) ?? []) : projMilestones
+  /* What a row's guides read, by track, so a drag of one project's
+     milestone renders that track's rows and no other's (a rename changes
+     only the track row's flags key, trackFlagsKeyOf). It holds the grid,
+     today, the window, the week width, the resource week, and each
+     milestone's id and the week it is drawn in. */
+  const guidesKeys = new Map<string, string>()
+  const guidesKeyOf = (track: string) => {
+    const key = wide ? track : ''
+    let found = guidesKeys.get(key)
+    if (found === undefined) {
+      found = JSON.stringify([
+        P.gridEpoch,
+        P.TODAY_ISO,
+        P.TODAY_POS,
+        w0,
+        w1,
+        weekW,
+        activeResourceWeek,
+        milestonesOf(track).map((milestone) => [milestone.id, msWeek(milestone)]),
+      ])
+      guidesKeys.set(key, found)
+    }
+    return found
+  }
+  const guides = (track: string) => (
     <>
       {resourceWeekHighlight()}
       {Array.from({ length: NW }).map((_, i) => {
@@ -1889,11 +2006,12 @@ function Roadmap({
           />
         )
       })}
-      {projMilestones
+      {milestonesOf(track)
         .filter((m) => msWeek(m) >= w0 && msWeek(m) <= w1)
         .map((m) => (
           <div
             key={m.id}
+            data-msguide={m.id}
             style={{
               left: (msWeek(m) - w0) * weekW,
               borderLeft: `1px dashed color-mix(in oklab, ${P.MILESTONE_COLOR} 40%, transparent)`,
@@ -1913,6 +2031,61 @@ function Roadmap({
       )}
     </>
   )
+
+  /* My view's flags on track `track`'s row, in the rows of flags its
+     height holds (roadmap/flagLanes.ts layoutTrackFlags), at its bottom and
+     not scrolling, drawn in the order the layout gives them, so a crowded
+     week's nudged diamonds each draw over the one before. A flag rides with
+     its row, so a pinned heading keeps it in sight and a folded track keeps
+     it. A drag stays in its row. The box takes no pointer, so the row's
+     Today line keeps its tooltip under it, and only the flags take it
+     (MilestoneFlag). */
+  const trackFlagsKeyOf = (track: string) =>
+    JSON.stringify([
+      P.gridEpoch,
+      w0,
+      w1,
+      weekW,
+      milestonesOf(track).map((m) => [m.id, m.week, msWeek(m), m.name, P.canWrite(m.project)]),
+    ])
+  const trackFlags = (track: string) => {
+    const flags = milestonesOf(track).filter((m) => m.week >= w0 && m.week <= w1)
+    const places = layoutTrackFlags(
+      flags.map((m) => ({ id: m.id, week: m.week, name: m.name, live: msWeek(m) })),
+      { w0, weekW, end: NW * weekW },
+    )
+    const byId = new Map(flags.map((m) => [m.id, m]))
+    return (
+      <div
+        data-msrow={track}
+        style={{ height: TRACK_FLAGS_H }}
+        className="[position:absolute] [left:0] [right:0] [bottom:0] [pointer-events:none]"
+      >
+        {[...places].map(([id, place]) => {
+          const m = byId.get(id)
+          return (
+            m &&
+            msWeek(m) >= w0 &&
+            msWeek(m) <= w1 && (
+              <MilestoneFlag
+                key={m.id}
+                m={m}
+                week={msWeek(m)}
+                w0={w0}
+                w1={w1}
+                weekW={weekW}
+                place={place}
+                movable={P.canWrite(m.project)}
+                onLive={msOnLive}
+                onCommit={msCommit}
+                onEdit={editMilestone}
+              />
+            )
+          )
+        })}
+      </div>
+    )
+  }
 
   /* Heading rows PIN while the rows they head scroll past, so a long track
      never leaves you reading nameless bars. A sticky element travels only
@@ -1942,7 +2115,7 @@ function Roadmap({
   // an empty scope offers no moves, as its emptyFrame does
   if (showMobileAgenda)
     return (
-      <RoadmapRoot view={view}>
+      <RoadmapRoot view={view} milestones={markers.view.state}>
         {emptyNote ? mobileAgenda(0, () => {}, emptyNote) : mobileAgenda(moves.length, autoArrange)}
       </RoadmapRoot>
     )
@@ -2206,34 +2379,38 @@ function Roadmap({
                       </HoverTooltip>
                     )
                   })}
-                  <FlagBand
-                    width={timelineW}
-                    height={msBandH}
-                    lanes={flagRows.lanes}
-                    scrolls={flagsScroll}
-                    onView={onMsView}
-                  >
-                    {shownMilestones.map((m) => {
-                      const place = flagRows.places.get(m.id)
-                      return (
-                        place && (
-                          <MilestoneFlag
-                            key={m.id}
-                            m={m}
-                            week={msWeek(m)}
-                            w0={w0}
-                            w1={w1}
-                            weekW={weekW}
-                            place={place}
-                            movable={P.canWrite(m.project)}
-                            onLive={msOnLive}
-                            onCommit={msCommit}
-                            onEdit={editMilestone}
-                          />
+                  {/* a project's or sub-project's flags; My view's sit on rows */}
+                  {!wide && (
+                    <FlagBand
+                      width={timelineW}
+                      height={msBandH}
+                      lanes={flagRows.lanes}
+                      scrolls={flagsScroll}
+                      busy={markers.view.busy}
+                      onView={onMsView}
+                    >
+                      {shownMilestones.map((m) => {
+                        const place = flagRows.places.get(m.id)
+                        return (
+                          place && (
+                            <MilestoneFlag
+                              key={m.id}
+                              m={m}
+                              week={msWeek(m)}
+                              w0={w0}
+                              w1={w1}
+                              weekW={weekW}
+                              place={place}
+                              movable={P.canWrite(m.project)}
+                              onLive={msOnLive}
+                              onCommit={msCommit}
+                              onEdit={editMilestone}
+                            />
+                          )
                         )
-                      )
-                    })}
-                  </FlagBand>
+                      })}
+                    </FlagBand>
+                  )}
                   {/* THE TODAY LINE IS NOT DRAWN HERE. It belongs to the grid, and
                 it starts under the header's bottom border — where the rows do.
                 Run up through this band and it crosses the one row of text the
@@ -2302,7 +2479,9 @@ function Roadmap({
                 className="relative min-w-full"
               >
                 {(() => {
-                  const renderRow = (L: LaidRow) => {
+                  /* Row `L` of track `track`, whose milestones' guides it
+                     draws, and on a track row in My view their flags. */
+                  const renderRow = (L: LaidRow, track: string) => {
                     const { row, h, top } = L
                     const isTrack = row.kind === 'track'
                     const isSub = row.kind === 'sub'
@@ -2352,8 +2531,14 @@ function Roadmap({
                         hasSubHeads={hasSubHeads}
                         context={P.contextVersion}
                         observer={rowObserver}
-                        guidesKey={guidesKey}
-                        renderGuides={guides}
+                        guidesKey={guidesKeyOf(track)}
+                        renderGuides={() => guides(track)}
+                        {...(wide && isTrack
+                          ? {
+                              flagsKey: trackFlagsKeyOf(track),
+                              renderFlags: () => trackFlags(track),
+                            }
+                          : {})}
                         onToggle={toggle}
                         onScope={onScope}
                         onOpen={onOpenIssue}
@@ -2369,7 +2554,9 @@ function Roadmap({
                   /* Task rows render in chunks a delivery skips unless one of
                      their rows changed, so a change to one task renders its
                      chunk alone. A chunk reads everything else through
-                     `chunkDeps`. */
+                     `chunkDeps` and its track's guides key, so a change to
+                     one project's milestones in My view renders that
+                     track's chunks alone. */
                   const chunkDeps = [
                     session?.issueId,
                     revealed?.id,
@@ -2382,7 +2569,6 @@ function Roadmap({
                     P.contextVersion,
                     P.TODAY_ISO,
                     rowObserver,
-                    guidesKey,
                     toggle,
                     onScope,
                     onOpenIssue,
@@ -2390,34 +2576,38 @@ function Roadmap({
                     commit,
                     revealEdge,
                   ]
-                  const chunks = (pid: string, list: LaidRow[]) => {
+                  const chunks = (pid: string, list: LaidRow[], track: string) => {
                     let memory = chunkMemory.current.get(pid)
                     if (!memory) {
                       memory = { owners: new Map(), places: new Map(), next: 0 }
                       chunkMemory.current.set(pid, memory)
                     }
+                    const deps = [...chunkDeps, guidesKeyOf(track)]
                     return stableChunks(list, memory).map((chunk) => (
                       <RowChunk
                         key={`${pid}:${chunk.key}`}
                         rows={chunk.rows}
                         rings={barRing}
-                        deps={chunkDeps}
-                        render={renderRow}
+                        deps={deps}
+                        render={(row) => renderRow(row, track)}
                       />
                     ))
                   }
-                  return groups.map((g) => (
-                    <div key={`track:${g.head.row.pid}`}>
-                      {renderRow(g.head)}
-                      {chunks(g.head.row.pid, g.own)}
-                      {g.bands.map((b) => (
-                        <div key={`band:${b.head.row.pid}`}>
-                          {renderRow(b.head)}
-                          {chunks(b.head.row.pid, b.rows)}
-                        </div>
-                      ))}
-                    </div>
-                  ))
+                  return groups.map((g) => {
+                    const track = g.head.row.pid
+                    return (
+                      <div key={`track:${track}`}>
+                        {renderRow(g.head, track)}
+                        {chunks(track, g.own, track)}
+                        {g.bands.map((b) => (
+                          <div key={`band:${b.head.row.pid}`}>
+                            {renderRow(b.head, track)}
+                            {chunks(b.head.row.pid, b.rows, track)}
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  })
                 })()}
 
                 {/* the rail pruned to nothing — sticky-left so the note sits in the

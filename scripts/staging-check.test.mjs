@@ -46,6 +46,7 @@ import {
   IMAGE_SPACER,
   INBOX_BADGE_STEP,
   imageDownloads,
+  inDefaultWindow,
   isSiteOf,
   LABEL_MENTION_NAMES,
   LABEL_MENTION_STEP,
@@ -53,6 +54,7 @@ import {
   LABELS_STEP,
   LIST_REFUSALS,
   MILESTONE_STEP,
+  MILESTONES_BETWEEN_QUERY,
   NOT_LOADED_YET,
   newerWalk,
   ON_DEMAND_STEP,
@@ -80,6 +82,7 @@ import {
   REMOVAL_EXPECTED,
   REMOVAL_STEP,
   REST_BODY_FIELDS,
+  ROADMAP_MILESTONES_STEP,
   ROADMAP_QUERY,
   rateLimitWait,
   redact,
@@ -226,6 +229,42 @@ describe('staging check REST contract', () => {
     // must fail: the run's own week is not in the past
     expect(freePastMilestoneWeek([], '2026-11-06', 1)).not.toBe('2026-11-02')
   })
+  it("checks the Roadmap's flags on the deployment's range read, in the header and on My view's rows", () => {
+    expect(ROADMAP_MILESTONES_STEP).toBe('ui/roadmap-milestones')
+    expect(MILESTONES_BETWEEN_QUERY).toBe('milestones:between')
+    // the marks the step waits on
+    const roadmap = readFileSync(new URL('../src/views/Roadmap.tsx', import.meta.url), 'utf8')
+    for (const mark of ['data-roadmap-milestones={milestones}', 'data-msrow={track}'])
+      expect(roadmap).toContain(mark)
+    const marks = readFileSync(
+      new URL('../src/views/roadmap/TimelineMarks.tsx', import.meta.url),
+      'utf8',
+    )
+    for (const mark of ['data-msband', 'data-msflag={m.id}']) expect(marks).toContain(mark)
+    const row = readFileSync(
+      new URL('../src/views/roadmap/TimelineRow.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(row).toContain('data-track={isTrack ? row.pid : undefined}')
+    // it runs after ui/milestones in the run's order
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const main = script.slice(script.indexOf('await milestoneWindowCheck()\n'))
+    expect(main.indexOf('await roadmapMilestonesCheck()')).toBeGreaterThan(0)
+    expect(main.indexOf('await roadmapMilestonesCheck()')).toBeLessThan(
+      main.indexOf('await teamSyncCheck()'),
+    )
+    // the window is two weeks back to six on, with a week to spare at each end
+    expect(inDefaultWindow('2026-11-23', '2026-11-06', 1)).toBe(true)
+    expect(inDefaultWindow('2026-12-07', '2026-11-06', 1)).toBe(true)
+    expect(inDefaultWindow('2026-10-26', '2026-11-06', 1)).toBe(true)
+    // must fail: past the window's last week less the spare one, or before it
+    expect(inDefaultWindow('2026-12-14', '2026-11-06', 1)).toBe(false)
+    expect(inDefaultWindow('2026-10-19', '2026-11-06', 1)).toBe(false)
+    // a week starting on Sunday
+    expect(inDefaultWindow('2026-12-06', '2026-11-06', 0)).toBe(true)
+    expect(inDefaultWindow('2026-12-13', '2026-11-06', 0)).toBe(false)
+  })
+
   it("checks the removal window on a sub-project of its own, in the window's words", () => {
     const modals = readFileSync(new URL('../src/panels/Modals.tsx', import.meta.url), 'utf8')
     expect(modals).toContain("'Reassign and remove'")

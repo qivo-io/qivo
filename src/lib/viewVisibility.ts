@@ -4,8 +4,9 @@
    views/roadmap/useRoadmapView.ts, the milestone reads, P.watchMilestones,
    of the Milestones window, panels/Modals.tsx useMilestoneGet for the
    milestone it opened on and a kept editor's, and its Upcoming and Past
-   sections, views/useMilestoneSection.ts, and of Team sync's opening,
-   views/teamSync/TeamOpening.tsx useSyncMilestoneReads, and Team sync's
+   sections, views/useMilestoneSection.ts, of Team sync's opening,
+   views/teamSync/TeamOpening.tsx useSyncMilestoneReads, and of the
+   Roadmap's flags, views/roadmap/useRoadmapMilestones.ts, and Team sync's
    agenda and last comments, views/teamSync/useSyncMeeting.ts and
    views/TeamSync.tsx) while the tab or the desktop window is hidden. It
    follows document.visibilityState, not focus. A window people can see

@@ -12,7 +12,17 @@
    dragged flag keeps to the rows in sight, the layout counts the flags out
    of sight for the band's "+N more" signs, and labels end before a
    scrollbar that takes space. Rows and sides still come from the whole
-   timeline, so a scrollbar never moves a flag, at most cuts a name short. */
+   timeline, so a scrollbar never moves a flag, at most cuts a name short.
+
+   In My view each milestone sits on its own project's track row instead
+   (layoutTrackFlags), in the rows of flags the row's height holds
+   (TRACK_FLAG_LANES), which never scroll. A week with more milestones of
+   one project than those rows, which only a guest organization's week
+   start or milestones stored before the weekly rule cause, draws the rest
+   in the top row, each diamond nudged sideways within its week, where the
+   labels of that row stop short of it as they stop short of any flag. */
+
+import { ROW_H } from './layout'
 
 /** Height of one row of flags, diamond and one line of label. */
 export const FLAG_LANE_H = 16
@@ -51,14 +61,22 @@ export type FlagPlace = {
   room: number
   /** The flag's offset from the band's bottom edge, in pixels. */
   bottom: number
+  /** How far right of its week's line the diamond stands, in pixels, for
+      a flag a track row nudges within its week (layoutTrackFlags). */
+  shift?: number
 }
 type Grid = { w0: number; weekW: number; end: number }
+/** Where a pinned flag stands, its diamond alone in row `lane` and
+    `shift` pixels right of its week's line, whatever room its label would
+    have. */
+type Pin = { lane: number; shift: number }
 /** What a scrolling band shows: its rows `lo` to `hi` whole, and `bar`
     pixels at its right edge that its scrollbar takes, 0 where scrollbars
     overlay the content. */
 export type FlagView = { lo: number; hi: number; bar: number }
-/** A flag at the week it is drawn in, with its label's full width. */
-type Item = { id: string; week: number; x: number; side: FlagSide; label: number }
+/** A flag at the week it is drawn in, with its label's full width, and
+    the shift of a pinned one, which shows its diamond alone. */
+type Item = { id: string; week: number; x: number; side: FlagSide; label: number; shift?: number }
 
 /** An estimate of `name`'s width in the label font (Instrument Sans 600 at
     11 px), within about 5% for ordinary names. It only chooses rows and
@@ -156,25 +174,52 @@ const slack = (a: Item, b: Item) =>
 const roomFor = (label: number) =>
   DIAMOND_W + Math.max(0, Math.min(FLAG_LABEL_MAX_W - DIAMOND_W, label))
 
-/** Each flag's row, side and room, for flags on a grid that starts at week
-    `w0` with `weekW` pixels a week and ends `end` pixels in. Labels open at
-    most `maxLanes` rows; only a week with more flags opens more. Rows come
-    from the saved weeks, so a flag being dragged moves alone: the others
-    keep their places and the band its height until the drop. In a band
-    that scrolls, `view` is what it shows: a dragged flag stays in the rows
-    in sight, `above` and `below` count the flags in the rows above and
-    below them, and no label runs under the scrollbar. Answers the rows used
-    too, at least one. */
-export function layoutFlags(
-  flags: Flag[],
-  grid: Grid & { maxLanes: number; view?: FlagView | null },
-): { lanes: number; places: Map<string, FlagPlace>; above: number; below: number } {
-  const sorted = flags
+/** `flags` in the order that gives them rows, by saved week, then name,
+    then id. */
+const inOrder = (flags: Flag[]) =>
+  flags
     .slice()
     .sort((a, b) => a.week - b.week || a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+
+/** Whether `sorted[i]` (inOrder) comes after the first `perWeek` flags of
+    its saved week. */
+const pastWeek = (sorted: Flag[], i: number, perWeek: number) =>
+  i >= perWeek && sorted[i - perWeek].week === sorted[i].week
+
+/** Each flag's row, side and room, for flags on a grid that starts at week
+    `w0` with `weekW` pixels a week and ends `end` pixels in. Labels open at
+    most `maxLanes` rows; only a week with more flags opens more. A flag in
+    `pinned` stands where its pin says, its diamond alone, and the labels
+    of its row stop short of it as they stop short of any flag; it must
+    come after the flags of its week that take rows, in the order that
+    gives them rows, so each row stays in the order of its diamonds. Rows
+    come from the saved weeks, so a flag being dragged moves alone. The
+    others keep their places and the band its height until the drop, and a
+    dragged pinned flag stands on its new week's line like any other. In a
+    band that scrolls, `view` is what it shows, so a dragged flag stays in
+    the rows in sight, `above` and `below` count the flags in the rows
+    above and below them, and no label runs under the scrollbar. Answers
+    the rows used too, at least one. */
+export function layoutFlags(
+  flags: Flag[],
+  grid: Grid & {
+    maxLanes: number
+    pinned?: ReadonlyMap<string, Pin>
+    view?: FlagView | null
+  },
+): { lanes: number; places: Map<string, FlagPlace>; above: number; below: number } {
+  const sorted = inOrder(flags)
   const rows: Item[][] = []
   for (const flag of sorted) {
     const it = itemAt(flag, flag.week, grid)
+    const pin = grid.pinned?.get(flag.id)
+    if (pin) {
+      // after the flags before it in its row, never in a row past the last
+      const lane = Math.min(pin.lane, rows.length)
+      const at: Item = { ...it, x: it.x + pin.shift, side: 'right', label: 0, shift: pin.shift }
+      rows[lane] = [...(rows[lane] ?? []), at]
+      continue
+    }
     // the rows whose last flag is in another week, the only ones it may join
     const open = rows.flatMap((row, lane) => {
       const last = row[row.length - 1]
@@ -201,15 +246,18 @@ export function layoutFlags(
   const boxes = rows.map((row, lane) =>
     row.map((it, i) => {
       const label =
-        it.side === 'right'
-          ? i < row.length - 1
-            ? share(it, row[i + 1]).a
-            : shownEnd - it.x - HALF
-          : i > 0
-            ? share(row[i - 1], it).b
-            : it.x - HALF
+        it.shift !== undefined
+          ? 0
+          : it.side === 'right'
+            ? i < row.length - 1
+              ? share(it, row[i + 1]).a
+              : shownEnd - it.x - HALF
+            : i > 0
+              ? share(row[i - 1], it).b
+              : it.x - HALF
       const room = roomFor(label)
-      places.set(it.id, { lane, side: it.side, room, bottom: bottom(lane) })
+      const place = { lane, side: it.side, room, bottom: bottom(lane) }
+      places.set(it.id, it.shift === undefined ? place : { ...place, shift: it.shift })
       const shown = Math.min(room, DIAMOND_W + it.label)
       const from = it.side === 'right' ? it.x - HALF : it.x + HALF - shown
       return { id: it.id, from, to: from + shown }
@@ -240,11 +288,17 @@ export function layoutFlags(
         best = { lane, side: it.side, room, bottom: bottom(lane) }
     }
     // no row in sight has room for its diamond: it passes over the others
-    // in its own, the row it was pressed in
+    // in its own, the row it was pressed in, on its new week's line
     const own = places.get(flag.id)
     const edge = it.side === 'right' ? shownEnd - it.x - HALF : it.x - HALF
     if (best) places.set(flag.id, best)
-    else if (own) places.set(flag.id, { ...own, side: it.side, room: roomFor(edge) })
+    else if (own)
+      places.set(flag.id, {
+        lane: own.lane,
+        side: it.side,
+        room: roomFor(edge),
+        bottom: own.bottom,
+      })
   }
   const lanesOf = [...places.values()].map((p) => p.lane)
   return {
@@ -253,4 +307,56 @@ export function layoutFlags(
     above: view ? lanesOf.filter((lane) => lane > view.hi).length : 0,
     below: view ? lanesOf.filter((lane) => lane < view.lo).length : 0,
   }
+}
+
+/** The rows of flags a Roadmap track row holds, two, as many as its
+    height leaves room for beside the band's padding. */
+export const TRACK_FLAG_LANES = Math.floor((ROW_H.track - BAND_PAD) / FLAG_LANE_H)
+
+/** The height of the box a track row draws its flags in, at its bottom. */
+export const TRACK_FLAGS_H = flagBandHeight(TRACK_FLAG_LANES)
+
+/**
+ * Each flag's row, side, room and bottom in a Roadmap track row of My view
+ * (TRACK_FLAG_LANES rows, a box TRACK_FLAGS_H tall), for flags on `grid`,
+ * in the order to draw them in. Only the first TRACK_FLAG_LANES flags of
+ * each saved week, in layoutFlags' order, take those rows, so no third row
+ * opens and a later week's flag keeps its name. The rest of a week with
+ * more milestones than the rows hold are pinned in the top row, each
+ * diamond nudged right of its week's line by one more step and kept within
+ * the week, with its name in its tooltip only. Every label in the top row
+ * stops short of a nudged diamond as it stops short of a flag's own, so
+ * that week's flag there shows its diamond alone where its name would run
+ * right. The map holds the flags in layoutFlags' order, the order to draw
+ * them in, so each nudged diamond draws over the one before it and every
+ * diamond keeps a strip no other covers. Where the week holds its nudged
+ * diamonds a full step apart, DIAMOND_W + 2 pixels, that strip is the
+ * whole diamond, wide enough to point at; in a narrower week it narrows to
+ * the step between them, 3.75 pixels for six milestones in a week 24
+ * pixels wide, the narrowest a week gets. A dragged flag, also a nudged
+ * one, takes the place layoutFlags gives a dragged flag, on its new
+ * week's line.
+ */
+export function layoutTrackFlags(flags: Flag[], grid: Grid): Map<string, FlagPlace> {
+  const lanes = TRACK_FLAG_LANES
+  const sorted = inOrder(flags)
+  // the flags of each saved week past the row's rows, in their order
+  const past = new Map<number, Flag[]>()
+  for (const [i, flag] of sorted.entries())
+    if (pastWeek(sorted, i, lanes)) past.set(flag.week, [...(past.get(flag.week) ?? []), flag])
+  const pinned = new Map<string, Pin>()
+  for (const extra of past.values()) {
+    // the room right of the week's line, shared by the nudged diamonds
+    const step = Math.min(DIAMOND_W + 2, Math.max(1, grid.weekW - DIAMOND_W) / extra.length)
+    for (const [k, flag] of extra.entries())
+      pinned.set(flag.id, { lane: lanes - 1, shift: (k + 1) * step })
+  }
+  const { places } = layoutFlags(flags, { ...grid, maxLanes: lanes, pinned })
+  // layoutFlags counts bottoms from the rows it used, the box from its own
+  const out = new Map<string, FlagPlace>()
+  for (const flag of sorted) {
+    const place = places.get(flag.id)
+    if (place) out.set(flag.id, { ...place, bottom: laneBottom(lanes, place.lane) })
+  }
+  return out
 }
