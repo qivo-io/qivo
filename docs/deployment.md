@@ -1687,7 +1687,7 @@ which Convex builds at deploy with no backfill, adds no table and needs no
 backfill. The release whose app first calls `claimDownload` makes this
 release that app's backend floor, and its own paragraph says so.
 
-From the release after v0.1.148, `notifications.settings`, `setDelivery`,
+From the release after v0.1.153, `notifications.settings`, `setDelivery`,
 `beat`, `end`, `claimAlerts` and `claimSummary` hold each login's
 Notification delivery setting, its signed-in sessions, its delivery records
 and its catch-up checkpoint, and the cron `notification record expiry`
