@@ -354,6 +354,34 @@ describe('the open rule', { timeout: 30_000 }, () => {
     expect(go).not.toHaveBeenCalled()
   })
 
+  it('ends the line of a wait a press on a held row replaces, also once its caller hides', async () => {
+    const next = base()
+    const held = top(next, 'Held')
+    await load(next)
+    const after = later(next)
+    const late = top(after, 'Late arrival')
+    const list = [
+      { id: late, name: 'Late arrival' },
+      { id: held, name: 'Held' },
+    ]
+    await render(list)
+    await press(late)
+    expect(line()).toBe('Opening Late arrival…')
+    await press(held)
+    expect(go).toHaveBeenCalledExactlyOnceWith(held)
+    expect(line()).toBe('')
+    // the kept page shown again says nothing of the replaced wait
+    await render(list, 'hidden')
+    await render(list)
+    expect(line()).toBe('')
+    await act(async () => {
+      publish(after)
+      asks[0].ok(late)
+    })
+    await settle()
+    expect(go).toHaveBeenCalledTimes(1)
+  })
+
   it("drops the wait and its line on the person's navigation and on another list's open, so its answer opens nothing", async () => {
     const next = base()
     await load(next)
