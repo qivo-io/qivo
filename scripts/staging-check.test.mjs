@@ -298,6 +298,15 @@ describe('staging check REST contract', () => {
     // a week starting on Sunday
     expect(inDefaultWindow('2026-12-06', '2026-11-06', 0)).toBe(true)
     expect(inDefaultWindow('2026-12-13', '2026-11-06', 0)).toBe(false)
+    // the flag's move goes to the next week M leaves free, still in the
+    // window, through the store's flag move
+    const moved = freeMilestoneWeek(['2026-11-23'], '2026-11-06', 1)
+    expect(moved).toBe('2026-11-30')
+    expect(inDefaultWindow(moved, '2026-11-06', 1)).toBe(true)
+    expect(script).toContain('window.PLANNER.setMilestone(id, window.PLANNER.isoToWeek(day))')
+    const planner = readFileSync(new URL('../src/store/planner.ts', import.meta.url), 'utf8')
+    for (const mark of ['setMilestone: (id: string, week: number', 'isoToWeek'])
+      expect(planner).toContain(mark)
   })
   it("checks the Overview's Upcoming and collapsed Past on the deployment's section read, and My view's with mine", () => {
     expect(OVERVIEW_MILESTONES_STEP).toBe('ui/overview-milestones')
