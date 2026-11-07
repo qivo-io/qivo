@@ -352,7 +352,9 @@ const MENTION_SEARCH = 'data-sync-mention-search'
     nothing, as a later opening holds its own choice and check. `initial`
     is chosen (`onWho` without a press) once a batch row or an `eligible`
     answer holds them, while the person has picked no one (`picked`). A
-    failed or refused check chooses nothing. */
+    failed or refused check chooses nothing. The list's end shows only once
+    the list for the typed text has opened, so a changed search never
+    shows the older search's end. */
 function MentionPeople({
   it,
   initial,
@@ -374,8 +376,9 @@ function MentionPeople({
   const [text, setText] = useState('')
   const search = useSettledSearch(text, LIMITS.search)
   const query = search.settled
+  const listKey = `${it.org}\n${it.uuid}\n${query}`
   const list = usePagedList<OwnerChoices, OwnerChoice>({
-    key: `${it.org}\n${it.uuid}\n${query}`,
+    key: listKey,
     source: {
       kind: 'once',
       read: (at) => P.recipientChoices({ task, search: query, cursor: at.after }),
@@ -383,6 +386,12 @@ function MentionPeople({
     batch: (answer) => (answer.state === 'ready' ? answer : null),
     id: (row) => row.id,
     most: PICKER_CAPS.recipients,
+  })
+  // the list the paged list opened, which it opens after the render that
+  // names a new one, so that render never ends with an older text's end
+  const opened = useRef<string | null>(null)
+  useEffect(() => {
+    opened.current = listKey
   })
   // the choice the window opened with, kept from before; `initial` is
   // chosen only for a window that opened without one
@@ -419,7 +428,8 @@ function MentionPeople({
     if (offered && !picked && who === null) onWho(offered, false)
   }, [offered, picked, who])
   const rows = list.rows.filter((row) => row.id !== who?.id)
-  const end = query === search.typed && !search.tooLong ? listEnd(list, query !== '') : 'loading'
+  const answered = query === search.typed && !search.tooLong && opened.current === listKey
+  const end = answered ? listEnd(list, query !== '') : 'loading'
   const row = (person: Recipient, chosen: boolean) => (
     <Button
       key={person.id}

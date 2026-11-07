@@ -612,6 +612,42 @@ describe('the Team sync @ window’s people', () => {
     expect(note()?.value).toBe('Can you check it?')
   })
 
+  it('never shows an older search’s end while the next search’s list opens', async () => {
+    await load(3)
+    await mount(vi.fn())
+    await openWindow()
+    await search('zzz')
+    expect(listText()).toContain('No people match.')
+    // every text the list showed while the search was cleared, also for
+    // one render: each text before a change, each node added or removed,
+    // and each changed text as it stands
+    const shown: string[] = []
+    const take = (records: MutationRecord[]) => {
+      for (const record of records) {
+        if (record.oldValue !== null) shown.push(record.oldValue)
+        if (record.type === 'characterData') shown.push(record.target.textContent ?? '')
+        for (const node of [...record.addedNodes, ...record.removedNodes])
+          shown.push(node.textContent ?? '')
+      }
+    }
+    const watch = new MutationObserver(take)
+    const list = document.querySelector('[data-sync-mention-list]')
+    if (!list) throw new Error('missing the list')
+    watch.observe(list, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      characterDataOldValue: true,
+    })
+    await search('')
+    take(watch.takeRecords())
+    watch.disconnect()
+    expect(shown.join('\n')).not.toContain('No one else can be mentioned on this task.')
+    // the list says it loads until the cleared search's list answers
+    expect(shown.some((text) => text.includes('Loading…'))).toBe(true)
+    expect(people()).toContain('person-0000')
+  })
+
   it('clears the search on Escape before it closes', async () => {
     await load(40)
     await mount(vi.fn())
