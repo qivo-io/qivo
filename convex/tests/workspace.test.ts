@@ -1589,8 +1589,8 @@ describe('the projects and people parts', () => {
       return (await ctx.meta.getTransactionMetrics()).databaseQueries.used
     })
     // and a grant range and a team grant range for each shown project,
-    // shared or not: 1,235 ranges in all, 435 for the window and the checks
-    // and 800 for the 400 projects
+    // shared or not. That makes 1,235 ranges in all, 435 for the window and
+    // the checks and 800 for the 400 projects
     expect(after.ranges).toBe(checks + 2 * 400)
   }, 60_000)
 
