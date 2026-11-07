@@ -1367,7 +1367,7 @@ describe('the design size, one figure at a time', () => {
       what it seeded. */
   async function personPage(openN: number, doneN: number) {
     const finished = new Date(Date.now() - 3_600_000).toISOString()
-    const { snapshot } = await open(
+    const opened = await open(
       (snap) => {
         for (let n = 1; n <= openN + doneN; n++)
           snap.issues.push({
@@ -1378,11 +1378,31 @@ describe('the design size, one figure at a time', () => {
       },
       (snap) => ({ scope: `project:${sub(snap)}`, step: me(snap) }),
     )
+    const { snapshot } = opened
     const of = (status: 'progress' | 'done') =>
       snapshot.issues.filter((it) => it.project_id === sub(snapshot) && it.status === status).length
     expect([of('progress'), of('done')]).toEqual([openN, doneN])
     expect(state()).toBe('ok')
+    return opened
   }
+
+  it('shows one person’s page of 300 open and 150 Done tasks whole, reading no people until a list opens', async () => {
+    const { board, P } = await personPage(300, 150)
+    expect(document.querySelectorAll('[data-sync-card]')).toHaveLength(300)
+    expect(document.querySelectorAll('[data-sync-done-row]')).toHaveLength(150)
+    // no owner list and no Mention window reads anything before it opens
+    expect(board.server.owners.asked).toEqual([])
+    const handle = P.syncTask('t1')?.id ?? ''
+    await click(card(handle)?.querySelector('[data-assignee-edit]'))
+    await settle()
+    expect(board.server.owners.asked.map((a) => a.name).sort()).toEqual([
+      'pickers:canOwn',
+      'pickers:taskOwners',
+    ])
+    expect(document.querySelector('[data-owner-list]')?.getAttribute('data-picker-state')).toBe(
+      'ready',
+    )
+  }, 60_000)
 
   it('shows one person’s page of a sub-project of 300 open tasks', async () => {
     await personPage(300, 20)
