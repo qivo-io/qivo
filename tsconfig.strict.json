@@ -18,6 +18,7 @@
     "src/lib/imageMetadata.ts",
     "src/lib/images.ts",
     "src/lib/inboxBadge.ts",
+    "src/lib/inboxPage.ts",
     "src/lib/initials.ts",
     "src/lib/issueGroups.ts",
     "src/lib/localDay.ts",

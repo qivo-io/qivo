@@ -208,17 +208,20 @@ function inboxShown(
 }
 
 /**
- * The caller's inbox items, the latest activity first, as the app folds its
- * messages into items (src/store/viewModels.ts shapeMessageGroup). Like the
- * app, it lists only tasks in the caller's working set (inboxShown). Rows
- * about other tasks stay stored and come back if the task does. It reads
- * with the app's limit (lib/inbox.ts loadInbox, INBOX_LIMIT) and folds
- * up to INBOX_LIMIT unread messages, newest first, and up to INBOX_LIMIT
- * read ones, most recently read first. Each walk examines at most
- * 2 * INBOX_LIMIT rows, those about unlisted tasks included. The app
- * delivers at most the first 500 of the same selection, so what it lists
- * for this profile is among what this lists. It says `truncated` when some
- * messages were not examined. Items whose messages were not examined are
+ * The caller's inbox items, the latest activity first, folded as the
+ * workspace inbox part's messages fold into items (src/store/viewModels.ts
+ * shapeMessageGroup). It lists only tasks in the caller's working set
+ * (inboxShown). Rows about other tasks stay stored and come back if the
+ * task does. It reads with the part's limit (lib/inbox.ts loadInbox,
+ * INBOX_LIMIT) and folds up to INBOX_LIMIT unread messages, newest first,
+ * and up to INBOX_LIMIT read ones, most recently read first. Each walk
+ * examines at most 2 * INBOX_LIMIT rows, those about unlisted tasks
+ * included. Only that part, which the app keeps for its desktop alerts,
+ * shares this selection. It delivers at most the first 500 of it, so what
+ * it holds for this profile is among what this lists. The app's Inbox list
+ * reads inbox.page (model/inboxPage.ts) instead, a page of the caller's
+ * task groups at a time. It says `truncated` when some messages were not
+ * examined. Items whose messages were not examined are
  * then missing, and an item listed may lack older messages. A snoozed item
  * is left out unless `includeSnoozed`, and `unreadOnly` keeps items with an
  * unread message.

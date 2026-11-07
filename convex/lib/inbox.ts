@@ -2,10 +2,11 @@
  * part (lib/workspaceParts.ts readInbox) and the machine inbox
  * (machine/discussion.ts inboxItems). Both read with INBOX_LIMIT, so they
  * walk the same rows in the same order and keep the same ones. The machine
- * inbox folds all of them into items, and the app shows the first
- * LIMITS.inboxShown (lib/limits.ts) across a person's seats, unread rows
- * first (blendInbox), so the messages the app lists for a seat are always
- * among the ones the machine inbox lists for that profile.
+ * inbox folds all of them into items, and the app's inbox part keeps the
+ * first INBOX_LIMIT (lib/limits.ts) across a person's seats, unread rows
+ * first (blendInbox), for the desktop alerts, so the messages the part
+ * sends for a seat are always among the ones the machine inbox lists for
+ * that profile. The app's Inbox list reads inbox.page instead.
  *
  * Unread rows are never retired by retention, and read rows stay while a
  * person keeps retention at Never, so an inbox nobody clears grows without
@@ -19,10 +20,10 @@
  *
  * It also holds the rules of an Inbox row's text and kinds (messageDetail,
  * messageLine, inboxSearchText, itemKinds, kindsMatch), which the Inbox
- * page (model/inboxPage.ts) applies on the server. The app's list applies
- * the same rules in src/panels/Inbox.tsx (detailText, secondLine, its
- * search text and its kind filter) until it reads the page, so the two
- * find and show alike. */
+ * page (model/inboxPage.ts) applies on the server. The app's list shows
+ * the page's rows and applies none of them itself; the app's stand-in of
+ * the page (src/store/inboxStandIn.setup.ts) applies the same ones, so the
+ * two find and show alike. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
@@ -261,14 +262,19 @@ export const itemKinds = (counts: KindCounts): MessageKind[] =>
 export const kindsMatch = (counts: KindCounts, kinds: readonly MessageKind[]): boolean =>
   kinds.length === 0 || kinds.some((kind) => counts[KIND_COUNT[kind]] > 0)
 
-/** A message's detail as the Inbox shows and searches it. Migration 0075
- * stored one privacy-fenced fallback with the former noun, which reads
- * "a task in another project" here (src/panels/Inbox.tsx detailText). */
+/** A message's detail as the Inbox shows and searches it (messageLine,
+ * inboxSearchText), on the server (model/inboxPage.ts), in the app's rows
+ * (src/store/viewModels.ts shapeInboxRow) and in the page's stand-in
+ * (src/store/inboxStandIn.setup.ts). Migration 0075 stored one
+ * privacy-fenced fallback with the former noun, which reads "a task in
+ * another project" here. */
 export const messageDetail = (detail: string): string =>
   detail.replace('an issue in another project', 'a task in another project')
 
-/** The second line of an Inbox row, from its newest message
- * (src/panels/Inbox.tsx secondLine): "from @Name" for a mention, with
+/** The second line of an Inbox row, from its newest message, which the
+ * page's search reads on the server (model/inboxPage.ts) and in its
+ * stand-in (src/store/inboxStandIn.setup.ts), and the app's row shows
+ * (src/store/viewModels.ts shapeInboxRow): "from @Name" for a mention, with
  * "Someone" where Qivo cannot name the actor (a machine caller or a
  * removed profile), "New comment" for a comment, and a change's detail. */
 export function messageLine(

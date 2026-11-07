@@ -1182,6 +1182,55 @@ export const recipes: Recipe[] = [
     },
   },
   {
+    // the Inbox row's Mark as unread (P.unreadItem). The server marks every
+    // message of the item unread, msg-2 here
+    mutation: 'messages:unreadItem',
+    mutator: 'unreadItem',
+    what: "a task's inbox item back to unread",
+    pause: 'U',
+    act: (P) =>
+      P.unreadItem({ org: ORG, task: 'task-b', through: Date.parse('2026-10-19T08:00:00.000Z') }),
+    truth: (snap) => {
+      snap.messages[1].read_at = undefined
+      snap.readMessageCount = 0
+    },
+  },
+  {
+    // the Inbox row's Remove notification (P.removeItem). The server removes
+    // every message of the item stored up to `through`, msg-2 here
+    mutation: 'messages:removeItem',
+    mutator: 'removeItem',
+    what: "a task's inbox item removed",
+    pause: 'U',
+    act: (P) =>
+      P.removeItem({
+        org: ORG,
+        task: 'task-b',
+        through: Date.parse('2026-10-19T08:00:00.000Z'),
+        latestAt: '2026-10-19T08:00:00.000Z',
+      }),
+    truth: (snap) => {
+      snap.messages = [snap.messages[0]]
+      snap.readMessageCount = 0
+    },
+  },
+  {
+    // the Inbox row's Snooze (P.snoozeItem). The server stamps every message
+    // of the item, msg-1 here
+    mutation: 'messages:snoozeItem',
+    mutator: 'snoozeItem',
+    what: "a task's inbox item snoozed",
+    pause: 'U',
+    act: (P) =>
+      P.snoozeItem(
+        { org: ORG, task: 'task-a', through: Date.parse('2026-10-19T08:00:00.000Z') },
+        '2026-10-27T08:00:00.000Z',
+      ),
+    truth: (snap) => {
+      snap.messages[0].snoozed_until = '2026-10-27T08:00:00.000Z'
+    },
+  },
+  {
     mutation: 'messages:markAllRead',
     mutator: 'markAllMessagesRead',
     what: 'every message read',

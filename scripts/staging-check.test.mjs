@@ -48,6 +48,9 @@ import {
   IMAGE_DOWNLOADS,
   IMAGE_SPACER,
   INBOX_BADGE_STEP,
+  INBOX_LIST_MARKS,
+  INBOX_LIST_STEP,
+  INBOX_PAGE_QUERY,
   imageDownloads,
   inDefaultWindow,
   isSiteOf,
@@ -107,6 +110,7 @@ import {
   searchOf,
   selectedCreatorsStarts,
   send,
+  sentMutation,
   syncsWith,
   TAG_ANY,
   TAG_PREFIX,
@@ -774,6 +778,38 @@ describe('staging check REST contract', () => {
     const at = order.map((call) => script.indexOf(call))
     expect(at.every((n) => n > 0)).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
+  })
+  it("names the Inbox list's step, its read and marks, and reads its frames", () => {
+    expect(INBOX_LIST_STEP).toBe('ui/inbox-list')
+    expect(INBOX_PAGE_QUERY).toBe('inbox:page')
+    // the list reads its pages by that name, and its marks are the Inbox's
+    const inbox = readFileSync(new URL('../src/panels/Inbox.tsx', import.meta.url), 'utf8')
+    expect(inbox).toContain('query: api.inbox.page')
+    expect(inbox).toContain('hook="inbox-page"')
+    const fromHook = [INBOX_LIST_MARKS.next, INBOX_LIST_MARKS.previous]
+    for (const mark of Object.values(INBOX_LIST_MARKS))
+      if (!fromHook.includes(mark)) expect(inbox).toContain(mark)
+    expect(fromHook).toEqual(['data-inbox-page-next', 'data-inbox-page-previous'])
+    // it runs after the badge's step and before the archive, while t0 is active
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const order = ['await inboxBadgeCheck()', 'await inboxListCheck()', 'await archiveChecks()']
+    const at = order.map((call) => script.indexOf(call))
+    expect(at.every((n) => n > 0)).toBe(true)
+    expect([...at].sort((a, b) => a - b)).toEqual(at)
+    // a mutation frame's arguments, and a page's arguments from its Add
+    const mutation = (udfPath, args) =>
+      JSON.stringify({ type: 'Mutation', requestId: 3, udfPath, args: [args] })
+    const read = { org_id: 'o', issue_id: 't', through: 12.5 }
+    expect(sentMutation(mutation('messages:readItem', read), 'messages:readItem')).toEqual(read)
+    expect(sentMutation(mutation('messages:markRead', read), 'messages:readItem')).toBeNull()
+    expect(sentMutation('not json', 'messages:readItem')).toBeNull()
+    const add = (udfPath, args) => ({ type: 'Add', queryId: 1, udfPath, args: [args] })
+    const frame = JSON.stringify({
+      type: 'ModifyQuerySet',
+      modifications: [add(INBOX_PAGE_QUERY, { search: 'QN-1' }), add('workspace:root', {})],
+    })
+    expect(addedArgs(frame, INBOX_PAGE_QUERY)).toEqual([{ search: 'QN-1' }])
+    expect(addedArgs(frame, TASK_WINDOWS_QUERY)).toEqual([])
   })
   it('tells a frame that subscribes the task windows from every other frame', () => {
     expect(ON_DEMAND_STEP).toBe('ui/tasks-on-demand')

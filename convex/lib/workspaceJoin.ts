@@ -14,7 +14,7 @@
 import { joinLists } from './arrayLimit.ts'
 import { type IdWindow, idWindows, inIdWindow, piecesAfter, startWindows } from './idWindows.ts'
 import { blendInbox } from './inbox.ts'
-import { LIMITS } from './limits.ts'
+import { INBOX_LIMIT } from './limits.ts'
 import type {
   readCatalog,
   readInbox,
@@ -125,9 +125,12 @@ export function joinParts(root: RootSeats, orgs: readonly OrgParts[], deliveredA
       orgLoad.push(...part.orgLoad)
     }
   }
+  // the inbox part's newest messages across the seats, which the desktop
+  // alerts read; the Inbox lists inbox.page instead, and this cap goes
+  // with the part (t3/limits-inbox-feed)
   const inbox = blendInbox(
     orgs.map((org) => org.inbox),
-    LIMITS.inboxShown.max,
+    INBOX_LIMIT,
   )
   return {
     auth_user_id: root.auth_user_id,

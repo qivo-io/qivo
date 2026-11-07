@@ -677,8 +677,13 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
         created_at: '2026-09-14T08:30:00.000Z',
       })
       snap.messages.push(message('m1', 't1', 'Write the release notes'))
-      // an item whose task this person cannot open
+      // an item whose task the server holds and the workspace's parts do
+      // not send (the live double's `unheld`), which the Inbox's page lists
+      // and its pane opens from the server
       snap.messages.push(message('m2', 'gone', 'Plan the offsite'))
+      Object.assign(snap, {
+        unheld: { issues: [{ ...taskRow(snap, 'gone', 'todo', 99), title: 'Plan the offsite' }] },
+      })
     })
     await go(`/app/${org}/inbox`)
     const inbox = await shownPage('inbox')
@@ -689,14 +694,15 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
       )
       await act(async () => row.click())
     }
-    // the pane opens its task from the server, which has not answered here
+    // the pane opens its task from the server, which has not answered
+    // here, by the row's number too, which its loading note names
     await pick('gone')
-    expect(inbox.textContent).toContain('Loading this task…')
+    expect(inbox.textContent).toContain('Loading QN-99…')
     await go(`/app/${org}/board/all`)
     await shownPage('kanban')
     await go(`/app/${org}/inbox`)
     expect(await shownPage('inbox')).toBe(inbox)
-    expect(inbox.textContent).not.toContain('Loading this task')
+    expect(inbox.textContent).not.toContain('Loading QN-99')
 
     // the item read as it opened is not new when its task opens again
     await pick('t1')

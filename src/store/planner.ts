@@ -257,8 +257,10 @@ import {
   byOrder,
   type CommentVM,
   duplicateNameTags,
+  type InboxMark,
   type IssueSubscribers,
   type IssueVM,
+  inboxMarkKey,
   isNewer,
   type LabelVM,
   type MessageGroupVM,
@@ -486,6 +488,8 @@ let watchedHeld: {
 } | null = null
 /* The task and organization of the thread the parts watch, or null. */
 let threadWatched: { task: string; org: string } | null = null
+
+export type { InboxMark } from './viewModels'
 /** The unread summary across the login's seats, as convex/inbox.ts
     summary answers it. */
 export type InboxSummaryAnswer = FunctionReturnType<typeof api.inbox.summary>
@@ -534,18 +538,53 @@ let itemConnection = 0
 let itemRerun = false
 /* A hold on the open task's read on open that holds nothing, which each
    visit starts with (itemHold). */
-const freeHold = () => ({ waiting: 0, accepted: false, keptBack: false })
+const freeHold = () => ({
+  waiting: new Set<number>(),
+  accepted: 0,
+  readThrough: 0,
+  keptBack: false,
+})
 /* This client's hold on the open task's read on open this visit
    (P.readOnOpen), from its Mark as unread or a snooze or its end on the
-   task (holdUnreadOf). It counts those writes that still wait and says
-   whether the server accepted one, and while either holds, no read on
-   open goes out. A write the server refused or that failed only stops
-   waiting, so the hold is as it would be without that write. `keptBack`
-   says whether the hold turned away a read on open the window asked for,
-   which runs again once nothing holds. Each visit gets a new hold, so a
-   write of an earlier visit changes nothing. Forgotten when the thread
-   changes or stops. */
+   task (holdUnreadOf), its unread choices, each by the number holdWrites
+   gave it as it went out. `waiting` holds the numbers of those whose
+   write still waits, `accepted` the newest the server accepted, and
+   `readThrough` the newest that went out before a row's Mark as read the
+   server accepted (P.readItem), which supersedes every unread choice up
+   to it, accepted, waiting or failed. A later choice that waits or was
+   accepted holds (heldBack), and while one does, no read on open goes
+   out. A write the server refused or that failed only stops waiting, so
+   the hold is as it would be without that write. `keptBack` says whether
+   the hold turned away a read on open the window asked for, which runs
+   again once nothing holds. Each visit gets a new hold, so a write of an
+   earlier visit changes nothing. Forgotten when the thread changes or
+   stops. */
 let itemHold = freeHold()
+/* The number of the newest write that took a hold on the watched task's
+   read on open (holdWatched), in the order they went out, so a row's
+   accepted Mark as read supersedes exactly the unread choices that went
+   out before it (P.readItem). */
+let holdWrites = 0
+
+/* Whether hold `hold` holds off the read on open, as an unread choice
+   that went out after the last accepted row read does while it waits and
+   once the server accepted it. */
+function heldBack(hold: ReturnType<typeof freeHold>): boolean {
+  if (hold.accepted > hold.readThrough) return true
+  for (const n of hold.waiting) if (n > hold.readThrough) return true
+  return false
+}
+
+/* The marks of the person's Inbox writes by `${org}:${task}`
+   (inboxMarkKey), which P.inboxMarks shows. A write sets its mark as it
+   goes out, replacing any before, and settles only its own. A refusal or a
+   failure ends it at once, and an acceptance keeps it until an Inbox shows
+   an answer that is current after the settle (P.endInboxMarks), since a
+   list that waits for a fresh answer, as after a hidden tab, a kept Inbox
+   shown again or a reconnect, still shows one from before the write. So
+   they are bounded by the session's writes. */
+const inboxMarks = new Map<string, InboxMark>()
+
 /* How many answers of the open task's inbox item arrived, so the read on
    open can tell an answer that came after its read went out
    (P.readOnOpen). */
@@ -1451,23 +1490,55 @@ function dropAboveGap() {
    which the server does not know yet. */
 const serverTask = (uuid: string) => base.stagedTask(uuid)
 
-/* The organization of the watched task: its row's while the workspace
-   holds it, else the one kept for it (watchedOrg), or undefined. */
-function watchedOrgOf(): string | undefined {
+/* The workspace's row of the watched task while it holds the task in the
+   watched organization (watchedOrg), else undefined. Another
+   organization's task of the same id, which the workspace may hold
+   instead, is not the watched task, and the window shows the watched one
+   from its own read (P.taskDetail). */
+function watchedRow(): Row<'issues'> | undefined {
   const t = watchedComments
-  if (!t) return undefined
-  return rows.issues.get(t)?.org_id ?? watchedOrg ?? undefined
+  const row = t ? rows.issues.get(t) : undefined
+  return row && (!watchedOrg || row.org_id === watchedOrg) ? row : undefined
 }
 
-/* The organization of task `uuid` for a comment write or read: its row's
-   while the workspace holds it, else the watched task's kept one
-   (watchedOrg) when it is the watched task, else the row an open view's
-   answer brings, as a Team sync card's mention names its task, or
-   undefined. The server checks the comment either way. */
+/* Whether the workspace holds task `uuid` in organization `org`. It holds
+   one task by an id, and two organizations can hold one task id, so a
+   held task of another organization is another task, which no write or
+   paint of this one reaches. It reads the row without copying it, so a
+   paint that only asks copies no row (store/rowMap.ts peek). */
+const holdsIn = (uuid: string, org: string): boolean => rows.issues.peek(uuid)?.org_id === org
+
+/* Whether the workspace holds another organization's task than `org`'s
+   by id `uuid`, read as holdsIn reads it. */
+function heldElsewhere(uuid: string, org: string): boolean {
+  const row = rows.issues.peek(uuid)
+  return !!row && row.org_id !== org
+}
+
+/* The views' copies of task `uuid` of organization `org` that a paint may
+   change (store/viewRows.ts edit), without another organization's task of
+   the same id that a view holds. */
+const viewCopiesIn = (uuid: string, org: string) =>
+  viewRows.edit(uuid).filter((copy) => copy.org_id === org)
+
+/* The organization of the watched task, the one kept for it (watchedOrg),
+   else its row's while the workspace holds it, or undefined. */
+function watchedOrgOf(): string | undefined {
+  if (!watchedComments) return undefined
+  return watchedOrg ?? watchedRow()?.org_id
+}
+
+/* The organization of task `uuid` for a comment write or read. It is the
+   watched task's kept one (watchedOrg) when it is the watched task, so a
+   comment never goes to another organization's task of the same id that
+   the workspace holds, else its row's while the workspace holds it, else
+   the row an open view's answer brings, as a Team sync card's mention
+   names its task, or undefined. The server checks the comment either
+   way. */
 function orgOfTask(uuid: string): string | undefined {
+  if (uuid === watchedComments && watchedOrg) return watchedOrg
   const row = rows.issues.get(uuid)
   if (row) return row.org_id
-  if (uuid === watchedComments && watchedOrg) return watchedOrg
   return viewRows.peek(uuid)?.org_id
 }
 
@@ -1510,11 +1581,12 @@ function watchedCreating(): boolean {
 function subscribeWaitingThread() {
   const t = watchedComments
   if (!t || threadWatched || watchedGone()) return
-  const row = serverTask(t)
+  const server = serverTask(t)
+  const row = server && (!watchedOrg || server.org_id === watchedOrg) ? server : undefined
   const took = tookCreates.get(t)
   if (row) subscribeThread(t, row.org_id)
   else if (took) subscribeThread(t, took)
-  else if (watchedOrg && !rows.issues.has(t)) subscribeThread(t, watchedOrg)
+  else if (watchedOrg && !watchedRow()) subscribeThread(t, watchedOrg)
 }
 
 /* Subscribes to the watched thread `issueUuid` in organization `orgId`, as
@@ -1587,15 +1659,10 @@ function stopItem() {
 }
 
 /* Holds off the read on open of the watched task while a write about the
-   loaded messages `ids` waits, when they name one of its messages, as the
-   person's own Mark as unread or snooze does (itemHold), and answers the
-   handlers send() runs for that write. The hold stays for the rest of the
-   visit once the server accepts the write. A refusal or a failure takes
-   away only this write's part, so an unread choice the server accepted,
-   before or since, still holds. Once nothing holds, a read on open the
-   hold turned away runs again, so an update that arrived while the write
-   waited is read as it would have been without it. A write of an earlier
-   visit changes nothing. Call it just before the write goes out. */
+   loaded messages `ids` waits, when they name one of its messages, as an
+   id-list Mark as unread or snooze does (holdWatched). Only the store's
+   tests send those since the Inbox acts on items (holdUnreadOfItem); it
+   goes with them. */
 function holdUnreadOf(ids: readonly string[]): SendOptions<unknown> {
   const watched = threadWatched
   if (!watched) return {}
@@ -1603,21 +1670,118 @@ function holdUnreadOf(ids: readonly string[]): SendOptions<unknown> {
     const row = rows.messages.get(id)
     return row?.issue_id === watched.task && row.org_id === watched.org
   })
-  if (!ofTask) return {}
+  return ofTask ? holdWatched(watched.task) : {}
+}
+
+/* Holds off the read on open of the watched task while a write about its
+   inbox item waits, when `org` and `task` name it, as the person's own
+   Mark as unread, snooze or its end does (holdWatched). Another
+   organization's task of the same id holds nothing. */
+function holdUnreadOfItem(org: string, task: string): SendOptions<unknown> {
+  const watched = threadWatched
+  return watched?.task === task && watched.org === org ? holdWatched(task) : {}
+}
+
+/* Holds off the read on open of the watched task `task` while one write
+   waits (itemHold), and answers the handlers send() runs for that write.
+   The hold stays for the rest of the visit once the server accepts the
+   write, until a row's Mark as read of the task that went out after it
+   is accepted (P.readItem). A refusal or a failure takes away only this
+   write's part, so an unread choice the server accepted and no accepted
+   read superseded, before or since, still holds. Once nothing holds, a
+   read on open the hold turned away runs again, so an update that
+   arrived while the write waited is read as it would have been without
+   it. A write of an earlier visit changes nothing. Call it just before
+   the write goes out. */
+function holdWatched(task: string): SendOptions<unknown> {
+  const n = ++holdWrites
   const hold = itemHold
-  hold.waiting++
+  hold.waiting.add(n)
   return {
     onOk: () => {
-      if (hold === itemHold) hold.accepted = true
+      if (hold === itemHold) hold.accepted = Math.max(hold.accepted, n)
     },
     onSettled: () => {
       if (hold !== itemHold) return
-      hold.waiting--
-      // refused or failed, so the read the window asked for meanwhile goes
-      // out, unless another unread choice still holds
-      if (hold.waiting > 0 || hold.accepted || !hold.keptBack) return
+      hold.waiting.delete(n)
+      // refused or failed, or an accepted read superseded it, so the read
+      // the window asked for meanwhile goes out, unless another unread
+      // choice still holds
+      if (heldBack(hold) || !hold.keptBack) return
       hold.keptBack = false
-      PLANNER.readOnOpen(watched.task)
+      PLANNER.readOnOpen(task)
+    },
+  }
+}
+
+/* Sets the mark of the item of task `task` in organization `org` for a
+   write that goes out now, replacing any before, and answers it, so the
+   write settles only its own (settleInboxMark). */
+function setInboxMark(org: string, task: string, mark: Omit<InboxMark, 'settled'>): InboxMark {
+  const [set] = setInboxMarks([{ org, task, mark }])
+  return set.mark
+}
+
+/* One mark of a write, with the item it marks. */
+type MarkOf = { org: string; task: string; mark: InboxMark }
+
+/* setInboxMark for several items at once, with one repaint. */
+function setInboxMarks(
+  marks: readonly { org: string; task: string; mark: Omit<InboxMark, 'settled'> }[],
+): MarkOf[] {
+  const set = marks.map(({ org, task, mark }) => {
+    const one: InboxMark = { ...mark, settled: false }
+    inboxMarks.set(inboxMarkKey(org, task), one)
+    return { org, task, mark: one }
+  })
+  if (set.length) showInboxMarks()
+  return set
+}
+
+/* Settles `mark` of the item of task `task` in organization `org` once its
+   write was answered. An accepted one stays until an Inbox shows a current
+   answer (P.endInboxMarks), a refused or failed one ends at once. A mark a
+   later write replaced is not touched. */
+function settleInboxMark(org: string, task: string, mark: InboxMark, accepted: boolean) {
+  settleInboxMarks([{ org, task, mark }], accepted)
+}
+
+/* settleInboxMark for several marks at once, with one repaint. */
+function settleInboxMarks(marks: readonly MarkOf[], accepted: boolean) {
+  let changed = false
+  for (const { org, task, mark } of marks) {
+    const key = inboxMarkKey(org, task)
+    if (inboxMarks.get(key) !== mark) continue
+    if (accepted) inboxMarks.set(key, { ...mark, settled: true })
+    else inboxMarks.delete(key)
+    changed = true
+  }
+  if (changed) showInboxMarks()
+}
+
+/* Publishes the marks to the Inbox (P.inboxMarks). */
+function showInboxMarks() {
+  PLANNER.inboxMarks = new Map(inboxMarks)
+  emit('inbox')
+}
+
+/* The send() handlers that settle `mark` of the item of task `task` in
+   organization `org`, with `then`'s, which run after. */
+function settlingMark(
+  org: string,
+  task: string,
+  mark: InboxMark,
+  then: SendOptions<unknown> = {},
+): SendOptions<unknown> {
+  let accepted = false
+  return {
+    onOk: (result) => {
+      accepted = true
+      then.onOk?.(result)
+    },
+    onSettled: () => {
+      settleInboxMark(org, task, mark, accepted)
+      then.onSettled?.()
     },
   }
 }
@@ -1749,7 +1913,7 @@ function historyNews(news: SideNews) {
 function sidesWanted(): Record<SectionSide, boolean> {
   const t = watchedComments
   const shown = !!t && sectionOwners.size > 0
-  const detail = !!t && !rows.issues.has(t) && watchedOrgOf() !== undefined
+  const detail = !!t && !watchedRow() && watchedOrgOf() !== undefined
   return { task: shown || detail, links: shown, attachments: shown }
 }
 
@@ -1775,7 +1939,7 @@ function syncThread() {
    (subscribeWaitingThread, retryComments). */
 function watchedGone(): boolean {
   const t = watchedComments
-  if (!t || rows.issues.has(t)) return false
+  if (!t || watchedRow()) return false
   const answer = sectionAnswers.issue === t ? sectionAnswers.task : null
   return answer !== null && answer !== CREATING && answer.state === 'unavailable'
 }
@@ -2260,10 +2424,12 @@ function syncRefRead() {
 }
 
 /* The handle of the registered reference's task once the workspace holds
-   it, else undefined. */
+   it in the reference's organization, else undefined, so a reference to
+   another organization's task of the same id as a held one never moves
+   to the held task's handle (heldHandle). */
 function refHandle(read: RefRead): string | undefined {
   const uuid = read.task?.uuid ?? read.parts.uuid
-  if (uuid) return uuidToKey.get(uuid)
+  if (uuid) return heldHandle(uuid, read.task?.org ?? read.parts.org)
   if (read.parts.org && read.parts.num !== undefined)
     return PLANNER.issueRefIn(read.parts.org, `${ISSUE_PREFIX}-${read.parts.num}`) ?? undefined
   return undefined
@@ -2726,7 +2892,8 @@ function workspaceSections(
    A section without an answer yet lists what a workspace that holds every
    task holds (workspaceSections), and says it loads otherwise, since a
    task the person created while tasks load has lists that only its
-   answers bring. */
+   answers bring. A held task of another organization with the watched
+   task's id is another task, so its lists never stand in (watchedRow). */
 function sectionsNow(): TaskSectionsVM | null {
   const t = watchedComments
   if (!t || sectionOwners.size === 0) return null
@@ -2734,9 +2901,10 @@ function sectionsNow(): TaskSectionsVM | null {
     sectionAnswers.issue === t
       ? sectionAnswers
       : { issue: t, task: null, links: null, attachments: null }
-  // the workspace's lists, built only while one section has no answer
+  // the workspace's lists, built only while one section has no answer and
+  // the workspace holds the watched task in its own organization
   const waits = answers.task === null || answers.links === null || answers.attachments === null
-  const handle = waits && tasksAll ? uuidToKey.get(t) : undefined
+  const handle = waits && tasksAll && watchedRow() ? uuidToKey.get(t) : undefined
   const held = handle === undefined ? undefined : PLANNER.issueById[handle]
   const fallback =
     held &&
@@ -2779,7 +2947,7 @@ function shownAnswer(answer: SectionAnswers['task']): SectionAnswers['task'] {
 function taskDetailNow(): TaskDetailVM | null {
   const t = watchedComments
   const org = watchedOrgOf()
-  if (!t || !org || rows.issues.has(t)) return null
+  if (!t || !org || watchedRow()) return null
   const answers = sectionAnswers.issue === t ? sectionAnswers : null
   const answer = answers ? shownAnswer(answers.task) : undefined
   const links = answers?.links
@@ -2808,7 +2976,7 @@ function taskDetailNow(): TaskDetailVM | null {
    (syncSections). Answers whether either changed. */
 function rebuildSections(): boolean {
   const t = watchedComments
-  const row = t ? rows.issues.get(t) : undefined
+  const row = watchedRow()
   const handle = t ? uuidToKey.get(t) : undefined
   const it = handle === undefined ? undefined : PLANNER.issueById[handle]
   if (t && row && it)
@@ -3001,13 +3169,15 @@ function purgeIssueRows(subtree: Set<string>) {
   })
 }
 
-/* The paint of an accepted archive of task `rootId` at `at`. With
-   `keepSubtasks` the server detached every active direct child first (it
-   keeps its own subtasks) and archived the task alone, so only the task
-   leaves the board; otherwise the whole visible subtree goes with it. */
-function archivePaint(rootId: string, keepSubtasks: boolean, at: string): Paint {
+/* The paint of an accepted archive of task `rootId` of organization `org`
+   at `at`. With `keepSubtasks` the server detached every active direct
+   child first (it keeps its own subtasks) and archived the task alone, so
+   only the task leaves the board; otherwise the whole visible subtree goes
+   with it. It skips while the workspace does not hold the task in that
+   organization (holdsIn). */
+function archivePaint(rootId: string, keepSubtasks: boolean, at: string, org: string): Paint {
   return () => {
-    if (!rows.issues.has(rootId)) return
+    if (!holdsIn(rootId, org)) return
     if (!keepSubtasks) {
       purgeIssueRows(issueSubtree(rootId))
       return
@@ -3046,9 +3216,13 @@ function dropProjectRows(id: string) {
   })
 }
 
-/* The paint of a task delete at `at`: the tasks in `gone` leave, and their
-   subtasks outside it become top-level tasks, as the server detaches them. */
-function dropDeletedTasks(gone: Set<string>, at: string) {
+/* The paint of a task delete in organization `org` at `at`: the tasks in
+   `deleted` leave, and their subtasks outside it become top-level tasks, as
+   the server detaches them. A held task of another organization with an
+   id in `deleted` is another task, which stays with its subtasks
+   (heldElsewhere). */
+function dropDeletedTasks(deleted: ReadonlySet<string>, at: string, org: string) {
+  const gone = new Set([...deleted].filter((uuid) => !heldElsewhere(uuid, org)))
   // the SET NULL cascade fires the touch server-side — mirror both
   for (const r of rows.issues.where(
     (i) => !!i.parent_id && gone.has(i.parent_id) && !gone.has(i.id),
@@ -3180,6 +3354,17 @@ const handleUnder = (home: string, uuid: string, orgId: string, key: string) =>
   orgId && orgId === home ? key : uuid
 const handleFor = (uuid: string, orgId: string, key: string) =>
   handleUnder(HOME_ORG, uuid, orgId, key)
+/* The handle of task `uuid` while the workspace holds it in organization
+   `org`, by the task index's own maps, or with no organization named, by
+   its id alone, else undefined. Two organizations can hold one task id,
+   and the workspace holds one task by an id, so the handle of another
+   organization's task of the same id never stands for this one. */
+function heldHandle(uuid: string, org: string | null | undefined): string | undefined {
+  const handle = uuidToKey.get(uuid)
+  if (handle === undefined || !org) return handle
+  const key = uuidToDisplayKey.get(uuid)
+  return key !== undefined && keyByOrg.get(org)?.get(key) === uuid ? handle : undefined
+}
 
 // Week indexes are UNBOUNDED offsets from TIMELINE_START (negative and past
 // the prototype's 28 alike) — the roadmap's user-chosen window clips them
@@ -3235,10 +3420,10 @@ function messagesByOrg(ids: string[]): Map<string, string[]> {
   return m
 }
 
-/* Sends messages.readItem for the item `target` names (P.readItem), and
-   runs `confirmed` once the server accepted it and its paint settled, so
-   `confirmed` may send another write. Answers false when the pause refuses
-   it. */
+/* Sends messages.readItem for the item `target` names (P.readItem), with a
+   read mark on its Inbox row (setInboxMark), and runs `confirmed` once the
+   server accepted it and its paint settled, so `confirmed` may send
+   another write. Answers false when the pause refuses it, with no mark. */
 function sendItemRead(
   target: { org: string; task: string; through: number; latestAt: string },
   quiet: boolean,
@@ -3258,6 +3443,7 @@ function sendItemRead(
     )
       ids.push(row.id)
   let accepted = false
+  const mark = setInboxMark(target.org, target.task, { through: target.through, read: true })
   void send(
     api.messages.readItem,
     { org_id: target.org, issue_id: target.task, through: target.through },
@@ -3265,16 +3451,14 @@ function sendItemRead(
     {
       // the read that opening a task sends is not a change the person made
       about: { background: quiet },
-      ...(confirmed
-        ? {
-            onOk: () => {
-              accepted = true
-            },
-            onSettled: () => {
-              if (accepted) confirmed()
-            },
-          }
-        : {}),
+      ...settlingMark(target.org, target.task, mark, {
+        onOk: () => {
+          accepted = true
+        },
+        onSettled: () => {
+          if (accepted) confirmed?.()
+        },
+      }),
     },
   )
   return true
@@ -7419,10 +7603,13 @@ function describeWrite(name: string, args: unknown, taskId = ''): UnconfirmedCha
     (name === 'issues:removeLink' ? text(a.a) : '') ||
     (name.startsWith('issues:') ? text(a.id) : '') ||
     (name.startsWith('comments:') ? (rows.comments.get(text(a.id))?.issue_id ?? '') : '')
-  // a task the window shows from its answer has its key there
+  // a task the window shows from its answer has its key there, also
+  // while the workspace holds another organization's task of its id
+  const org = text(a.org_id)
   const detail = PLANNER.detail
-  const task =
-    uuidToDisplayKey.get(issueId) ?? (detail?.task === issueId ? detail.view?.key : undefined)
+  const held = org && heldElsewhere(issueId, org) ? undefined : uuidToDisplayKey.get(issueId)
+  const shown = detail?.task === issueId && (!org || detail.org === org) ? detail.view : null
+  const task = held ?? shown?.key
   const fields =
     name === 'issues:update' && a.patch && typeof a.patch === 'object'
       ? [...new Set(Object.keys(a.patch).map((key) => TASK_FIELD[key] ?? key))]
@@ -8331,9 +8518,10 @@ function rebuild(now = new Date(), full = false) {
   // Mark all as read and Remove all read follow the unread summary, whose
   // rule reads the seats this repaint may have changed
   deriveInboxFlags()
-  // the snapshot delivers at most 500 messages, so the Inbox says when older
-  // ones exist that it does not list, snoozed ones included, and whether
-  // Mark all as read and Remove all read reach them (they skip snoozed rows)
+  // the inbox part delivers at most 500 messages, so these say when older
+  // ones exist that it did not send, snoozed ones included, and whether
+  // Mark all as read and Remove all read reach them (they skip snoozed
+  // rows); no view reads them, as the Inbox lists inbox.page
   P.inboxCutReach = {
     markAllRead: unexaminedUnread,
     removeRead: hiddenReadMessages > 0 || unexaminedRead,
@@ -8436,7 +8624,7 @@ function withUnheldMoves(moved: ReadonlyMap<string, string>, homeBefore: string)
    workspace last held it (watchedHeld), or null. */
 function unheldWatched(): { uuid: string; org: string; num: number } | null {
   const t = watchedComments
-  if (!t || rows.issues.has(t)) return null
+  if (!t || watchedRow()) return null
   const detail = PLANNER.detail
   if (detail?.task === t && detail.num != null) return { uuid: t, org: detail.org, num: detail.num }
   return watchedHeld?.uuid === t ? watchedHeld : null
@@ -8576,10 +8764,12 @@ const emailRefusal = (v: unknown): string => {
 }
 
 /* --- sub-issue remaining rollup (0066) — the optimistic mirror ------------
-   A task that gains a subtask loses its own hours, at `at`. */
-function clearParentHours(parentUuid: string | null | undefined, at: string) {
+   A task that gains a subtask of organization `org` loses its own hours,
+   at `at`. A parent is of its subtask's organization, so a held task of
+   another organization with the parent's id keeps its hours. */
+function clearParentHours(parentUuid: string | null | undefined, at: string, org: string) {
   const pRow = parentUuid ? rows.issues.get(parentUuid) : null
-  if (pRow && (pRow.remaining_hours != null || pRow.review_at != null)) {
+  if (pRow?.org_id === org && (pRow.remaining_hours != null || pRow.review_at != null)) {
     pRow.remaining_hours = undefined
     pRow.remaining_set_at = undefined // the server stamp pairs the two (0072)
     pRow.review_at = undefined // a group has no review hand-off of its own
@@ -9286,16 +9476,17 @@ type UpdateOptions = {
   parentRow?: RelationCandidate
 }
 
-/** Puts label `labelId` on task `uuid` in the workspace's rows, or takes
-    it off with `on` false, as a label toggle paints them. Skips while the
-    workspace does not hold the task, so a write from the window's own
-    answer paints the workspace once it holds the task. A label the
+/** Puts label `labelId` on task `uuid` of organization `org` in the
+    workspace's rows, or takes it off with `on` false, as a label toggle
+    paints them. Skips while the workspace does not hold the task in that
+    organization (holdsIn), so a write from the window's own answer paints
+    the workspace once it holds the task. A label the
     workspace does not hold paints too: the task's labels list every id
     (store/taskIndex.ts), and the window names one it does not hold from
     labels.byIds. */
-function labelRowsPaint(uuid: string, labelId: string, on: boolean): Paint {
+function labelRowsPaint(uuid: string, labelId: string, on: boolean, org: string): Paint {
   return () => {
-    if (!rows.issues.has(uuid)) return
+    if (!holdsIn(uuid, org)) return
     const has = workspaceRows
       .peekList('issueLabels')
       .some((il) => il.issue_id === uuid && il.label_id === labelId)
@@ -9309,12 +9500,13 @@ function labelRowsPaint(uuid: string, labelId: string, on: boolean): Paint {
   }
 }
 
-/** Makes profile `me` follow task `uuid` in the workspace's rows, or stop
-    following it with `on` false, as of `at`. Skips while the workspace does
-    not hold the task, as labelRowsPaint does. */
-function followRowsPaint(uuid: string, me: string, on: boolean, at: string): Paint {
+/** Makes profile `me` follow task `uuid` of organization `org` in the
+    workspace's rows, or stop following it with `on` false, as of `at`.
+    Skips while the workspace does not hold the task in that organization,
+    as labelRowsPaint does. */
+function followRowsPaint(uuid: string, me: string, on: boolean, at: string, org: string): Paint {
   return () => {
-    if (!rows.issues.has(uuid)) return
+    if (!holdsIn(uuid, org)) return
     const has = workspaceRows
       .peekList('issueSubs')
       .some((s) => s.issue_id === uuid && s.profile_id === me)
@@ -9332,11 +9524,17 @@ type UploadTarget = { uuid: string; org: string; project: string; count: number;
 
 /** The workspace's task for an upload: its cap counts the larger of the
     workspace's rows and the whole section list (capInputs), and an image a
-    description save took out no longer counts. */
-function heldUploadTarget(issueKey: string): UploadTarget | null {
+    description save took out no longer counts. With `org`, only while the
+    workspace holds the task in that organization. Without one, none while
+    the window watches another organization's task of the same id, which
+    the workspace does not hold. */
+function heldUploadTarget(issueKey: string, org?: string): UploadTarget | null {
   const uuid = keyToUuid.get(issueKey) || (rows.issues.has(issueKey) ? issueKey : undefined)
   const row = uuid ? rows.issues.get(uuid) : undefined
   if (!row || !uuid) return null
+  if (org !== undefined && row.org_id !== org) return null
+  if (org === undefined && uuid === watchedComments && watchedOrg && row.org_id !== watchedOrg)
+    return null
   const held = PLANNER.issueById[uuidToKey.get(uuid) ?? '']
   const count = Math.max(
     [...rows.attachments.values()].filter((a) => a.issue_id === uuid && a.dropped_at === undefined)
@@ -9346,11 +9544,12 @@ function heldUploadTarget(issueKey: string): UploadTarget | null {
   return { uuid, org: row.org_id, project: row.project_id, count, answer: false }
 }
 
-/** The task the window shows from its own answer for an upload
-    (answerTaskOf): its cap counts the larger of the window's view and its
-    whole attachments answer (capInputs), with no walk of the workspace. */
-function answerUploadTarget(issueKey: string): UploadTarget | null {
-  const shown = answerTaskOf(issueKey)
+/** The task the window shows from its own answer for an upload, of
+    organization `org` when named (answerTaskOf): its cap counts the larger
+    of the window's view and its whole attachments answer (capInputs), with
+    no walk of the workspace. */
+function answerUploadTarget(issueKey: string, org?: string): UploadTarget | null {
+  const shown = answerTaskOf(issueKey, org)
   return shown
     ? {
         uuid: shown.uuid,
@@ -9363,10 +9562,11 @@ function answerUploadTarget(issueKey: string): UploadTarget | null {
 }
 
 /* The task a file for `issueKey`, a handle or a uuid, goes to now, for
-   P.addAttachment. It is the workspace's task, else the one the window
-   shows from a current answer. */
-const uploadTarget = (issueKey: string) =>
-  heldUploadTarget(issueKey) ?? answerUploadTarget(issueKey)
+   P.addAttachment, of organization `org` when named, as two organizations
+   can hold one task id. It is the workspace's task, else the one the
+   window shows from a current answer. */
+const uploadTarget = (issueKey: string, org?: string) =>
+  heldUploadTarget(issueKey, org) ?? answerUploadTarget(issueKey, org)
 
 /* Says why task `id` takes no file now, for an upload of file `name`.
    Either the window shows it from an answer that is not current
@@ -9383,19 +9583,20 @@ function refuseUpload(id: string, name: string) {
     hold: a file only the watched task's attachments answer holds, of a task
     the window shows from its own answer or of a held task whose file has
     not arrived yet, or an upload of task `opts.task` that no list holds. It
-    sends files.removeAttachment to that task's organization without a
-    paint, which `opts.org` names for an upload of a task the store no
-    longer holds or watches, as once the window that showed it closed. The
-    attachments answer drops the row when the write commits, before the
-    write resolves (lib/convexOrdering.test.ts), so the row shows busy
-    until then, and a refusal toasts and leaves it. */
+    sends files.removeAttachment without a paint to the organization of the
+    answer that lists the file, else to `opts.org` when the uploader names
+    it, as two organizations can hold one task id and the store may no
+    longer watch the uploaded one, else to the watched or held task's
+    organization (orgOfTask). The attachments answer drops the row when the
+    write commits, before the write resolves (lib/convexOrdering.test.ts),
+    so the row shows busy until then, and a refusal toasts and leaves it. */
 function removeUnheldAttachment(
   attId: string,
   opts: { deferWhilePaused?: boolean; task?: string; org?: string },
 ): Promise<boolean> {
   const listed = sectionAttachment(attId)
   const task = listed?.row.issue_id ?? opts.task
-  const org = listed?.org ?? (task ? (orgOfTask(task) ?? opts.org) : undefined)
+  const org = listed?.org ?? opts.org ?? (task ? orgOfTask(task) : undefined)
   if (!task || !org) return Promise.resolve(false)
   if (opts.deferWhilePaused && (snapshotTrouble || savePause())) {
     reapAfterPause.set(attId, { task, org })
@@ -9403,7 +9604,7 @@ function removeUnheldAttachment(
   }
   if (refusePausedEdit()) return Promise.resolve(false)
   return send(api.files.removeAttachment, { org_id: org, id: attId }, 'none', {
-    about: { task, ...(rows.issues.has(task) ? {} : { answer: true }) },
+    about: { task, ...(holdsIn(task, org) ? {} : { answer: true }) },
   })
 }
 
@@ -9435,11 +9636,11 @@ function sendArchive(
     // until one does. An 'already' answer changed nothing, and the earlier
     // archive may have kept or taken the subtasks, so nothing paints and
     // the board shows the task until a delivery holds that archive. A task
-    // the workspace does not hold paints nothing (archivePaint skips): its
-    // window's answer turns archived first.
+    // the workspace does not hold in its organization paints nothing
+    // (archivePaint skips): its window's answer turns archived first.
     {
       keep: (out) =>
-        out?.archived === false ? null : { workspace: archivePaint(uuid, keepSubtasks, at) },
+        out?.archived === false ? null : { workspace: archivePaint(uuid, keepSubtasks, at, org) },
       ...(about ? { about } : {}),
     },
   ).then(
@@ -9471,23 +9672,25 @@ function paintMoved(
 }
 
 /** A move's paint of the workspace's rows: the tasks `family` (the task
-    first, then the subtasks it carries) in sub-project `projectId` at
-    `at`, and the task without its parent when it `leavesParent`. Each row
-    the workspace does not hold skips. */
+    first, then the subtasks it carries) of organization `org` in
+    sub-project `projectId` at `at`, and the task without its parent when
+    it `leavesParent`. Each row the workspace does not hold in that
+    organization skips (holdsIn). */
 function moveRowsPaint(
   family: readonly string[],
   projectId: string,
   leavesParent: boolean,
   at: string,
+  org: string,
 ): Paint {
   return () => {
     for (const taskId of family) {
       const moved = rows.issues.get(taskId)
-      if (moved) paintMoved(moved, projectId, at)
+      if (moved?.org_id === org) paintMoved(moved, projectId, at)
     }
     const uuid = family[0]
     const moved = uuid === undefined ? undefined : rows.issues.get(uuid)
-    if (leavesParent && moved && uuid !== undefined) {
+    if (leavesParent && moved?.org_id === org && uuid !== undefined) {
       moved.parent_id = undefined
       rows.hiddenParentTasks.delete(uuid)
     }
@@ -9530,7 +9733,7 @@ function moveAnswerTask(a: AnswerTask, projectId: string): string | null {
     },
     view: viewPaint(moving, () => {
       for (const taskId of moving)
-        for (const copy of viewRows.edit(taskId)) {
+        for (const copy of viewCopiesIn(taskId, a.org)) {
           paintMoved(copy, projectId, at)
           if (leavesParent && taskId === uuid) {
             copy.parent_id = undefined
@@ -9538,7 +9741,7 @@ function moveAnswerTask(a: AnswerTask, projectId: string): string | null {
           }
         }
     }),
-    workspace: moveRowsPaint(moving, projectId, leavesParent, at),
+    workspace: moveRowsPaint(moving, projectId, leavesParent, at, a.org),
   }
   void send(
     api.issues.move,
@@ -9596,7 +9799,7 @@ function deleteAnswerTask(a: AnswerTask, subtasks: string[], reason?: string): P
   if (!subtaskIds) return Promise.resolve(false)
   const gone = new Set([a.uuid, ...subtaskIds])
   const at = new Date().toISOString()
-  const view: View = { workspace: () => dropDeletedTasks(gone, at) }
+  const view: View = { workspace: () => dropDeletedTasks(gone, at, a.org) }
   const text = (reason || '').trim()
   const epoch = storeEpoch
   return sendAwaited(
@@ -9633,13 +9836,21 @@ type AnswerTask = { uuid: string; org: string; answer: TaskOk; model: IssueVM }
     serves until the task side answers) edits nothing until the task side
     answered. It is the answer the window
     draws, not a newer delivery the window has yet to draw, so the write
-    never sends another member's change as what the person saw. */
-function answerTaskOf(id: string): AnswerTask | null {
+    never sends another member's change as what the person saw. The
+    workspace may hold another organization's task of the same id
+    instead (watchedRow), which is another task. Then the window's handle
+    names the watched task, a reference (P.handleNow), and the uuid alone
+    names neither for certain, so a write by it fails closed. With `org`,
+    it is the watched task of that organization only, which its uuid then
+    names, as an upload names its task (uploadTarget). */
+function answerTaskOf(id: string, org?: string): AnswerTask | null {
   const t = watchedComments
   const detail = PLANNER.detail
-  if (!t || !detail || detail.task !== t || rows.issues.has(t)) return null
+  if (!t || !detail || detail.task !== t || watchedRow()) return null
   if (detail.state !== 'ok' || !detail.view || sectionsWatched.task?.task !== t) return null
-  if (id !== t && id !== detail.view.id) return null
+  if (org !== undefined && org !== detail.org) return null
+  const byUuid = id === t && (org !== undefined || !rows.issues.has(t))
+  if (!byUuid && id !== detail.view.id) return null
   const answer = drawnAnswer
   if (!answer || answer.task.id !== t || answer.task.org_id !== detail.org) return null
   return { uuid: t, org: detail.org, answer, model: detail.view }
@@ -9726,7 +9937,7 @@ function toggleAnswerLabel(a: AnswerTask, labelId: string, created?: Promise<boo
       },
     },
     view: marker,
-    workspace: labelRowsPaint(uuid, labelId, on),
+    workspace: labelRowsPaint(uuid, labelId, on, a.org),
   }
   void send(api.labels.toggle, { org_id: a.org, issue_id: uuid, label_id: labelId, on }, view, {
     about: { task: uuid, answer: true },
@@ -9753,7 +9964,7 @@ function followAnswerTask(a: AnswerTask, on: boolean) {
         shown.follow = on ? { issue_id: uuid, profile_id: me, created_at: at } : null
       },
     },
-    workspace: followRowsPaint(uuid, me, on, at),
+    workspace: followRowsPaint(uuid, me, on, at, a.org),
   }
   void send(
     on ? api.issues.subscribe : api.issues.unsubscribe,
@@ -9904,7 +10115,7 @@ function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions)
   // the new parent's short row as the window's next answer holds it
   const parentShort = newParent && parentRow ? parentShortOf(parentRow, at) : null
   const viewPart = viewPaint([uuid], () => {
-    for (const copy of viewRows.edit(uuid)) {
+    for (const copy of viewCopiesIn(uuid, a.org)) {
       stampTaskPatch(copy, viewDb, at)
       if (parentChange) copy.has_hidden_parent = false
     }
@@ -9925,23 +10136,37 @@ function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions)
       },
     },
     view: viewPart,
-    // skips until the workspace holds the task, then paints it as the held
-    // path does
+    // skips until the workspace holds the task in its organization, then
+    // paints it as the held path does
     workspace: () => {
-      clearParentHours(newParent, at)
-      if (!rows.issues.has(uuid)) return
+      clearParentHours(newParent, at, a.org)
+      if (!holdsIn(uuid, a.org)) return
       patchIssueRow(uuid, paintDb, at)
       if (parentChange) rows.hiddenParentTasks.delete(uuid)
       if ('description' in paintDb)
         paintDescriptionImages(uuid, prevDesc, String(paintDb.description || ''), at)
     },
   }
+  // a kept draft rebases on the value on screen (shownOf), which reads the
+  // workspace's row of the task first. While the workspace holds another
+  // organization's task of this id, that row is another task's, so the
+  // value comes from the window's own answer of this task, or none once
+  // the window shows another
+  const keep = opts.keepDraft
   return send(api.issues.update, { org_id: a.org, id: uuid, patch: wire }, view, {
     over: {
       ...overOf('issues', row, Object.keys(wire), opts.seen),
       hiddenParent: row.has_hidden_parent,
     },
-    keepDraft: opts.keepDraft,
+    keepDraft:
+      keep &&
+      ((shown) => {
+        if (!heldElsewhere(uuid, a.org)) return keep(shown)
+        const field = Object.keys(wire)[0]
+        const now = paintedAnswer()?.task
+        const own = now?.id === uuid && now.org_id === a.org ? now : undefined
+        return keep(own && Object.entries(own).find(([key]) => key === field)?.[1])
+      }),
     keepUnsaved: opts.keepUnsaved,
     about: { task: uuid, answer: true },
   })
@@ -10074,7 +10299,7 @@ function newTaskPaint(row: Row<'issues'>, created: { num: number | null }): Pain
     const num = created.num ?? Math.max(row.num, (org.next_issue_num || 0) + 1)
     org.next_issue_num = Math.max(org.next_issue_num || 0, num)
     rows.issues.set(row.id, { ...row, num })
-    clearParentHours(row.parent_id, row.created_at)
+    clearParentHours(row.parent_id, row.created_at, row.org_id)
   }
 }
 
@@ -10143,6 +10368,17 @@ async function askReach(action: BulkAction) {
     batch there passes. */
 type BulkSeat = { org: string; before?: number }
 
+/** A row the Inbox showed when a bulk action was pressed
+    (P.markAllMessagesRead, P.deleteReadMessages): its organization, task
+    and cutoff, and whether it was read and snoozed. */
+export type ShownInboxRow = {
+  org: string
+  task: string
+  through: number
+  read: boolean
+  snoozed: boolean
+}
+
 /** The seats bulkReach says a bulk Inbox action has work in, in seat
     order, each with its cutoff, whether the action needs more than one
     round and why (InboxBulk.why): a seat with more than one batch, or more
@@ -10184,7 +10420,13 @@ function dropStopToast(key: string) {
    (P.hostInboxNotice). Then the `messages` it reached when pressed show
    `paint`, under one umbrella layer per seat, and the `flags` it clears
    under one more; rows that arrived later stay as they are, as the press's
-   cutoff leaves them out. The seats run on the shared runner
+   cutoff leaves them out. The Inbox's rows on screen at the press, `shown`,
+   that the action changes in a planned seat, the unread ones that are not
+   snoozed for Mark all as read and the read ones that are not snoozed for
+   Remove all read, take a read or removed mark at their cutoff
+   (P.inboxMarks). A seat's marks settle when its lane ends, a stop ends
+   them at once, so a refused seat's rows come back, and a fault ends them
+   all. The seats run on the shared runner
    (lib/batchRunner.ts runLanes), at most BULK_SEATS at once, a long action
    on the app's shared lanes: each sends `batch` until an answer has no
    more, every Mark all as read batch with its seat's cutoff from the
@@ -10219,6 +10461,7 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
     count: (answer: R) => number
   },
   batch: (seat: BulkSeat, previous: R | null, keep: (answer: R) => View) => Promise<R>,
+  shown: readonly ShownInboxRow[] = [],
 ): Promise<void> {
   if (bulkBusy(PLANNER.inboxBulk) || refusePausedWrite(a.ref)) return
   const epoch = storeEpoch
@@ -10230,6 +10473,12 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
   // the rows the press reaches, as loaded now
   const pressed = messagesByOrg(a.messages().map((message) => message.id))
   const opened: Layer[] = []
+  // the marks of the shown rows the action changes, by seat
+  const marked = new Map<string, MarkOf[]>()
+  const endMarks = (org: string | null, accepted: boolean) => {
+    for (const [seat, marks] of marked)
+      if (org === null || seat === org) settleInboxMarks(marks, accepted)
+  }
   try {
     let bulk: InboxBulk = {
       action,
@@ -10272,6 +10521,25 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
       if (!go || refusePausedWrite(a.ref)) return setInboxBulk(null)
     }
     asking = null
+    for (const { org } of plan.seats)
+      marked.set(
+        org,
+        setInboxMarks(
+          shown
+            .filter(
+              (row) =>
+                row.org === org && !row.snoozed && (action === 'read' ? !row.read : row.read),
+            )
+            .map((row) => ({
+              org,
+              task: row.task,
+              mark:
+                action === 'read'
+                  ? { through: row.through, read: true }
+                  : { through: row.through, removed: true },
+            })),
+        ),
+      )
     const name = getFunctionName(a.ref)
     const flag = openUmbrella(name, a.flags)
     opened.push(flag)
@@ -10309,6 +10577,8 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
         setInboxBulk(bulk)
       },
       onStop: ({ lane: seat, reason, paused }) => {
+        // the seat's rows show as the server keeps them, at once
+        endMarks(seat.org, false)
         // the first stop takes the flags back
         if (stops.length === 0) endUmbrella(flag, false)
         stops.push({ org: seat.org, done: doneIn.get(seat.org) ?? 0, reason, paused })
@@ -10316,13 +10586,14 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
         setInboxBulk(bulk)
       },
       onLaneEnd: (seat, lastSeat) => {
+        endMarks(seat.org, true)
         const umbrella = umbrellas.get(seat.org)
         // the last seat's umbrella ends with the flags in one repaint
         if (lastSeat) last = umbrella ?? null
         else if (umbrella) endUmbrella(umbrella, false)
       },
     })
-    if (ran === null) return
+    if (ran === null) return endMarks(null, false)
     const finished = ran.finished.map((seat) => seat.org)
     together(() => {
       if (last) endUmbrella(last, false)
@@ -10354,6 +10625,7 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
     if (stops.length === 0 && bulk.long) toast(bulkDoneText(bulk), 'success')
   } catch (fault) {
     if (asking === press) asking = null
+    endMarks(null, false)
     if (!live()) return
     reportFault(fault)
     noticeAnswer = null
@@ -10820,6 +11092,12 @@ export const PLANNER = {
   // the watched people whose latest-comment answer stayed cut short by the
   // server's budgets even when asked alone, so some of their cards lack marks
   lastCommentsCut: [] as string[],
+  /* The workspace inbox part's messages, and their groups one per task.
+     No view reads them since the Inbox lists inbox.page. The desktop
+     alerts read the part (announceNewMessages), the store's tests read
+     these, and scripts/smoke.mjs reads P.messages to pick tasks it can
+     open without marking unread messages read. They go with the part
+     (t3/limits-inbox-feed). */
   messages: [] as MessageVM[],
   messageGroups: [] as MessageGroupVM[],
   /** The loaded message groups (P.messageGroups) that are unread and not
@@ -10830,7 +11108,9 @@ export const PLANNER = {
       (scripts/benchmark-browser.mjs). It goes with the workspace inbox
       part. */
   unreadMessages: 0,
-  readMessageCount: 0, // includes read notifications beyond the displayed snapshot
+  // the read messages the part counts, beyond those it sent too; no view
+  // reads it, the store's tests do, and it goes with the part
+  readMessageCount: 0,
   // whether the Inbox's Mark all as read and Remove all read may change
   // anything, from the unread summary's seat flags, and true while it has
   // no answer (deriveInboxFlags)
@@ -10844,12 +11124,17 @@ export const PLANNER = {
   inboxItem: null as InboxItemVM | null,
   // the bulk action running or last run, with its progress (store/inboxBulk.ts)
   inboxBulk: null as InboxBulk | null,
+  // the marks of the person's own Inbox writes by inboxMarkKey, which the
+  // Inbox shows its rows by until its page answers them (inboxMarks)
+  inboxMarks: new Map() as ReadonlyMap<string, InboxMark>,
   // the Deleted items restore or Delete now running or last run, with its
   // progress (runDeletedItems), and the deferred items it watches
   deletedAction: null as DeletedAction | null,
   deletedWaiting: new Set<string>() as ReadonlySet<string>,
-  // whether older messages exist than the Inbox lists (the snapshot's 500),
-  // and which of Mark all as read and Remove all read reach some of them
+  // whether the inbox part left out older messages than it sent (its 500),
+  // and which of Mark all as read and Remove all read reach some of them;
+  // no view reads them since the Inbox lists inbox.page, the store's tests
+  // do, and they go with the part
   inboxCut: false,
   inboxCutReach: { markAllRead: false, removeRead: false },
   loaded: false,
@@ -11998,27 +12283,31 @@ export const PLANNER = {
       because a new task's handle can move to another task meanwhile. */
   handleOf: (uuid: string): string | null => uuidToKey.get(uuid) ?? null,
   /** The handle task `uuid` shows by now: the workspace's, else the
-      window's while it shows the task from its own answer, or null. The
-      description editor follows its uploads by it (P.handleOf answers
-      only the workspace's, which the views read as whether it holds the
-      task). */
-  shownHandleOf: (uuid: string): string | null => {
-    const held = uuidToKey.get(uuid)
+      window's while it shows the task from its own answer, or null. With
+      `org`, of that organization's task only, as two organizations can
+      hold one task id (heldHandle). The description editor follows its
+      uploads by it (P.handleOf answers only the workspace's, which the
+      views read as whether it holds the task). */
+  shownHandleOf: (uuid: string, org?: string): string | null => {
+    const held = heldHandle(uuid, org)
     if (held !== undefined) return held
     const detail = PLANNER.detail
-    return detail?.task === uuid && detail.answered === 'ok' ? (detail.view?.id ?? null) : null
+    const ours = detail?.task === uuid && (!org || detail.org === org)
+    return ours && detail.answered === 'ok' ? (detail.view?.id ?? null) : null
   },
   /** The task handle or uuid `id` names as the window shows it: the
       workspace's view, else the window's view from its own answer while
-      the workspace does not hold the task (P.taskDetail), or undefined. */
+      the workspace does not hold the task in its organization
+      (P.taskDetail), or undefined. While the workspace holds another
+      organization's task of the same id, the window's handle names the
+      window's task and the uuid alone names neither (answerTaskOf). */
   taskShown: (id: string): IssueVM | undefined => {
     const held = PLANNER.issueById[id]
     if (held) return held
     const detail = PLANNER.detail
     const view = detail?.answered === 'ok' ? detail.view : null
-    return view && (view.id === id || view.uuid === id) && !rows.issues.has(view.uuid)
-      ? view
-      : undefined
+    if (!view || holdsIn(view.uuid, view.org)) return undefined
+    return view.id === id || (view.uuid === id && !rows.issues.has(id)) ? view : undefined
   },
   /** The watched task the workspace does not hold, as a window names it,
       when handle `id` is the one it opens by now (P.handleNow): its uuid,
@@ -12051,7 +12340,7 @@ export const PLANNER = {
       someone changed the task meanwhile. */
   answerSaveWaits: (id: string): boolean => {
     const shown = PLANNER.taskShown(id)
-    return !!shown && !rows.issues.has(shown.uuid) && answerTaskOf(id) === null
+    return !!shown && !holdsIn(shown.uuid, shown.org) && answerTaskOf(id) === null
   },
   /** Refuses a save to task `id` while it waits (P.answerSaveWaits), with
       a toast that says why, so the editor keeps its draft, as
@@ -12070,10 +12359,11 @@ export const PLANNER = {
       holds a subtask stored before the rule of one level, so both windows
       say they cannot read every subtask, or wait for every task. */
   familyOf: (it: IssueVM): TaskFamily | null => {
-    const held = rows.issues.has(it.uuid)
+    const held = holdsIn(it.uuid, it.org)
     if (held && tasksAll) return { root: it, byId: PLANNER.issueById, done: PLANNER.isDone(it) }
-    const answer =
-      watchedComments === it.uuid && sectionFailure.task === 'none' ? paintedAnswer() : null
+    // the watched task's answer, of its own organization's task
+    const watched = watchedComments === it.uuid && watchedOrgOf() === it.org
+    const answer = watched && sectionFailure.task === 'none' ? paintedAnswer() : null
     return answer ? answerFamilyOf(it, answer) : null
   },
   /** The tasks, by uuid, whose text a view's row does not send, their
@@ -12608,17 +12898,26 @@ export const PLANNER = {
     return it && row ? taskRef({ org: it.org, num: row.num, uuid: it.uuid }) : id
   },
   /** What opening task `uuid`, number `num` of organization `org` passes
-      on: its handle when the workspace holds it, else a reference that
-      names all three (lib/taskReference.ts), as Search and the related
-      rows open a task. */
+      on: its handle when the workspace holds it in that organization,
+      else a reference that names all three (lib/taskReference.ts), as
+      Search, the related rows and an Inbox row open a task. Another
+      organization's held task of the same id is another task
+      (heldHandle). */
   openTask: (uuid: string, org: string, num: number | null): string =>
-    uuidToKey.get(uuid) ?? taskRef({ org, num, uuid }),
+    heldHandle(uuid, org) ?? taskRef({ org, num, uuid }),
   /** The handle task `uuid`, number `num` of organization `orgId` opens by
-      now: the store's when it holds the task, else the home organization's
-      key or another organization's uuid (handleFor). Read when the task
-      opens, as a role change since a search answered can change it. */
+      now: the store's when it holds the task in that organization, else
+      the home organization's key or another organization's uuid
+      (handleFor). While the workspace holds another organization's task
+      of the same id, whose handle that would be, it is a reference that
+      names all three, which no lookup of a handle finds (heldHandle). Read
+      when the task opens, as a role change since a search answered can
+      change it. */
   handleNow: (uuid: string, orgId: string, num: number): string =>
-    uuidToKey.get(uuid) ?? handleFor(uuid, orgId, `${ISSUE_PREFIX}-${num}`),
+    heldHandle(uuid, orgId) ??
+    (uuidToKey.has(uuid)
+      ? taskRef({ org: orgId, num, uuid })
+      : handleFor(uuid, orgId, `${ISSUE_PREFIX}-${num}`)),
   /** The handle the views name the task that `open` opens by: a handle as
       it is, and a reference that names a task's organization, number and
       uuid (P.openTask) by the handle that task opens by now (P.handleNow),
@@ -12817,7 +13116,8 @@ export const PLANNER = {
       if (!PLANNER.refuseStaleEdit(it.parent)) toast(PARENT_UNKNOWN, 'error')
       return null
     }
-    const shownParent = parentId && !rows.issues.has(parentId) ? answerTaskOf(parentId) : null
+    const shownParent =
+      it.parent && parentId && !holdsIn(parentId, orgRow.id) ? answerTaskOf(it.parent) : null
     const uuid = crypto.randomUUID()
     const now = new Date().toISOString()
     const previewNum = (orgRow.next_issue_num || 0) + 1
@@ -13067,7 +13367,7 @@ export const PLANNER = {
           }
         : {}),
       workspace: () => {
-        clearParentHours(newParent, at)
+        clearParentHours(newParent, at, row.org_id)
         patchIssueRow(uuid, paintDb, at)
         // a new visible parent or a detach replaces a hidden one
         if ('parent_id' in paintDb && rows.issues.has(uuid)) rows.hiddenParentTasks.delete(uuid)
@@ -13172,10 +13472,11 @@ export const PLANNER = {
     const view: View = {
       workspace: () => {
         // a task the window shows from its answer gets its new parent at
-        // once, and its own row once the workspace holds it
-        if (!shown && !rows.issues.has(it.uuid)) return
+        // once, and its own row once the workspace holds it in its
+        // organization
+        if (!shown && !holdsIn(it.uuid, it.org)) return
         paintParent()
-        if (!rows.issues.has(it.uuid)) return
+        if (!holdsIn(it.uuid, it.org)) return
         if (rows.issues.get(it.uuid)?.parent_id === parentId) return
         patchIssueRow(it.uuid, child, at)
         rows.hiddenParentTasks.delete(it.uuid)
@@ -13193,7 +13494,7 @@ export const PLANNER = {
         },
       },
     }
-    const row = rows.issues.get(it.uuid)
+    const row = holdsIn(it.uuid, it.org) ? rows.issues.get(it.uuid) : undefined
     const over: Over | undefined = row
       ? overOf('issues', row, ['parent_id'])
       : shown
@@ -13285,9 +13586,9 @@ export const PLANNER = {
     }
     const view: View = {
       workspace: () => {
-        if (!shown && !rows.issues.has(it.uuid)) return
+        if (!shown && !holdsIn(it.uuid, it.org)) return
         paintTask()
-        if (!rows.issues.has(it.uuid) || !rows.issues.has(taskId) || rows.links.has(link.id)) return
+        if (!holdsIn(it.uuid, it.org) || !holdsIn(taskId, it.org) || rows.links.has(link.id)) return
         rows.links.set(link.id, { ...link })
       },
     }
@@ -13340,7 +13641,9 @@ export const PLANNER = {
     const { leavesParent, carried } = PLANNER.moveFamily(it, projectId)
     const at = new Date().toISOString() // the server's move fires the touch
     const family = [uuid, ...carried.map((task) => task.uuid)]
-    const view: View = { workspace: moveRowsPaint(family, projectId, leavesParent, at) }
+    const view: View = {
+      workspace: moveRowsPaint(family, projectId, leavesParent, at, row.org_id),
+    }
     void send(
       api.issues.move,
       {
@@ -13426,7 +13729,7 @@ export const PLANNER = {
     // the paint of the delete; the server moves the rows to Deleted items
     // (convex/model/deletedItems.ts) and keeps the attachment bytes there
     const at = new Date().toISOString()
-    const view: View = { workspace: () => dropDeletedTasks(gone, at) }
+    const view: View = { workspace: () => dropDeletedTasks(gone, at, row.org_id) }
     const text = (reason || '').trim()
     const args = {
       org_id: row.org_id,
@@ -13906,7 +14209,7 @@ export const PLANNER = {
       return Promise.resolve(false)
     }
     const handle = uuidToKey.get(child.uuid)
-    if (handle !== undefined && rows.issues.has(child.uuid))
+    if (handle !== undefined && holdsIn(child.uuid, org))
       return PLANNER.updateIssue(
         handle,
         { parent: on ? openUuid : null },
@@ -13921,7 +14224,7 @@ export const PLANNER = {
     const uuid = child.uuid
     const view: View = {
       view: viewPaint([uuid], () => {
-        for (const copy of viewRows.edit(uuid)) {
+        for (const copy of viewCopiesIn(uuid, org)) {
           stampTaskPatch(copy, patch, at)
           copy.has_hidden_parent = false
         }
@@ -13931,8 +14234,8 @@ export const PLANNER = {
       // once the workspace holds it, takes the new parent in place of the
       // one it had, a hidden one too, as the held path paints it
       workspace: () => {
-        clearParentHours(parentId, at)
-        if (!rows.issues.has(uuid)) return
+        clearParentHours(parentId, at, org)
+        if (!holdsIn(uuid, org)) return
         patchIssueRow(uuid, patch, at)
         rows.hiddenParentTasks.delete(uuid)
       },
@@ -13967,7 +14270,7 @@ export const PLANNER = {
     }
     if (other.uuid === it.uuid) return Promise.resolve(false)
     const otherHandle = uuidToKey.get(other.uuid)
-    if (heldOpen && otherHandle !== undefined && rows.issues.has(other.uuid))
+    if (heldOpen && otherHandle !== undefined && holdsIn(other.uuid, it.org))
       return PLANNER.addLink(open, kind, otherHandle)
     const full = linkBlock(capInputs(it).links)
     if (full) {
@@ -13985,7 +14288,7 @@ export const PLANNER = {
     }
     const view: View = {
       workspace: () => {
-        if (!rows.issues.has(source) || !rows.issues.has(target)) return
+        if (!holdsIn(source, it.org) || !holdsIn(target, it.org)) return
         if (rows.links.keysWhere((l) => l.pair_key === row.pair_key).length) return
         rows.links.set(row.id, { ...row })
       },
@@ -14017,13 +14320,13 @@ export const PLANNER = {
     }
     const a = it.uuid
     const b = other.uuid
-    const bothHeld = !!heldOpen && uuidToKey.get(b) !== undefined && rows.issues.has(b)
+    const bothHeld = !!heldOpen && uuidToKey.get(b) !== undefined && holdsIn(b, it.org)
     const pair = (l: Row<'issue_links'>) =>
       (l.source_id === a && l.target_id === b) || (l.source_id === b && l.target_id === a)
     const kind = shownKind === 'blocks' || shownKind === 'blocked_by' ? shownKind : 'relates'
     const view: View = {
       workspace: () => {
-        if (!rows.issues.has(a) || !rows.issues.has(b)) return
+        if (!holdsIn(a, it.org) || !holdsIn(b, it.org)) return
         for (const id of rows.links.keysWhere(pair)) rows.links.delete(id)
       },
     }
@@ -14086,13 +14389,21 @@ export const PLANNER = {
       organization, project and cap from that answer (answerUploadTarget),
       and none while that answer is not current (P.refuseStaleEdit). The
       upload follows the task `issueKey` names when it starts, by its uuid
-      and organization, whatever that handle names later. */
+      and organization, whatever that handle names later. With `opts.org`
+      it is that organization's task, as two organizations can hold one
+      task id, so the window's task shown from its answer takes a file by
+      its uuid while the workspace holds another organization's task of
+      that id. */
   addAttachment: withUpdateBlock(
-    async (issueKey: string, input: File, opts?: { inline?: boolean }): Promise<string | null> => {
+    async (
+      issueKey: string,
+      input: File,
+      opts?: { inline?: boolean; org?: string },
+    ): Promise<string | null> => {
       // issueKey may be a derived key ("QN-482") or the issue uuid — the
       // New-issue modal and the drawer attach by uuid, which survives the rare
       // INSERT renumbering that reassigns the derived key mid-flight
-      const first = uploadTarget(issueKey)
+      const first = uploadTarget(issueKey, opts?.org)
       // a task the window shows from an answer that is not current takes no
       // file yet, and says why, as does one the window no longer shows
       if (!first) {
@@ -14107,9 +14418,10 @@ export const PLANNER = {
       // name the file) hand over WebP, which comes straight back out.
       // Re-encoding is real wall-clock work — re-check the issue after it: the
       // row can be deleted from another tab while we encode, and a handle
-      // can move to another task, so it is checked by the uuid found first.
+      // can move to another task, so it is checked by the uuid and the
+      // organization found first.
       const file = await compressImage(input)
-      const target = uploadTarget(first.uuid)
+      const target = uploadTarget(first.uuid, first.org)
       if (!target) {
         refuseUpload(first.uuid, file.name)
         return null
@@ -14159,15 +14471,16 @@ export const PLANNER = {
           'none',
           {
             about,
-            // a file of a task the workspace does not hold shows with the
-            // attachments answer, which Convex delivers before the write
-            // resolves (lib/convexOrdering.test.ts); this paint skips then
+            // a file of a task the workspace does not hold in its
+            // organization shows with the attachments answer, which Convex
+            // delivers before the write resolves (lib/convexOrdering.test.ts);
+            // this paint skips then
             keep: (answer) =>
               'refused' in answer
                 ? null
                 : {
                     workspace: () => {
-                      if (!rows.issues.has(uuid) || rows.attachments.has(attId)) return
+                      if (!holdsIn(uuid, org) || rows.attachments.has(attId)) return
                       rows.attachments.set(attId, { ...answer.attachment })
                     },
                   },
@@ -14262,13 +14575,15 @@ export const PLANNER = {
       it. */
   watchComments: (issueUuid: string | null, orgId?: string) => {
     // the organization a later call brings for the watched task starts its
-    // watch over, so the empty thread and lists of a task without one go
+    // watch over, so the empty thread and lists of a task without one go,
+    // and so does another organization's, whose task of the same id is
+    // another task
     if (watchedComments === issueUuid) {
-      if (!issueUuid || !orgId || watchedOrg) return
+      if (!issueUuid || !orgId || watchedOrg === orgId) return
       watchedComments = null
     }
     ++commentsWatchEpoch
-    if (watchedHeld?.uuid !== issueUuid) watchedHeld = null
+    if (watchedHeld?.uuid !== issueUuid || (orgId && watchedHeld.org !== orgId)) watchedHeld = null
     watchedComments = issueUuid
     const row = issueUuid ? serverTask(issueUuid) : undefined
     watchedOrg = orgId ?? row?.org_id ?? null
@@ -14309,8 +14624,9 @@ export const PLANNER = {
       if (historyOwners.size > 0) startHistory()
     }
     // the thread, and with it the sections and the task answer
-    // (syncSections), then the emptied thread and lists show
-    const org = row?.org_id ?? watchedOrg
+    // (syncSections), then the emptied thread and lists show, in the
+    // organization the window named
+    const org = watchedOrg
     if (issueUuid && org && !creating) subscribeThread(issueUuid, org)
     repaint({ thread: true, sections: true })
   },
@@ -14368,11 +14684,14 @@ export const PLANNER = {
 
   /** The task the window shows from its own read while the workspace does
       not hold it (store/taskDetail.ts), when `uuid` is the watched task and
-      its organization is known, else null. Its read is the task side of the
-      sections, which runs while a window shows the sections or the
-      workspace does not hold the watched task. */
-  taskDetail: (uuid: string | null | undefined): TaskDetailVM | null =>
-    uuid && PLANNER.detail?.task === uuid ? PLANNER.detail : null,
+      its organization is known, and with `org`, when that organization is
+      `org`, as two organizations can hold one task id; else null. Its read
+      is the task side of the sections, which runs while a window shows the
+      sections or the workspace does not hold the watched task. */
+  taskDetail: (uuid: string | null | undefined, org?: string): TaskDetailVM | null => {
+    const detail = PLANNER.detail
+    return uuid && detail?.task === uuid && (!org || detail.org === org) ? detail : null
+  },
 
   /** Retry for the window's read of the task it shows from its answer
       (P.taskDetail): a fresh subscription of the task answer, with
@@ -15099,11 +15418,16 @@ export const PLANNER = {
 
   /* ---- inbox messages (0074) ----
      Rows are created only by the server; the client's whole write surface is
-     read_at (and delete). The inbox acts on an ITEM — every message for one
-     task — so these take an id LIST. The singular forms stay for callers
-     that hold one message. Each checks the pause before its paint, so a
-     paused write paints nothing, and sends one write per organization, each
-     with its own layer, so a seat that refuses takes back only its rows. */
+     read_at (and delete). The Inbox acts on an ITEM, every message for one
+     task, by its organization and task with the row's cutoff (readItem,
+     unreadItem, removeItem, snoozeItem). The id-list actions here
+     (markMessagesRead, markMessagesUnread, deleteMessages, snoozeMessages
+     and the singular forms) act on the workspace inbox part's loaded
+     messages; no view calls them since the Inbox lists inbox.page, the
+     store's tests do, and they go with the part (t3/limits-inbox-feed).
+     Each checks the pause before its paint, so a paused write paints
+     nothing, and sends one write per organization, each with its own
+     layer, so a seat that refuses takes back only its rows. */
   /** Marks messages read and answers whether it sent the mark, for the
       Inbox's rows. */
   markMessagesRead: (ids: string[]): boolean => {
@@ -15136,40 +15460,69 @@ export const PLANNER = {
       the answer is painted read and comes back unread when the server
       answers. `quiet` refuses a paused read without a toast and leaves it
       out of what the notice counts, for the read that opening a task sends
-      on its own (P.readOnOpen). */
+      on its own (P.readOnOpen). Its read mark turns the Inbox's row read
+      at once (P.inboxMarks). Once the server accepts it, a read of the
+      watched task supersedes every Mark as unread or snooze that went out
+      before it, accepted, waiting or failed, so their hold goes
+      (holdWatched). A read on open the hold turned away then runs, as it
+      does once a refusal frees the hold, and reads news that came past
+      this read's cutoff, or sends nothing when the item holds no unread
+      message. Later news on the task is read on open again, as the
+      person's newest choice is read. A Mark as unread or snooze that went
+      out after it is newer and holds while it waits or once accepted, and
+      holds nothing once refused or failed. The read on open never frees
+      it. */
   readItem: (
     target: { org: string; task: string; through: number; latestAt: string },
     { quiet = false } = {},
-  ): boolean => sendItemRead(target, quiet),
+  ): boolean => {
+    const before = holdWrites
+    return sendItemRead(target, quiet, () => {
+      const watched = threadWatched
+      if (watched?.task !== target.task || watched.org !== target.org) return
+      const hold = itemHold
+      hold.readThrough = Math.max(hold.readThrough, before)
+      // the read superseded the unread choices before it, so a read on
+      // open the hold turned away runs now, unless a newer choice still
+      // holds, for news past this read's cutoff
+      if (heldBack(hold) || !hold.keptBack) return
+      hold.keptBack = false
+      PLANNER.readOnOpen(target.task)
+    })
+  },
   /** The read on open of task `task`, which a window shows once it froze
-      where its unread part starts. It reads the task's inbox item through
-      P.readItem, with the organization, the task and the `through` of its
-      item answer (P.inboxItem), once that answer is ok and current with
-      unread messages and no snooze. Nothing goes out while the item loads,
-      while the seat's items are building, after a failure, for no item, a
-      read item or a snoozed one, or for a task the store does not watch.
-      Once the person marked the task unread from this client, with Mark as
-      unread, a snooze or its end, it sends nothing more until the thread
-      changes or stops, so their choice holds while the task stays open,
-      from the moment that write goes out. One the server refused or that
-      failed holds nothing once answered, and a read it turned away runs
-      again then (holdUnreadOf). It sends each `through` once a visit of
+      where its unread part starts. It reads the task's inbox item with the
+      organization, the task and the `through` of its item answer
+      (P.inboxItem), once that answer is ok and current with unread
+      messages and no snooze. It sends that read with sendItemRead, never
+      P.readItem, whose acceptance frees the hold below. Nothing goes out
+      while the item loads, while the seat's items are building, after a
+      failure, for no item, a read item or a snoozed one, or for a task the
+      store does not watch. Once the person marked the task unread from
+      this client, with Mark as unread, a snooze or its end, it sends
+      nothing more until the thread changes or stops, or until a row's
+      accepted Mark as read of the task frees the hold (P.readItem), so
+      their choice holds while the task stays open, from the moment that
+      write goes out. One the server refused or that failed holds nothing
+      once answered. A read the hold turned away runs again once nothing
+      holds, after a refusal, a failure or a row's accepted Mark as read
+      (holdWatched, P.readItem). It sends each `through` once a visit of
       the watched task, so the Inbox pane and its pop-out send one read,
       and once more when the server confirmed that read and the item's
       answer, one that came after the read went out, still holds unread
       messages at the same `through`, as for a message whose mutation
       started before the read and committed after it. It checks that at
       the confirmation too, since Convex brings the answer that holds the
-      read before the read's promise resolves, so the answer that came with
-      it may hold such a message, and no later answer may come. A paused
-      read is refused quietly and goes out once the pause ends, and a
-      refusal by the server is not sent again for its `through`. Answers
+      read before the read's promise resolves, so the answer that came
+      with it may hold such a message, and no later answer may come. A
+      paused read is refused quietly and goes out once the pause ends, and
+      a refusal by the server is not sent again for its `through`. Answers
       whether it sent one. */
   readOnOpen: (task: string): boolean => {
     const shown = PLANNER.inboxItem
     if (!shown || shown.task !== task || shown.state !== 'ok' || !shown.current) return false
     // the person chose unread for this visit, or the write that does waits
-    if (itemHold.waiting > 0 || itemHold.accepted) {
+    if (heldBack(itemHold)) {
       itemHold.keptBack = true
       return false
     }
@@ -15216,12 +15569,13 @@ export const PLANNER = {
     PLANNER.inboxSummary = { state: 'loading', answer: null, current: false }
     emit('inbox')
   },
-  /* Mark every current notification read, including messages hidden by the
-     snapshot cap and notifications in other organization seats. Each seat
-     keeps the cutoff bulkReach answered at the press, so new arrivals stay
-     unread (bulkInboxAction). The Inbox passes `ask`, so a long action
-     waits for the keep-open notice. */
-  markAllMessagesRead: async (ask = false): Promise<void> => {
+  /* Mark every current notification read, including messages the
+     workspace did not load and notifications in other organization seats.
+     Each seat keeps the cutoff bulkReach answered at the press, so new
+     arrivals stay unread (bulkInboxAction). The Inbox passes `ask`, so a
+     long action waits for the keep-open notice, and the rows it shows,
+     `shown`, so they turn read at once. */
+  markAllMessagesRead: async (ask = false, shown: readonly ShownInboxRow[] = []): Promise<void> => {
     if (!PLANNER.canMarkAllRead) return
     const at = new Date().toISOString()
     await bulkInboxAction<FunctionReturnType<typeof api.messages.markAllRead>>(
@@ -15247,6 +15601,7 @@ export const PLANNER = {
           'none',
           { keep },
         ),
+      shown,
     )
   },
   /* Back to unread, the same column the other way. Nothing is pruned by
@@ -15280,12 +15635,12 @@ export const PLANNER = {
       void send(api.messages.remove, { org_id: org, ids: list }, removeMessagesPaint(list))
     })
   },
-  /* Inbox cleanup spans every seat and the full server inbox, beyond the
-     snapshot's display cap. Each bounded batch selects current read rows,
-     so unread arrivals and messages reopened on another device survive
-     (bulkInboxAction). Completion means all writes settled. The Inbox
-     passes `ask`, as for markAllMessagesRead. */
-  deleteReadMessages: async (ask = false): Promise<void> => {
+  /* Inbox cleanup spans every seat and the full server inbox, loaded or
+     not. Each bounded batch selects current read rows, so unread arrivals
+     and messages reopened on another device survive (bulkInboxAction).
+     Completion means all writes settled. The Inbox passes `ask` and
+     `shown`, as for markAllMessagesRead, so its read rows leave at once. */
+  deleteReadMessages: async (ask = false, shown: readonly ShownInboxRow[] = []): Promise<void> => {
     if (!PLANNER.canRemoveRead) return
     await bulkInboxAction<FunctionReturnType<typeof api.messages.removeRead>>(
       'remove',
@@ -15307,6 +15662,7 @@ export const PLANNER = {
       },
       (seat, _previous, keep) =>
         sendAwaited(api.messages.removeRead, { org_id: seat.org }, 'none', { keep }),
+      shown,
     )
   },
   /* The person's answer to the keep-open notice of the bulk action that
@@ -15384,6 +15740,123 @@ export const PLANNER = {
       }
       void send(api.messages.snooze, { org_id: org, ids: list, until }, view, holdUnreadOf(list))
     })
+  },
+
+  /** Marks the person's inbox item about task `task` in organization
+      `org` unread (messages.unreadItem), every message of it, loaded or
+      not, and answers whether it sent the write. An unread mark turns the
+      Inbox's row, whose cutoff is `through`, unread at once (P.inboxMarks),
+      and the paint marks the item's loaded messages unread. On the watched
+      task it holds off the read on open for the rest of the visit, unless
+      the server refuses it or it fails (holdUnreadOfItem). The pause
+      refuses it first, with no mark. */
+  unreadItem: (target: { org: string; task: string; through: number }): boolean => {
+    if (refusePausedWrite(api.messages.unreadItem)) return false
+    const { org, task } = target
+    const mark = setInboxMark(org, task, { through: target.through, read: false })
+    void send(
+      api.messages.unreadItem,
+      { org_id: org, issue_id: task },
+      {
+        workspace: () =>
+          rows.messages
+            .where((r) => r.issue_id === task && r.org_id === org)
+            .forEach((r) => {
+              r.read_at = undefined
+            }),
+      },
+      settlingMark(org, task, mark, holdUnreadOfItem(org, task)),
+    )
+    return true
+  },
+  /** Removes the person's inbox item about task `task` in organization
+      `org` (messages.removeItem), every message the server stored up to
+      `through`, the row's cutoff, loaded or not, and answers whether it
+      sent the write. A message stored after it stays as the item's only
+      one. A removed mark hides the Inbox's row at once (P.inboxMarks), and
+      the paint removes the item's loaded messages no newer than
+      `latestAt`, its newest one at the press. The pause refuses it first,
+      with no mark. */
+  removeItem: (target: {
+    org: string
+    task: string
+    through: number
+    latestAt: string
+  }): boolean => {
+    if (refusePausedWrite(api.messages.removeItem)) return false
+    const { org, task } = target
+    const latest = Date.parse(target.latestAt)
+    const mark = setInboxMark(org, task, { through: target.through, removed: true })
+    void send(
+      api.messages.removeItem,
+      { org_id: org, issue_id: task, through: target.through },
+      {
+        workspace: () =>
+          rows.messages
+            .where(
+              (r) => r.issue_id === task && r.org_id === org && Date.parse(r.created_at) <= latest,
+            )
+            .forEach((r) => {
+              rows.messages.delete(r.id)
+            }),
+      },
+      settlingMark(org, task, mark),
+    )
+    return true
+  },
+  /** Snoozes the person's inbox item about task `task` in organization
+      `org` until the ISO instant `until`, or with null wakes it now
+      (messages.snoozeItem), and answers whether it sent the write. Both
+      leave it unread, as a reminder returns bold, and the timed return is
+      the server's scheduled wake. A snooze mark shows the Inbox's row,
+      whose cutoff is `through`, snoozed or woken at once (P.inboxMarks),
+      and the paint stamps the item's loaded messages. On the watched task
+      either holds off the read on open for the rest of the visit, unless
+      the server refuses it or it fails (holdUnreadOfItem). The pause
+      refuses it first, with no mark. */
+  snoozeItem: (
+    target: { org: string; task: string; through: number },
+    until: string | null,
+  ): boolean => {
+    if (refusePausedWrite(api.messages.snoozeItem)) return false
+    const { org, task } = target
+    const mark = setInboxMark(org, task, { through: target.through, snoozedUntil: until })
+    void send(
+      api.messages.snoozeItem,
+      { org_id: org, issue_id: task, until },
+      {
+        workspace: () =>
+          rows.messages
+            .where((r) => r.issue_id === task && r.org_id === org)
+            .forEach((r) => {
+              if (until === null) {
+                if (r.snoozed_until === undefined) return
+                r.snoozed_until = undefined
+                r.read_at = undefined
+              } else {
+                r.snoozed_until = until
+                r.read_at = undefined
+                r.woke_at = undefined
+              }
+            }),
+      },
+      settlingMark(org, task, mark, holdUnreadOfItem(org, task)),
+    )
+    return true
+  },
+  /** Ends the settled marks `marks` (P.inboxMarks), which an Inbox passes
+      once it shows an answer that is current after they settled, so its
+      rows show as the server keeps them. A mark that a later write
+      replaced, or that is not settled, stays. */
+  endInboxMarks: (marks: readonly InboxMark[]) => {
+    const ended = new Set(marks.filter((mark) => mark.settled))
+    let changed = false
+    for (const [key, mark] of inboxMarks)
+      if (ended.has(mark)) {
+        inboxMarks.delete(key)
+        changed = true
+      }
+    if (changed) showInboxMarks()
   },
 
   /* How long this person keeps a message they have read (0110); null = for
@@ -17106,7 +17579,7 @@ export const PLANNER = {
       toast(full)
       return
     }
-    const view: View = { workspace: labelRowsPaint(uuid, labelId, on) }
+    const view: View = { workspace: labelRowsPaint(uuid, labelId, on, issue.org_id) }
     void send(
       api.labels.toggle,
       { org_id: issue.org_id, issue_id: uuid, label_id: labelId, on },
@@ -17165,7 +17638,7 @@ export const PLANNER = {
       {
         onOk: () => onSuccess?.(),
         onSettled,
-        about: { task: issue.uuid, ...(rows.issues.has(issue.uuid) ? {} : { answer: true }) },
+        about: { task: issue.uuid, ...(holdsIn(issue.uuid, issue.org) ? {} : { answer: true }) },
       },
     )
   },
@@ -17192,7 +17665,7 @@ export const PLANNER = {
     if (has === on) return // already in the asked-for state
     if (refusePausedWrite(on ? api.issues.subscribe : api.issues.unsubscribe)) return
     const at = new Date().toISOString()
-    const view: View = { workspace: followRowsPaint(uuid, me, on, at) }
+    const view: View = { workspace: followRowsPaint(uuid, me, on, at, row.org_id) }
     void send(
       on ? api.issues.subscribe : api.issues.unsubscribe,
       { org_id: row.org_id, issue_id: uuid },
@@ -17256,10 +17729,10 @@ export const PLANNER = {
    part is the new anchor the rows are built from (owe).
 
    Tasks load on demand. The workspace holds no task until something that
-   needs every task asks for them (P.askTasks), such as a create or the
-   Inbox's search, and keeps them once asked until
-   the store resets (`asked`). The views show the server's own answers
-   meanwhile. From the ask until every task window answered, the registry's
+   needs every task asks for them (P.askTasks), a create, and keeps them
+   once asked until the store resets (`asked`). The views show the
+   server's own answers meanwhile. From the ask until every task window
+   answered, the registry's
    reports are partial and carry no task: they repaint the projects, people
    and Inbox, hold no write, and move the share loaded (stillLoading), and
    the store holds only the person's own new tasks. The paint of the
@@ -17312,9 +17785,10 @@ let tasksAll = false
    shows (tasksAll). */
 let tasksNext = false
 
-/** What asked for every task (P.askTasks): the readers that need every one
-    of them, and the scripts and the benchmark. */
-export type AskReason = 'create' | 'inbox' | 'script' | 'benchmark'
+/** What asked for every task (P.askTasks): a create, which needs every
+    one of them, and the scripts and the benchmark. The Inbox's search
+    asks the server instead (inbox.page). */
+export type AskReason = 'create' | 'script' | 'benchmark'
 
 /** Why a task load stopped while the rest of the workspace stays live:
     the sentence the readers that wait for every task show beside Try
@@ -17754,6 +18228,8 @@ export function disposeDemoStore() {
   PLANNER.inboxBulk = null
   inboxWrites.clear()
   stopToasts.clear()
+  inboxMarks.clear()
+  PLANNER.inboxMarks = new Map()
   // a Deleted items action and its deferred items' watches end with it too
   PLANNER.deletedAction = null
   stopDeferredWatches()

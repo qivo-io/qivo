@@ -13,11 +13,12 @@ import { taskFacts } from '../lib/router'
     its uuid, organization and number once known. */
 type TaskIdentity = { n: number; ids: Set<string>; uuid?: string; org?: string; num?: number }
 
-/** A number that stays while `open` names the same task: the same uuid,
-    or the same number in the same organization, by what the store knows of
-    it (lib/router.ts taskFacts), or while the store knows neither, as of a
-    task that left, a string it was named by before. It moves on when
-    another task opens, or none. */
+/** A number that stays while `open` names the same task: the same uuid in
+    the same organization once both are known, as two organizations can
+    hold one task id, or the same number in the same organization, by what
+    the store knows of it (lib/router.ts taskFacts), or while the store
+    knows neither, as of a task that left, a string it was named by
+    before. It moves on when another task opens, or none. */
 export function useTaskKey(open: string | null): number {
   const ident = useRef<TaskIdentity>({ n: 0, ids: new Set() })
   const was = ident.current
@@ -28,7 +29,7 @@ export function useTaskKey(open: string | null): number {
   const facts = taskFacts(open)
   const same =
     facts?.uuid && was.uuid
-      ? facts.uuid === was.uuid
+      ? facts.uuid === was.uuid && (!facts.org || !was.org || facts.org === was.org)
       : facts?.org && was.org && facts.num !== undefined && was.num !== undefined
         ? facts.org === was.org && facts.num === was.num
         : was.ids.has(open)

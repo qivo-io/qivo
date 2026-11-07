@@ -2720,8 +2720,7 @@ One call lists up to 500 of your unread messages (newest first) and up to
 each, counting the stored ones about tasks it does not list. When some
 messages were not looked at, `truncated` is `true`, so a large backlog about
 such tasks can set it too. Items whose messages were not looked at are then
-missing, and an item listed may lack its older messages. The app's **Inbox**
-loads up to 500 of the same messages, unread ones first. Marking items read
+missing, and an item listed may lack its older messages. Marking items read
 keeps only each item's latest message, so `update_inbox` with
 `action: "read"` and `all: true`, repeated while `has_more` is `true`,
 shrinks the inbox until it fits.

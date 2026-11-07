@@ -33,9 +33,12 @@
    November 2026, every store method and every view and panel loop that
    sends writes):
 
-   - The Inbox's message actions on one item's messages (markMessagesRead,
-     markMessagesUnread, deleteMessages, snoozeMessages) send one call per
-     organization of the loaded messages together: one round.
+   - The Inbox's row actions on one item (readItem, unreadItem, removeItem,
+     snoozeItem) send one call a press, naming the item by its organization
+     and task: one round. The id-list actions on loaded messages
+     (markMessagesRead, markMessagesUnread, deleteMessages, snoozeMessages),
+     which no view calls since the Inbox lists inbox.page, send one call per
+     organization of those messages together: one round.
    - The Roadmap's Auto-move sends one roadmap.change of up to 1,000
      operations, atomic, while the Roadmap visit records changes
      (batchRoadmapChanges). Without a recording visit, after an undo

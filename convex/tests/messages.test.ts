@@ -280,7 +280,7 @@ describe('archive cascade + the shared instant', () => {
     expect(msgs).toHaveLength(1)
     expect([
       ['change', 'Archived'],
-      ['comment', 'New comment'], // Inbox secondLine key
+      ['comment', 'New comment'], // the Inbox row's line (lib/inbox.ts messageLine)
     ]).toContainEqual([msgs[0].kind, msgs[0].detail])
     expect(msgs[0].read_at).toBe(comments[0].created_at)
     expect(msgs[0].created_at).toBe(comments[0].created_at) // ONE now (0111)

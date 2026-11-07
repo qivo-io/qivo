@@ -3,10 +3,10 @@
  * (schema.ts) across every seat of the login, with the order, Unread only,
  * Show snoozed, the kind filter and the search applied before the page is
  * cut, so a page holds up to INBOX_PAGE.rows groups whatever the filters
- * leave out. No app, REST or MCP caller reads it yet. The app lists the
- * workspace inbox part (lib/workspaceParts.ts readInbox) until a later
- * release switches its list to these pages, and REST and MCP are to page
- * with inboxWalk under their own cursors.
+ * leave out. The app's Inbox list (src/panels/Inbox.tsx) reads one page at
+ * a time, open, and moves Next at the shown page's live `next`, so it never
+ * sends `through`. REST and MCP are to page with inboxWalk under their own
+ * cursors.
  *
  * Who sees what. Each seat reads only its own items (recipient_id), and a
  * group shows only when its task is in the seat's working set, the rule of
@@ -50,9 +50,10 @@
  * `checked_to` is the list time of the last group the page examined whose
  * task the caller is shown, matched or not, so the list can say how far a
  * stopped search looked. The kind filter applies before the access check,
- * without a read, so a page the kind filter fills with misses can stop
- * with `checked_to` null, and the list then says it searched part of the
- * Inbox. `not_ready` names the seats whose items are not complete
+ * without a read, so a page can stop with `checked_to` null, as when the
+ * kind filter or items about tasks the caller is not shown spend its
+ * budget, and the list then says it looked through part of the Inbox.
+ * `not_ready` names the seats whose items are not complete
  * (model/inboxItems.ts seatReady), which the page leaves out, and
  * `unchecked` says a check of the caller's access that a bound stopped
  * (lib/access.ts accessUnchecked, roomSpent included) left a group out.
@@ -80,7 +81,7 @@ import type { MessageKind } from '../lib/enums'
 import { badRequest } from '../lib/functions'
 import { inboxSearchText, itemKinds, kindsMatch, messageLine } from '../lib/inbox'
 import { limitedText } from '../lib/limitRules'
-import { LIMITS } from '../lib/limits'
+import { INBOX_PAGE_ROWS, LIMITS } from '../lib/limits'
 import { filtersKey } from '../lib/listCursor'
 import {
   compareIn,
@@ -104,7 +105,8 @@ import { inboxScope, unreadChange } from './inboxReads'
 
 /**
  * The bounds of one Inbox page, which tests lower and set back with
- * structuredClone. `rows`: the groups a page holds, the owner's 50.
+ * structuredClone. `rows`: the groups a page holds, the owner's 50
+ * (lib/limits.ts INBOX_PAGE_ROWS, the registry's inboxPage).
  * `reads`: what one call may read, NAMED_READ's share (2,000 index ranges,
  * 8,000 documents and 4 MiB) for a subscription list that runs again on
  * every change of what it read, which lib/namedPages.ts namedCeiling also
@@ -160,7 +162,7 @@ import { inboxScope, unreadChange } from './inboxReads'
  * `next`.
  */
 export const INBOX_PAGE: { rows: number; reads: ReadCeiling } = {
-  rows: 50,
+  rows: INBOX_PAGE_ROWS,
   reads: { ...NAMED_READ },
 }
 
@@ -169,7 +171,9 @@ export const INBOX_PAGE: { rows: number; reads: ReadCeiling } = {
 export const INBOX_LIST = 'inbox.page'
 
 /** The refusal of an `after` or `through` that is not a `next` of this
- * list. */
+ * list. The app's stand-in of the page (src/store/inboxStandIn.setup.ts
+ * NOT_INBOX_CURSOR) refuses with a copy, which
+ * src/store/inboxParity.test.ts holds to this one. */
 export const NOT_INBOX_CURSOR =
   'after and through must be cursors from an earlier Inbox page with the same order, filters and search; start again from the first page'
 

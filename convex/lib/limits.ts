@@ -209,6 +209,10 @@ export const BY_IDS_MAX = 100
  * unread and read halves (lib/inbox.ts). */
 export const INBOX_LIMIT = 500
 
+/** The task groups one Inbox page holds (model/inboxPage.ts INBOX_PAGE.rows),
+ * the owner's 50, which the app's list shows a page at a time. */
+export const INBOX_PAGE_ROWS = 50
+
 /** The most comments and changes the task window keeps loaded for the open
  * task (threadRows), measured in the browser benchmark's thread phase
  * (scripts/benchmark-browser.mjs --thread) on 6 November 2026: no candidate
@@ -641,12 +645,15 @@ export const LIMITS = {
       'this person leads more than 1,000 projects and cannot be removed at once. Give some of those projects another lead first, or make the person Inactive to end their access now.',
     on: ['app', 'operator'],
   },
-  inboxShown: {
-    label: 'Inbox messages the app shows',
+  // A page of the app's own, not a stored cap. The Inbox lists one page of
+  // task groups at a time, which Previous and Next replace (inbox.page,
+  // src/panels/Inbox.tsx). REST and MCP page their inbox apart from it.
+  inboxPage: {
+    label: 'Task groups one Inbox page shows',
     group: 'tasks',
-    max: INBOX_LIMIT,
-    unit: 'messages',
-    refusal: `the app shows your newest ${grouped(INBOX_LIMIT)} inbox messages. Mark older ones read or remove them to see the rest.`,
+    max: INBOX_PAGE_ROWS,
+    unit: 'task groups',
+    refusal: `the Inbox shows ${grouped(INBOX_PAGE_ROWS)} tasks a page, newest or oldest first. Previous and Next move between pages, and the order, filters and search apply to your whole Inbox.`,
     on: ['app'],
   },
   // the Board says it in place of its columns, with how to narrow the

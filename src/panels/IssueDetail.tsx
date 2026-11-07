@@ -565,12 +565,13 @@ function AttachmentsSection({
   const note = sectionNote('attachments', section, canEdit ? null : 'No attachments.')
   // attach by uuid: on a just-created issue the derived key in the closure's
   // `it` can renumber while the INSERT is in flight, which would strand (or
-  // mis-target) every file after the first
+  // mis-target) every file after the first. The organization goes with it,
+  // as two organizations can hold one task id
   const addFiles = async (files: FileList | File[]) => {
     for (const f of Array.from(files || [])) {
       setUploading((u) => [...u, f.name])
       try {
-        await P.addAttachment(it.uuid, f)
+        await P.addAttachment(it.uuid, f, { org: it.org })
       } finally {
         setUploading((u) => {
           const n = u.slice()
@@ -1241,8 +1242,9 @@ function ArchivedPlace({ project, archivedAt }: { project: string; archivedAt: n
     (lib/taskReference.ts), is about, by uuid and organization: the
     workspace's task (`held`), else the task the window showed last when
     `issueId` names it too (`shown`, as a reference and the handle it moved
-    to do), else what the reference names once its uuid and organization
-    are known (`named`), or null. The window watches it (P.watchComments)
+    to do, by uuid and organization, lib/router.ts sameTask), else what
+    the reference names once its uuid and organization are known
+    (`named`), or null. The window watches it (P.watchComments)
     and shows it from its own read while the workspace does not hold it
     (P.taskDetail). */
 function windowTaskOf(
@@ -1263,16 +1265,20 @@ function windowTaskOf(
 /** The workspace's task that reference `ref` names once the workspace
     holds it, before the reference moves to its handle (P.watchHandles),
     by its uuid, or its number in its organization: never by reading the
-    reference as a handle. */
+    reference as a handle. A held task of another organization than the
+    one the reference or its read names is another task of the same id,
+    so it is not that task. */
 function heldByRef(ref: RefParts | undefined, read: TaskRefVM | null): IssueVM | undefined {
   if (!ref) return undefined
   const uuid = ref.uuid ?? read?.task?.uuid
+  const org = ref.org ?? read?.task?.org
   const handle = uuid
     ? P.handleOf(uuid)
     : ref.org && ref.num !== undefined
       ? P.issueRefIn(ref.org, `${P.ISSUE_PREFIX}-${ref.num}`)
       : null
-  return handle ? P.issueById[handle] : undefined
+  const held = handle ? P.issueById[handle] : undefined
+  return held && (!org || held.org === org) ? held : undefined
 }
 
 /** What the window names a task opened by reference `ref` by while it
@@ -1740,8 +1746,10 @@ function IssueDetail({
     [holdThread],
   )
   // the task as the window shows it from its own read while the workspace
-  // does not hold it (P.taskDetail)
-  const detail: TaskDetailVM | null = !held && identity ? P.taskDetail(identity.uuid) : null
+  // does not hold it (P.taskDetail), of the organization the window names,
+  // as two organizations can hold one task id
+  const detail: TaskDetailVM | null =
+    !held && identity ? P.taskDetail(identity.uuid, identity.org || undefined) : null
   // the view of the last answer that held the task, active or archived,
   // also while a read after it failed or runs again (`stale`), so a
   // comment typed for the task stays; but not while this window's own
@@ -1995,13 +2003,17 @@ function IssueDetail({
   // Where this visit's unread part starts, frozen once a visit. Opening
   // marks the task read (below), so an unfrozen mark would vanish while you
   // were looking at it. Assigned DURING render, before any effect runs.
-  // That ordering is the whole trick. Keyed on the uuid, not issueId: on a
-  // cold deep link P.issueById[issueId] is still undefined on the first
-  // render, and a null key would freeze "nothing unread" forever. It comes
-  // from the task's inbox item, which the store reads beside the thread
-  // (P.inboxItem), so it is exact also for messages the workspace never
-  // loaded, and stays pending until that read's first ok, current answer,
-  // while no mark shows and no read goes out. It stays pending through a
+  // That ordering is the whole trick. Keyed on the organization and the
+  // uuid, not issueId: on a cold deep link P.issueById[issueId] is still
+  // undefined on the first render, and a null key would freeze "nothing
+  // unread" forever. It comes from the task's inbox item, which the store
+  // reads beside the thread (P.inboxItem), so it is exact also for messages
+  // the workspace never loaded, and stays pending until that read's first
+  // ok, current answer, while no mark shows and no read goes out. Only the
+  // item of the window's own organization counts, since the store moves
+  // P.inboxItem only in the effect that watches the thread, and another
+  // organization's task of the same id is another task, whose item would
+  // freeze a start this one never had. It stays pending through a
   // seat whose items are building and through a failure, which the store
   // runs once more, so a read that recovers still draws the divider.
   // …unless the surface that opened us passed one (`unread`, the Inbox's
@@ -2014,11 +2026,15 @@ function IssueDetail({
     key: undefined,
     unread: { ts: null, change: false },
   })
-  const shownItem = watchUuid && P.inboxItem?.task === watchUuid ? P.inboxItem : null
-  if (frozen.current.key !== watchUuid || frozen.current.unread === null) {
+  const freezeKey = watchUuid ? `${watchOrg}:${watchUuid}` : watchUuid
+  const shownItem =
+    watchUuid && P.inboxItem?.task === watchUuid && P.inboxItem.org === watchOrg
+      ? P.inboxItem
+      : null
+  if (frozen.current.key !== freezeKey || frozen.current.unread === null) {
     const answered = shownItem?.state === 'ok' && shownItem.current ? shownItem : null
     frozen.current = {
-      key: watchUuid,
+      key: freezeKey,
       unread:
         unreadIn !== undefined
           ? unreadIn
@@ -3214,31 +3230,39 @@ function IssueDetail({
                   // does one from an answer that is not current
                   if (P.refusePausedEdit() || P.refuseStaleEdit(it.id)) return
                   // refused over someone else's rename, the field opens again
-                  // with this draft (keepDraft), unless the person has moved on
+                  // with this draft (keepDraft), unless the person has moved
+                  // on, and so it does after any other refusal, which its
+                  // toast says, or a save no task took
                   const session = titleSession.current
                   const task = it.uuid
+                  const reopen = () => {
+                    if (!mountedRef.current || titleSession.current !== session) return false
+                    if (shownUuid.current !== task) return false
+                    // the field takes focus when it opens, so only while
+                    // nothing else holds it
+                    const at = document.activeElement
+                    if (at && at !== document.body) return false
+                    setTitleDraft(v)
+                    setEditTitle(true)
+                    return true
+                  }
                   void P.updateIssue(
                     it.id,
                     { title: v },
                     {
                       seen: { title: titleSeen },
                       keepDraft: (shown) => {
-                        if (!mountedRef.current || titleSession.current !== session) return false
-                        if (shownUuid.current !== task) return false
-                        // the field takes focus when it opens, so only while
-                        // nothing else holds it
-                        const at = document.activeElement
-                        if (at && at !== document.body) return false
+                        if (!reopen()) return false
                         // the rename shown now is the title a second save
                         // replaces; until a delivery shows it, wait for it
                         if (typeof shown === 'string' && shown !== titleSeen) setTitleSeen(shown)
                         else titleRebase.current = true
-                        setTitleDraft(v)
-                        setEditTitle(true)
                         return true
                       },
                     },
-                  )
+                  ).then((saved) => {
+                    if (!saved) reopen()
+                  })
                 }
                 setEditTitle(false)
               }}
@@ -3529,15 +3553,18 @@ function IssueDetail({
                         <>
                           {/* the inbox pane is the one host that isn't the board,
                             so only there does the menu offer the way over to it:
-                            the same jump as the row's right-click entry, for a
-                            task the workspace holds only, since the Board may
-                            hold no card of another one to reveal */}
-                          {embedded && onShowOnBoard && !archived && !!held && (
+                            the same jump as the row's right-click entry, by the
+                            same reference (P.openTask), for any task it shows,
+                            held or from its answer, whose project the store
+                            holds, which the Board needs; App reveals the card
+                            the Board's answer names it by */}
+                          {embedded && onShowOnBoard && !archived && !!P.project(it.project) && (
                             <MenuItem
                               data-task-open-board
                               onClick={() => {
                                 close()
-                                onShowOnBoard(it.project, it.id)
+                                const num = Number(it.key.slice(P.ISSUE_PREFIX.length + 1))
+                                onShowOnBoard(it.project, P.openTask(it.uuid, it.org, num))
                               }}
                             >
                               <Icon name="board" size={14} />

@@ -3,8 +3,9 @@
  * the workspace's parts, for its Inbox badge and the availability of Mark
  * all as read and Remove all read, and the item beside the open task's
  * thread, for the task window's New divider and its read on open
- * (messages.ts readItem). The Inbox list keeps the workspace inbox part
- * (workspace.ts inbox) until a later release switches it to the pages.
+ * (messages.ts readItem). The Inbox list reads the page while it shows,
+ * one page at a time, and its row actions are the item actions. The
+ * workspace inbox part (workspace.ts inbox) stays for the desktop alerts.
  *
  * - summary (across the caller's seats): each seat's organization, whether
  *   its items are complete (model/inboxItems.ts seatReady) and whether Mark

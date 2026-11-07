@@ -766,6 +766,16 @@ describe('sameTask, whether two names name one task', () => {
     expect(sameTask(null, 'QN-5')).toBe(false)
   })
 
+  it("tells another organization's task of a held task's id apart from it", () => {
+    // ACME's held task and HOME's task of the same id, which the store does not hold
+    const homeCopy = taskRef({ org: HOME, num: 12, uuid: 'uuid-acme-5' })
+    expect(sameTask(homeCopy, 'uuid-acme-5')).toBe(false)
+    expect(sameTask(homeCopy, taskRef({ org: ACME, uuid: 'uuid-acme-5' }))).toBe(false)
+    // the same id in the same organization, or with none named yet, is one task
+    expect(sameTask(taskRef({ org: ACME, num: 5, uuid: 'uuid-acme-5' }), 'uuid-acme-5')).toBe(true)
+    expect(sameTask(homeCopy, taskRef({ org: null, uuid: 'uuid-acme-5' }))).toBe(true)
+  })
+
   it('never reads a reference as a handle', () => {
     // a reference that looked up as a handle would open the home QN-5
     const acme5 = taskRef({ org: ACME, num: 5 })

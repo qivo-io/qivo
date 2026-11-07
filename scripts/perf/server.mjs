@@ -400,7 +400,10 @@
 //                        inherited lead
 //   unread (0)           unread messages for the signed-in person at the
 //                        start, one per task, a minute apart, so the Inbox
-//                        badge counts them (unread=12 shows 12)
+//                        badge counts them (unread=12 shows 12) and the
+//                        Inbox lists them, 50 a page; at most one per task,
+//                        so `tasks` bounds it (tasks=150&unread=120 lists
+//                        three pages)
 //   inbox                a state the Inbox's unread summary and the open
 //                        task's inbox item (inbox:summary and inbox:item)
 //                        answer whatever the messages say, for screenshots
@@ -411,6 +414,18 @@
 //                        shows 12+), more (more than 99) or notready (the
 //                        seat's items are not complete, so the count is a
 //                        lower bound and the item answers building)
+//   inboxpage            a state the Inbox's page (inbox:page) answers
+//                        whatever the messages say, for screenshots of the
+//                        list's notes a seeded backend cannot reach
+//                        (src/store/inboxStandIn.setup.ts), one of stopped
+//                        (each page stops after 10 groups and says how far
+//                        it looked), blind (the same, unable to say how
+//                        far), notready (the first seat's groups are left
+//                        out and named), unchecked (the first group is left
+//                        out by a check that could not finish), badcursor
+//                        (every page after the first is refused), stuck (a
+//                        page after the first stops without moving), failed
+//                        (every page fails) or loading (no page answers)
 //   thread (0)           comments of ordinary text, a few sentences each,
 //                        some with a list, a link or a mention, every tenth
 //                        the signed-in person's, on the task the benchmark
@@ -511,12 +526,15 @@
 // tasks in the projects the change reaches as the lost holdings and every
 // person who can hold work as the choices, and answers a chosen person's
 // holder_eligible by that rule, without the server's rules.
-// So are the Inbox's unread summary and the open task's inbox item
-// (inbox:summary and inbox:item), through the stand-in the jsdom tests use
-// (src/store/inboxStandIn.setup.ts), folded from the messages held here,
-// and a write sends them again with the parts it changed. Its read of one
-// item (messages:readItem) marks the item's unread messages up to its
-// `through` read and prunes the item, as messages:markRead does.
+// So are the Inbox's unread summary, the open task's inbox item and the
+// Inbox's pages (inbox:summary, inbox:item and inbox:page), through the
+// stand-in the jsdom tests use (src/store/inboxStandIn.setup.ts), folded
+// from the messages held here, and a write sends them again with the parts
+// it changed. Its read of one item (messages:readItem) marks the item's
+// unread messages up to its `through` read and prunes the item, as
+// messages:markRead does; unreadItem marks every message of the item
+// unread, removeItem removes those up to `through`, and snoozeItem stamps
+// every message of the item, unread, with the snooze or wakes it.
 // So is Team sync's agenda (teamSync:agenda), through the stand-in the
 // jsdom tests use (src/store/teamSyncStandIn.setup.ts): the agenda's rules
 // over the workspace held here, with no access rule or read budget, and the
@@ -553,6 +571,7 @@ import {
 import {
   INBOX_NO_ANSWER,
   inboxItemStandIn,
+  inboxPageStandIn,
   inboxSummaryStandIn,
 } from '../../src/store/inboxStandIn.setup'
 import {
@@ -776,6 +795,18 @@ const forcedInbox = (() => {
   if (state === 'notready') return 'notReady'
   return ['loading', 'failed', 'incomplete', 'more'].includes(state) ? state : undefined
 })()
+/* The Inbox page's forced state (the `inboxpage` parameter), as the
+   stand-in's `force` takes it. */
+const forcedInboxPage = {
+  stopped: 'stopped',
+  blind: 'blind',
+  notready: 'notReady',
+  unchecked: 'unchecked',
+  badcursor: 'badCursor',
+  stuck: 'stuck',
+  failed: 'failed',
+  loading: 'loading',
+}[parameters.get('inboxpage') ?? '']
 /* The milestone reads' forced states (the `milestones` parameter), as the
    stand-in's `force` takes them; sync-too-many and roadmap-too-many are
    the page's (scripts/perf/entry.tsx). The roadmap-* states force the
@@ -2259,6 +2290,11 @@ const read = (name, args = {}) => {
           )
     return answer === INBOX_NO_ANSWER ? NO_ANSWER : answer
   }
+  // the Inbox's page, which answers nothing under inboxpage=loading
+  if (name === 'inbox:page') {
+    const answer = inboxPageStandIn(snapshot, args, forcedInboxPage)
+    return answer === INBOX_NO_ANSWER ? NO_ANSWER : answer
+  }
   switch (name) {
     case 'snapshot:forMe':
       snapshot.delivered_at = new Date().toISOString()
@@ -2615,6 +2651,45 @@ async function mutate(name, args) {
       pruneItem(args.issue_id)
       await settleInbox()
     }
+    writes++
+    return null
+  }
+  if (
+    name === 'messages:unreadItem' ||
+    name === 'messages:removeItem' ||
+    name === 'messages:snoozeItem'
+  ) {
+    // the Inbox row's item writes, as convex/messages.ts runs them on the
+    // caller's messages of one task. unreadItem marks every one unread,
+    // removeItem removes those stored up to `through` (created_at stands
+    // for _creationTime here), and snoozeItem stamps every one, unread,
+    // with the snooze and no wake. With null it ends the snooze of the
+    // ones that carry one, which turn unread, and leaves the rest and
+    // every wake as they were, as convex/model/messages.ts snoozeMessages
+    // does, so the row goes back to its own place in the list
+    const through = args.through ?? Number.POSITIVE_INFINITY
+    const ofItem = (m) => m.issue_id === args.issue_id && m.org_id === args.org_id
+    const before = snapshot.messages
+    if (name === 'messages:removeItem')
+      snapshot.messages = before.filter((m) => !ofItem(m) || Date.parse(m.created_at) > through)
+    else
+      snapshot.messages = before.map((m) => {
+        if (!ofItem(m)) return m
+        if (name === 'messages:snoozeItem' && args.until === null) {
+          if (!m.snoozed_until) return m
+          const { read_at: _read, snoozed_until: _until, ...awake } = m
+          return awake
+        }
+        const { read_at: _read, ...unread } = m
+        if (name === 'messages:unreadItem') return unread
+        const { snoozed_until: _until, woke_at: _woke, ...fresh } = unread
+        return { ...fresh, snoozed_until: args.until }
+      })
+    if (
+      snapshot.messages.some((m, i) => m !== before[i]) ||
+      snapshot.messages.length !== before.length
+    )
+      await settleInbox()
     writes++
     return null
   }

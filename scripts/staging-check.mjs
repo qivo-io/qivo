@@ -210,7 +210,12 @@
  * whose window must draw the New divider above that comment from its inbox
  * item (inbox.item) and read the item (messages.readItem), so the summary
  * drops back, and removes t0's item from Nora's Inbox with the row's own
- * action (ui/inbox-badge).
+ * action, messages.removeItem (ui/inbox-badge). It mentions Nora on t0
+ * again and opens the Inbox in a fresh load, which must list t0's row
+ * from the deployment's pages (inbox.page) with M and Alpha in its crumb
+ * and subscribe no task window, find it by a search on the server, send
+ * the row's read, unread, snooze and remove by organization and task,
+ * and open Alpha's Board on it (ui/inbox-list).
  * Every task, comment,
  * grant and file lives in projects the run creates and names with its run
  * tag. It revokes every credential in the app, checks that the next call is
@@ -5524,7 +5529,8 @@ async function inboxBadgeCheck() {
       }, 60_000),
       `the summary did not drop back: ${JSON.stringify(back?.answer ?? null)}`,
     )
-    // the row's own Remove notification leaves Nora's Inbox as it was
+    // the row's own Remove notification (messages.removeItem with the
+    // row's cutoff) leaves Nora's Inbox as it was
     await app.goto(`${cfg.appOrigin}/app/~/inbox`, { waitUntil: 'domcontentloaded' })
     const row = app.locator(`[data-message="${t0.id}"]`)
     await row.waitFor({ timeout: 60_000 })
@@ -5536,6 +5542,208 @@ async function inboxBadgeCheck() {
       "t0's row stayed in the Inbox",
     )
     return `the badge counted ${before.answer.unread_count} and then ${after.answer.unread_count} from the summary, the New divider stood above the mention, and opening ${t0.key} read it`
+  })
+}
+
+/** The step that lists Nora's Inbox from the deployment's pages and acts
+ *  on a row by its organization and task (inboxListCheck). */
+export const INBOX_LIST_STEP = 'ui/inbox-list'
+
+/** The read the Inbox lists its pages from (convex/inbox.ts page). */
+export const INBOX_PAGE_QUERY = 'inbox:page'
+
+/** The marks the step reads the Inbox by (src/panels/Inbox.tsx): a row by
+ *  its task and organization, its crumbs and its snooze's return, the
+ *  search, the filter menu's Show snoozed, the row menu with its Open task
+ *  in board, Unsnooze and snooze buttons, and the page's Next and Previous,
+ *  whose names come from the page's fold hook (inbox-page). */
+export const INBOX_LIST_MARKS = {
+  row: 'data-message',
+  rowOrg: 'data-message-org',
+  crumb: 'data-msg-crumb',
+  until: 'data-msg-until',
+  search: 'data-inbox-search',
+  filter: 'data-inbox-filter',
+  showSnoozed: 'data-inbox-show-snoozed',
+  menu: 'data-msg-menu',
+  board: 'data-msg-menu-board',
+  unsnooze: 'data-msg-menu-unsnooze',
+  snoozeGo: 'data-msg-snooze-go',
+  next: 'data-inbox-page-next',
+  previous: 'data-inbox-page-previous',
+}
+
+/** The arguments of mutation `udfPath` that a frame `text` the page sent
+ *  on its sync socket runs, or null for any other frame, also one that is
+ *  no JSON. */
+export function sentMutation(text, udfPath) {
+  let message
+  try {
+    message = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (message?.type !== 'Mutation' || message.udfPath !== udfPath) return null
+  const [args] = Array.isArray(message.args) ? message.args : []
+  return args !== null && typeof args === 'object' ? args : null
+}
+
+/** The Inbox lists its pages from the deployment (INBOX_PAGE_QUERY) and
+ *  acts on a row by its organization and task with the row's cutoff. As
+ *  Nora, after the Standard agent mentions her in a comment on t0 over
+ *  REST, a fresh load of /app/~/inbox must show t0's row, by its task and
+ *  organization, on the first page with M's name and then Alpha's in its
+ *  crumb, having subscribed the page and no task window
+ *  (TASK_WINDOWS_QUERY). A search by t0's key, and then by M's name, must
+ *  subscribe the page with that search and hold t0's row, still with no
+ *  task window. From the row's menu it sends Mark as read
+ *  (messages.readItem with t0's organization, task and a cutoff), Mark as
+ *  unread (messages.unreadItem), Snooze for an hour (messages.snoozeItem
+ *  with a time), after which the row leaves, Show snoozed brings it back
+ *  with its return time, and Unsnooze (messages.snoozeItem with null).
+ *  Open task in board must show Alpha's Board with t0's window over it and
+ *  its card ringed. Back in the Inbox, when the first page has a Next, Next
+ *  and Previous must show t0's row again; else it notes one page. Last,
+ *  Remove notification (messages.removeItem with the cutoff) leaves Nora's
+ *  Inbox as the step found it. It runs after ui/inbox-badge, which removed
+ *  t0's item, and before the run archives M, which holds t0; the cleanup,
+ *  which deletes M, removes the comment with t0. */
+async function inboxListCheck() {
+  const s = run.creds.stdKey
+  const { t0, nora } = run
+  const { M, A } = run.projects
+  const m = INBOX_LIST_MARKS
+  await check(INBOX_LIST_STEP, async () => {
+    await restOk(s, 'POST', `/tasks/${t0.key}/comments`, {
+      body: `${run.tag} inbox list for @[${nora.name}](user:${nora.id})`,
+    })
+    const sent = []
+    const record = (ws) => ws.on('framesent', (frame) => sent.push(String(frame.payload)))
+    app.on('websocket', record)
+    try {
+      await app.goto(`${cfg.appOrigin}/app/~/inbox`, { waitUntil: 'domcontentloaded' })
+      await app.locator(`[${m.row}="${t0.id}"]`).first().waitFor({ timeout: 60_000 })
+      // the row names its group by the organization of Nora's seat, her home
+      // organization once the store has loaded
+      const org = await app.locator(`[${m.row}="${t0.id}"]`).first().getAttribute(m.rowOrg)
+      eq(org, await evaluate(app, () => window.PLANNER?.homeOrg ?? null), "t0's row's organization")
+      const row = app.locator(`[${m.row}="${t0.id}"][${m.rowOrg}="${org}"]`)
+      same(
+        await row.locator(`[${m.crumb}]`).allTextContents(),
+        [M.name, A.name],
+        "t0's row's crumb",
+      )
+      const pages = () => sent.flatMap((f) => addedArgs(f, INBOX_PAGE_QUERY))
+      const windows = () => sent.filter((f) => addsQuery(f, TASK_WINDOWS_QUERY)).length
+      expect(pages().length >= 1, 'the load did not subscribe the Inbox page')
+      eq(windows(), 0, 'the Inbox subscribed task windows')
+      // the search goes to the server, by t0's key and by M's name
+      const search = app.locator(`[${m.search}]`)
+      for (const text of [t0.key, M.name]) {
+        await search.fill(text)
+        expect(
+          await until(async () => pages().some((args) => args.search === text), 30_000),
+          `the Inbox did not search the server for ${text}`,
+        )
+        await row.waitFor({ timeout: 60_000 })
+      }
+      eq(windows(), 0, "the Inbox's search subscribed task windows")
+      await search.fill('')
+      /** The arguments of the first `udfPath` sent after frame `from`. */
+      const wrote = async (udfPath, from, what) => {
+        let args = null
+        expect(
+          await until(async () => {
+            args =
+              sent
+                .slice(from)
+                .map((f) => sentMutation(f, udfPath))
+                .find(Boolean) ?? null
+            return args !== null
+          }, 30_000),
+          `${what} sent no ${udfPath}`,
+        )
+        eq(args.org_id, org, `${what}'s organization`)
+        eq(args.issue_id, t0.id, `${what}'s task`)
+        return args
+      }
+      /** Opens t0's row menu and presses `item`, answering what it sent. */
+      const fromMenu = async (item, udfPath) => {
+        const from = sent.length
+        // a desktop row's menu opens on a right-click; its actions button is the phone's
+        await row.click({ button: 'right' })
+        await item(app.locator(`[${m.menu}]`)).click()
+        return wrote(udfPath, from, udfPath)
+      }
+      const byText = (text) => (menu) => menu.locator('button', { hasText: text }).first()
+      const read = await fromMenu(byText('Mark as read'), 'messages:readItem')
+      expect(Number.isFinite(read.through), 'Mark as read sent no cutoff')
+      await fromMenu(byText('Mark as unread'), 'messages:unreadItem')
+      const snooze = await fromMenu(
+        (menu) => menu.locator(`[${m.snoozeGo}]`).first(),
+        'messages:snoozeItem',
+      )
+      expect(typeof snooze.until === 'string', 'Snooze sent no return time')
+      expect(await until(async () => (await row.count()) === 0, 30_000), 'the snoozed row stayed')
+      await app.locator(`[${m.filter}]`).click()
+      await app.locator(`[${m.showSnoozed}]`).click()
+      await app.keyboard.press('Escape')
+      await row.locator(`[${m.until}]`).waitFor({ timeout: 60_000 })
+      const woke = await fromMenu((menu) => menu.locator(`[${m.unsnooze}]`), 'messages:snoozeItem')
+      eq(woke.until, null, "Unsnooze's return time")
+      // Open task in board: Alpha's Board, t0's window over it, its card ringed
+      await row.click({ button: 'right' })
+      await app.locator(`[${m.board}]`).click()
+      expect(
+        await until(
+          () =>
+            evaluate(
+              app,
+              (key) =>
+                !!document
+                  .querySelector(`[data-card="${key}"]`)
+                  ?.closest('.board-card')
+                  ?.hasAttribute('data-board-revealed'),
+              t0.key,
+            ),
+          60_000,
+        ),
+        "Open task in board did not ring t0's card",
+      )
+      const scope = await evaluate(app, () => window.PLANNER?.loadUI?.() ?? null)
+      eq(scope?.scope, A.id, "the Board's project")
+      expect(
+        await until(
+          () =>
+            evaluate(
+              app,
+              (title) =>
+                [...document.querySelectorAll('[data-task-title]')].some(
+                  (el) => el.textContent === title,
+                ),
+              t0.title,
+            ),
+          60_000,
+        ),
+        "t0's window is not over the Board",
+      )
+      // back in the Inbox, Next and Previous show t0's row again
+      await app.goto(`${cfg.appOrigin}/app/~/inbox`, { waitUntil: 'domcontentloaded' })
+      await row.waitFor({ timeout: 60_000 })
+      let paging = 'one page'
+      if ((await app.locator(`[${m.next}]`).count()) > 0) {
+        await app.locator(`[${m.next}]`).click()
+        await app.locator(`[${m.previous}]`).click()
+        await row.waitFor({ timeout: 60_000 })
+        paging = 'Next and Previous'
+      }
+      const removed = await fromMenu(byText('Remove notification'), 'messages:removeItem')
+      expect(Number.isFinite(removed.through), 'Remove notification sent no cutoff')
+      expect(await until(async () => (await row.count()) === 0, 30_000), "t0's row stayed")
+      return `listed ${t0.key} on the deployment's pages with ${M.name} and ${A.name}, searched it by key and project, acted on it by organization and task, opened it on ${A.name}'s Board and paged with ${paging}`
+    } finally {
+      app.off('websocket', record)
+    }
   })
 }
 
@@ -9334,6 +9542,9 @@ async function main() {
   // the Inbox badge from the deployment's unread summary, and the read of
   // a mentioned task on opening it, while t0 is active
   await inboxBadgeCheck()
+  // the Inbox list from the deployment's pages, with a row's actions by
+  // organization and task, while t0 is active
+  await inboxListCheck()
   // archived tasks and projects, then delete the projects in the app
   await archiveChecks()
   await check('cleanup/app/delete-project', async () => {

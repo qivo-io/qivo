@@ -2,12 +2,12 @@
  * WHOLE message write surface, and bulkReach, the one read here, which
  * says before a bulk action starts how much it has to do. Rows are created
  * only by model/messages' notify family, and everything else is immutable
- * by not appearing in any validator. The app's current Inbox names the
- * rows by message id (markRead, markUnread, remove, snooze), the bulk
- * actions take none (markAllRead, removeRead), and the item actions name
- * one item by its task (readItem, unreadItem, removeItem, snoozeItem), so a
- * row the app did not load is reached too. Open old clients keep calling
- * the id actions.
+ * by not appearing in any validator. The app's Inbox names a row's item by
+ * its task (readItem, unreadItem, removeItem, snoozeItem), so a row the
+ * workspace did not load is reached too, and the bulk actions take none
+ * (markAllRead, removeRead). The id actions (markRead, markUnread, remove,
+ * snooze) have no caller in the app's views any more; open old clients
+ * keep calling them, so they stay.
  *
  * Own rows only, silently: the RLS filter's successor (model/messages.ts
  * ownMessages) skips non-own and unknown ids without a trace (the client
@@ -53,7 +53,8 @@ import {
   wakeSnoozedItem,
 } from './model/messages'
 
-/* P.markMessagesRead. One `now` stamps every row of the act. */
+/* P.markMessagesRead, which no view calls any more (an older app's Inbox
+ * row). One `now` stamps every row of the act. */
 export const markRead = orgMutation({
   args: { ids: v.array(v.string()) },
   handler: async (ctx, { ids }) => {
@@ -100,9 +101,9 @@ export const bulkReach = authedQuery({
   }),
 })
 
-/* P.markMessagesUnread, the same column the other way. A message about an
- * archived task refuses the whole act (model/messages.ts
- * refuseArchivedItems), and the client rolls back. */
+/* P.markMessagesUnread, which no view calls any more, the same column the
+ * other way. A message about an archived task refuses the whole act
+ * (model/messages.ts refuseArchivedItems), and the client rolls back. */
 export const markUnread = orgMutation({
   args: { ids: v.array(v.string()) },
   handler: async (ctx, { ids }) => {
@@ -111,8 +112,9 @@ export const markUnread = orgMutation({
   },
 })
 
-/* P.deleteMessages. Removing an item removes every message in it, so the
- * caller passes the whole list (P.messageGroups' ids). */
+/* P.deleteMessages, which no view calls any more. Removing an item removes
+ * every message in it, so an older app's Inbox passed the whole list of its
+ * loaded messages. */
 export const remove = orgMutation({
   args: { ids: v.array(v.string()) },
   handler: async (ctx, { ids }) => {
@@ -121,10 +123,10 @@ export const remove = orgMutation({
   },
 })
 
-/* Read cleanup is independent of the snapshot's 500-message display limit.
- * Each bounded batch selects the current read rows, so a message reopened
- * by another device survives. The caller repeats while hasMore is true.
- * `ids` names the rows this batch deleted, as markAllRead's does. */
+/* Read cleanup reaches every read message, loaded or not. Each bounded
+ * batch selects the current read rows, so a message reopened by another
+ * device survives. The caller repeats while hasMore is true. `ids` names
+ * the rows this batch deleted, as markAllRead's does. */
 export const removeRead = orgMutation({
   args: {},
   handler: async (ctx) => {
@@ -137,10 +139,10 @@ export const removeRead = orgMutation({
   },
 })
 
-/* P.snoozeMessages. Hides an item until `until` on every client at once, or
- * lifts the snooze early (null). The ids name the item; the write covers the
- * WHOLE (recipient, issue) pair, loaded or not (model/messages.ts
- * snoozeMessages). The return trip is the scheduled wake below, a server
+/* P.snoozeMessages, which no view calls any more. Hides an item until
+ * `until` on every client at once, or lifts the snooze early (null). The
+ * ids name the item; the write covers the WHOLE (recipient, issue) pair,
+ * loaded or not (model/messages.ts snoozeMessages). The return trip is the scheduled wake below, a server
  * event, so the laptop that snoozed and the phone that did not see the row
  * come back at the same instant, and a closed phone finds it back the
  * moment it opens. An archived task refuses it like markUnread. */

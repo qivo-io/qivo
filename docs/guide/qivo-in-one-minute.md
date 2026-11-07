@@ -15,7 +15,7 @@ and flags projected delays. Other users see saved changes live.
 Views and dialogs may show **Loading…** the first time you open them.
 
 Qivo loads every task only when something needs every one of them: a new
-task and the Inbox's search. A note at the
+task. A note at the
 bottom of the page then says **Loading tasks…**, with a bar that moves but
 does not say how far it has got. The Board, the task list, the Overview,
 Team sync and Search show what the server answers for them, before and while
@@ -34,7 +34,7 @@ subtasks, linked tasks and attachments load on their own, and its
 the server. Settings and all its pages open at once. A link to one task
 opens without loading every task. If loading stops, the note says why and
 that changes you make show as you made them until every task has loaded,
-and it offers **Try again**, as the Inbox's search does.
+and it offers **Try again**.
 
 If your organization uses Microsoft and sign-in asks for admin approval, see
 [Microsoft sign-in and administrator approval](./microsoft-sign-in-and-administrator-approval.md).

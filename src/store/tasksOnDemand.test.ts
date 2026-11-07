@@ -136,7 +136,7 @@ describe('tasks on demand', () => {
     expect(held('01000000-a')).toBe(false)
     // the projects and people are there
     expect(store.P.projects).toHaveLength(1)
-    store.P.askTasks('inbox')
+    store.P.askTasks('script')
     expect(store.P.taskLoad()).toEqual({ state: 'arriving' })
     expect(store.P.tasksArriving()).toBe(true)
     expect(taskWatches(watch)).toBe(1)
@@ -156,7 +156,7 @@ describe('tasks on demand', () => {
     snapshot.orgs[0].next_issue_num = 128 * 200
     await boot()
     double.live?.holdWindow(LAST_OF_128)
-    store.P.askTasks('inbox')
+    store.P.askTasks('script')
     for (let i = 0; i < 4; i++) await tick()
     expect(store.P.stillLoading()).toBeCloseTo(127 / 128)
     expect(store.P.taskLoad()).toEqual({ state: 'arriving' })
@@ -172,7 +172,7 @@ describe('tasks on demand', () => {
   it('keeps the projects live while tasks arrive, and a write accepted meanwhile painted until the load ends', async () => {
     await boot()
     double.live?.holdWindow('')
-    store.P.askTasks('inbox')
+    store.P.askTasks('script')
     await tick()
     const project = snapshot.projects[0]
     // someone renames the project: the partial delivery repaints it
@@ -206,13 +206,13 @@ describe('tasks on demand', () => {
   it('stops only the task load on a failing window, and keeps writes as made until Try again', async () => {
     await boot()
     double.live?.failWindow('', new Error('boom'))
-    store.P.askTasks('inbox')
+    store.P.askTasks('script')
     for (let i = 0; i < 3; i++) await tick()
     const load = store.P.taskLoad()
     expect(load.state).toBe('failed')
     expect(load.state === 'failed' && load.reason).toBeTruthy()
     expect(store.TASKS_FAILED_TEXT).toContain('Changes you make show as you made them')
-    // not snapshot trouble: edits go on, and the Inbox's search keeps waiting
+    // not snapshot trouble: edits go on, and a create keeps waiting
     expect(store.P.snapshotTrouble()).toBeNull()
     expect(store.P.editsPaused()).toBe(false)
     expect(store.P.tasksHeld()).toBe(false)
@@ -243,7 +243,7 @@ describe('tasks on demand', () => {
     liveParts.STALL.ms = 30
     await boot()
     double.live?.holdWindow('')
-    store.P.askTasks('inbox')
+    store.P.askTasks('script')
     await wait(80)
     const load = store.P.taskLoad()
     expect(load.state).toBe('failed')
@@ -258,7 +258,7 @@ describe('tasks on demand', () => {
 
   it('keeps asking through Try again, a fresh registry and a new organization’s re-init', async () => {
     await boot()
-    store.P.askTasks('inbox')
+    store.P.askTasks('script')
     await tick()
     await tick()
     expect(store.P.tasksHeld()).toBe(true)
@@ -285,7 +285,7 @@ describe('tasks on demand', () => {
 
   it('fails a new organization’s re-init after an ask whose windows stall, and runs its fallback', async () => {
     await boot()
-    store.P.askTasks('inbox')
+    store.P.askTasks('script')
     await tick()
     await tick()
     liveParts.STALL.ms = 30
@@ -299,7 +299,7 @@ describe('tasks on demand', () => {
 
   it('fails a new organization’s re-init after an ask whose window fails, and runs its fallback', async () => {
     await boot()
-    store.P.askTasks('inbox')
+    store.P.askTasks('script')
     await tick()
     await tick()
     double.live?.failWindow('', new Error('boom'), true)
@@ -367,7 +367,7 @@ describe('tasks on demand', () => {
     expect(store.P.delayColor(of('0a000000-due'))).toBeNull()
     const before = of('0a000000-due')
     // once every task is held, the workspace judges and lists them
-    store.P.askTasks('inbox')
+    store.P.askTasks('script')
     for (let i = 0; i < 3; i++) await tick()
     expect(store.P.tasksHeld()).toBe(true)
     expect(store.P.remainingOf(of('02000000-b'))).toBe(4)
@@ -413,7 +413,7 @@ describe('tasks on demand', () => {
   it('reads a new task’s family and sections from its own answers during the load', async () => {
     await boot()
     double.live?.holdWindow('')
-    store.P.askTasks('inbox')
+    store.P.askTasks('script')
     await tick()
     const key = store.P.addIssue({ project: snapshot.projects[0].id, title: 'A new task' })
     const it = store.P.issueById[key ?? '']
@@ -535,7 +535,7 @@ describe('tasks on demand', () => {
     demo.on = true
     try {
       await boot()
-      store.P.askTasks('inbox')
+      store.P.askTasks('script')
       await tick()
       await tick()
       expect(store.P.tasksHeld()).toBe(true)

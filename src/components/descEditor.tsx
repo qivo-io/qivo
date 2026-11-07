@@ -168,9 +168,10 @@ function finishUpload(
 ) {
   const token = `![Uploading image…](${src})`
   // the task's handle and committed text now, as the handle may have
-  // moved since the upload began
+  // moved since the upload began, of the task's organization, as two
+  // organizations can hold one task id
   const committedNow = () => {
-    const issueKey = P.shownHandleOf(uuid)
+    const issueKey = P.shownHandleOf(uuid, org)
     const it = issueKey ? P.taskShown(issueKey) : undefined
     const text = it && typeof it.description === 'string' ? it.description : ''
     return { issueKey, text, holds: text.includes(token) }
@@ -1161,9 +1162,9 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
           // at most 60 code points, so a long file name adds little to the
           // description's length
           const alt = [...name.replace(/[[\]()\n\\]/g, '_')].slice(0, 60).join('')
-          const key = P.shownHandleOf(uuid)
+          const key = P.shownHandleOf(uuid, org)
           if (!key) return finishUpload(uuid, org, src, null, alt)
-          return P.addAttachment(key, file, { inline: true }).then(
+          return P.addAttachment(key, file, { inline: true, org }).then(
             (attId: string | null) => {
               if (attId) {
                 sessionUploadsRef.current.push(attId)

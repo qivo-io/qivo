@@ -19,8 +19,9 @@
    itself (onceList, components/mentionSuggestion.ts). Beside it, a page
    mode (usePagedPages, at the end of this file) shows one page at a time,
    which Previous and Next replace, as Settings › Projects, Archived
-   projects, Users and Deleted items and the All projects directory read
-   theirs, and useMoreOnScroll loads the next batch of a list as its end
+   projects, Users and Deleted items, the All projects directory and the
+   Inbox (panels/Inbox.tsx) read theirs, and useMoreOnScroll loads the next
+   batch of a list as its end
    scrolls into view. It holds only what the page shows, in the page, and
    drops it when the page is left. A live list or page that a kept page
    holds (components/KeptView.tsx), as the All projects directory is, or
@@ -1104,6 +1105,13 @@ export type PagedPages<A, Row> = {
   /** whether the list waits for a fresh answer to its page, after the
       page showed again or the socket reconnected */
   refreshing: boolean
+  /** whether the answer on screen came from the page's open read on the
+      connection the socket holds now, with the tab shown, the page not
+      kept hidden and no move on its way, so it holds every write the
+      server accepted before it, as Convex sends the results a write
+      changed before the write's own answer; false while it waits, as
+      `refreshing` says, and while it reads nothing */
+  current: boolean
   /** the page starts walked to, the first page's null first and the page
       on screen last, for a page that remembers where it was */
   starts: readonly (string | null)[]
@@ -1435,6 +1443,14 @@ function pagesEngine<A, Row>(options: () => PagedPagesOptions<A, Row>, changed: 
         stopped: !!ok && ok.batch.stopped,
         stuck: isStuck(),
         refreshing: reading() && page !== null && page.held !== null && !current(page),
+        current:
+          reading() &&
+          !settling &&
+          move === null &&
+          page !== null &&
+          page.held !== null &&
+          page.held.error === undefined &&
+          current(page),
         starts: [...starts],
       }
     },
