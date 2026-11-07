@@ -27,7 +27,7 @@ import { hasTooltip } from '@/lib/passEscapeOn'
    refusal. comment.reset clears a saved composer; edits retain the committed
    baseline. */
 
-import type { Attributes, Editor, NodeViewProps } from '@tiptap/core'
+import type { Editor, NodeViewProps } from '@tiptap/core'
 import { Extension, markInputRule } from '@tiptap/core'
 import Blockquote from '@tiptap/extension-blockquote'
 import Bold, { starInputRegex as boldStar } from '@tiptap/extension-bold'
@@ -36,7 +36,6 @@ import CodeBlock from '@tiptap/extension-code-block'
 import Document from '@tiptap/extension-document'
 import HardBreak from '@tiptap/extension-hard-break'
 import Heading from '@tiptap/extension-heading'
-import Image from '@tiptap/extension-image'
 import Italic, { starInputRegex as italicStar } from '@tiptap/extension-italic'
 import Link from '@tiptap/extension-link'
 import { BulletList, ListItem, OrderedList } from '@tiptap/extension-list'
@@ -47,7 +46,6 @@ import Text from '@tiptap/extension-text'
 import Underline from '@tiptap/extension-underline'
 import { Dropcursor, Gapcursor, Placeholder, UndoRedo } from '@tiptap/extensions'
 import type { Node as PMDocNode } from '@tiptap/pm/model'
-import { Fragment, Slice } from '@tiptap/pm/model'
 import { EditorState, Plugin, TextSelection } from '@tiptap/pm/state'
 import {
   EditorContent,
@@ -74,6 +72,7 @@ import { beginUpdateBlock, useUpdateBlocker } from '../lib/updateSafety'
 import { P, textRefusal } from '../store/planner'
 import type { PMNode } from './descDoc'
 import { astToDoc, docToAst } from './descDoc'
+import { descImage, filterPastedImages, normalizeImgSrc, srcForeign } from './descImage'
 import { toast } from './imgActions'
 import { InlineImageBody } from './inlineImage'
 import { Markdown } from './markdown'
@@ -83,27 +82,8 @@ import { Icon } from './qivo'
 const IS_MAC = typeof navigator !== 'undefined' && /Mac|iP(hone|ad|od)/.test(navigator.platform)
 const MOD = IS_MAC ? '⌘' : 'Ctrl+'
 
-/* A copy from the read-only rendered view carries the URL the image
-   shows instead of the att: pseudo-src. That is a blob: URL of the store's
-   inline image loader, the gateway's /files/<uuid> URL where the loader
-   fell back to it, or the retired signed URL. Normalize each back so
-   ownership rules (and permanence) apply instead of baking a URL that
-   ends into the text. */
-const SIGNED_ATT = /\/storage\/v1\/object\/sign\/attachments\/[0-9a-f-]{36}\/([0-9a-f-]{36})\//
-const GATEWAY_ATT = /\/files\/([0-9a-f]{8}-[0-9a-f-]{27})\?/
-const normalizeImgSrc = (src: string) => {
-  const shown = src.startsWith('blob:') ? P.inlineImages.attachmentOf(src) : null
-  if (shown) return `att:${shown}`
-  const m = SIGNED_ATT.exec(src) ?? GATEWAY_ATT.exec(src)
-  return m ? `att:${m[1]}` : src
-}
-/** True when this issue may NOT keep a pasted image reference: it neither
-    owns it (committed text) nor uploaded it this session. */
-const srcForeign = (src: string, committed: string, session: string[]) => {
-  if (src.startsWith('uploading:')) return true
-  const attId = src.startsWith('att:') ? src.slice(4) : null
-  return !!attId && !committed.includes(attId) && !session.includes(attId)
-}
+/* The loader's attachment for a blob: URL it made, for a pasted copy. */
+const shownAttachment = (url: string) => P.inlineImages.attachmentOf(url)
 
 /* Same ownership rules for the plain-text markdown paste path, which goes
    through parseMd → insertContent and never reaches transformPasted. */
@@ -115,7 +95,7 @@ function filterForeignInline(
 ): MdInline[] {
   return nodes.map((n): MdInline => {
     if (n.t === 'image') {
-      const src = normalizeImgSrc(n.src)
+      const src = normalizeImgSrc(n.src, shownAttachment)
       if (srcForeign(src, committed, session)) {
         flag.stripped = true
         return { t: 'text', text: ' ' }
@@ -509,47 +489,15 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
         linkOnPaste: false,
         HTMLAttributes: { rel: 'noopener noreferrer' },
       }),
-      Image.extend({
-        inline: true, // the dialect image is inline content
-        group: 'inline',
-        parseHTML() {
-          // the fallback rendering below emits att:/uploading: images with NO
-          // src attribute — without this second rule they'd vanish from
-          // clipboard HTML round-trips
-          return [{ tag: 'img[src]:not([src^="data:"])' }, { tag: 'img[data-qivo-src]' }]
-        },
-        addAttributes() {
-          const parent: Attributes = this.parent?.() || {}
-          return {
-            ...parent,
-            src: {
-              ...parent.src,
-              // round-trips the fallback rendering below (and clipboard HTML)
-              parseHTML: (el: HTMLElement) =>
-                el.getAttribute('data-qivo-src') || el.getAttribute('src'),
-            },
-          }
-        },
-        renderHTML({ HTMLAttributes }) {
-          // ProseMirror falls back to this before the React node view attaches
-          // (and for clipboard serialization); a raw att:/uploading: src would
-          // hit the network as an unknown scheme, so park it in a data attr
-          const src = String(HTMLAttributes.src || '')
-          if (/^(att|uploading):/.test(src)) {
-            return ['img', { ...HTMLAttributes, src: undefined, 'data-qivo-src': src }]
-          }
-          return ['img', HTMLAttributes]
-        },
-        addNodeView() {
-          return ReactNodeViewRenderer(ImageView, {
-            className: 'mdimgnv',
-            stopEvent: ({ event }) => {
-              const t = event.target as HTMLElement | null
-              return !!t?.closest?.('button')
-            },
-          })
-        },
-      }),
+      descImage(() =>
+        ReactNodeViewRenderer(ImageView, {
+          className: 'mdimgnv',
+          stopEvent: ({ event }) => {
+            const t = event.target as HTMLElement | null
+            return !!t?.closest?.('button')
+          },
+        }),
+      ),
       Mention.configure({
         HTMLAttributes: { class: 'mention' },
         renderText: ({ node }) => `@${node.attrs.label ?? node.attrs.id}`,
@@ -694,40 +642,19 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
         },
         transformPasted: (slice) => {
           // an att: image pasted from another issue would die with that
-          // issue's image, and the server refuses it — strip it and say so
-          // (uploading: placeholders are meaningless
-          // outside their source editor too); signed-URL srcs from a copy of
-          // the rendered view normalize back to att: first. Comment mode owns
-          // nothing: empty baseline, so every image reference strips.
-          const committed = isComment ? '' : rawRef.current
-          const session = isComment ? [] : sessionUploadsRef.current
-          let stripped = false
-          let changed = false
-          const filter = (fragment: Fragment): Fragment => {
-            const nodes: PMDocNode[] = []
-            fragment.forEach((node) => {
-              if (node.type.name === 'image') {
-                const raw = String(node.attrs.src || '')
-                const src = normalizeImgSrc(raw)
-                if (srcForeign(src, committed, session)) {
-                  stripped = true
-                  // a space placeholder keeps the slice's open depths valid
-                  nodes.push(node.type.schema.text(' '))
-                  return
-                }
-                if (src !== raw) {
-                  changed = true
-                  nodes.push(node.type.create({ ...node.attrs, src }, null, node.marks))
-                  return
-                }
-              }
-              nodes.push(node.copy(filter(node.content)))
-            })
-            return Fragment.fromArray(nodes)
-          }
-          const content = filter(slice.content)
-          if (!stripped && !changed) return slice
-          if (stripped)
+          // issue's image, and the server refuses it, so strip it and say so
+          // (uploading: placeholders are meaningless outside their source
+          // editor too, and so is a blob: URL no attachment shows); the
+          // sources a copy of the rendered view carries normalize back to
+          // att: first (descImage.ts). Comment mode owns nothing: empty
+          // baseline, so every image reference strips.
+          const filtered = filterPastedImages(
+            slice,
+            isComment ? '' : rawRef.current,
+            isComment ? [] : sessionUploadsRef.current,
+            shownAttachment,
+          )
+          if (filtered.stripped)
             setTimeout(
               () =>
                 toast(
@@ -737,7 +664,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
                 ),
               0,
             )
-          return new Slice(content, slice.openStart, slice.openEnd)
+          return filtered.slice
         },
       },
     },

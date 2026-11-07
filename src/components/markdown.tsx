@@ -3,7 +3,10 @@
    by sanitizeHref). Images load near view through the store's inline image
    loader, "att:<id>" sources as bytes from the access-checked file gateway
    (components/inlineImage.tsx), and reveal copy/download buttons in their
-   top-right corner on hover. */
+   top-right corner on hover. Each image's wrapper names its source and alt
+   text (data-qivo-src, data-qivo-alt) whatever its body shows, so a copy
+   of the rendered text pastes back into an editor as the image itself
+   (descImage.ts). */
 import React, { useMemo } from 'react'
 import type { MdBlock, MdInline } from '../lib/md'
 import { parseMd, sanitizeHref } from '../lib/md'
@@ -21,9 +24,14 @@ function MdImage({ alt, src }: { alt: string; src: string }) {
     )
   }
   const external = attId ? null : sanitizeHref(src)
+  const source = attId ? `att:${attId}` : external
   // keyed by the source, so an edit that swaps it starts afresh
   return (
-    <span className="mdimgwrap" {...(attId ? { 'data-att': attId } : {})}>
+    <span
+      className="mdimgwrap"
+      {...(attId ? { 'data-att': attId } : {})}
+      {...(source ? { 'data-qivo-src': source, 'data-qivo-alt': alt } : {})}
+    >
       <InlineImageBody
         key={attId ?? external ?? ''}
         alt={alt}
