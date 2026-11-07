@@ -1,9 +1,9 @@
 ## Plan on roadmap
 
-**Plan on roadmap** opens the timeline and highlights the task. From **All
-projects** it opens the task's top-level project. The task stays on the
-timeline for the session whatever the filters, and the Roadmap moves its
-window to the task first if needed. Unscheduled tasks receive a starter bar.
+**Plan on roadmap** opens the timeline and highlights the task. From the
+views over all projects it opens the task's top-level project. The task
+stays on the timeline for the session whatever the filters, and the Roadmap
+moves its window to the task first if needed. Unscheduled tasks receive a starter bar.
 A Backlog task must first move to another status; trying to plan it leaves
 its dates unchanged.
 Done tasks that have dates can still be moved on the Roadmap. A Done task
@@ -70,8 +70,8 @@ planned weeks a dashed border. Resuming restores their hours. Agent rows show
 hours only, with no percentage or over-capacity warning.
 
 **All projects / This project** chooses which visible projects contribute
-hours. The toggle is absent in All projects and My view. Use the three layout
-buttons to expand Team, show it with the Roadmap, or collapse it. Expanded
+hours. The toggle is absent over all projects and in My view. Use the three
+layout buttons to expand Team, show it with the Roadmap, or collapse it. Expanded
 Team keeps the timeline's dates, milestones and window controls.
 
 Click a person or weekly cell to highlight their tasks. Hover or keyboard-focus
@@ -270,7 +270,7 @@ Use the row controls to change tasks without opening them:
 A row's **Board** and **Roadmap** links open the task's sub-project. The
 links beside a person's name filter to that person, using
 the selected project when applicable; for an all-project or team sync they
-open All projects, where the Board and the Roadmap ask you to choose a
+open the Board or the Roadmap over all projects, which ask you to choose a
 project and then show that person's tasks in it. Other filters clear so tasks remain
 visible; Focus stays unchanged.
 

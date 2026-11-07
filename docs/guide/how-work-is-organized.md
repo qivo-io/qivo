@@ -117,11 +117,12 @@ New tasks start unassigned with Low priority. A column's **+** uses that
 status; other entry points start in Backlog. Creating in **In Review** sets
 Remaining to the project's review time ([Review time](./will-it-be-ready-in-time-the-delay-status.md#review-time)).
 
-**My view** columns have no **+**, and the Board of **All projects** asks
-you to choose a project. Use a project heading's **+** in My view's
-Swimlanes by project or Side-by-side boards, or open the project first. A
-task you create in All projects opens in its sub-project, on the Board, the
-Overview or the Roadmap you were on, which ask to choose a project there.
+**My view** columns have no **+**, and the Board over all projects, at an
+address that ends in `/all`, asks you to choose a project ([All projects](./finding-your-way-around.md#all-projects)).
+Use a project heading's **+** in My view's Swimlanes by project or
+Side-by-side boards, or open the project first. A task you create over all
+projects opens in its sub-project, on the Board, the Overview or the Roadmap
+you were on, which ask to choose a project there.
 Phones use the same project/sub-project picker. Relationship
 pickers keep their separate quick-create flow for subtasks, linked tasks and
 parents. Use **Move** to relocate an existing task while keeping its ID.
