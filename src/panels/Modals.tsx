@@ -2658,10 +2658,13 @@ function UnusedReason({
    milestone out of its rows while it shows elsewhere. An editor whose
    milestone no section shows reads it with milestones.get under
    milestone:kept, which gives it its stored values, its organization and
-   its right, and says when it is gone. That read's failure says so above
-   the sections with Retry, and its refusal gives the server's sentence;
-   before any answer a refusal also locks the editor with its draft, and
-   after one, a failure or refusal keeps that answer and its right. */
+   its right, and says when it is gone. Until that read first answers, its
+   Save and Delete wait, so they always start from the values that read
+   gave, and it says it is loading while the read loads. That read's
+   failure says so above the sections with Retry, and its refusal gives
+   the server's sentence; before any answer a refusal also locks the
+   editor with its draft, and after one, a failure or refusal keeps that
+   answer and its right. */
 
 /* The store's slots of the window's reads: the milestone it opened on, the
    milestone of an editor no section shows, and its two sections' asks. */
@@ -3001,13 +3004,18 @@ function MilestoneModal({
      can no longer tell (rightUnknown). A kept editor takes its right from
      its own read once it answered, keeps it through a later failure or
      refusal, and has none while that read was refused before any answer,
-     as the server could not confirm it. */
+     as the server could not confirm it. Until that read first answers,
+     loading or failed, a kept editor waits with its Save and Delete off,
+     also while another read still holds its milestone, such as a hidden
+     page's stopped one, so a save always sends the values its own read
+     gave. */
   const editorOf = (m: MilestoneVM) => {
     const own = m.id === init.id
     lastEdited.current = m
     const isKept = !own && keptId === m.id
     const keptRight = isKept && keptAnswer !== null
     const keptRefused = isKept && !keptRight && keptRead?.state === 'refused'
+    const keptWaiting = isKept && !keptRight && !keptRefused
     const right = own
       ? openedCanWrite
       : keptRight
@@ -3018,6 +3026,7 @@ function MilestoneModal({
         key={m.id}
         m={m}
         storedOf={storedOf(m.id)}
+        waiting={keptWaiting ? (keptRead?.state === 'failed' ? 'failed' : 'loading') : undefined}
         locked={!right}
         lockedNote={
           (rightUnknown && !keptRight) || keptRefused
@@ -3377,6 +3386,10 @@ function MilestoneRowView({
    MilestoneAnswer.stored); the save sends them as what the person saw, and
    a refused save rebases on them as they are once the store took its paint
    back.
+   `waiting` keeps Save and Delete off, and Enter from saving, while the
+   window's own read of a kept editor's milestone has not answered yet.
+   With `loading` the editor says so under the fields; with `failed` the
+   window's failure line with Retry says why. The draft stays editable.
    `locked` keeps the typed text read-only once the person may no longer
    change the milestone, and `lockedNote` says why under it. The Name box
    takes focus when the editor opens, unless the person already moved focus
@@ -3389,6 +3402,7 @@ function MilestoneRowView({
 function MilestoneEditor({
   m,
   storedOf,
+  waiting,
   locked = false,
   lockedNote = 'You can no longer change this milestone.',
   onClose,
@@ -3397,6 +3411,8 @@ function MilestoneEditor({
 }: {
   m: MilestoneVM
   storedOf: () => { name: string; week: string } | undefined
+  /** the kept editor's own read, which has not answered yet */
+  waiting?: 'loading' | 'failed'
   locked?: boolean
   lockedNote?: string
   onClose: () => void
@@ -3435,7 +3451,11 @@ function MilestoneEditor({
   // the server answers
   const [saving, setSaving] = useStateM(false)
   const canSave =
-    !locked && name.trim().length > 0 && !overLimit(LIMITS.milestoneName, name) && !saving
+    !locked &&
+    !waiting &&
+    name.trim().length > 0 &&
+    !overLimit(LIMITS.milestoneName, name) &&
+    !saving
   // an answer that comes after this editor closed, for example because
   // another milestone's editor opened, closes nothing
   const mounted = useRefM(true)
@@ -3500,7 +3520,7 @@ function MilestoneEditor({
   const armDel = deletion.armed !== null
   const remove = () =>
     deletion.press('delete', () => {
-      if (locked || P.refusePausedEdit()) return
+      if (locked || waiting || P.refusePausedEdit()) return
       onDelete?.()
       void P.removeMilestone(m.id, seen).then((saved) => {
         if (saved) window.showToast?.('Milestone removed')
@@ -3549,6 +3569,11 @@ function MilestoneEditor({
           {lockedNote}
         </p>
       )}
+      {!locked && waiting === 'loading' && (
+        <p data-milestone-editor-wait className="mt-2 mb-0 pl-6 text-sm text-text-3">
+          Loading this milestone…
+        </p>
+      )}
       <div className="mt-2 flex flex-wrap items-center gap-2 pl-6">
         <span className="text-xs text-text-3">Week {P.weekNumberOf(week).num}</span>
         <div className="flex-1" />
@@ -3556,7 +3581,7 @@ function MilestoneEditor({
           type="button"
           variant="ghost"
           size="sm"
-          disabled={locked}
+          disabled={locked || !!waiting}
           style={{ background: armDel ? 'var(--danger-soft)' : undefined }}
           className="[color:var(--danger)]"
           onClick={remove}

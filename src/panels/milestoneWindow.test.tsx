@@ -946,12 +946,54 @@ async function keepEditor(forced: ForcedMilestones = {}) {
 const keptLine = () => q('[data-milestone-open][data-milestone-kept]')
 const gets = () => subs.filter((s) => s.name === 'milestones:get')
 const editorButton = (text: string) => button(text, q('[data-milestone-editor]') ?? document)
+const waitLine = () => q('[data-milestone-editor-wait]')
+/** The milestone writes the window sent, by name, the store's each one
+    held until the test answers it. */
+function heldWrites() {
+  const sent: { name: string; args: Record<string, unknown>; resolve: (v: unknown) => void }[] = []
+  network.mutation.mockImplementation((ref, args) => {
+    const name = getFunctionName(ref)
+    if (!name.endsWith('Milestone')) return Promise.resolve(null)
+    return new Promise((resolve) => sent.push({ name, args, resolve }))
+  })
+  return sent
+}
+/** Presses Delete and then, past the time that ignores a second press
+    (lib/useConfirmArm.ts), Confirm delete in the open editor. */
+async function deleteInEditor() {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  const del = () =>
+    [...document.querySelectorAll<HTMLButtonElement>('[data-milestone-editor] button')].find((b) =>
+      b.textContent?.includes('elete'),
+    )
+  await act(async () => del()?.click())
+  vi.setSystemTime(Date.now() + 1_000)
+  await act(async () => del()?.click())
+  vi.useRealTimers()
+  await settle()
+}
+/** Presses Enter in the editor's Name box. */
+async function enterInName() {
+  const box = nameBox()
+  if (!box) throw new Error('no box')
+  await act(async () => {
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  })
+  await settle()
+}
+
 describe("a kept editor's own read", { timeout: 30_000 }, () => {
-  it('says its read failed before any answer, with Retry, and keeps the draft', async () => {
+  it('says its read failed before any answer, with Retry, keeps the draft, and keeps Save and Delete off until Retry answers', async () => {
     await keepEditor({ get: 'error' })
     expect(keptLine()?.getAttribute('data-milestone-open')).toBe('failed')
     expect(keptLine()?.textContent).toBe("Couldn't load the latest version of this milestone.Retry")
     expect(nameBox()?.value).toBe('Step two, drafted')
+    // the failure line speaks for the editor, which says nothing of its own,
+    // and the buttons are off as on a locked editor
+    expect(waitLine()).toBeNull()
+    expect(nameBox()?.readOnly).toBe(false)
+    expect(editorButton('Save')?.disabled).toBe(true)
+    expect(editorButton('Delete')?.disabled).toBe(true)
     // Retry asks the kept read again, and its answer takes the line away
     force = {}
     const before = gets().length
@@ -960,6 +1002,56 @@ describe("a kept editor's own read", { timeout: 30_000 }, () => {
     expect(keptLine()).toBeNull()
     expect(nameBox()?.value).toBe('Step two, drafted')
     expect(q('[data-milestone-editor="u2"]')?.hasAttribute('data-milestone-locked')).toBe(false)
+    expect(editorButton('Save')?.disabled).toBe(false)
+    expect(editorButton('Delete')?.disabled).toBe(false)
+  })
+
+  it('waits for its read: says it is loading and sends no Save or Delete, then saves with the answer it gives', async () => {
+    await keepEditor({ get: 'loading' })
+    const sent = heldWrites()
+    const editor = q('[data-milestone-editor="u2"]')
+    expect(waitLine()?.textContent).toBe('Loading this milestone…')
+    expect(editor?.hasAttribute('data-milestone-locked')).toBe(false)
+    expect(nameBox()?.readOnly).toBe(false)
+    expect(editorButton('Save')?.disabled).toBe(true)
+    expect(editorButton('Delete')?.disabled).toBe(true)
+    // neither a press, nor Enter, nor a Delete sends or closes anything
+    await press(editorButton('Save'))
+    await enterInName()
+    await deleteInEditor()
+    expect(sent).toEqual([])
+    expect(q('[data-milestone-editor="u2"]')).toBe(editor)
+    // the draft stays editable while the read loads
+    await typeInto(nameBox(), 'Step two, final')
+    expect(nameBox()?.value).toBe('Step two, final')
+    // once the read answers, the line goes, and Save sends against what
+    // the editor showed as it opened, in the answer's organization
+    force = {}
+    await rerun()
+    expect(waitLine()).toBeNull()
+    expect(editorButton('Save')?.disabled).toBe(false)
+    await press(editorButton('Save'))
+    expect(sent.map((w) => w.name)).toEqual(['projects:updateMilestone'])
+    expect(sent[0].args).toMatchObject({
+      org_id: snap.orgs[0].id,
+      id: 'u2',
+      patch: { name: 'Step two, final' },
+      expected: { name: 'Step 2' },
+    })
+  })
+
+  it('must fail: a Delete of a kept editor whose read has not answered closes nothing, and deletes once it answered', async () => {
+    await keepEditor({ get: 'loading' })
+    const sent = heldWrites()
+    await deleteInEditor()
+    expect(sent).toEqual([])
+    expect(q('[data-milestone-editor="u2"]')).not.toBeNull()
+    force = {}
+    await rerun()
+    await deleteInEditor()
+    expect(sent.map((w) => w.name)).toEqual(['projects:removeMilestone'])
+    expect(sent[0].args).toMatchObject({ org_id: snap.orgs[0].id, id: 'u2' })
+    expect(q('[data-milestone-editor="u2"]')).toBeNull()
   })
 
   it.each([
