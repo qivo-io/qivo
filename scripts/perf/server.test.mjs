@@ -2035,6 +2035,43 @@ describe('the benchmark server', () => {
     )
   })
 
+  it('ends a snooze as the server does, the row back in its Newest first place and an item without one left as it was', async () => {
+    const ORG = '00000000-0000-4000-8000-000000000001'
+    const { posted, send } = await server('tasks=150&latency=0&mbps=100000&unread=120')
+    const ask = async (args) => {
+      const asked = `page:${posted.length}`
+      await send({ type: 'query', id: asked, name: 'inbox:page', args })
+      return JSON.parse(posted.find((m) => m.to === asked).text)
+    }
+    const write = async (name, args) => {
+      const asked = `${name}:${posted.length}`
+      await send({ type: 'mutation', id: asked, name, args: { org_id: ORG, ...args } })
+      expect(posted.find((m) => m.id === asked)).toMatchObject({ type: 'answer', value: null })
+    }
+    /** Every row with Show snoozed on, Newest first, page by page. */
+    const all = async () => {
+      const first = { order: 'newest', unread_only: false, include_snoozed: true, kinds: [] }
+      const pages = [await ask(first)]
+      while (pages.at(-1).next) pages.push(await ask({ ...first, after: pages.at(-1).next }))
+      return pages.flatMap((page) => page.rows)
+    }
+    const order = (await all()).map((r) => r.issue_id)
+    // a row whose newest message is older than now, so a wake stamped now
+    // would move it to the top
+    const middle = order[80]
+    await write('messages:snoozeItem', { issue_id: middle, until: '2099-01-01T00:00:00.000Z' })
+    await write('messages:snoozeItem', { issue_id: middle, until: null })
+    const after = await all()
+    expect(after.map((r) => r.issue_id)).toEqual(order)
+    expect(after[80]).toMatchObject({ issue_id: middle, snoozed_until: null, woke_at: null })
+    expect(after[80].unread_count).toBeGreaterThan(0)
+    // an item that carries no snooze keeps its read state
+    const row = after[90]
+    await write('messages:readItem', { issue_id: row.issue_id, through: row.through })
+    await write('messages:snoozeItem', { issue_id: row.issue_id, until: null })
+    expect((await all())[90]).toMatchObject({ issue_id: row.issue_id, unread_count: 0 })
+  })
+
   it("answers the Inbox's page in the states the page asks for", async () => {
     /** What the first and the second page answer on a page with `params`. */
     const read = async (params) => {

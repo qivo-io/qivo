@@ -2663,7 +2663,10 @@ async function mutate(name, args) {
     // caller's messages of one task. unreadItem marks every one unread,
     // removeItem removes those stored up to `through` (created_at stands
     // for _creationTime here), and snoozeItem stamps every one, unread,
-    // with the snooze, or wakes the item with null
+    // with the snooze and no wake. With null it ends the snooze of the
+    // ones that carry one, which turn unread, and leaves the rest and
+    // every wake as they were, as convex/model/messages.ts snoozeMessages
+    // does, so the row goes back to its own place in the list
     const through = args.through ?? Number.POSITIVE_INFINITY
     const ofItem = (m) => m.issue_id === args.issue_id && m.org_id === args.org_id
     const before = snapshot.messages
@@ -2672,12 +2675,15 @@ async function mutate(name, args) {
     else
       snapshot.messages = before.map((m) => {
         if (!ofItem(m)) return m
+        if (name === 'messages:snoozeItem' && args.until === null) {
+          if (!m.snoozed_until) return m
+          const { read_at: _read, snoozed_until: _until, ...awake } = m
+          return awake
+        }
         const { read_at: _read, ...unread } = m
         if (name === 'messages:unreadItem') return unread
-        const { snoozed_until: _until, woke_at: _woke, ...awake } = unread
-        return args.until === null
-          ? { ...awake, ...(m.snoozed_until ? { woke_at: new Date().toISOString() } : {}) }
-          : { ...awake, snoozed_until: args.until }
+        const { snoozed_until: _until, woke_at: _woke, ...fresh } = unread
+        return { ...fresh, snoozed_until: args.until }
       })
     if (
       snapshot.messages.some((m, i) => m !== before[i]) ||
