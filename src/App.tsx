@@ -1580,15 +1580,16 @@ function App() {
      covers the views, as the phone's Inbox at a bare address, it waits
      until a view shows, as no tab there leads to the scope beneath. Every
      navigation the person makes while it is on its way drops it
-     (navMoved), a view pill, another page or project, Back or Forward and
-     an open that starts to wait in a list, so its answer changes nothing
-     and the chooser takes its line's place, unless Back or Forward reached
-     an address that names its own opening. Otherwise its answer counts
-     only while the scope is still empty and no newer opening started: ok
-     opens the project once the workspace holds it (openResolved);
-     unavailable shows the chooser with its note; the access_unchecked
-     refusal and a failed read show their sentence with Retry, never the
-     chooser, another project, My view or All projects. */
+     (navMoved), a view pill, another page, project or Team sync scope,
+     Back or Forward and an open that starts to wait in a list, so its
+     answer changes nothing and the chooser takes its line's place, unless
+     Back or Forward reached an address that names its own opening.
+     Otherwise its answer counts only while the scope is still empty and
+     no newer opening started: ok opens the project once the workspace
+     holds it (openResolved); unavailable shows the chooser with its note;
+     the access_unchecked refusal and a failed read show their sentence
+     with Retry, never the chooser, another project, My view or All
+     projects. */
   const askedCheck = useRef(-1)
   const stopCheck = useRef<(() => void) | null>(null)
   const openingRef = useRef(opening)
@@ -1908,8 +1909,13 @@ function App() {
       if (next.scope && next.scope !== sync?.scope) P.saveUINow({ teamSyncScope: next.scope })
       correctSync(next)
     }
-    // a scope switch names the cards it asks about
-    if (closes) closeOrAsk(closes, apply)
+    // a scope switch names the cards it asks about, and drops every open
+    // that waits and startup's check once accepted, as move does
+    if (closes)
+      closeOrAsk(closes, () => {
+        navMoved()
+        apply()
+      })
     else move({ sync: next }, apply)
   }
   // …and the page's own correction of a step it cannot show, unasked; it

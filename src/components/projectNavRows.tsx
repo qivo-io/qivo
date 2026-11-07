@@ -278,11 +278,11 @@ export function onNavMove(heard: () => void): () => void {
  * a caller does on a page move or a new search, which ends its own line.
  * The caller hiding (React's Activity runs this hook's cleanup) or going
  * drops it too, and so does every navigation the person makes (navMoved):
- * another view, page or project, Back or Forward, or an open that starts
- * to wait in another list. So nothing opens later in a place the person
- * left, and only one open waits at a time. These, and a press on a held
- * row, also end the "Opening <name>…" line with `say(null)`, so no list
- * says it opens what nothing waits for.
+ * another view, page, project or Team sync scope, Back or Forward, or an
+ * open that starts to wait in another list. So nothing opens later in a
+ * place the person left, and only one open waits at a time. These, and a
+ * press on a held row, also end the "Opening <name>…" line with
+ * `say(null)`, so no list says it opens what nothing waits for.
  */
 export function useNavOpen(go: (id: string) => void, say: (line: string | null) => void) {
   const wait = useRef<{ id: string; stop: () => void } | null>(null)

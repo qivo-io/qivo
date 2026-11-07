@@ -1163,6 +1163,48 @@ describe('an open or a check that waits, and the person’s next move', { timeou
     expect(sentProjects()).not.toContain(late)
   })
 
+  it('drops a sidebar open once the person picks another Team sync scope, so its answer leaves Team sync shown', async () => {
+    const { snap, held, late } = lateWorld()
+    resolveWith = (args) => {
+      deliver(held)
+      return queryProjectNav(held, 'projectNav:resolve', args)
+    }
+    await app(snap, '/app/testbed/overview/p/10', {}, () => {
+      server = held
+    })
+    await until(() => shown() === 'overview' && crumb() === 'Luma Sensor', 'Luma Sensor')
+    await click(q('aside [data-sync-nav]'))
+    await until(() => shown() === 'sync' && q('[data-sync-scope] [data-fieldselect]'), 'Team sync')
+    expect(store.P.project(late)).toBeUndefined()
+    const release = holdResolve()
+    await until(() => q(`aside [data-project-row="${late}"] button`), 'the row')
+    await click(q(`aside [data-project-row="${late}"] button`))
+    expect(toast()).toContain('Opening Late programme…')
+    // the scope menu, opened from its trigger, then its All projects choice
+    const from = location.pathname
+    await act(async () =>
+      q('[data-sync-scope] [data-fieldselect]')?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+      ),
+    )
+    await click(
+      [...document.querySelectorAll('[data-fieldselect-menu] [role="option"]')].find(
+        (option) => option.textContent?.trim() === 'All projects',
+      ),
+    )
+    const there = location.pathname
+    expect(there).not.toBe(from)
+    expect(there).toContain('/sync/all')
+    expect(toast()).not.toContain('Opening Late programme…')
+    await release()
+    // the answer brought the project, and opened nothing
+    expect(store.P.project(late)).toBeDefined()
+    expect(shown()).toBe('sync')
+    expect(location.pathname).toBe(there)
+    expect(toast()).not.toContain('Late programme')
+    expect(sentProjects()).not.toContain(late)
+  })
+
   it('drops a pick that waits in the chooser once the person searches again, so its answer opens nothing', async () => {
     const { snap, held, late } = lateWorld()
     resolveWith = (args) => {
