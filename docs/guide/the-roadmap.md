@@ -129,10 +129,10 @@ resizing the window loads those of the new weeks; meanwhile the milestones of
 the weeks both windows share stay. A line under the toolbar says when the
 milestones are still loading, could not load (**Retry** loads them again),
 are not all shown because the window held more than Qivo reads at once (it
-says from which day, and that a shorter window shows them all, or in My view
-also opening a project), or belong to more projects than the app reads at once
-([Limits](./limits.md)). The window narrows only the milestones, not the tasks
-the Roadmap shows.
+says from which day, and that a shorter window, or in My view opening a
+project, can help), or belong to more projects than the app reads at once
+([Limits](./limits.md)). Unlike for tasks, a shorter window reads fewer
+milestones.
 When a scope has nothing to schedule, for example a project without
 sub-projects or My view with nothing assigned to you, the Roadmap says why.
 In a project or sub-project, and in My view, the timeline stays behind that
