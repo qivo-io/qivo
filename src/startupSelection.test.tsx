@@ -1061,6 +1061,36 @@ describe('a task address the workspace does not hold', { timeout: 60_000 }, () =
       TASKS.atBoot = true
     }
   })
+
+  it('drops startup’s check when Back or Forward reaches such a task, so the check’s answer, landing first, leaves the task to name its project', async () => {
+    const { TASKS } = await import('./store/liveParts')
+    TASKS.atBoot = false
+    try {
+      const release = holdResolve()
+      await app(world(), '/app/testbed', remembering(PORTAL, PARTNER))
+      await chooser('checking')
+      expect(asks.map((a) => a.args)).toEqual([{ project_id: PORTAL }])
+      await go('/app/testbed/board/tasks/qn-7')
+      await until(() => windowReads.length > 0, "the window's read")
+      // the task's wait, as on a boot, and no chooser under its window
+      expect(q('[data-project-chooser]')).toBeNull()
+      // the remembered project's answer lands before the task's
+      await release()
+      expect(shown()).toBeUndefined()
+      expect(viewReads()).toEqual([])
+      await act(async () => {
+        for (const read of windowReads) read(taskAnswer())
+      })
+      await until(() => shown() === 'kanban', "Firmware's Board")
+      expect(q('[data-scope-crumb] h1')?.textContent).toBe('Firmware')
+      expect(location.pathname).toBe('/app/testbed/board/tasks/qn-7')
+      expect(asks).toHaveLength(1)
+      // a task's address chose it, so nothing is remembered
+      expect(sentProjects()).toEqual([])
+    } finally {
+      TASKS.atBoot = true
+    }
+  })
 })
 
 describe('an open or a check that waits, and the person’s next move', { timeout: 60_000 }, () => {

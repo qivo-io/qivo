@@ -1521,6 +1521,11 @@ function App() {
         )
       }
       if (door) showOpening(startupOpening)
+      // a task the workspace does not hold, reached with no scope, waits
+      // for its answer to name its project, as on a boot, never for a
+      // check the move dropped
+      if (resolving && !r.sync && next.scope === undefined)
+        showOpening((n) => ({ kind: 'task', n }))
       // a scope the task's address chose is not remembered (taskScope)
       if (!r.sync && !liveScope(r.scope) && task && liveScope(sc)) taskScope.current = sc ?? null
       else if (next.scope !== was.scope) taskScope.current = null
