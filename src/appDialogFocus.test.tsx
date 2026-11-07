@@ -510,17 +510,52 @@ describe('a project saved from the Projects page', { timeout: 30_000 }, () => {
       (button) => button.textContent === 'Docs',
     )
   const header = (hook: string) => document.querySelector<HTMLElement>(`[${hook}]`)
+  /** 25 top-level projects the Planner leads, Alpha 00 to Alpha 24, which
+      sort before Docs and fill the tree's first batch. They come first in
+      the workspace, so the boot's scope is one of them and the tree reads
+      no further batch before the create. */
+  const alphas = (snap: Snapshot) => {
+    const plan = snap.projects[0]
+    snap.projects.unshift(
+      ...Array.from({ length: 25 }, (_, i) => ({
+        ...plan,
+        id: `alpha-${i}`,
+        key: `A${i}`,
+        num: 10 + i,
+        name: `Alpha ${String(i).padStart(2, '0')}`,
+      })),
+    )
+  }
   it.each([
-    ['desktop', 'New project', () => sidebarRow('data-project-row')],
-    ['phone', 'New project', () => header('data-mobile-project-actions')],
-    ['desktop', "a menu's New sub-project", () => sidebarRow('data-subproject-row')],
-    ['phone', "a menu's New sub-project", () => header('data-mobile-new-task')],
+    ['desktop', 'New project', '', () => sidebarRow('data-project-row')],
+    [
+      'desktop',
+      'New project',
+      ", a project the tree's first batch does not reach",
+      () => sidebarRow('data-project-row'),
+      alphas,
+    ],
+    ['phone', 'New project', '', () => header('data-mobile-project-actions')],
+    ['desktop', "a menu's New sub-project", '', () => sidebarRow('data-subproject-row')],
+    ['phone', "a menu's New sub-project", '', () => header('data-mobile-new-task')],
   ])(
-    "on a %s, gives focus to the project's own control once App has moved into it from %s",
-    async (layout, opener, target) => {
+    "on a %s, gives focus to the project's own control once App has moved into it from %s%s",
+    async (layout, opener, _past, target, prepare?: (snap: Snapshot) => void) => {
       phone(layout === 'phone')
       history.replaceState(null, '', '/app/testbed/projects')
-      await boot()
+      // the boot's scope is the workspace's first project, not one an
+      // earlier case saved
+      localStorage.clear()
+      await boot(prepare)
+      if (prepare) {
+        // the tree's first batch holds the 25 Alpha projects and not Plan,
+        // which sorts after them, as Docs will
+        await waitFor(
+          () => document.querySelectorAll('aside [data-project-row]').length === 25,
+          "the tree's first batch",
+        )
+        expect(document.querySelector('aside [data-project-row="plan"]')).toBeNull()
+      }
       const page = await waitFor(
         () => document.querySelector('.mobile-project-directory'),
         'the page',
@@ -549,7 +584,10 @@ describe('a project saved from the Projects page', { timeout: 30_000 }, () => {
       // which hides as App moves into the saved project
       await save()
       expect(held.closest('[data-hidden-view]')).not.toBeNull()
-      const own = target()
+      // a project past the tree's first batch shows once the scope rule
+      // has read the second, a commit after the move, where the tree's
+      // focus request gives its row focus
+      const own = prepare ? await waitFor(target, "Docs's row") : target()
       expect(own).toBeTruthy()
       expect(own?.closest('[data-hidden-view]')).toBeNull()
       expect(document.activeElement).toBe(own)
