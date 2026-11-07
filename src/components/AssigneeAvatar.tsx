@@ -71,20 +71,21 @@ function OwnerFace({ id }: { id: string }) {
  * hold the field's own "Unassigned" or "No reviewer", as OwnerField names
  * them. Then the batches' rows, each id once, the holder left out.
  *
- * Rows of an older text read dimmed and take no pick until the answer for
- * the typed text lands, which moves the highlight to its first row; Enter
- * acts only then. Under a search that first row is a person whenever the
- * answer holds one, so Enter after a name never clears the field, even
- * when the clear row's label also holds the typed words. A failed or held
- * first read moves no highlight, so the answer Try again brings moves it
- * as a fresh answer does. Load more moves the highlight to the first new
- * row. A held, refused, unavailable, over-budget, stopped or failed list
- * says so in the field's words (CommandChoiceEnd), never as an empty or
- * ended list. An unavailable list and a refused assignee list also
- * disable the clear row, which the write would refuse. A refused reviewer
- * list keeps it, since the write still clears the reviewer a task with
- * subtasks kept from before (REVIEWER_ON_GROUP), though it refuses a clear
- * below Edit.
+ * Rows of an older text read dimmed and take no pick until the list
+ * answers the typed text, which moves the highlight to its first row;
+ * Enter acts only then. Under a search that first row is a person
+ * whenever the list shows one, the holder first, so Enter after a name
+ * never clears the field, even when the clear row's label also holds the
+ * typed words. The highlight moves this way each time the list comes to
+ * answer the typed text: its first answer, a failed or held first read,
+ * the answer Try again brings, and the answer for a text typed again
+ * after another. Load more moves the highlight to the first new row. A
+ * held, refused, unavailable, over-budget, stopped or failed list says so
+ * in the field's words (CommandChoiceEnd), never as an empty or ended
+ * list. An unavailable list and a refused assignee list also disable the
+ * clear row, which the write would refuse. A refused reviewer list keeps
+ * it, since the write still clears the reviewer a task with subtasks kept
+ * from before (REVIEWER_ON_GROUP), though it refuses a clear below Edit.
  *
  * Picking writes `field` when the pick changes it through P.updateIssue,
  * whose refusal toasts the server's sentence and is the only check of the
@@ -202,15 +203,16 @@ export function OwnerPickList({
     if (typed !== '' && person) return person
     return showNone && !closed ? NONE : (person ?? '')
   }
-  // the key whose answer moved the highlight. Only a batch the server
-  // answered for the key moves it, an empty one included, never a failed
-  // or held first read, so the answer Try again brings for the same key
-  // moves it as a fresh answer does.
-  const highlighted = useRef<string | null>(null)
+  // whether the list answered the typed text at the last render. The
+  // highlight moves each time the list comes to answer it: its first
+  // answer, a failed or held one included, the answer Try again brings,
+  // and the answer for a text typed again after another, which the list
+  // reads again. Load more keeps the list answered and moves it itself.
+  const wasAnswered = useRef(false)
   useEffect(() => {
-    if (!answered || list.phase !== 'ready' || highlighted.current === listKey) return
-    highlighted.current = listKey
-    setValue(firstValue())
+    const lands = answered && !wasAnswered.current
+    wasAnswered.current = answered
+    if (lands) setValue(firstValue())
   })
   const input = useRef<HTMLInputElement>(null)
   const from = useRef<number | null>(null)

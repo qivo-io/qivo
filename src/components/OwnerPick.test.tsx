@@ -516,6 +516,62 @@ describe('the owner list’s search', () => {
       patch: { assignee_id: 'edward' },
     })
   })
+
+  it.each([
+    ['fails', 'error', "Couldn't load people."],
+    ['is held', 'not-ready', "People can't be listed yet."],
+  ])(
+    'keeps a holder whose name holds the typed words ahead of the clear row when the first read %s',
+    async (_, state, line) => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      await load({ edward: true, holder: 'edward' })
+      await openList()
+      force.add(state)
+      await type('Ed')
+      await rest()
+      expect(listText()).toContain(line)
+      // "ed" is in "Unassigned" too, which shows, yet the holder, named by
+      // the check sent on open, takes Enter, which leaves the field as it is
+      expect(unassigned()).toBeDefined()
+      expect(holderRow()?.textContent).toContain('Edward Stone')
+      expect(selected()).toBe(holderRow())
+      await press('Enter')
+      await settle()
+      expect(writes).toHaveLength(0)
+    },
+  )
+
+  it('moves the highlight when the answer for a text typed again lands after a detour', async () => {
+    await load({ edward: true })
+    await openList()
+    await type('Ed')
+    await rest()
+    expect(selected()?.dataset.ownerChoice).toBe('edward')
+    // "Edw" is asked and has not answered when the text is "Ed" again,
+    // which the list reads again
+    holding = true
+    await type('Edw')
+    await rest()
+    await type('Ed')
+    await rest()
+    expect(reads('pickers:taskOwners').map((a) => a.args.search)).toEqual([
+      undefined,
+      'Ed',
+      'Edw',
+      'Ed',
+    ])
+    const again = held.filter((h) => h.args.search === 'Ed').at(-1)
+    await act(async () => again?.release())
+    await settle()
+    expect(selected()?.dataset.ownerChoice).toBe('edward')
+    await press('Enter')
+    await settle()
+    expect(writes).toHaveLength(1)
+    expect(network.mutation.mock.calls.at(-1)?.[1]).toMatchObject({
+      patch: { assignee_id: 'edward' },
+    })
+    await act(async () => held.find((h) => h.args.search === 'Edw')?.release())
+  })
 })
 
 describe('the owner list’s batches and states', () => {
