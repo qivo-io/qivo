@@ -267,8 +267,9 @@ describe('layoutTrackFlags', () => {
     const lanes = [...places.values()].map((p) => p.lane)
     expect(Math.max(...lanes)).toBeLessThan(TRACK_FLAG_LANES)
     expect([...places.values()].some((p) => p.room < wants(long))).toBe(true)
-    // no label runs into the next flag of its row
-    for (const lane of boxes(flags, { maxLanes: TRACK_FLAG_LANES }))
+    // must fail: a label of the track row that runs into the next flag of
+    // its row
+    for (const lane of trackBoxes(flags))
       for (let i = 1; i < lane.length; i++) expect(lane[i - 1][1]).toBeLessThanOrEqual(lane[i][0])
   })
 
