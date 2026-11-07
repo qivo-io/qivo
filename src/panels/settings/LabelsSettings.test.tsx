@@ -773,6 +773,43 @@ describe('Settings › Labels', () => {
       args: { id: 'new', expected: { name: 'Renamed elsewhere', color: '#22C55E' } },
     })
   })
+
+  it('checks a typed name again once this page renames or deletes the label that held it', async () => {
+    await load((snap) => {
+      labelRow(snap, 'fw', 'Firmware')
+      labelRow(snap, 'hw', 'Hardware')
+    })
+    await render()
+    const input = find<HTMLInputElement>('input[placeholder="New label name"]')
+    await type(input, 'Firmware')
+    await rest()
+    await settle()
+    expect(button('Add label')?.disabled).toBe(true)
+    expect(find('[data-label-name-check="taken"]').textContent).toBe(
+      'A label with that name already exists',
+    )
+    // this page renames Firmware, which frees the name
+    await rename('fw', 'Firmware old')
+    Object.assign(server.snap.labels.find((l) => l.id === 'fw') ?? {}, {
+      name: 'Firmware old',
+      name_lower: 'firmware old',
+    })
+    await answer('labels:update', 'accept')
+    expect(server.checks).toEqual(['Firmware', 'Firmware'])
+    expect(button('Add label')?.disabled).toBe(false)
+    expect(document.querySelector('[data-label-name-check]')).toBeNull()
+    // a delete here frees a name too
+    await type(input, 'Hardware')
+    await rest()
+    await settle()
+    expect(button('Add label')?.disabled).toBe(true)
+    await click(find<HTMLButtonElement>('[data-delete-label="hw"]'))
+    await click(button('Delete', find('[data-modal-shell]')))
+    server.snap.labels = server.snap.labels.filter((l) => l.id !== 'hw')
+    await answer('labels:remove', 'accept')
+    expect(server.checks).toEqual(['Firmware', 'Firmware', 'Hardware', 'Hardware'])
+    expect(button('Add label')?.disabled).toBe(false)
+  })
 })
 
 describe('a label name on the draft model', () => {

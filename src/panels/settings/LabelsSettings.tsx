@@ -106,8 +106,13 @@ export const NAME_TAKEN = 'A label with that name already exists'
 
 /** Where New label's check of a typed name stands: on its way, free (the
     answer's `exact` is null), taken by a label, or failed, when Add stays
-    on and the server decides. */
-type NameCheck = { name: string; state: 'checking' | 'free' | 'taken' | 'failed' }
+    on and the server decides. `writes` counts the page's accepted label
+    writes before it, so a create, rename or delete here checks again. */
+type NameCheck = {
+  name: string
+  writes: number
+  state: 'checking' | 'free' | 'taken' | 'failed'
+}
 
 /** A name or color the server accepted from the page over a label the
     store does not hold, with the values the page showed before its writes
@@ -428,6 +433,10 @@ export function OrgLabelsPage() {
   const [saved, setSaved] = useState<ReadonlyMap<string, { name?: SavedOver; color?: SavedOver }>>(
     () => new Map(),
   )
+  // the label writes the server accepted from this page, which New label's
+  // check of a typed name follows
+  const [writes, setWrites] = useState(0)
+  const wrote = () => setWrites((n) => n + 1)
   // the names on their way, by label, which a renamed label's kept row
   // waits for in a loaded batch until the server answers
   const [sending, setSending] = useState<ReadonlyMap<string, string>>(() => new Map())
@@ -449,6 +458,7 @@ export function OrgLabelsPage() {
         const was = m.get(id)
         return new Map(m).set(id, { ...was, name: savedOver(was?.name, name, before) })
       })
+      wrote()
     })
   }
   const onRecolored = (id: string, color: string, before: string, accepted: Promise<boolean>) => {
@@ -527,8 +537,9 @@ export function OrgLabelsPage() {
   useUnsaved(!!newLabel.trim(), 'label name')
   const tooLong = overLimit(LIMITS.labelName, newLabel)
   // the typed name, checked once typing rests on labels.picker's `exact`,
-  // one read a name, never subscribed; a name past LIMITS.labelName or
-  // LIMITS.search reads nothing
+  // one read a name, never subscribed, and again after each create, rename
+  // or delete the server accepts from this page, which can take or free
+  // the name; a name past LIMITS.labelName or LIMITS.search reads nothing
   const typedName = useSettledSearch(newLabel, LIMITS.search)
   const checkName = typedName.settled
   const [check, setCheck] = useState<NameCheck | null>(null)
@@ -536,21 +547,24 @@ export function OrgLabelsPage() {
     if (!admin || checkName === '' || typedName.tooLong || overLimit(LIMITS.labelName, checkName))
       return setCheck(null)
     let live = true
-    setCheck({ name: checkName, state: 'checking' })
+    setCheck({ name: checkName, writes, state: 'checking' })
     void P.labelChoices({ org, search: checkName, cursor: null }).then((answer) => {
       if (!live) return
       setCheck({
         name: checkName,
+        writes,
         state: answer?.state === 'ready' ? (answer.exact === null ? 'free' : 'taken') : 'failed',
       })
     })
     return () => {
       live = false
     }
-  }, [admin, org, checkName, typedName.tooLong])
-  // the check for the text on screen, else one on its way
+  }, [admin, org, checkName, typedName.tooLong, writes])
+  // the check for the text on screen after the page's latest write, else
+  // one on its way
   const name = newLabel.trim()
-  const checked = check !== null && check.name === name ? check.state : 'checking'
+  const checked =
+    check !== null && check.name === name && check.writes === writes ? check.state : 'checking'
   const nameNote =
     name === '' || tooLong
       ? null
@@ -571,6 +585,7 @@ export function OrgLabelsPage() {
     void created.saved.then((ok) => {
       setAdding(false)
       if (!ok) return
+      wrote()
       known.current.set(created.id, { name: v, color: created.color })
       // its chip names it at once on any task, whether or not the
       // catalogue holds it
@@ -615,7 +630,10 @@ export function OrgLabelsPage() {
     setAsked(null)
     setDeleting((s) => toggled(s, id, true))
     void P.removeLabel(id, { orgId: org, name, color }).then((saved) => {
-      if (saved) window.showToast?.(`Label “${name}” deleted`)
+      if (saved) {
+        window.showToast?.(`Label “${name}” deleted`)
+        wrote()
+      }
       // a refusal, toasted by the store, brings the row back
       else setDeleting((s) => toggled(s, id, false))
     })
