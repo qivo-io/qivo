@@ -67,8 +67,8 @@ import {
   expectedProjects,
   expectedSubProjects,
 } from '../../convex/tests/projectSettingsLists.setup'
-import type { Snapshot } from './plannerFixture.setup'
 import { projectListsStandIn } from './projectSettingsListsStandIn.setup'
+import type { Snapshot } from './workspaceBase'
 
 vi.hoisted(() => {
   // cursors are sealed with a key derived from it (lib/archiveCursorSeal.ts)

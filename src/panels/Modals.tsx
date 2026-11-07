@@ -3374,9 +3374,8 @@ function MilestoneRowView({
    edit and leaves the window open (data-escape-owner, see ModalShell).
    `storedOf` answers the milestone's stored name and day as the row it
    renders from holds them now (a milestone read's answer,
-   MilestoneAnswer.stored), else the editor reads the store's
-   (P.milestoneRow); the save sends them as what the person saw, and a
-   refused save rebases on them as they are once the store took its paint
+   MilestoneAnswer.stored); the save sends them as what the person saw, and
+   a refused save rebases on them as they are once the store took its paint
    back.
    `locked` keeps the typed text read-only once the person may no longer
    change the milestone, and `lockedNote` says why under it. The Name box
@@ -3397,7 +3396,7 @@ function MilestoneEditor({
   onPastMove,
 }: {
   m: MilestoneVM
-  storedOf?: () => { name: string; week: string } | undefined
+  storedOf: () => { name: string; week: string } | undefined
   locked?: boolean
   lockedNote?: string
   onClose: () => void
@@ -3413,7 +3412,7 @@ function MilestoneEditor({
   // a second Save replaces it on purpose. Read when asked, never as of the
   // last render: a refusal's keepDraft runs right after the store took the
   // person's paint back, before React renders again.
-  const storedNow = () => (storedOf ? storedOf() : P.milestoneRow(m.id)) ?? undefined
+  const storedNow = () => storedOf() ?? undefined
   const [seen, setSeen] = useStateM(storedNow)
   const rebase = useRefM(false)
   const takeStored = () => {

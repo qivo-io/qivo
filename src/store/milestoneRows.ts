@@ -1,6 +1,7 @@
 /* The milestones the store's milestone reads hold (store/planner.ts
    P.watchMilestones: convex/milestones.ts get, section and between), and
-   the paints of a person's milestone writes over them.
+   the paints of a person's milestone writes over them. They are the only
+   milestones the store keeps, as the workspace's projects part sends none.
 
    - Each read keeps its last answer, by slot, as its anchor: the ask it
      answers, its rows in the server's order, and the answer's `next`,
@@ -11,8 +12,9 @@
      milestone in every read, a live read's first, and keeps each read's
      rows as the server would answer them: an edit takes a row out of a
      read it no longer belongs to, moves it to its place in the server's
-     order, and adds it to a read it now belongs to (covers), as a create
-     does. A `get` read takes no row it did not hold.
+     order, and adds it to a read it now belongs to (covers) from a copy
+     another read shows, as a create does. A `get` read takes no row it did
+     not hold, and an edit of a milestone no read shows paints nothing.
    - A read stopped with its rows kept, as a hidden page's, never stands in
      for a live read's: row() and orgOf() look in live reads first. Its
      copies of the milestones a live read's answer brings follow that
@@ -32,7 +34,7 @@ import { nameKey } from '../../convex/lib/nameKey'
 import { allWordsMatcher } from '../../convex/lib/search'
 import type { Row } from './rows'
 
-/** A milestone as the reads answer it, as the projects part sends it. */
+/** A milestone as the reads answer it (convex/milestones.ts MilestoneRow). */
 export type MilestoneRow = Row<'milestones'>
 
 /** A place in the reads' order, just after the milestone with this stored
@@ -152,14 +154,10 @@ const sameRow = (a: MilestoneRow, b: MilestoneRow) =>
 
 /** Creates an empty registry. `topOf` names the top-level project a project
     stands for in a read (a sub-project its parent), as the server folds the
-    projects a read names; `live` says whether a slot's read is subscribed;
-    `known` gives the milestones the store holds outside the reads, such as
-    the workspace's copy, which tell where a batch's own last row may move
-    (coversRow). */
+    projects a read names; `live` says whether a slot's read is subscribed. */
 export function createMilestoneRows(o: {
   topOf: (projectId: string) => string
   live: (slot: string) => boolean
-  known?: () => Iterable<MilestoneRow>
 }) {
   const anchors = new Map<string, Anchor>()
   // the rows on screen, live reads first
@@ -197,8 +195,8 @@ export function createMilestoneRows(o: {
 
   /** Whether `anchor`'s read is known to lack a milestone other than `id`
       that it would list (reaches) before position `pos`, meaning one that
-      the store (`known`) or another read's answer holds and this answer
-      does not. */
+      another read's answer holds and this answer does not. Only the reads'
+      answers tell, as the store keeps no milestone outside them. */
   function lacksBefore(anchor: Anchor, id: string, pos: MilestonePosition): boolean {
     const { ask, take } = anchor
     if (ask.kind === 'get') return false
@@ -208,7 +206,6 @@ export function createMilestoneRows(o: {
       !held.has(row.id) &&
       reaches(ask, take, row) &&
       before(ask, positionOf(row), pos)
-    for (const row of o.known?.() ?? []) if (lacked(row)) return true
     for (const other of anchors.values()) if (other.take.rows.some(lacked)) return true
     return false
   }
@@ -217,8 +214,12 @@ export function createMilestoneRows(o: {
       lists it (reaches) up to its answer's `next`. The batch's own last
       row, whose position `next` is, stays when a write moves it later,
       while it still comes before every milestone the read is known to lack
-      (lacksBefore), since the following batch starts after it. A `get`
-      read covers its own milestone only. */
+      (lacksBefore), since the following batch starts after it. Only the
+      other reads' answers tell what it lacks, so a move past a milestone no
+      read holds keeps the row until the read's next delivery, which a live
+      read sends before the write resolves; the row then shows a little
+      longer and never a wrong value. A `get` read covers its own milestone
+      only. */
   function coversRow(anchor: Anchor, row: MilestoneRow): boolean {
     const { ask, take } = anchor
     if (ask.kind === 'get') return row.id === ask.id
@@ -327,10 +328,10 @@ export function createMilestoneRows(o: {
         read's rows as the server would answer them: a read the changed row
         no longer belongs to drops it, one it still belongs to moves it to
         its place, and one it now belongs to takes it, from a copy on
-        screen, else `fallback` (the workspace's row). Skips when no copy is
-        left (layers.ts rule 5). */
-    update(id: string, fields: { name?: string; week?: string }, fallback?: MilestoneRow) {
-      const base = peek(id) ?? fallback
+        screen. Skips when no read on screen holds a copy (layers.ts rules 1
+        and 5), so it never puts back a milestone every read has dropped. */
+    update(id: string, fields: { name?: string; week?: string }) {
+      const base = peek(id)
       if (!base) return
       for (const [slot, shown] of painted) {
         const anchor = anchors.get(slot)

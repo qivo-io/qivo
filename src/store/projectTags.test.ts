@@ -4,6 +4,7 @@ import type { Doc } from '../../convex/_generated/dataModel'
 import { as, newT, plantSeat, uuid, withOrg, workspaceOf } from '../../convex/tests/helpers.setup'
 import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup'
 import { duplicateNameTags, type TaggableProject } from './viewModels'
+import type { Snapshot as Delivered } from './workspaceBase'
 
 type Project = TaggableProject
 
@@ -87,7 +88,7 @@ describe('project labels in the store', () => {
   })
 
   // a fresh store whose first delivery is `snap`
-  async function start(snap: Snapshot) {
+  async function start(snap: Delivered) {
     vi.resetModules()
     vi.stubGlobal('window', { showToast: vi.fn() })
     network.query.mockResolvedValue(null)

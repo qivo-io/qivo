@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NO_PASSWORD_LOGIN } from '../../convex/lib/email'
 import { LIMITS, TEXT_MAX } from '../../convex/lib/limits'
 import { limitSentence, sentence } from '../lib/fieldLimits'
+import { answerMilestones, isMilestoneRead } from './milestoneStandIn.setup'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 import type { Row } from './rows'
 
@@ -97,9 +98,12 @@ describe('the limits in the store', () => {
       args.push(sentArgs)
       return new Promise(() => {})
     })
-    network.onUpdate.mockImplementation((ref, _args, receive) => {
-      if (getFunctionName(ref) === 'workspace:whole') receive(structuredClone(snap))
-      else if (getFunctionName(ref) === 'snapshot:threadComments') {
+    network.onUpdate.mockImplementation((ref, readArgs, receive, fail) => {
+      const name = getFunctionName(ref)
+      if (name === 'workspace:whole') receive(structuredClone(snap))
+      // the milestone, which only a milestone read holds
+      else if (isMilestoneRead(name)) answerMilestones(snap, name, readArgs, receive, fail)
+      else if (name === 'snapshot:threadComments') {
         publishComments = (comments) => receive({ comments, earlier: false })
       }
       return () => {}
@@ -164,6 +168,9 @@ describe('the limits in the store', () => {
 
   it('refuses a name over its cap before painting or sending, and sends one at it', async () => {
     const { P } = store
+    // the milestone's window reads it, which gives its writes their row
+    P.watchMilestones('limits', { kind: 'get', id: 'milestone-a' })
+    await vi.waitFor(() => expect(P.milestoneRead('limits').state).toBe('ok'))
     const project = P.projects[0].id
     expect(await P.updateProject(project, { name: NAME_OVER })).toBe(false)
     expect(await P.updateTeam('team-a', { name: NAME_OVER })).toBe(false)

@@ -66,7 +66,7 @@ import {
   type OverviewArgs,
   overviewStandIn,
 } from './overviewStandIn.setup'
-import type { Snapshot } from './plannerFixture.setup'
+import type { Snapshot } from './workspaceBase'
 
 vi.hoisted(() => {
   // the client's zone, set before any module reads the clock

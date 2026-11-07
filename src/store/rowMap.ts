@@ -256,7 +256,6 @@ export function createWorkspaceRows(base: WorkspaceBase) {
     projects: new RowMap<Row<'projects'>>('projects', host),
     issues: new RowMap<Row<'issues'>>('issues', host),
     links: new RowMap<Row<'issue_links'>>('links', host),
-    milestones: new RowMap<Row<'milestones'>>('milestones', host),
     labels: new RowMap<Row<'labels'>>('labels', host),
     attachments: new RowMap<Row<'issue_attachments'>>('attachments', host),
     messages: new RowMap<Row<'messages'>>('messages', host),

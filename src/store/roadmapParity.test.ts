@@ -64,8 +64,8 @@ import { dependenciesFor, NO_ROADMAP_FILTERS, roadmapFor } from '../../convex/te
 import type { LoadIssue, LoadItem } from '../lib/workload'
 import { CALL_OWNERS } from './ownerLoadCache'
 import { ownerLoadsStandIn } from './ownerLoadsStandIn.setup'
-import type { Snapshot } from './plannerFixture.setup'
 import type { TeamMode } from './roadmapOracle.setup'
+import type { Snapshot } from './workspaceBase'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({

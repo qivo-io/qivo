@@ -29,13 +29,11 @@ const ms = (id: string, week: string, name = id, project = 'plan'): MilestoneRow
   created_at: AT,
 })
 
-/** A registry whose reads in `stopped` are not subscribed, with the
-    milestones the store holds outside the reads, `known`. */
-function registry(stopped: readonly string[] = [], known: readonly MilestoneRow[] = []) {
+/** A registry whose reads in `stopped` are not subscribed. */
+function registry(stopped: readonly string[] = []) {
   return createMilestoneRows({
     topOf: (id) => TOP[id] ?? id,
     live: (slot) => !stopped.includes(slot),
-    known: () => known,
   })
 }
 
@@ -172,15 +170,30 @@ describe('the paints', () => {
     expect(r.shownOf('far')?.rows[0].name).toBe('zzz')
   })
 
-  it('skips an edit when no copy is left, and takes the fallback row otherwise', () => {
+  it('takes the row an edit moves into a read from the read that shows it', () => {
+    const r = registry()
+    r.take('range', 'r', range, answer([]))
+    r.take('far', 'f', upcoming({ from: '2026-12-01' }), answer([ms('x', '2026-12-01')]))
+    r.beginPaint()
+    r.update('x', { week: '2026-09-16' })
+    expect(ids(r.shownOf('range')?.rows)).toEqual(['x'])
+    expect(r.shownOf('range')?.rows[0].week).toBe('2026-09-16')
+    expect(ids(r.shownOf('far')?.rows)).toEqual([])
+  })
+
+  it('must fail: an edit paints no read while no read holds a copy', () => {
     const r = registry()
     r.take('range', 'r', range, answer([]))
     r.beginPaint()
     r.update('x', { week: '2026-09-16' })
     expect(ids(r.shownOf('range')?.rows)).toEqual([])
-    r.update('x', { week: '2026-09-16' }, ms('x', '2026-12-01'))
-    expect(ids(r.shownOf('range')?.rows)).toEqual(['x'])
-    expect(r.shownOf('range')?.rows[0].week).toBe('2026-09-16')
+    // once the only copy left the screen, as another person's delete takes
+    // it out, the edit puts nothing back
+    r.take('far', 'f', upcoming({ from: '2026-12-01' }), answer([ms('x', '2026-12-01')]))
+    r.take('far', 'f', upcoming({ from: '2026-12-01' }), answer([]))
+    r.beginPaint()
+    r.update('x', { week: '2026-09-16' })
+    expect(ids(r.shownOf('range')?.rows)).toEqual([])
   })
 })
 
@@ -188,9 +201,11 @@ describe("a batch's own last row", () => {
   it('stays when a rename or a move keeps it before every milestone the read lacks', () => {
     const a = ms('a', '2026-09-15', 'Alpha')
     const b = ms('b', '2026-09-22', 'Beta')
-    const r = registry([], [a, b])
-    // a one-row section: the following batch starts after Alpha
+    const r = registry()
+    // a one-row section: the following batch starts after Alpha; a range
+    // read tells of Beta, which the section lacks
     r.take('next', 'k', upcoming({ limit: 1 }), answer([a], positionOf(a)))
+    r.take('range', 'r', range, answer([a, b]))
     r.beginPaint()
     r.update('a', { name: 'Zed' })
     expect(r.shownOf('next')?.rows.map((row) => row.name)).toEqual(['Zed'])
@@ -199,21 +214,39 @@ describe("a batch's own last row", () => {
     expect(ids(r.shownOf('next')?.rows)).toEqual(['a'])
   })
 
+  it("keeps the row through a move past a milestone no read holds until the read's next delivery, which drops it", () => {
+    const a = ms('a', '2026-09-15', 'Alpha')
+    const b = ms('b', '2026-09-22', 'Beta')
+    const r = registry()
+    r.take('next', 'k', upcoming({ limit: 1 }), answer([a], positionOf(a)))
+    r.beginPaint()
+    // no read holds Beta, so the section is not known to lack it, and
+    // shows the person's own move a little longer
+    r.update('a', { week: '2026-09-29' })
+    expect(ids(r.shownOf('next')?.rows)).toEqual(['a'])
+    expect(r.shownOf('next')?.rows[0].week).toBe('2026-09-29')
+    // the read's delivery after the move answers Beta, and the move's
+    // paint finds no copy of Alpha left to put back
+    r.take('next', 'k', upcoming({ limit: 1 }), answer([b], positionOf(b)))
+    r.beginPaint()
+    r.update('a', { week: '2026-09-29' })
+    expect(ids(r.shownOf('next')?.rows)).toEqual(['b'])
+  })
+
   it('must fail: leaves the batch once it moves past a milestone the read lacks', () => {
     const a = ms('a', '2026-09-15', 'Alpha')
     const b = ms('b', '2026-09-22', 'Beta')
-    const r = registry([], [a, b])
+    const r = registry()
     r.take('next', 'k', upcoming({ limit: 1 }), answer([a], positionOf(a)))
+    r.take('range', 'r', range, answer([a, b]))
     r.beginPaint()
     r.update('a', { week: '2026-09-29' })
     expect(ids(r.shownOf('next')?.rows)).toEqual([])
-    // another read's answer tells of a milestone the batch lacks too
-    const other = registry()
-    other.take('next', 'k', upcoming({ limit: 1 }), answer([a], positionOf(a)))
-    other.take('range', 'r', range, answer([a, b]))
-    other.beginPaint()
-    other.update('a', { name: 'Zed', week: '2026-09-22' })
-    expect(ids(other.shownOf('next')?.rows)).toEqual([])
+    // a rename that moves it onto the lacked milestone's day, after it by
+    // name key, leaves too
+    r.beginPaint()
+    r.update('a', { name: 'Zed', week: '2026-09-22' })
+    expect(ids(r.shownOf('next')?.rows)).toEqual([])
     // a row that is not the batch's last still leaves past `next`
     const c = ms('c', '2026-09-16', 'Gamma')
     const third = registry()

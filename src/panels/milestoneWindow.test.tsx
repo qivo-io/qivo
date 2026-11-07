@@ -946,7 +946,6 @@ async function keepEditor(forced: ForcedMilestones = {}) {
 const keptLine = () => q('[data-milestone-open][data-milestone-kept]')
 const gets = () => subs.filter((s) => s.name === 'milestones:get')
 const editorButton = (text: string) => button(text, q('[data-milestone-editor]') ?? document)
-
 describe("a kept editor's own read", { timeout: 30_000 }, () => {
   it('says its read failed before any answer, with Retry, and keeps the draft', async () => {
     await keepEditor({ get: 'error' })
@@ -1133,7 +1132,7 @@ describe('opened on a milestone', { timeout: 30_000 }, () => {
     await start()
     await open({ id: 'u1' })
     // the store drops the project before the milestone's answer comes
-    await act(async () => deliverWorkspace({ ...snap, projects: [], milestones: [] }))
+    await act(async () => deliverWorkspace({ ...snap, projects: [] }))
     force = {}
     await rerun()
     const editor = q('[data-milestone-top] [data-milestone-editor="u1"]')

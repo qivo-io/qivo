@@ -1,5 +1,10 @@
 import type { Workspace } from '../../convex/lib/workspaceJoin'
-export type Snapshot = Workspace
+import type { Whole } from './guard/liveDouble.setup'
+
+/** The whole a store test publishes, the workspace the app holds with the
+    server's milestones beside it, which no part sends and the milestone
+    stand-in answers from (store/guard/liveDouble.setup.ts Whole). */
+export type Snapshot = Workspace & Required<Pick<Whole, 'milestones'>>
 const NOW = '2026-09-14T08:00:00.000Z'
 
 export function plannerFixture(): Snapshot {

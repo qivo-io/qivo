@@ -140,7 +140,6 @@ function fixture(myRole: Role) {
     access: [{ project_id: meta, profile_id: aisha.id, level: 'user' }],
     teamAccess: [],
     links: [],
-    milestones: [],
     labels: [],
     issueLabels: [],
     issueSubs: [],

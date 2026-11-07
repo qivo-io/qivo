@@ -382,7 +382,6 @@ const rows = {
     return workspaceRows.flags('hiddenParentTasks')
   },
   links: workspaceRows.links,
-  milestones: workspaceRows.milestones,
   labels: workspaceRows.labels,
   get issueLabels() {
     return workspaceRows.list('issueLabels')
@@ -3501,8 +3500,6 @@ function dropProjectRows(id: string) {
     row.type === 'meta' ? [id, ...rows.projects.keysWhere((x) => x.parent_id === id)] : [id]
   for (const key of rows.issues.keysWhere((i) => ids.includes(i.project_id)))
     rows.issues.delete(key)
-  for (const key of rows.milestones.keysWhere((m) => ids.includes(m.project_id)))
-    rows.milestones.delete(key)
   for (const key of rows.links.keysWhere(
     (l) => !rows.issues.has(l.source_id) || !rows.issues.has(l.target_id),
   ))
@@ -3844,7 +3841,6 @@ function shownWorkspace() {
       P.projectTags,
       // the list P.issues shows, read past its test-build guard
       tasks.issues(),
-      P.milestones,
       P.comments,
       P.threadEvents,
       P.commentsEarlier,
@@ -4876,7 +4872,9 @@ function overviewStep(step: () => void) {
    is a view read
    (watchView), with its owner, attempt, key, connection and the answer it
    keeps while it stops, and its answer's milestones are the read's anchor
-   in milestoneRows. Every
+   in milestoneRows. They are the store's only milestones, since the
+   workspace's projects part sends none, so every milestone the app shows,
+   edits or names comes from them. Every
    live layer's `milestones` part paints every copy of a milestone it
    changes there, and a delivery of each read that holds a copy holds the
    write, so a person's rename shows in every read at once and stays until
@@ -4927,12 +4925,12 @@ function milestonePaint(marks: MilestoneMarks, paint: Paint): Paint {
 }
 
 /* The milestone reads' rows: a sub-project stands for its top-level
-   project, as the server folds the projects a read names, and the
-   workspace's milestones tell which rows a read is known to lack. */
+   project, as the server folds the projects a read names. Only the reads'
+   own answers tell which rows a read is known to lack
+   (store/milestoneRows.ts coversRow). */
 const milestoneRows = createMilestoneRows({
   topOf: (id) => rows.projects.get(id)?.parent_id ?? id,
   live: viewLive,
-  known: () => rows.milestones.peekValues(),
 })
 
 /** Whether read `slot`'s answer holds what `marks` changes: a copy of one
@@ -5240,14 +5238,14 @@ function milestoneAnswer(slot: ViewSlot): MilestoneAnswer | null {
   return answer
 }
 
-/** Milestone `id` as the screen shows it: the workspace's row, else the row
-    a milestone read shows, a live read's first. The writes take their row
-    from here when an editor names none of its own. */
-const milestoneOnScreen = (id: string): MilestoneRow | undefined =>
-  rows.milestones.get(id) ?? milestoneRows.row(id)
+/** Milestone `id` as a milestone read shows it, a live read's first, or
+    undefined while no read shows it. The writes take their row from here,
+    since the reads hold the only milestones the store keeps. */
+const milestoneOnScreen = (id: string): MilestoneRow | undefined => milestoneRows.row(id)
 
 /** The organization of milestone `row`: the one a `get` answer named for
-    it, else its project's in the workspace, else none (''). */
+    it, else its project's in the store (orgOfProject, from the projects
+    part until t3/limits-projects-part removes it), else none (''). */
 const milestoneOrg = (row: MilestoneRow): string =>
   milestoneRows.orgOf(row.id) ?? orgOfProject(row.project_id)
 
@@ -6260,6 +6258,13 @@ export const __layerProbe = STRICT_LAYERS
           and how many layers are live. */
       rows: (noStamps = false) => canonicalRows(noStamps),
       layerCount: () => layers.ordered().length,
+      /** The parts each live layer paints, in order. */
+      layerParts: () =>
+        layers
+          .ordered()
+          .map((layer) =>
+            (Object.keys(layer.view) as (keyof View)[]).filter((part) => !!layer.view[part]),
+          ),
       /** How many rows the paints have copied so far (store/rowMap.ts). */
       rowCopies,
       /** The spans of owner `owner`'s tasks the workspace holds, as the
@@ -8805,14 +8810,6 @@ function rebuild(now = new Date(), full = false) {
   P.issueById = tasks.issueById()
   if (STRICT_LAYERS && !unchecked) checkTasks(sources)
 
-  // milestones
-  P.milestones = keepItems(
-    P.milestones,
-    [...rows.milestones.values()]
-      .sort((a, b) => byStamp(a.created_at, a.id, b.created_at, b.id))
-      .map(shapeMilestone),
-  )
-
   // comments — the watched issue's only (oldest first, like its history; the
   // discussion spine reverses for newest-first display). Ties on the insert
   // timestamp order by id so two optimistic rows can't swap on redelivery.
@@ -8873,7 +8870,6 @@ function rebuild(now = new Date(), full = false) {
     P.projects,
     P.archivedProjects,
     P.projectTags,
-    P.milestones,
     P.CURRENT_USER,
     P.homeOrg,
     P.gridEpoch,
@@ -11639,7 +11635,6 @@ export const PLANNER = {
   PRIORITIES,
   issues: [] as IssueVM[],
   issueById: {} as Record<string, IssueVM>,
-  milestones: [] as MilestoneVM[],
   // the watched task's history, oldest first, while a window shows All
   // (showHistory); empty until it is delivered
   threadEvents: [] as ActivityVM[],
@@ -11908,14 +11903,13 @@ export const PLANNER = {
   /* Shared scope for Overview, Board and Roadmap; null means it disappeared.
      subIds names task-holding sub-projects. Groups are sub-projects within a
      project, top-level projects in wide scopes, or the single selected sub.
-     Milestones follow the owning top-level projects.
+     Its milestones are the milestone reads' (P.watchMilestones), not here.
      wide covers both All projects and My view; mine narrows tasks to me.
      Rollups use the only predicate but ignore transient toolbar filters. */
   scopeInfo: (scopeId: string) => {
     if (scopeId === ALL_SCOPE || scopeId === MINE_SCOPE) {
       const mine = scopeId === MINE_SCOPE
       const metas = PLANNER.visibleProjects()
-      const metaIds = new Set(metas.map((m) => m.id))
       const groups = metas.map((m) => ({
         proj: m,
         subIds: (m.children || []).filter((id) => PLANNER.canSee(id)),
@@ -11933,7 +11927,6 @@ export const PLANNER = {
         groups,
         subIds,
         subIdSet: new Set(subIds),
-        milestones: PLANNER.milestones.filter((x) => metaIds.has(x.project)),
       }
     }
     const p = PLANNER.project(scopeId)
@@ -11959,7 +11952,6 @@ export const PLANNER = {
       groups,
       subIds,
       subIdSet: new Set(subIds),
-      milestones: meta ? PLANNER.milestones.filter((x) => x.project === meta.id) : [],
     }
   },
   /** The tasks a scope holds, its sub-projects', narrowed by the scope's
@@ -12834,13 +12826,6 @@ export const PLANNER = {
     if (!tasksAll) return null
     const d = delayMap.get(it.uuid)
     return d ? DELAY_COLORS[d.status] : DELAY_NEUTRAL
-  },
-  /* Milestones belong to the project whose roadmap shows them (0078). A meta
-     project's roadmap also carries the milestones of… only itself: milestones
-     are set on the meta, sub-projects inherit the view through it. */
-  milestonesIn: (projectId: string) => {
-    const m = PLANNER.metaOf(projectId)
-    return m ? PLANNER.milestones.filter((x) => x.project === m.id) : []
   },
   /* one curated list for the whole organization (0078). `orgId` picks which:
      the blend (0081) also carries a host org's vocabulary, and a label only
@@ -17287,8 +17272,6 @@ export const PLANNER = {
           r.parent_id = undefined
           rows.hiddenParentTasks.add(r.id)
         }
-        for (const key of rows.milestones.keysWhere((m) => ids.includes(m.project_id)))
-          rows.milestones.delete(key)
         for (const key of rows.links.keysWhere(
           (l) => !rows.issues.has(l.source_id) || !rows.issues.has(l.target_id),
         ))
@@ -18109,16 +18092,6 @@ export const PLANNER = {
     )
   },
 
-  /** Milestone `id` as stored, its day unrounded, for an editor that sends
-      what the person saw (updateMilestone): the workspace's row, else the
-      row a milestone read shows (milestoneOnScreen). An editor fed by a
-      read's answer takes `seen` from that answer instead
-      (MilestoneAnswer.stored). Null when it is gone. */
-  milestoneRow: (id: string): { name: string; week: string } | null => {
-    const row = milestoneOnScreen(id)
-    return row ? { name: row.name, week: row.week } : null
-  },
-
   /** Moves milestone `id` to week `week`, as a flag's drag does. `seen` is
       the milestone as the flag showed it, its stored name and day from the
       answer it came from; updateMilestone sends only the fields it
@@ -18145,12 +18118,8 @@ export const PLANNER = {
       week,
       created_at: new Date().toISOString(),
     }
+    // every milestone read that would answer it, in its place
     const view: View = {
-      workspace: () => {
-        if (!rows.milestones.has(uuid) && rows.projects.has(meta.id))
-          rows.milestones.set(uuid, { ...milestone })
-      },
-      // every milestone read that would answer it, in its place
       milestones: milestonePaint({ ids: [uuid], rows: [milestone] }, () =>
         milestoneRows.insert(milestone),
       ),
@@ -18171,14 +18140,15 @@ export const PLANNER = {
   /** Paints the change at once and resolves whether the server saved it.
       Resolves false without sending when it refused the change first
       (toasted), or when the milestone or its organization is not known here:
-      the row comes from the workspace, else from a milestone read
-      (milestoneOnScreen), and the organization from a `get` answer, else
-      the project's (milestoneOrg). Resolves false after a refusal, which is
-      toasted and taken back. `seen` is the milestone as an editor showed it
-      when opened, which goes out as the expected values, and `keepDraft`
-      runs when the server refuses because someone changed it first
-      (SendOptions). The paint changes the workspace's row and every copy a
-      milestone read holds. */
+      the row comes from a milestone read (milestoneOnScreen), and the
+      organization from a `get` answer, else the project's (milestoneOrg).
+      Resolves false after a refusal, which is toasted and taken back.
+      `seen` is the milestone as an editor showed it when opened, which goes
+      out as the expected values, and `keepDraft` runs when the server
+      refuses because someone changed it first (SendOptions). The paint
+      changes every copy a milestone read holds, and adds the changed row
+      to a read it now belongs to from a copy another read shows; it skips
+      while no read shows the milestone (store/milestoneRows.ts update). */
   updateMilestone: (
     id: string,
     patch: { name?: string; week?: number },
@@ -18201,14 +18171,10 @@ export const PLANNER = {
     if ('name' in patch && refuseOver(LIMITS.milestoneName, patch.name ?? ''))
       return Promise.resolve(false)
     const fields = { ...db }
+    // every copy, each read keeping its rows where the server would
     const view: View = {
-      workspace: () => {
-        const live = rows.milestones.get(id)
-        if (live) Object.assign(live, fields)
-      },
-      // every copy, each read keeping its rows where the server would
       milestones: milestonePaint({ ids: [id], rows: [{ ...row, ...fields }] }, () =>
-        milestoneRows.update(id, fields, rows.milestones.get(id)),
+        milestoneRows.update(id, fields),
       ),
     }
     // moved/renamed verb logic is server-side now (it diffs against its row)
@@ -18219,9 +18185,9 @@ export const PLANNER = {
     )
   },
 
-  /** Removes the milestone from the screen at once, from the workspace and
-      every milestone read, and resolves whether the server deleted it, as
-      updateMilestone does, with its row and organization found as there.
+  /** Removes the milestone from every milestone read at once, and resolves
+      whether the server deleted it, as updateMilestone does, with its row
+      and organization found as there.
       `seen` is the milestone as an editor showed it, the values the delete
       is checked against. */
   removeMilestone: (id: string, seen?: { name: string; week: string }): Promise<boolean> => {
@@ -18229,9 +18195,6 @@ export const PLANNER = {
     const org = row ? milestoneOrg(row) : ''
     if (!row || !org || refusePausedEdit()) return Promise.resolve(false)
     const view: View = {
-      workspace: () => {
-        rows.milestones.delete(id)
-      },
       milestones: milestonePaint({ ids: [id] }, () => milestoneRows.hide(id)),
     }
     // what an editor showed, which may be older than the row on screen

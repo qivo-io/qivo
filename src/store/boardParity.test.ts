@@ -56,8 +56,8 @@ import { DEFAULT_PLANNABLE_HOURS, plannableHoursOf } from '../lib/workload'
 import { boardStandIn } from './boardStandIn.setup'
 import type { OwnerLoad } from './ownerLoadCache'
 import { ownerLoadsStandIn } from './ownerLoadsStandIn.setup'
-import type { Snapshot } from './plannerFixture.setup'
 import type { ViewDelayCtx } from './viewDelay'
+import type { Snapshot } from './workspaceBase'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({

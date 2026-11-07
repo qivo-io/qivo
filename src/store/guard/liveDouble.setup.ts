@@ -11,6 +11,7 @@ import {
   inboxSummaryStandIn,
   type PageArgs,
 } from '../inboxStandIn.setup'
+import type { MilestoneRow } from '../milestoneRows'
 
 /* The live transport (lib/liveQueries.ts) for store tests, over a Convex
    client double with onUpdate. A test publishes the whole workspace as one
@@ -32,6 +33,11 @@ import {
    and waits for its first answer waits for ever, as it would in the app.
    A view's own handler (onTransition `view`) hears every transition but
    starts no store generation.
+
+   The whole may hold the server's milestones (`milestones`), which no part
+   sends, as the projects part sends none; the milestone stand-in answers
+   the milestone reads from them (store/milestoneStandIn.setup.ts), and
+   the store never receives them otherwise.
 
    The two inbox reads every store watches beside the parts, the unread
    summary and the open task's item (convex/inbox.ts summary and item), and
@@ -61,17 +67,20 @@ type Client = {
   query?(ref: FunctionReference<'query'>, args: Record<string, unknown>): Promise<unknown>
 }
 
-/* The workspace a test publishes, which may name messagesCut false, and
-   may hold messages the server keeps beyond the inbox part's cut
-   (`beyondCut`, the part's INBOX_LIMIT across the seats), which the inbox
-   reads count and list and the parts leave out, as for an Inbox past 500
-   messages, and tasks and projects the server holds that the parts do not
-   send (`unheld`), which the page names its rows by, such as another
-   organization's task of the same id as one the workspace holds. */
-type Whole = Omit<Workspace, 'messagesCut'> & {
+/** The workspace a test publishes, which may name messagesCut false, and
+    may hold messages the server keeps beyond the inbox part's cut
+    (`beyondCut`, the part's INBOX_LIMIT across the seats), which the inbox
+    reads count and list and the parts leave out, as for an Inbox past 500
+    messages, tasks and projects the server holds that the parts do not
+    send (`unheld`), which the page names its rows by, such as another
+    organization's task of the same id as one the workspace holds, and the
+    server's milestones (`milestones`), which no part sends and the
+    milestone stand-in answers from. */
+export type Whole = Omit<Workspace, 'messagesCut'> & {
   messagesCut?: boolean
   beyondCut?: Workspace['messages']
   unheld?: Partial<Pick<Workspace, 'issues' | 'projects'>>
+  milestones?: MilestoneRow[]
 }
 
 /** What a test publishes for a login whose seats a running organization

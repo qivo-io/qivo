@@ -85,11 +85,11 @@ export type Recipe = {
     answer: (args?: Record<string, unknown>) => TaskAnswer
     files?: (args?: Record<string, unknown>) => AttachmentsAnswer
   }
-  /** For a write on a milestone a milestone read holds
-      (store/milestoneRows.ts), such as ms-a when the projects part sends
-      no milestone: the read the runner opens (P.watchMilestones), its
-      query as Convex names it, and its answer before the write and, given
-      its arguments, as the server answers after it. */
+  /** For a write on a milestone, which only a milestone read holds
+      (store/milestoneRows.ts) as the projects part sends no milestone, the
+      read the runner opens (P.watchMilestones), its query as Convex names
+      it, and its answer before the write and, given its arguments, as the
+      server answers after it. */
   milestones?: {
     slot: string
     ask: MilestoneAsk
@@ -120,8 +120,8 @@ const task = (id: string, num: number, over: Partial<Row<'issues'>> = {}): Row<'
 
 /** A small workspace every recipe starts from: one organization where I am
     an admin, Pat a member, two teams, a project with two sub-projects,
-    three tasks, a link, a label, a milestone, an attachment and two
-    messages. */
+    three tasks, a link, a label, an attachment and two messages. The
+    milestone recipes bring their milestone in a milestone read. */
 export function fixture(): Snapshot {
   const person = (id: string, name: string, role: Row<'profiles'>['org_role']) => ({
     id,
@@ -215,15 +215,6 @@ export function fixture(): Snapshot {
         created_at: '2026-10-01T08:00:00.000Z',
       },
     ],
-    milestones: [
-      {
-        id: 'ms-a',
-        project_id: 'plan',
-        name: 'Launch',
-        week: '2026-11-02',
-        created_at: '2026-10-01T08:00:00.000Z',
-      },
-    ],
     labels: [
       {
         id: 'label-a',
@@ -298,7 +289,7 @@ const issue = (snap: Snapshot, id: string) => snap.issues.find((r) => r.id === i
 const profile = (snap: Snapshot, id: string) => snap.profiles.find((r) => r.id === id)!
 const str = (value: unknown) => String(value)
 
-/** Milestone ms-a as the server stores it (fixture). */
+/** Milestone ms-a of Plan, as the server stores it. */
 const MS_A: Row<'milestones'> = {
   id: 'ms-a',
   project_id: 'plan',
@@ -1742,51 +1733,13 @@ export const recipes: Recipe[] = [
       snap.teamMembers = snap.teamMembers.filter((m) => m.profile_id !== PAT)
     },
   },
-  {
-    mutation: 'projects:addMilestone',
-    mutator: 'addMilestone',
-    what: 'a new milestone',
-    pause: 'P',
-    act: (P) => P.addMilestone({ project: 'work', name: 'Beta', week: P.isoToWeek('2026-11-09') }),
-    truth: (snap, args) =>
-      snap.milestones.push({
-        id: str(args.id),
-        project_id: 'plan',
-        name: 'Beta',
-        week: '2026-11-09',
-        created_at: SERVER,
-      }),
-  },
-  {
-    mutation: 'projects:updateMilestone',
-    mutator: 'updateMilestone',
-    what: 'a renamed milestone',
-    pause: 'P',
-    act: (P) => P.updateMilestone('ms-a', { name: 'Release' }),
-    truth: (snap) => {
-      snap.milestones[0].name = 'Release'
-    },
-  },
-  {
-    mutation: 'projects:removeMilestone',
-    mutator: 'removeMilestone',
-    what: 'a removed milestone',
-    pause: 'P',
-    act: (P) => P.removeMilestone('ms-a'),
-    truth: (snap) => {
-      snap.milestones = []
-    },
-  },
-  // the same writes from a milestone read, as the projects part will send
-  // no milestone (t3/limits-milestone-part)
+  // the milestone writes, each from a milestone read, as the projects
+  // part sends no milestone
   {
     mutation: 'projects:addMilestone',
     mutator: 'addMilestone',
     what: 'a new milestone in a read that covers it',
     pause: 'P',
-    seed: (snap) => {
-      snap.milestones = []
-    },
     milestones: milestoneRange((args) =>
       args
         ? [
@@ -1802,24 +1755,12 @@ export const recipes: Recipe[] = [
         : [MS_A],
     ),
     act: (P) => P.addMilestone({ project: 'work', name: 'Beta', week: P.isoToWeek('2026-11-09') }),
-    // the projects part still sends every milestone at this stage
-    truth: (snap, args) =>
-      snap.milestones.push({
-        id: str(args.id),
-        project_id: 'plan',
-        name: 'Beta',
-        week: '2026-11-09',
-        created_at: SERVER,
-      }),
   },
   {
     mutation: 'projects:updateMilestone',
     mutator: 'updateMilestone',
     what: 'a renamed milestone only a read holds',
     pause: 'P',
-    seed: (snap) => {
-      snap.milestones = []
-    },
     milestones: milestoneRange((args) => [args ? { ...MS_A, name: 'Release' } : MS_A]),
     act: (P) => P.updateMilestone('ms-a', { name: 'Release' }),
   },
@@ -1828,9 +1769,6 @@ export const recipes: Recipe[] = [
     mutator: 'updateMilestone',
     what: 'a moved milestone only an opened read holds',
     pause: 'P',
-    seed: (snap) => {
-      snap.milestones = []
-    },
     milestones: {
       slot: 'milestone:open',
       ask: { kind: 'get', id: 'ms-a' },
@@ -1848,9 +1786,6 @@ export const recipes: Recipe[] = [
     mutator: 'removeMilestone',
     what: 'a removed milestone only a read holds',
     pause: 'P',
-    seed: (snap) => {
-      snap.milestones = []
-    },
     milestones: milestoneRange((args) => (args ? [] : [MS_A])),
     act: (P) => P.removeMilestone('ms-a'),
   },

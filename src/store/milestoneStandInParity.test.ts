@@ -17,7 +17,11 @@
  * milestoneSection.ts) answer the same rows, a range of 26 weeks answers
  * the same rows, and
  * every milestone of the organization opens the same way, `can_write`
- * included. My view's sections, read with `mine`, list the same projects
+ * included. The stand-in answers from each person's workspace with every
+ * milestone the database holds beside it, as the published whole carries
+ * the server's milestones that no part sends, and its own rules leave out
+ * what the person cannot list. My view's sections, read with `mine`, list
+ * the same projects
  * and walk the same milestones. The stand-in answers `next` null once no
  * milestone follows,
  * where the real read can answer a `next` that leads to an empty batch, so
@@ -32,7 +36,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
 import { LIMITS } from '../../convex/lib/limits'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
 import { MILESTONE_READ, MILESTONE_TOO_MANY, OVERFLOW_DAYS } from '../../convex/model/milestones'
 import {
   as,
@@ -47,6 +50,7 @@ import {
 } from '../../convex/tests/helpers.setup'
 import { NORTHSTAR_ANCHOR, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
+import type { Whole } from './guard/liveDouble.setup'
 import { type MilestonePosition, positionOf } from './milestoneRows'
 import {
   isMilestoneRead,
@@ -107,18 +111,20 @@ async function walk(
   throw new Error('the section did not end')
 }
 
-/** The stand-in's answer of `query` with `args` over `snap`. */
-const standIn = (snap: Workspace, query: 'get' | 'section' | 'between', args: MilestoneReadArgs) =>
+/** The stand-in's answer of `query` with `args` over `snap`, a published
+    whole. */
+const standIn = (snap: Whole, query: 'get' | 'section' | 'between', args: MilestoneReadArgs) =>
   milestoneStandIn(snap, query, args) as Batch
 
 /** Compares the stand-in's sections and range from `from` with the
-    reads for `caller`, over the top-level projects its workspace `snap`
+    reads for `caller`, over the top-level projects its workspace in `snap`
     shows and the ids `named` (a sub-project, archived projects, an id
-    twice), and with `all` every milestone's `get`. Answers the ids the
-    sections listed. */
+    twice), and with `all` every milestone's `get`. `snap` is the whole the
+    stand-in answers from, the caller's workspace with the database's
+    milestones. Answers the ids the sections listed. */
 async function compare(
   caller: Caller,
-  snap: Workspace,
+  snap: Whole,
   all: readonly Doc<'milestones'>[],
   from: string,
   named: readonly string[],
@@ -275,15 +281,18 @@ describe('the milestone stand-in against the reads', () => {
     let writable = 0
     for (const person of [...profiles.filter((p) => p.kind === 'person'), viewer, guest]) {
       const caller = as(t, person)
-      const snap = await workspaceOf(caller)
-      if (snap === null) throw new Error(`${person.name} holds no seat`)
+      const workspace = await workspaceOf(caller)
+      if (workspace === null) throw new Error(`${person.name} holds no seat`)
+      // the server's whole, the person's workspace with every stored
+      // milestone beside it, which no part sends
+      const snap = { ...workspace, milestones: all.map(({ _id, _creationTime, ...row }) => row) }
       const listed = await compare(caller, snap, all, from, named)
       for (const id of await compare(caller, snap, [], october, named)) listed.add(id)
       // the admin's sections reach every planted row, and none of the rows
       // no read lists
       if (person === admin) for (const id of planted) expect(listed.has(id)).toBe(true)
       for (const id of hidden) expect(listed.has(id)).toBe(false)
-      for (const m of snap.milestones) {
+      for (const m of all) {
         const got = milestoneStandIn(snap, 'get', { id: m.id }) as { can_write: boolean } | null
         if (got?.can_write) writable++
       }

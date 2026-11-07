@@ -102,7 +102,7 @@ type Project = Workspace['projects'][number]
     included, with those tasks, in the order the tasks come.
     store/milestoneStandIn.setup.ts answers a `mine` read with it. */
 export function myViewProjects(
-  workspace: Workspace,
+  workspace: Pick<Workspace, 'myProfileIds' | 'projects' | 'issues'>,
   sees?: (projectId: string) => boolean,
 ): Map<string, Task[]> {
   const mine = new Set(workspace.myProfileIds)
