@@ -705,7 +705,9 @@ function KanbanBoard({
   const visible = view.tasks.filter((it) => !P.isGroup(it))
   // the people the Board shows, named while it shows: each row's assignee
   // and reviewer in the rows' order, which the lanes' owners are, and the
-  // project lanes' leads
+  // leads of the project lanes, whose headings alone draw a lead's portrait
+  // (LaneHeader), so only while it draws them as swimlanes
+  const leadLanes = grouped && tweaks.metaViz === 'swimlanes'
   usePeople(
     React.useMemo(
       () => [
@@ -713,9 +715,11 @@ function KanbanBoard({
           { org: it.org, id: it.assignee ?? '' },
           { org: it.org, id: it.reviewer ?? '' },
         ]),
-        ...info.groups.map((g) => ({ org: g.proj.org, id: P.leadOf(g.proj.id) ?? '' })),
+        ...(leadLanes
+          ? info.groups.map((g) => ({ org: g.proj.org, id: P.leadOf(g.proj.id) ?? '' }))
+          : []),
       ],
-      [view.tasks, info.groups, P.contextVersion],
+      [view.tasks, info.groups, leadLanes, P.contextVersion],
     ),
   )
   // a message in place of the Board ends a drag over it
