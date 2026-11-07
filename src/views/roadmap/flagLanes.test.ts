@@ -269,4 +269,23 @@ describe('layoutTrackFlags', () => {
       expect(top.every((d) => d.room === 9)).toBe(true)
     }
   })
+
+  it("keeps the name of a week's only milestone after a crowded week", () => {
+    const flags = [
+      flag('a', 4, 'Alpha supplier contract review'),
+      flag('b', 4, 'Beta supplier contract review'),
+      flag('c', 4, 'Gamma check'),
+      flag('d', 5, 'Delta field test'),
+      flag('e', 6, 'Epsilon'),
+    ]
+    const places = layoutTrackFlags(flags, { ...row, weekW: 36, end: 20 * 36 })
+    expect([...places.values()].every((p) => p.lane < TRACK_FLAG_LANES)).toBe(true)
+    // the crowded week's third is nudged beside the one in the top row
+    expect(places.get('c')?.shift).toBeGreaterThan(0)
+    // must fail: a later week's only milestone nudged, its name gone
+    for (const id of ['d', 'e']) {
+      expect(places.get(id)?.shift).toBeUndefined()
+      expect(places.get(id)?.room).toBeGreaterThan(9)
+    }
+  })
 })

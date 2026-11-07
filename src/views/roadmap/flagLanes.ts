@@ -168,24 +168,39 @@ const slack = (a: Item, b: Item) =>
 const roomFor = (label: number) =>
   DIAMOND_W + Math.max(0, Math.min(FLAG_LABEL_MAX_W - DIAMOND_W, label))
 
-/** Each flag's row, side and room, for flags on a grid that starts at week
-    `w0` with `weekW` pixels a week and ends `end` pixels in. Labels open at
-    most `maxLanes` rows; only a week with more flags opens more. Rows come
-    from the saved weeks, so a flag being dragged moves alone: the others
-    keep their places and the band its height until the drop. In a band
-    that scrolls, `view` is what it shows: a dragged flag stays in the rows
-    in sight, `above` and `below` count the flags in the rows above and
-    below them, and no label runs under the scrollbar. Answers the rows used
-    too, at least one. */
-export function layoutFlags(
-  flags: Flag[],
-  grid: Grid & { maxLanes: number; view?: FlagView | null },
-): { lanes: number; places: Map<string, FlagPlace>; above: number; below: number } {
-  const sorted = flags
+/** `flags` in the order that gives them rows, by saved week, then name,
+    then id. */
+const inOrder = (flags: Flag[]) =>
+  flags
     .slice()
     .sort((a, b) => a.week - b.week || a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+
+/** Whether `sorted[i]` (inOrder) comes after the first `perWeek` flags of
+    its saved week. */
+const pastWeek = (sorted: Flag[], i: number, perWeek: number) =>
+  i >= perWeek && sorted[i - perWeek].week === sorted[i].week
+
+/** Each flag's row, side and room, for flags on a grid that starts at week
+    `w0` with `weekW` pixels a week and ends `end` pixels in. Labels open at
+    most `maxLanes` rows; only a week with more flags opens more. With
+    `perWeek`, only the first `perWeek` flags of a saved week take rows; the
+    rest get no place, unless dragged to another week, where they get one
+    as any dragged flag does when a row in sight has room for its diamond.
+    Rows come from the saved weeks, so a flag being dragged moves alone:
+    the others keep their places and the band its height until the drop.
+    In a band that scrolls, `view` is what it shows: a dragged flag stays in
+    the rows in sight, `above` and `below` count the flags in the rows above
+    and below them, and no label runs under the scrollbar. Answers the rows
+    used too, at least one. */
+export function layoutFlags(
+  flags: Flag[],
+  grid: Grid & { maxLanes: number; perWeek?: number; view?: FlagView | null },
+): { lanes: number; places: Map<string, FlagPlace>; above: number; below: number } {
+  const sorted = inOrder(flags)
+  const { perWeek } = grid
   const rows: Item[][] = []
-  for (const flag of sorted) {
+  for (const [i, flag] of sorted.entries()) {
+    if (perWeek !== undefined && pastWeek(sorted, i, perWeek)) continue
     const it = itemAt(flag, flag.week, grid)
     // the rows whose last flag is in another week, the only ones it may join
     const open = rows.flatMap((row, lane) => {
@@ -267,8 +282,8 @@ export function layoutFlags(
   }
 }
 
-/** The rows of flags a Roadmap track row holds, as many as its height
-    leaves room for beside the band's padding: two. */
+/** The rows of flags a Roadmap track row holds, two, as many as its
+    height leaves room for beside the band's padding. */
 export const TRACK_FLAG_LANES = Math.floor((ROW_H.track - BAND_PAD) / FLAG_LANE_H)
 
 /** The height of the box a track row draws its flags in, at its bottom. */
@@ -276,48 +291,51 @@ export const TRACK_FLAGS_H = flagBandHeight(TRACK_FLAG_LANES)
 
 /**
  * Each flag's row, side, room and bottom in a Roadmap track row of My view
- * (TRACK_FLAG_LANES rows, a box TRACK_FLAGS_H tall), for flags on `grid`
- * as layoutFlags places them in those rows. A flag that layoutFlags gives a
- * row past them, one of more milestones in one week than the rows hold,
- * draws in the top row instead, its diamond nudged right of its week's
- * line and kept within the week, with its name in its tooltip only, so
- * every diamond shows and takes a click. The flag of that week already in
- * the top row then shows its diamond alone too, so no name runs under the
- * nudged ones. A dragged flag keeps the place layoutFlags gave it.
+ * (TRACK_FLAG_LANES rows, a box TRACK_FLAGS_H tall), for flags on `grid`.
+ * Only the first TRACK_FLAG_LANES flags of each saved week, in layoutFlags'
+ * order, take those rows, so no third row opens and a later week's flag
+ * keeps its name. The rest of a week with more milestones than the rows
+ * hold draw in the top row, each diamond nudged right of its week's line
+ * and kept within the week, with its name in its tooltip only, so every
+ * diamond shows and takes a click. That week's flag in the top row then
+ * shows its diamond alone too, so no name runs under the nudged ones. A
+ * dragged flag keeps the place layoutFlags gives it. One of a week's rest
+ * that no row has room for at the week it is dragged to shows its diamond
+ * alone in the top row.
  */
 export function layoutTrackFlags(flags: Flag[], grid: Grid): Map<string, FlagPlace> {
   const lanes = TRACK_FLAG_LANES
   const top = lanes - 1
-  const { places } = layoutFlags(flags, { ...grid, maxLanes: lanes })
+  const bottom = laneBottom(lanes, top)
+  const sorted = inOrder(flags)
+  const { places } = layoutFlags(flags, { ...grid, maxLanes: lanes, perWeek: lanes })
+  // layoutFlags counts bottoms from the rows it used, the box from its own
   const out = new Map<string, FlagPlace>()
-  // the flags of each week past the row's rows, in the order of their rows
-  const past = new Map<number, { id: string; lane: number }[]>()
-  for (const flag of flags) {
-    const place = places.get(flag.id)
-    if (!place) continue
-    const lane = Math.min(place.lane, top)
-    out.set(flag.id, { ...place, lane, bottom: laneBottom(lanes, lane) })
-    const dragged = flag.live !== undefined && flag.live !== flag.week
-    if (place.lane > top && !dragged)
-      past.set(flag.week, [...(past.get(flag.week) ?? []), { id: flag.id, lane: place.lane }])
-  }
+  for (const [id, place] of places) out.set(id, { ...place, bottom: laneBottom(lanes, place.lane) })
+  const dragged = (flag: Flag) => flag.live !== undefined && flag.live !== flag.week
+  // the flags of each saved week past the row's rows, in their order
+  const past = new Map<number, Flag[]>()
+  for (const [i, flag] of sorted.entries())
+    if (pastWeek(sorted, i, lanes)) past.set(flag.week, [...(past.get(flag.week) ?? []), flag])
   for (const [week, extra] of past) {
-    extra.sort((a, b) => a.lane - b.lane)
     // the room right of the week's line, shared by the nudged diamonds
     const step = Math.min(DIAMOND_W + 2, Math.max(1, grid.weekW - DIAMOND_W) / extra.length)
-    for (const flag of flags) {
+    for (const flag of sorted) {
       const place = out.get(flag.id)
-      if (flag.week === week && place && places.get(flag.id)?.lane === top)
+      if (flag.week === week && !dragged(flag) && !extra.includes(flag) && place?.lane === top)
         out.set(flag.id, { ...place, room: DIAMOND_W })
     }
-    extra.forEach(({ id }, k) => {
-      out.set(id, {
-        lane: top,
-        side: 'right',
-        room: DIAMOND_W,
-        bottom: laneBottom(lanes, top),
-        shift: (k + 1) * step,
-      })
+    extra.forEach((flag, k) => {
+      if (!dragged(flag))
+        out.set(flag.id, {
+          lane: top,
+          side: 'right',
+          room: DIAMOND_W,
+          bottom,
+          shift: (k + 1) * step,
+        })
+      else if (!out.has(flag.id))
+        out.set(flag.id, { lane: top, side: 'right', room: DIAMOND_W, bottom })
     })
   }
   return out
