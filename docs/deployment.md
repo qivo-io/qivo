@@ -1726,7 +1726,7 @@ floor. An older app works against its backend, and this app works against
 any backend the floors above already hold. Returning the app alone to an
 earlier release is safe.
 
-From the release after v0.1.150, the sidebar's **All projects** and the
+From the release after v0.1.155, the sidebar's **All projects** and the
 phone's **Projects** open the project directory, which lists the person's
 projects from `projectNav.page` and `search` and a project's sub-projects
 from `projectNav.children`, which v0.1.118 (`13f4bcba`) and v0.1.126
