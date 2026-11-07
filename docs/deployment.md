@@ -1828,13 +1828,15 @@ as that function's docstring shows. The average, rounded up to a whole
 byte, goes through the same allowance, blocks and single charge as a
 sample. With no sample of the organization at all the period records no
 storage charge and a `billing.storage_unavailable` audit row, never 0. A
-subscription that ends or is revoked before the period's recorded end gets
-no storage charge for that period, since the charge is recorded near the
-end and its delivery stops at the end, where the sample at the start had
-sent it already. `billing.usageFigures` answers the basis and the average,
-which this release's app shows only for a daily period, with how many days
-were estimated. An app from v0.1.145 up to this release says "Not measured
-yet for this period." for a daily period until it reloads. Switching it on
+subscription that ends or is revoked before the period's recorded end
+stops that period's storage charge only while the charge has not been
+delivered, since its delivery stops at the end. A charge delivered before
+the subscription ended stays, as the charge of a sample at the start,
+sent minutes after the start, always did. `billing.usageFigures` answers
+the basis and the average, which this release's app shows only for a
+daily period, with how many days were estimated. An app from v0.1.145 up
+to this release says "Not measured yet for this period." for a daily
+period until it reloads. Switching it on
 also changes what the pricing page and the administration and organization
 guides say about storage, so a docs change goes out before or with it;
 qivo-internal `docs/billing-operations.md` keeps the texts.

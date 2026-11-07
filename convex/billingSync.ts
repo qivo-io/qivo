@@ -1025,9 +1025,12 @@ async function dayClosed(ctx: MutationCtx, day: string, now: number): Promise<bo
  * allows, so a period finalized after its end, as after the cron stood
  * still, records its figures and eventReady abandons its event with a
  * billing.usage_delivery_stopped audit row. So does a subscription that
- * ends or is revoked before the recorded end, which the sample at a
- * period's start had already charged. A daily period then has no storage
- * charge, as its API calls after the end have none. The finalize times
+ * ends or is revoked before the recorded end while the charge's event has
+ * not been delivered, and the daily period then has no storage charge, as
+ * its API calls after the end have none. A charge delivered before the
+ * subscription ended stays, since eventResult marks its event finished
+ * and nothing reverses it, as the charge of a sample at the period's
+ * start, sent minutes after the start, always did. The finalize times
  * itself by the row's period_end, which apply never moves; if Polar moved
  * a recorded period's end later the charge is recorded early, and earlier
  * the charge can miss eventReady's boundary.
