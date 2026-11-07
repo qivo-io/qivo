@@ -16,6 +16,8 @@ import { billingBytes, CALLS_COUNTING, STORAGE_COUNTING } from '../src/lib/billi
 import { endText } from '../src/lib/deletedItems'
 import { creatorPhrase } from '../src/lib/projectCreators'
 import {
+  ADMIN_MANAGEMENT_MARKS,
+  ADMIN_MANAGEMENT_STEP,
   AGENDA_QUERY,
   APP_BATCHES_MAX,
   ASSIGNEE_LOAD_QUERY,
@@ -414,6 +416,8 @@ describe('staging check REST contract', () => {
       "'data-project-team-role'",
       "'data-project-access-user-option': row.id",
       "'data-project-role'",
+      "{ 'data-project-access-selected-option': `user:",
+      "'data-project-access-selected-role'",
       'data-new-subproject-parent=',
       'probe="data-new-subproject-parent-search"',
       'data-new-subproject-parent-choice={row.id}',
@@ -445,9 +449,73 @@ describe('staging check REST contract', () => {
       step.indexOf(`.locator(\`[data-new-subproject-parent="\${project.id}"]\`)`),
     )
     expect(step).toContain(`eq(madeSub.parent_id, project.id, "the sub-project's parent")`)
+    // Nora's automatic entry is checked as it is, never clicked
+    expect(step).toContain(
+      `app.locator(\`[data-project-access-selected-option="user:\${run.nora.id}"]\`)`,
+    )
+    expect(step).not.toContain(`[data-project-access-user-option="\${run.nora.id}"]`)
     // its project goes in the cleanup
     expect(check).toContain(
       'if (run.projects.D) await deleteProjectInApp(c.writeToken, run.projects.D)',
+    )
+  })
+
+  it("checks an admin's management of a project she takes no part in, after the dialogs step, and deletes that project itself", () => {
+    const pages = [
+      '../src/panels/settings/ProjectLists.tsx',
+      '../src/panels/settings/ArchivedTasks.tsx',
+    ]
+      .map((file) => readFileSync(new URL(file, import.meta.url), 'utf8'))
+      .join('\n')
+    for (const mark of [
+      ADMIN_MANAGEMENT_MARKS.search,
+      ADMIN_MANAGEMENT_MARKS.row,
+      ADMIN_MANAGEMENT_MARKS.archived,
+    ])
+      expect(pages).toContain(mark)
+    expect(pages).toContain(ADMIN_MANAGEMENT_MARKS.unavailable)
+    expect(ADMIN_MANAGEMENT_STEP).toBe('ui/admin-management')
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    expect(check.indexOf('await adminManagementCheck()')).toBeGreaterThan(
+      check.indexOf('await projectDialogsCheck()'),
+    )
+    expect(check.indexOf('await adminManagementCheck()')).toBeLessThan(
+      check.indexOf('await archiveChecks()'),
+    )
+    const step = check.slice(
+      check.indexOf('async function adminManagementCheck()'),
+      check.indexOf('export const BILLING_STORAGE_STEP'),
+    )
+    // Nora takes no part in the project before anything is checked
+    expect(step.indexOf('/access/users/')).toBeLessThan(step.indexOf('eq(read.access?.read, false'))
+    // Search must hold its control row before the managed task's absence counts
+    expect(step.indexOf('(await item(control.key).count()) === 1')).toBeLessThan(
+      step.indexOf("eq(await item(managed.key).count(), 0, 'the managed task in Search')"),
+    )
+    // the step deletes its project itself, also after a failure
+    expect(step).toContain('} finally {')
+    expect(step).toContain('if (project) await deleteProjectInApp(w, project)')
+  })
+
+  it('deletes a project the store does not hold by its organization, and sweeps the projects Nora only manages', () => {
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const remove = check.slice(
+      check.indexOf('async function deleteProjectInApp('),
+      check.indexOf('async function appMessages('),
+    )
+    // the archived row is waited for only for a project the store holds
+    expect(remove.indexOf('if (held)')).toBeLessThan(
+      remove.indexOf(
+        'window.PLANNER.archivedProjects?.some((x) => x.id === id),\n      project.id',
+      ),
+    )
+    expect(remove).toContain('window.PLANNER.removeProject(id, undefined, {')
+    const sweep = check.slice(
+      check.indexOf('async function sweep('),
+      check.indexOf('// labels, which only the app deletes'),
+    )
+    expect(sweep).toContain(
+      'window.PLANNER.subProjectParents(window.PLANNER.homeOrg, search, after)',
     )
   })
   it("checks Settings › Projects and Archived projects on the pages' own marks, after a project's Settings page", () => {
