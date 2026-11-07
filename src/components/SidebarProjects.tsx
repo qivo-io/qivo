@@ -35,9 +35,11 @@
    - Rows carry the shared rules of components/projectNavRows.tsx: another
      organization's name on a second line inside the name button, so a
      foreign row's accessible name includes it, number tags for equal
-     names among the rows shown, and the open rule, which opens a project
-     as the sidebar always has, and for one the workspace does not hold
-     yet says so in a toast and moves nothing.
+     names among the rows shown, and the open rule (useNavOpen), which
+     opens a project the workspace holds as the sidebar always has, and
+     one it does not hold yet through projectNav.resolve, saying "Opening
+     <name>…" in a toast until it opens, or why it cannot. The tree
+     hiding under Settings drops the wait.
    - New sub-project… in a row's menu, and Add sub-project at a confirmed
      empty end of the expanded list, show where the person manages the
      project in the workspace (P.canManageOwnProjectAccess, its lead or an
@@ -95,8 +97,8 @@ import {
   heldText,
   navCursors,
   navTags,
-  openNavProject,
   tagged,
+  useNavOpen,
 } from './projectNavRows'
 import { Icon, MenuItem, Popover } from './qivo'
 import { Button } from './ui/button'
@@ -109,6 +111,9 @@ export type FocusRow = { id: string; n: number }
 
 /** The top-level list's identity, one list across every seat. */
 const TREE_KEY = JSON.stringify(['sidebar'])
+
+/** The key of the toast the open rule's lines share. */
+const OPEN_TOAST = 'sidebar-open'
 
 /** What a favorite's row adds for a screen reader: the group of favorite
     projects it belongs to, which no other row has. */
@@ -299,12 +304,20 @@ export function SidebarProjects({
   const pressed = useRef(false)
 
   const tags = navTags(list.rows)
-  const say = (line: string) => window.showToast?.(line, 'info')
-  const open = (row: NavProject) => openNavProject(row, actions, say)
+  // the open rule's lines, in one toast that each line replaces and an
+  // open takes away
+  const nav = useNavOpen(
+    (id) => actions.openProject(id),
+    (line) =>
+      line === null
+        ? window.dismissToast?.(OPEN_TOAST)
+        : window.showToast?.(line, 'info', { key: OPEN_TOAST }),
+  )
+  const open = (row: NavProject) => nav.open(row)
   /* A press on a row opens it. A pick in its menu, portaled out of the
      row, reaches the row too, and moves the scope as it always has, only
-     where the workspace holds the project, never saying it has not
-     loaded. */
+     where the workspace holds the project, reading nothing and saying
+     nothing for one it does not hold. */
   const pressRow = (e: MouseEvent<HTMLElement>, row: NavProject) => {
     if (e.target instanceof Node && e.currentTarget.contains(e.target)) open(row)
     else if (P.project(row.id)) actions.openProject(row.id)

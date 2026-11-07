@@ -1,12 +1,16 @@
 /* The rules the lists on the server's navigation reads (convex/projectNav.ts)
    share, so they name, tag, word and open a project alike: the shared
    project picker (components/ProjectPicker.tsx), the All projects directory
-   (components/ProjectDirectory.tsx) and the sidebar's project tree
-   (components/SidebarProjects.tsx). Of the store they read only the
-   organizations' names, the home organization and whether the workspace
-   holds a project. */
+   (components/ProjectDirectory.tsx), the sidebar's project tree
+   (components/SidebarProjects.tsx), Search's project results
+   (panels/Palette.tsx) and the project chooser
+   (components/ProjectChooser.tsx). Of the store they read the
+   organizations' names, the home organization, whether the person is an
+   organization admin and whether the workspace holds a project and is
+   current, and they open a project the workspace does not hold through
+   projectNav.resolve (openResolved, useNavOpen). */
 
-import type { ReactNode } from 'react'
+import { type ReactNode, useCallback, useEffect, useRef } from 'react'
 import type {
   NavChildren,
   NavPage,
@@ -14,7 +18,8 @@ import type {
   NavSearch,
 } from '../../convex/model/projectNavReads'
 import type { BatchAt } from '../lib/pagedList'
-import { P } from '../store/planner'
+import { useLatest } from '../lib/useLatest'
+import { P, type ProjectAsk } from '../store/planner'
 import { duplicateNameTags, type TaggableProject } from '../store/viewModels'
 
 /** The cursors of one batch, absent ones left out, as the reads take them. */
@@ -139,15 +144,146 @@ export function navTags<Row extends NavProject>(
   return duplicateNameTags([...taggable.values()])
 }
 
-/** Opens `row` as the sidebar's rows always have (actions.openProject),
-    once the workspace holds it. One the workspace does not hold yet calls
-    `say` with a sentence that says so and moves nothing, so the access
-    guard never moves the scope somewhere the person did not ask for. */
-export function openNavProject(
-  row: NavProject,
-  actions: Record<string, (id: string) => void>,
-  say: (line: string) => void,
-) {
-  if (!P.project(row.id)) return say(`${row.name} has not loaded yet. Try again in a moment.`)
-  actions.openProject(row.id)
+/** What a person with no active project to choose is told, in the All
+    projects directory and the project chooser: the lists judge an
+    organization admin by ordinary access too, so an admin is pointed to
+    the list of every project of their organization. */
+export function noNavProjectsHint(): string {
+  return P.isAdmin()
+    ? 'You have no active projects. Ask an organization admin or a project lead for access. Settings › Projects › All projects lists every project of your organization.'
+    : 'You have no active projects. Ask an organization admin or a project lead for access.'
+}
+
+/** What opening a project through projectNav.resolve came to
+    (openResolved): open, the workspace holding it; not loaded, the
+    server's ok, with the project's name, while the workspace, current,
+    did not hold it, or did not become current within NAV_OPEN_WAIT_MS;
+    unavailable, a project the person cannot open; unchecked, the
+    access_unchecked refusal with its sentence; or failed, a read that
+    failed. */
+export type NavOpening =
+  | { state: 'open'; id: string }
+  | { state: 'not_loaded'; name: string }
+  | { state: 'unavailable' }
+  | { state: 'unchecked'; message: string }
+  | { state: 'failed' }
+
+/** How long an open waits at most, after the server's ok, for a workspace
+    that is not current (P.workspaceCurrent) to hold the project. */
+export const NAV_OPEN_WAIT_MS = 10_000
+
+/** The refusal's sentence where the server gives none. */
+const UNCHECKED_TEXT = 'Qivo could not finish checking whether you can open this project.'
+
+/**
+ * Asks the server whether the person may open the project `ask` names
+ * (P.resolveProject) and calls `done` once with what that came to. On ok,
+ * a project the workspace holds opens at once. Otherwise the decision
+ * waits for the store's next repaint, as the delivery that brings the
+ * project can arrive with the answer and paint after it: it opens once the
+ * workspace holds the project, and ends not loaded once the workspace is
+ * current without it (P.workspaceCurrent), or at the latest after
+ * NAV_OPEN_WAIT_MS. Only that wait follows the store. Answers a function
+ * that stops it, after which `done` is never called.
+ */
+export function openResolved(ask: ProjectAsk, done: (opening: NavOpening) => void): () => void {
+  let live = true
+  let stopWait = () => {}
+  const finish = (opening: NavOpening) => {
+    if (!live) return
+    live = false
+    stopWait()
+    done(opening)
+  }
+  void P.resolveProject(ask).then((answer) => {
+    if (!live) return
+    if (answer === null) return finish({ state: 'failed' })
+    if (answer.state !== 'ok')
+      return finish(
+        answer.reason === 'access_unchecked'
+          ? { state: 'unchecked', message: answer.message ?? UNCHECKED_TEXT }
+          : { state: 'unavailable' },
+      )
+    const { id, name } = answer.project
+    if (P.project(id)) return finish({ state: 'open', id })
+    const look = () => {
+      if (P.project(id)) finish({ state: 'open', id })
+      else if (P.workspaceCurrent()) finish({ state: 'not_loaded', name })
+    }
+    const off = P.updates.workspace.subscribe(look)
+    // a paint owed at the answer runs on a 0 ms timer at the latest (owe)
+    const repaint = setTimeout(look, 0)
+    const bound = setTimeout(() => finish({ state: 'not_loaded', name }), NAV_OPEN_WAIT_MS)
+    stopWait = () => {
+      off()
+      clearTimeout(repaint)
+      clearTimeout(bound)
+    }
+  })
+  return () => {
+    live = false
+    stopWait()
+  }
+}
+
+/** What a list says when opening project `name` came to `opening`, or
+    null where it opened. */
+export function navOpenText(opening: NavOpening, name: string): string | null {
+  switch (opening.state) {
+    case 'open':
+      return null
+    case 'not_loaded':
+      return `${name} has not loaded yet. Try again in a moment.`
+    case 'unavailable':
+      return `You can no longer open ${name}.`
+    case 'unchecked':
+      return opening.message
+    case 'failed':
+      return `Couldn't open ${name}. Try again.`
+  }
+}
+
+/**
+ * The open rule of the lists on the navigation reads. `open(row)` opens a
+ * project the workspace holds at once with `go(id)`, reading nothing. One
+ * it does not hold says "Opening <name>…" through `say` and opens through
+ * openResolved: `go(id)` once the workspace holds it, with `say(null)`,
+ * which ends the line, else the outcome's sentence (navOpenText). A
+ * second press of the row it waits for does nothing, and a press on
+ * another row replaces the wait. `cancel()` drops it, as a caller does on
+ * a page move or a new search, and so does the caller hiding (React's
+ * Activity runs this hook's cleanup) or going, so nothing opens later in
+ * a place the person left.
+ */
+export function useNavOpen(go: (id: string) => void, say: (line: string | null) => void) {
+  const wait = useRef<{ id: string; stop: () => void } | null>(null)
+  const goNow = useLatest(go)
+  const sayNow = useLatest(say)
+  const cancel = useCallback(() => {
+    wait.current?.stop()
+    wait.current = null
+  }, [])
+  useEffect(() => cancel, [cancel])
+  const open = (row: { id: string; name: string }) => {
+    if (P.project(row.id)) {
+      cancel()
+      return goNow(row.id)
+    }
+    if (wait.current?.id === row.id) return
+    cancel()
+    sayNow(`Opening ${row.name}…`)
+    const at = {
+      id: row.id,
+      stop: openResolved(row.id, (opening) => {
+        if (wait.current !== at) return
+        wait.current = null
+        if (opening.state === 'open') {
+          sayNow(null)
+          goNow(opening.id)
+        } else sayNow(navOpenText(opening, row.name))
+      }),
+    }
+    wait.current = at
+  }
+  return { open, cancel }
 }

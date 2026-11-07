@@ -9189,6 +9189,13 @@ export type ReassignChoices = FunctionReturnType<typeof api.accessRemovals.reass
 export type ReassignChoice = Extract<ReassignChoices, { state: 'ready' }>['rows'][number]
 /** A project's settings as the server reads them (projectSettings.get). */
 export type ProjectSettingsAnswer = FunctionReturnType<typeof api.projectSettings.get>
+
+/** How P.resolveProject names a project: its id, or its organization and
+    its number there, as a project address names it. */
+export type ProjectAsk = string | { org_id: string; num: number }
+
+/** What projectNav.resolve answers (P.resolveProject). */
+export type ProjectResolved = FunctionReturnType<typeof api.projectNav.resolve>
 /** One page of Settings › Users as the server reads it (people.settingsPage). */
 export type PeoplePageAnswer = FunctionReturnType<typeof api.people.settingsPage>
 /** One person as Settings › Users shows them (people.get). */
@@ -11756,6 +11763,15 @@ export const PLANNER = {
   inboxCut: false,
   inboxCutReach: { markAllRead: false, removeRead: false },
   loaded: false,
+
+  /** Whether the newest workspace delivery brought the projects, a
+      complete one or a partial one while every task loads, and no paint
+      of the workspace is owed, so what the workspace holds is what the
+      server held then. For a reader that waits for the workspace to hold
+      a project a server read named, such as the open rule after
+      projectNav.resolve (components/projectNavRows.tsx), which stops
+      waiting when this holds and the project is still missing. */
+  workspaceCurrent: (): boolean => inboxCurrent && !owed.workspace,
 
   project: (id: string | null | undefined): ProjectVM | undefined =>
     findProject(PLANNER.projects, id),
@@ -14648,21 +14664,26 @@ export const PLANNER = {
       { org_id: project.org_id, project_id: project.id, favorite },
       'none',
     ),
-  /** Whether project `id` is open to this person for navigation
-      (projectNav.resolve), with its name, number, organization and
-      top-level project, for the project Search and Archived tasks open on.
-      The server judges it by ordinary access, as the project picker's
-      lists, so an organization admin resolves only the projects their own
-      leads, grants and team shares reach. A check the server could not
-      finish answers `unavailable` with reason access_unchecked and its
-      sentence, apart from a project the person cannot open. Null for a
-      failed read. One read, never subscribed to and never part of the
-      snapshot. */
-  resolveProject: async (
-    id: string,
-  ): Promise<FunctionReturnType<typeof api.projectNav.resolve> | null> => {
+  /** Whether the project `ask` names is open to this person for
+      navigation (projectNav.resolve), with its name, number, organization
+      and top-level project. `ask` is the project's id, which goes alone,
+      or its organization and number, as a project address names it. The
+      server judges it by ordinary access, as the project picker's lists,
+      so an organization admin resolves only the projects their own leads,
+      grants and team shares reach. A check the server could not finish
+      answers `unavailable` with reason access_unchecked and its sentence,
+      apart from a project the person cannot open. Null for a failed read.
+      One read, never subscribed to and never part of the snapshot. Its
+      callers are startup's check of the remembered project and of a
+      project address the workspace does not hold (App.tsx), the open rule
+      of the lists on the navigation reads (components/projectNavRows.tsx
+      useNavOpen), Search's Search in and Settings › Archived tasks. */
+  resolveProject: async (ask: ProjectAsk): Promise<ProjectResolved | null> => {
     try {
-      return await convex.query(api.projectNav.resolve, { project_id: id })
+      return await convex.query(
+        api.projectNav.resolve,
+        typeof ask === 'string' ? { project_id: ask } : { org_id: ask.org_id, num: ask.num },
+      )
     } catch (e) {
       console.error('[qivo] project resolve failed:', e)
       return null

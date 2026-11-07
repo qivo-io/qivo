@@ -19,9 +19,13 @@
    cover everything (lib/searchNote.ts), which it never calls no results.
    An empty search reads nothing, and nothing subscribes, so a hidden tab
    reads nothing. A task result opens by its handle or by a reference the
-   task window reads from the server (openTaskResult). Only opening a
-   project result still uses the workspace (openProjectResult), which
-   startup selection switches. */
+   task window reads from the server (openTaskResult). A project result
+   opens by the open rule of the lists on the navigation reads
+   (components/projectNavRows.tsx useNavOpen): one the workspace holds at
+   once, and one it does not hold yet through projectNav.resolve, while
+   the palette stays open saying "Opening <name>…" and closes as it opens,
+   or says why it cannot (openProjectResult). A new search drops the
+   wait, and so does the palette closing. */
 import {
   type KeyboardEvent,
   type ReactNode,
@@ -37,6 +41,7 @@ import { Label } from '@/components/ui/label'
 import { LIMITS } from '../../convex/lib/limits'
 import { searchTerms } from '../../convex/lib/searchTerms'
 import { ProjectPicker } from '../components/ProjectPicker'
+import { useNavOpen } from '../components/projectNavRows'
 import { Icon, IssueKey, ProjectName, StatusDot } from '../components/qivo'
 import { limitSentence, overLimit } from '../lib/fieldLimits'
 import { restoreFocus } from '../lib/focusVisibility'
@@ -243,6 +248,12 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
     pendingActionRef.current = action
     closeLayer()
   }
+  // a project result's open, which the notice words while it waits and
+  // where it cannot open; the palette closes as it opens
+  const nav = useNavOpen(
+    (id) => run(() => ctx.setScope(id)),
+    (line) => setNotice(line),
+  )
 
   // the scope Search in names. A project picked here that is archived or
   // hidden later answers on the server as any project the person cannot
@@ -280,6 +291,8 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
     setRunning({ seq, key: search.key, move })
     setFailed(null)
     setRefusal(null)
+    // a new search, or another page of it, drops a project's open that waits
+    nav.cancel()
     setNotice(null)
     void P.fetchSearchPage(search.text, {
       includeArchived: search.includeArchived,
@@ -344,17 +357,11 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
     } else if (shown.starts.length > 1) ask(shown.ask, shown.starts.slice(0, -1), 'previous')
   }
 
-  /* Opens project result `row` as its sidebar entry does (App navScope).
-     navScope moves an unknown project to another one, so a project the
-     workspace does not hold yet stays unopened, with a note. The project
-     navigation stages resolve such a project instead. */
-  const openProjectResult = (row: SearchProjectRow) => {
-    if (!P.project(row.id)) {
-      setNotice(`${row.name} has not loaded yet. Try again in a moment.`)
-      return
-    }
-    run(() => ctx.setScope(row.id))
-  }
+  /* Opens project result `row` as its sidebar entry does (App navScope),
+     through the lists' open rule, so a project the workspace does not
+     hold yet opens once the server said the person may and the workspace
+     holds it, never moving the scope to a project it does not hold. */
+  const openProjectResult = (row: SearchProjectRow) => nav.open(row)
 
   // the rows on screen answer an older text, scope or toggle
   const stale = typed !== (shown?.ask.key ?? null)

@@ -597,7 +597,7 @@ describe('staging check REST contract', () => {
     // the note for a project the workspace has not delivered, which the
     // step waits out, in the open rule the directory shares
     // (projectNavRows.tsx)
-    expect(page).toContain('openNavProject(row, actions, say)')
+    expect(page).toContain('nav.open(row)')
     expect(
       readFileSync(new URL('../src/components/projectNavRows.tsx', import.meta.url), 'utf8'),
     ).toContain(`${NOT_LOADED_YET}. Try again in a moment.`)
