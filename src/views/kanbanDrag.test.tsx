@@ -224,7 +224,7 @@ describe('dragging a Board card', { timeout: BOARD_TEST_TIMEOUT }, () => {
   it('takes a drop into the lane of someone the write refuses, then puts it back with the server’s reason', async () => {
     const { board, answers } = await lanesBoard()
     await act(async () => board.card('a')?.dispatchEvent(dragEvent('dragstart')))
-    // the browser does not judge Vic: the drop is offered
+    // the browser does not judge Vic, so the drop is offered
     const offer = dragEvent('dragover')
     await act(async () => laneCell('vic', 'todo')?.dispatchEvent(offer))
     expect(offer.defaultPrevented).toBe(true)

@@ -14875,10 +14875,11 @@ export const PLANNER = {
   /* --- the task owner pickers and Team sync's Mention window ---------- */
   /** One batch of the people who could become task `task`'s assignee or
       reviewer (`field`, pickers.taskOwners), read once and never
-      subscribed to: those whose name holds every word of `search`, after
-      `cursor`, an earlier answer's `next`, or from the start. A search
-      past its limit or a cursor the server no longer accepts answers
-      `refused` with the server's sentence, and a failed read null. */
+      subscribed to. It holds the people whose name holds every word of
+      `search`, after `cursor`, an earlier answer's `next`, or from the
+      start. A search past its limit or a cursor the server no longer
+      accepts answers `refused` with the server's sentence, and a failed
+      read null. */
   ownerChoices: (o: {
     task: { uuid: string; org: string }
     field: 'assignee' | 'reviewer'

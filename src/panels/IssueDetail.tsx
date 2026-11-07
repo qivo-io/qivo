@@ -2401,7 +2401,7 @@ function IssueDetail({
       )}
     </div>
   )
-  /* The Assignee and Reviewer fields: the shared owner list
+  /* The Assignee and Reviewer fields are the shared owner list
      (components/AssigneeAvatar.tsx OwnerField), which reads the people who
      can take the task from the server while it is open, each writing its
      own field. The field names its holder by id, and the open list marks

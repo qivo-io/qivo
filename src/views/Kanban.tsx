@@ -1002,7 +1002,7 @@ function KanbanBoard({
 
   /* What dropping the task into this status cell writes (boardDropPatch),
      or null when the cell refuses it. The browser does not judge the
-     person a patch names, a new assignee or reviewer: the write checks
+     person a patch names, a new assignee or reviewer. The write checks
      them, and its refusal takes the painted drop back with the server's
      sentence (P.updateIssue). The store's chain check still refuses,
      before the paint, a holder who cannot see a task above that it holds. */

@@ -150,8 +150,8 @@ const END_ITEM = '\u0000end:'
  * ChoiceEnd inside a cmdk Command (components/ui/command.tsx), with Load
  * more and Try again as cmdk items, so the arrow keys and Enter reach them
  * as they reach the rows. Each item's value is END_ITEM and its hook. `off`
- * says why the list may no longer act: both read disabled with it as
- * their title, and a press does nothing.
+ * says why the list may no longer act. Both items then read disabled with
+ * it as their title, and a press does nothing.
  */
 export function CommandChoiceEnd<A extends HeldPick, Row>({
   off,

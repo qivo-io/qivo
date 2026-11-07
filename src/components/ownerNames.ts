@@ -1,10 +1,10 @@
 /* The names of a task's holders, its assignee and reviewer, as the task
    window's Assignee and Reviewer fields, the Inbox pane's owner line and
-   an open owner list name them (useOwnerNames): the store's profile when
-   the workspace holds the person in the task's organization, else from
-   people.byIds, so a holder not loaded shows as loading, never as
-   unassigned, and only the server's answer that leaves the id out shows
-   one as gone. A module map (keepOwnerName) keeps names from earlier
+   an open owner list name them (useOwnerNames). A name is the store's
+   profile when the workspace holds the person in the task's organization,
+   else people.byIds' row, so a holder not loaded shows as loading, never
+   as unassigned, and only the server's answer that leaves the id out
+   shows one as gone. A module map (keepOwnerName) keeps names from earlier
    answers, picked rows and pickers.canOwn rows, so a hidden tab or a new
    set of ids turns no name back to loading. t3/limits-roster-cache
    replaces the map with its profile cache. While the people part sends
@@ -50,10 +50,10 @@ export type OwnerName =
   | { id: string; state: 'loading' | 'failed' | 'gone' }
 
 /**
- * The names of `ids` in organization `org`, in the order given: the
- * store's profile when it holds the person in `org`, at once; else from
- * people.byIds, read live while the caller shows, for the sorted ids the
- * store does not hold, at most BY_IDS_MAX (the rest stay loading). A
+ * The names of `ids` in organization `org`, in the order given. A person
+ * the store holds in `org` is named from its profile at once, the others
+ * from people.byIds, read live while the caller shows, for the sorted ids
+ * the store does not hold, at most BY_IDS_MAX (the rest stay loading). A
  * person an answer holds is `ok` and kept; one the answer for the current
  * ids leaves out is `gone`. A kept name stays `ok` while the current read
  * has no answer. Otherwise `loading`, or `failed` after a failed read.
