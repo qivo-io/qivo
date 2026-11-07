@@ -1175,3 +1175,101 @@ describe('the press on the Settings pages', () => {
     )
   })
 })
+
+describe("the removal window's names and a press's outcome, from the page", () => {
+  const shellText = () => document.querySelector('[data-modal-shell]')?.textContent ?? ''
+
+  it('names a person the preview and the store do not hold from the change, and says Someone without a name', async () => {
+    const { grantRemoval } = await import('../store/planner')
+    const org = P.homeOrg
+    await open(answer({ people: [] }), grantRemoval('user', work, 'gina', org, false, 'Gina Ghost'))
+    expect(shellText()).toContain('Remove Gina Ghost?')
+    await open(answer({ people: [] }), grantRemoval('user', work, 'gina', org, false))
+    expect(shellText()).toContain('Remove Someone?')
+  })
+
+  it('names a team the store does not hold from the change, for its grant and its deletion', async () => {
+    const { grantRemoval, teamRemoval } = await import('../store/planner')
+    const org = P.homeOrg
+    await open(answer(), grantRemoval('team', work, 'night', org, false, 'Night shift'))
+    expect(shellText()).toContain('Remove the Night shift team?')
+    await open(answer(), teamRemoval('night', null, org, 'Night shift'))
+    expect(shellText()).toContain('Delete the Night shift team?')
+    // without a name, and with no team the store holds, it says "team"
+    await open(answer(), grantRemoval('team', work, 'night', org, false))
+    expect(shellText()).toContain('Remove the team?')
+  })
+
+  /* A component that holds one removal press, as a Settings page does. */
+  async function pressHost() {
+    const { useAccessRemoval } = await import('./useAccessRemoval')
+    const hook: { current: ReturnType<typeof useAccessRemoval> | null } = { current: null }
+    function Host() {
+      hook.current = useAccessRemoval()
+      return <>{hook.current.window}</>
+    }
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <Host />
+        </TooltipProvider>,
+      ),
+    )
+    const removal = () => {
+      if (!hook.current) throw new Error('the host did not render')
+      return hook.current
+    }
+    return removal
+  }
+
+  it("tells a press made with a name from its check without one, and from another member's", async () => {
+    await load({ viaTeam: true })
+    const { teamRemoval } = await import('../store/planner')
+    const org = P.homeOrg
+    let answered: (value: unknown) => void = () => {}
+    preview = () => new Promise((resolve) => (answered = resolve))
+    const removal = await pressHost()
+    await act(async () => removal().press(teamRemoval('crew', 'leo', org, 'Leo Berg'), () => null))
+    expect(removal().checking(teamRemoval('crew', 'leo', org, ''))).toBe(true)
+    expect(removal().checking(teamRemoval('crew', 'ada-berg', org, ''))).toBe(false)
+    expect(removal().checking(teamRemoval('bench', 'leo', org, ''))).toBe(false)
+    await act(async () => answered({ state: 'unavailable' }))
+    await settle()
+    expect(removal().checking(teamRemoval('crew', 'leo', org, ''))).toBe(false)
+  })
+
+  it('reports a removal that went through, and not one the server refused', async () => {
+    await load({ viaTeam: true })
+    const { teamRemoval } = await import('../store/planner')
+    const org = P.homeOrg
+    const change = () => teamRemoval('crew', 'leo', org, 'Leo Berg')
+    const removal = await pressHost()
+    const removed = vi.fn()
+    // the plain removal, refused and then accepted
+    preview = async () => answer({ tasks: 0, people: [], items: [], items_total: 0 })
+    refusal = new ConvexError({ code: 'rule', message: 'the server said no' })
+    await act(async () => removal().press(change(), () => null, removed))
+    await settle()
+    expect(writes()).toEqual([['teams:removeMember', 'leave']])
+    expect(removed).not.toHaveBeenCalled()
+    refusal = null
+    await act(async () => removal().press(change(), () => null, removed))
+    await settle()
+    expect(removed).toHaveBeenCalledOnce()
+    // the access was gone already
+    preview = async () => ({ state: 'unavailable' })
+    await act(async () => removal().press(change(), () => null, removed))
+    await settle()
+    expect(removed).toHaveBeenCalledTimes(2)
+    // the window's choice, once the server accepts it
+    preview = async () => answer()
+    await act(async () => removal().press(change(), () => null, removed))
+    await settle()
+    expect(removed).toHaveBeenCalledTimes(2)
+    await click(shellButton('Keep as Viewer and remove'))
+    expect(document.querySelector('[data-modal-shell]')).toBeNull()
+    expect(removed).toHaveBeenCalledTimes(3)
+  })
+})

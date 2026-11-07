@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
+import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ApiAccessPageAnswer } from './lib/apiAccess'
+import { TODAY_WEEK, weekToISO } from './lib/dates'
+import { isPeopleSettingsRead, peopleSettingsServer } from './store/peopleSettingsStandIn.setup'
 import type { Snapshot } from './store/plannerFixture.setup'
-import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './views/boardFixture.setup'
+import { isProjectSettingsRead, projectSettingsServer } from './store/projectSettingsStandIn.setup'
+import { isTeamSettingsRead, teamSettingsServer } from './store/teamSettingsStandIn.setup'
+import { BOARD_TEST_TIMEOUT, loadBoard, spread, taskRow } from './views/boardFixture.setup'
 
 /* The people every page shows, as the profile cache names and paints them
    (store/profileCache.ts, store/planner.ts P.person): a person the
@@ -12,8 +18,11 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './views/boardFixture.set
    user" until the answer leaves them out; and the audit, one case a page:
    every portrait a page renders ([data-avatar]) is of a person an open view
    names (usePeople), so a host that forgets to name its people fails here.
-   The caller's own seats are the workspace's always, and the view filter's
-   Assignee menu, which names no one, is not open in any case. */
+   The caller's own seats are the workspace's always, and the store asks for
+   their pictures whatever the views name (store/planner.ts wantPictures),
+   so the audit leaves them out; the view filter's Assignee menu, which
+   names no one, is not open in any case. The Settings pages read their
+   answers from their stand-ins over the same snapshot (settingsReads). */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => ({
@@ -123,6 +132,8 @@ function watchNames(board: Board) {
     return real(owner, people)
   })
   return {
+    /** every person an open view names now */
+    named: () => new Set([...owners.values()].flatMap((ids) => [...ids])),
     /** the portraits on the page whose person no open view names, the
         caller's own seats left out */
     unnamed: () => {
@@ -133,6 +144,72 @@ function watchNames(board: Board) {
         .filter((id) => id && !named.has(id) && !own.has(id))
     },
   }
+}
+
+/** Answers the Settings pages' reads from their stand-ins over the board's
+    snapshot, the server's, which holds Gina and Hal, beside the reads
+    loadBoard answers, people.byIds among them; and API access's reads with
+    one token of Gina's. */
+function settingsReads(board: Board) {
+  const people = peopleSettingsServer(() => board.snapshot)
+  const teams = teamSettingsServer(() => board.snapshot)
+  const projects = projectSettingsServer(() => board.snapshot)
+  const query = network.query.getMockImplementation()
+  const watch = network.onUpdate.getMockImplementation()
+  const org = board.snapshot.orgs[0].id
+  const period = '2026-09-01T00:00:00.000Z'
+  const apiAccess: Record<string, () => unknown> = {
+    'apiAccess:summary': () => ({
+      state: 'ready',
+      periods: [{ key: period, kind: 'paid', start: period, end: period, current: true }],
+      period,
+      summary: { calls: 3, included_calls: null, plan: null, waived: false },
+    }),
+    'apiAccess:page': (): ApiAccessPageAnswer => ({
+      state: 'ready',
+      period,
+      person: null,
+      rows: [
+        {
+          table: 'mcp_tokens',
+          id: 'gina-token',
+          name: 'Gina’s token',
+          prefix: 'qvt_gina',
+          profile_id: GINA,
+          person: 'Gina Ghost',
+          agent: false,
+          removed: false,
+          access: 'write',
+          expires_at: null,
+          last_used_at: null,
+          revoked_at: null,
+          revoked_by_admin: false,
+          state: 'active',
+          calls: 3,
+        },
+      ],
+      next: null,
+      stopped: false,
+    }),
+    'apiAccess:people': () => ({ state: 'ready', rows: [], next: null, stopped: false }),
+  }
+  network.query.mockImplementation(async (ref, args) => {
+    const name = getFunctionName(ref)
+    if (name in apiAccess) return apiAccess[name]?.()
+    if (name !== 'people:byIds' && isPeopleSettingsRead(name)) return people.query(name, args)
+    if (isTeamSettingsRead(name)) return teams.query(name, args)
+    if (isProjectSettingsRead(name)) return projects.query(name, args)
+    return query?.(ref, args)
+  })
+  network.onUpdate.mockImplementation((ref, args, next, fail) => {
+    const name = getFunctionName(ref)
+    if (name !== 'people:byIds' && isPeopleSettingsRead(name))
+      return people.watch(name, args, next, fail)
+    if (isTeamSettingsRead(name)) return teams.watch(name, args, next, fail)
+    if (isProjectSettingsRead(name)) return projects.watch(name, args, next, fail)
+    return watch?.(ref, args, next, fail)
+  })
+  return { org }
 }
 
 /** Lets the store's frame-batched repaint and React run. */
@@ -332,6 +409,158 @@ describe('people the workspace does not hold, on each page', () => {
       await board.answer()
       await repaint()
       expect(portraits(GINA).every((s) => s === 'ok')).toBe(true)
+      expect(names.unnamed()).toEqual([])
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it.each([
+    ['swimlanes', true],
+    ['assignees', false],
+  ] as const)(
+    'names a sub-project’s lead on the %s Board only while its lane headings draw them',
+    async (metaViz, drawn) => {
+      const { board, names } = await load(
+        (snap) => {
+          spread(1)(snap)
+          const two = snap.projects.find((p) => p.id === 'two')
+          if (two) two.lead_id = GINA
+        },
+        { metaViz, scope: 'plan' },
+      )
+      await board.render(root)
+      await repaint()
+      expect(portraits(GINA).length > 0).toBe(drawn)
+      expect(names.named().has(GINA)).toBe(drawn)
+      expect(names.unnamed()).toEqual([])
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
+    'names the Roadmap’s people and Team utilization’s, loading and then by name',
+    async () => {
+      const dated = { start_week: weekToISO(TODAY_WEEK), end_week: weekToISO(TODAY_WEEK + 1) }
+      const { board, names } = await load((snap) => {
+        snap.issues.push({ ...taskRow(snap, 'g1', 'todo', 1), assignee_id: GINA, ...dated })
+        snap.issues.push({ ...taskRow(snap, 'h1', 'todo', 2), assignee_id: HAL, ...dated })
+      }, {})
+      const { Roadmap } = await import('./views/Roadmap')
+      await board.renderView(root, (info) => (
+        <Roadmap
+          info={info}
+          filters={{
+            mine: false,
+            assignees: [],
+            priority: null,
+            stale: false,
+            focus: false,
+            search: '',
+          }}
+          actions={new Proxy({}, { get: () => () => {} }) as never}
+          filterControls={() => null}
+          focusPlan={null}
+        />
+      ))
+      await repaint()
+      // Team utilization lists both, loading, never leaving them out
+      const team = () =>
+        [...document.querySelectorAll<HTMLElement>('[data-res-row]')].map(
+          (row) => row.dataset.resRow,
+        )
+      expect(team()).toEqual(expect.arrayContaining([GINA, HAL]))
+      expect(portraits(GINA).length).toBeGreaterThan(0)
+      expect(names.unnamed()).toEqual([])
+      board.server.people.hold = false
+      await board.answer()
+      await repaint()
+      expect(portraits(GINA).every((s) => s === 'ok')).toBe(true)
+      expect(names.unnamed()).toEqual([])
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
+    'names Settings › Users’ people',
+    async () => {
+      const { board, names } = await load(() => {}, {})
+      settingsReads(board)
+      const { OrgUsersPage } = await import('./panels/settings/UsersSettings')
+      await board.renderView(root, () => <OrgUsersPage setPage={vi.fn()} />)
+      await repaint()
+      expect(portraits(GINA).length).toBeGreaterThan(0)
+      expect(portraits(HAL).length).toBeGreaterThan(0)
+      expect(names.unnamed()).toEqual([])
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
+    'names a team page’s members, and the person Add member shows once its picker closes',
+    async () => {
+      const { board, names } = await load((snap) => {
+        snap.teams.push({
+          id: 'crew',
+          org_id: snap.orgs[0].id,
+          name: 'Crew',
+          track_delay_default: false,
+          created_at: '2026-09-14T08:00:00.000Z',
+        })
+        snap.teamMembers.push({ team_id: 'crew', profile_id: GINA, is_leader: true })
+      }, {})
+      settingsReads(board)
+      const { TeamPage } = await import('./panels/settings/TeamSettings')
+      await board.renderView(root, () => <TeamPage teamId="crew" setPage={vi.fn()} />)
+      await repaint()
+      expect(portraits(GINA).length).toBeGreaterThan(0)
+      expect(names.unnamed()).toEqual([])
+      // Hal, picked in Add member, stays on its button after the picker closes
+      const click = async (selector: string) => {
+        const el = document.querySelector<HTMLElement>(selector)
+        if (!el) throw new Error(`no ${selector}`)
+        await act(async () => el.click())
+        await repaint()
+      }
+      await click('[data-team-member-picker]')
+      await click(`[data-team-member-choice="${HAL}"]`)
+      expect(document.querySelector('[data-team-member-choices]')).toBeNull()
+      expect(
+        document.querySelector(`[data-team-member-picker] [data-avatar="${HAL}"]`),
+      ).not.toBeNull()
+      expect(names.unnamed()).toEqual([])
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
+    'names a project’s Settings page’s people',
+    async () => {
+      const { board, names } = await load((snap) => {
+        snap.access.push(
+          { project_id: snap.projects[0].id, profile_id: GINA, level: 'user' },
+          { project_id: snap.projects[0].id, profile_id: HAL, level: 'viewer' },
+        )
+      }, {})
+      settingsReads(board)
+      const { ProjectPage } = await import('./panels/settings/ProjectSettings')
+      const project = board.snapshot.projects[0].id
+      await board.renderView(root, () => <ProjectPage projectId={project} setPage={vi.fn()} />)
+      await repaint()
+      expect(portraits(GINA).length).toBeGreaterThan(0)
+      expect(names.unnamed()).toEqual([])
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
+    'names API access’s credentials’ people',
+    async () => {
+      const { board, names } = await load(() => {}, {})
+      settingsReads(board)
+      const { OrgApiAccessPage } = await import('./panels/settings/ApiAccessSettings')
+      await board.renderView(root, () => <OrgApiAccessPage />)
+      await repaint()
+      expect(portraits(GINA).length).toBeGreaterThan(0)
       expect(names.unnamed()).toEqual([])
     },
     BOARD_TEST_TIMEOUT,

@@ -1734,6 +1734,57 @@ export const recipes: Recipe[] = [
       snap.teamMembers = snap.teamMembers.filter((m) => m.profile_id !== PAT)
     },
   },
+  {
+    mutation: 'teams:removeMember',
+    mutator: 'sendRemoval',
+    what: 'a member leaving a team from its page, which names the organization and the member',
+    pause: 'P',
+    act: (P) =>
+      P.removeAccess(
+        { kind: 'teamMember', teamId: 'team-a', userId: PAT, orgId: ORG, label: 'Pat as shown' },
+        { keep: true },
+      ),
+    truth: (snap) => {
+      snap.teamMembers = snap.teamMembers.filter((m) => m.profile_id !== PAT)
+    },
+  },
+  {
+    mutation: 'projects:addMilestone',
+    mutator: 'addMilestone',
+    what: 'a new milestone',
+    pause: 'P',
+    act: (P) => P.addMilestone({ project: 'work', name: 'Beta', week: P.isoToWeek('2026-11-09') }),
+    truth: (snap, args) =>
+      snap.milestones.push({
+        id: str(args.id),
+        project_id: 'plan',
+        name: 'Beta',
+        week: '2026-11-09',
+        created_at: SERVER,
+      }),
+  },
+  {
+    mutation: 'projects:updateMilestone',
+    mutator: 'updateMilestone',
+    what: 'a renamed milestone',
+    pause: 'P',
+    act: (P) => P.updateMilestone('ms-a', { name: 'Release' }),
+    truth: (snap) => {
+      snap.milestones[0].name = 'Release'
+    },
+  },
+  {
+    mutation: 'projects:removeMilestone',
+    mutator: 'removeMilestone',
+    what: 'a removed milestone',
+    pause: 'P',
+    act: (P) => P.removeMilestone('ms-a'),
+    truth: (snap) => {
+      snap.milestones = []
+    },
+  },
+  // the same writes from a milestone read, as the projects part will send
+  // no milestone (t3/limits-milestone-part)
   // the milestone writes, each from a milestone read, as the projects
   // part sends no milestone
   {
@@ -1894,6 +1945,14 @@ export const recipes: Recipe[] = [
     },
   },
   {
+    mutation: 'teams:update',
+    mutator: 'updateTeam',
+    what: 'a renamed team the workspace does not hold, which paints nothing',
+    pause: 'P',
+    act: (P) =>
+      P.updateTeam('team-far', { name: 'Far crew' }, {}, { orgId: ORG, name: 'Far team' }),
+  },
+  {
     mutation: 'teams:addMember',
     mutator: 'addTeamMember',
     what: 'a new team member',
@@ -1918,6 +1977,20 @@ export const recipes: Recipe[] = [
     what: 'a deleted team',
     pause: 'P',
     act: (P) => P.removeAccess({ kind: 'deleteTeam', teamId: 'team-b' }, { keep: true }),
+    truth: (snap) => {
+      snap.teams = [snap.teams[0]]
+    },
+  },
+  {
+    mutation: 'teams:deleteDeep',
+    mutator: 'sendRemoval',
+    what: 'a deleted team from Settings › Teams, which names its organization and the team',
+    pause: 'P',
+    act: (P) =>
+      P.removeAccess(
+        { kind: 'deleteTeam', teamId: 'team-b', orgId: ORG, label: 'Team B as shown' },
+        { keep: true },
+      ),
     truth: (snap) => {
       snap.teams = [snap.teams[0]]
     },
@@ -1988,6 +2061,27 @@ export const recipes: Recipe[] = [
     },
   },
   {
+    mutation: 'profiles:update',
+    mutator: 'updateUser',
+    what: 'a renamed person the workspace does not hold, which paints nothing',
+    pause: 'P',
+    act: (P) =>
+      P.updateUser(
+        'person-far',
+        { name: 'Far Person' },
+        {},
+        {
+          orgId: ORG,
+          name: 'Far',
+          isAgent: false,
+          pending: false,
+          orgRole: 'user',
+          active: true,
+          plannableHours: null,
+        },
+      ),
+  },
+  {
     mutation: 'profiles:remove',
     mutator: 'removeUser',
     what: 'a removed person',
@@ -2026,6 +2120,19 @@ export const recipes: Recipe[] = [
     truth: (snap) => Object.assign(snap.labels[0], { name: 'Defect', name_lower: 'defect' }),
   },
   {
+    mutation: 'labels:update',
+    mutator: 'updateLabel',
+    what: 'a renamed label the workspace does not hold, which paints nothing',
+    pause: 'P',
+    act: (P) =>
+      P.updateLabel(
+        'label-far',
+        { name: 'Far defect' },
+        {},
+        { orgId: ORG, name: 'Far label', color: '#335577' },
+      ),
+  },
+  {
     mutation: 'labels:remove',
     mutator: 'removeLabel',
     what: 'a removed label',
@@ -2035,6 +2142,13 @@ export const recipes: Recipe[] = [
       snap.labels = []
       snap.issueLabels = []
     },
+  },
+  {
+    mutation: 'labels:remove',
+    mutator: 'removeLabel',
+    what: 'a removed label the workspace does not hold, which paints nothing',
+    pause: 'P',
+    act: (P) => P.removeLabel('label-far', { orgId: ORG, name: 'Far label', color: '#335577' }),
   },
   {
     mutation: 'labels:toggle',
