@@ -54,6 +54,8 @@ Review**, where they change the reviewer. Dropping into the assignee's own
 In Review cell clears the reviewer. That column's **Unassigned** lane
 rejects a task that has an assignee. Any new assignee or reviewer must be
 eligible for the task's project ([Task ownership](./how-work-is-organized.md#the-task)).
+A drop that names someone who can't take the task moves the card, then
+Qivo puts it back and says why.
 
 ## Cards
 
@@ -77,9 +79,12 @@ not match the filters. A group with no matching descendants has no card.
 
 Hover a portrait to read the person's name. With editing access, click the
 portrait or unassigned indicator to choose an eligible person or agent, or
-**Unassigned**. This also works for parent tasks. While a task is In Review
-with a reviewer, its portrait picker changes the reviewer and offers
-**No reviewer** to clear it.
+**Unassigned**. The list shows the people who can take the task, 25 at a
+time with a search and **Load more**, after **Unassigned** and the current
+owner, as the task window's **Assignee** does
+([The details column](./the-task-window.md#the-details-column)). This also
+works for parent tasks. While a task is In Review with a reviewer, its
+portrait picker changes the reviewer and offers **No reviewer** to clear it.
 
 Paused tasks show an amber mark. Delay banners identify slipping or delayed
 tasks ([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). A

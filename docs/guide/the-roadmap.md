@@ -87,7 +87,10 @@ With edit access, drag a bar to move it or drag either edge to resize it.
 Release to save. Click a bar or task name to open its details. Read-only bars
 and the bars of tasks with subtasks open but cannot move or resize.
 
-Click the portrait beside a task to change or clear its assignee. For a task
+Click the portrait beside a task to change or clear its assignee. Its list
+shows the people who can take the task, 25 at a time with a search and
+**Load more**, as the task window's **Assignee** does
+([The details column](./the-task-window.md#the-details-column)). For a task
 **In Review** with a reviewer, the portrait and picker show the reviewer instead.
 
 Bars fill the whole planned period; their length does not show completion.

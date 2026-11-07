@@ -151,8 +151,19 @@ with the hint **Dates come from subtasks**. Its button reads
 **Show on roadmap**.
 
 Read-only access shows the values but disables editing ([Project access](./who-sees-what-the-access-model.md)).
-**Reviewer** uses the same eligible people as Assignee; choose **No reviewer**
-to clear it.
+**Assignee** and **Reviewer** open a list of the people who can take the
+task, 25 at a time with **Load more**, after **Unassigned** or
+**No reviewer** and the current assignee or reviewer, checked. Choose
+**Unassigned** or **No reviewer** to clear the field. The search finds a
+person when every word you type is in their name, in any order, ignoring
+case and accents. After 500 people the list asks you to search. A current
+assignee or reviewer who can no longer take the task stays named and
+checked, with a note, but can't be chosen again. The list says when people
+can't be listed yet, when Qivo couldn't check who can take the task, and
+when it shows only the people found so far, and offers **Try again** after a
+failed load. On a task with subtasks, **Reviewer** explains why it lists no
+one. Qivo checks the person again when it saves your choice, and says why if
+it refuses.
 
 Use the buttons beside **Labels**, **Parent**, **Subtasks** and **Linked tasks**
 to add or change them. Relationship pickers can create a task if no existing
