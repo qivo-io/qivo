@@ -22,7 +22,8 @@
      one arrives. A failed chunk marks its ids `failed`, except those that
      hold a face or a name, which stay as they are.
    - A picker's rows and picks are taken as names (`take`), which name a
-     person at once until a face arrives and never replace one.
+     person at once until a face arrives and never replace one, nor a
+     current answer that leaves the person out.
    - `look` answers a person from the cache without marking anything, so a
      render, also one of a hidden kept page, changes no order.
    - "Shown" means named by an open view. A released entry keeps the moment
@@ -325,10 +326,14 @@ export function createProfileCache(deps: ProfileCacheDeps) {
     /** Whether an open view names person `id`. */
     isNamed: (id: string) => namedCount.has(id),
     /** Keeps the person rows of a picker's answer or pick in organization
-        `org` as names, which never replace a face. */
+        `org` as names, which never replace a face, and never a current
+        answer of `org` that leaves the person out: a picker's row may be
+        older than that answer. */
     take(org: string, rows: readonly PersonRow[]) {
       for (const row of rows) {
         if (deps.held(org, row.id)) continue
+        const chunk = chunkOf.get(row.id)
+        if (chunk?.org === org && chunk.result instanceof Set && !chunk.result.has(row.id)) continue
         const was = entries.get(row.id)
         if (was?.face) continue
         if (was?.name && JSON.stringify(was.name) === JSON.stringify(row)) continue

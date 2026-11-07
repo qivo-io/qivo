@@ -138,6 +138,23 @@ describe('usePeople', () => {
     expect(text()).toEqual(['zed:gone', 'held:Hal Held', 'amy:Amy Archer'])
   })
 
+  it("keeps a person gone while the current answer leaves them out, whatever a picker's older row says", async () => {
+    const org = snap.orgs[0].id
+    await show(['zed'])
+    await act(async () => open()[0].next({ rows: [] }))
+    await frame()
+    expect(text()).toEqual(['zed:gone'])
+    // a picker still holds Zed's row from before, and takes it now
+    store.P.takePeople(org, [row('zed', 'Zed From Picker')])
+    await frame()
+    expect(store.P.person('zed', org)?.state).toBe('gone')
+    expect(text()).toEqual(['zed:gone'])
+    // the next answer that holds Zed names them
+    await act(async () => open()[0].next({ rows: [row('zed', 'Zed Zane')] }))
+    await frame()
+    expect(text()).toEqual(['zed:Zed Zane'])
+  })
+
   it('says a failed read failed, never gone', async () => {
     await show(['zed'])
     vi.spyOn(console, 'error').mockImplementation(() => {})
