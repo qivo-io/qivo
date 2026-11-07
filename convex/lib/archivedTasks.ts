@@ -841,9 +841,9 @@ export const ARCHIVED_PAGE_ROWS = 25
  * sub-projects or on the top-level projects above them. A task
  * row without its text is at most lib/limits.ts TASK_ROW_MAX_BYTES, so 200
  * heads read about 400 KB of a page's bytes (ARCHIVE_PAGE.bytes), and the
- * 267 of 200 sub-projects found through their 67 top-level projects about
- * 530 KB. With the
- * copy of its text a rollback to the second release writes, at the
+ * 267 heads of 200 sub-projects found through their 67 top-level projects,
+ * merged with those top-level projects, about 530 KB. With the copy of its
+ * text a rollback to the second release writes, at the
  * description cap in a three-byte script, a row is about 61 KB, and the
  * heads of about 130 such projects fill those bytes
  * (convex/tests/archived.test.ts reaches that stop with ordinary texts and
