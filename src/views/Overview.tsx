@@ -25,6 +25,7 @@ import {
   type MouseEvent,
   memo,
   type ReactNode,
+  type Ref,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -181,6 +182,7 @@ function OvStat({
   valueClassName,
   className,
   figure,
+  rootRef,
   children,
 }: {
   label: string
@@ -190,10 +192,15 @@ function OvStat({
   className?: string
   /** the figure the cell shows (data-ov-figure), with its state */
   figure?: { name: string; shown: Shown<unknown> }
+  /** the cell, which then takes focus from a script, for a control in it
+      that goes with its press */
+  rootRef?: Ref<HTMLDivElement>
   children?: ReactNode
 }) {
   return (
     <div
+      ref={rootRef}
+      tabIndex={rootRef ? -1 : undefined}
       className={cn('min-w-0 break-words', className)}
       {...(figure ? figureAttrs(figure.name, figure.shown) : {})}
     >
@@ -730,35 +737,57 @@ function OvList({
 /** The Next milestone cell (data-ov-figure="next-milestone"): the
     milestone's name with its week and date where it is known, the page's
     placeholder while it loads, a dash with "None scheduled" where Upcoming
-    is whole and empty, and a dash with "Unavailable" where its read failed,
-    was refused, names too many projects or stopped before a row, which the
-    Milestones section says why. A name or "None scheduled" from an answer
-    kept from before is marked refreshing, as the page's other figures
-    are. */
+    is whole and empty, and a dash with "Unavailable" where Upcoming's read
+    failed, a read was refused, names too many projects or stopped before a
+    row, which the Milestones section says why. Where the one-row read of
+    an Upcoming that moved on failed, which the section does not say, the
+    figure is marked failed (`error`, as the page's other figures are) and
+    the cell says so with a Retry (data-ov-figure-retry) that asks it again;
+    where the Retry leaves focus nowhere as it goes, the cell takes it. A
+    name or "None scheduled" from an answer kept from before is marked
+    refreshing, as the page's other figures are. */
 function OvNextMilestone({ next }: { next: NextMilestone }) {
+  const root = useRef<HTMLDivElement>(null)
+  useFocusWhenGone(next.state === 'failed', () => root.current)
   const shown: Shown<unknown> =
     next.state === 'loading'
       ? { state: 'loading' }
-      : next.state === 'unavailable'
-        ? { state: 'unavailable', reason: 'scope' }
-        : next.state === 'none'
-          ? { state: next.refreshing ? 'refreshing' : 'ok', value: null }
-          : { state: next.state, value: null }
+      : next.state === 'failed'
+        ? { state: 'error' }
+        : next.state === 'unavailable'
+          ? { state: 'unavailable', reason: 'scope' }
+          : next.state === 'none'
+            ? { state: next.refreshing ? 'refreshing' : 'ok', value: null }
+            : { state: next.state, value: null }
   const row = 'row' in next ? next.row : null
   return (
     <OvStat
       label="Next milestone"
       figure={{ name: 'next-milestone', shown }}
+      rootRef={root}
       value={row ? row.name : placeholder(shown)}
       valueClassName="font-sans text-md"
       sub={
-        row
-          ? `${P.weekNumLabel(row.week)}, ${P.fmtDate(P.weekToDate(row.week))}`
-          : next.state === 'none'
-            ? 'None scheduled'
-            : next.state === 'unavailable'
-              ? 'Unavailable'
-              : undefined
+        row ? (
+          `${P.weekNumLabel(row.week)}, ${P.fmtDate(P.weekToDate(row.week))}`
+        ) : next.state === 'none' ? (
+          'None scheduled'
+        ) : next.state === 'unavailable' ? (
+          'Unavailable'
+        ) : next.state === 'failed' ? (
+          <span className="flex flex-wrap items-center gap-2">
+            {"Couldn't load"}
+            <Button
+              type="button"
+              variant="ghost"
+              data-ov-figure-retry
+              className="h-control-sm text-sm"
+              onClick={next.retry}
+            >
+              Retry
+            </Button>
+          </span>
+        ) : undefined
       }
     />
   )

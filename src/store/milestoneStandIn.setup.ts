@@ -55,16 +55,19 @@ type ForcedBatch = 'loading' | 'error' | 'refused' | 'unchecked' | 'stopped'
     of `firstBatch` and none of them, the app's first batches (10 and 25
     unless set, src/lib/milestoneSection.ts OVERVIEW_MILESTONES and
     MILESTONE_SECTION), so a first ask of either size is not one and a
-    one-row read is not either. `mine` forces a section read with `mine`
-    alone, over every other state: its refusal for a read too large
-    (`refused`) or for too many projects (`too_many`). `canWrite` replaces
-    `get`'s `can_write`. */
+    one-row read is not either. `next` forces the Overview's one-row read
+    of the next milestone, a section ask of one row from the start, over
+    its side's state, so it fails while Upcoming answers. `mine` forces a
+    section read with `mine` alone, over every other state: its refusal
+    for a read too large (`refused`) or for too many projects (`too_many`).
+    `canWrite` replaces `get`'s `can_write`. */
 export type ForcedMilestones = {
   get?: 'loading' | 'error' | 'unavailable' | 'refused' | 'unchecked'
   section?: ForcedBatch
   upcoming?: ForcedBatch
   past?: ForcedBatch
   more?: ForcedBatch
+  next?: ForcedBatch
   firstBatch?: number | readonly number[]
   mine?: 'refused' | 'too_many'
   between?: ForcedBatch
@@ -76,7 +79,8 @@ export type ForcedMilestones = {
 const FIRST_BATCHES: readonly number[] = [10, 25]
 
 /** The state `force` holds the read `query` with `args` in, if any: a
-    section ask's own one first (ForcedMilestones `more`, then its side). */
+    section ask's own one first (ForcedMilestones `more` or `next`, then its
+    side). */
 function forcedOf(
   query: 'get' | 'section' | 'between',
   args: MilestoneReadArgs,
@@ -91,8 +95,10 @@ function forcedOf(
         : force.firstBatch
   const limit = args.limit ?? 0
   const grows = args.after !== undefined || (limit > Math.min(...firsts) && !firsts.includes(limit))
+  const oneRow = args.after === undefined && limit === 1
   return (
     (grows ? force.more : undefined) ??
+    (oneRow ? force.next : undefined) ??
     (args.side === 'past' ? force.past : force.upcoming) ??
     force.section
   )

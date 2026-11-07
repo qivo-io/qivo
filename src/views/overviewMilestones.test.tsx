@@ -10,8 +10,9 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
    views/overview/OverviewMilestones.tsx): Upcoming 10 at a time with Load
    more and the move on at a lowered cap, a collapsed Past that reads
    nothing until it opens, 25 at a time with its search on the server, the
-   Next milestone cell in each state, a kept answer's included, the empty
-   lines and My view's own sentences, My view's `mine` read, All projects
+   Next milestone cell in each state, a kept answer's included, the Retry
+   of its one-row read, the empty lines and My view's own sentences, My
+   view's `mine` read, All projects
    reading none, the note pages, the section staying under a note while
    Retry and Show from the start read again, another person's rename, move
    and delete arriving while the page shows, a hidden tab, a kept page, a
@@ -409,6 +410,52 @@ describe('the Next milestone cell and the section states', { timeout: BOARD_TEST
     expect(cell()?.dataset.ovFigureState).toBe('refreshing')
     expect(cell()?.textContent).toContain('Step 1')
     board.server.milestones.force = {}
+  })
+
+  it('offers a Retry of the one-row read that fails while Upcoming answers, which reads it again', async () => {
+    const loaded = await overview(plan({ up: 7 }))
+    const { board, section, store } = loaded
+    Object.assign(section.OVERVIEW_MILESTONES.upcoming, { batch: 2, rows: 4 })
+    /** The one-row reads of the next milestone asked so far. */
+    const oneRow = () => sectionAsks(board).filter((a) => a.limit === 1 && a.after === undefined)
+    try {
+      await act(async () => root.unmount())
+      root = createRoot(container)
+      await loaded.render()
+      board.server.milestones.force = { next: 'error' }
+      await click(sectionOf('upcoming')?.querySelector('[data-milestone-more]'))
+      await click(sectionOf('upcoming')?.querySelector('[data-milestone-more]'))
+      // Upcoming moved on and answers, and the one-row read failed, which
+      // Upcoming's note does not say
+      expect(rowsOf('upcoming')).toEqual(['u3', 'u4', 'u5', 'u6'])
+      expect(stateOf('upcoming')).toBe('ok')
+      expect(store.P.milestoneRead(store.OVERVIEW_MILESTONE_SLOTS.next).state).toBe('failed')
+      expect(cell()?.dataset.ovFigureState).toBe('error')
+      expect(cell()?.textContent).toContain("Couldn't load")
+      const retry = cell()?.querySelector<HTMLElement>('[data-ov-figure-retry]')
+      expect(retry?.textContent).toBe('Retry')
+      // Retry asks the one-row read again, and its row shows
+      board.server.milestones.force = {}
+      const asked = oneRow().length
+      retry?.focus()
+      await click(retry)
+      expect(oneRow()).toHaveLength(asked + 1)
+      expect(cell()?.dataset.ovFigureState).toBe('ok')
+      expect(cell()?.textContent).toContain('Step 1')
+      expect(cell()?.querySelector('[data-ov-figure-retry]')).toBeNull()
+      // the focus the Retry left as it went is on the cell
+      expect(document.activeElement).toBe(cell())
+      // a refusal stays unavailable, with no Retry
+      board.server.milestones.force = { next: 'refused' }
+      await board.answer()
+      expect(store.P.milestoneRead(store.OVERVIEW_MILESTONE_SLOTS.next).state).toBe('refused')
+      expect(cell()?.dataset.ovFigureState).toBe('unavailable')
+      expect(cell()?.textContent).toContain('Unavailable')
+      expect(cell()?.querySelector('[data-ov-figure-retry]')).toBeNull()
+      board.server.milestones.force = {}
+    } finally {
+      Object.assign(section.OVERVIEW_MILESTONES.upcoming, { batch: 10, rows: 100 })
+    }
   })
 
   it('shows a past milestone project as having history, and Retry asks again', async () => {

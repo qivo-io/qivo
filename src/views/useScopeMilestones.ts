@@ -15,7 +15,8 @@
    The Overview also shows the next milestone, Upcoming's first row while
    the section has not moved on, else a one-row read of the same base on a
    slot of its own while it has, so the figure never comes from a row the
-   browser picked out of a longer list. */
+   browser picked out of a longer list. That read's failure offers a Retry
+   of its own, as Upcoming's note says nothing of it. */
 
 import { useState } from 'react'
 import { weekToISO } from '@/lib/dates'
@@ -49,14 +50,17 @@ export function scopeMilestoneBase(
 /** The next milestone as the Overview's cell shows it: on its way, given
     (kept from before and refreshing, or current), none scheduled where
     Upcoming is whole and empty (`refreshing` where that answer is kept
-    from before), or unavailable where the read failed, was refused, names
-    too many projects or stopped before a row, which the section below
-    says why. */
+    from before), unavailable where Upcoming's read failed, a read was
+    refused, names too many projects or stopped before a row, which the
+    section below says why, or failed where the one-row read of a section
+    that moved on failed, which the section does not say, with `retry`,
+    which asks it again. */
 export type NextMilestone =
   | { state: 'loading' }
   | { state: 'ok' | 'refreshing'; row: MilestoneVM }
   | { state: 'none'; refreshing: boolean }
   | { state: 'unavailable' }
+  | { state: 'failed'; retry: () => void }
 
 /** The slots of a page's milestone sections (store/planner.ts
     OVERVIEW_MILESTONE_SLOTS, AGENDA_MILESTONE_SLOTS), with the next
@@ -169,12 +173,14 @@ export function useScopeMilestones(
   const showPast = base !== null && (pastOpen || holds?.past === true)
   const stands = holds?.stands === true
 
-  // the next milestone's one-row read, only while Upcoming moved on
+  // the next milestone's one-row read, only while Upcoming moved on, and
+  // its attempt, which its Retry raises
   const nextAsk =
     slots.next && upcomingBase && view.dropped
       ? sectionAsk(upcomingBase, '', { n: 0, limit: 1, attempt: 0 })
       : null
-  useMilestoneSlot(slots.next ?? null, nextAsk, active)
+  const [nextAttempt, setNextAttempt] = useState(0)
+  useMilestoneSlot(slots.next ?? null, nextAsk, active, nextAttempt)
   let next: NextMilestone
   if (!view.dropped) next = nextFromUpcoming(view)
   else {
@@ -183,13 +189,15 @@ export function useScopeMilestones(
     next =
       !read || read.state === 'loading'
         ? { state: 'loading' }
-        : read.state !== 'ok'
-          ? { state: 'unavailable' }
-          : row
-            ? { state: read.current ? 'ok' : 'refreshing', row }
-            : read.answer.next === null && read.answer.stopped === null
-              ? { state: 'none', refreshing: !read.current }
-              : { state: 'unavailable' }
+        : read.state === 'failed'
+          ? { state: 'failed', retry: () => setNextAttempt((n) => n + 1) }
+          : read.state !== 'ok'
+            ? { state: 'unavailable' }
+            : row
+              ? { state: read.current ? 'ok' : 'refreshing', row }
+              : read.answer.next === null && read.answer.stopped === null
+                ? { state: 'none', refreshing: !read.current }
+                : { state: 'unavailable' }
   }
   const nextId = !view.dropped && 'row' in next ? next.row.id : null
   return {

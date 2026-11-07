@@ -106,7 +106,9 @@ milestones; open a project to see its milestones.
 **Next milestone** is the first upcoming milestone, highlighted in the
 list. While it loads it shows "…", "None scheduled" where no upcoming
 milestone exists, and "Unavailable" where Qivo cannot tell, as when loading
-fails. A section says when it is loading, and when Qivo could check only
+fails. Once **Load more** has moved past the first milestones, Next
+milestone loads on its own, and if that fails, it says "Couldn't load" with
+**Retry**. A section says when it is loading, and when Qivo could check only
 part of the list, in which case **Load more** continues. If loading fails,
 it says so with **Retry**, and if Qivo refuses to read the milestones, it
 gives the reason. In My view, where your own work spans more than 200
