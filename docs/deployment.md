@@ -934,7 +934,9 @@ favorites rows below. `projectNav.page` and `projectNav.children` answer
 and `projectNav.resolve` answers without them. The reads skip the
 favorites a rollback past the favorites release leaves, by the reader rule
 the favorites paragraph below describes, so such a row never shows and
-keeps its project, where the seat sees it, in the list of the rest.
+keeps its project, where the seat sees it, in the list of the rest. From
+the release after v0.1.158 the sidebar's project tree calls
+`projectNav.page` and `children` too, as its paragraph below says.
 
 The Roadmap's server reads, `tasks.roadmap` and
 `tasks.roadmapDependencies`, first ship in the release after v0.1.119
@@ -1918,6 +1920,20 @@ cannot list MCP access against this backend. It also removes
 on Users. Both apps are on the Instant Rollback list above. The release adds
 the index `mcp_tokens.by_profile_created`, which Convex builds at deploy
 with no backfill. There is no other schema change and no release step.
+
+From the release after v0.1.158, the sidebar's project tree lists the
+person's top-level projects from `projectNav.page`, their favorites first,
+25 at a time up to 200, and the scope's sub-projects from
+`projectNav.children`, which v0.1.118 (`13f4bcba`) first shipped, instead
+of the workspace's projects. The reads judge every project by ordinary
+access, so an organization admin's tree holds the projects they take part
+in. Against a backend before v0.1.118 the tree says it couldn't load your
+projects, also in a tab that was open when the backend went back, until the
+backend rolls forward. The floors above already hold v0.1.118, so the
+release sets no new floor. Returning the app alone to an earlier release is
+safe, because that app's tree lists the workspace's projects. The release
+changes no server function, and has no schema change, no backfill and no
+release step.
 
 ## Node.js version
 
