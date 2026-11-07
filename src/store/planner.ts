@@ -14644,11 +14644,14 @@ export const PLANNER = {
 
   /** The task the window shows from its own read while the workspace does
       not hold it (store/taskDetail.ts), when `uuid` is the watched task and
-      its organization is known, else null. Its read is the task side of the
-      sections, which runs while a window shows the sections or the
-      workspace does not hold the watched task. */
-  taskDetail: (uuid: string | null | undefined): TaskDetailVM | null =>
-    uuid && PLANNER.detail?.task === uuid ? PLANNER.detail : null,
+      its organization is known, and with `org`, when that organization is
+      `org`, as two organizations can hold one task id; else null. Its read
+      is the task side of the sections, which runs while a window shows the
+      sections or the workspace does not hold the watched task. */
+  taskDetail: (uuid: string | null | undefined, org?: string): TaskDetailVM | null => {
+    const detail = PLANNER.detail
+    return uuid && detail?.task === uuid && (!org || detail.org === org) ? detail : null
+  },
 
   /** Retry for the window's read of the task it shows from its answer
       (P.taskDetail): a fresh subscription of the task answer, with

@@ -18,7 +18,9 @@ import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixt
    organization's task with the id of a task the workspace holds, which
    the Inbox pane shows with that organization's New mark, reads on open,
    comments on and saves a title to in that organization, through that
-   task's own answer, never as the held task. */
+   task's own answer, never as the held task. And two rows of one task id
+   in two organizations, neither held, where the pane goes from the first
+   row's task to the second's and reads the second's item. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => {
@@ -395,126 +397,142 @@ describe("the Inbox pane's Open task in board", { timeout: 30_000 }, () => {
   })
 })
 
-describe("an Inbox row of another organization's task with a held task's id", {
-  timeout: 30_000,
-}, () => {
-  it("shows, reads and edits that organization's task in the pane, never the held one", async () => {
-    vi.resetModules()
-    history.replaceState(null, '', '/app/~/inbox')
-    const GUEST = 'org-guest'
-    const snap: Snapshot = underProgram(plannerFixture())
-    const me = snap.profiles[0]
-    snap.orgs.push({ ...snap.orgs[0], id: GUEST, slug: 'guest', name: 'Guest Co' })
-    snap.profiles.push({ ...me, id: 'me-guest', org_id: GUEST })
-    snap.myProfileIds.push('me-guest')
-    const guestProject = {
-      ...snap.projects[0],
-      id: 'guest-work',
-      org_id: GUEST,
-      name: 'Guest work',
-      parent_id: undefined,
-    }
-    snap.projects.push(guestProject)
-    const task = (org: string, project: string, num: number, title: string) => ({
-      id: SOAK,
+/* The guest organization of the two-organization Inbox cases. */
+const GUEST = 'org-guest'
+
+/* Two organizations that each hold a task of id SOAK, on App's Inbox: the
+   home organization's QN-2 'Run the soak test', which the workspace holds
+   when `homeHeld`, else only the server does, and the guest
+   organization's QN-7 'Calibrate the guest rig', which only the server
+   holds. Each has an Inbox item, the home one read when `homeRead`, and
+   the guest one unread with a comment on its thread after it. The
+   window's own read answers the task of the organization it names. */
+async function twoOrganizations({ homeHeld, homeRead }: { homeHeld: boolean; homeRead: boolean }) {
+  vi.resetModules()
+  history.replaceState(null, '', '/app/~/inbox')
+  const snap: Snapshot = underProgram(plannerFixture())
+  const me = snap.profiles[0]
+  const home = snap.orgs[0].id
+  snap.orgs.push({ ...snap.orgs[0], id: GUEST, slug: 'guest', name: 'Guest Co' })
+  snap.profiles.push({ ...me, id: 'me-guest', org_id: GUEST })
+  snap.myProfileIds.push('me-guest')
+  const guestProject = {
+    ...snap.projects[0],
+    id: 'guest-work',
+    org_id: GUEST,
+    name: 'Guest work',
+    parent_id: undefined,
+  }
+  snap.projects.push(guestProject)
+  const task = (org: string, project: string, num: number, title: string) => ({
+    id: SOAK,
+    org_id: org,
+    project_id: project,
+    num,
+    title,
+    description: '',
+    status: 'progress' as const,
+    priority: 'medium' as const,
+    paused: false,
+    created_at: AT,
+    updated_at: AT,
+    has_hidden_subtasks: false,
+    has_hidden_parent: false,
+  })
+  // the tasks the parts do not send, which only the server holds
+  const homeTask = task(home, snap.projects[0].id, 2, 'Run the soak test')
+  const guestTask = task(GUEST, guestProject.id, 7, 'Calibrate the guest rig')
+  if (homeHeld) snap.issues.push(homeTask)
+  const unheld = homeHeld ? [guestTask] : [homeTask, guestTask]
+  Object.assign(snap, { unheld: { issues: unheld } })
+  for (const [org, recipient, read] of [
+    [home, me.id, homeRead],
+    [GUEST, 'me-guest', false],
+  ] as const)
+    snap.messages.push({
+      id: `message-${org}`,
       org_id: org,
-      project_id: project,
-      num,
-      title,
-      description: '',
-      status: 'progress' as const,
-      priority: 'medium' as const,
-      paused: false,
-      created_at: AT,
-      updated_at: AT,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
-    })
-    // the workspace holds the home organization's task, and the server
-    // also holds the guest organization's task of the same id, which the
-    // parts do not send
-    snap.issues.push(task(snap.orgs[0].id, snap.projects[0].id, 2, 'Run the soak test'))
-    const guestTask = task(GUEST, guestProject.id, 7, 'Calibrate the guest rig')
-    Object.assign(snap, { unheld: { issues: [guestTask] } })
-    // the home organization's message is read and the guest
-    // organization's unread, with a comment on its thread after it
-    for (const [org, recipient, read] of [
-      [snap.orgs[0].id, me.id, true],
-      [GUEST, 'me-guest', false],
-    ] as const)
-      snap.messages.push({
-        id: `message-${org}`,
-        org_id: org,
-        recipient_id: recipient,
-        issue_id: SOAK,
-        issue_title: 'News',
-        kind: 'comment',
-        detail: 'New comment',
-        created_at: AT,
-        ...(read ? { read_at: AT } : {}),
-      })
-    const guestComment = {
-      id: 'fe000000-0000-4000-8000-000000000001',
+      recipient_id: recipient,
       issue_id: SOAK,
-      author: 'me-guest',
-      body: 'The rig drifts',
-      created_at: '2026-09-14T08:05:00.000Z',
-    }
-    network.onUpdate.mockImplementation((ref, args, next) => {
-      const name = getFunctionName(ref)
-      const a = args as { org_id?: string; ref?: string }
-      if (name === 'workspace:whole') next(structuredClone(snap))
-      else if (name === 'snapshot:threadComments')
-        next({ comments: a.org_id === GUEST ? [guestComment] : [], earlier: false })
-      else if (name === 'taskWindow:task') {
-        // the window's own read, of the task of the organization it names
-        const row = [...snap.issues, guestTask].find(
-          (it) => it.org_id === a.org_id && it.id === a.ref,
-        )
-        if (row)
-          next({
-            state: 'ok',
-            task: { ...row, has_subtasks: false },
-            level: 'lead',
-            labels: [],
-            follow: null,
-            parent: null,
-            subtasks: { rows: [], complete: true },
-          })
-      }
-      return () => {}
+      issue_title: 'News',
+      kind: 'comment',
+      detail: 'New comment',
+      created_at: AT,
+      ...(read ? { read_at: AT } : {}),
     })
-    network.query.mockResolvedValue(null)
-    // only this case's writes
-    network.mutation.mockReset()
-    network.mutation.mockResolvedValue(null)
-    const store = await import('./store/planner')
-    await store.initStore()
-    const { syncStatus } = await import('./lib/syncStatus')
-    syncStatus.setSocket({ connected: true, everConnected: true })
-    const { default: App } = await import('./App')
-    await act(async () =>
-      root.render(
-        <TooltipProvider>
-          <App />
-        </TooltipProvider>,
-      ),
-    )
-    const home = snap.orgs[0].id
-    expect(store.P.issueById[store.P.handleOf(SOAK) ?? '']?.org).toBe(home)
-    const rowOpen = (org: string) =>
+  const guestComment = {
+    id: 'fe000000-0000-4000-8000-000000000001',
+    issue_id: SOAK,
+    author: 'me-guest',
+    body: 'The rig drifts',
+    created_at: '2026-09-14T08:05:00.000Z',
+  }
+  network.onUpdate.mockImplementation((ref, args, next) => {
+    const name = getFunctionName(ref)
+    const a = args as { org_id?: string; ref?: string }
+    if (name === 'workspace:whole') next(structuredClone(snap))
+    else if (name === 'snapshot:threadComments')
+      next({ comments: a.org_id === GUEST ? [guestComment] : [], earlier: false })
+    else if (name === 'taskWindow:task') {
+      // the window's own read, of the task of the organization it names
+      const row = [homeTask, guestTask].find((it) => it.org_id === a.org_id && it.id === a.ref)
+      if (row)
+        next({
+          state: 'ok',
+          task: { ...row, has_subtasks: false },
+          level: 'lead',
+          labels: [],
+          follow: null,
+          parent: null,
+          subtasks: { rows: [], complete: true },
+        })
+    }
+    return () => {}
+  })
+  network.query.mockResolvedValue(null)
+  // only this case's writes
+  network.mutation.mockReset()
+  network.mutation.mockResolvedValue(null)
+  const store = await import('./store/planner')
+  await store.initStore()
+  const { syncStatus } = await import('./lib/syncStatus')
+  syncStatus.setSocket({ connected: true, everConnected: true })
+  const { default: App } = await import('./App')
+  await act(async () =>
+    root.render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>,
+    ),
+  )
+  return {
+    store,
+    home,
+    /** The open control of organization `org`'s row of the task. */
+    rowOpen: (org: string) =>
       waitFor(
         () =>
           document.querySelector<HTMLElement>(
             `[data-message-key="${org}:${SOAK}"] .inbox-message-open`,
           ),
         `the row of ${org}`,
-      )
-    const title = () => document.querySelector('[data-task-title]')?.textContent
-    const reads = () =>
-      network.mutation.mock.calls
-        .filter(([ref]) => getFunctionName(ref) === 'messages:readItem')
-        .map(([, args]) => args as { org_id: string; issue_id: string })
+      ),
+    /** The pane's task title. */
+    title: () => document.querySelector('[data-task-title]')?.textContent,
+    /** The reads of an item the store sent, in order. */
+    reads: () => sentArgs('messages:readItem'),
+  }
+}
+
+describe("an Inbox row of another organization's task with a held task's id", {
+  timeout: 30_000,
+}, () => {
+  it("shows, reads and edits that organization's task in the pane, never the held one", async () => {
+    const { store, home, rowOpen, title, reads } = await twoOrganizations({
+      homeHeld: true,
+      homeRead: true,
+    })
+    expect(store.P.issueById[store.P.handleOf(SOAK) ?? '']?.org).toBe(home)
     const divider = () => document.querySelector('.inbox-detail-frame [data-unread-divider]')
     // the held task's row opens it, whose item is read, so it shows no New
     // mark and sends no read
@@ -580,5 +598,35 @@ describe("an Inbox row of another organization's task with a held task's id", {
     // the id alone names either task, so a write by it fails closed
     expect(await store.P.updateIssue(SOAK, { title: 'Calibrate by id' })).toBe(false)
     expect(sentArgs('issues:update')).toHaveLength(1)
+  })
+})
+
+describe('two Inbox rows of one task id in two organizations, neither held', {
+  timeout: 30_000,
+}, () => {
+  it("switches the pane from the first row's task to the second's and reads it there", async () => {
+    const { store, home, rowOpen, title, reads } = await twoOrganizations({
+      homeHeld: false,
+      homeRead: false,
+    })
+    expect(store.P.handleOf(SOAK)).toBeNull()
+    // the home organization's row opens its task from its own read, and
+    // reads its item
+    const homeRow = await rowOpen(home)
+    await act(async () => homeRow.click())
+    await waitFor(() => title() === 'Run the soak test', "the home task's title")
+    await waitFor(() => reads().length === 1, "the home task's read on open")
+    // the guest organization's row of the same id then shows that task,
+    // from a read of its own, and reads that organization's item
+    const guestRow = await rowOpen(GUEST)
+    await act(async () => guestRow.click())
+    await waitFor(() => title() === 'Calibrate the guest rig', "the guest task's title")
+    await waitFor(() => reads().length === 2, "the guest task's read on open")
+    expect(reads()).toEqual([
+      expect.objectContaining({ org_id: home, issue_id: SOAK }),
+      expect.objectContaining({ org_id: GUEST, issue_id: SOAK }),
+    ])
+    expect(store.P.detail?.org).toBe(GUEST)
+    expect(location.pathname).toBe('/app/guest/inbox/tasks/qn-7')
   })
 })

@@ -1745,8 +1745,10 @@ function IssueDetail({
     [holdThread],
   )
   // the task as the window shows it from its own read while the workspace
-  // does not hold it (P.taskDetail)
-  const detail: TaskDetailVM | null = !held && identity ? P.taskDetail(identity.uuid) : null
+  // does not hold it (P.taskDetail), of the organization the window names,
+  // as two organizations can hold one task id
+  const detail: TaskDetailVM | null =
+    !held && identity ? P.taskDetail(identity.uuid, identity.org || undefined) : null
   // the view of the last answer that held the task, active or archived,
   // also while a read after it failed or runs again (`stale`), so a
   // comment typed for the task stays; but not while this window's own

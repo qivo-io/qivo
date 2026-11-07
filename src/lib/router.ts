@@ -136,7 +136,9 @@ const findIssueKey = (s: string | undefined, org?: string) => {
 /** What the store knows of the task `open` names, a handle or a reference
     (lib/taskReference.ts), from its live sources only: the workspace, the
     view of the task a window shows from its own read (P.detail), and the
-    read of the registered reference (P.reference). Undefined when none
+    read of the registered reference (P.reference). A reference takes that
+    view only while it is of the organization the reference or its read
+    names, as two organizations can hold one task id. Undefined when none
     names it. */
 export function taskFacts(open: string | null | undefined): TaskFacts | undefined {
   if (!open) return undefined
@@ -151,11 +153,12 @@ export function taskFacts(open: string | null | undefined): TaskFacts | undefine
   }
   const read = P.reference?.ref === open ? P.reference.task : null
   const uuid = ref.uuid ?? read?.uuid
+  const org = ref.org ?? read?.org ?? null
   const view = uuid && detail?.task === uuid ? detail.view : null
-  if (view) return factsOfView(view)
+  if (view && (!org || view.org === org)) return factsOfView(view)
   return {
     uuid,
-    org: ref.org ?? read?.org ?? null,
+    org,
     from: ref.from,
     num: ref.num ?? read?.num ?? undefined,
     project: read?.project ?? undefined,
