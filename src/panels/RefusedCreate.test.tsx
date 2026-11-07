@@ -11,7 +11,10 @@ import { plannerFixture } from '../store/plannerFixture.setup'
 
 /* A new task's window when the server refuses the create, on the real
    store, the real editors and App's own create and refusal wiring: the task
-   is made through the project's New task button and the dialog. */
+   is made through the project's New task button and the dialog, in a store
+   that never asked for every task, as the app boots, so the window shows
+   it from its creating answer and App names it by its key, never by the
+   reference it opened it by. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -60,6 +63,8 @@ afterEach(async () => {
   container.remove()
   document.body.innerHTML = ''
   history.replaceState(null, '', '/')
+  const { TASKS } = await import('../store/liveParts')
+  TASKS.atBoot = true
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -115,6 +120,9 @@ async function openNewTask() {
       })
     return name.startsWith('comments:') ? new Promise(() => {}) : Promise.resolve(null)
   })
+  // the app's boot, without every task
+  const { TASKS } = await import('../store/liveParts')
+  TASKS.atBoot = false
   const store = await import('../store/planner')
   await store.initStore()
   // App's views load their code only while the socket counts as connected
@@ -146,11 +154,17 @@ async function openNewTask() {
     set?.call(title, 'Run the soak test')
     title.dispatchEvent(new Event('input', { bubbles: true }))
   })
+  // the key the new task takes, which the dialog's create previews
+  const key = store.P.nextIssueKey('work')
   const create = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Create')
   await act(async () => create?.click())
-  const task = store.P.issues.find((it) => it.title === 'Run the soak test')
-  if (!task) throw new Error('the task was not created')
-  return task.key
+  await waitFor(
+    () => document.querySelector('[data-task-title]')?.textContent?.includes('Run the soak test'),
+    'the new task in its window',
+  )
+  // the window names it by its key, though App opened it by a reference
+  expect(document.querySelector('[data-issue-key]')?.textContent).toBe(key)
+  return key
 }
 
 /** Refuses the create and lets the window close. */

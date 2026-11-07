@@ -1852,40 +1852,45 @@ function App() {
   const createIssue = (issue) => {
     // while edits are paused the dialog stays open with what was typed
     if (P.refusePausedEdit()) return false
-    // the issue's key exists only once the row does — addIssue returns it.
-    // The preview can be invalidated by ANY concurrent create in the org
-    // (0050's shared counter), more than once: the open window follows its
-    // task (P.watchHandles above), so it doesn't blank or show the concurrent
-    // issue, and a refusal closes it under the handle it showed last, saying
-    // what text typed in it went with it.
-    const key = P.addIssue(issue, (last) => {
+    // what opening the new task passes on, which addIssue returns: a
+    // reference to its organization, preview number and uuid, as the
+    // workspace holds no task (a handle where it holds every task). The
+    // preview can be invalidated by ANY concurrent create in the org
+    // (0050's shared counter): the open window follows its task to the
+    // server's number (P.watchHandles above), so it doesn't blank or show
+    // the concurrent issue, and a refusal closes it under what it showed
+    // last, saying with the task's key what text typed in it went with it.
+    const open = P.addIssue(issue, (last) => {
       if (hereRef.current.openIssue !== last) return
-      const lost = dropRefusedTask(unsent.task, last)
+      const lost = dropRefusedTask(unsent.task, P.keyOfOpen(last))
       setOpenIssue((cur) => (cur === last ? null : cur))
       if (lost) window.showToast?.(lost, 'error')
     })
-    if (!key) {
+    if (!open) {
       window.showToast?.('That sub-project is gone, so the task was not created.', 'error')
       return false
     }
     // The create dialog's phone marker, a spare once it closes in this
     // commit, takes the task's address (lib/pageHistory pushPage).
     setModal(null)
-    window.showToast?.(`Created ${P.issueById[key]?.key || key}`)
+    window.showToast?.(`Created ${P.keyOfOpen(open)}`)
     const curProj = P.project(scope)
     /* All projects shows the task on no view, as the Board, the Overview
        and the Roadmap each ask to choose a project there, so a create from
        it moves to the task's sub-project, as from a project that does not
-       hold it. My view shows it only if it landed on me; a task created
-       from a side-board's + is unassigned, so that one still jumps to its
-       sub-project. */
+       hold it. My view shows it only if it landed on me, by P.isMine's
+       rule read from what was typed, since the workspace holds no task:
+       its assignee, or its reviewer for a task born In Review. A task
+       created from a side-board's + is unassigned, so that one still
+       jumps to its sub-project. */
+    const owner = issue.status === 'review' && issue.reviewer ? issue.reviewer : issue.assignee
     const inScope =
-      (P.isMineScope(scope) && P.isMine(P.issueById[key])) ||
+      (P.isMineScope(scope) && !!owner && P.myProfileIds.includes(owner)) ||
       (curProj &&
         (curProj.id === issue.project || (curProj.children || []).includes(issue.project)))
     // Keep the task visible underneath its editor when creation changes scope.
     if (!inScope) setScope(issue.project)
-    navOpenIssue(key)
+    navOpenIssue(open)
     return true
   }
   // The sidebar's tree shows the new project once the server's list holds
