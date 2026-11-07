@@ -666,8 +666,8 @@ describe('a list kept live a batch at a time', () => {
     await publish()
     const asked = open()
     expect(asked).toHaveLength(2)
-    // the tab hides and shows while the page is kept, then the page shows:
-    // each batch reads once
+    // the tab hides and shows while the page is kept, then the page shows,
+    // and each batch reads once
     await kept('hidden')
     await setVisibility('hidden')
     await setVisibility('visible')
@@ -1302,8 +1302,8 @@ describe('a list shown a page at a time', () => {
     await publish()
     const asked = open()
     expect(asked).toEqual([{ list: 'k', after: cursor('a24') }])
-    // the tab hides and shows while the page is kept, then the page shows:
-    // the page reads once
+    // the tab hides and shows while the page is kept, then the page shows,
+    // and the page reads once
     await kept('hidden')
     await setVisibility('hidden')
     await setVisibility('visible')
