@@ -57,7 +57,7 @@ organization shows that organization's name. The directory loads no tasks;
 opening a project loads what its view needs.
 
 The star on a project adds it to your favorites or removes it. Your
-favorites are yours alone, in that organization alone: a star changes no
+favorites are yours alone, in that organization alone. A star changes no
 one's access and sends no notification, and it cannot change while the
 organization is read-only. The project then moves between the two groups.
 An archived project, one in Deleted items and one you lost access to leave
