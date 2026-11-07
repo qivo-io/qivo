@@ -106,8 +106,9 @@ export const NAME_TAKEN = 'A label with that name already exists'
 
 /** Where New label's check of a typed name stands: on its way, free (the
     answer's `exact` is null), taken by a label, or failed, when Add stays
-    on and the server decides. `writes` counts the page's accepted label
-    writes before it, so a create, rename or delete here checks again. */
+    on and the server decides. `writes` counts the creates, renames and
+    deletes the server accepted from the page before it, so each of them
+    checks the name again. */
 type NameCheck = {
   name: string
   writes: number
@@ -433,8 +434,9 @@ export function OrgLabelsPage() {
   const [saved, setSaved] = useState<ReadonlyMap<string, { name?: SavedOver; color?: SavedOver }>>(
     () => new Map(),
   )
-  // the label writes the server accepted from this page, which New label's
-  // check of a typed name follows
+  // the label creates, renames and deletes the server accepted from this
+  // page, which can take or free a name and which New label's check of a
+  // typed name follows
   const [writes, setWrites] = useState(0)
   const wrote = () => setWrites((n) => n + 1)
   // the names on their way, by label, which a renamed label's kept row
