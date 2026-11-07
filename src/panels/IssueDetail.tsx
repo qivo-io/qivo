@@ -138,7 +138,8 @@ const NO_PROFILE = '__none__'
    about the person's own new task wait while the window shows it from what
    its create sent (TaskDetailVM saving): the owner, Parent, Subtasks,
    Linked tasks and Subscribers pickers, a new parent's Remove subtask,
-   Plan on roadmap, Move to sub-project… and Archive or delete…. Its
+   Plan on roadmap (Show on roadmap for a new parent), Move to
+   sub-project… and Archive or delete…. Its
    fields, labels, files, comments and the eye take changes
    at once, which go out behind the create. WAITS_FOR_CHECK says why a
    change to a task

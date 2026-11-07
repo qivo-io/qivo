@@ -267,9 +267,9 @@ export function projectName({
     the task waits until the server stored it and the window's own read
     answered (store/taskDetail.ts TaskDetailVM saving): the owner, Parent,
     Subtasks, Linked tasks and Subscribers pickers, a new parent's Remove
-    subtask, Plan on roadmap, Move to sub-project… and Archive or delete…
-    of its window, and the owner list of its card until the server took
-    the create (P.createOnItsWay). */
+    subtask, Plan on roadmap (Show on roadmap for a new parent), Move to
+    sub-project… and Archive or delete… of its window, and the owner list
+    of its card until the server took the create (P.createOnItsWay). */
 export const WAITS_FOR_SAVE = 'Available once this task is saved'
 
 /** The attributes a closed Radix popover gives its trigger, which a static
