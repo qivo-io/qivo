@@ -149,6 +149,32 @@ describe('the profile cache', () => {
     expect(s.reads()).toEqual([])
   })
 
+  it('moves an id a view now names in another organization to a read there, out of the old chunk', () => {
+    const s = setup()
+    s.cache.name('board', [
+      { org: 'a', id: 'p0' },
+      { org: 'a', id: 'p1' },
+    ])
+    s.answer(s.reads()[0]?.token ?? '')
+    expect(s.cache.look('p0')).toMatchObject({ state: 'face', org: 'a' })
+    s.cache.name('board', [
+      { org: 'b', id: 'p0' },
+      { org: 'a', id: 'p1' },
+    ])
+    // A's chunk reads p1 alone, and one read of B reads p0
+    expect(s.reads().map((r) => [r.org, r.ids])).toEqual([
+      ['a', ['p1']],
+      ['b', ['p0']],
+    ])
+    const [a, b] = s.reads()
+    s.answer(b?.token ?? '')
+    expect(s.cache.look('p0')).toMatchObject({ state: 'face', org: 'b' })
+    // A's answer, which no longer asks for p0, says nothing of them
+    s.answer(a?.token ?? '')
+    expect(s.cache.look('p0')).toMatchObject({ state: 'face', org: 'b' })
+    expect(s.cache.look('p1')).toMatchObject({ state: 'face', org: 'a' })
+  })
+
   it('stops every read while the page is hidden and starts them again on return', () => {
     const s = setup()
     s.cache.name('board', people(150))

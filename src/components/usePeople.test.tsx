@@ -155,6 +155,18 @@ describe('usePeople', () => {
     expect(text()).toEqual(['zed:Zed Zane'])
   })
 
+  it('answers a person only under their own organization, held or read by id', async () => {
+    const org = snap.orgs[0].id
+    await show(['amy'])
+    await act(async () => open()[0].next({ rows: [row('amy', 'Amy Archer')] }))
+    await frame()
+    expect(store.P.person('held', org)).toMatchObject({ state: 'ok', name: 'Hal Held' })
+    expect(store.P.person('amy', org)).toMatchObject({ state: 'ok', name: 'Amy Archer' })
+    // asked under another organization, neither is its person
+    expect(store.P.person('held', 'another-org')?.state).toBe('loading')
+    expect(store.P.person('amy', 'another-org')?.state).toBe('loading')
+  })
+
   it('says a failed read failed, never gone', async () => {
     await show(['zed'])
     vi.spyOn(console, 'error').mockImplementation(() => {})

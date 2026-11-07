@@ -160,7 +160,8 @@ export function createProfileCache(deps: ProfileCacheDeps) {
       if (chunkOf.get(row.id) !== chunk) continue
       answered.add(row.id)
       const was = entries.get(row.id)
-      if (was?.face && JSON.stringify(was.face) === JSON.stringify(row)) continue
+      if (was?.face && was.org === chunk.org && JSON.stringify(was.face) === JSON.stringify(row))
+        continue
       entries.set(row.id, { org: chunk.org, face: row })
       touch()
     }
