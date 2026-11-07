@@ -344,11 +344,13 @@ const MENTION_SEARCH = 'data-sync-mention-search'
     the server's search and Load more, at most PICKER_CAPS.recipients kept;
     the chosen person `who` first, checked, whatever the batches hold, then
     the batches' rows, each once. On open it sends one pickers.canOwn check
-    with the first batch, for the kept choice, else for `initial`: a kept
+    with the first batch, for the kept choice, else for `initial`. A kept
     choice the check finds no longer eligible is cleared with `onLine`'s
-    line, and `initial` is chosen (`onWho` without a press) once a batch
-    row or an `eligible` answer holds them, while the person has picked no
-    one (`picked`). A failed or refused check chooses nothing. */
+    line, but only while it is still the choice, so a person picked before
+    the answer keeps their pick. `initial` is chosen (`onWho` without a
+    press) once a batch row or an `eligible` answer holds them, while the
+    person has picked no one (`picked`). A failed or refused check chooses
+    nothing. */
 function MentionPeople({
   it,
   initial,
@@ -383,6 +385,9 @@ function MentionPeople({
   // the choice the window opened with, kept from before; `initial` is
   // chosen only for a window that opened without one
   const [openedWith] = useState(who)
+  // the choice as it stands when the check below answers
+  const whoNow = useRef(who)
+  whoNow.current = who
   // the one check of the person the window opens with
   const [suggested, setSuggested] = useState<Recipient | null>(null)
   useEffect(() => {
@@ -391,10 +396,12 @@ function MentionPeople({
     void P.ownerChecks({ task, field: 'recipient', ids: [id] }).then((answer) => {
       const row = answer?.state === 'ready' ? answer.rows.find((r) => r.id === id) : undefined
       if (!row) return
-      if (openedWith && !row.eligible) {
+      if (openedWith) {
+        // a person picked since the window opened keeps their pick
+        if (row.eligible || whoNow.current?.id !== openedWith.id) return
         onLine(goneLine(openedWith.name))
         onWho(null, false)
-      } else if (!openedWith && row.eligible && row.person) setSuggested(row.person)
+      } else if (row.eligible && row.person) setSuggested(row.person)
     })
   }, [])
   // `initial`, once a batch or the check says they may be mentioned
@@ -449,8 +456,8 @@ function MentionPeople({
   )
 }
 
-/* A recipient's face: the store's portrait, or a plain square while the
-   store does not hold them. */
+/* A recipient's face. It is the store's portrait, or a plain square while
+   the store does not hold them. */
 function MentionFace({ id }: { id: string }) {
   if (P.user(id)) return <Avatar id={id} size={28} />
   return <span aria-hidden="true" className="size-7 shrink-0 rounded-[5px] bg-surface-3" />
@@ -482,10 +489,12 @@ export function MentionCtl({
 }) {
   const [open, setOpen] = useState(false)
   const [who, setWho] = useState<Recipient | null>(null)
-  // whether the person pressed a row since the window opened, after which
-  // `initial` is never chosen for them
+  // whether the person pressed a row, or a Send cleared their choice,
+  // since the window last opened without a kept note. After that `initial`
+  // is never chosen for them.
   const [picked, setPicked] = useState(false)
-  // why the last Send or the opening check posted nothing
+  // why the last Send or the opening check posted nothing, which a kept
+  // note keeps
   const [line, setLine] = useState<string | null>(null)
   const [text, setText] = useState('')
   // a note on its way to the server. The window locks it until the answer,
@@ -582,12 +591,15 @@ export function MentionCtl({
       open={open}
       onOpenChange={(next) => {
         if (!next) return close()
+        // a kept note keeps its choice, whether the person made it and the
+        // line that says why the last Send posted nothing, so a note meant
+        // for someone the check dropped never goes to `initial`
         if (!kept) {
           setWho(null)
           setText('')
+          setPicked(false)
+          setLine(null)
         }
-        setPicked(false)
-        setLine(null)
         setOpen(true)
       }}
     >

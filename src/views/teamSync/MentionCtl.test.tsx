@@ -540,7 +540,7 @@ describe('the Team sync @ window’s people', () => {
     holding = true
     await mount(vi.fn())
     await openWindow()
-    // the batch and the check are on their way: no one is chosen
+    // the batch and the check are on their way, so no one is chosen
     expect(pressed()).toEqual([])
     expect(held).toHaveLength(2)
     // the check answers first and says yes
@@ -627,8 +627,10 @@ describe('the Team sync @ window’s people', () => {
     expect(box?.value).toBe('')
   })
 
+  // the people figure at its design size, 1,000 people with the writer and
+  // Aisha
   it('lists 1,000 people 25 at a time up to its cap of 500, each once', async () => {
-    await load(1000)
+    await load(998)
     await mount(vi.fn())
     await openWindow()
     expect(people()).toHaveLength(25)
@@ -706,5 +708,49 @@ describe('the Team sync @ window’s Send', () => {
     expect(note()?.value).toBe('Can you check the soak report?')
     expect(line()).toBe('Aisha can no longer be mentioned on this task. Pick someone else.')
     expect(pressed()).toEqual([])
+  })
+
+  it('keeps a person picked before the check of a kept choice answers', async () => {
+    await load(3)
+    await write('Can you check the soak report?', vi.fn())
+    await pressSend()
+    await toggle()
+    await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: RULE })))
+    force.add('check-ineligible')
+    holding = true
+    await toggle()
+    await release('pickers:syncRecipients')
+    // Ben Carter, picked while the check of the kept Aisha is on its way
+    const ben = 'person-0000'
+    await act(async () => person(ben)?.click())
+    expect(pressed()).toEqual([ben])
+    await release('pickers:canOwn')
+    expect(pressed()).toEqual([ben])
+    expect(line()).toBeNull()
+  })
+
+  it('never sends a kept note to the suggestion once Send dropped the chosen person', async () => {
+    await load(3)
+    await mount(vi.fn())
+    await openWindow()
+    expect(pressed()).toEqual(['aisha'])
+    // Ben Carter, picked over the suggested Aisha
+    const ben = 'person-0000'
+    await act(async () => person(ben)?.click())
+    await typeNote('Can you check the soak report?')
+    holding = true
+    await pressSend()
+    // closed while the check of Ben is on its way, which then says no
+    await toggle()
+    expect(windowOpen()).toBe(false)
+    force.add('check-ineligible')
+    holding = false
+    await release('pickers:canOwn')
+    await toggle()
+    await flush()
+    expect(note()?.value).toBe('Can you check the soak report?')
+    expect(line()).toBe('Ben can no longer be mentioned on this task. Pick someone else.')
+    expect(pressed()).toEqual([])
+    expect(writes).toHaveLength(0)
   })
 })
