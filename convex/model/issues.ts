@@ -2407,7 +2407,7 @@ export async function moveIssueCore(
  * The reason-comment (early archive) is the mutation layer's job (comments
  * model, phase 5) — it must share this same `now`. */
 
-/* Both name who can finish the change: someone who can edit that project,
+/* Both name who can finish the change, someone who can edit that project,
  * so neither refusal is a dead end. Admin status gives no Edit, so they
  * name no organization admin. */
 export const ARCHIVE_CASCADE_RULE =

@@ -206,21 +206,23 @@ import { taskFields } from './workspaceParts'
  * - With the catalogue at its sum, 2,000 projects live and archived, a
  *   rare word in all your projects reads 101 ranges, 2,170 documents and
  *   1 MiB for a member, the catalogue's 2,000 documents included, and 707
- *   ranges, 3,089 documents and 1.65 MiB for an organization admin over
- *   its 700 live projects.
- * - One batch at its full `scan` for an admin, over 167 sub-projects of
- *   about 30 tasks, reads 242 ranges, 5,642 documents and 3.82 MiB, and
- *   stops at `scan` with its own count at 3.72 MiB.
+ *   ranges, 3,089 documents and 1.65 MiB for the lead of every project
+ *   over its 700 live projects.
+ * - One batch at its full `scan` for the lead of every project, over 167
+ *   sub-projects of about 30 tasks, reads 242 ranges, 5,642 documents and
+ *   3.82 MiB, and stops at `scan` with its own count at 3.72 MiB.
  * - Search all your projects reads 288 ranges, 1,407 documents and 0.85
  *   MiB for a member who reads 200 sub-projects, and 131 ranges, 1,099
  *   documents and 0.58 MiB for one whose team shares 50 live and 150
  *   archived projects.
  *
  * The Boat timing of its slowest calls (owner, 31 October 2026) takes the
- * admin's rare word over the catalogue's 700 live projects, the admin's
- * batch at its full `scan`, and a member's rare word over the project of
- * 800 open tasks, as those cases build them. If the slowest call's
- * JavaScript passes 0.5 s, lower `scan`.
+ * rare word over the catalogue's 700 live projects and the batch at its
+ * full `scan` of a caller who reads every project, an organization admin
+ * then and the lead of every project since the admin access split, whose
+ * reads the tests measured the same on 7 November 2026, and a member's
+ * rare word over the project of 800 open tasks, as those cases build
+ * them. If the slowest call's JavaScript passes 0.5 s, lower `scan`.
  */
 export const RELATION_PICKER = {
   rows: 25,

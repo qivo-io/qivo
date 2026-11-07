@@ -40,10 +40,9 @@
  * beneath an archived parent, which only a search lists, carries its
  * parent's `can_restore`, the action a search hit takes (restoring the
  * parent brings it back when `with_parent`), and no right of its own
- * (coordinator, 5 November 2026). Before the admin access split these
- * equal the writes' level rule (hasProjectLevel 'lead'), as only an admin
- * or the effective lead holds 'lead'; the split moves the writes onto
- * managesIn, so they stay the writes' rule after it.
+ * (coordinator, 5 November 2026). They are the writes' own rule, since
+ * the writes ask this predicate (model/projects.ts assertManages and
+ * subProjectParent, projects.deleteDeep and removalSummary).
  *
  * Orders and cursors. Settings › Projects and its search are in name key
  * byte order (lib/namedPages.ts compareNamed), tied by the project id and

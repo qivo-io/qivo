@@ -333,8 +333,10 @@ export const deleteDeep = orgMutation({
  * 5,000 tasks or 8 MiB of them and says so). The same gate as deleteDeep,
  * management of the project (canManageOwnProjectAccess), because it names
  * sub-projects and counts work a member who only navigates to the project
- * cannot see; whoever manages a top-level project manages every sub-project
- * of it, which the Settings project lists show them too. */
+ * cannot see; whoever manages a top-level project sees or manages every
+ * sub-project of it, since its lead holds at least User on each and an
+ * organization admin manages each, which the Settings project lists show
+ * them too. */
 export const removalSummary = orgQuery({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {

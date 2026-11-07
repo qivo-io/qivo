@@ -9,9 +9,9 @@
  * included, reads only those projects, each one's active tasks in the
  * documented order (issues by_project_archived_created, created_at and then
  * number), merged side by side. So where a page stops and whether more
- * follows never depend on a task of a project the caller cannot read. Until
- * the admin access split lands an admin reads every project; after it the
- * same merge follows the split's rule through `readable`.
+ * follows never depend on a task of a project the caller cannot read.
+ * Since the admin access split an admin's readable projects are those
+ * their own leads, grants and team shares reach, as anyone's.
  *
  * The reads that follow hidden data are those lib/machineSubtree.ts names:
  * how many active subtasks a row has in projects the caller cannot read,

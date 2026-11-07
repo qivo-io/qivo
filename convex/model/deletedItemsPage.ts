@@ -63,9 +63,8 @@
  * each filtered to the items of one of the seat's sources, with fixed
  * allowances set before any reads (gatherTasks); the cross-project items no
  * query covers are read whole. A candidate counts only in a project the
- * seat may read in its view of the item (ItemView readable), so once the
- * admin access split lands an admin's search keeps its sources and drops
- * the tasks they cannot read, which is how it narrows an admin's search
+ * seat may read in its view of the item (ItemView readable), so an
+ * admin's search keeps its sources and drops the tasks they cannot read, which is how it narrows an admin's search
  * (coordinator, 2026-11-05). Every page gathers the same candidates and
  * orders them, and is the entries after its cursor.
  *
@@ -78,10 +77,10 @@
  * missing: `reads` when the budget cut an unordered range or the opening of
  * a seat's sources, or the page went past an entry whose row its budget
  * could not build, and for the search of a seat whose role reads every
- * task (model/deletedItems.ts roleReadsEveryTask, an organization admin's
- * until the admin access split) also the gathering; `matches` when such a
- * seat's search source read its whole allowance. A search page of any
- * other seat, an admin's after the split included, always says `matches`,
+ * task (model/deletedItems.ts roleReadsEveryTask, which no role does since
+ * the admin access split) also the gathering; `matches` when such a seat's
+ * search source read its whole allowance. A search page of any other seat,
+ * an admin's included, always says `matches`,
  * never computed from a stop, since its search sources hold tasks hidden
  * from it (owner, 2026-10-28, as main Search). Rows stored before the
  * page's release hold none of its fields; `legacy` says so (olderRows). */
@@ -447,8 +446,8 @@ const keyOf = (a: Asked): Promise<string> =>
  * item, which are the organization's ranges, heldFor, the admin's assignee
  * index and olderRows' probe. `readsAll`, whether the seat's role reads
  * every task (model/deletedItems.ts roleReadsEveryTask), decides the
- * search's notes. It equals `admin` until the admin access split and is
- * false for everyone after it. */
+ * search's notes. It is false for everyone since the admin access split,
+ * and t3/limits-project-old-paths removes it. */
 type Seat = { me: Profile; sight: Sight; orgName: string; admin: boolean; readsAll: boolean }
 
 /** What a scope holds in one seat's sight: every project, or the named

@@ -55,9 +55,9 @@
  * (storedLevels), each with the seat in the item's organization. An
  * organization admin keeps every item that is not purging, with its
  * metadata and Delete now, and reads its tasks as their role reads them
- * (roleReadsEveryTask), every task until the admin access split and after
- * it only those their ordinary access reaches, so no title, hit or count
- * comes from a project they cannot read. A Memo keeps the reads they
+ * (roleReadsEveryTask), which since the admin access split is only those
+ * their ordinary access reaches, so no title, hit or count comes from a
+ * project they cannot read. A Memo keeps the reads they
  * repeat; a list read seeds one per seat (sightOf).
  *
  * The step machine. Each step spends one budget, TRASH_BUDGET scaled by the
@@ -2008,9 +2008,8 @@ async function taskItemBlock(s: Scope, me: Doc<'profiles'>): Promise<RestoreBloc
  * suffices. A person whose level on the root is only for navigation to a
  * sub-project they lead or can access reads not_lead, as the root has a
  * lead of its own. A sub-project item needs its parent live and not
- * archived. An admin needs no stored row read here, though after the admin
- * access split their view of a project item reads the stored rows as
- * anyone else's does (viewOf). */
+ * archived. An admin needs no stored row read here, though their view of a
+ * project item reads the stored rows as anyone else's does (viewOf). */
 async function projectItemBlock(s: Scope, me: Doc<'profiles'>): Promise<RestoreBlock | null> {
   const parentId = s.item.parent_project_id
   const parent = parentId === undefined ? null : await namedProject(s, parentId, 'meta')
