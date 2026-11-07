@@ -788,6 +788,7 @@ describe('staging check REST contract', () => {
       "const OWNER_SEARCH = 'data-owner-search'",
       'data-owner-choice={person.id}',
       'data-fieldselect',
+      'data-owner-field={field}',
     ])
       expect(owners).toContain(mark)
     const card = read('../src/views/teamSync/SyncCard.tsx')

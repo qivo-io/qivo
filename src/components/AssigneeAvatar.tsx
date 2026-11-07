@@ -349,9 +349,11 @@ export function OwnerPickList({
 }
 
 /** The task window's Assignee or Reviewer field (`field`) of `issue`, a
- * button in FieldSelect's look, marked data-fieldselect with `aria-label`
- * "Assignee" or "Reviewer", that opens the shared owner list
- * (OwnerPickList) in a popover. It names the holder by face and name
+ * button in FieldSelect's look, marked data-fieldselect and
+ * data-owner-field, that opens the shared owner list (OwnerPickList) in a
+ * popover. Its accessible name holds the field and what it shows, such as
+ * "Assignee, Leo Park" or "Reviewer, No reviewer", as the menu it replaced
+ * gave its value to a screen reader. It names the holder by face and name
  * through useOwnerNames, "Loading…" while the name is on its way, "Couldn't
  * load this person" after a failed read (the list still opens), and
  * "Unassigned" or "No reviewer" only with no holder or for an answer that
@@ -382,6 +384,7 @@ export function OwnerField({
           ? "Couldn't load this person"
           : 'Loading…'
   const known = holder !== null && name?.state === 'ok'
+  const named = field === 'reviewer' ? 'Reviewer' : 'Assignee'
   return (
     <Popover
       width={260}
@@ -394,7 +397,7 @@ export function OwnerField({
           variant="unstyled"
           data-fieldselect
           data-owner-field={field}
-          aria-label={field === 'reviewer' ? 'Reviewer' : 'Assignee'}
+          aria-label={`${named}, ${label}`}
           aria-haspopup="dialog"
           aria-expanded={open}
           disabled={disabled}

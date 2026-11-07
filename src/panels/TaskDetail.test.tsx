@@ -339,8 +339,12 @@ function one(name: string): Live {
 const answer = (name: string, value: unknown) => act(async () => one(name).deliver(value))
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"], [role="region"]')
 const note = () => document.querySelector<HTMLElement>('[data-task-gone] [role="status"]')
+/* The field labelled `label`. Assignee and Reviewer name their holder
+   too, so they are found by their field. */
 const field = (label: string) =>
-  document.querySelector<HTMLButtonElement>(`[data-fieldselect][aria-label="${label}"]`)
+  document.querySelector<HTMLButtonElement>(
+    `[data-fieldselect][aria-label="${label}"], [data-owner-field="${label.toLowerCase()}"]`,
+  )
 const buttonNamed = (name: string, scope: ParentNode = document) =>
   [...scope.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === name)
 async function click(element: Element | null | undefined) {
@@ -2069,6 +2073,9 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
     expect(field('Assignee')?.disabled).toBe(false)
     expect(fieldName('Assignee')).toBe('Leo Park')
     expect(fieldName('Reviewer')).toBe('No reviewer')
+    // a screen reader hears the field and its holder, as the menu said
+    expect(field('Assignee')?.getAttribute('aria-label')).toBe('Assignee, Leo Park')
+    expect(field('Reviewer')?.getAttribute('aria-label')).toBe('Reviewer, No reviewer')
     // nothing is read before a list opens, and no name by id
     expect(asked).toEqual([])
     expect(byIds()).toEqual([])
@@ -2117,9 +2124,11 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
     await pickersAnswer()
     await openSettled(P.handleOf(FAM) ?? '')
     expect(fieldName('Assignee')).toBe('Loading…')
+    expect(field('Assignee')?.getAttribute('aria-label')).toBe('Assignee, Loading…')
     expect(byIds().map((s) => s.args)).toEqual([{ org_id: snap.orgs[0].id, ids: ['gina'] }])
     await act(async () => byIds()[0].deliver({ rows: [GINA] }))
     expect(fieldName('Assignee')).toBe('Gina Ghost')
+    expect(field('Assignee')?.getAttribute('aria-label')).toBe('Assignee, Gina Ghost')
   })
 
   it('says Unassigned for a holder only on an answer that leaves them out, and a failed name as failed', async () => {

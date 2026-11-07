@@ -5718,7 +5718,8 @@ async function ownerPickersCheck() {
     })
     const dialog = app.locator('[role="dialog"]')
     await dialog.locator('[data-task-title]').waitFor({ timeout: 60_000 })
-    const field = (label) => dialog.locator(`[data-fieldselect][aria-label="${label}"]`)
+    // the fields' names hold their holder too, so they are found by field
+    const field = (label) => dialog.locator(`[data-owner-field="${label.toLowerCase()}"]`)
     await pick(field('Assignee'), std.name, std.id)
     expect(
       await until(async () => (await task()).assignee_id === std.id),
