@@ -213,7 +213,7 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     expect(board.P.taskLoad()).toEqual({ state: 'not_asked' })
   })
 
-  it("changes its owner from the owner picker, with the roster's check", async () => {
+  it('changes its owner from the owner picker, on the server’s people', async () => {
     const board = await farBoard()
     const model = board.P.viewTask('board:desktop', 'far')
     if (!model) throw new Error('no model')
@@ -224,6 +224,15 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
           <OwnerPickList issue={model} onClose={(then) => then()} />
         </TooltipProvider>,
       ),
+    )
+    for (let i = 0; i < 3; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
+    // the list reads the task only the answer brings, which the stand-in
+    // judges by its organization
+    expect(
+      board.server.owners.asked.map((a) => [a.name, (a.args as { issue_id: string }).issue_id]),
+    ).toContainEqual(['pickers:taskOwners', model.uuid])
+    expect(document.querySelector('[data-owner-list]')?.getAttribute('data-picker-state')).toBe(
+      'ready',
     )
     const unassigned = [...document.querySelectorAll<HTMLElement>('[cmdk-item]')].find(
       (item) => item.textContent === 'Unassigned',

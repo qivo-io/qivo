@@ -146,6 +146,8 @@ describe('focus on a Board card', { timeout: BOARD_TEST_TIMEOUT }, () => {
     await act(async () => owner()?.focus())
     // Enter opens the picker; focus moves into its list, outside the Board
     await act(async () => owner()?.click())
+    // the list's first batch of people, from the server's owner picker
+    for (let i = 0; i < 3; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
     const pick = [...document.querySelectorAll<HTMLElement>('[cmdk-item]')].find((item) =>
       item.textContent?.includes('Second Person'),
     )
