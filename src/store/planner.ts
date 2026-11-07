@@ -8633,6 +8633,10 @@ export type SettingsPersonRow = Extract<PersonSettingsAnswer, { state: 'ok' }>['
 export type AgentKeysAnswer = FunctionReturnType<typeof api.tokens.agentKeys>
 /** One agent's keys (tokens.agentKeys). */
 export type AgentKeysRow = AgentKeysAnswer['agents'][number]
+/** One batch of my personal tokens on MCP access (tokens.personalTokens). */
+export type PersonalTokenBatch = FunctionReturnType<typeof api.tokens.personalTokens>
+/** One batch of my connected apps on MCP access (connectedApps.list). */
+export type ConnectedAppBatch = FunctionReturnType<typeof api.connectedApps.list>
 /** Organization › General's creators line (orgs.projectCreators). */
 export type ProjectCreatorsAnswer = FunctionReturnType<typeof api.orgs.projectCreators>
 /** One answer of an Add team or user picker (projectSettings.candidates). */
@@ -15614,10 +15618,22 @@ export const PLANNER = {
     sendAwaited(api.oauthConnections.getContext, { oauth_query: oauthQuery }, 'none', {
       onError: (e) => toastWriteError(e, false),
     }),
-  listOAuthConnections: async () => {
+  /** One batch of my connected apps (connectedApps.list), 25 at most,
+      newest approval first, matching `search` when it is not empty and
+      after `cursor`, an earlier batch's `next`, when given; null when the
+      read failed. Read once a batch and never subscribed, because every
+      call made with a connection stamps its last use. */
+  connectedApps: async (
+    search: string,
+    cursor: string | null,
+  ): Promise<ConnectedAppBatch | null> => {
     try {
-      return await convex.query(api.oauthConnections.list, {})
-    } catch {
+      return await convex.query(api.connectedApps.list, {
+        ...(search === '' ? {} : { search }),
+        ...(cursor === null ? {} : { cursor }),
+      })
+    } catch (e) {
+      console.error('[qivo] connected apps list failed:', e)
       return null
     }
   },
@@ -15636,14 +15652,28 @@ export const PLANNER = {
   },
 
   /* ---- personal MCP tokens (Settings → Your preferences) ----
-     Same on-demand pattern. The owner manages their own tokens here
-     (authedMutations, no org_id) and nothing narrates; an organization admin
-     can also list and revoke them on API access (apiAccessPage above). */
-  listMcpTokens: async () => {
+     Read a batch at a time on demand, as the connected apps are. The owner
+     manages their own tokens here (authedMutations, no org_id) and nothing
+     narrates; an organization admin can also list and revoke them on API
+     access (apiAccessPage above). */
+
+  /** One batch of my personal tokens across my seats
+      (tokens.personalTokens), 25 at most, newest first, matching `search`
+      when it is not empty and after `cursor`, an earlier batch's `next`,
+      when given; null when the read failed. Read once a batch and never
+      subscribed, because machine auth stamps a token's last use on every
+      call made with it. */
+  personalTokens: async (
+    search: string,
+    cursor: string | null,
+  ): Promise<PersonalTokenBatch | null> => {
     try {
-      return await convex.query(api.tokens.listMcpTokens, {})
+      return await convex.query(api.tokens.personalTokens, {
+        ...(search === '' ? {} : { search }),
+        ...(cursor === null ? {} : { cursor }),
+      })
     } catch (e) {
-      console.error('[qivo] mcp token list failed:', e)
+      console.error('[qivo] personal token list failed:', e)
       return null
     }
   },

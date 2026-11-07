@@ -207,8 +207,10 @@ function RetentionField({ me }: { me: Pick<UserVM, 'messageRetentionDays'> }) {
 }
 
 /* OAuth is the primary connection flow. Personal tokens remain available for
-   manual setup (PersonalTokens). */
-function McpAccessSection() {
+   manual setup (PersonalTokens). Connected apps and Personal access tokens
+   each read their own list from the server a batch at a time as the page
+   opens, so a search or a change in one never reads the other again. */
+export function McpAccessSection() {
   const mcpUrl = `${import.meta.env.VITE_CONVEX_SITE_URL}/mcp`
   return (
     <div>

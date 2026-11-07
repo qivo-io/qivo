@@ -4,14 +4,25 @@ import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { LIMITS } from '../../../convex/lib/limits'
 import { CONFIRM_IGNORE_MS } from '../../lib/useConfirmArm'
+import {
+  type CredentialWorld,
+  credentialListsStandIn,
+  type ForcedCredentialLists,
+  type StandInConnection,
+} from '../../store/credentialListsStandIn.setup'
 import { plannerFixture } from '../../store/plannerFixture.setup'
 
-/* The token list and the New token dialog on the real store. The network
-   answers the token list and records the create call; the clock is fixed at
-   15 Oct 2026 in local time, so every date below reads the same in any time
-   zone. A click that confirms moves the clock past CONFIRM_IGNORE_MS first,
-   because the clock does not move on its own. */
+/* The token list and the New token dialog on the real store, and MCP
+   access's two lists side by side (McpAccessSection). The network answers
+   the token and connection batches through the stand-in the perf page uses
+   (store/credentialListsStandIn.setup.ts), over the tokens and connections
+   a case sets, and records every call; a case can hold the answers back to
+   release them in its own order. The clock is fixed at 15 Oct 2026 in
+   local time, so every date below reads the same in any time zone. A click
+   that confirms moves the clock past CONFIRM_IGNORE_MS first, because the
+   clock does not move on its own. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../../lib/convex', async () => ({
@@ -30,6 +41,8 @@ type Tokens = typeof import('./PersonalTokens')
 type Expiry = typeof import('../../lib/tokenExpiry')
 type Tooltip = typeof import('../../components/ui/tooltip')
 type Safety = typeof import('../../lib/updateSafety')
+type Lists = typeof import('../../lib/credentialLists')
+type Account = typeof import('./AccountSettings')
 type Token = {
   id: string
   name: string
@@ -39,6 +52,7 @@ type Token = {
   expiresAt: string | null
   lastUsedAt: string | null
   revokedAt: string | null
+  revokedByAdmin?: boolean
 }
 
 const NOW = new Date(2026, 9, 15, 10, 0)
@@ -50,9 +64,37 @@ let ui: Tokens
 let expiry: Expiry
 let tooltip: Tooltip
 let safety: Safety
+let lists: Lists
+let account: Account
 let tokens: Token[]
+let connections: StandInConnection[]
+// the states the stand-in answers, and whether the batches wait for release()
+let force: ForcedCredentialLists
+let holding: boolean
+// the batches waiting while held, oldest first
+let held: { name: string; release: () => void }[]
 let container: HTMLDivElement
 let root: Root
+
+/** What the server holds for the signed-in person. */
+const world = (): CredentialWorld => ({
+  login: 'test-account',
+  seats: ['seat'],
+  tokens: tokens.map((t) => ({ revokedByAdmin: false, ...t, seat: 'seat' })),
+  connections,
+})
+/** The batch reads the network answered or holds, by name and arguments. */
+const reads = () =>
+  network.query.mock.calls
+    .map(([ref, args]) => [getFunctionName(ref), args] as const)
+    .filter(([name]) => name === 'tokens:personalTokens' || name === 'connectedApps:list')
+/** Releases the oldest held batch, or the oldest of read `name`. */
+const release = async (name?: string) => {
+  const at = held.findIndex((h) => name === undefined || h.name === name)
+  const [next] = held.splice(at, 1)
+  await act(async () => next?.release())
+  await settle()
+}
 
 /* The stored expiry for a last day, as the dialog creates it. */
 const ending = (day: string) => {
@@ -75,10 +117,25 @@ const token = (id: string, patch: Partial<Token>): Token => ({
 async function load() {
   vi.resetModules()
   const snap = plannerFixture()
-  network.query.mockImplementation((ref) => {
+  network.query.mockImplementation((ref, args) => {
     const name = getFunctionName(ref)
-    if (name === 'tokens:listMcpTokens') return Promise.resolve(structuredClone(tokens))
-    return Promise.resolve(null)
+    if (name !== 'tokens:personalTokens' && name !== 'connectedApps:list')
+      return Promise.resolve(null)
+    // the answer is the server's when the read lands, as a held one lands later
+    const answer = () => structuredClone(credentialListsStandIn(name, args, world(), force))
+    if (!holding) return new Promise((resolve) => resolve(answer()))
+    return new Promise((resolve, reject) =>
+      held.push({
+        name,
+        release: () => {
+          try {
+            resolve(answer())
+          } catch (e) {
+            reject(e)
+          }
+        },
+      }),
+    )
   })
   network.onUpdate.mockImplementation((_ref, _args, next) => {
     next(structuredClone(snap))
@@ -96,6 +153,8 @@ async function load() {
   expiry = await import('../../lib/tokenExpiry')
   tooltip = await import('../../components/ui/tooltip')
   safety = await import('../../lib/updateSafety')
+  lists = await import('../../lib/credentialLists')
+  account = await import('./AccountSettings')
 }
 
 beforeEach(async () => {
@@ -108,6 +167,10 @@ beforeEach(async () => {
   vi.setSystemTime(NOW)
   window.showToast = vi.fn()
   tokens = []
+  connections = []
+  force = {}
+  holding = false
+  held = []
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -118,6 +181,8 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   document.body.innerHTML = ''
+  lists.TOKEN_LIST.most = 2000
+  lists.APP_LIST.most = 2000
   vi.useRealTimers()
   vi.unstubAllGlobals()
   network.mutation.mockReset()
@@ -573,5 +638,337 @@ describe('New token', () => {
     await openDialog()
     expect(find<HTMLInputElement>('input[aria-label="Name"]').value).toBe('')
     expect(radio('never').checked).toBe(true)
+  })
+})
+
+/* ------------------------------------------------- the list from the server */
+
+/** `n` tokens, the oldest `Oldest helper` and the others `Token 1` to
+    `Token n-1`, newest last, with prefixes no search below matches. */
+const many = (n: number) =>
+  Array.from({ length: n }, (_, i) =>
+    token(`t${String(i).padStart(3, '0')}`, {
+      name: i === 0 ? 'Oldest helper' : `Token ${i}`,
+      prefix: 'qvt_aaaaaaa',
+      createdAt: new Date(Date.UTC(2026, 8, 1) + i * 60_000).toISOString(),
+    }),
+  )
+/** The names of the token rows on screen, in order. */
+const shownNames = () =>
+  [...document.querySelectorAll('[data-mcp-token]')].map(
+    (row) => row.querySelector(':scope > div > div')?.firstChild?.textContent,
+  )
+const end = () => find('[data-mcp-tokens-end]').getAttribute('data-mcp-tokens-end')
+const note = () => document.querySelector('[data-mcp-tokens-note]')?.textContent ?? ''
+const searchBox = () => document.querySelector<HTMLInputElement>('[data-mcp-tokens-search]')
+/** Types `text` into the token search and lets it settle and land. */
+async function search(text: string) {
+  const box = searchBox()
+  if (!box) throw new Error('no token search')
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(box, text)
+    box.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await act(async () => await new Promise((r) => setTimeout(r, 300)))
+  await settle()
+}
+const tokenReads = () => reads().filter(([name]) => name === 'tokens:personalTokens')
+
+describe('the token list read from the server', () => {
+  it('reads one batch with no empty field and never the full list, and shows no search for two tokens', async () => {
+    tokens = many(2)
+    await render()
+    expect(reads()).toEqual([['tokens:personalTokens', {}]])
+    expect(network.query.mock.calls.map(([ref]) => getFunctionName(ref))).not.toContain(
+      'tokens:listMcpTokens',
+    )
+    expect(shownNames()).toEqual(['Token 1', 'Oldest helper'])
+    expect(searchBox()).toBeNull()
+    expect(end()).toBe('end')
+    expect(note()).toBe('')
+  })
+
+  it('shows 25 of 30 with Load more, then 30 and the end, with focus on the first new row', async () => {
+    tokens = many(30)
+    await render()
+    expect(shownNames()).toHaveLength(25)
+    expect(shownNames()[0]).toBe('Token 29')
+    const more = find('[data-mcp-tokens-more]')
+    more.focus()
+    await click(more)
+    await settle()
+    expect(shownNames()).toHaveLength(30)
+    expect(shownNames().at(-1)).toBe('Oldest helper')
+    expect(end()).toBe('end')
+    expect(document.querySelector('[data-mcp-tokens-more]')).toBeNull()
+    expect(document.activeElement).toBe(find('[data-mcp-token="t004"] button'))
+    expect(tokenReads()).toHaveLength(2)
+    expect(tokenReads()[1][1]).toEqual({ cursor: expect.any(String) })
+  })
+
+  it('shows the search at 26 and keeps it while it holds text, searching the server once typing rests', async () => {
+    tokens = many(26)
+    await render()
+    expect(searchBox()).not.toBeNull()
+    await search('OLDEST')
+    expect(tokenReads().at(-1)?.[1]).toEqual({ search: 'OLDEST' })
+    expect(shownNames()).toEqual(['Oldest helper'])
+    expect(end()).toBe('end')
+    await search('nothing like it')
+    expect(shownNames()).toEqual([])
+    expect(end()).toBe('none')
+    expect(note()).toBe('No tokens match.')
+    // a search past the limit reads nothing and says so
+    const before = tokenReads().length
+    await search('x'.repeat(LIMITS.search.max + 1))
+    expect(tokenReads()).toHaveLength(before)
+    expect(end()).toBe('too_long')
+    // the box stays for the rest of the visit, also without a search
+    await search('')
+    expect(searchBox()).not.toBeNull()
+    expect(shownNames()).toHaveLength(25)
+  })
+
+  it('never lets an older search answer replace a newer one', async () => {
+    tokens = many(26)
+    await render()
+    holding = true
+    await search('oldest')
+    await search('nothing like it')
+    expect(held).toHaveLength(2)
+    // the newer search lands first, then the older one
+    const [older, newer] = held.splice(0, 2)
+    await act(async () => newer.release())
+    await settle()
+    expect(end()).toBe('none')
+    await act(async () => older.release())
+    await settle()
+    expect(shownNames()).toEqual([])
+    expect(end()).toBe('none')
+  })
+
+  it('asks for a search at the cap, and never ends a stopped batch', async () => {
+    tokens = many(60)
+    lists.TOKEN_LIST.most = 50
+    await render()
+    await click(find('[data-mcp-tokens-more]'))
+    await settle()
+    expect(shownNames()).toHaveLength(50)
+    expect(end()).toBe('full')
+    expect(note()).toBe('Search to find more tokens.')
+    expect(document.querySelector('[data-mcp-tokens-more]')).toBeNull()
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    force = { stop: 3 }
+    await render()
+    expect(shownNames()).toHaveLength(3)
+    expect(end()).toBe('more')
+    expect(note()).toContain('Qivo checked part of the list. Load more continues.')
+    expect(document.querySelector('[data-mcp-tokens-more]')).not.toBeNull()
+  })
+
+  it('says a failed first batch with Retry and offers no New token, and keeps the rows of a failed Load more', async () => {
+    tokens = many(30)
+    force = { fail: true }
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await render()
+    expect(end()).toBe('failed')
+    expect(note()).toBe("Couldn't load MCP tokens.Retry")
+    expect(document.querySelector('[data-mcp-new-token]')).toBeNull()
+    force = {}
+    await click(find('[data-mcp-tokens-retry]'))
+    await settle()
+    expect(shownNames()).toHaveLength(25)
+    force = { fail: true }
+    await click(find('[data-mcp-tokens-more]'))
+    await settle()
+    expect(shownNames()).toHaveLength(25)
+    expect(note()).toBe("Couldn't load more tokens.Retry")
+    expect(document.querySelector('[data-mcp-new-token]')).not.toBeNull()
+    force = {}
+    await click(find('[data-mcp-tokens-retry]'))
+    await settle()
+    expect(shownNames()).toHaveLength(30)
+  })
+
+  it('keeps the new secret and the rows on screen while the list reads again after a create', async () => {
+    tokens = many(2)
+    await render()
+    holding = true
+    await openDialog()
+    await type('input[aria-label="Name"]', 'Raycast on my Mac')
+    tokens = [
+      token('raycast', { name: 'Raycast on my Mac', createdAt: NOW.toISOString() }),
+      ...tokens,
+    ]
+    await click(createButton())
+    await settle()
+    expect(dialog()).toBe('created')
+    // the refresh is on its way; the rows stay, marked busy
+    expect(held).toHaveLength(1)
+    expect(shownNames()).toEqual(['Token 1', 'Oldest helper'])
+    expect(find('[data-mcp-tokens-end]').getAttribute('aria-busy')).toBe('true')
+    await release()
+    expect(dialog()).toBe('created')
+    expect(shownNames()).toEqual(['Raycast on my Mac', 'Token 1', 'Oldest helper'])
+    expect(find('[data-mcp-tokens-end]').getAttribute('aria-busy')).toBeNull()
+  })
+
+  it('keeps focus on a revoked row through the refresh, and moves it from one that sat past the first batch', async () => {
+    tokens = many(30)
+    network.mutation.mockImplementation((ref, args) => {
+      if (getFunctionName(ref) === 'tokens:revokeMcpToken')
+        tokens = tokens.map((t) => (t.id === args.id ? { ...t, revokedAt: NOW.toISOString() } : t))
+      return Promise.resolve(null)
+    })
+    await render()
+    holding = true
+    const confirm = async (id: string) => {
+      const press = find<HTMLButtonElement>(`[data-mcp-token="${id}"] button`)
+      press.focus()
+      await click(press)
+      vi.setSystemTime(Date.now() + CONFIRM_IGNORE_MS)
+      await click(press)
+      await settle()
+      return press
+    }
+    const first = await confirm('t029')
+    // while the refresh reads, the row and its button stay with focus
+    expect(held).toHaveLength(1)
+    expect(document.activeElement).toBe(first)
+    await release()
+    expect(document.activeElement).toBe(first)
+    expect(first.getAttribute('aria-label')).toBe('Delete revoked token')
+    // a token in the second batch leaves with the refresh's first batch
+    holding = false
+    await click(find('[data-mcp-tokens-more]'))
+    await settle()
+    expect(shownNames()).toHaveLength(30)
+    holding = true
+    await confirm('t002')
+    await release()
+    expect(shownNames()).toHaveLength(25)
+    expect(document.activeElement).toBe(find('[data-mcp-token="t005"] button'))
+  })
+
+  it('gives focus to Retry when a refresh fails, and reads nothing once the page has gone', async () => {
+    tokens = many(3)
+    network.mutation.mockImplementation(() => Promise.resolve(null))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await render()
+    force = { fail: true }
+    const press = find<HTMLButtonElement>('[data-mcp-token="t002"] button')
+    press.focus()
+    await click(press)
+    vi.setSystemTime(Date.now() + CONFIRM_IGNORE_MS)
+    await click(press)
+    await settle()
+    expect(shownNames()).toEqual([])
+    expect(note()).toBe("Couldn't load MCP tokens.Retry")
+    expect(document.activeElement).toBe(find('[data-mcp-tokens-retry]'))
+    // a revoke that answers after the page was left reads nothing
+    force = {}
+    await click(find('[data-mcp-tokens-retry]'))
+    await settle()
+    let answer = (_: unknown) => {}
+    network.mutation.mockImplementation(() => new Promise((resolve) => (answer = resolve)))
+    const revoke = find<HTMLButtonElement>('[data-mcp-token="t001"] button')
+    await click(revoke)
+    vi.setSystemTime(Date.now() + CONFIRM_IGNORE_MS)
+    await click(revoke)
+    const before = tokenReads().length
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await act(async () => answer(null))
+    await settle()
+    expect(tokenReads()).toHaveLength(before)
+  })
+})
+
+describe('MCP access', () => {
+  const app = (id: string, n: number): StandInConnection => ({
+    id,
+    clientId: `client-${id}`,
+    clientName: `App ${n}`,
+    profileId: 'seat',
+    orgId: 'org',
+    scopes: ['qivo:read'],
+    createdAt: new Date(Date.UTC(2026, 8, 1) + n * 60_000).toISOString(),
+    lastUsedAt: null,
+    revokedAt: null,
+    login: 'test-account',
+    approvedAt: new Date(Date.UTC(2026, 8, 1) + n * 60_000).toISOString(),
+    revocationReason: null,
+    created: n,
+    profileName: 'Nora Berg',
+    orgName: 'Northstar Labs',
+    clientGone: false,
+  })
+  async function renderSection() {
+    await act(async () =>
+      root.render(
+        <tooltip.TooltipProvider>
+          <account.McpAccessSection />
+        </tooltip.TooltipProvider>,
+      ),
+    )
+    await settle()
+  }
+
+  it('searches and refreshes one list without reading the other, which keeps its rows, armed button and dialog', async () => {
+    tokens = many(26)
+    connections = Array.from({ length: 26 }, (_, n) => app(`a${n}`, n))
+    network.mutation.mockImplementation(() => Promise.resolve(null))
+    await renderSection()
+    expect(
+      reads()
+        .map(([name]) => name)
+        .sort(),
+    ).toEqual(['connectedApps:list', 'tokens:personalTokens'])
+    // arm a token's revoke, then search the connected apps
+    const armed = find<HTMLButtonElement>('[data-mcp-token="t025"] button')
+    await click(armed)
+    const appsBox = find<HTMLInputElement>('[data-connected-apps-search]')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        appsBox,
+        'app 3',
+      )
+      appsBox.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => await new Promise((r) => setTimeout(r, 300)))
+    await settle()
+    expect(reads().filter(([name]) => name === 'tokens:personalTokens')).toHaveLength(1)
+    expect(reads().at(-1)).toEqual(['connectedApps:list', { search: 'app 3' }])
+    expect(armed.getAttribute('aria-label')).toBe(
+      'Confirm revocation. Connected clients lose access immediately',
+    )
+    expect(shownNames()).toHaveLength(25)
+    // open a connection's delete question, then revoke a token behind it
+    await act(async () => find('[data-oauth-connection="a3"]').querySelector('button')?.click())
+    expect(document.querySelector('[role="alertdialog"]')).not.toBeNull()
+    const appReads = reads().filter(([name]) => name === 'connectedApps:list').length
+    vi.setSystemTime(Date.now() + CONFIRM_IGNORE_MS)
+    await act(async () => armed.click())
+    await settle()
+    expect(reads().filter(([name]) => name === 'tokens:personalTokens')).toHaveLength(2)
+    expect(reads().filter(([name]) => name === 'connectedApps:list')).toHaveLength(appReads)
+    expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain(
+      'Delete App 3 connection?',
+    )
+  })
+
+  it('drops both answers on their way when the page is left', async () => {
+    tokens = many(2)
+    connections = [app('a1', 1)]
+    holding = true
+    await renderSection()
+    expect(held.map((h) => h.name).sort()).toEqual(['connectedApps:list', 'tokens:personalTokens'])
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await release()
+    await release()
+    expect(container.innerHTML).toBe('')
+    expect(reads()).toHaveLength(2)
   })
 })
