@@ -189,6 +189,31 @@ describe('markerView', () => {
     expect(view.rows.map((r) => r.id)).toEqual(['both', 'edge'])
     const unread = ok([row('far', W + 9)])
     expect(markerView(plan, unread, LOADING, W + 2, W + 10, ['plan']).rows).toEqual([])
+    // a flag of the shown answer shows, so the new window's read is no
+    // wait with nothing to show
+    expect(view.waiting).toBe(false)
+  })
+
+  it('says a new window that shares no week with the shown one waits with no flag to show', () => {
+    const shown = planOf(['plan'], W - 2, W + 6)
+    const later = nextPlan(shown, markerAsk(['plan'], W + 8, W + 14), true) as MarkerPlan
+    const read = ok([row('a', W)])
+    const view = markerView(later, read, LOADING, W + 8, W + 14, ['plan'])
+    // the slots and Retry stay as for any refresh
+    expect(view).toMatchObject({ state: 'refreshing', busy: true, rows: [], retry: null })
+    // must fail: an empty display that reads as finished
+    expect(view.waiting).toBe(true)
+    // a shown answer that stopped at its budget waits the same way
+    const stopped = ok([row('a', W)], true, weekToISO(W + 1))
+    expect(markerView(later, stopped, LOADING, W + 8, W + 14, ['plan'])).toMatchObject({
+      state: 'partial',
+      waiting: true,
+    })
+    // once the new read answers and shows, nothing waits
+    const swapped = markerView(swapPlan(later), ok([]), null, W + 8, W + 14, ['plan'])
+    expect(swapped).toMatchObject({ state: 'ok', waiting: false })
+    // a kept answer that refreshes with no flag in its window is no new read
+    expect(markerView(shown, ok([], false), null, W - 2, W + 6, ['plan']).waiting).toBe(false)
   })
 
   it('says a stopped answer is partial, with its flags up to the stop and the day it stopped at', () => {
@@ -242,6 +267,7 @@ describe('markerLine', () => {
   const line = (view: Parameters<typeof markerLine>[0], mine = false) => markerLine(view, mine, day)
   const of = (state: Parameters<typeof markerLine>[0]['state']) => ({
     state,
+    waiting: false,
     stopped: null,
     refusal: null,
   })
@@ -273,5 +299,13 @@ describe('markerLine', () => {
 
   it('says nothing while the flags are whole, refreshing or not asked', () => {
     for (const state of ['ok', 'refreshing', 'none'] as const) expect(line(of(state))).toBeNull()
+  })
+
+  it('says a new read with no flag to show meanwhile is loading, also beside a stopped answer', () => {
+    // must fail: nothing said while the new window's flags are on their way
+    // and none of the shown answer's shows
+    expect(line({ ...of('refreshing'), waiting: true })).toBe('Loading milestones…')
+    const stopped = { ...of('partial'), stopped: '2026-12-07', waiting: true }
+    expect(line(stopped, true)).toBe('Loading milestones…')
   })
 })

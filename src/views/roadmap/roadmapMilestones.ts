@@ -190,6 +190,10 @@ export type MarkerView<R extends Marker> = {
   state: MarkerState
   /** whether a read is on its way, so the header band is busy */
   busy: boolean
+  /** whether a new window's or set of projects' read is on its way while
+      none of the shown answer's flags shows, so the line says the flags
+      are loading */
+  waiting: boolean
   /** the flags to draw, in the window and of a project named now, in the
       server's order */
   rows: readonly R[]
@@ -229,6 +233,7 @@ export function markerView<R extends Marker>(
   const empty: MarkerView<R> = {
     state: 'none',
     busy: false,
+    waiting: false,
     rows: [],
     stored: NO_STORED,
     stopped: null,
@@ -273,20 +278,27 @@ export function markerView<R extends Marker>(
   if (note) return note
   if (shown.state !== 'ok') return { ...base, state: 'loading', busy: true }
   const busy = !shown.current || pending !== null
-  if (shown.answer.stopped !== null) return { ...base, state: 'partial', busy }
-  return { ...base, state: busy ? 'refreshing' : 'ok', busy }
+  const waiting = pending !== null && rows.length === 0
+  if (shown.answer.stopped !== null) return { ...base, state: 'partial', busy, waiting }
+  return { ...base, state: busy ? 'refreshing' : 'ok', busy, waiting }
 }
 
 /** What the line beside the Roadmap's toolbar says for `view`, in My view
     (`mine`) or a project, with `day` formatting a stored day, or null when
     the flags are whole or on their way over flags shown. A wait with no
-    flag to show says so at once, as the dependency line does. */
+    flag to show says so at once, as the dependency line does, also while
+    a new window's or set of projects' read is on its way and none of the
+    shown answer's flags shows (`waiting`), as after a window change that
+    shares no week with the one before. */
 export function markerLine(
-  view: Pick<MarkerView<Marker>, 'state' | 'stopped' | 'refusal'>,
+  view: Pick<MarkerView<Marker>, 'state' | 'waiting' | 'stopped' | 'refusal'>,
   mine: boolean,
   day: (iso: string) => string,
 ): string | null {
   const openOne = 'Open a project to see its milestones.'
+  // markerView says a read waits only beside a refreshing or partial
+  // answer none of whose flags shows
+  if (view.waiting) return 'Loading milestones…'
   switch (view.state) {
     case 'loading':
       return 'Loading milestones…'

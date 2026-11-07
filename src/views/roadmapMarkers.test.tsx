@@ -639,6 +639,68 @@ describe('a window move', { timeout: 30_000 }, () => {
     expect(liveRanges()[0]).toBe(pending)
   })
 
+  /** Sets a window of the weeks `start` to `end` from this week's through
+      the window menu's Custom range, the end first. */
+  async function customWindow(start: number, end: number) {
+    const glyph = await waitFor(
+      () => document.querySelector<HTMLElement>('[data-workspace-view] [data-win="menu"]'),
+      "the window menu's glyph",
+    )
+    await act(async () => glyph.click())
+    const custom = await waitFor(
+      () => document.querySelector<HTMLElement>('[data-win-custom]'),
+      'Custom range',
+    )
+    await act(async () => custom.click())
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    for (const [which, value] of [
+      ['end', end],
+      ['start', start],
+    ] as const) {
+      const input = await waitFor(
+        () => document.querySelector<HTMLInputElement>(`[data-win-weeks="${which}"]`),
+        `the ${which} weeks field`,
+      )
+      await act(async () => {
+        setter?.call(input, String(value))
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+    }
+    await settle()
+  }
+
+  it.each([
+    ['My view', '/app/~/roadmap/mine'],
+    ['a project', '/app/testbed/roadmap/p/1'],
+  ])(
+    'says the flags are loading in %s after a window that shares no week with the last, until its read answers',
+    async (_, path) => {
+      await app(spread(), path)
+      await roadmap()
+      await waitFor(() => flag('early') && flag('both'), 'the first window')
+      const { iso, w0, w1 } = await grid()
+      // every read but the first window's waits; the tasks answer at once
+      holds = (sub) => sub.args.from !== iso(w0) || sub.args.to !== iso(w1 + 1)
+      await customWindow(8, 14)
+      await roadmap('refreshing')
+      const pending = liveRanges().find((s) => s.args.from === iso(w0 + 10))
+      expect(pending?.args.to).toBe(iso(w0 + 17))
+      // the first window's read stays live, none of its flags in the new one
+      expect(liveRanges()).toHaveLength(2)
+      expect(document.querySelector('[data-workspace-view] [data-msflag]')).toBeNull()
+      // must fail: an empty display with nothing said, which reads as finished
+      expect(line()?.textContent).toBe('Loading milestones…')
+      holds = () => false
+      await act(async () => {
+        if (pending) answer(pending)
+      })
+      await roadmap('ok')
+      expect(flag('late')).not.toBeNull()
+      expect(line()).toBeNull()
+      expect(liveRanges()).toEqual([pending])
+    },
+  )
+
   it('drops the new window’s read on a pan back before it answers', async () => {
     await app(spread(), '/app/~/roadmap/mine')
     await roadmap()
