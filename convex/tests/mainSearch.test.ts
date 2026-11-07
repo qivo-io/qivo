@@ -49,6 +49,7 @@ import {
   plantSeat,
   type T,
   uuid,
+  withOrg,
   withReadingAdmin,
 } from './helpers.setup'
 import { northstarId, plantNorthstar } from './northstar.setup'
@@ -445,15 +446,23 @@ describe('who main Search shows a task to', () => {
     expect(await search(t, member, { text: 'gearbox' })).toEqual(EMPTY)
   })
 
-  it('gives an organization admin what projectLevel gives', async () => {
+  it('gives an organization admin what their own rows give, and nothing for the role', async () => {
     const t = newT()
-    const f = await withReadingAdmin(t)
+    const f = await withOrg(t)
     const elsewhere = await subOf(t, f, f.hidden)
     const unshared = await task(t, f, elsewhere, 'Gearbox spares')
-    // today an admin leads every project (lib/access.ts levelUnder); the
-    // admin access split leaves this task out
-    expect(ids(await search(t, f.admin, { text: 'gearbox' }))).toEqual([unshared.id])
+    // the admin holds no lead, grant or share, so the search finds nothing
+    expect(ids(await search(t, f.admin, { text: 'gearbox' }))).toEqual([])
     expect(ids(await search(t, f.guest, { text: 'gearbox' }))).toEqual([])
+    // a grant of their own on Skunkworks finds it, as anyone's
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: f.hidden.id,
+        profile_id: f.admin.id,
+        level: 'user',
+      }),
+    )
+    expect(ids(await search(t, f.admin, { text: 'gearbox' }))).toEqual([unshared.id])
   })
 
   it("adds a second seat's matches, each organization answering its own task numbers", async () => {
@@ -927,10 +936,11 @@ describe('searching project by project', () => {
     expect(guest.page.coverage).toEqual(COMPLETE)
     // two projects, a title and a description query each, and no name query
     expect(guest.searches).toBe(4)
-    // the organization's search reads the hidden tasks and stops at the
-    // cap, after one query of its project names
+    // the admin, who reads Skunkworks too by a grant, is searched project
+    // by project like anyone, its three sub-projects, and stops at the cap
+    // in the one whose 300 tasks they read
     const admin = await searchRun(t, [f.admin], { text: 'gearbox' })
-    expect(admin.searches).toBe(3)
+    expect(admin.searches).toBe(6)
     expect(admin.page.coverage).toEqual(stopped('candidates'))
   })
 
@@ -1033,9 +1043,10 @@ describe('searching project by project', () => {
     expect(withHidden.page).toEqual(without.page)
     expect(without.page.coverage).toEqual(stopped('projects'))
     expect(without.page.rows).toHaveLength(3)
-    // an admin, who sees every project, gets coverage from the cap
+    // an admin searched whole is told the same, as no role sees every
+    // project by itself
     expect((await searchRun(t, [f.admin], { text: 'zebra' })).page.coverage).toEqual(
-      stopped('candidates'),
+      stopped('projects'),
     )
     // the guest's search project by project reads no hidden task and is
     // exact
@@ -1251,6 +1262,9 @@ describe("description rows' copies", () => {
           await ctx.db.patch(row._id, { project_id: undefined, archived_at: undefined })
       }
     })
+    // the admin's seat searched whole, whose candidates come from the whole
+    // organization's index
+    MAIN_SEARCH.projects = 0
     expect(ids(await search(t, f.admin, { text: 'capacitor' }))).toEqual([active.id])
     expect(
       ids(await search(t, f.admin, { text: 'capacitor', include_archived: true })).sort(),
@@ -1706,13 +1720,12 @@ describe('the project results of main Search', () => {
     expect(await sees(user)).toEqual(
       Array(2).fill(sorted(f.meta, f.sub, f.sub2, sibling, f.hidden, f.otherProject, away)),
     )
-    // today an admin leads every project of a meta's tree (lib/access.ts
-    // levelUnder); the admin access split leaves out what they hold nothing on
+    // the admin sees what their grants on TBED and Skunkworks reach
     const adminSees = sorted(f.meta, f.sub, f.sub2, sibling, f.hidden)
     expect(await sees([f.admin])).toEqual([adminSees, adminSees])
   })
 
-  it('shows exactly the live projects canSeeProject shows, for every access shape, on both paths', async () => {
+  it('shows exactly the live projects canSeeProject shows, for every access shape and role, an admin included, on both paths', async () => {
     const extra: Shape[] = [
       [
         'user team share on an archived sub-project',
@@ -1741,7 +1754,9 @@ describe('the project results of main Search', () => {
       await t.run((ctx) => plant(ctx, f, subject))
       await nameAll(t, 'zephyr')
       await withReach(t)
-      for (const org_role of ['user', 'viewer', 'guest'] as const) {
+      // an admin is searched by the root rows of their seat and teams like
+      // a member, so the same shapes show and the same miss past the bounds
+      for (const org_role of ['admin', 'user', 'viewer', 'guest'] as const) {
         const me = { ...subject, org_role }
         const expected = await t.run(async (ctx) => {
           const out: string[] = []
@@ -1812,7 +1827,7 @@ describe('the project results of main Search', () => {
         ...GRANT_LEVELS.map((level) => `${level} team share on a sub-project`),
         'user team share on an archived sub-project',
       ]
-        .flatMap((shape) => [`${shape} as user`, `${shape} as viewer`])
+        .flatMap((shape) => [`${shape} as admin`, `${shape} as user`, `${shape} as viewer`])
         .sort(),
     )
   })
@@ -2029,7 +2044,7 @@ describe('the project results of main Search', () => {
     expect(projectIds(await found())).toEqual([f.meta.id])
   })
 
-  it("reads each of an admin's name candidates once", async () => {
+  it("reads each of an admin's name candidates once, beside their own root rows", async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     // the admin leads them, as admin status alone shows no project
@@ -2039,21 +2054,29 @@ describe('the project results of main Search', () => {
       lead_id: f.admin.id,
     }))
     await withReach(t)
+    // the admin's seat searched whole, with a name query
+    MAIN_SEARCH.projects = 0
     const none = await searchRun(t, [f.admin], { text: 'quokka' })
     const ten = await searchRun(t, [f.admin], { text: 'zephyr' })
     expect(projectIds(ten.page)).toHaveLength(10)
     expect(ten.searches).toBe(none.searches)
     // one document each and no read of its row by id, which would add a
     // range and a document; convex-test counts no range for a search result,
-    // where Convex counts one
-    expect(ten.read.documents - none.read.documents).toBe(10)
-    expect(ten.read.ranges - none.read.ranges).toBe(0)
+    // where Convex counts one. Beside them the admin's sight reads, once,
+    // their own root rows (projectSight), as any member's does: their
+    // membership of Hardware, then the twelve root rows of their seat (the
+    // grants on TBED and Skunkworks and the ten projects they lead) and
+    // none of Hardware's, in three ranges
+    expect(ten.read.documents - none.read.documents).toBe(10 + 1 + 12)
+    expect(ten.read.ranges - none.read.ranges).toBe(3)
   })
 
   it('leaves the names of an organization without nav_at out of a search of it whole', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const torque = await task(t, f, f.sub, 'Firmware torque')
+    // the admin's seat searched whole
+    MAIN_SEARCH.projects = 0
     const unready = await searchRun(t, [f.admin], { text: 'firmware' })
     expect(unready.page.rows.map((row) => row.kind)).toEqual(['task'])
     expect(taskIds(unready.page)).toEqual([torque.id])
@@ -2061,13 +2084,15 @@ describe('the project results of main Search', () => {
     expect(unready.searches).toBe(2)
     // a seat searched project by project needs no readiness
     // the project's name equals the text and ranks first
+    MAIN_SEARCH.projects = DEFAULT_SEARCH.projects
     const guest = await searchRun(t, [f.guest], { text: 'firmware' })
     expect(ids(guest.page)).toEqual([f.sub.id, torque.id])
     expect(guest.page.coverage).toEqual(COMPLETE)
     await withReach(t)
+    MAIN_SEARCH.projects = 0
     const ready = await searchRun(t, [f.admin], { text: 'firmware' })
     expect(ids(ready.page)).toEqual([f.sub.id, torque.id])
-    expect(ready.page.coverage).toEqual(COMPLETE)
+    expect(ready.page.coverage).toEqual(stopped('projects'))
     expect(ready.searches).toBe(3)
     // and once nav_at is gone again, as no organization's is
     await stampNav(t, f.org.id, null)
@@ -2155,16 +2180,19 @@ describe('the project results of main Search', () => {
     const f = await withReadingAdmin(t)
     await plantProjects(t, f.org.id, 5, (i) => ({ parent_id: f.meta.id, name: `Zephyr ${i}` }))
     await withReach(t)
-    expect((await search(t, f.admin, { text: 'zephyr' })).coverage).toEqual(COMPLETE)
+    // the admin's seat searched whole, which says it may miss matches
+    // whatever its name source did, so its stops show in what it found
+    MAIN_SEARCH.projects = 0
+    const whole = await search(t, f.admin, { text: 'zephyr' })
+    expect(whole.coverage).toEqual(stopped('projects'))
+    expect(projectIds(whole)).toHaveLength(5)
     MAIN_SEARCH.names = 2
     const capped = await search(t, f.admin, { text: 'zephyr' })
-    expect(capped.coverage).toEqual(stopped('candidates'))
+    expect(capped.coverage).toEqual(stopped('projects'))
     expect(projectIds(capped)).toHaveLength(2)
     MAIN_SEARCH.names = DEFAULT_SEARCH.names
-    // a seat searched whole that does not see every project
-    MAIN_SEARCH.projects = 0
+    // the user's seat searched whole alike
     expect((await search(t, f.user, { text: 'zephyr' })).coverage).toEqual(stopped('projects'))
-    MAIN_SEARCH.projects = DEFAULT_SEARCH.projects
     // project rows near Convex's 1 MiB, more than the seat's whole
     // allowance holds, spend the names' quarter of it, and the seat's task
     // sources still read with the rest
@@ -2176,8 +2204,9 @@ describe('the project results of main Search', () => {
     await withReach(t)
     const titled = await task(t, f, f.sub, 'Zephyr')
     const large = await searchRun(t, [f.admin], { text: 'zephyr' })
-    expect(large.page.coverage).toEqual(stopped('reads'))
+    expect(large.page.coverage).toEqual(stopped('projects'))
     expect(projectIds(large.page).length).toBeGreaterThan(0)
+    expect(projectIds(large.page).length).toBeLessThan(17)
     expect(taskIds(large.page)).toEqual([titled.id])
     // a quarter of the seat's 8 MiB, passed by the one row that crosses it
     expect(large.read.bytes).toBeLessThan(4 << 20)
@@ -2230,25 +2259,28 @@ describe('the project results of main Search', () => {
   it("reads names only within what the seat's number lookups left of its allowance", async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
+    // sub-projects of TBED, which the admin reads by a grant, so their
+    // sight reads two root rows and not one a project
     await plantProjects(t, f.org.id, 40, (i) => ({
-      type: 'meta',
+      parent_id: f.meta.id,
       name: `Zephyr 901 902 ${i}`,
-      lead_id: f.admin.id,
     }))
     await withReach(t)
     // an admin's seat, searched whole and planned with no read, gets the
     // whole allowance, and its two number lookups, which find no task,
     // count as LOOKUP each, leaving less than the names' quarter of it
+    MAIN_SEARCH.projects = 0
     MAIN_SEARCH.documents = 140
     const left = MAIN_SEARCH.documents - 2 * LOOKUP.documents
     expect(left).toBeLessThan(MAIN_SEARCH.documents / 4)
     const run = await searchRun(t, [f.admin], { text: 'QN-901 QN-902 zephyr' })
-    // the lookups read nothing and the top-level projects' rows need no
-    // other read, so every document read is one the seat had left
+    // the lookups read nothing, and the names and their checks read within
+    // what the seat had left
     expect(run.read.documents).toBeLessThanOrEqual(left)
     expect(projectIds(run.page).length).toBeGreaterThan(0)
     expect(projectIds(run.page).length).toBeLessThan(left)
-    expect(run.page.coverage).toEqual(stopped('reads'))
+    // a seat searched whole says it may miss matches, whatever stopped it
+    expect(run.page.coverage).toEqual(stopped('projects'))
   })
 
   it('keeps the task sources of a member past the root row bound', async () => {
@@ -2381,11 +2413,8 @@ describe('project results at Convex’s limits', () => {
       expect(run.read.bytes).toBeLessThan(16 << 20)
       expect(run.read.documents).toBeLessThan(32_000)
       expect(run.read.ranges).toBeLessThan(4_096)
-      if (who === f.admin)
-        expect(['reads', 'candidates']).toContain(
-          (run.page.coverage as { stopped: string }).stopped,
-        )
-      else expect(run.page.coverage).toEqual(stopped('projects'))
+      // both seats searched whole, an admin's as a member's
+      expect(run.page.coverage).toEqual(stopped('projects'))
     }
   })
 
@@ -2426,11 +2455,12 @@ describe('project results at Convex’s limits', () => {
       await task(t, f, f.sub, `Zephyr task ${i}`, { description: 'zephyr notes' })
     await withReach(t)
     // the guest is searched project by project, with no name query; the
-    // member and the admin are searched whole, each with one
+    // member and the admin, who are in the team, are searched whole, each
+    // with one, and say they may miss matches
     for (const [who, searches, coverage] of [
       [guest, 2, COMPLETE],
       [member, 3, stopped('projects')],
-      [f.admin, 3, stopped('candidates')],
+      [f.admin, 3, stopped('projects')],
     ] as const) {
       const run = await searchRun(t, [who], { text: 'zephyr' })
       expect(run.searches).toBe(searches)

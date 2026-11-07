@@ -436,6 +436,18 @@ describe('per-subject history, kept whole and read a page at a time', () => {
     expect(seen.rows.map((row) => row.ts)).toEqual(
       Array.from({ length: 20 }, (_, i) => at(START - 3_600_000 + i)),
     )
+    // an admin with a grant on TBED alone is judged as a member and gets the
+    // viewer's rows, not the 600 that name Skunkworks
+    const ada = await plantLogin(
+      t,
+      await plantSeat(t, { org_id: f.org.id, name: 'Ada', org_role: 'admin', accepted_at: NOW }),
+    )
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', { project_id: f.meta.id, profile_id: ada.id, level: 'user' }),
+    )
+    const adas = (await t.run((ctx) => taskHistoryPage(ctx, ada, task))).rows
+    expect(adas.map((row) => row.ts)).toEqual(seen.rows.map((row) => row.ts))
+    // the fixture's admin, who reads Skunkworks by a grant, receives them all
     expect((await t.run((ctx) => taskHistoryPage(ctx, f.admin, task))).rows).toHaveLength(500)
     // a read that fills up before it finds a row answers none and where to go on
     const room = HISTORY_ROOM.room
@@ -443,14 +455,17 @@ describe('per-subject history, kept whole and read a page at a time', () => {
     let stopped: Awaited<ReturnType<typeof page>>
     try {
       stopped = await page()
-      // REST and MCP cannot answer an empty page that is not the end
-      const rest = t.query(internal.machine.records.restTaskActivity, {
-        callerId: f.viewer.id,
-        access: 'read',
-        ref: task.id,
-      })
-      const e = await expectRefusal(rest, 'rule')
-      expect(e.data.message).toBe(HISTORY_HIDDEN)
+      // REST and MCP cannot answer an empty page that is not the end, for
+      // the viewer and for the admin alike
+      for (const callerId of [f.viewer.id, ada.id]) {
+        const rest = t.query(internal.machine.records.restTaskActivity, {
+          callerId,
+          access: 'read',
+          ref: task.id,
+        })
+        const e = await expectRefusal(rest, 'rule')
+        expect(e.data.message).toBe(HISTORY_HIDDEN)
+      }
     } finally {
       HISTORY_ROOM.room = room
     }
@@ -994,7 +1009,7 @@ describe('which task rows a member receives, in the task window and over REST', 
     expect(await seen(f.admin)).toEqual([namesHidden, namesVisible])
   })
 
-  it('hides a row stored without its list from members only, whatever its text', async () => {
+  it('hides a row stored without its list from every member, an admin included, whatever its text', async () => {
     const { f, visible, seen, plant } = await setup()
     const ids = await plant([
       { detail: `(blocks QN-${visible.num})` },
@@ -1002,7 +1017,7 @@ describe('which task rows a member receives, in the task window and over REST', 
       { verb: 'renamed', detail: 'from “Oldest”', named_task_nums: [] },
     ])
     expect(await seen(f.guest)).toEqual([ids[2]])
-    expect(await seen(f.admin)).toEqual(ids)
+    expect(await seen(f.admin)).toEqual([ids[2]])
   })
 
   it('checks a named task where it is now: hidden, deleted, purged or restored', async () => {
@@ -1071,8 +1086,9 @@ describe('which task rows a member receives, in the task window and over REST', 
         ids: [(await itemOf(restored.id)) ?? ''],
       })
       await t.finishAllScheduledFunctions(vi.runAllTimers)
+      // the purged task's row reaches no member, an admin as anyone
       expect(await seen(f.guest)).toEqual([toMoving, toRestored])
-      expect(await seen(f.admin)).toEqual([toMoving, toRestored, toPurged])
+      expect(await seen(f.admin)).toEqual([toMoving, toRestored])
     } finally {
       vi.useRealTimers()
     }
@@ -1166,7 +1182,7 @@ describe("a member's history, checked against canAccessProject on each project i
       return kept
     })
 
-  it('gives every role and kind of member the rows the oracle keeps, in the window, over REST and MCP and to taskWriters, for every grant shape', async () => {
+  it('gives every role and kind of member, an admin included, the rows the oracle keeps, in the window, over REST and MCP and to taskWriters, for every grant shape', async () => {
     // which rows, by their place, some shape's member receives
     const seen = new Set<string>()
     for (const [name, plant] of SHAPES) {
@@ -1211,7 +1227,8 @@ describe("a member's history, checked against canAccessProject on each project i
         { project_id: undefined },
       ])
       const anchor = rows[rows.length - 1]
-      for (const org_role of ['user', 'guest', 'viewer'] as const) {
+      // an organization admin receives what the member's rule gives, as anyone
+      for (const org_role of ['user', 'guest', 'viewer', 'admin'] as const) {
         for (const kind of PROFILE_KINDS) {
           const as_ = `${name}: ${org_role} ${kind}`
           subject = await t.run(async (ctx) => {

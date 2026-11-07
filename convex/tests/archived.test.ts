@@ -259,7 +259,9 @@ describe('issues.archivedPage', () => {
     // the last page knows it is the last one, so no empty page follows it
     expect(family.sizes).toEqual([...Array(9).fill(25), 5])
     expect(family.scanned).toBe(230)
-    // All projects reads the organization's archive and lists the same
+    // All projects merges the projects the admin reaches by their grants,
+    // found through their reach rows, and lists the same
+    await withReach(t)
     const all = await everyPage(t, f.admin, allOf(f.org.id))
     expect(all.ids).toEqual(expected)
     expect(all.sizes).toEqual([...Array(9).fill(25), 5])
@@ -720,6 +722,7 @@ describe('issues.archivedPage', () => {
     // the label matches every task, so the search reads each one's labels
     const found = await pageOf(t, f.admin, { ...scope, search: 'hardware' })
     expect(found.rows).toHaveLength(25)
+    await withReach(t)
     const missing = await pageOf(t, f.admin, { ...allOf(f.org.id), search: 'hardwarez' })
     expect(missing.rows).toHaveLength(0)
     expect(missing.next_cursor).not.toBeNull()
@@ -732,6 +735,7 @@ describe('issues.archivedPage', () => {
     ]) {
       const t = newT()
       const f = await withReadingAdmin(t)
+      await withReach(t)
       await plantMany(t, f, 25, (i) => ({ project_id: f.sub.id, archived_at: day(1 + (i % 9)) }))
       const expected = (await archiveOrder(t, f.org.id, [f.sub.id])).map((row) => row.id)
       const restore = expected[10]
@@ -778,12 +782,14 @@ describe('issues.archivedPage', () => {
     ] as const) {
       expect(await pageOf(t, profile, args), JSON.stringify(args)).toEqual(empty)
     }
-    // the other organization's own admin sees its archive
+    // the other organization's own admin, who leads its project, sees its
+    // archive
+    await withReach(t)
     for (const args of [scopeOf(f.otherOrg.id, f.otherProject.id), allOf(f.otherOrg.id)])
       expect((await pageOf(t, f.otherAdmin, args)).rows).toHaveLength(1)
   })
 
-  it('never shows an out-of-scope task in the cursor of an admin page that reads the whole archive', async () => {
+  it('refuses a page whose projects do not open side by side within its budget, for an admin as for a guest', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     // an archived top-level project, whose tasks the page leaves out, archived most recently
@@ -810,34 +816,19 @@ describe('issues.archivedPage', () => {
       await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, archived_at: day(d) })
     }
     const listed = (await archiveOrder(t, f.org.id, [f.sub.id, f.sub2.id])).map((row) => row.id)
-    // no share for opening projects one by one, so an admin's family pages
-    // read the organization's archive, as All projects does for an admin,
-    // and a budget of one document ends each page after its first task
-    ARCHIVE_PAGE.opening = 0
+    await withReach(t)
+    // within the budget the family lists, never the archived project's tasks
+    for (const scope of [scopeOf(f.org.id, f.meta.id), allOf(f.org.id)])
+      expect((await everyPage(t, f.admin, scope)).ids).toEqual(listed)
+    // a page reads only its own projects, which do not fit a budget of one
+    // document side by side, so it is refused for everyone, as no page
+    // reads the organization's archive
     ARCHIVE_PAGE.documents = 1
-    for (const scope of [scopeOf(f.org.id, f.meta.id), allOf(f.org.id)]) {
-      const first = await pageOf(t, f.admin, scope)
-      // the budget ran out on a task outside the scope: no rows, none counted, more to read
-      expect(first.rows).toEqual([])
-      expect(first.scanned).toBe(0)
-      expect(first.next_cursor).toMatch(/^3~[0-9a-f]+$/)
-      for (const task of shelved) {
-        for (const part of [
-          task._id,
-          String(Math.trunc(task._creationTime)),
-          task.archived_at ?? '',
-        ]) {
-          expect(first.next_cursor).not.toContain(part)
-        }
-      }
-      // the pages still move past them and list the family's once each
-      const all = await everyPage(t, f.admin, scope)
-      expect(all.ids).toEqual(listed)
-      expect(all.scanned).toBe(listed.length)
-    }
-    // a guest's page reads only their own projects, which do not fit that
-    // budget side by side, so it is refused
-    expect(await pageOf(t, f.guest, scopeOf(f.org.id, f.meta.id))).toEqual(TOO_WIDE)
+    for (const who of [f.admin, f.guest])
+      for (const scope of [scopeOf(f.org.id, f.meta.id), allOf(f.org.id)])
+        expect(await pageOf(t, who, scope), who.name).toEqual(TOO_WIDE)
+    // the archived project's tasks never show
+    expect(shelved.some((task) => listed.includes(task.id))).toBe(false)
   })
 
   it('refuses a cursor from another scope, organization, kind or version', async () => {
@@ -936,7 +927,7 @@ describe('issues.archivedPage', () => {
     )
   })
 
-  it('refuses a family past its sub-project bound for anyone but an admin, who reads it whole', async () => {
+  it('refuses a family past its sub-project bound for anyone, an admin included', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     // the guest sees FW and PCB, not this third sub-project of TBED
@@ -990,11 +981,13 @@ describe('issues.archivedPage', () => {
     expect((await everyPage(t, f.guest, scopeOf(f.org.id, otherSub.id))).ids).toEqual(
       await order([otherSub.id]),
     )
-    // an admin, who sees every project, reads the organization's archive past it
-    const admin = await everyPage(t, f.admin, { ...scope, limit: 5 })
-    const live = await order([f.sub.id, f.sub2.id, sibling.id, doc.id])
-    expect(admin.ids).toEqual(live)
-    expect(admin.scanned).toBe(live.length)
+    // and an admin's, who reads the family by a grant, as no page reads the
+    // organization's archive
+    expect(await pageOf(t, f.admin, scope)).toEqual(TOO_WIDE)
+    ARCHIVED_SCOPE.subProjects = expansion.subProjects
+    expect((await everyPage(t, f.admin, { ...scope, limit: 5 })).ids).toEqual(
+      await order([f.sub.id, f.sub2.id, sibling.id, doc.id]),
+    )
   })
 
   it('lists for All projects every archived task of the live projects the caller sees, only', async () => {
@@ -1038,16 +1031,19 @@ describe('issues.archivedPage', () => {
     const scope = allOf(f.org.id)
     for (const ready of [false, true]) {
       if (ready) await withReach(t)
-      // an admin sees every live project, Skunkworks too, through the organization's archive
-      expect((await everyPage(t, f.admin, scope)).ids).toEqual(
-        await order([f.sub.id, f.sub2.id, skunkSub.id]),
-      )
       if (!ready) {
-        // without complete reach rows no one else's projects can be found
+        // without complete reach rows no one's projects can be found, an
+        // admin's included
+        expect(await pageOf(t, f.admin, scope)).toEqual(TOO_WIDE)
         expect(await pageOf(t, f.guest, scope)).toEqual(TOO_WIDE)
         expect(await pageOf(t, ungranted, scope)).toEqual(TOO_WIDE)
         continue
       }
+      // the admin sees the live projects under TBED and Skunkworks through
+      // their grants
+      expect((await everyPage(t, f.admin, scope)).ids).toEqual(
+        await order([f.sub.id, f.sub2.id, skunkSub.id]),
+      )
       // a guest sees TBED's sub-projects through their grant
       expect((await everyPage(t, f.guest, scope)).ids).toEqual(await order([f.sub.id, f.sub2.id]))
       // a member without a grant sees none
@@ -1229,8 +1225,8 @@ describe('issues.archivedPage', () => {
       archived_at: day(25),
     }))
     expect(await settings()).toEqual(without)
-    // an admin reaches every archived task, the hidden ones too, through
-    // the organization's archive
+    // an admin who reads Skunkworks by a grant reaches its archived tasks
+    // too, through the projects their grants reach
     ARCHIVE_PAGE.documents = page.documents
     expect(new Set((await everyPage(t, f.admin, allOf(f.org.id))).ids)).toEqual(
       new Set([...visible, ...newer]),
@@ -1253,10 +1249,10 @@ describe('issues.archivedPage', () => {
     ARCHIVE_PAGE.documents = 1
     expect(await pageOf(t, f.guest, scopeOf(f.org.id, f.hidden.id))).toEqual(EMPTY)
     expect(await pageOf(t, f.guest, scopeOf(f.org.id, uuid()))).toEqual(EMPTY)
-    // its lead sees it, so past the bound they are told to choose a sub-project
+    // its lead sees it, so past the bound they are told to choose a
+    // sub-project, and so is the admin who reads it by a grant
     expect(await pageOf(t, f.user, scopeOf(f.org.id, f.hidden.id))).toEqual(TOO_WIDE)
-    // an admin reads it through the organization's archive
-    expect((await everyPage(t, f.admin, scopeOf(f.org.id, f.hidden.id))).ids).toHaveLength(9)
+    expect(await pageOf(t, f.admin, scopeOf(f.org.id, f.hidden.id))).toEqual(TOO_WIDE)
   })
 
   it('counts only live sub-projects toward the bound, with or without their archive state', async () => {
@@ -1307,7 +1303,7 @@ describe('issues.archivedPage', () => {
     }
   })
 
-  it('answers Restore and owners on All projects for a Viewer and a guest, and past the bound for an admin', async () => {
+  it('answers Restore and owners on All projects for a Viewer, a guest and an admin, and refuses past the bound for everyone', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     await withReach(t)
@@ -1337,14 +1333,17 @@ describe('issues.archivedPage', () => {
         [reviewed.id, 'guest', true],
       ])
     }
-    // past the bound only an admin's page lists, through the organization's archive
-    ARCHIVED_SCOPE.subProjects = 1
-    for (const scope of [allOf(f.org.id), scopeOf(f.org.id, f.meta.id)]) {
-      expect(await pageOf(t, f.viewer, scope)).toEqual(TOO_WIDE)
+    // the admin, with User by a grant, restores as the guest does
+    for (const scope of [allOf(f.org.id), scopeOf(f.org.id, f.meta.id)])
       expect(shown(await pageOf(t, f.admin, scope))).toEqual([
         [owned.id, 'user', true],
         [reviewed.id, 'guest', true],
       ])
+    // past the bound every page is refused, an admin's included
+    ARCHIVED_SCOPE.subProjects = 1
+    for (const scope of [allOf(f.org.id), scopeOf(f.org.id, f.meta.id)]) {
+      expect(await pageOf(t, f.viewer, scope)).toEqual(TOO_WIDE)
+      expect(await pageOf(t, f.admin, scope)).toEqual(TOO_WIDE)
     }
   })
 
@@ -1381,12 +1380,13 @@ describe('issues.archivedPage', () => {
     ]
     for (const scope of scopes)
       expect((await everyPage(t, f.guest, scope)).ids, JSON.stringify(scope)).toEqual([fw.id])
-    // past the bound the guest is refused, and the admin sees both
+    // the admin, who holds a grant on TBED itself, sees both within the
+    // bound, and past it everyone is refused
+    expect((await everyPage(t, f.admin, allOf(f.org.id))).ids).toEqual([inTop.id, fw.id])
     ARCHIVED_SCOPE.subProjects = 0
-    for (const scope of scopes) expect(await pageOf(t, f.guest, scope)).toEqual(TOO_WIDE)
-    for (const bound of [200, 0]) {
-      ARCHIVED_SCOPE.subProjects = bound
-      expect((await everyPage(t, f.admin, allOf(f.org.id))).ids).toEqual([inTop.id, fw.id])
+    for (const scope of scopes) {
+      expect(await pageOf(t, f.guest, scope)).toEqual(TOO_WIDE)
+      expect(await pageOf(t, f.admin, scope)).toEqual(TOO_WIDE)
     }
   })
 
@@ -1639,6 +1639,7 @@ describe('issues.archivedPage', () => {
       archived_at: day(2),
     })
     await plantIssue(t, { org_id: f.org.id, project_id: shelved.id, archived_at: day(3) })
+    await withReach(t)
     const ids = async (args: PageArgs) => (await pageOf(t, f.admin, args)).rows.map((row) => row.id)
     expect(await ids(scopeOf(f.org.id, f.meta.id))).toEqual([kept.id])
     expect(await ids(allOf(f.org.id))).toEqual([kept.id])
@@ -1784,6 +1785,7 @@ describe('issues.archivedPage', () => {
         }
       })
     }
+    await withReach(t)
     /** What one call of archivedPageCore answers and reads. */
     const measured = (search: string) =>
       t.run(async (ctx) => {

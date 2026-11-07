@@ -23,8 +23,9 @@
  * order, so each source is read in that order up to its cap
  * (MAIN_SEARCH.candidates, MAIN_SEARCH.names for names), and every
  * candidate is judged here. It counts only when the caller may see it
- * (ordinary project access, lib/access.ts accessOf, so an organization
- * admin follows projectLevel like everyone else) and every term matches its
+ * (ordinary project access, lib/access.ts accessOf, which judges an
+ * organization admin by their own rows like everyone else) and every term
+ * matches its
  * number, title or readable description, or a project's name
  * (lib/searchTerms.ts, lib/md.ts readableText). The matches of every seat
  * and both kinds are ranked together (lib/searchTerms.ts scoreOf, then
@@ -118,8 +119,8 @@ import {
  * has up to a quarter fewer reads left for its task sources than before,
  * and can stop with `reads` sooner. Measured in convex-test (2026-10-29) in
  * an organization of 300 projects whose names all held the text, the 256
- * candidates cost an admin's seat and a member's seat searched whole each
- * about 255 documents and 95 KB more than one candidate did, and on Convex,
+ * candidates cost a seat searched whole about 255 documents and 95 KB more
+ * than one candidate did, and on Convex,
  * which counts each search result as a range, as many ranges: about a
  * quarter of a lone seat's ranges, its whole names part, so there the names
  * can stop with `reads` a few candidates before `names`. The member's check
@@ -411,12 +412,11 @@ type Stops = {
  * caller cannot see too, and they count toward its cap and the budget, so
  * its stops would tell whether, and with padding how many, hidden tasks or
  * project names hold a word. So a search of the whole organization for a
- * seat that does not see every project of it (seesEveryProject) is always
- * reported incomplete, as `projects`, whatever it read: choosing a project
- * searches that project fully. A seat searched project by project reads
- * only tasks of projects it sees and matches only the names of projects it
- * sees, and a seat that sees every project hides nothing from itself, so
- * their stops are reported exactly. A seat searched whole whose
+ * seat, an organization admin's included, is always reported incomplete,
+ * as `projects`, whatever it read. Choosing a project searches that
+ * project fully. A seat searched project by project reads only tasks of
+ * projects it sees and matches only the names of projects it sees, so its
+ * stops are reported exactly. A seat searched whole whose
  * organization's reach rows are not complete searches no project names
  * (`unready`), and is reported as `projects` too: choosing a project lists
  * its projects from their rows, with no name query.
@@ -455,10 +455,8 @@ type Stops = {
  *   child rows of each grantee all fail (a viewer's lead, a project in a
  *   Deleted items move), or, past PROJECT_SIGHT's bounds, one seen only
  *   through a team's source on a sub-project, stays out there, a missed
- *   match. An organization admin's whole seat also reads projects
- *   outside any meta's tree, which no writer makes now and no one sees.
- *   Such a seat's coverage, and so the search's, is always `projects`,
- *   except an admin's, whose seat hides nothing.
+ *   match. Such a seat's coverage, and so the search's, is always
+ *   `projects`.
  * - The real limit, which every allowance shares: the transaction's, less
  *   the page's room for the seats. Each step reserves its documents at
  *   Convex's 1 MiB size against it, and the allowances leave STEP and
@@ -670,13 +668,6 @@ function parseAllowance(limit: number) {
 
 /* ------------------------------------------------------------ the places */
 
-/** Whether `me` sees every project of their organization, so that listing
- * their own projects finds nothing smaller and a search of the whole
- * organization hides nothing from them. That is an organization admin,
- * until the admin access split changes projectLevel (lib/access.ts
- * levelUnder). */
-const seesEveryProject = (me: Doc<'profiles'>): boolean => me.org_role === 'admin'
-
 /* Waits for room for one access check, which the budget counts once it has
  * run (SEARCH_RESERVE holds its own rows). */
 async function step(budget: ReadBudget): Promise<void> {
@@ -801,8 +792,8 @@ async function ownProjects(
  * Where main Search searches seat `me`: the live projects they can see,
  * one by one, at most `most` of them, or null when it searches their
  * organization instead, because they see more, one of the reads that list
- * them holds more than MAIN_SEARCH.listing rows, `most` is 0, or `me` sees
- * every project (seesEveryProject). Narrowed to `scope`, a top-level
+ * them holds more than MAIN_SEARCH.listing rows, or `most` is 0. Narrowed
+ * to `scope`, a top-level
  * project of `me`'s organization they can see, it lists that project and
  * its sub-projects instead. The list comes from the person's own rows
  * (ownProjects), and each listed project is then checked with
@@ -820,8 +811,8 @@ async function ownProjects(
  * project above each archived sub-project the person's own rows name that
  * they see, as a source on it shows its parent for navigation. Each such
  * parent must be live and of the organization, and the check of its
- * sub-project already read it. Outside an admin seat projectLevel gives a
- * level only through a lead, a grant or a team share the listing reads,
+ * sub-project already read it. projectLevel gives a level only through a
+ * lead, a grant or a team share the listing reads, for every seat,
  * on the project or on the top-level project above, whose sub-projects the
  * listing adds, and navigation shows a top-level project only for a
  * sub-project the person sees through such a source, so `shown` holds every
@@ -850,7 +841,7 @@ export async function searchPlaces(
       for (const kid of kids) read.set(kid.id, kid)
       candidates = [scope.id, ...kids.map((kid) => kid.id)]
     }
-  } else if (!seesEveryProject(me) && most > 0) {
+  } else if (most > 0) {
     const own = await ownProjects(ctx, me, budget, read)
     if (own !== null) ({ ids: candidates, archived } = own)
   }
@@ -1408,7 +1399,7 @@ export async function mainSearchPage(
           scoped,
           listing.places ?? [undefined],
           whole ? null : listing.shown,
-          whole && !seesEveryProject(me),
+          whole,
         )
       }
       searches += 2 * seat.places.length

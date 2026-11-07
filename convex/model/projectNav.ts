@@ -819,8 +819,8 @@ type Held = { grantees: Grantee[]; onRoot: boolean }
  * fails, the project stays out though the person may see it, which misses
  * a match and never shows one.
  *
- * For a person who is not an organization admin, it first reads once the
- * live root rows of all their grantees (project_reach by_grantee_list), up
+ * For every person, an organization admin included, it first reads once
+ * the live root rows of all their grantees (project_reach by_grantee_list), up
  * to PROJECT_SIGHT.roots. Once the organization's reach rows are complete
  * (org_ready nav_at, reachReady, which the caller asks first), every
  * top-level project such a person sees holds a root row of one of their
@@ -833,10 +833,9 @@ type Held = { grantees: Grantee[]; onRoot: boolean }
  * child rows show a top-level project for navigation, one range a
  * candidate: a top-level project the person sees only for navigation
  * through a team's share on one of its sub-projects then stays out, a
- * missed match. An organization admin sees every project of a meta's tree
- * (lib/access.ts levelUnder), which no reach row records, so their
- * candidates skip the root rows and are checked the same way; the admin
- * access split changes that rule in lib/access.ts.
+ * missed match. An organization admin is judged the same way, by the root
+ * rows of their own seat and teams, as admin status gives no level
+ * (lib/access.ts levelUnder).
  *
  * Every read goes through `budget`, which throws to stop the caller: each
  * project above a sub-project, each reach row and each sub-project a row
@@ -941,7 +940,7 @@ export function projectSight(
   const judge = async (p: Doc<'projects'>): Promise<boolean> => {
     if (p.org_id !== me.org_id || p.archived_at !== undefined) return false
     access.seen(p)
-    const held = me.org_role === 'admin' ? null : await rootsOf()
+    const held = await rootsOf()
     const reached = held?.get(p.parent_id ?? p.id)
     if (held !== null && reached === undefined) return false
     if (p.parent_id !== undefined) {
