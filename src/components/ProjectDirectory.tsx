@@ -23,7 +23,9 @@
      projects. A row of another organization than the home one carries
      that organization's name, and equal names among the rows shown carry
      their number (store/viewModels.ts duplicateNameTags), never through
-     the workspace's ProjectName.
+     the workspace's ProjectName. These rules, the sentences of the lists
+     and the open rule below live in components/projectNavRows.tsx, which
+     the sidebar's project tree shares.
    - A top-level row's star stars or unstars it (P.setFavorite), showing
      the new state at once, busy until the server answers; the row moves
      between the groups as the page's next answer orders it. A refused star
@@ -36,8 +38,8 @@
      new search, a page move or the row leaving the page collapses it,
      which stops its read.
    - A press on a name opens the project as the sidebar does
-     (actions.openProject). One the workspace does not hold yet says so
-     and moves nothing.
+     (projectNavRows.tsx openNavProject). One the workspace does not hold
+     yet says so and moves nothing.
    - No list says it found nothing or ended before the server said so: not
      ready, the access_unchecked refusal, a stopped page or batch and a
      failure each show as themselves, the refusal and a failure with Retry.
@@ -72,7 +74,6 @@ import { menuTrigger } from '../lib/focusWhenGone'
 import { useLiveView } from '../lib/liveView'
 import { useLoadMore } from '../lib/loadMore'
 import {
-  type BatchAt,
   type ListEnd,
   listEnd,
   type PagedList,
@@ -84,9 +85,17 @@ import {
 } from '../lib/pagedList'
 import { DIRECTORY_MOST } from '../lib/projectPick'
 import { P, type ProjectSettingsAnswer } from '../store/planner'
-import { duplicateNameTags, type TaggableProject } from '../store/viewModels'
 import { type HeldLine, PageFold } from './pageFold'
 import { pagesState, useMoveFocus } from './pageMoves'
+import {
+  CHILDREN_WORDS,
+  foreignOrg,
+  heldText,
+  navCursors,
+  navTags,
+  openNavProject,
+  tagged,
+} from './projectNavRows'
 import { Icon, MenuItem, Popover } from './qivo'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
@@ -99,52 +108,6 @@ type Row = NavPageRow | NavSearchRow
 
 /** The project above a search's sub-project row, null for a top-level row. */
 const parentOf = (row: Row): NavProject | null => ('parent' in row ? row.parent : null)
-
-/** The cursors of one batch, absent ones left out, as the reads take them. */
-const cursors = (at: BatchAt) => ({
-  ...(at.after === null ? {} : { after: at.after }),
-  ...(at.through === null ? {} : { through: at.through }),
-})
-
-/** The organization's name for a row of another organization than the
-    home one, as Search's results and the picker name it. */
-const foreignOrg = (org: string): string | null =>
-  org === P.homeOrg ? null : (P.orgs.find((o) => o.id === org)?.name ?? null)
-
-/** What a list says for an answer with no rows: not ready, the
-    access_unchecked refusal's own sentence, or a project that cannot be
-    opened. */
-function heldText(
-  answer: NavPage | NavSearch | NavChildren | null | undefined,
-  what: 'page' | 'children',
-) {
-  if (answer?.state === 'not_ready') return 'Qivo is still preparing your project list.'
-  if (answer?.state === 'unavailable' && answer.reason === 'access_unchecked')
-    return answer.message ?? 'Qivo could not finish checking which projects you can see.'
-  return what === 'children'
-    ? 'You can no longer open this project.'
-    : "Couldn't load your projects."
-}
-
-/** A name with its tag, `#12` for one of equal names shown together. */
-function Tagged({ name, tag }: { name: string; tag: string | undefined }) {
-  return (
-    <>
-      {name}
-      {tag && (
-        <>
-          {' '}
-          <span
-            data-project-tag
-            className="whitespace-nowrap font-mono text-xs font-normal text-text-2"
-          >
-            {tag}
-          </span>
-        </>
-      )}
-    </>
-  )
-}
 
 /** A star the person pressed: the state it shows, and whether the write is
     still on its way. */
@@ -270,10 +233,7 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
   }
 
   /** Opens `row` as the sidebar does, once the workspace holds it. */
-  const open = (row: NavProject) => {
-    if (!P.project(row.id)) return say(`${row.name} has not loaded yet. Try again in a moment.`)
-    actions.openProject(row.id)
-  }
+  const open = (row: NavProject) => openNavProject(row, actions, say)
 
   const move = useMoveFocus(
     page,
@@ -284,29 +244,7 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
 
   // equal names among the rows shown carry their number, and so do the
   // projects a search's sub-project rows name before their own
-  const taggable = new Map<string, TaggableProject>()
-  for (const row of rows) {
-    const up = parentOf(row)
-    taggable.set(row.id, {
-      id: row.id,
-      org: row.org_id,
-      parent: up?.id,
-      name: row.name,
-      num: row.num,
-    })
-  }
-  for (const row of rows) {
-    const up = parentOf(row)
-    if (up && !taggable.has(up.id))
-      taggable.set(up.id, {
-        id: up.id,
-        org: up.org_id,
-        parent: undefined,
-        name: up.name,
-        num: up.num,
-      })
-  }
-  const tags = duplicateNameTags([...taggable.values()])
+  const tags = navTags(rows, parentOf)
 
   const grouped = rows.some((r) => r.favorite === true)
   const firstFavorite = rows.findIndex((r) => r.favorite === true)
@@ -352,7 +290,7 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
           >
             <span className="min-w-0 flex-1 text-left">
               <span className="block break-words font-semibold">
-                <Tagged name={row.name} tag={tags.get(row.id)} />
+                {tagged({ name: row.name, tag: tags.get(row.id) })}
               </span>
               {org && (
                 <span data-directory-org="" className="block text-xs text-text-2">
@@ -409,9 +347,9 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
           >
             <span className="min-w-0 flex-1 text-left">
               <span className="block break-words font-semibold">
-                <Tagged name={up.name} tag={tags.get(up.id)} />
+                {tagged({ name: up.name, tag: tags.get(up.id) })}
                 {' › '}
-                <Tagged name={row.name} tag={tags.get(row.id)} />
+                {tagged({ name: row.name, tag: tags.get(row.id) })}
               </span>
               {org && (
                 <span data-directory-org="" className="block text-xs text-text-2">
@@ -609,7 +547,7 @@ function SubProjects({
     source: {
       kind: 'live',
       query: api.projectNav.children,
-      args: (at) => ({ project_id: parent.id, ...cursors(at) }),
+      args: (at) => ({ project_id: parent.id, ...navCursors(at) }),
     },
     // an answer without rows, not ready or unavailable, is held and worded
     batch: (answer) => (answer.state === 'ok' ? answer : null),
@@ -626,15 +564,7 @@ function SubProjects({
         `[data-directory-row="${parent.id}"] [data-directory-expand]`,
       ),
   )
-  const tags = duplicateNameTags(
-    list.rows.map((r) => ({
-      id: r.id,
-      org: r.org_id,
-      parent: parent.id,
-      name: r.name,
-      num: r.num,
-    })),
-  )
+  const tags = navTags(list.rows, () => parent)
   return (
     <div data-directory-children={parent.id}>
       {list.batches.map((batch, i) => (
@@ -648,7 +578,7 @@ function SubProjects({
               onClick={() => onOpen(r)}
             >
               <span className="min-w-0 flex-1 whitespace-normal text-left">
-                <Tagged name={r.name} tag={tags.get(r.id)} />
+                {tagged({ name: r.name, tag: tags.get(r.id) })}
               </span>
               <Icon name="chevronRight" size={16} />
             </Button>
@@ -683,9 +613,7 @@ function BatchNote({
       data-directory-children-note={batch.note}
       className={cn('flex flex-wrap items-center gap-2', noteClass)}
     >
-      {batch.note === 'stuck'
-        ? 'Qivo could not check part of the sub-projects.'
-        : "Couldn't load part of the sub-projects."}
+      {batch.note === 'stuck' ? CHILDREN_WORDS.stuck : CHILDREN_WORDS.partFailed}
       <Button
         variant="ghost"
         className="h-control-sm text-sm"
@@ -719,7 +647,7 @@ function ChildrenEnd({
   )
   switch (end) {
     case 'loading':
-      return line('Loading sub-projects…', 'status')
+      return line(CHILDREN_WORDS.loading, 'status')
     case 'held': {
       const answer = list.answers[0]
       // the refusal of a check the server could not finish offers Retry,
@@ -752,22 +680,18 @@ function ChildrenEnd({
           data-directory-children-end={end}
           className={cn('flex flex-wrap items-center gap-2', noteClass)}
         >
-          {list.rows.length === 0
-            ? "Couldn't load the sub-projects."
-            : "Couldn't load more sub-projects."}
+          {list.rows.length === 0 ? CHILDREN_WORDS.failed : CHILDREN_WORDS.failedMore}
           <Button variant="ghost" className="h-control-sm text-sm" onClick={() => list.retry()}>
             Retry
           </Button>
         </div>
       )
     case 'full':
-      return line('Search to find more sub-projects.')
+      return line(CHILDREN_WORDS.full)
     case 'more':
       return (
         <div data-directory-children-end={end} className="flex flex-wrap items-center gap-2 px-1">
-          {list.stopped && (
-            <span className={noteClass}>Qivo checked part of the sub-projects.</span>
-          )}
+          {list.stopped && <span className={noteClass}>{CHILDREN_WORDS.stopped}</span>}
           <Button
             variant="ghost"
             data-directory-more=""
@@ -782,7 +706,7 @@ function ChildrenEnd({
     case 'end':
       // the list's end after its rows says nothing
       return list.rows.length === 0 ? (
-        line('No sub-projects you can open.')
+        line(CHILDREN_WORDS.empty)
       ) : (
         <span data-directory-children-end={end} hidden />
       )

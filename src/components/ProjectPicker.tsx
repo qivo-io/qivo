@@ -99,6 +99,7 @@ import {
 import { useMobile } from '../lib/useMobile'
 import { P } from '../store/planner'
 import { duplicateNameTags, type TaggableProject } from '../store/viewModels'
+import { foreignOrg } from './projectNavRows'
 import { Icon, Popover } from './qivo'
 
 /** The cursors of one batch, absent ones left out, as the reads take them. */
@@ -247,11 +248,6 @@ function BatchNote({
     </div>
   )
 }
-
-/** The organization's name for a row of another organization than the
-    home one, as Search's results name it. */
-const foreignOrg = (org: string): string | null =>
-  org === P.homeOrg ? null : (P.orgs.find((o) => o.id === org)?.name ?? null)
 
 /** What the panel asks of its caller. */
 export type ProjectPickerPanelProps = {
