@@ -6868,7 +6868,10 @@ async function mcpAccessListsCheck() {
         { rows: [], next: null, stopped: false },
         'the token batch for a search with no match',
       )
-    return `found the run's two connections and two tokens newest first${appsSearched || tokensSearched ? ' by the run tag' : " in the first batches and in the store's batches for the run tag"}, and a token search with no match`
+    /** How the step found a list's two rows. */
+    const how = (searched) =>
+      searched ? 'by its search' : "in its first batch and the store's batch for the run tag"
+    return `found the run's two connections ${how(appsSearched)} and two tokens ${how(tokensSearched)}, newest first, and a token search with no match`
   })
 }
 
