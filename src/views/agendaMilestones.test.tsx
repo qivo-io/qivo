@@ -12,8 +12,9 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
    own slots, which the Roadmap reads so they outlive the agenda's
    remounts: Upcoming 10 at a time and a collapsed Past, a `mine` read in
    My view, the reads stopped while the task schedule or the landscape
-   timeline shows and freed by P.releaseRoadmap, and the Roadmap's own flag
-   read stopped while the agenda shows. */
+   timeline shows and freed by P.releaseRoadmap, the reads under a note
+   whatever section the person chose, and the Roadmap's own flag read
+   stopped while the agenda shows. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -242,6 +243,24 @@ describe("the phone agenda's milestones", { timeout: BOARD_TEST_TIMEOUT }, () =>
         (s) => store.P.milestoneRead(s).state === 'loading',
       ),
     ).toBe(true)
+  })
+
+  it('reads under a note that comes while the task schedule shows, as the agenda then lists its milestones', async () => {
+    const { board } = await agenda()
+    await press(button('Task schedule'))
+    expect(live(board, 'milestones:section')).toHaveLength(0)
+    // the Roadmap's read fails while the person stays on Task schedule, so
+    // its note takes the agenda's place, with the milestone section under
+    // it whatever section the person chose
+    board.server.roadmap.fail = new Error('down')
+    await board.answer()
+    expect(document.body.textContent).toContain('The Roadmap could not be loaded')
+    // must fail for an agenda whose reads are active without !!emptyNote
+    expect(live(board, 'milestones:section')).toHaveLength(1)
+    await vi.waitFor(() => expect(sectionOf('upcoming')?.dataset.milestoneSectionState).toBe('ok'))
+    expect(rowsOf('upcoming')).toEqual(Array.from({ length: 10 }, (_, i) => `u${i + 1}`))
+    // the section, not New milestone alone, stands under the note
+    expect(button('New milestone')).toBeUndefined()
   })
 
   it("reads My view with mine and lists only the projects that hold the person's own work", async () => {

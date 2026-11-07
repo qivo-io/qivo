@@ -11,7 +11,8 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
    more and the move on at a lowered cap, a collapsed Past that reads
    nothing until it opens, 25 at a time with its search on the server, the
    Next milestone cell in each state, My view's `mine` read, All projects
-   reading none, the note pages, a hidden tab, a kept page, a scope switch,
+   reading none, the note pages, another person's rename, move and delete
+   arriving while the page shows, a hidden tab, a kept page, a scope switch,
    P.releaseOverview and a new week. The reads answer through the milestone
    stand-in over the fixture's workspace (store/milestoneStandIn.setup.ts).
    Every case asks for no task. */
@@ -276,13 +277,29 @@ describe("a project's Past", { timeout: BOARD_TEST_TIMEOUT }, () => {
     // its search runs on the server, once there were more rows to load
     const box = sectionOf('past')?.querySelector<HTMLInputElement>('[data-milestone-search]')
     expect(box).not.toBeNull()
+    // the server holds the search's answer back, so the section shows what
+    // it has while the new search loads
+    board.server.milestones.hold = true
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(box, 'review')
       box?.dispatchEvent(new Event('input', { bubbles: true }))
     })
     await act(async () => await new Promise((r) => setTimeout(r, 350)))
+    // a new search releases the shown slot at once and shows loading, never
+    // the old rows; must fail for a new search that keeps the old answer
+    // showing, as the Roadmap's flags keep theirs while a new window loads
+    expect(stateOf('past')).toBe('loading')
+    expect(rowsOf('past')).toEqual([])
+    const pastReads = () =>
+      liveSections(board)
+        .map((s) => s.args as { side: string; search?: string })
+        .filter((a) => a.side === 'past')
+    expect(pastReads()).toEqual([expect.objectContaining({ search: 'review' })])
+    board.server.milestones.hold = false
+    await board.answer()
     expect(sectionAsks(board).at(-1)).toMatchObject({ side: 'past', search: 'review', limit: 25 })
-    expect(rowsOf('past').every((id) => Number(id?.slice(1)) % 2 === 0)).toBe(true)
+    expect(stateOf('past')).toBe('ok')
+    expect(rowsOf('past')).toEqual(Array.from({ length: 15 }, (_, i) => `p${2 * (i + 1)}`))
     // Upcoming has no search
     expect(sectionOf('upcoming')?.querySelector('[data-milestone-search]')).toBeNull()
     // a collapse releases Past's reads
@@ -441,6 +458,53 @@ describe('the note pages', { timeout: BOARD_TEST_TIMEOUT }, () => {
     await none.board.answer()
     expect(rowsOf('upcoming')).toEqual(['late'])
     expect(loaded.board.snapshot.milestones).toHaveLength(2)
+  })
+})
+
+describe("another person's changes", { timeout: BOARD_TEST_TIMEOUT }, () => {
+  it('arrive in Upcoming, Next milestone and an open Past while the page shows, and wait while the tab hides', async () => {
+    const { board } = await overview(plan({ up: 4, past: 2 }))
+    await click(q('[data-overview-milestones] [data-milestone-past-toggle]'))
+    expect(rowsOf('upcoming')).toEqual(['u1', 'u2', 'u3', 'u4'])
+    expect(rowsOf('past')).toEqual(['p1', 'p2'])
+    expect(cell()?.textContent).toContain('Step 1')
+    const named = (id: string) => q(`[data-overview-milestone="${id}"]`)?.textContent
+    const stored = (id: string) => {
+      const row = board.snapshot.milestones.find((m) => m.id === id)
+      if (!row) throw new Error(`no milestone ${id}`)
+      return row
+    }
+    // someone else renames u1, moves u2 to a past week and deletes u3; the
+    // server pushes the new answers of both live reads, and the workspace's
+    // copy stays as it was; must fail for a section that keeps the first
+    // answer of its arguments
+    stored('u1').name = 'Kickoff'
+    stored('u2').week = mondayIn(-3)
+    board.snapshot.milestones = board.snapshot.milestones.filter((m) => m.id !== 'u3')
+    await board.answer()
+    expect(rowsOf('upcoming')).toEqual(['u1', 'u4'])
+    expect(named('u1')).toContain('Kickoff')
+    expect(cell()?.textContent).toContain('Kickoff')
+    expect(q('[data-overview-milestone="u1"]')?.hasAttribute('data-next')).toBe(true)
+    expect(rowsOf('past')).toEqual(['p1', 'p2', 'u2'])
+    expect(q('[data-overview-milestone="u3"]')).toBeNull()
+    // while the tab hides neither section reads, so a change waits; must
+    // fail for an open Past that keeps reading while the tab hides
+    await setVisibility('hidden')
+    expect(liveSections(board)).toHaveLength(0)
+    const asked = sectionAsks(board).length
+    stored('u4').name = 'Launch'
+    board.snapshot.milestones = board.snapshot.milestones.filter((m) => m.id !== 'p1')
+    await board.answer()
+    expect(sectionAsks(board)).toHaveLength(asked)
+    expect(liveSections(board)).toHaveLength(0)
+    expect(named('u4')).toContain('Step 4')
+    expect(rowsOf('past')).toEqual(['p1', 'p2', 'u2'])
+    // the return reads both sections again, and the changes arrive
+    await setVisibility('visible')
+    await board.answer()
+    expect(named('u4')).toContain('Launch')
+    expect(rowsOf('past')).toEqual(['p2', 'u2'])
   })
 })
 
