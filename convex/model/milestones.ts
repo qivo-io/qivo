@@ -1098,17 +1098,23 @@ export async function milestoneProjects(
  * Its guard decides by the bytes the step read with each project row the
  * access read, and each task in a project the person is not shown, counted
  * at its fixed size (lib/viewReads.ts viewBudget charge), so no row's text
- * moves the answer. These decision bytes run far above the real bytes. A
- * sub-project archived with one of the person's open tasks still in it
- * counts a project row and a task at their fixed sizes, 8 KiB, so the
- * design size's 500 archived sub-projects alone decide at about 4 MiB.
- * Rows within the caps read fewer real bytes than they count, so the step
- * reads at most 8 MiB, the read after it at most MILESTONE_READ's 4 MiB
- * within what the request has left (lib/archivedTasks.ts roomOf), and
- * MILESTONE_RESERVE keeps 1 MiB back. That is 13 MiB of Convex's 16 MiB,
- * which leaves 3 MiB for the sign-in and seats read before them, and the
- * two shares' 4,000 ranges and 16,000 documents keep under 4,096 and
- * 32,000.
+ * moves the answer. An archived sub-project the person can see and their
+ * tasks in it count at their real sizes instead, as the person may read
+ * both (lib/viewReads.ts ArchivedCharge `readable`); every other view
+ * counts them at the fixed sizes, 6 KiB a project row and 2 KiB a task.
+ * Knowing which archived sub-projects the person can see takes an access
+ * question about each that holds their tasks, which reads an index range
+ * where they hold more grants than the access reads at once (lib/access.ts
+ * OWN_READS). Rows within the caps read fewer real bytes than they count,
+ * so the step reads at most 4 MiB, the read after it at most
+ * MILESTONE_READ's 4 MiB within what the request has left (lib/archivedTasks.ts
+ * roomOf), and MILESTONE_RESERVE keeps 1 MiB back. That is 9 MiB of
+ * Convex's 16 MiB, which leaves 7 MiB for the sign-in and seats read before
+ * them. The two shares' 16,000 documents keep under 32,000. The step's
+ * 2,500 ranges and the read's 2,000 pass 4,096 together, so the read takes
+ * at most what the step leaves, which is at least 1,596 ranges less those
+ * of the sign-in and seats, and a read whose projects' first days do not
+ * fit there is refused.
  *
  * Measured on 7 November 2026 under convex-test's transaction limits with
  * rows as the app writes them (tests/milestoneMine.test.ts, design size),
@@ -1121,29 +1127,35 @@ export async function milestoneProjects(
  *   50 a team, and 50 through a grant on the top-level project (the 200
  *   top-level projects and the 200 sub-projects one person can read at
  *   their sum), one upcoming milestone each. The finding takes 579, 860,
- *   0.31 and 2.5, the request 979, 1,060 and 0.35.
+ *   0.31 and 2.5, the request 981, 1,062 and 0.35.
  * - The same 200 projects where the caller's access comes through a grant
  *   on each sub-project alone, so every top-level project shows only for
  *   navigation. The finding takes 1,245, 1,566, 0.47 and 2.67, the request
- *   1,645, 1,766 and 0.51. The check of named projects alone would read
+ *   1,647, 1,768 and 0.51. The check of named projects alone would read
  *   1,434 ranges more for these 200 projects, more than the half of the
  *   2,851 left that it may take (scopeCeiling), so a `mine` read does not
  *   ask it.
  * - The same shape with 2 or 3 sub-projects archived beside each live one,
  *   each by a grant and with one of the caller's open tasks, which
  *   archiving leaves in place (the 200 live and 500 archived sub-projects
- *   one person can read at their sum). The finding takes 1,753, 3,074, 1.03
- *   and 6.74, the request 2,155, 3,276 and 1.07. The 4 MiB this share held
- *   before refused it.
+ *   one person can read at their sum). The finding takes 2,254, 4,087, 1.2
+ *   and 3.41, the request 2,664, 4,297 and 1.25. At every other view's
+ *   charges the finding would decide at 6.74 MiB in 1,753 ranges.
+ * - 20 top-level projects the caller holds a grant on, each with 3 live
+ *   sub-projects of 30 open tasks, 7 of them the caller's, and 25 archived
+ *   sub-projects that keep 7 of the caller's open tasks each (500 archived
+ *   sub-projects one person can read). The finding takes 711, 4,583, 1.99
+ *   and 2.43, the request 789, 4,641 and 2.01. At every other view's
+ *   charges the finding would decide at 10.55 MiB.
  * - 300 open and 150 Done tasks of the caller in one sub-project (open and
  *   Done at their sum). The finding takes 100, 466, 0.27 and 0.29, the
- *   request 107, 482 and 0.28.
+ *   request 103, 478 and 0.28.
  *
  * Tests lower these. */
 export const MILESTONE_MINE: ReadCeiling = {
-  ranges: 2000,
+  ranges: 2500,
   documents: 8000,
-  bytes: 8 * 1024 * 1024,
+  bytes: 4 * 1024 * 1024,
 }
 
 /** The reason of the refusal of a section read with `mine` whose person's
@@ -1179,8 +1191,10 @@ const mineTooMany = (): ConvexError<Refusal> =>
  * projects again, so a Load more after the person's work moved reads the
  * new set.
  *
- * It reads within MILESTONE_MINE from its start, and past it refuses the
- * whole read with MILESTONE_READ_TOO_LARGE. A check of a seat's own access
+ * It reads within MILESTONE_MINE from its start, counting an archived
+ * sub-project the caller can see and their tasks in it at their real
+ * sizes (lib/viewReads.ts ArchivedCharge `readable`), and past it refuses
+ * the whole read with MILESTONE_READ_TOO_LARGE. A check of a seat's own access
  * that a bound stopped refuses with its own reason (accessUnchecked). More
  * than MILESTONE_READ.projects projects across every seat refuse with
  * MILESTONE_TOO_MANY, never cut to that many, as a cut list could show a
@@ -1204,7 +1218,8 @@ export async function mineMilestoneProjects(
         viewAccess(ctx, guard, me),
       ]),
     )
-    ids = [...new Set((await myViewProjects(ctx, guard, seats)).map((r) => r.project.id))]
+    const found = await myViewProjects(ctx, guard, seats, undefined, 'readable')
+    ids = [...new Set(found.map((r) => r.project.id))]
   } catch (e) {
     if (isOverBudget(e)) throw readTooLarge()
     throw e

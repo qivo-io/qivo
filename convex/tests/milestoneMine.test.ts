@@ -18,7 +18,7 @@ import { byId, newWindowKey } from '../lib/db'
 import { LIMITS, MIB } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { myViewProjects } from '../lib/overview'
-import { type ViewAccess, viewAccess, viewBudget } from '../lib/viewReads'
+import { type ArchivedCharge, type ViewAccess, viewAccess, viewBudget } from '../lib/viewReads'
 import {
   MILESTONE_MINE,
   MILESTONE_READ,
@@ -134,26 +134,43 @@ async function program(t: T, orgId: string, name: string, over: Partial<Doc<'pro
   return { top, sub }
 }
 
+/* What plantTrees plants beside its sub-projects: `live` live
+ * sub-projects a top-level project, 1 unless given; `own` open tasks `me`
+ * is assigned in each sub-project, 1 unless given; `others` open tasks of
+ * `other` in each live sub-project beside them; `me`'s grant on each
+ * sub-project, or on each top-level project alone (`grant` 'top'); and
+ * `each` top-level projects a transaction, 50 unless given. */
+type TreeShape = {
+  live?: number
+  own?: number
+  others?: { other: Doc<'profiles'>; n: number }
+  grant?: 'sub' | 'top'
+  each?: number
+}
+
 /* `n` top-level projects of `orgId` in a few transactions, each with one
  * live sub-project and `archivedOf(i)` archived ones as archiving a
  * sub-project leaves it (model/projects.ts archiveProjectCore), archived
  * and listed under its live parent with its tasks untouched. Each
- * sub-project gets a grant to `me` and one open task `me` is assigned. */
+ * sub-project gets a grant to `me` and one open task `me` is assigned,
+ * unless `shape` says otherwise (TreeShape). */
 async function plantTrees(
   t: T,
   orgId: string,
   me: Doc<'profiles'>,
   n: number,
   archivedOf: (i: number) => number,
+  shape: TreeShape = {},
 ) {
+  const { live: lives = 1, own = 1, others, grant: grantOn = 'sub', each = 50 } = shape
   const out = {
     tops: [] as Doc<'projects'>[],
     live: [] as Doc<'projects'>[],
     archived: [] as Doc<'projects'>[],
   }
-  for (let from = 0; from < n; from += 50)
+  for (let from = 0; from < n; from += each)
     await t.run(async (ctx) => {
-      let num = 10_000 + from * 10
+      let num = 10_000 + from * 100
       const project = async (over: Partial<Doc<'projects'>>, name: string) => {
         num++
         const _id = await ctx.db.insert('projects', {
@@ -172,44 +189,57 @@ async function plantTrees(
         })
         return (await ctx.db.get(_id)) as Doc<'projects'>
       }
-      const work = async (sub: Doc<'projects'>) => {
+      let task = num * 100
+      const access = async (p: Doc<'projects'>) =>
         await ctx.db.insert('project_access', {
-          project_id: sub.id,
+          project_id: p.id,
           profile_id: me.id,
           level: 'user',
         })
-        const id = uuid()
-        await ctx.db.insert('issues', {
-          id,
-          org_id: orgId,
-          project_id: sub.id,
-          num: num * 10,
-          title: 'Replace the fan controller',
-          status: 'todo',
-          priority: 'medium',
-          paused: false,
-          assignee_id: me.id,
-          status_at: NOW,
-          created_at: NOW,
-          updated_at: NOW,
-          window_key: newWindowKey(),
-        })
-        await ctx.db.insert('issue_descriptions', {
-          issue_id: id,
-          description: '',
-          org_id: orgId,
-          project_id: sub.id,
-        })
+      /* `count` open tasks of `assignee` in `sub` */
+      const tasks = async (sub: Doc<'projects'>, assignee: Doc<'profiles'>, count: number) => {
+        for (let j = 0; j < count; j++) {
+          const id = uuid()
+          await ctx.db.insert('issues', {
+            id,
+            org_id: orgId,
+            project_id: sub.id,
+            num: task++,
+            title: 'Replace the fan controller',
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            assignee_id: assignee.id,
+            status_at: NOW,
+            created_at: NOW,
+            updated_at: NOW,
+            window_key: newWindowKey(),
+          })
+          await ctx.db.insert('issue_descriptions', {
+            issue_id: id,
+            description: '',
+            org_id: orgId,
+            project_id: sub.id,
+          })
+        }
       }
-      for (let i = from; i < Math.min(n, from + 50); i++) {
+      const work = async (sub: Doc<'projects'>) => {
+        if (grantOn === 'sub') await access(sub)
+        await tasks(sub, me, own)
+      }
+      for (let i = from; i < Math.min(n, from + each); i++) {
         const top = await project({}, `Programme ${i}`)
         out.tops.push(top)
-        const live = await project(
-          { type: 'project', parent_id: top.id, archive_state: 'live' },
-          `Workstream ${i}`,
-        )
-        out.live.push(live)
-        await work(live)
+        if (grantOn === 'top') await access(top)
+        for (let l = 0; l < lives; l++) {
+          const live = await project(
+            { type: 'project', parent_id: top.id, archive_state: 'live' },
+            lives === 1 ? `Workstream ${i}` : `Workstream ${i}-${l}`,
+          )
+          out.live.push(live)
+          await work(live)
+          if (others) await tasks(live, others.other, others.n)
+        }
         for (let k = 0; k < archivedOf(i); k++) {
           const gone = await project(
             {
@@ -261,11 +291,13 @@ const took = <R>(t: T, read: (ctx: QueryCtx) => Promise<R>) =>
 
 /* The finding of My view's projects alone (lib/overview.ts myViewProjects)
  * under `reads`, MILESTONE_MINE unless given, as mineMilestoneProjects runs
- * it, before the check of the projects, with the guard it read under. */
+ * it, before the check of the projects, with the guard it read under, or
+ * with the charges of `archived` (lib/viewReads.ts ArchivedCharge). */
 const resolveOnly = async (
   ctx: QueryCtx,
   profiles: ReadonlyMap<string, Doc<'profiles'>>,
   reads: ReadCeiling = MILESTONE_MINE,
+  archived: ArchivedCharge = 'readable',
 ) => {
   const guard = viewBudget(ctx, reads)
   const seats = new Map(
@@ -274,7 +306,7 @@ const resolveOnly = async (
       viewAccess(ctx, guard, me),
     ]),
   )
-  return { found: await myViewProjects(ctx, guard, seats), guard }
+  return { found: await myViewProjects(ctx, guard, seats, undefined, archived), guard }
 }
 
 /* The bytes a measured finding may read, past MILESTONE_MINE.bytes so a
@@ -282,6 +314,23 @@ const resolveOnly = async (
  * lib/viewReads.ts REAL_BYTES, so its guard's ceiling.bytes is these less
  * the fixed charges. */
 const FINDING_BYTES = 12 * MIB
+
+/* The bytes the guard of `me`'s finding of My view's projects decides by,
+ * each in a transaction of its own: the real bytes it read with each row it
+ * charges at a fixed size counted at that size, as a `mine` read finds them
+ * (`mine`) and with the charges of every other view (`fixed`, as My view's
+ * health table finds them). */
+async function decidedBytes(t: T, me: Doc<'profiles'>) {
+  const profiles = new Map([[me.org_id, me]])
+  const once = (archived: ArchivedCharge) =>
+    t.query(async (ctx) => {
+      const reads = { ...MILESTONE_MINE, bytes: FINDING_BYTES }
+      const { guard } = await resolveOnly(ctx, profiles, reads, archived)
+      const used = (await ctx.meta.getTransactionMetrics()).bytesRead.used
+      return used + reads.bytes - guard.ceiling.bytes
+    })
+  return { mine: await once('readable'), fixed: await once('fixed') }
+}
 
 /* `read` as took answers it, or the reason of its refusal. */
 async function tried<R>(t: T, read: (ctx: QueryCtx) => Promise<R>) {
@@ -325,13 +374,21 @@ async function measureMine(
   // FINDING_BYTES, with the bytes its guard decides by, which
   // MILESTONE_MINE.bytes bounds. They are the real bytes with each row it
   // charges at a fixed size (lib/viewReads.ts viewBudget charge) counted at
-  // that size
+  // that size; `fixedMib` are those the same finding decides by with every
+  // other view's charges (lib/viewReads.ts ArchivedCharge 'fixed')
+  const mibOf = (bytes: number) => Math.round((bytes / MIB) * 100) / 100
   const finding = await tried(t, async (ctx) => {
     const reads = measuring()
     const { found, guard } = await resolveOnly(ctx, profiles, reads)
     const used = (await ctx.meta.getTransactionMetrics()).bytesRead.used
     const decided = used + reads.bytes - guard.ceiling.bytes
-    return { projects: found.length, decisionMib: Math.round((decided / MIB) * 100) / 100 }
+    return { projects: found.length, decisionMib: mibOf(decided) }
+  })
+  const fixed = await tried(t, async (ctx) => {
+    const reads = measuring()
+    const { guard } = await resolveOnly(ctx, profiles, reads, 'fixed')
+    const used = (await ctx.meta.getTransactionMetrics()).bytesRead.used
+    return mibOf(used + reads.bytes - guard.ceiling.bytes)
   })
   const check = await tried(
     t,
@@ -349,7 +406,7 @@ async function measureMine(
       past: batch.past,
     }
   })
-  console.log(`mine reads, ${label}: ${JSON.stringify({ finding, check, read, whole })}`)
+  console.log(`mine reads, ${label}: ${JSON.stringify({ finding, fixed, check, read, whole })}`)
   return whole
 }
 
@@ -791,6 +848,68 @@ describe('refusals of a mine read', () => {
   })
 })
 
+// ------------------------------------------------------------ what it counts
+
+describe("what a mine read's budget counts", () => {
+  it('counts an archived sub-project the caller can see and their tasks there at their real sizes, and one they cannot see at the fixed sizes', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org = f.org.id
+    const me = await seatOf(t, org, { org_role: 'user' })
+    // a top-level project the caller reaches through a grant on its live
+    // sub-project, with one of the caller's open tasks there
+    const { top, sub } = await program(t, org, 'Programme')
+    await grant(t, sub, me)
+    await plantTasks(t, sub, 1, () => ({ assignee_id: me.id }))
+    // an archived sub-project beside it the caller cannot see, with 3 of
+    // their open tasks, which archiving left in place
+    const archived = (key: string, num: number) =>
+      plantProject(t, {
+        org_id: org,
+        type: 'project',
+        parent_id: top.id,
+        key,
+        num,
+        sort_order: num,
+        name: `Closed ${key}`,
+        archived_at: NOW,
+        archive_state: 'listed',
+      })
+    const hidden = await archived('HIDE', 9001)
+    const hiddenTasks = await plantTasks(t, hidden, 3, () => ({ assignee_id: me.id }))
+    await withReach(t)
+    const longer = (n: number) => ' and log the readings'.repeat(n)
+    // a row the caller may not see moves no budget decision: a mine read
+    // decides at the bytes every other view does, whatever its text
+    const first = await decidedBytes(t, me)
+    expect(first.mine).toBe(first.fixed)
+    await t.run(async (ctx) => {
+      for (const task of hiddenTasks)
+        await ctx.db.patch(task._id, { title: `${task.title}${longer(20)}` })
+      await ctx.db.patch(hidden._id, { description: longer(40) })
+    })
+    expect(await decidedBytes(t, me)).toEqual(first)
+    // an archived sub-project the caller can see through a grant, with 3
+    // of their open tasks: a mine read counts its row and the tasks at
+    // their real sizes, so their text moves its decisions by its bytes,
+    // and every other view keeps the fixed sizes
+    const seen = await archived('SEEN', 9002)
+    await grant(t, seen, me)
+    const seenTasks = await plantTasks(t, seen, 3, () => ({ assignee_id: me.id }))
+    await withReach(t)
+    const before = await decidedBytes(t, me)
+    expect(before.mine).toBeLessThan(before.fixed)
+    await t.run(async (ctx) => {
+      for (const task of seenTasks)
+        await ctx.db.patch(task._id, { title: `${task.title}${longer(20)}` })
+      await ctx.db.patch(seen._id, { description: longer(40) })
+    })
+    const after = await decidedBytes(t, me)
+    expect(after.fixed).toBe(before.fixed)
+    expect(after.mine - before.mine).toBe(3 * longer(20).length + longer(40).length)
+  })
+})
+
 // ---------------------------------------------------------------- design size
 // newT({ transactionLimits }) enforces Convex's own limits per transaction.
 // Each case raises one figure, or two a read covers at their sum.
@@ -904,7 +1023,8 @@ describe('a mine read at the design size', () => {
     // their sum, each by a grant on it, under 200 top-level projects that
     // show only for navigation, 2 or 3 archived beside each live one; an
     // archived sub-project keeps its open tasks, so the finding reads the
-    // caller's 500 there and judges each project not live
+    // caller's 500 there, judges each project not live and asks whether
+    // the caller can see it, which counts those rows at their real sizes
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const me = await seatOf(t, f.org.id, { org_role: 'user' })
@@ -941,6 +1061,44 @@ describe('a mine read at the design size', () => {
       10,
     )
     expect(got).toMatchObject({ answer: { projects: 200, rows: 10, next: true, stopped: null } })
+    const answer = await as(t, me).query(api.milestones.section, mineAsk({ limit: 10 }))
+    expect(answer.projects).toEqual(trees.tops.map((p) => p.id).sort())
+    expect(answer.rows).toHaveLength(10)
+    expect(answer.stopped).toBeNull()
+  })
+
+  it("lists 20 top-level projects whose 500 archived sub-projects each hold 7 of the caller's open tasks", async () => {
+    // the 500 archived sub-projects one person can read, 25 under each of
+    // 20 top-level projects the caller holds a grant on, each keeping 7 of
+    // the caller's open tasks, as archiving leaves them; beside them each
+    // top-level project has 3 live sub-projects of everyday work, 30 open
+    // tasks with 7 of them the caller's. At the fixed sizes, 6 KiB a
+    // project row and 2 KiB a task, the archived rows alone would decide
+    // at about 9.8 MiB
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const me = await seatOf(t, f.org.id, { org_role: 'user' })
+    const trees = await plantTrees(t, f.org.id, me, 20, () => 25, {
+      live: 3,
+      own: 7,
+      others: { other: f.user, n: 23 },
+      grant: 'top',
+      each: 2,
+    })
+    expect(trees.live).toHaveLength(60)
+    expect(trees.archived).toHaveLength(500)
+    await plantMany(
+      t,
+      trees.tops.map((p, i) => ({ project: p.id, week: plus(MONDAY, 7 * i), name: `Gate ${i}` })),
+    )
+    await withReach(t)
+    const got = await measureMine(
+      t,
+      me,
+      '20 projects, 60 live and 500 archived sub-projects with 7 own tasks each, limit 10',
+      10,
+    )
+    expect(got).toMatchObject({ answer: { projects: 20, rows: 10, next: true, stopped: null } })
     const answer = await as(t, me).query(api.milestones.section, mineAsk({ limit: 10 }))
     expect(answer.projects).toEqual(trees.tops.map((p) => p.id).sort())
     expect(answer.rows).toHaveLength(10)

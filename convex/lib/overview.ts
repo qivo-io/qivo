@@ -104,6 +104,7 @@ import {
   verdicts,
 } from './viewLoads'
 import {
+  type ArchivedCharge,
   BY_ID,
   firstSubtaskCheck,
   type GroupFacts,
@@ -1658,7 +1659,9 @@ export type MyViewProject = { project: Doc<'projects'>; own: Doc<'issues'>[] }
  * person's own ranges (lib/viewReads.ts ownTasks), never the projects', so
  * a task in a sub-project the seat does not hold adds nothing
  * (ownHeldTasks). `g` learns which of the tasks whose owner depends on it
- * are groups.
+ * are groups. `archived` says how a task in an archived sub-project counts
+ * in the guard's decisions (lib/viewReads.ts ArchivedCharge), at the fixed
+ * size unless given; the projects it answers are the same either way.
  *
  * It is the rule of My view's health table rows (healthItems) and of
  * milestones.section's `mine` scope (model/milestones.ts
@@ -1675,11 +1678,13 @@ export async function myViewProjects(
   guard: ViewBudget,
   seats: ViewSeats,
   g: Groups = newGroups(),
+  archived: ArchivedCharge = 'fixed',
 ): Promise<MyViewProject[]> {
   const out: MyViewProject[] = []
   for (const seat of seats.values()) {
     const own: Doc<'issues'>[] = []
-    for await (const step of ownTasks(ctx, guard, seat, ISSUE_STATUSES)) own.push(...step)
+    for await (const step of ownTasks(ctx, guard, seat, ISSUE_STATUSES, true, archived))
+      own.push(...step)
     await readGroups(
       ctx,
       guard,
