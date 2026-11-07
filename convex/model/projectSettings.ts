@@ -253,10 +253,10 @@ export const settingsProject = async (
  * a pending deletion is billing.status's. */
 export type SettingsRights = {
   /** projects.update of the name, key, description, review time and delay
-   * tracking (model/projects.ts updateProjectCore, assertLead) */
+   * tracking (model/projects.ts updateProjectCore, assertManages) */
   can_edit: boolean
   /** projects.update of lead_id: a person, and canManageProjectUsers for a
-   * top-level project, assertLead for a sub-project */
+   * top-level project, assertManages for a sub-project */
   can_change_lead: boolean
   /** projects.setAccess and removeAccess for a person
    * (model/projectAccess.ts assertManagesAccess) */
@@ -265,12 +265,12 @@ export type SettingsRights = {
   can_manage_teams: boolean
   /** projects.inviteGuest: not in the demo, and canManageProjectUsers */
   can_invite: boolean
-  /** projects.archive (model/projects.ts archiveProjectCore, assertLead) */
+  /** projects.archive (model/projects.ts archiveProjectCore, assertManages) */
   can_archive: boolean
-  /** projects.deleteDeep and removalSummary: Lead access */
+  /** projects.deleteDeep and removalSummary: canManageOwnProjectAccess */
   can_delete: boolean
   /** projects.create of a sub-project under this one (model/projects.ts
-   * subProjectParent): Lead access to a top-level meta that is not
+   * subProjectParent): management of a top-level meta that is not
    * archived. The write checks only that the parent is a meta, so it would
    * also take a legacy meta row with a parent, which nobody could then
    * reach; this flag is stricter and asks for a top-level one. */
@@ -279,11 +279,12 @@ export type SettingsRights = {
 
 /**
  * `me`'s rights on the project of `gate` (SettingsRights). Every management
- * right is canManageOwnProjectAccess, which equals Lead access
- * (hasProjectLevel 'lead') for an active seat today, as lib/access.ts
- * levelUnder answers 'lead' only for an organization admin or the project's
- * lead and grants hold at most User. The admin access split moves the
- * writes onto that predicate, so these answers do not change with it.
+ * right is canManageOwnProjectAccess (`gate.manages`), and every write these
+ * rights offer asks that predicate too (model/projects.ts assertManages and
+ * subProjectParent, projects.deleteDeep and removalSummary, and
+ * model/projectAccess.ts for access changes), so an organization admin who
+ * takes part in no project of the organization is offered exactly the
+ * writes that go through. The caller's level decides none of them.
  */
 export function settingsRights(
   me: Doc<'profiles'>,

@@ -1287,8 +1287,11 @@ export const managesEveryProject = (me: Pick<Doc<'profiles'>, 'active' | 'org_ro
  * a top-level meta, or a top-level project that is not a meta, answers
  * false where rootMetaOf would throw or the tree check fail. The Settings
  * project lists' rights (can_create_sub_project, can_restore, can_delete)
- * are this predicate, before the admin access split, which moves the
- * writes onto it, and after. */
+ * and a project's Settings page (model/projectSettings.ts settingsRights)
+ * are this predicate, and so are the writes they offer: model/projects.ts
+ * assertManages for settings, a sub-project's lead, archive and restore,
+ * subProjectParent for a new sub-project, projects.deleteDeep and
+ * removalSummary, and the access changes (canManageProjectUsers). */
 export function managesIn(
   me: Doc<'profiles'>,
   project: Pick<Doc<'projects'>, 'id' | 'org_id' | 'type' | 'parent_id' | 'lead_id'>,

@@ -48,6 +48,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { keyOrg } from './nameKeys.setup'
 import { countOrg } from './overviewCounts.setup'
 
 const VIA_REST = 'via the REST API (drive)'
@@ -775,6 +776,88 @@ describe('creating projects and sub-projects', () => {
 /* ----------------------------------------------------- 2. changing projects */
 
 describe('changing a project', () => {
+  /* The writes a project's Settings page and Settings › Projects offer from
+   * management (model/projectSettings.ts settingsRights), through the app's
+   * own functions: the fixture's admin holds no lead, grant or team share
+   * in the organization, so only management lets them through; Pia sees FW
+   * through a grant and TBED for navigation without leading either, and
+   * Sam sees nothing. */
+  it('an admin who takes part in no project manages it through every write the Settings pages offer', async () => {
+    const fx = await setup()
+    const sam = await plantSeat(fx.t, {
+      org_id: fx.org.id,
+      name: 'Sam',
+      email: 'sam@testbed.test',
+      auth_user_id: `auth_sam_${fx.org.id}`,
+      accepted_at: NOW,
+    })
+    // the lead picker answers once the organization's rows hold name keys
+    await keyOrg(fx.t, fx.org.id)
+    const app = (p: Doc<'profiles'>) => as(fx.t, p)
+    const org_id = fx.org.id
+    const update = (p: Doc<'profiles'>, id: string, patch: Json) =>
+      app(p).mutation(api.projects.update, { org_id, id, patch })
+    const archive = (p: Doc<'profiles'>, id: string) =>
+      app(p).mutation(api.projects.archive, { org_id, id })
+    const unarchive = (p: Doc<'profiles'>, id: string) =>
+      app(p).mutation(api.projects.unarchive, { org_id, id })
+    const summary = (p: Doc<'profiles'>, id: string) =>
+      app(p).query(api.projects.removalSummary, { org_id, id })
+    const remove = (p: Doc<'profiles'>, id: string) =>
+      app(p).mutation(api.projects.deleteDeep, { org_id, id })
+    const createSub = (p: Doc<'profiles'>, parent_id: string, key: string) =>
+      app(p).mutation(api.projects.create, {
+        org_id,
+        id: uuid(),
+        type: 'project',
+        parent_id,
+        key,
+        name: key,
+        lead_id: fx.user.id,
+      })
+    const leads = (p: Doc<'profiles'>, parent_id: string) =>
+      app(p).query(api.projectSettings.leadCandidates, { org_id, parent_id })
+    const LEAD = 'requires lead access to this project'
+
+    // a member who sees the project without leading it is refused each,
+    // with the sentences these writes have always had
+    await refused(update(fx.pia, fx.sub.id, { review_hours: 2 }), 'forbidden', LEAD)
+    await refused(update(fx.pia, fx.sub.id, { lead_id: fx.pia.id }), 'forbidden', LEAD)
+    await refused(archive(fx.pia, fx.sub.id), 'forbidden', LEAD)
+    await refused(summary(fx.pia, fx.sub.id), 'rule', 'requires the project lead')
+    await refused(remove(fx.pia, fx.sub.id), 'rule', 'requires the project lead')
+    await refused(createSub(fx.pia, fx.meta.id, 'PIA'), 'forbidden', LEAD)
+    expect(await leads(fx.pia, fx.meta.id)).toEqual({ state: 'refused', message: LEAD })
+    // one who sees nothing reads the parent as missing, as before
+    await refused(createSub(sam, fx.hidden.id, 'SAM'), 'rule', 'parent project not found')
+    expect(await leads(sam, fx.hidden.id)).toEqual({ state: 'unavailable' })
+    await refused(update(sam, fx.hidden.id, { review_hours: 2 }), 'forbidden', LEAD)
+
+    // the admin's every write goes through
+    await update(fx.admin, fx.hidden.id, { review_hours: 2 })
+    expect((await projectRow(fx.t, fx.hidden.id))?.review_hours).toBe(2)
+    await update(fx.admin, fx.sub.id, { lead_id: fx.pia.id })
+    expect((await projectRow(fx.t, fx.sub.id))?.lead_id).toBe(fx.pia.id)
+    expect((await leads(fx.admin, fx.hidden.id)).state).toBe('ready')
+    const made = await createSub(fx.admin, fx.hidden.id, 'OPT')
+    expect(await projectRow(fx.t, made.id)).toMatchObject({
+      parent_id: fx.hidden.id,
+      lead_id: fx.user.id,
+    })
+    // archive the sub-project, then its parent, and restore the
+    // sub-project under the archived parent, which restores that too
+    await archive(fx.admin, fx.sub2.id)
+    await archive(fx.admin, fx.meta.id)
+    await unarchive(fx.admin, fx.sub2.id)
+    expect((await projectRow(fx.t, fx.sub2.id))?.archived_at).toBeUndefined()
+    expect((await projectRow(fx.t, fx.meta.id))?.archived_at).toBeUndefined()
+    expect(await summary(fx.admin, fx.hidden.id)).toMatchObject({
+      sub_projects: [{ id: made.id, key: 'OPT' }],
+    })
+    await remove(fx.admin, fx.hidden.id)
+    expect(await projectRow(fx.t, fx.hidden.id)).toBeNull()
+  })
+
   it('changes settings with Lead access only, signed via the REST API', async () => {
     const fx = await setup()
     const patch = (p: Doc<'profiles'>, body: unknown) =>

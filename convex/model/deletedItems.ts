@@ -4959,8 +4959,8 @@ function cutToCaps(task: Doc<'issues'>): Doc<'issues'> {
 
 /**
  * Moves `project` with its sub-projects, archived ones included, and every
- * task in them to Deleted items as one project item. The caller checks Lead
- * and writes the 'deleted' activity row. A project with more than
+ * task in them to Deleted items as one project item. The caller checks
+ * management (projects.deleteDeep) and writes the 'deleted' activity row. A project with more than
  * LIMITS.projectDeleteSubProjects.max sub-projects is refused. This transaction stores
  * the project rows, which hides the projects and so every task, milestone,
  * grant and team grant in them; those then move within the same budget and
