@@ -987,6 +987,8 @@ describe('a create in a store that never asked for every task', () => {
       view: { title: 'Order the spare sensors' },
     })
     expect(P().familyOf(P().taskDetail(uuid)?.view as never)).toBeNull()
+    // the failed read keeps the pending create
+    expect(P().createText(uuid)).not.toBeNull()
     // the write sent behind the create goes on and is saved
     take('issues:update').resolve(null)
     await settle()
@@ -1010,7 +1012,8 @@ describe('a create in a store that never asked for every task', () => {
       saving: false,
       view: { title: 'Order the spare sensors' },
     })
-    expect(P().createOnItsWay(uuid)).toBe(false)
+    // and ends the pending create too
+    expect(P().createText(uuid)).toBeNull()
     expect(P().refuseStaleEdit(handle)).toBe(false)
     void P().updateIssue(handle, { title: 'Order the spare humidity sensors' })
     await settle()
