@@ -42,6 +42,7 @@ import { useMenuBackLayer } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
 import { useViewHidden } from '@/lib/viewHidden'
 import { P } from '../../store/planner'
+import { ESCAPE_CLEARS, escapeClearsFirst } from '../pickerWords'
 import {
   type AvatarSize,
   avatar,
@@ -276,11 +277,13 @@ function ProjectNameOf({ id, withOwner }: { id: string | null | undefined; withO
    onEscapeKeyDown hears Escape before the popover closes on it, and keeps it
    open by preventing the event's default, as a search field inside that
    clears its text first does. Only the Radix popover calls it, not the
-   landscape Roadmap's. `modal` makes the Radix popover modal: it keeps
-   focus and scrolling inside itself and hides the rest from screen
-   readers, which a popover over a modal dialog needs to scroll its own
-   list (components/ProjectPicker.tsx inside Search). `collisionPadding`
-   keeps the open popover that far inside the viewport's edges. */
+   landscape Roadmap's, whose pop stays open instead for a search box
+   marked ESCAPE_CLEARS that holds text (AnchoredPop). `modal` makes the
+   Radix popover modal: it keeps focus and scrolling inside itself and
+   hides the rest from screen readers, which a popover over a modal dialog
+   needs to scroll its own list (components/ProjectPicker.tsx inside
+   Search). `collisionPadding` keeps the open popover that far inside the
+   viewport's edges. */
 type PopoverProps = {
   button: (toggle: () => void, open: boolean) => ReactNode
   children: (close: (then?: () => void) => void) => ReactNode
@@ -759,6 +762,15 @@ function AnchoredPopLayer({
       if (popStack[popStack.length - 1] !== entry) return // a pop stacked on top owns Escape
       // so does the discard question, which opens above every pop
       if (questionOpen()) return
+      // A search box in the pop that holds text and clears itself on
+      // Escape (ESCAPE_CLEARS) takes this one, and the pop stays open, as
+      // a picker popover does (escapeClearsFirst). The prevented default
+      // tells the hosts around, such as the landscape Roadmap, that the
+      // Escape is taken.
+      if (e.target instanceof Node && ref.current?.contains(e.target)) {
+        escapeClearsFirst(ESCAPE_CLEARS)(e)
+        if (e.defaultPrevented) return
+      }
       e.stopImmediatePropagation()
       closeRef.current()
     }

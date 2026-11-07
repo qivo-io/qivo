@@ -261,6 +261,27 @@
 //                        state, the first team shares each program at
 //                        User, so a removal on Settings' team or program
 //                        pages opens the window
+//   owners               states a task's owner lists and Team sync's
+//                        Mention window answer whatever the people say
+//                        (pickers:taskOwners, syncRecipients and canOwn,
+//                        src/store/ownerPickersStandIn.setup.ts), for
+//                        screenshots of states a seeded backend cannot
+//                        reach: stopped (each batch stops after half a
+//                        batch), small (batches of five), not-ready,
+//                        refused (the write's refusal), group (a reviewer
+//                        list refused on a task with subtasks),
+//                        unavailable, over-budget, error (every list read
+//                        fails), check-error (every check fails),
+//                        check-ineligible (every check says no) and
+//                        check-slow (checks answer after two seconds);
+//                        several joined by commas. people=1000 reaches
+//                        Load more and the lists' cap of 500
+//   unheldpeople (0)     leaves the N highest-numbered people out of the
+//                        workspace's people part while the pickers and
+//                        people:byIds still answer them, and makes the two
+//                        highest the assignee and reviewer of the first
+//                        open task without subtasks, so the task window
+//                        names them by id
 //   projectsettings      states a project's Settings page reads answer
 //                        whatever the workspace says, for screenshots of
 //                        states a seeded backend cannot reach inside the
@@ -488,7 +509,12 @@
 // admin and a user and false for a Viewer, and the editor's @ mention
 // suggestions (pickers:mentions), through
 // src/store/mentionStandIn.setup.ts, over every person of the organization
-// with the popup's match. So are Settings › Teams' batches and a team's page
+// with the popup's match. So are a task's owner lists and Team sync's
+// Mention window (pickers:taskOwners, syncRecipients and canOwn), through
+// src/store/ownerPickersStandIn.setup.ts, which offers the organization's
+// active admins, users and guests as owners and its active people but the
+// caller as recipients, without the server's access rule, over every
+// person the server holds. So are Settings › Teams' batches and a team's page
 // with its Add member picker (teams:settingsPage, get, members and
 // addable), through src/store/teamSettingsStandIn.setup.ts, which keeps the
 // server's audiences and counts by team_counts' rule; the team writes
@@ -589,6 +615,7 @@ import { mentionStandIn } from '../../src/store/mentionStandIn.setup'
 import { milestoneStandIn } from '../../src/store/milestoneStandIn.setup'
 import { overviewStandIn } from '../../src/store/overviewStandIn.setup'
 import { ownerLoadsStandIn } from '../../src/store/ownerLoadsStandIn.setup'
+import { OWNER_CHECK_SLOW_MS, ownerPickersStandIn } from '../../src/store/ownerPickersStandIn.setup'
 import {
   isPeopleSettingsRead,
   peopleSettingsStandIn,
@@ -948,6 +975,12 @@ const forcedDeleted = (() => {
 const deletedCount = option('deleted', 0)
 /* The removal window's forced states (the `removal` parameter). */
 const forcedRemoval = new Set((parameters.get('removal') ?? '').split(',').filter(Boolean))
+/* The owner lists' and the Mention window's forced states (the `owners`
+   parameter), as the stand-in's `force` takes them. */
+const forcedOwners = new Set((parameters.get('owners') ?? '').split(',').filter(Boolean))
+/* How many of the highest-numbered people the people part leaves out
+   (`unheldpeople`). */
+const unheldPeopleCount = Math.max(0, Math.floor(option('unheldpeople', 0)))
 const fixtureTime = new Date()
 const now = fixtureTime.toISOString()
 const day = (offset) => {
@@ -1364,6 +1397,27 @@ const hiddenTasks = Array.from({ length: perProject * hiddenCount }, (_, h) =>
 if (hiddenTasks.length)
   for (const row of tasks)
     if (!row.parent_id && row.num % 20 === 13) row.parent_id = hiddenTasks[0].id
+/* The highest-numbered people, never the signed-in person, whom the people
+   part leaves out (`unheldpeople`) while the pickers and people:byIds
+   answer them. The highest holds the first open task without subtasks,
+   and the next reviews it, so the task window names both by id. */
+const unheldPeople = new Set(
+  unheldPeopleCount > 0
+    ? profiles
+        .slice(1, peopleCount)
+        .slice(-unheldPeopleCount)
+        .map((p) => p.id)
+    : [],
+)
+if (unheldPeople.size > 0) {
+  const parentIds = new Set(tasks.map((row) => row.parent_id).filter(Boolean))
+  const held = tasks.find((row) => !parentIds.has(row.id) && row.status !== 'done')
+  const [holder, reviewer] = [...unheldPeople].reverse()
+  if (held) {
+    held.assignee_id = holder
+    if (reviewer) held.reviewer_id = reviewer
+  }
+}
 const shown = new Set(tasks.map((row) => row.id))
 const allTasks = [...tasks, ...hiddenTasks]
 // visible tasks with a hidden subtask (workingSetOf's hidden subtask parents)
@@ -1617,14 +1671,22 @@ const unheld = new Set(
 const settingsUnheld = new Set()
 /** The workspace as its parts and forMe send it: without the unheld tasks
     and the rows hung on them, without the projects a Settings page read
-    under projectsettings=unheld, with their grants, and without the
-    labels `unheldlabels` leaves out of the catalogue. */
+    under projectsettings=unheld, with their grants, without the
+    labels `unheldlabels` leaves out of the catalogue, and without the
+    people `unheldpeople` leaves out. */
 function heldWorkspace() {
-  if (unheld.size === 0 && settingsUnheld.size === 0 && unheldLabels.size === 0) return snapshot
+  if (
+    unheld.size === 0 &&
+    settingsUnheld.size === 0 &&
+    unheldLabels.size === 0 &&
+    unheldPeople.size === 0
+  )
+    return snapshot
   const held = (row) => !unheld.has(row.issue_id)
   const shown = (row) => !settingsUnheld.has(row.project_id)
   return {
     ...snapshot,
+    profiles: snapshot.profiles.filter((profile) => !unheldPeople.has(profile.id)),
     labels: snapshot.labels.filter((label) => !unheldLabels.has(label.id)),
     projects: snapshot.projects.filter((p) => !settingsUnheld.has(p.id)),
     access: snapshot.access.filter(shown),
@@ -2382,6 +2444,12 @@ const read = (name, args = {}) => {
     // the editor's @ mention suggestions
     case 'pickers:mentions':
       return mentionStandIn(snapshot, args, { force: forcedMentions })
+    // a task's owner lists and Team sync's Mention window, over every
+    // person the server holds, the ones the people part leaves out included
+    case 'pickers:taskOwners':
+    case 'pickers:syncRecipients':
+    case 'pickers:canOwn':
+      return ownerPickersStandIn(snapshot, name, args, forcedOwners)
     case 'overview:summary':
     case 'overview:risk':
     case 'overview:attention':
@@ -3201,6 +3269,9 @@ port.onmessage = async ({ data }) => {
       // removal=slow holds the removal window's reads for two seconds
       if (forcedRemoval.has('slow') && data.name.startsWith('accessRemovals:'))
         await new Promise((resolve) => setTimeout(resolve, 2000))
+      // owners=check-slow holds the owner checks
+      if (forcedOwners.has('check-slow') && data.name === 'pickers:canOwn')
+        await new Promise((resolve) => setTimeout(resolve, OWNER_CHECK_SLOW_MS))
       await deliver(data.id, () => read(data.name, data.args))
       return
     case 'mutation': {

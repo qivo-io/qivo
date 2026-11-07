@@ -11,10 +11,14 @@
    (panels/settings/ProjectLists.tsx), Settings › Teams, a team's members
    and its Add member picker (panels/settings/TeamSettings.tsx), Settings ›
    Users (panels/settings/UsersSettings.tsx), the task label picker
-   (panels/LabelPicker.tsx), the expanded sub-project list of the All
-   projects directory (components/ProjectDirectory.tsx) and the sidebar's
-   project tree and its expanded list (components/SidebarProjects.tsx),
-   which grow to their bounds as the person scrolls. The editor's @
+   (panels/LabelPicker.tsx), a task's owner list behind the task window's
+   Assignee and Reviewer and every owner portrait
+   (components/AssigneeAvatar.tsx OwnerPickList), Team sync's Mention
+   window (views/teamSync/SyncCard.tsx MentionCtl), the expanded
+   sub-project list of the All projects directory
+   (components/ProjectDirectory.tsx) and the sidebar's project tree and its
+   expanded list (components/SidebarProjects.tsx), which grow to their
+   bounds as the person scrolls. The editor's @
    mention popup, plain DOM outside React, reads through the `once` engine
    itself (onceList, components/mentionSuggestion.ts). Beside it, a page
    mode (usePagedPages, at the end of this file) shows one page at a time,
@@ -44,10 +48,11 @@
    A list reads its batches from one of two sources (BatchSource):
 
    - `once`: each batch is one read on demand, never subscribed to, as API
-     access, Billing's lists, the removal window's Reassign picker, Deleted
-     items' people and MCP access's Connected apps and Personal access
-     tokens (panels/ConnectedApps.tsx, panels/settings/PersonalTokens.tsx)
-     read everything. Load
+     access, Billing's lists, the removal window's Reassign picker, a
+     task's owner lists, Team sync's Mention window, Deleted items' people
+     and MCP access's Connected apps and Personal access tokens
+     (panels/ConnectedApps.tsx, panels/settings/PersonalTokens.tsx) read
+     everything. Load
      more reads after the last batch's `next`; one read runs at a time, so a
      second press or a Retry while one runs reads nothing. A failed batch
      keeps the rows and the place, and Retry reads it again, or starts again

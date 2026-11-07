@@ -169,7 +169,7 @@ function fixture(): Snapshot {
   }
 }
 
-describe('task assignee choices', () => {
+describe('task holders in the store', () => {
   let P: Planner
   let projectId: string
 
@@ -195,34 +195,17 @@ describe('task assignee choices', () => {
     vi.unstubAllGlobals()
   })
 
-  it('excludes direct, team and guest View access, including the organization viewer ceiling', () => {
-    const choices = P.issueAssigneesFor(projectId).map((user) => user.name)
+  // The people a picker offers are the server's now (pickers.taskOwners,
+  // whose rule convex/tests/pickerParity.test.ts holds to the write). The
+  // store still reads levels for its own checks and names its holders.
+  it('reads direct, team and guest View access as Viewer, including the organization viewer ceiling', () => {
     for (const name of ['Direct View', 'Team View', 'Guest View', 'Org viewer with team Edit']) {
       const user = P.users.find((candidate) => candidate.name === name)!
       expect(P.levelOn(projectId, user.id)).toBe('viewer')
-      expect(choices).not.toContain(name)
     }
   })
 
-  it('offers active same-organization people and agents with effective Edit or Lead access', () => {
-    expect(
-      P.issueAssigneesFor(projectId)
-        .map((user) => user.name)
-        .sort(),
-    ).toEqual([
-      'Admin',
-      'Agent Edit',
-      'Direct Edit',
-      'Direct View with team Edit',
-      'Guest Edit',
-      'Managing team lead',
-      'Project lead',
-    ])
-  })
-
-  it('keeps View users available as reporters and preserves existing assignment names', () => {
-    const reporters = P.issueUsersFor(projectId).map((user) => user.name)
-    expect(reporters).toEqual(expect.arrayContaining(['Direct View', 'Team View', 'Guest View']))
+  it('preserves existing assignment names', () => {
     const task = P.issues.find((issue) => issue.title === 'Existing assignment')!
     expect(P.user(task.assignee)?.name).toBe('Direct View')
     expect(P.user(task.reporter)?.name).toBe('Direct View')

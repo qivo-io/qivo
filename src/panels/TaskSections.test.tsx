@@ -1084,10 +1084,14 @@ describe('a new task before the server stored it', { timeout: 20_000 }, () => {
       expect(button(label)?.disabled, label).toBe(true)
       expect(await hintOf(button(label)), label).toBe('Available once this task is saved')
     }
-    for (const label of ['Assignee', 'Reviewer'])
-      expect(document.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)?.disabled).toBe(
-        true,
-      )
+    // the owner fields, found by their mark since their accessible name
+    // carries the holder (Assignee, Mira)
+    for (const field of ['assignee', 'reviewer'])
+      expect(
+        document.querySelector<HTMLButtonElement>(`[data-fieldselect][data-owner-field="${field}"]`)
+          ?.disabled,
+        field,
+      ).toBe(true)
     const during = await menu()
     expect(during.move?.disabled).toBe(true)
     expect(during.fate?.disabled).toBe(true)

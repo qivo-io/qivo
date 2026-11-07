@@ -8,6 +8,11 @@ import { TooltipProvider } from '../../components/ui/tooltip'
 import { endClosing, playClosingAnimations } from '../../lib/closingAnimation.setup'
 import { pastCloseTicks } from '../../lib/discardQuestion.setup'
 import type { UnsentScope } from '../../lib/leaveGuard'
+import {
+  isOwnerPickerRead,
+  type OwnerPickerArgs,
+  ownerPickersStandIn,
+} from '../../store/ownerPickersStandIn.setup'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 
 /* The Team sync @ window on the real store. Its note is a comment, so the
@@ -43,12 +48,38 @@ let prompt: typeof import('../../components/DiscardPrompt')
 let container: HTMLDivElement
 let root: Root
 let writes: Answer[]
+/** the stand-in's forced states (store/ownerPickersStandIn.setup.ts) */
+let force: Set<string>
+/** every pickers: read, oldest first */
+let asked: { name: string; args: OwnerPickerArgs }[]
+/** whether the reads wait for `held`'s releases */
+let holding: boolean
+let held: { name: string; release: () => void }[]
 
-async function load() {
+const FIRST =
+  'Ben Carla Dmitri Elena Farid Grace Hugo Ines Jonas Keiko Liam Maya Nora Omar Priya Quinn Rosa Sven Tara Umar Vera Wes Ximena Yusuf Zara Alba Bruno Chloe Diego Emil Freya Gus Hana Ivan Jade Kofi Lena Mateo Noor Leo'.split(
+    ' ',
+  )
+const LAST =
+  'Carter Silva Ivanov Rossi Haddad Kim Moreau Costa Berg Tanaka Walsh Patel Martins Farouk Nair Lopez Novak Larsen Singh Okafor Weber Dubois Garcia Yilmaz Mensah Hughes Sato Byrne Fischer Young'.split(
+    ' ',
+  )
+
+async function load(people = 0) {
   vi.resetModules()
   const snap: Snapshot = plannerFixture()
   const me = snap.profiles[0]
   snap.profiles.push({ ...me, id: 'aisha', name: 'Aisha Rahman', auth_user_id: 'account-aisha' })
+  for (let i = 0; i < people; i++) {
+    const name = `${FIRST[i % FIRST.length]} ${LAST[Math.floor(i / FIRST.length) % LAST.length]}`
+    snap.profiles.push({
+      ...me,
+      id: `person-${String(i).padStart(4, '0')}`,
+      name,
+      auth_user_id: `account-${i}`,
+      org_role: 'user',
+    })
+  }
   snap.issues.push({
     id: 'task-a',
     org_id: snap.orgs[0].id,
@@ -69,7 +100,13 @@ async function load() {
     if (getFunctionName(ref) === 'workspace:whole') next(structuredClone(snap))
     return () => {}
   })
-  network.query.mockResolvedValue(null)
+  network.query.mockImplementation(async (ref, args: OwnerPickerArgs) => {
+    const name = getFunctionName(ref)
+    if (!isOwnerPickerRead(name)) return null
+    asked.push({ name, args })
+    if (holding) await new Promise<void>((release) => held.push({ name, release }))
+    return structuredClone(ownerPickersStandIn(snap, name, args, force))
+  })
   network.mutation.mockImplementation(
     (ref) =>
       new Promise((resolve, reject) => {
@@ -104,6 +141,10 @@ beforeEach(async () => {
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
+  force = new Set()
+  asked = []
+  held = []
+  holding = false
   await load()
 })
 
@@ -115,9 +156,14 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-/* Opens the @ window on the task, with Aisha picked, and writes `text`.
-   `page` is the scope of the page the card sits on. */
-async function write(text: string, onSent: () => void, page?: UnsentScope) {
+/** A few turns for the server's answers and React. */
+async function flush() {
+  for (let i = 0; i < 3; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
+}
+
+/* Renders the @ glyph on the task, suggesting `initial`. `page` is the
+   scope of the page the card sits on. */
+async function mount(onSent: () => void, page?: UnsentScope, initial: string | null = 'aisha') {
   const it = P.issues.find((i) => i.uuid === 'task-a')
   if (!it) throw new Error('missing the task')
   const { UnsentScopeContext } = await import('../../lib/leaveGuard')
@@ -125,13 +171,16 @@ async function write(text: string, onSent: () => void, page?: UnsentScope) {
     root.render(
       <TooltipProvider>
         <UnsentScopeContext.Provider value={page ?? null}>
-          <card.MentionCtl it={it} initial="aisha" onSent={onSent} />
+          <card.MentionCtl it={it} initial={initial} onSent={onSent} />
         </UnsentScopeContext.Provider>
         <prompt.DiscardPrompt />
       </TooltipProvider>,
     ),
   )
-  await act(async () => document.querySelector<HTMLElement>('[data-sync-mention]')?.click())
+}
+
+/* Types `text` into the note. */
+async function typeNote(text: string) {
   const field = note()
   if (!field) throw new Error('missing the note')
   // React tracks the value through the native setter
@@ -140,6 +189,22 @@ async function write(text: string, onSent: () => void, page?: UnsentScope) {
     setValue?.call(field, text)
     field.dispatchEvent(new Event('input', { bubbles: true }))
   })
+}
+
+/* Opens the @ window on the task, with Aisha picked once the server says
+   she can be mentioned, and writes `text`. `page` is the scope of the
+   page the card sits on. */
+async function write(text: string, onSent: () => void, page?: UnsentScope) {
+  await mount(onSent, page)
+  await act(async () => document.querySelector<HTMLElement>('[data-sync-mention]')?.click())
+  await flush()
+  await typeNote(text)
+}
+
+/* Presses Send and lets the check and the post go out. */
+async function pressSend() {
+  await act(async () => send()?.click())
+  await flush()
 }
 const windowOpen = () => document.querySelector('[data-sync-mention-window]') !== null
 function note() {
@@ -198,7 +263,7 @@ describe('the Team sync @ window', () => {
   it('keeps the window and its note when the server refuses the comment', async () => {
     const onSent = vi.fn()
     await write('Can you check the soak report?', onSent)
-    await act(async () => send()?.click())
+    await pressSend()
     expect(writes).toHaveLength(1)
     // one send at a time, and nothing in the window changes meanwhile
     expect(send()?.disabled).toBe(true)
@@ -221,7 +286,7 @@ describe('the Team sync @ window', () => {
   it('keeps the note when the server refuses it after the window closed', async () => {
     const onSent = vi.fn()
     await write('Can you check the soak report?', onSent)
-    await act(async () => send()?.click())
+    await pressSend()
     await toggle()
     expect(windowOpen()).toBe(false)
     await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: RULE })))
@@ -242,7 +307,7 @@ describe('the Team sync @ window', () => {
     const { createUnsentScope } = await import('../../lib/leaveGuard')
     const page = createUnsentScope()
     await write('Can you check the soak report?', vi.fn(), page)
-    await act(async () => send()?.click())
+    await pressSend()
     await toggle()
     await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: RULE })))
     expect(page.held()).toEqual(['note'])
@@ -267,7 +332,7 @@ describe('the Team sync @ window', () => {
   it('shows the note being sent when the window opens again, and closes once it is saved', async () => {
     const onSent = vi.fn()
     await write('Can you check the soak report?', onSent)
-    await act(async () => send()?.click())
+    await pressSend()
     await toggle()
     await toggle()
     expect(note()?.value).toBe('Can you check the soak report?')
@@ -308,7 +373,7 @@ describe('the Team sync @ window', () => {
     playClosingAnimations()
     const onSent = vi.fn()
     await write('Can you check the soak report?', onSent)
-    await act(async () => send()?.click())
+    await pressSend()
     await act(async () => writes[0].resolve(null))
     const closing = document.querySelector('[data-sync-mention-window]')
     expect(closing?.getAttribute('data-state')).toBe('closed')
@@ -316,7 +381,7 @@ describe('the Team sync @ window', () => {
     expect(note()?.readOnly).toBe(true)
     expect(aisha()?.disabled).toBe(true)
     expect(button('Cancel').disabled).toBe(true)
-    await act(async () => send()?.click())
+    await pressSend()
     expect(writes).toHaveLength(1)
     await endClosing()
     expect(windowOpen()).toBe(false)
@@ -336,8 +401,8 @@ describe('the Team sync @ window', () => {
     )
     // the fading window shows what it had, Send included
     expect(send()?.disabled).toBe(false)
-    await act(async () => send()?.click())
-    await act(async () => send()?.click())
+    await pressSend()
+    await pressSend()
     expect(writes).toHaveLength(0)
     await endClosing()
     expect(windowOpen()).toBe(false)
@@ -360,19 +425,19 @@ describe('the Team sync @ window', () => {
     expect(note()?.value).toBe('Can you check the soak report?')
     expect(send()?.disabled).toBe(true)
     expect(note()?.readOnly).toBe(true)
-    await act(async () => send()?.click())
+    await pressSend()
     expect(writes).toHaveLength(1)
   })
 
   it('closes at once on a phone after the save, and stays locked while it fades', async () => {
     playClosingAnimations()
     await writeOnPhone()
-    await act(async () => send()?.click())
+    await pressSend()
     await act(async () => writes[0].resolve(null))
     expect(fading()).toBe(true)
     expect(send()?.disabled).toBe(true)
     expect(note()?.readOnly).toBe(true)
-    await act(async () => send()?.click())
+    await pressSend()
     expect(writes).toHaveLength(1)
     await endClosing()
     expect(windowOpen()).toBe(false)
@@ -383,7 +448,7 @@ describe('the Team sync @ window', () => {
     await writeOnPhone()
     await act(async () => button('Cancel').click())
     expect(fading()).toBe(true)
-    await act(async () => send()?.click())
+    await pressSend()
     expect(writes).toHaveLength(0)
     await endClosing()
     expect(windowOpen()).toBe(false)
@@ -396,17 +461,389 @@ describe('the Team sync @ window', () => {
     expect(writes).toHaveLength(0)
     expect(windowOpen()).toBe(true)
     expect(note()?.value).toBe('Can you check the soak report?')
-    await act(async () => send()?.click())
+    await pressSend()
     expect(writes).toHaveLength(1)
   })
 
   it('closes once the server saves the comment', async () => {
     const onSent = vi.fn()
     await write('Can you check the soak report?', onSent)
-    await act(async () => send()?.click())
+    await pressSend()
     expect(windowOpen()).toBe(true)
     await act(async () => writes[0].resolve(null))
     expect(windowOpen()).toBe(false)
     expect(onSent).toHaveBeenCalledTimes(1)
+  })
+})
+
+const person = (id: string) =>
+  document.querySelector<HTMLButtonElement>(`[data-sync-mention-person="${id}"]`)
+const people = () =>
+  [...document.querySelectorAll<HTMLButtonElement>('[data-sync-mention-person]')].map(
+    (b) => b.dataset.syncMentionPerson,
+  )
+const pressed = () =>
+  [...document.querySelectorAll<HTMLButtonElement>('[data-sync-mention-person]')]
+    .filter((b) => b.getAttribute('aria-pressed') === 'true')
+    .map((b) => b.dataset.syncMentionPerson)
+const line = () => document.querySelector('[data-sync-mention-line]')?.textContent ?? null
+const listText = () => document.querySelector('[data-sync-mention-list]')?.textContent ?? ''
+const reads = (name: string) => asked.filter((a) => a.name === name)
+async function openWindow() {
+  await act(async () => document.querySelector<HTMLElement>('[data-sync-mention]')?.click())
+  await flush()
+}
+/* Lets the held read of `name` answer. */
+async function release(name: string) {
+  const at = held.findIndex((h) => h.name === name)
+  if (at < 0) throw new Error(`no held ${name}`)
+  const [read] = held.splice(at, 1)
+  await act(async () => read.release())
+  await flush()
+}
+async function search(text: string) {
+  const box = document.querySelector<HTMLInputElement>('[data-sync-mention-search]')
+  if (!box) throw new Error('missing the search')
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  await act(async () => {
+    setValue?.call(box, text)
+    box.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await act(async () => await new Promise((r) => setTimeout(r, 300)))
+  await flush()
+}
+async function loadMore() {
+  await act(async () => document.querySelector<HTMLElement>('[data-picker-more]')?.click())
+  await flush()
+}
+
+describe('the Team sync @ window’s people', () => {
+  it('reads nothing while closed, and its first batch and the suggestion’s check while open', async () => {
+    await mount(vi.fn())
+    expect(asked).toEqual([])
+    await openWindow()
+    const org = P.org.id
+    expect(reads('pickers:syncRecipients').map((a) => a.args)).toEqual([
+      { org_id: org, issue_id: 'task-a' },
+    ])
+    expect(reads('pickers:canOwn').map((a) => a.args)).toEqual([
+      { org_id: org, issue_id: 'task-a', field: 'recipient', ids: ['aisha'] },
+    ])
+    await toggle()
+    expect(windowOpen()).toBe(false)
+    const before = asked.length
+    await flush()
+    expect(asked).toHaveLength(before)
+  })
+
+  it('chooses the suggested person only once the server says they can be mentioned', async () => {
+    holding = true
+    await mount(vi.fn())
+    await openWindow()
+    // the batch and the check are on their way, so no one is chosen
+    expect(pressed()).toEqual([])
+    expect(held).toHaveLength(2)
+    // the check answers first and says yes
+    await release('pickers:canOwn')
+    await flush()
+    expect(pressed()).toEqual(['aisha'])
+  })
+
+  it('chooses nothing for a check that says no or fails, until a batch holds the person', async () => {
+    for (const state of ['check-ineligible', 'check-error']) {
+      await load()
+      force = new Set([state])
+      holding = true
+      held = []
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      await mount(vi.fn())
+      await openWindow()
+      await release('pickers:canOwn')
+      await flush()
+      expect(pressed(), state).toEqual([])
+      expect(line(), state).toBeNull()
+      // a batch row of the person is the server's yes
+      await release('pickers:syncRecipients')
+      await flush()
+      expect(pressed(), state).toEqual(['aisha'])
+      await toggle()
+      holding = false
+    }
+  })
+
+  it('never chooses the suggested person over someone the person picked', async () => {
+    await load(40)
+    holding = true
+    // Zara Carter sorts after the first batch
+    await mount(vi.fn(), undefined, 'person-0024')
+    await openWindow()
+    await release('pickers:syncRecipients')
+    await flush()
+    const ben = people()[0]
+    expect(ben).toBeDefined()
+    await act(async () => person(ben ?? '')?.click())
+    expect(pressed()).toEqual([ben])
+    await release('pickers:canOwn')
+    await flush()
+    expect(pressed()).toEqual([ben])
+  })
+
+  it('keeps the chosen person first through a search that leaves them out, Load more and a new render', async () => {
+    await load(40)
+    await mount(vi.fn())
+    await openWindow()
+    await typeNote('Can you check it?')
+    expect(people()[0]).toBe('aisha')
+    expect(pressed()).toEqual(['aisha'])
+    await search('Ben')
+    expect(people()[0]).toBe('aisha')
+    expect(
+      people()
+        .slice(1)
+        .every((id) => id?.startsWith('person-')),
+    ).toBe(true)
+    expect(pressed()).toEqual(['aisha'])
+    await search('')
+    await loadMore()
+    expect(people().filter((id) => id === 'aisha')).toHaveLength(1)
+    expect(people()[0]).toBe('aisha')
+    await mount(vi.fn())
+    expect(pressed()).toEqual(['aisha'])
+    expect(note()?.value).toBe('Can you check it?')
+  })
+
+  it('never shows an older search’s end while the next search’s list opens', async () => {
+    await load(3)
+    await mount(vi.fn())
+    await openWindow()
+    await search('zzz')
+    expect(listText()).toContain('No people match.')
+    // every text the list showed while the search was cleared, also for
+    // one render: each text before a change, each node added or removed,
+    // and each changed text as it stands
+    const shown: string[] = []
+    const take = (records: MutationRecord[]) => {
+      for (const record of records) {
+        if (record.oldValue !== null) shown.push(record.oldValue)
+        if (record.type === 'characterData') shown.push(record.target.textContent ?? '')
+        for (const node of [...record.addedNodes, ...record.removedNodes])
+          shown.push(node.textContent ?? '')
+      }
+    }
+    const watch = new MutationObserver(take)
+    const list = document.querySelector('[data-sync-mention-list]')
+    if (!list) throw new Error('missing the list')
+    watch.observe(list, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      characterDataOldValue: true,
+    })
+    await search('')
+    take(watch.takeRecords())
+    watch.disconnect()
+    expect(shown.join('\n')).not.toContain('No one else can be mentioned on this task.')
+    // the list says it loads until the cleared search's list answers
+    expect(shown.some((text) => text.includes('Loading…'))).toBe(true)
+    expect(people()).toContain('person-0000')
+  })
+
+  it('clears the search on Escape before it closes', async () => {
+    await load(40)
+    await mount(vi.fn())
+    await openWindow()
+    await search('Ben')
+    const box = document.querySelector<HTMLInputElement>('[data-sync-mention-search]')
+    await act(async () =>
+      box?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+      ),
+    )
+    expect(windowOpen()).toBe(true)
+    expect(box?.value).toBe('')
+  })
+
+  // the people figure at its design size, 1,000 people with the writer and
+  // Aisha
+  it('lists 1,000 people 25 at a time up to its cap of 500, each once', async () => {
+    await load(998)
+    await mount(vi.fn())
+    await openWindow()
+    expect(people()).toHaveLength(25)
+    for (let press = 0; press < 19; press++) await loadMore()
+    expect(people()).toHaveLength(500)
+    expect(new Set(people()).size).toBe(500)
+    expect(listText()).toContain('Search to narrow the list.')
+    expect(document.querySelector('[data-picker-more]')).toBeNull()
+  }, 60_000)
+})
+
+describe('the Team sync @ window’s Send', () => {
+  it('checks the person first and posts only on a current yes', async () => {
+    await write('Can you check the soak report?', vi.fn())
+    const checks = reads('pickers:canOwn').length
+    await pressSend()
+    expect(reads('pickers:canOwn')).toHaveLength(checks + 1)
+    expect(reads('pickers:canOwn').at(-1)?.args).toMatchObject({
+      field: 'recipient',
+      ids: ['aisha'],
+    })
+    expect(writes).toHaveLength(1)
+  })
+
+  it('posts nothing for a person who can no longer be mentioned, keeps the note and asks for another', async () => {
+    await write('Can you check the soak report?', vi.fn())
+    force.add('check-ineligible')
+    await pressSend()
+    expect(writes).toHaveLength(0)
+    expect(windowOpen()).toBe(true)
+    expect(note()?.value).toBe('Can you check the soak report?')
+    expect(note()?.readOnly).toBe(false)
+    expect(line()).toBe('Aisha can no longer be mentioned on this task. Pick someone else.')
+    expect(pressed()).toEqual([])
+    expect(send()?.disabled).toBe(true)
+  })
+
+  it('keeps the choice and the note when the check fails, and sends on the next press', async () => {
+    await write('Can you check the soak report?', vi.fn())
+    force.add('check-error')
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await pressSend()
+    expect(writes).toHaveLength(0)
+    expect(line()).toBe("Couldn't check Aisha. Press Send to try again.")
+    expect(pressed()).toEqual(['aisha'])
+    expect(note()?.value).toBe('Can you check the soak report?')
+    force.delete('check-error')
+    await pressSend()
+    expect(writes).toHaveLength(1)
+  })
+
+  for (const [state, says] of [
+    ['refused', 'No write access to this project.'],
+    ['unavailable', 'This task is no longer available.'],
+    ['over-budget', "Couldn't check Aisha. Press Send to try again."],
+  ])
+    it(`posts nothing when the check answers ${state}, and says why`, async () => {
+      await write('Can you check the soak report?', vi.fn())
+      force.add(state)
+      await pressSend()
+      expect(writes).toHaveLength(0)
+      expect(line()).toBe(says)
+      expect(note()?.value).toBe('Can you check the soak report?')
+      expect(windowOpen()).toBe(true)
+    })
+
+  it('clears a kept choice the server no longer takes when the window opens again', async () => {
+    await write('Can you check the soak report?', vi.fn())
+    await pressSend()
+    await toggle()
+    await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: RULE })))
+    force.add('check-ineligible')
+    await toggle()
+    await flush()
+    expect(note()?.value).toBe('Can you check the soak report?')
+    expect(line()).toBe('Aisha can no longer be mentioned on this task. Pick someone else.')
+    expect(pressed()).toEqual([])
+  })
+
+  it('leaves a kept choice the opening check cleared to the person, also once the suggestion changes', async () => {
+    await load(3)
+    await write('Can you check the soak report?', vi.fn())
+    await pressSend()
+    await toggle()
+    await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: RULE })))
+    force.add('check-ineligible')
+    await toggle()
+    await flush()
+    expect(pressed()).toEqual([])
+    await toggle()
+    // the task's other party is now Ben Carter, whom the server takes
+    force.delete('check-ineligible')
+    await mount(vi.fn(), undefined, 'person-0000')
+    await toggle()
+    await flush()
+    expect(reads('pickers:canOwn').at(-1)?.args.ids).toEqual(['person-0000'])
+    expect(people()).toContain('person-0000')
+    expect(pressed()).toEqual([])
+    expect(line()).toBe('Aisha can no longer be mentioned on this task. Pick someone else.')
+    expect(note()?.value).toBe('Can you check the soak report?')
+  })
+
+  it('keeps a person picked before the check of a kept choice answers', async () => {
+    await load(3)
+    await write('Can you check the soak report?', vi.fn())
+    await pressSend()
+    await toggle()
+    await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: RULE })))
+    force.add('check-ineligible')
+    holding = true
+    await toggle()
+    await release('pickers:syncRecipients')
+    // Ben Carter, picked while the check of the kept Aisha is on its way
+    const ben = 'person-0000'
+    await act(async () => person(ben)?.click())
+    expect(pressed()).toEqual([ben])
+    await release('pickers:canOwn')
+    expect(pressed()).toEqual([ben])
+    expect(line()).toBeNull()
+  })
+
+  it('ignores the opening check of a window that closed before it answered', async () => {
+    await load(3)
+    await write('Can you check the soak report?', vi.fn())
+    await pressSend()
+    await toggle()
+    await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: RULE })))
+    force.add('check-ineligible')
+    holding = true
+    // opened and closed while its check of the kept Aisha is on its way,
+    // then opened again
+    await toggle()
+    await toggle()
+    expect(windowOpen()).toBe(false)
+    await toggle()
+    expect(
+      reads('pickers:canOwn')
+        .slice(-2)
+        .map((a) => a.args.ids),
+    ).toEqual([['aisha'], ['aisha']])
+    await release('pickers:syncRecipients')
+    await release('pickers:syncRecipients')
+    // Ben Carter, picked in the second opening
+    const ben = 'person-0000'
+    await act(async () => person(ben)?.click())
+    expect(pressed()).toEqual([ben])
+    // the first opening's check says no of Aisha, and changes nothing
+    await release('pickers:canOwn')
+    expect(pressed()).toEqual([ben])
+    expect(line()).toBeNull()
+    await release('pickers:canOwn')
+    expect(pressed()).toEqual([ben])
+    expect(line()).toBeNull()
+  })
+
+  it('never sends a kept note to the suggestion once Send dropped the chosen person', async () => {
+    await load(3)
+    await mount(vi.fn())
+    await openWindow()
+    expect(pressed()).toEqual(['aisha'])
+    // Ben Carter, picked over the suggested Aisha
+    const ben = 'person-0000'
+    await act(async () => person(ben)?.click())
+    await typeNote('Can you check the soak report?')
+    holding = true
+    await pressSend()
+    // closed while the check of Ben is on its way, which then says no
+    await toggle()
+    expect(windowOpen()).toBe(false)
+    force.add('check-ineligible')
+    holding = false
+    await release('pickers:canOwn')
+    await toggle()
+    await flush()
+    expect(note()?.value).toBe('Can you check the soak report?')
+    expect(line()).toBe('Ben can no longer be mentioned on this task. Pick someone else.')
+    expect(pressed()).toEqual([])
+    expect(writes).toHaveLength(0)
   })
 })

@@ -9,6 +9,8 @@
 import { memo, type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { AssigneeAvatar, OwnerPickList } from '@/components/AssigneeAvatar'
 import { LimitedTextarea } from '@/components/LimitedField'
+import { ChoiceEnd, PickerSearch } from '@/components/pickerParts'
+import { escapeClearsFirst, RECIPIENT_WORDS } from '@/components/pickerWords'
 import {
   AnchoredPop,
   Avatar,
@@ -28,8 +30,10 @@ import { planHint, type Reviewed } from '@/components/walkRows'
 import { clampedTitleTip } from '@/lib/clampedTitle'
 import { useClosingWords } from '@/lib/closingWords'
 import { closeOrAsk, questionOpen } from '@/lib/discardQuestion'
-import { overLimit } from '@/lib/fieldLimits'
+import { overLimit, sentence } from '@/lib/fieldLimits'
 import { type UnsentScope, UnsentScopeContext, useUnsaved, useUnsentScope } from '@/lib/leaveGuard'
+import { listEnd, usePagedList, useSettledSearch } from '@/lib/pagedList'
+import { PICKER_CAPS } from '@/lib/pickerCaps'
 import {
   dayLabel,
   type LoadFigure,
@@ -46,7 +50,7 @@ import { useUpdateBlocker } from '@/lib/updateSafety'
 import { useMenuBackLayer, useMobileBackLayer } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
 import { fmtHours } from '@/lib/workload'
-import { type IssueVM, P } from '@/store/planner'
+import { type IssueVM, type OwnerChoice, type OwnerChoices, P } from '@/store/planner'
 import type { StoreVersion } from '@/store/updates'
 import { LIMITS } from '../../../convex/lib/limits'
 import { DelayBanner } from '../kanbanCards'
@@ -78,9 +82,9 @@ export type PageCtx = {
   cards: Map<UnsentScope, SyncCardPlace>
   /** while the meeting stopped updating (state stale), the title of the
       task controls it turns off (stoppedTitle), else null: the cards'
-      typed text stays and a mention still sends, while an owner list, the
-      status menu or the reviewer prompt open before it closes and writes
-      nothing */
+      typed text stays and the Mention window still lists its people and
+      sends, while an owner list, the status menu or the reviewer prompt
+      open before it closes and writes nothing */
   frozen: string | null
 }
 
@@ -267,11 +271,13 @@ function StatusCtl({
 }
 
 /** The reviewer picker a move into In Review offers, anchored to the row's
-    owner control. Escape, a click outside or a phone's Back skips it; a pick
-    is a change made from the row, written as the prompt closes, which takes
-    no history step (lib/useMobile useMenuBackLayer). Closing hands focus back
-    to the owner control while the row is still on the page (a pick usually
-    moves it to the reviewer's page). */
+    owner control. An Escape in its search clears typed text first, as in
+    every owner list, and an Escape with the search empty skips it, as a
+    click outside or a phone's Back always does; a pick is a change made
+    from the row, written as the prompt closes, which takes no history step
+    (lib/useMobile useMenuBackLayer). Closing hands focus back to the owner
+    control while the row is still on the page (a pick usually moves it to
+    the reviewer's page). */
 function ReviewerPrompt({
   it,
   ctx,
@@ -328,10 +334,172 @@ function ReviewerPrompt({
   )
 }
 
+/** A person the Mention window may send to, by id and name. */
+type Recipient = { id: string; name: string }
+
+/* The Mention window's search box, which Escape clears before it closes
+   the window (escapeClearsFirst). */
+const MENTION_SEARCH = 'data-sync-mention-search'
+
+/** The people of the Mention window, read while it is open
+    (pickers.syncRecipients through P.recipientChoices), 25 a batch with
+    the server's search and Load more, at most PICKER_CAPS.recipients kept;
+    the chosen person `who` first, checked, whatever the batches hold, then
+    the batches' rows, each once. On open it sends one pickers.canOwn check
+    with the first batch, for the kept choice, else for `initial`. A kept
+    choice the check finds no longer eligible goes to `onGone`, which
+    clears it, says why and leaves the choice to the person, but only while
+    it is still the choice, so a person picked before the answer keeps
+    their pick. A check that answers once this window's list has gone,
+    after its closing fade, changes nothing, as the next opening sends its
+    own check. A reopening inside the fade keeps this check, under the same
+    guard. `initial` is chosen (`onWho` without a press) once a batch row or
+    an `eligible` answer holds them, while the person has picked no one
+    (`picked`). A failed or refused check chooses nothing. The list's end
+    shows only once the list for the typed text has opened, so a changed
+    search never shows the older search's end. */
+function MentionPeople({
+  it,
+  initial,
+  who,
+  picked,
+  locked,
+  onWho,
+  onGone,
+}: {
+  it: IssueVM
+  initial: string | null
+  who: Recipient | null
+  picked: boolean
+  locked: boolean
+  onWho: (person: Recipient | null, pressed: boolean) => void
+  onGone: (person: Recipient) => void
+}) {
+  const task = { uuid: it.uuid, org: it.org }
+  const [text, setText] = useState('')
+  const search = useSettledSearch(text, LIMITS.search)
+  const query = search.settled
+  const listKey = `${it.org}\n${it.uuid}\n${query}`
+  const list = usePagedList<OwnerChoices, OwnerChoice>({
+    key: listKey,
+    source: {
+      kind: 'once',
+      read: (at) => P.recipientChoices({ task, search: query, cursor: at.after }),
+    },
+    batch: (answer) => (answer.state === 'ready' ? answer : null),
+    id: (row) => row.id,
+    most: PICKER_CAPS.recipients,
+  })
+  // the list the paged list opened, which it opens after the render that
+  // names a new one, so that render never ends with an older text's end
+  const opened = useRef<string | null>(null)
+  useEffect(() => {
+    opened.current = listKey
+  })
+  // the choice the window opened with, kept from before; `initial` is
+  // chosen only for a window that opened without one
+  const [openedWith] = useState(who)
+  // the choice as it stands when the check below answers
+  const whoNow = useRef(who)
+  whoNow.current = who
+  // the one check of the person the window opens with
+  const [suggested, setSuggested] = useState<Recipient | null>(null)
+  useEffect(() => {
+    const id = openedWith?.id ?? initial
+    if (!id) return
+    // an answer after this list unmounted, once the window has faded out,
+    // is an older opening's, which says nothing of the choice a later
+    // opening holds
+    let live = true
+    void P.ownerChecks({ task, field: 'recipient', ids: [id] }).then((answer) => {
+      if (!live) return
+      const row = answer?.state === 'ready' ? answer.rows.find((r) => r.id === id) : undefined
+      if (!row) return
+      if (openedWith) {
+        // a person picked since the window opened keeps their pick
+        if (row.eligible || whoNow.current?.id !== openedWith.id) return
+        onGone(openedWith)
+      } else if (row.eligible && row.person) setSuggested(row.person)
+    })
+    return () => {
+      live = false
+    }
+  }, [])
+  // `initial`, once a batch or the check says they may be mentioned
+  const fromBatch = initial ? list.rows.find((row) => row.id === initial) : undefined
+  const offered = openedWith ? undefined : (fromBatch ?? suggested)
+  useEffect(() => {
+    if (offered && !picked && who === null) onWho(offered, false)
+  }, [offered, picked, who])
+  const rows = list.rows.filter((row) => row.id !== who?.id)
+  const answered = query === search.typed && !search.tooLong && opened.current === listKey
+  const end = answered ? listEnd(list, query !== '') : 'loading'
+  const row = (person: Recipient, chosen: boolean) => (
+    <Button
+      key={person.id}
+      type="button"
+      variant="unstyled"
+      data-sync-mention-person={person.id}
+      disabled={locked}
+      onClick={() => onWho(chosen ? null : person, true)}
+      aria-pressed={chosen}
+      className={cn(
+        'flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-sm border-none bg-transparent px-2 py-2 text-left text-base text-text-1 hover:bg-hover disabled:cursor-not-allowed disabled:opacity-55',
+        chosen && 'font-semibold',
+      )}
+    >
+      <MentionFace id={person.id} />
+      <span className="min-w-0 flex-1 truncate">{person.name}</span>
+      {chosen && <Icon name="check" size={16} strokeWidth={2} color="var(--muted-foreground)" />}
+    </Button>
+  )
+  return (
+    <div className="mb-2 flex flex-col gap-1" data-sync-mention-people="">
+      <PickerSearch text={text} onText={setText} label="Search people" probe={MENTION_SEARCH} />
+      <div
+        data-sync-mention-list=""
+        data-picker-state={list.phase}
+        aria-busy={list.phase === 'first' || list.phase === 'more' || undefined}
+        className="flex max-h-[min(232px,40dvh)] flex-col overflow-y-auto"
+      >
+        {who && row(who, true)}
+        {rows.map((person) => row(person, false))}
+        {!(end === 'end' && list.rows.length > 0) && (
+          <ChoiceEnd
+            end={end}
+            tooLong={search.tooLong}
+            list={list}
+            words={RECIPIENT_WORDS}
+            menu={false}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* A recipient's face. It is the store's portrait, or a plain square while
+   the store does not hold them. */
+function MentionFace({ id }: { id: string }) {
+  if (P.user(id)) return <Avatar id={id} size={28} />
+  return <span aria-hidden="true" className="size-7 shrink-0 rounded-[5px] bg-surface-3" />
+}
+
+/* The line for a chosen person the server says can no longer be
+   mentioned. */
+const goneLine = (name: string) =>
+  `${firstName(name)} can no longer be mentioned on this task. Pick someone else.`
+
 /** The @ glyph and its window: pick a person, write a line, Send. It posts
     an ordinary comment carrying the @mention, so the person gets it in the
     Inbox and the task's discussion keeps it. `initial` is the task's other
-    party (the assignee on a reviewer's row, the reviewer on a waiting row). */
+    party (the assignee on a reviewer's row, the reviewer on a waiting row),
+    chosen once the server says they can be mentioned. The window lists its
+    people from the server only while open (MentionPeople), and Send asks
+    pickers.canOwn first and posts only when the chosen person can still be
+    mentioned; otherwise nothing posts, the window unlocks with the note
+    and says why. The note and the choice stay through searches, batches,
+    live updates and a stale meeting, which leaves this window sending. */
 export function MentionCtl({
   it,
   initial,
@@ -342,7 +510,22 @@ export function MentionCtl({
   onSent: () => void
 }) {
   const [open, setOpen] = useState(false)
-  const [who, setWho] = useState<string | null>(null)
+  const [who, setWho] = useState<Recipient | null>(null)
+  // whether the person pressed a row, or a check at Send or at a kept
+  // note's reopening cleared their choice, since the window last opened
+  // without a kept note. After that `initial` is never chosen for them.
+  const [picked, setPicked] = useState(false)
+  // why the last Send or the opening check posted nothing, which a kept
+  // note keeps
+  const [line, setLine] = useState<string | null>(null)
+  // Clears a chosen person the server says can no longer be mentioned,
+  // with the line that says why. The choice is then the person's to make
+  // again, never `initial`'s, though no row was pressed.
+  const drop = (gone: Recipient) => {
+    setWho(null)
+    setPicked(true)
+    setLine(goneLine(gone.name))
+  }
   const [text, setText] = useState('')
   // a note on its way to the server. The window locks it until the answer,
   // and after a save until the window has closed.
@@ -385,27 +568,43 @@ export function MentionCtl({
   // Handlers read `sending`.
   const locked = useClosingWords(open, sending)
   const canWrite = P.canWrite(it.project)
-  // the people who can see the task (a mention of anyone else notifies no
-  // one), humans only, never the writer
-  const people = P.issueUsersFor(it.project).filter(
-    (u) => u.active && !u.isAgent && u.id !== P.CURRENT_USER,
-  )
-  const person = people.find((u) => u.id === who) || null
+  const person = who
   // the note is saved as a comment, so a comment's cap holds it
   const ready = !!person && text.trim() !== '' && !overLimit(LIMITS.comment, text) && !sending
   const send = () => {
-    if (!ready) return
-    // The window closes once the server saves the note. A refused one (the
+    if (!ready || !person) return
+    // The press locks the window, then checks that the person can still be
+    // mentioned (pickers.canOwn), and posts only on a current yes. The
+    // window closes once the server saves the note. A refused one (the
     // store toasts why, such as lost access or a body over the length cap
-    // once escaped) keeps the window open, so the note is not lost.
+    // once escaped), and a check that says no or could not answer, keep
+    // the window open, so the note is not lost.
     setKept(true)
     setSending(true)
-    void P.addComment(it.uuid, mentionBody(person, text)).then((saved) => {
-      if (!saved) return setSending(false)
-      setKept(false)
-      letGo.current = 'saved'
-      close()
-      onSent()
+    setLine(null)
+    const body = mentionBody(person, text)
+    void P.ownerChecks({
+      task: { uuid: it.uuid, org: it.org },
+      field: 'recipient',
+      ids: [person.id],
+    }).then((answer) => {
+      const row =
+        answer?.state === 'ready' ? answer.rows.find((r) => r.id === person.id) : undefined
+      if (!row?.eligible) {
+        setSending(false)
+        if (row) drop(person)
+        else if (answer?.state === 'refused') setLine(sentence(answer.message))
+        else if (answer?.state === 'unavailable') setLine('This task is no longer available.')
+        else setLine(`Couldn't check ${firstName(person.name)}. Press Send to try again.`)
+        return
+      }
+      void P.addComment(it.uuid, body).then((saved) => {
+        if (!saved) return setSending(false)
+        setKept(false)
+        letGo.current = 'saved'
+        close()
+        onSent()
+      })
     })
   }
   const cancel = () => {
@@ -418,9 +617,14 @@ export function MentionCtl({
       open={open}
       onOpenChange={(next) => {
         if (!next) return close()
+        // a kept note keeps its choice, whether the person made it and the
+        // line that says why the last Send posted nothing, so a note meant
+        // for someone the check dropped never goes to `initial`
         if (!kept) {
-          setWho(initial && people.some((u) => u.id === initial) ? initial : null)
+          setWho(null)
           setText('')
+          setPicked(false)
+          setLine(null)
         }
         setOpen(true)
       }}
@@ -449,6 +653,8 @@ export function MentionCtl({
         onFocusOutside={(event) => {
           if (questionOpen()) event.preventDefault()
         }}
+        // an Escape in the search clears it first
+        onEscapeKeyDown={escapeClearsFirst(MENTION_SEARCH)}
         data-sync-mention-window={it.id}
         className="z-[120] w-[min(340px,calc(100vw-32px))] rounded-lg p-3 shadow-pop"
       >
@@ -456,23 +662,21 @@ export function MentionCtl({
           <span className="text-sm font-semibold text-text-1">Mention on</span>
           <IssueKey id={it.key} />
         </div>
-        <div className="mb-2 flex flex-wrap gap-1">
-          {people.map((u) => (
-            <Button
-              key={u.id}
-              type="button"
-              variant="unstyled"
-              data-sync-mention-person={u.id}
-              disabled={locked}
-              onClick={() => setWho(u.id)}
-              aria-label={u.name}
-              aria-pressed={who === u.id}
-              className="grid size-8 cursor-pointer place-items-center rounded-sm border-none bg-transparent p-0 aria-pressed:shadow-[0_0_0_2px_var(--primary)] disabled:cursor-not-allowed disabled:opacity-55"
-            >
-              <Avatar id={u.id} size={28} />
-            </Button>
-          ))}
-        </div>
+        <MentionPeople
+          it={it}
+          initial={initial}
+          who={who}
+          picked={picked}
+          locked={locked}
+          onWho={(next, pressed) => {
+            if (pressed) {
+              setPicked(true)
+              setLine(null)
+            }
+            setWho(next)
+          }}
+          onGone={drop}
+        />
         <LimitedTextarea
           limit={LIMITS.comment}
           rows={2}
@@ -484,6 +688,11 @@ export function MentionCtl({
           wrapperClassName="mb-2"
           className="max-h-[min(48dvh,260px)] min-h-0 resize-none overflow-y-auto bg-surface-1 text-sm"
         />
+        {line && (
+          <p role="status" data-sync-mention-line="" className="mb-2 text-sm text-text-2">
+            {line}
+          </p>
+        )}
         <div className="flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-xs text-text-3">
             {person ? (

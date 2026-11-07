@@ -87,6 +87,8 @@ import { useMobile } from '../lib/useMobile'
 import { OUT_OF_USE } from '../lib/viewHidden'
 import { loadDescEditor } from '../lib/workspaceChunks'
 import '../styles/mobile-issue.css'
+import { OwnerField } from '../components/AssigneeAvatar'
+import { useOwnerNames } from '../components/ownerNames'
 import {
   type ActivityVM,
   type CommentsEarlier,
@@ -129,7 +131,6 @@ function EditorSlot({ fallback, children }: { fallback: ReactNode; children: Rea
     </ViewBoundary>
   )
 }
-const NO_PROFILE = '__none__'
 /* WAITS_FOR_TASKS (from Modals.tsx) says why moving, archiving or deleting
    a task the workspace holds waits before it holds every task and no answer
    of its own serves its subtasks, which only a store that asked for every
@@ -2321,8 +2322,12 @@ function IssueDetail({
   const canLead = held
     ? P.levelOn(held.project) === 'lead'
     : !!it && !archived && answerLevel === 'lead' && P.levelOn(it.project) === 'lead'
-  // one roster for both people pickers: the reviewer follows the assignee rule
-  const assigneeChoices = it ? P.taskAssigneesFor(it) : []
+  // the Inbox pane's owner, named from the workspace or by id
+  // (components/ownerNames.ts), so one not loaded never reads as unassigned
+  const [ownerName] = useOwnerNames(
+    it?.org ?? '',
+    embedded && !mobile && it?.owner ? [it.owner] : [],
+  )
   // one sentence for every control the read-only case switches off, so a
   // viewer is told WHY rather than left prodding a dead field. A task shown
   // from its answer says, to someone who could change it, that it waits
@@ -2396,39 +2401,22 @@ function IssueDetail({
       )}
     </div>
   )
-  /* The Assignee and Reviewer pickers: the same control over the same roster,
-     each writing its own field. A historical value that is no longer eligible
-     still renders as the placeholder but is not a selectable menu item. */
-  const personControl = (field: 'assignee' | 'reviewer') => {
-    const value = it[field]
-    const none = field === 'reviewer' ? 'No reviewer' : 'Unassigned'
-    const selectable = !!value && assigneeChoices.some((u) => u.id === value)
-    return (
-      <FieldSelect
-        aria-label={field === 'reviewer' ? 'Reviewer' : 'Assignee'}
-        value={value ? (selectable ? value : undefined) : NO_PROFILE}
-        placeholder={(value && P.user(value)?.name) || none}
-        menuWidth={220}
-        disabled={!canEdit || saving}
-        title={saving ? WAITS_FOR_SAVE : roTip}
-        options={[
-          { value: NO_PROFILE, label: none },
-          ...assigneeChoices.map((u) => ({
-            value: u.id,
-            label: u.name,
-            icon: <Avatar id={u.id} size={28} />,
-          })),
-        ]}
-        onChange={(v) =>
-          upd(
-            field === 'reviewer'
-              ? { reviewer: v === NO_PROFILE ? null : v }
-              : { assignee: v === NO_PROFILE ? null : v },
-          )
-        }
-      />
-    )
-  }
+  /* The Assignee and Reviewer fields are the shared owner list
+     (components/AssigneeAvatar.tsx OwnerField), which reads the people who
+     can take the task from the server while it is open, each writing its
+     own field. The field names its holder by id, and the open list marks
+     one who can no longer take the task. A field turned off closes its
+     open list, which then writes nothing; while the task's create is on
+     its way the field is off with WAITS_FOR_SAVE, as the server has no
+     task to read the people for yet. */
+  const personControl = (field: 'assignee' | 'reviewer') => (
+    <OwnerField
+      issue={it}
+      field={field}
+      disabled={!canEdit || saving}
+      title={saving ? WAITS_FOR_SAVE : roTip}
+    />
+  )
   // user-level and up can move the issue to any sub-project they can write in — but
   // only offer the menu item when some target OTHER than the current
   // sub-project exists (else the dialog could never enable its Move button)
@@ -3782,7 +3770,13 @@ function IssueDetail({
                             data-task-assignee-name
                             className="text-base font-semibold text-text-1 break-words"
                           >
-                            {(it.owner && P.user(it.owner)?.name) || 'Unassigned'}
+                            {!it.owner || !ownerName || ownerName.state === 'gone'
+                              ? 'Unassigned'
+                              : ownerName.state === 'ok'
+                                ? ownerName.name
+                                : ownerName.state === 'failed'
+                                  ? "Couldn't load this person"
+                                  : 'Loading…'}
                           </div>
                         </div>
                       </div>
@@ -3942,10 +3936,9 @@ function IssueDetail({
                           </span>
                         </DetailField>
                         <DetailField label="Assignee" person>
-                          {/* Choices need active profiles with project write access.
-                      A historical value
-                      that is no longer eligible still renders but is not a
-                      selectable menu item. */}
+                          {/* The server lists who can take the task. A holder
+                      who no longer can stays named and checked in the
+                      open list, but is not a new choice. */}
                           {personControl('assignee')}
                         </DetailField>
                         {/* Owns the task while it waits In Review; hidden on a

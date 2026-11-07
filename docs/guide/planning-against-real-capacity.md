@@ -173,7 +173,8 @@ Two lists help complete assignments:
   tasks that are Urgent or High priority, or planned to start this week or
   earlier. It also includes unassigned tasks due within two weeks or overdue,
   including Backlog but excluding Done. Tasks with subtasks are excluded.
-  Use **Assign** to choose an eligible owner.
+  Use **Assign** to choose an eligible owner from a list of the people who
+  can take the task, 25 at a time with a search and **Load more**.
 - **Needs a reviewer** includes In Review tasks without a reviewer, longest
   waiting first. Use **Reviewer** to assign one.
 
@@ -253,12 +254,20 @@ Use the row controls to change tasks without opening them:
   If none is assigned, the reviewer picker opens; you can dismiss it without
   choosing. Leaving In Review returns ownership to the assignee.
 - **Owner** changes the assignee, or the reviewer for an In Review task with
-  one. Choose an active person with User or Lead access. The task moves to
-  their page and workload figures update.
+  one. Its list shows the people who can take the task, 25 at a time with a
+  search and **Load more**, after **Unassigned** or **No reviewer** and the
+  current owner, as the task window's **Assignee** does
+  ([The details column](./the-task-window.md#the-details-column)). The
+  task moves to their page and workload figures update.
 - **@** posts a comment mentioning an active person who can see the task.
-  Pick someone, write a note and press **Send**. It starts with the assignee
-  selected on a reviewer's row, or the reviewer on a Waiting on review row.
-  The recipient gets an Inbox notification ([Your inbox](./working-together.md#your-inbox)).
+  Its window lists the people who can see the task, 25 at a time with a
+  search and **Load more**. Pick someone, write a note and press **Send**.
+  It starts with the assignee chosen on a reviewer's row, or the reviewer
+  on a Waiting on review row, once Qivo has checked that they can still be
+  mentioned. When you press **Send**, Qivo checks the person again. If they
+  can no longer be mentioned, nothing is posted, your note stays and the
+  window asks you to pick someone else. The recipient gets an Inbox
+  notification ([Your inbox](./working-together.md#your-inbox)).
   The window closes once the comment is saved, and the note cannot change
   while Qivo saves it. If Qivo refuses it, for example after you lose edit
   access, your note stays in the window, also if you closed it meanwhile.

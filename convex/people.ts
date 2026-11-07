@@ -16,8 +16,11 @@
  * - byIds reads the person rows, with their faces, of up to 100 profiles
  *   of the organization by id, for any active seat, guests and viewers
  *   included, as the workspace's people part sends every seat the whole
- *   roster today. No page reads it yet; the roster cache and the pickers
- *   will, for people a batch does not hold.
+ *   roster today. The task window's Assignee and Reviewer fields, the
+ *   Inbox pane's owner line and an open owner list read it, live while
+ *   they show, for a holder the workspace does not hold
+ *   (src/components/ownerNames.ts useOwnerNames); the roster cache will
+ *   read it for other people a batch does not hold.
  *
  * Each is an orgQuery, so the caller is an active seat of `org_id`, and
  * reads one organization, no task, team, membership or key, and no grant

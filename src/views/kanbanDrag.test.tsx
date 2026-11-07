@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -7,11 +9,13 @@ import {
   BOARD_TEST_TIMEOUT,
   cell,
   dragEvent,
+  loadBoard,
   loadBoardWithTasks,
   taskRow,
 } from './boardFixture.setup'
 
-/* Dragging a Board card on the real store. */
+/* Dragging a Board card on the real store, into a status and into a
+   person's lane, where the write, not the browser, judges the person. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -170,6 +174,92 @@ describe('dragging a Board card', { timeout: BOARD_TEST_TIMEOUT }, () => {
     await act(async () => window.dispatchEvent(new Event('pointermove')))
     expect(isUpdateBlocked()).toBe(false)
     expect(document.querySelector('.opacity-40')).toBeNull()
+  })
+
+  /** A Board by person with Vic, an organization Viewer whom the write
+      refuses as a new assignee, holding task `v`, and Olle, a user who may
+      take work, holding task `o`; the fixture's person holds `a`. Task
+      writes wait for `answer`. */
+  async function lanesBoard() {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        const me = snap.profiles[0]
+        snap.profiles.push(
+          { ...me, id: 'vic', name: 'Vic Viewer', auth_user_id: 'account-vic', org_role: 'viewer' },
+          { ...me, id: 'olle', name: 'Olle Berg', auth_user_id: 'account-olle', org_role: 'user' },
+        )
+        snap.issues.push(
+          taskRow(snap, 'a', 'todo', 1),
+          { ...taskRow(snap, 'v', 'todo', 2), assignee_id: 'vic' },
+          { ...taskRow(snap, 'o', 'todo', 3), assignee_id: 'olle' },
+        )
+      },
+      { metaViz: 'assignees' },
+    )
+    const answers: { name: string; args: unknown; settle: (e?: unknown) => void }[] = []
+    network.mutation.mockImplementation(
+      (ref, args) =>
+        new Promise((resolve, reject) => {
+          const name = getFunctionName(ref)
+          if (name === 'identity:claimMySeats') return resolve(null)
+          answers.push({ name, args, settle: (e) => (e ? reject(e) : resolve(null)) })
+        }),
+    )
+    await board.render(root)
+    return { board, answers }
+  }
+  /* Status `status`'s cell in the lane of `person`. */
+  const laneCell = (person: string, status: string) =>
+    [...document.querySelectorAll<HTMLElement>('[data-swimlane-panel]')]
+      .find((panel) => panel.querySelector(`[data-lane="assignee:${person}"]`))
+      ?.querySelector<HTMLElement>(`[data-board-cell][data-status="${status}"]`)
+  const laneOf = (board: { card: (uuid: string) => HTMLElement | null }, uuid: string) =>
+    board
+      .card(uuid)
+      ?.closest('[data-swimlane-panel]')
+      ?.querySelector('[data-lane]')
+      ?.getAttribute('data-lane')
+
+  it('takes a drop into the lane of someone the write refuses, then puts it back with the server’s reason', async () => {
+    const { board, answers } = await lanesBoard()
+    await act(async () => board.card('a')?.dispatchEvent(dragEvent('dragstart')))
+    // the browser does not judge Vic, so the drop is offered
+    const offer = dragEvent('dragover')
+    await act(async () => laneCell('vic', 'todo')?.dispatchEvent(offer))
+    expect(offer.defaultPrevented).toBe(true)
+    await act(async () => laneCell('vic', 'todo')?.dispatchEvent(dragEvent('drop')))
+    const writes = answers.filter((a) => a.name === 'issues:update')
+    expect(writes.map((w) => (w.args as { patch: unknown }).patch)).toEqual([
+      { assignee_id: 'vic' },
+    ])
+    // painted at once
+    expect(laneOf(board, 'a')).toBe('assignee:vic')
+    const { ASSIGNEE_RULE } = await import('../../convex/model/issues')
+    await act(async () =>
+      writes[0].settle(new ConvexError({ code: 'rule', message: ASSIGNEE_RULE })),
+    )
+    await act(async () => await new Promise((r) => setTimeout(r, 0)))
+    expect(laneOf(board, 'a')).toBe(`assignee:${board.snapshot.profiles[0].id}`)
+    expect(window.showToast).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'A task can only be assigned to an active user with Edit permission or higher on its project',
+      ),
+      'error',
+    )
+  })
+
+  it('writes a drop into the lane of someone who may take the task', async () => {
+    const { board, answers } = await lanesBoard()
+    await act(async () => board.card('a')?.dispatchEvent(dragEvent('dragstart')))
+    await act(async () => laneCell('olle', 'progress')?.dispatchEvent(dragEvent('dragover')))
+    await act(async () => laneCell('olle', 'progress')?.dispatchEvent(dragEvent('drop')))
+    expect(
+      answers
+        .filter((a) => a.name === 'issues:update')
+        .map((w) => (w.args as { patch: unknown }).patch),
+    ).toEqual([{ assignee_id: 'olle', status: 'progress' }])
+    expect(laneOf(board, 'a')).toBe('assignee:olle')
   })
 
   it('keeps a drag whose card is still on the page', async () => {

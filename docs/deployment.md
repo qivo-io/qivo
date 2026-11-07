@@ -464,6 +464,19 @@ projects without a scope, and deletes it for good once **Delete now**
 counts no earlier items (`ui/deleted-items`). The
 cleanup deletes the 26 tasks again with its project. Against a backend from
 before v0.1.131 that step fails.
+It makes a sub-project of its own under the run project, led by Leo
+Martins, with a task in it, picks the task's assignee (the run's Standard
+agent), its reviewer (Nora) and **No reviewer** in the task's window and
+Nora as its owner on its Team sync card, each from the deployment's people
+pickers and each checked over REST; then the card's Mention window picks
+Leo, the sub-project's lead goes back to Nora over REST and the User grant
+the handover leaves Leo is removed, until `GET /v1/projects/{ref}/users`
+stops listing him, and **Send** must post
+nothing and say Leo can no longer be mentioned (`ui/owner-pickers`). It
+notifies only the run's own Standard agent, which follows the task once it
+is assigned and gets the task's later changes, such as its handover to
+Nora, in its Inbox; no fixture person is notified. Against a backend from
+before v0.1.147 that step fails.
 Before the archive, it
 checks that the top bar's Inbox badge shows what the deployment's unread
 summary (`inbox.summary`) says, has the Standard agent mention Nora in a
@@ -1983,6 +1996,23 @@ which it has since v0.1.26 (`1dfbf802b`), and the floors above already
 hold far newer backends. The staging check's `ui/create-answer` step
 checks the create on the deployment. There is no schema change and no
 backfill.
+
+From the release after v0.1.158, the task window's **Assignee** and
+**Reviewer**, the owner lists of the Board, the Roadmap, My view and Team
+sync, and Team sync's Mention window read their people from
+`pickers.taskOwners`, `pickers.syncRecipients` and `pickers.canOwn`, which
+v0.1.143 (`4d2720c2`) first shipped, once a batch while they are open, and
+name a holder the workspace does not hold from `people.byIds`, which
+v0.1.147 (`cd7ff803`) first shipped, instead of the workspace's roster. So
+v0.1.143 is the backend floor of this app's pickers and v0.1.147 of its
+names; the floors above already hold both, so the release sets no new
+floor. Against a backend before v0.1.143, every owner list says "Couldn't
+load people." and the Mention window lists no one and posts nothing, also
+in a tab that was open when the backend went back, until the backend rolls
+forward. Returning the app alone to an earlier release is safe, because
+that app reads the workspace's roster, which the backend still sends. The
+release changes no server function, has no schema change, no backfill and
+no release step.
 
 ## Node.js version
 

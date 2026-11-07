@@ -3,18 +3,21 @@
  *
  * - taskOwners: the people who could become a task's assignee or reviewer,
  *   25 at a time in name order, with a search over every one of them. The
- *   task window's Assignee and Reviewer fields and the owner menus
- *   (src/components/AssigneeAvatar.tsx OwnerPickList) are to read it.
+ *   task window's Assignee and Reviewer fields and the owner lists behind
+ *   the Board's, the Roadmap's, My view's and Team sync's owner controls
+ *   read it (src/components/AssigneeAvatar.tsx OwnerPickList).
  * - syncRecipients: the people Team sync's Mention window may notify about
  *   a task, 25 at a time in name order, with a search
- *   (src/views/teamSync/SyncCard.tsx MentionCtl is to read it).
+ *   (src/views/teamSync/SyncCard.tsx MentionCtl reads it).
  * - canOwn: for a few people by id, their row and whether each could be
  *   chosen in one of those pickers now, for a current assignee or reviewer
- *   and for a suggested or kept recipient that no loaded batch holds.
+ *   and for a suggested or kept recipient that no loaded batch holds. An
+ *   open owner list checks its current holder with its first batch, and
+ *   the Mention window checks its suggested or kept person on open and the
+ *   chosen person before Send.
  *
- * No app control reads them yet; t3/limits-owner-pickers moves those
- * controls onto them. Each is to be read once a batch, or once a check,
- * and never subscribed. Each takes the organization and a task in it, and
+ * The app reads each once a batch, or once a check, while its control is
+ * open, and never subscribes. Each takes the organization and a task in it, and
  * runs the write's own gate before it reads any person. An unknown task,
  * one of another organization, a deleted or archived one, one in an
  * archived project or under an archived top-level project, and one in a

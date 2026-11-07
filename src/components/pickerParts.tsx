@@ -4,16 +4,26 @@
    A project's Settings page uses them for its Add team or user picker and
    its Lead field (components/ProjectAccessEditor.tsx), and the New project
    and New sub-project dialogs for their Project access, Project and Lead
-   lists (panels/Modals.tsx, components/ProjectAccessSelect.tsx), and the
-   task label picker for the end of its list (panels/LabelPicker.tsx).
-   Nothing here reads the store. */
+   lists (panels/Modals.tsx, components/ProjectAccessSelect.tsx), the task
+   label picker for the end of its list (panels/LabelPicker.tsx), Team
+   sync's Mention window (views/teamSync/SyncCard.tsx MentionCtl), and, as
+   cmdk items (CommandChoiceEnd), a task's owner list
+   (components/AssigneeAvatar.tsx OwnerPickList). Nothing here reads the
+   store. */
+import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
+import { CommandItem } from '@/components/ui/command'
 import { LIMITS } from '../../convex/lib/limits'
 import { limitSentence } from '../lib/fieldLimits'
 import type { ListEnd, PagedList } from '../lib/pagedList'
 import { LimitedInput } from './LimitedField'
-import type { ChoiceWords, HeldPick } from './pickerWords'
+import { type ChoiceWords, ESCAPE_CLEARS, type HeldPick } from './pickerWords'
 import { MenuItem } from './qivo'
+
+/** Load more or Try again as ChoiceEnd hands it to an `action` renderer:
+    its data attribute, its label, whether it is on its way, and its
+    press. */
+export type EndAction = { hook: string; label: string; busy: boolean; run: () => void }
 
 /**
  * The end of a picker's list (lib/pagedList.ts listEnd) in `words`, as the
@@ -22,7 +32,8 @@ import { MenuItem } from './qivo'
  * row in a `menu` and a button in a list of checkboxes, each marked
  * `moreHook`. The button stays focusable while it reads. `onMore` replaces
  * the list's own Load more, as a picker that moves focus to the first new
- * row does.
+ * row does. `action`, when given, draws Load more and Try again instead,
+ * as CommandChoiceEnd draws them as cmdk items.
  */
 export function ChoiceEnd<A extends HeldPick, Row>({
   end,
@@ -32,6 +43,7 @@ export function ChoiceEnd<A extends HeldPick, Row>({
   menu = true,
   moreHook = 'data-picker-more',
   onMore,
+  action,
 }: {
   end: ListEnd
   tooLong: boolean
@@ -40,6 +52,7 @@ export function ChoiceEnd<A extends HeldPick, Row>({
   menu?: boolean
   moreHook?: string
   onMore?: () => void
+  action?: (act: EndAction) => ReactNode
 }) {
   const held = end === 'held' ? list.answers[0] : (list.failure ?? undefined)
   const more = onMore ?? list.more
@@ -66,14 +79,23 @@ export function ChoiceEnd<A extends HeldPick, Row>({
       ) : (
         <div role="alert" className="flex items-center gap-2 px-2 py-1 text-sm text-danger">
           {words.failed}
-          <Button
-            type="button"
-            variant="ghost"
-            className="h-control-sm text-sm"
-            onClick={() => list.retry()}
-          >
-            Try again
-          </Button>
+          {action ? (
+            action({
+              hook: 'data-picker-retry',
+              label: 'Try again',
+              busy: false,
+              run: () => list.retry(),
+            })
+          ) : (
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-control-sm text-sm"
+              onClick={() => list.retry()}
+            >
+              Try again
+            </Button>
+          )}
         </div>
       )
     case 'full':
@@ -82,7 +104,14 @@ export function ChoiceEnd<A extends HeldPick, Row>({
       return (
         <>
           {list.stopped && <p className="px-2 py-1 text-sm text-text-2">{words.stopped}</p>}
-          {menu ? (
+          {action ? (
+            action({
+              hook: moreHook,
+              label: list.phase === 'more' ? 'Loading…' : 'Load more',
+              busy: list.phase === 'more',
+              run: () => list.phase !== 'more' && more(),
+            })
+          ) : menu ? (
             <MenuItem {...{ [moreHook]: '' }} disabled={list.phase === 'more'} onClick={more}>
               {list.phase === 'more' ? 'Loading…' : 'Load more'}
             </MenuItem>
@@ -113,9 +142,46 @@ export function ChoiceEnd<A extends HeldPick, Row>({
   }
 }
 
+/* The start of the value a CommandChoiceEnd item carries, which no id
+   takes. */
+const END_ITEM = '\u0000end:'
+
+/**
+ * ChoiceEnd inside a cmdk Command (components/ui/command.tsx), with Load
+ * more and Try again as cmdk items, so the arrow keys and Enter reach them
+ * as they reach the rows. Each item's value is END_ITEM and its hook. `off`
+ * says why the list may no longer act. Both items then read disabled with
+ * it as their title, and a press does nothing.
+ */
+export function CommandChoiceEnd<A extends HeldPick, Row>({
+  off,
+  ...props
+}: Omit<Parameters<typeof ChoiceEnd<A, Row>>[0], 'action' | 'menu'> & { off?: string }) {
+  return (
+    <ChoiceEnd
+      {...props}
+      action={({ hook, label, busy, run }) => (
+        <CommandItem
+          {...{ [hook]: '' }}
+          value={`${END_ITEM}${hook}`}
+          disabled={busy || !!off}
+          title={off}
+          onSelect={() => {
+            if (!off) run()
+          }}
+          className="text-sm text-text-2"
+        >
+          {label}
+        </CommandItem>
+      )}
+    />
+  )
+}
+
 /** A picker's search box, which clears its text on Escape first; the
-    popover closes on the Escape after that (escapeClearsFirst). `probe`
-    is the data attribute that marks it. */
+    popover or anchored pop closes on the Escape after that
+    (escapeClearsFirst, ESCAPE_CLEARS). `probe` is the data attribute that
+    marks it. */
 export function PickerSearch({
   text,
   onText,
@@ -134,7 +200,7 @@ export function PickerSearch({
       limit={LIMITS.search}
       aria-label={label}
       placeholder={placeholder}
-      {...{ [probe]: '' }}
+      {...{ [probe]: '', [ESCAPE_CLEARS]: '' }}
       value={text}
       onChange={(e) => onText(e.target.value)}
       onKeyDown={(e) => {

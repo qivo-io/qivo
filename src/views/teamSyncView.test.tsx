@@ -175,9 +175,11 @@ async function setVisibility(value: 'visible' | 'hidden') {
   await act(async () => document.dispatchEvent(new Event('visibilitychange')))
 }
 
-/** Writes `text` into card `handle`'s @ window, which it opens. */
+/** Writes `text` into card `handle`'s @ window, which it opens, once the
+    window's first batch of people has answered. */
 async function mention(handle: string, text: string) {
   await click(document.querySelector(`[data-sync-mention="${handle}"]`))
+  await settle()
   const field = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Note"]')
   if (!field) throw new Error('missing the note')
   const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
@@ -639,7 +641,7 @@ describe('a card only the agenda brings', () => {
   it(
     'posts a mention to its organization',
     async () => {
-      const { P, snapshot } = await open(people({}), (snap) => ({
+      const { board, P, snapshot } = await open(people({}), (snap) => ({
         scope: `project:${meta(snap)}`,
         step: me(snap),
       }))
@@ -647,12 +649,17 @@ describe('a card only the agenda brings', () => {
       await mention(handle, 'Can you check it?')
       await click(document.querySelector(`[data-sync-mention-person="${AISHA}"]`))
       await click(document.querySelector('[data-sync-mention-send]'))
-      // the comment names the task and the organization of the agenda's row,
-      // which the workspace does not hold
+      await settle()
+      // the check and the comment name the task and the organization of the
+      // agenda's row, which the workspace does not hold
       const sent = network.mutation.mock.calls.find(
         ([ref]) => getFunctionName(ref) === 'comments:create',
       )
       expect(sent?.[1]).toMatchObject({ issue_id: 't1', org_id: snapshot.orgs[0].id })
+      expect(board.server.owners.asked).toContainEqual({
+        name: 'pickers:canOwn',
+        args: { org_id: snapshot.orgs[0].id, issue_id: 't1', field: 'recipient', ids: [AISHA] },
+      })
     },
     BOARD_TEST_TIMEOUT,
   )
@@ -818,6 +825,57 @@ describe('the opening', () => {
   )
 })
 
+describe('the reviewer prompt', () => {
+  it(
+    'clears its typed search on Escape first, and is skipped on the next, writing nothing',
+    async () => {
+      const { P } = await open(people({}), (snap) => ({
+        scope: `project:${meta(snap)}`,
+        step: me(snap),
+      }))
+      const handle = P.syncTask('t1')?.id ?? ''
+      const status = card(handle)?.querySelector('[data-fieldselect]')
+      await act(async () =>
+        status?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
+      )
+      await click(
+        [...document.querySelectorAll('[role="option"]')].find(
+          (option) => option.textContent === 'In Review',
+        ),
+      )
+      await settle()
+      const prompt = () => document.querySelector(`[data-sync-reviewer-prompt="${handle}"]`)
+      const box = () => prompt()?.querySelector<HTMLInputElement>('[data-owner-search]') ?? null
+      const search = box()
+      if (!search) throw new Error('missing the prompt’s search')
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      await act(async () => {
+        setValue?.call(search, 'Ai')
+        search.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      /* An Escape in the prompt's search; true when the app took it. */
+      const pressEscape = async () => {
+        const event = new KeyboardEvent('keydown', {
+          key: 'Escape',
+          bubbles: true,
+          cancelable: true,
+        })
+        await act(async () => box()?.dispatchEvent(event))
+        await settle()
+        return event.defaultPrevented
+      }
+      expect(await pressEscape()).toBe(true)
+      expect(prompt()).not.toBeNull()
+      expect(box()?.value).toBe('')
+      const sent = network.mutation.mock.calls.length
+      await pressEscape()
+      expect(prompt()).toBeNull()
+      expect(network.mutation.mock.calls.length).toBe(sent)
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+})
+
 describe('a meeting that stops fitting', () => {
   it(
     'keeps the last meeting under the note, its cards’ unsent note and read-only controls, and ends with the next ok answer',
@@ -845,6 +903,7 @@ describe('a meeting that stops fitting', () => {
       expect(await hintOf(box)).toBe(
         'This meeting stopped updating. Choose a smaller team or project.',
       )
+      // the window still lists its people from the server
       await click(document.querySelector(`[data-sync-mention-person="${AISHA}"]`))
       expect(document.querySelector<HTMLButtonElement>('[data-sync-mention-send]')?.disabled).toBe(
         false,
@@ -852,6 +911,32 @@ describe('a meeting that stops fitting', () => {
       // a narrower scope from the note asks about the card's unsent note
       await click(document.querySelector(`[data-sync-choice="project:${sub(board.snapshot)}"]`))
       expect(calls.places.at(-1)?.closes?.length).toBeGreaterThan(0)
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
+    'leaves the Mention window listing its people and sending while the meeting is stale',
+    async () => {
+      const { board, P } = await open(people({}), (snap) => ({
+        scope: `project:${meta(snap)}`,
+        step: me(snap),
+      }))
+      const handle = P.syncTask('t1')?.id ?? ''
+      board.server.sync.force = { state: 'over_ceiling' }
+      await board.answer()
+      await settle()
+      expect(state()).toBe('stale')
+      await mention(handle, 'Still on it?')
+      await click(document.querySelector(`[data-sync-mention-person="${AISHA}"]`))
+      const from = network.mutation.mock.calls.length
+      await click(document.querySelector('[data-sync-mention-send]'))
+      await settle()
+      expect(
+        network.mutation.mock.calls
+          .slice(from)
+          .filter(([ref]) => getFunctionName(ref) === 'comments:create'),
+      ).toHaveLength(1)
     },
     BOARD_TEST_TIMEOUT,
   )
@@ -902,6 +987,8 @@ describe('a meeting that stops fitting', () => {
           `[data-sync-needs-reviewer="${P.syncTask('t1')?.id ?? ''}"] [data-assignee-edit]`,
         ),
       )
+      // the list's first batch, from the server's owner picker
+      await settle()
       const row = [...document.querySelectorAll<HTMLElement>('[cmdk-item]')].find((item) =>
         item.textContent?.includes('Aisha Rahman'),
       )
@@ -940,6 +1027,13 @@ describe('a meeting that stops fitting', () => {
       await settle()
       const prompt = () => document.querySelector(`[data-sync-reviewer-prompt="${handle}"]`)
       expect(prompt()).not.toBeNull()
+      // the prompt reads the reviewer's people from the server once
+      expect(
+        board.server.owners.asked.filter(
+          (a) =>
+            a.name === 'pickers:taskOwners' && (a.args as { field?: string }).field === 'reviewer',
+        ),
+      ).toHaveLength(1)
       const row = [...(prompt()?.querySelectorAll<HTMLElement>('[cmdk-item]') ?? [])].find((item) =>
         item.textContent?.includes('Aisha Rahman'),
       )
@@ -1324,7 +1418,7 @@ describe('the design size, one figure at a time', () => {
       what it seeded. */
   async function personPage(openN: number, doneN: number) {
     const finished = new Date(Date.now() - 3_600_000).toISOString()
-    const { snapshot } = await open(
+    const opened = await open(
       (snap) => {
         for (let n = 1; n <= openN + doneN; n++)
           snap.issues.push({
@@ -1335,11 +1429,31 @@ describe('the design size, one figure at a time', () => {
       },
       (snap) => ({ scope: `project:${sub(snap)}`, step: me(snap) }),
     )
+    const { snapshot } = opened
     const of = (status: 'progress' | 'done') =>
       snapshot.issues.filter((it) => it.project_id === sub(snapshot) && it.status === status).length
     expect([of('progress'), of('done')]).toEqual([openN, doneN])
     expect(state()).toBe('ok')
+    return opened
   }
+
+  it('shows one person’s page of 300 open and 150 Done tasks whole, reading no people until a list opens', async () => {
+    const { board, P } = await personPage(300, 150)
+    expect(document.querySelectorAll('[data-sync-card]')).toHaveLength(300)
+    expect(document.querySelectorAll('[data-sync-done-row]')).toHaveLength(150)
+    // no owner list and no Mention window reads anything before it opens
+    expect(board.server.owners.asked).toEqual([])
+    const handle = P.syncTask('t1')?.id ?? ''
+    await click(card(handle)?.querySelector('[data-assignee-edit]'))
+    await settle()
+    expect(board.server.owners.asked.map((a) => a.name).sort()).toEqual([
+      'pickers:canOwn',
+      'pickers:taskOwners',
+    ])
+    expect(document.querySelector('[data-owner-list]')?.getAttribute('data-picker-state')).toBe(
+      'ready',
+    )
+  }, 60_000)
 
   it('shows one person’s page of a sub-project of 300 open tasks', async () => {
     await personPage(300, 20)

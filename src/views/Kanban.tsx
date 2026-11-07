@@ -1001,18 +1001,16 @@ function KanbanBoard({
   }
 
   /* What dropping the task into this status cell writes (boardDropPatch),
-     or null when the cell refuses it. The person the patch names, a new
-     assignee or reviewer, must be able to hold the task; clearing one, or a
-     status-only move, needs no roster check. */
+     or null when the cell refuses it. The browser does not judge the
+     person a patch names, a new assignee or reviewer. The write checks
+     them, and its refusal takes the painted drop back with the server's
+     sentence (P.updateIssue). The store's chain check still refuses,
+     before the paint, a holder who cannot see a task above that it holds. */
   const dropPatchFor = (id: string, statusId: string, { projectIds, owner }: CardDropTarget) => {
     const task = P.anyTask(id)
     if (!task || P.isGroup(task) || !P.canWrite(task.project)) return null
     if (projectIds && !projectIds.includes(task.project)) return null
-    const patch = boardDropPatch(task, statusId as IssueVM['status'], owner)
-    if (!patch) return null
-    const person =
-      'assignee' in patch ? patch.assignee : 'reviewer' in patch ? patch.reviewer : null
-    return person == null || P.taskAssigneesFor(task).some((u) => u.id === person) ? patch : null
+    return boardDropPatch(task, statusId as IssueVM['status'], owner)
   }
   /* Writes the drop of task `id`, which the drag itself carries. A drop can
      come from a synthetic drag, which never went through a card's own
@@ -1024,7 +1022,8 @@ function KanbanBoard({
     endDrag()
   }
   // Native drag previews can leave the board. Only advertise and accept a
-  // drop where the task already belongs (or an eligible person lane), and
+  // drop where the task already belongs (or a person's lane, which the
+  // write checks), and
   // only from a Board card's drag: a file or another page's drag never
   // takes over a drag the Board still remembers.
   const cardDropHandlers = (key: string, statusId: string, target: CardDropTarget) => ({

@@ -9240,6 +9240,40 @@ export type MentionChoices =
   | { state: 'refused'; message: string }
 /** A person the mention popup offers. */
 export type MentionChoice = Extract<MentionChoices, { state: 'ready' }>['rows'][number]
+/** One answer of a task's owner or recipient picker (P.ownerChoices and
+    P.recipientChoices, pickers.taskOwners and syncRecipients), or a
+    refusal with the server's sentence. */
+export type OwnerChoices =
+  | FunctionReturnType<typeof api.pickers.taskOwners>
+  | { state: 'refused'; message: string }
+/** A person an owner or recipient picker offers, a person row with no
+    face (convex/model/projectSettings.ts PersonRow). */
+export type OwnerChoice = Extract<OwnerChoices, { state: 'ready' }>['rows'][number]
+/** One answer of a check of people by id (P.ownerChecks, pickers.canOwn),
+    or a refusal with the server's sentence. */
+export type OwnerChecks =
+  | FunctionReturnType<typeof api.pickers.canOwn>
+  | { state: 'refused'; message: string }
+/** One person P.ownerChecks answered. */
+export type OwnerCheck = Extract<OwnerChecks, { state: 'ready' }>['rows'][number]
+
+/* One read of a picker by `read`: its answer, a `bad_request` or `rule`
+   refusal as `refused` with the server's sentence, and any other failure
+   null, logged as `what`'s. */
+async function pickerRead<A>(
+  what: string,
+  read: () => Promise<A>,
+): Promise<A | { state: 'refused'; message: string } | null> {
+  try {
+    return await read()
+  } catch (e) {
+    const { code, message } = errData(e)
+    if (code === 'bad_request' || code === 'rule')
+      return { state: 'refused', message: asSentence(message || 'Qivo refused this search.') }
+    console.error(`[qivo] ${what} read failed:`, e)
+    return null
+  }
+}
 
 /* `change` as the server names a removal (convex/model/removalPreview.ts
    vRemovalChange). */
@@ -11976,43 +12010,21 @@ export const PLANNER = {
     const p = PLANNER.project(projectId)
     return p ? p.org : ''
   },
-  /* Rosters (0081). `users` is BLENDED — it carries every profile the
-     snapshot hands back, from every organization I hold a seat in — so any
-     picker that writes a profile id into a row must narrow to that row's
-     organization first: a foreign assignee/lead/grant is rejected by the
-     same-org fences, and a foreign @mention would render but never notify.
-     The editor's @ mention popup reads the server's people of the editor's
-     organization instead (P.mentionChoices, pickers.mentions). */
-  usersIn: (orgId: string) => PLANNER.users.filter((u) => u.org === orgId),
-  /* The active candidate roster for a project = its owning organization's
-     profiles minus anyone switched off. This broad list deliberately does
-     not ask whether they already have project access, which the task
-     pickers below narrow it by. `usersIn` stays the whole roster because a
-     name already on a task must keep rendering after the person is
-     switched off. */
-  usersFor: (projectId: string) =>
-    PLANNER.usersIn(PLANNER.orgOf(projectId)).filter((u) => u.active),
-  /* Profiles with access to a task's project. The assignee roster below
-     further narrows this to people and agents who can hold work. */
-  issueUsersFor: (projectId: string) =>
-    PLANNER.usersIn(PLANNER.orgOf(projectId)).filter(
-      (u) => PLANNER.levelOn(projectId, u.id) !== null,
-    ),
-  /* Active people and agents need effective Edit or Lead access to hold new
-     work. Existing assignments still render through `user`; this list
-     governs new choices only, for the reviewer as well as the assignee
-     (the server applies the same rule to both). */
-  issueAssigneesFor: (projectId: string) =>
-    PLANNER.usersFor(projectId).filter(
-      (u) =>
-        (u.orgRole === 'admin' || u.orgRole === 'user' || u.orgRole === 'guest') &&
-        PLANNER.canWrite(projectId, u.id),
-    ),
+  /* No roster here lists people for a picker. `users` is BLENDED, every
+     profile the people part sends from every organization I hold a seat
+     in, and t3/limits-roster-parts stops sending the whole roster, so a
+     list read from it would come out short without saying so. The people
+     pickers read the server's people of the task's or project's
+     organization instead: a task's owner lists and Team sync's Mention
+     window (P.ownerChoices, P.recipientChoices and P.ownerChecks), the
+     editor's @ mention popup (P.mentionChoices), and Settings' and the
+     dialogs' people pickers. `user` still names a person the workspace
+     holds. */
   /* Whoever holds a subtask must also see every task above it: the parent
      carries its context. This checks the tasks above that this view holds;
      one outside it (a hidden parent) is left to the server, which refuses
-     with the same rule. */
-  /* The first task above `it` (its parent, then up) in a project the person
+     with the same rule. The writes use it before they paint a new holder.
+     The first task above `it` (its parent, then up) in a project the person
      cannot see, or null. A task outside this view is left to the server.
      `sees` replaces the current grants, as tests of the view rows pass it. */
   unseenAbove: (
@@ -12033,11 +12045,6 @@ export const PLANNER = {
     }
     return null
   },
-  seesTasksAbove: (x: IssueVM | string, uid: string): boolean => !PLANNER.unseenAbove(x, uid),
-  /* The people who may be picked as this task's assignee or reviewer: Edit
-     access on its project, and sight of every task above it. */
-  taskAssigneesFor: (it: IssueVM) =>
-    PLANNER.issueAssigneesFor(it.project).filter((u) => PLANNER.seesTasksAbove(it, u.id)),
   /* Who works on `it` (when `self`) and on its visible subtasks at any depth:
      each assignee, and each reviewer of a task without subtasks (a group's
      reviewer is dormant). A switched-off person holds no new work, as on the
@@ -14864,6 +14871,66 @@ export const PLANNER = {
       return null
     }
   },
+
+  /* --- the task owner pickers and Team sync's Mention window ---------- */
+  /** One batch of the people who could become task `task`'s assignee or
+      reviewer (`field`, pickers.taskOwners), read once and never
+      subscribed to. It holds the people whose name holds every word of
+      `search`, after `cursor`, an earlier answer's `next`, or from the
+      start. A search past its limit or a cursor the server no longer
+      accepts answers `refused` with the server's sentence, and a failed
+      read null. */
+  ownerChoices: (o: {
+    task: { uuid: string; org: string }
+    field: 'assignee' | 'reviewer'
+    search: string
+    cursor: string | null
+  }): Promise<OwnerChoices | null> =>
+    pickerRead('owner picker', () =>
+      convex.query(api.pickers.taskOwners, {
+        org_id: o.task.org,
+        issue_id: o.task.uuid,
+        field: o.field,
+        ...(o.search === '' ? {} : { search: o.search }),
+        ...(o.cursor === null ? {} : { after: o.cursor }),
+      }),
+    ),
+
+  /** One batch of the people Team sync's Mention window may notify about
+      task `task` (pickers.syncRecipients), read once as P.ownerChoices
+      reads its batches. */
+  recipientChoices: (o: {
+    task: { uuid: string; org: string }
+    search: string
+    cursor: string | null
+  }): Promise<OwnerChoices | null> =>
+    pickerRead('mention recipients', () =>
+      convex.query(api.pickers.syncRecipients, {
+        org_id: o.task.org,
+        issue_id: o.task.uuid,
+        ...(o.search === '' ? {} : { search: o.search }),
+        ...(o.cursor === null ? {} : { after: o.cursor }),
+      }),
+    ),
+
+  /** Whether each person of `ids` could be chosen now in task `task`'s
+      picker for `field` (pickers.canOwn), read once: their row, null for
+      an id the organization does not hold, and `eligible`. More ids than
+      the server takes answers `refused` with the server's sentence, and a
+      failed read null. */
+  ownerChecks: (o: {
+    task: { uuid: string; org: string }
+    field: 'assignee' | 'reviewer' | 'recipient'
+    ids: string[]
+  }): Promise<OwnerChecks | null> =>
+    pickerRead('owner check', () =>
+      convex.query(api.pickers.canOwn, {
+        org_id: o.task.org,
+        issue_id: o.task.uuid,
+        field: o.field,
+        ids: o.ids,
+      }),
+    ),
 
   /** The parent of task `uuid` as the window's own answer of it shows it,
       painted, for the Parent row of a task the workspace holds whose
