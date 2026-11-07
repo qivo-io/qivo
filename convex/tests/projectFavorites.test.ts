@@ -474,7 +474,7 @@ describe('the writer', () => {
     expect(await favorites(t)).toHaveLength(1)
   })
 
-  it('resets a row a rollback or a manual edit left, and keeps when it was starred', async () => {
+  it('resets a row a rollback or a manual edit left as a new star, at the star’s time', async () => {
     const t = newT()
     const f = await ready(t)
     const earlier = new Date(Date.parse(NOW) - DAY).toISOString()
@@ -499,14 +499,17 @@ describe('the writer', () => {
       })
     })
     const [first] = await favorites(t)
+    expect(first?.created_at).toBe(earlier)
     await star(t, f.user, f.meta.id)
+    // the reset row is the seat's star from now, as the favorites repair
+    // tells an earlier seat's row by a created_at before its seat's
     expect(await favorites(t)).toEqual([
       {
         ...first,
         org_id: f.org.id,
         name_key: nameKey(f.meta.name),
         live: true,
-        created_at: earlier,
+        created_at: new Date().toISOString(),
       },
     ])
     await expectAll(t, 'after a reset')

@@ -445,9 +445,11 @@ async function writeStep(
         require(p !== undefined && !p.parent, rule(
           'marketing demo: a favorite names no top-level project',
         ))
+        const seat = profiles.find((pr) => pr.id === personIds[person.key])
+        require(seat !== undefined, rule('marketing demo: owned profile missing'))
         await insertSeededFavorite(ctx, {
           orgId: org.id,
-          profileId: personIds[person.key],
+          seat,
           project: {
             id: projectIds[p.key],
             name: cleanProjectName(p.name),

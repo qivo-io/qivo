@@ -1448,6 +1448,32 @@ describe('marketing demo rebuild ownership', () => {
     await check()
   })
 
+  it('stamps a seeded star no earlier than its seat, so the favorites repair keeps a seat put back mid-seed', async () => {
+    const t = newAuthT()
+    const { org_id } = await provision(t)
+    // the seed's first call stores the time every step writes with
+    expect(await apply(t, 'seed')).toMatchObject({ state: 'seeding' })
+    const began = (await t.run((ctx) => ctx.db.query('marketing_demo').first()))?.seed?.now
+    if (!began) throw new Error('the seed stored no time')
+    // Nora's seat, put back after the seed began as restoreSeat writes it,
+    // is newer than the seed's time
+    const later = new Date(Date.parse(began) + 60_000).toISOString()
+    const nora = (await profiles(t, org_id)).find((p) => p.name === 'Nora Berg')
+    if (!nora) throw new Error('no Nora')
+    await t.run((ctx) => ctx.db.patch(nora._id, { created_at: later }))
+    await seed(t)
+    const rows = await t.run(async (ctx) =>
+      (await ctx.db.query('project_favorites').collect()).filter((r) => r.org_id === org_id),
+    )
+    expect(rows).toHaveLength(4)
+    for (const row of rows)
+      expect(row.created_at, row.profile_id).toBe(row.profile_id === nora.id ? later : began)
+    // so no row is older than its seat, and the repair's dry run keeps all
+    const dry = await t.action(internal.internal.favoritesRepair.run, { dry_run: true })
+    expect(dry.counts.profile_newer).toBe(0)
+    expect(dry.counts.ok).toBe(4)
+  }, 30_000)
+
   it("wipes the seats' favorites with the projects, and refuses a seed while one is left", async () => {
     const t = newAuthT()
     const result = await seeded(t)

@@ -33,7 +33,12 @@
  *                     (copiesOf). Patched, its created_at kept.
  *   ok                left as it is.
  * A row whose seat lost access to its project is ok here: the readers skip
- * it, and it shows again when the access returns. A Northstar reset under
+ * it, and it shows again when the access returns. Every writer of this
+ * release stamps a row no earlier than its seat (model/projectFavorites.ts):
+ * a star, also one that resets a row an earlier seat left, writes the
+ * star's time, and the Northstar seed the later of its own time and the
+ * seat's. So only the earlier code leaves a row its seat's created_at
+ * follows, which is what profile_newer deletes. A Northstar reset under
  * the earlier code that wrote projects with the same ids leaves rows this
  * check cannot tell from real ones.
  *
@@ -206,7 +211,7 @@ async function baseClassOf(
   if (await reads.removing(row.profile_id)) return none('profile_removing')
   const profile = await reads.profile(row.profile_id)
   if (profile === null || profile.org_id !== row.org_id) return none('profile_gone')
-  // strictly later: a seed writes a seat and its rows at one time
+  // strictly later: the public demo writes a seat and its rows at one time
   if (profile.created_at > row.created_at) return none('profile_newer')
   const project = await reads.project(row.project_id)
   if (project === null) {

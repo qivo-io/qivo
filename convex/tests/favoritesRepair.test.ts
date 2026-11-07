@@ -228,6 +228,30 @@ describe('the favorites check and repair', () => {
     expect(older._id).not.toBe(kept._id)
   })
 
+  it('keeps a stale row older than its seat once the seat stars the project again', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await withReach(t)
+    // a row an earlier seat with this id left before the seat was made,
+    // whose copies a rename under the earlier code left stale
+    const left = await plant(t, f.user, f.meta, { created_at: OLD, name_key: 'an older name' })
+    expect((await runRepair(t, true)).counts).toEqual(counts({ profile_newer: 1 }))
+    // the readers skip it, so the person stars the project again, which
+    // resets the row as a new star
+    await as(t, f.user).mutation(api.projectNav.setFavorite, {
+      org_id: f.org.id,
+      project_id: f.meta.id,
+      favorite: true,
+    })
+    const [row] = await all(t)
+    expect(row?._id).toBe(left._id)
+    expect((row?.created_at ?? '') > f.user.created_at).toBe(true)
+    expect((await runRepair(t, true)).counts).toEqual(counts({ ok: 1 }))
+    await runRepair(t, false)
+    expect(await all(t)).toEqual([row])
+    expect(await shows(t, row as Favorite)).toBe(true)
+  })
+
   it('walks pages of a lowered size, goes on from a cursor and caps its examples', async () => {
     const t = newT()
     const f = await withOrg(t)
