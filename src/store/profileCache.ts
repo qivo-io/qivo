@@ -43,9 +43,10 @@ import type { PersonRow } from '../../convex/model/projectSettings'
 import type { LiveQueries } from '../lib/liveQueries'
 import type { Visibility } from '../lib/viewVisibility'
 
-/** The most entries the cache keeps beside the ones open views name. The
-    design size's 1,000 people of one organization fit, so an organization
-    at the design size never drops a person a view shows. Tests lower it.
+/** The most entries the cache keeps, the named ones among them; past it
+    only entries an open view names stay. The design size's 1,000 people
+    of one organization fit, so an organization at the design size never
+    drops a person a view shows. Tests lower it.
     Measured on the benchmark page (scripts/perf, people=1000 with
     unheldpeople=50 and pictures=1, 1440 by 1000, 7 November 2026): the
     Board named 101 people and read the 2 the workspace did not hold in one
