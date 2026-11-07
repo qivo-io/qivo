@@ -819,6 +819,30 @@ describe('pictures only for what the open views name', () => {
     expect(f.cache.url(KEY)).toBeNull()
   })
 
+  it('keeps a held picture no view names hidden past its grace when the tab shows again', async () => {
+    const f = fixture({}, false)
+    f.cache.sync([KEY])
+    f.cache.named([KEY])
+    await f.cache.prepare(KEY, LEASE)
+    const shown = f.cache.url(KEY)
+    f.cache.named([])
+    // past the lease at 600 s and its grace
+    f.time(1_200_000)
+    expect(f.cache.url(KEY)).toBeNull()
+    f.cache.pause(true)
+    f.cache.pause(false)
+    // still hidden, and nothing renews it until a view names it
+    expect(f.cache.url(KEY)).toBeNull()
+    f.time(1_500_000)
+    expect(f.cache.url(KEY)).toBeNull()
+    f.cache.named([KEY])
+    expect(f.cache.needsRefresh(KEY)).toBe(true)
+    expect(await f.cache.prepare(KEY, { url: 'https://files.test/portrait?r=2', exp: 2400 })).toBe(
+      true,
+    )
+    expect(f.cache.url(KEY)).toBe(shown)
+  })
+
   it('keeps a named picture past its grace while its renewal is on its way, and releases it once the renewal fails', async () => {
     const f = fixture({}, false)
     f.cache.sync([KEY])

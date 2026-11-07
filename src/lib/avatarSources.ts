@@ -662,14 +662,17 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
       return changed
     },
     /** Holds every picture while the page is hidden, and on return makes
-        each held one past its renewal due at once, shown until its renewal
-        answers and released STALE_GRACE after the return if it never does. */
+        each held one a view names past its renewal due at once, shown
+        until its renewal answers and released STALE_GRACE after the return
+        if it never does. A held picture no view names is not renewed, so
+        one past its grace stays hidden until a view names it again. */
     pause(hidden: boolean) {
       if (paused === hidden) return
       paused = hidden
       if (hidden) return
       const now = deps.now()
-      for (const entry of entries.values()) {
+      for (const [key, entry] of entries) {
+        if (!namedKeys.has(key)) continue
         if (!entry.source || entry.restored || entry.expiresAt - now > REFRESH_SKEW) continue
         entry.expiresAt = Math.max(entry.expiresAt, now)
         entry.retryAt = 0
