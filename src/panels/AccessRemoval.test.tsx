@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
-import { act } from 'react'
+import { act, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
@@ -1205,8 +1205,12 @@ describe("the removal window's names and a press's outcome, from the page", () =
     const { useAccessRemoval } = await import('./useAccessRemoval')
     const hook: { current: ReturnType<typeof useAccessRemoval> | null } = { current: null }
     function Host() {
-      hook.current = useAccessRemoval()
-      return <>{hook.current.window}</>
+      const removal = useAccessRemoval()
+      // published after the commit, as a render may not write outside itself
+      useEffect(() => {
+        hook.current = removal
+      })
+      return <>{removal.window}</>
     }
     await act(async () => root.unmount())
     root = createRoot(container)
