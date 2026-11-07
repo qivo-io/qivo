@@ -1246,11 +1246,60 @@ describe('project access, one user or team at a time', () => {
     expect((await grants(fx.t, fx.sub.id))[fx.pia.id]).toBeUndefined()
     expect((await taskRow(fx.t, open.id))?.assignee_id).toBe(fx.pia.id)
     expect((await taskRow(fx.t, done.id))?.assignee_id).toBe(fx.pia.id)
+    expect(out.hidden).toEqual({ tasks: 0, user_ids: [] })
     // nothing left to remove changes nothing
     expect(await setAccess(fx, fx.user, { user_id: fx.pia.id })).toMatchObject({
       changed: false,
       stranded: [],
     })
+  })
+
+  it('counts the tasks a remover cannot see in hidden with their holders, never naming them', async () => {
+    const fx = await setup()
+    const { open, reviewing } = await held(fx)
+    // the admin, who takes part in no project, manages FW and sees none of
+    // its tasks, over MCP and over REST
+    const viaMcp = await setAccess(fx, fx.admin, { user_id: fx.pia.id })
+    expect(viaMcp).toMatchObject({ changed: true, stranded: [], reassigned: [] })
+    expect(viaMcp.hidden).toEqual({ tasks: 2, user_ids: [fx.pia.id] })
+    await grant(fx.t, fx.sub.id, fx.pia.id, 'user')
+    const viaRest = await fx.t.mutation(internal.machine.projects.restRemoveUserAccess, {
+      ...rest(fx.admin),
+      ref: 'FW',
+      subject: fx.pia.id,
+      body: '',
+    })
+    expect(viaRest).toMatchObject({
+      removed: true,
+      stranded: [],
+      reassigned: [],
+      hidden: { tasks: 2, user_ids: [fx.pia.id] },
+    })
+    for (const out of [viaMcp, viaRest])
+      for (const task of [open, reviewing]) {
+        expect(JSON.stringify(out)).not.toContain(task.id)
+        expect(JSON.stringify(out)).not.toContain(`QN-${task.num}`)
+      }
+    // the lead, who reads FW, sees them listed and nothing hidden
+    await grant(fx.t, fx.sub.id, fx.pia.id, 'user')
+    const byLead = await setAccess(fx, fx.user, { user_id: fx.pia.id })
+    expect((byLead.stranded as Json[]).map((h) => h.id)).toEqual([open.id, reviewing.id])
+    expect(byLead.hidden).toEqual({ tasks: 0, user_ids: [] })
+  })
+
+  it('judges sight after the write, so a caller removing their own access counts what they no longer see', async () => {
+    const fx = await setup()
+    // the admin reads FW by a grant, holds a task there and removes the grant
+    await grant(fx.t, fx.sub.id, fx.admin.id, 'user')
+    const mine = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      assignee_id: fx.admin.id,
+    })
+    const out = await setAccess(fx, fx.admin, { user_id: fx.admin.id })
+    expect(out).toMatchObject({ changed: true, stranded: [] })
+    expect(out.hidden).toEqual({ tasks: 1, user_ids: [fx.admin.id] })
+    expect(JSON.stringify(out)).not.toContain(mine.id)
   })
 
   /* `ctx` with every task document its queries return pushed to `seen`. */

@@ -46,7 +46,13 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from '../_generated/server'
-import { canManageOwnProjectAccess, canSeeProject, rootMetaOf } from '../lib/access'
+import {
+  accessOf,
+  canManageOwnProjectAccess,
+  canSeeProject,
+  isAccessUnchecked,
+  rootMetaOf,
+} from '../lib/access'
 import {
   type AccessFlag,
   accessFlags,
@@ -91,6 +97,7 @@ import {
 } from '../model/milestones'
 import { newUuid } from '../model/orgs'
 import {
+  type AccessRemoval,
   type AccessSubject,
   GRANT_FIELDS,
   type HeldTasks,
@@ -411,7 +418,7 @@ export type HoldingJson = {
 }
 
 /** One open task someone holds, as removalJson's `stranded` and
- * `reassigned` lists name it. */
+ * `reassigned` lists name it, for a caller who can see its project. */
 export const holdingJson = (h: Holding): HoldingJson => ({
   id: h.task.id,
   key: issueKey(h.task.num),
@@ -426,12 +433,70 @@ const subjectJson = (subject: AccessSubject) =>
     ? { team: { id: subject.team.id, name: subject.team.name } }
     : { user: { id: subject.profile.id, name: subject.profile.name } }
 
-/** A removal's result fields. */
-export const removalJson = (r: Awaited<ReturnType<typeof removeProjectGrantCore>>) => ({
-  stranded: r.stranded.map(holdingJson),
-  kept_as_viewer: r.kept_as_viewer,
-  reassigned: r.reassigned.map(holdingJson),
-})
+/** The open tasks of a removal's result that the caller cannot see: how
+ * many distinct tasks, and their holders' ids, never a task's id, key or
+ * title. */
+export type HiddenHoldingsJson = { tasks: number; user_ids: string[] }
+
+/** A removal's result fields, for REST and MCP project access and team
+ * member removals. `stranded` and `reassigned` list only the holdings whose
+ * task's project `me` can see once the removal is written, which for a
+ * caller who removed their own access leaves out what they no longer see,
+ * and `hidden` counts the distinct tasks left out and names their holders,
+ * so a caller without access learns the counts and the owners and no
+ * title (the owner's rule for an admin without Edit). The sight is one
+ * lib/access.ts accessOf instance asked about the distinct projects of the
+ * holdings, at most the projects the removal reaches: a top-level project
+ * and its sub-projects for a project grant, 70 at the design size, or for
+ * a team member every project the team shares and their sub-projects, up
+ * to 50 live projects shared with one team at the design size. A check
+ * that stops (accessUnchecked) counts its task as hidden, so nothing shows
+ * that may not be seen. */
+export async function removalJson(
+  ctx: QueryCtx,
+  me: Caller,
+  r: Pick<AccessRemoval, 'stranded' | 'kept_as_viewer' | 'reassigned'>,
+): Promise<{
+  stranded: HoldingJson[]
+  kept_as_viewer: string[]
+  reassigned: HoldingJson[]
+  hidden: HiddenHoldingsJson
+}> {
+  const access = accessOf(ctx, me)
+  const sight = new Map<string, Promise<boolean>>()
+  const sees = (projectId: string) => {
+    let known = sight.get(projectId)
+    if (known === undefined) {
+      known = access.visible(projectId).catch((e: unknown) => {
+        if (isAccessUnchecked(e)) return false
+        throw e
+      })
+      sight.set(projectId, known)
+    }
+    return known
+  }
+  const hiddenTasks = new Set<string>()
+  const holders = new Set<string>()
+  const shown = async (holdings: readonly Holding[]) => {
+    const out: HoldingJson[] = []
+    for (const h of holdings) {
+      if (await sees(h.task.project_id)) out.push(holdingJson(h))
+      else {
+        hiddenTasks.add(h.task.id)
+        holders.add(h.profile_id)
+      }
+    }
+    return out
+  }
+  const stranded = await shown(r.stranded)
+  const reassigned = await shown(r.reassigned)
+  return {
+    stranded,
+    kept_as_viewer: r.kept_as_viewer,
+    reassigned,
+    hidden: { tasks: hiddenTasks.size, user_ids: [...holders] },
+  }
+}
 
 /* --------------------------------------------------------- MCP sentences */
 
@@ -603,7 +668,12 @@ export const mcpSetProjectAccess = internalMutation({
       now,
       provenance: MCP_PROVENANCE,
     })
-    return pretty({ ...base, level: null, changed: removal.removed, ...removalJson(removal) })
+    return pretty({
+      ...base,
+      level: null,
+      changed: removal.removed,
+      ...(await removalJson(ctx, me, removal)),
+    })
   },
 })
 
@@ -923,7 +993,7 @@ async function restRemoveAccess(ctx: MutationCtx, a: RestAccessArgs, kind: 'user
     project_id: project.id,
     ...subjectJson(subject),
     removed: removal.removed,
-    ...removalJson(removal),
+    ...(await removalJson(ctx, me, removal)),
   }
 }
 
@@ -1213,7 +1283,7 @@ export const PROJECT_TOOLS: McpTool[] = [
       name: 'set_project_access',
       title: 'Set project access',
       description:
-        'Give one user (`user_id`) or one team (`team_id`) `user` or `viewer` access to a project, or with `level: null` remove it. `on_held_tasks` settles open tasks a removal hides from the people working on them: `leave` (the default; the result lists them), `keep_as_viewer`, or `{"reassign_to": user id or null}`. Needs managing the project, as its lead or an organization admin, and only a person may change access. ' +
+        'Give one user (`user_id`) or one team (`team_id`) `user` or `viewer` access to a project, or with `level: null` remove it. `on_held_tasks` settles open tasks a removal hides from the people working on them: `leave` (the default; the result lists those you can see and counts the others in `hidden`), `keep_as_viewer`, or `{"reassign_to": user id or null}`. Needs managing the project, as its lead or an organization admin, and only a person may change access. ' +
         EXPECTED_SENTENCE +
         ' Its `level` is the access get_project shows, null for none, and takes no removal.',
       inputSchema: {

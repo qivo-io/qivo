@@ -787,7 +787,8 @@ cannot after. `DELETE` takes an optional JSON body whose `on_held_tasks` decides
 what happens to them:
 
 - `"leave"` (the default, also for an empty body) removes the access and
-  lists those tasks as `stranded`. They keep their assignee and reviewer.
+  lists those tasks as `stranded`, or counts them in `hidden` when you
+  cannot see them. They keep their assignee and reviewer.
 - `"keep_as_viewer"` gives each of those people a Viewer grant on the
   project, so they keep the tasks and can read the project. They can change
   only what another grant of their own still allows, such as a sub-project
@@ -826,9 +827,14 @@ people and tasks are too many to check in one request is a `400` with
 remove fewer people at once, such as some of a team's members, or reassign
 some of the tasks first`. Nothing changes after either refusal. The answer is
 `{"project_id", "user" | "team", "removed", "stranded", "kept_as_viewer",
-"reassigned"}`, where `stranded` and `reassigned` list `{"id", "key",
-"title", "user_id", "role"}`, and `kept_as_viewer` the user uuids given a
-Viewer grant. Removing access that is not there answers `removed: false`.
+"reassigned", "hidden"}`, where `stranded` and `reassigned` list `{"id",
+"key", "title", "user_id", "role"}` for the tasks you can see once the
+access is gone, `hidden` is `{"tasks", "user_ids"}`, the number of the
+other tasks and the uuids of the people who held them, with no task id,
+key or title, and `kept_as_viewer` the user uuids given a Viewer grant. An
+organization admin who manages a project without reading it, or anyone who
+removes their own access, gets those tasks in `hidden`. Removing access
+that is not there answers `removed: false`.
 Every change writes one `changed access on` activity row.
 
 ```sh
@@ -1004,7 +1010,8 @@ projects the team shares, and in those projects' sub-projects, that they can
 no longer see afterwards are settled by `on_held_tasks`, as for [project
 access](#project-access):
 
-- `"leave"` (the default, also for an empty body) lists them as `stranded`.
+- `"leave"` (the default, also for an empty body) lists them as `stranded`,
+  or counts them in `hidden` when you cannot see them.
 - `"keep_as_viewer"` gives the person a Viewer grant on the project the team
   shared that showed each task, which is the task's own sub-project when the
   team shares it and otherwise its top-level project. This needs the right to manage that
@@ -1026,7 +1033,8 @@ larger handover, or Viewer grants too many for one request, is a `400` and
 nothing changes.
 The answer is
 `{"team_id", "user", "removed", "stranded", "kept_as_viewer",
-"reassigned"}`, shaped as for project access; removing someone who is not a
+"reassigned", "hidden"}`, shaped as for project access, so the tasks in
+projects you cannot see count in `hidden`; removing someone who is not a
 member answers `removed: false`. Each change writes the app's activity row
 (`added`, `removed`, `made` a leader, `demoted`), signed as described under
 [Side effects and audit trail](#side-effects-and-audit-trail), and a Viewer

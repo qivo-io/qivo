@@ -236,7 +236,7 @@ export const mcpSetTeamMember = internalMutation({
       member: false,
       leader: false,
       changed: removal.removed,
-      ...removalJson(removal),
+      ...(await removalJson(ctx, me, removal)),
     })
   },
 })
@@ -422,7 +422,7 @@ export const restDeleteMember = internalMutation({
       team_id: team.id,
       user: named(member),
       removed: removal.removed,
-      ...removalJson(removal),
+      ...(await removalJson(ctx, me, removal)),
     }
   },
 })
@@ -476,7 +476,7 @@ export const TEAM_TOOLS: McpTool[] = [
       name: 'set_team_member',
       title: 'Set team member',
       description:
-        'Add a user to a team (`member: true`) or remove them (`member: false`); with `member: true`, `leader` makes or unmakes them a leader. Needs a person who is an organization admin or a leader of the team, and only people lead teams. On removal, `on_held_tasks` settles open tasks the user can no longer see: `leave` (the default; the result lists them), `keep_as_viewer`, or `{"reassign_to": user id or null}`.',
+        'Add a user to a team (`member: true`) or remove them (`member: false`); with `member: true`, `leader` makes or unmakes them a leader. Needs a person who is an organization admin or a leader of the team, and only people lead teams. On removal, `on_held_tasks` settles open tasks the user can no longer see: `leave` (the default; the result lists those you can see and counts the others in `hidden`), `keep_as_viewer`, or `{"reassign_to": user id or null}`.',
       inputSchema: {
         type: 'object',
         $schema: SCHEMA,

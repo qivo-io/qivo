@@ -1729,7 +1729,8 @@ sub-projects that someone works on (as assignee, or reviewer of a task
 without subtasks) and can no longer see afterwards are settled by
 `on_held_tasks`:
 
-- `"leave"`, the default, removes the access and lists them as `stranded`;
+- `"leave"`, the default, removes the access and lists them as `stranded`,
+  or counts them in `hidden` when you cannot see them;
 - `"keep_as_viewer"` gives those people a Viewer grant on the project, which
   is refused for a person whose removed grant was already Viewer;
 - `{"reassign_to": "<user uuid>"}` hands each one over in the same role, and
@@ -1749,9 +1750,13 @@ Any removal whose people and tasks are too many to check in one call is
 refused with `a removal can check only as many people and tasks as fit in one request, so
 remove fewer people at once, such as some of a team's members, or reassign
 some of the tasks first`. The
-result adds `stranded`,
-`kept_as_viewer` and `reassigned`; `stranded` and `reassigned` list `{id, key,
-title, user_id, role}`. `changed` is `false` when there was no grant to
+result adds `stranded`, `kept_as_viewer`, `reassigned` and `hidden`;
+`stranded` and `reassigned` list `{id, key, title, user_id, role}` for the
+tasks you can see once the access is gone, and `hidden` is `{tasks,
+user_ids}`, the number of the other tasks and the ids of the people who
+held them, with no task id, key or title. An organization admin who
+manages a project without reading it, or anyone who removes their own
+access, gets those tasks in `hidden`. `changed` is `false` when there was no grant to
 remove. `on_held_tasks` with a level is refused, and so is a misspelled
 `on_held_tasks`, like any argument the schema does not know.
 
@@ -1915,6 +1920,7 @@ person who is an organization admin or a leader of the team; an agent gets
   the projects the team shares, and in those projects' sub-projects, that
   they can no longer see afterwards are settled by `on_held_tasks`, as for
   `set_project_access`. `"leave"` (the default) lists them as `stranded`,
+  or counts them in `hidden` when you cannot see them,
   `"keep_as_viewer"` gives the user a Viewer grant on the project the team
   shared that showed each task (the task's own sub-project when the team
   shares it, else its top-level project), and `{"reassign_to": user id or
@@ -1927,8 +1933,8 @@ person who is an organization admin or a leader of the team; an agent gets
   larger handover, or Viewer grants too many for one call, is refused and
   nothing changes. The result is `{team,
   user, member: false, leader: false, changed}` plus `stranded`,
-  `kept_as_viewer` and `reassigned`; `changed` is `false` when the user was
-  not a member.
+  `kept_as_viewer`, `reassigned` and `hidden`, as for `set_project_access`;
+  `changed` is `false` when the user was not a member.
 
 `leader` with `member: false`, and `on_held_tasks` with `member: true`, are
 refused. Every membership change writes the app's activity row, signed `via
