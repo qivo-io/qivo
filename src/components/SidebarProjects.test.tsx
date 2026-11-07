@@ -552,15 +552,16 @@ describe('the projects figure', { timeout: 60_000 }, () => {
 
   it('stops the scope rule at the bound, at the end, and once the rows passed its place', async () => {
     const next0 = base()
-    const ids = projects(next0, 200, 20)
-    // projects the reads leave out, which the workspace holds: one that
-    // sorts last and one that sorts among the others by name
+    // the projects figure at its design size: 198 projects the person
+    // reads and two the reads leave out, which the workspace holds, one
+    // that sorts last and one that sorts among the others by name
+    const ids = projects(next0, 198, 20)
     const last = top(next0, 'Zulu without access', { grant: false })
     const middle = top(next0, `${named(60)} without access`, { grant: false })
     await load(next0)
     // a scope the list never holds reads to its end and lights nothing
     await render(last)
-    expect(rowIds()).toHaveLength(200)
+    expect(rowIds()).toHaveLength(198)
     expect(asked('page').filter((s) => s.open)).toHaveLength(8)
     expect(lit()).toEqual([])
     expect(scrolled).toEqual([])
