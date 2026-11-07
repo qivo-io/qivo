@@ -20,6 +20,7 @@ import {
   ASSIGNEE_LOAD_QUERY,
   addDays,
   addsQuery,
+  atProject,
   authCorsProblems,
   authRoutesStep,
   BILLING_ACCOUNTS_MARKS,
@@ -345,6 +346,24 @@ describe('staging check REST contract', () => {
     )
     expect(step).toContain('const { M, A, Z } = run.projects')
     expect(step).not.toContain("'POST', '/projects'")
+    // it waits for Zulu's own address and name, not any page but the
+    // directory
+    expect(step).toContain('atProject(path(), Z.num)')
+    expect(step).toContain("app.locator('[data-scope-crumb] h1')")
+  })
+  it("tells Zulu's own project address from every other the directory could open", () => {
+    expect(atProject('/app/acme/board/p/12', 12)).toBe(true)
+    expect(atProject('/app/acme/roadmap/p/12/tasks/AC-4', 12)).toBe(true)
+    // another project, a number that starts or ends the same, the views
+    // over all projects and the directory itself are not Zulu's
+    for (const other of [
+      '/app/acme/board/p/1',
+      '/app/acme/board/p/123',
+      '/app/acme/board/p/112',
+      '/app/acme/overview/all',
+      '/app/~/projects',
+    ])
+      expect(atProject(other, 12), other).toBe(false)
   })
   it("checks Settings › Users and the creators line in the pages' own words", () => {
     const users = readFileSync(

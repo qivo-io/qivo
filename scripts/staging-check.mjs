@@ -6510,6 +6510,14 @@ export const PROJECT_DIRECTORY_MARKS = {
  *  delivered yet, which the step waits out. */
 export const NOT_LOADED_YET = 'has not loaded yet'
 
+/** Whether app address `pathname` shows the project numbered `num`, as
+ *  src/lib/router.ts writes a project's view (`…/board/p/12`), with or
+ *  without a task or person after it. */
+export function atProject(pathname, num) {
+  const parts = pathname.split('/')
+  return parts.some((part, i) => part === 'p' && parts[i + 1] === String(num))
+}
+
 /** The All projects directory on the deployment's navigation reads
  *  (projectNav.page, search and children) and its star
  *  (projectNav.setFavorite), on the run's own project M, which Nora leads,
@@ -6520,7 +6528,8 @@ export const NOT_LOADED_YET = 'has not loaded yet'
  *  expands it and waits for Alpha and Zulu from projectNav.children,
  *  pressing Load more while one is still to come, opens Zulu from that
  *  list, pressing again while the directory says the workspace has not
- *  loaded it yet, and waits for Zulu's address. Back in All projects it
+ *  loaded it yet, and waits for Zulu's address (`/p/` and its number) and
+ *  for the header to name Zulu. Back in All projects it
  *  searches M's name again, unstars M and waits for the Favorites heading
  *  to go; a failure unstars it through the store, so no later step meets
  *  the run's project as a favorite. It reads none of Nora's own favorites,
@@ -6571,17 +6580,26 @@ async function projectDirectoryCheck() {
         }, 60_000),
         "M's sub-projects do not list Alpha and Zulu",
       )
+      const path = () => new URL(app.url()).pathname
       let pressed = false
       const opened = await until(async () => {
-        if (!new URL(app.url()).pathname.endsWith('/projects')) return true
+        if (atProject(path(), Z.num)) return true
+        // the directory left for another page: wait, pressing nothing more
+        if (!path().endsWith('/projects')) return false
         const note = (await app.locator(`[${m.status}]`).textContent()) ?? ''
         // a project the workspace has not delivered yet: the directory says
         // so and moves nothing, so the step presses again
         if (!pressed || note.includes(NOT_LOADED_YET)) await child(Z).click()
         pressed = true
-        return !new URL(app.url()).pathname.endsWith('/projects')
+        return atProject(path(), Z.num)
       }, 60_000)
-      expect(opened, "Zulu's page did not open from the directory")
+      expect(opened, `Zulu's page did not open from the directory, which went to ${path()}`)
+      // and the page shows Zulu, whose name the header holds
+      const scope = app.locator('[data-scope-crumb] h1')
+      expect(
+        await until(async () => ((await scope.textContent()) ?? '').trim() === Z.name, 30_000),
+        `the page opened from the directory shows ${(await scope.textContent()) ?? 'nothing'}, not ${Z.name}`,
+      )
       // back in All projects, M unstarred leaves the Favorites
       await app.locator('[data-all-nav]').click()
       await app.locator(`[${m.page}]`).waitFor({ timeout: 30_000 })
