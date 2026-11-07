@@ -406,12 +406,29 @@ and saves, then checks over REST that the task is Nora's and the agent's
 grant is gone (`ui/removal-window`). Against a backend from before the
 removal window's release that step fails. In **New project** it then makes
 a project of its own with its run tag, led by the Standard agent and shared
-with the run's team as Viewer and with Nora as User from the deployment's
-pickers. It opens **New sub-project** from its first project's menu, picks
-the new project from the **Project** list and makes a sub-project there,
-and checks both over REST (`ui/project-dialogs`). The cleanup deletes both.
-Against a backend from before the release after v0.1.140, which still
-requires `sort_order`, that step fails. It then makes a sub-project of its
+with the run's team as Viewer from the deployment's pickers, and checks
+that the dialog's own entry for a creator who names someone else as lead
+shares it with Nora as User, which it leaves as it is. It opens **New
+sub-project** from its first project's menu, picks the new project from
+the **Project** list and makes a sub-project there, and checks both over
+REST (`ui/project-dialogs`). The cleanup deletes both. Against a backend
+from before the release after v0.1.140, which still requires
+`sort_order`, that step fails. Over REST it then makes `<tag> Managed`,
+led by the Standard agent, takes Nora's automatic User grant there away,
+and with the agent's key adds `<tag> Managed sub` with a task, and it
+makes `<tag> Managed control` under its first project with a task of
+Nora's own. It checks that Nora, an organization admin who manages
+`<tag> Managed` without taking part in it, reads it with `access.read`
+false, completion unavailable and no milestones, cannot read its task and
+saves its description, and in the app that **Settings → Projects** lists
+it, that its **Archived tasks** says it can't show the project's tasks,
+and that Search finds the control task and not the managed one
+(`ui/admin-management`). It deletes `<tag> Managed`, its sub-project and
+task after the step, also after a failure, and reports that delete as
+`cleanup/admin-management`; the control sub-project goes with its first
+project in the cleanup. Against a backend from before the release after
+v0.1.158, where admin status still gives access to project work, that
+step fails. It then makes a sub-project of its
 own under its first project, uploads one file of 2,048 bytes over REST to a
 task there, opens **Billing**, checks that current storage shows a figure
 rather than **Being counted**, finds the sub-project alone with **2.0 KB ·
