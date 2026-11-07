@@ -1416,14 +1416,29 @@ describe('real limits', () => {
     // their 54 by name, 1,440 in all, more than the ceiling's worth; the
     // admin, in the same 3 teams, reads what the member reads
     const c = await allProjectsOrg((top, mine) => (mine && top < 150 ? 30 : 0), true)
-    await allProjectsReads(c, c.me, 'a member in 3 teams, over 200 top-level projects')
+    // admin status adds no sub-project to the 54 the member's teams share
+    expect(await readableLiveSubProjects(c.t, c.me)).toBe(54)
+    expect(await readableLiveSubProjects(c.t, c.f.admin)).toBe(54)
+    const member = await allProjectsReads(
+      c,
+      c.me,
+      'a member in 3 teams, over 200 top-level projects',
+    )
     // the counts again, which the member's second read took away
     await countOrg(c.t, c.f.org.id)
-    await allProjectsReads(
+    const admin = await allProjectsReads(
       c,
       c.f.admin,
       "an admin in the member's teams, over 200 top-level projects",
     )
+    // the same read, two ranges more for the admin's own seat: an admin
+    // branch back in the level rule reads every project instead, about
+    // 2,100 and 2,300 ranges
+    for (const read of ['bound', 'counting'] as const) {
+      const more = admin[read].read.ranges - member[read].read.ranges
+      expect(more).toBeGreaterThanOrEqual(0)
+      expect(more).toBeLessThanOrEqual(5)
+    }
   })
 
   it('answers over_ceiling for All projects for an admin who reads 200 live sub-projects through grants on their top-level projects, from the counts and while counting', async () => {
@@ -1578,12 +1593,13 @@ async function allProjectsOrg(tasks: (top: number, mine: boolean) => number, adm
 
 /* All projects for `who` in the organization of allProjectsOrg, from the
  * counts and then while the counts are not whole, each over_ceiling, the
- * counts in fewer ranges. */
+ * counts in fewer ranges. Answers both reads, for a case that compares two
+ * callers. */
 async function allProjectsReads(
   c: Awaited<ReturnType<typeof allProjectsOrg>>,
   who: Doc<'profiles'>,
   label: string,
-): Promise<void> {
+) {
   const bound = await agendaRead(c.t, who, ALL)
   record(`All projects for ${label}, the counts bound`, bound.answer, bound.read)
   expect(bound.answer).toEqual({ state: 'over_ceiling', ceiling: TEAM_SYNC_TASKS })
@@ -1593,6 +1609,7 @@ async function allProjectsReads(
   expect(counting.answer).toEqual({ state: 'over_ceiling', ceiling: TEAM_SYNC_TASKS })
   // the counts establish the ceiling before the read gets as far
   expect(bound.read.ranges).toBeLessThan(counting.read.ranges)
+  return { bound, counting }
 }
 
 /* An everyday open task `i`, scheduled in NOW's week with remaining hours,
