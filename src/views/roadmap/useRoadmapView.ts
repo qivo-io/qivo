@@ -315,8 +315,8 @@ export function useRoadmapView(
     for (const uuid of own) {
       const it = P.ownOnScreen(ROADMAP_SLOT, uuid)
       if (!it || shown.has(uuid) || !passes(it) || !textOk(it)) continue
-      // the person's new task on its way, by the whole text its create sent
-      // (P.createText), as the Board checks it
+      // the person's new task on its way, by its whole text as the screen
+      // shows it (P.createText), as the Board checks it
       const created = filters.search ? P.createText(uuid) : null
       if (created !== null && !matchesAllWords(created, filters.search)) continue
       shown.add(uuid)

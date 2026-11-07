@@ -540,6 +540,55 @@ describe('a create in a store that never asked for every task', () => {
     expect(store.__layerProbe?.layerCount()).toBe(0)
   })
 
+  it('checks the new card under a text filter by the title, description and labels its window changed behind the create', async () => {
+    await boot()
+    snap.labels.push({
+      id: 'label-hw',
+      org_id: ORG,
+      name: 'Hardware',
+      name_lower: 'hardware',
+      color: '#335577',
+      created_at: SERVER,
+    })
+    deliverWhole()
+    await openBoard()
+    const { uuid } = create({ description: 'Check the north bench first.' })
+    P().watchComments(uuid, ORG)
+    await settle()
+    const handle = P().taskDetail(uuid)?.view?.id ?? ''
+    const text = () => P().createText(uuid) ?? ''
+    expect(text()).toContain('humidity')
+    expect(text()).toContain('north bench')
+    // renamed, described again and labelled in its window before the
+    // create answers, so the card is checked against what the screen shows
+    void P().updateIssue(handle, {
+      title: 'Order the spare sensors',
+      description: 'Check the south bench first.',
+    })
+    P().toggleIssueLabel(handle, 'label-hw')
+    await settle()
+    expect(P().viewTask(BOARD, uuid)?.title).toBe('Order the spare sensors')
+    for (const word of ['spare sensors', 'south bench', 'hardware'])
+      expect(text().toLowerCase()).toContain(word)
+    for (const word of ['humidity', 'north bench']) expect(text()).not.toContain(word)
+    // the label's refusal takes its name back with its paint
+    expect(waiting().map((s) => s.name)).toEqual([
+      'issues:create',
+      'issues:update',
+      'labels:toggle',
+    ])
+    take('labels:toggle').reject(
+      new ConvexError({ code: 'forbidden', message: 'no write access to this project' }),
+    )
+    await settle()
+    expect(text().toLowerCase()).not.toContain('hardware')
+    // with the window closed, a description change on its way cannot be
+    // read, so the Board counts the card as unsure
+    P().watchComments(null)
+    await settle()
+    expect(P().createText(uuid)).toBeNull()
+  })
+
   it('takes a refused create away with one toast: its card, its window and the writes sent behind it', async () => {
     await boot()
     await openBoard()

@@ -27,9 +27,9 @@
      refused write takes it away again. The person's new task goes into the
      Board's rows from what its create sent (store/viewRows.ts insert),
      and while the server has not taken it, the Board checks it against
-     the whole text filter from that, its description included
-     (P.createText), as the server will. Edits by others wait for the
-     answer.
+     the whole text filter as the screen shows it, its description and
+     labels included (P.createText), as the server will. Edits by others
+     wait for the answer.
    - An answer counts only for the arguments it was sent with. Until the
      answer for the arguments on screen arrives, the Board shows the rows
      the store kept for those arguments while the read was stopped, marked
@@ -375,7 +375,8 @@ export function useBoardView(
     for (const uuid of own) {
       const it = P.ownOnScreen(slot, uuid)
       if (!it || shown.has(uuid) || !passes(info, filters, it) || !textOk(it)) continue
-      // the person's new task on its way, by the whole text its create sent
+      // the person's new task on its way, by its whole text as the screen
+      // shows it, the writes sent behind its create included
       const created = filters.search ? P.createText(uuid) : null
       if (created !== null && !matchesAllWords(created, filters.search)) continue
       // the person's new subtask whose parent is still to come, as above

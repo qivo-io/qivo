@@ -13497,23 +13497,42 @@ export const PLANNER = {
       has no task to read for it yet. */
   createOnItsWay: (uuid: string): boolean => createOnItsWay(uuid),
   /** The search text of task `uuid` while it is a create of the person's
-      own on its way that the workspace does not hold, with its
-      description, which a view's row does not send, else null. The views
-      check such a card against the whole text filter (views/board
-      useBoardView.ts), as the server will once it holds the task. */
+      own on its way that the workspace does not hold, as the screen shows
+      it with the writes sent behind the create. The fields come from its
+      row in the views, and its description and labels, which a view's row
+      does not send, from the window's painted answer while a window shows
+      it from its creating answer, else as the create sent them. Null for
+      any other task, and where a change of its description or labels
+      went out behind the create that no window shows, or a label has no
+      name the store knows, so the views count the card as unsure. The
+      views check such a card against the whole text filter (views/board
+      useBoardView.ts), as the server will once it holds the task, and a
+      refused write's paint going takes its text back with it. */
   createText: (uuid: string): string | null => {
     const pending = pendingCreates.get(uuid)
     if (!pending || holdsIn(uuid, pending.org)) return null
-    const row = pendingRow(pending)
+    const shown =
+      watchedComments === uuid && creatingShown() && drawnAnswer?.task.id === uuid
+        ? drawnAnswer
+        : null
+    if (!shown && PLANNER.ownUnsentEdits().has(uuid)) return null
+    const sent = pendingRow(pending)
+    const row = viewRows.peek(uuid) ?? sent
+    const labelNames: string[] = []
+    for (const { label_id } of shown?.labels ?? []) {
+      const name = rows.labels.get(label_id)?.name
+      if (name === undefined) return null
+      labelNames.push(name)
+    }
     return taskSearchText({
       key: `${ISSUE_PREFIX}-${row.num}`,
       title: row.title,
-      description: row.description,
+      description: shown ? shown.task.description : sent.description,
       status: row.status,
       group: pending.child !== null,
       priority: row.priority,
       assigneeName: row.assignee_id ? PLANNER.user(row.assignee_id)?.name : undefined,
-      labelNames: [],
+      labelNames,
     })
   },
   /** The handle task `uuid`, number `num` of organization `orgId` opens by
