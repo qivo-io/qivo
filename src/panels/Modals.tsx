@@ -26,6 +26,7 @@ import { ProjectAccessSelect } from '../components/ProjectAccessSelect'
 import { ChoiceEnd, PickerSearch } from '../components/pickerParts'
 import { type ChoiceWords, escapeClearsFirst } from '../components/pickerWords'
 import { Avatar, DateSelect, Icon, MenuItem, Popover } from '../components/qivo'
+import { WAITS_FOR_SAVE } from '../components/rowElements'
 import { ACCESS_CAPS } from '../lib/accessCaps'
 import { copyText } from '../lib/clipboard'
 import { relativeWeek, weekToISO } from '../lib/dates'
@@ -1020,8 +1021,13 @@ function ParentChoiceList({
 
 /** Why moving, archiving or deleting a task the workspace holds waits
     while tasks still load and no answer of its own serves its subtasks:
-    each acts on subtasks and blockers that may be still to arrive. */
+    each acts on subtasks and blockers that may be still to arrive. Only a
+    store that asked for every task, as the scripts' and the benchmark's,
+    holds a task before every task has loaded. */
 export const WAITS_FOR_TASKS = 'Available once every task has loaded'
+/** Why a control of the person's own new task that reads the server about
+    the task waits until it is saved (components/rowElements.tsx). */
+export { WAITS_FOR_SAVE }
 /** Why a change to a task the task window shows from its own read waits
     while that read failed or runs again: Qivo cannot tell whether someone
     changed the task meanwhile. */
@@ -1032,11 +1038,18 @@ export const FAMILY_UNKNOWN = 'Not available while Qivo cannot read every subtas
 
 /** Why a task's Move or Archive or delete window cannot act, with no
     family (P.familyOf). A task the workspace holds waits for every task,
-    and one the window shows from its own read waits for that read to be
-    current again (P.answerSaveWaits), else for its whole subtask list, as
-    the task window's menu says (IssueDetail fateTip). */
+    the person's new task shown from what its create sent waits until it
+    is saved, and one the window shows from its own read waits for that
+    read to be current again (P.answerSaveWaits), else for its whole
+    subtask list, as the task window's menu says (IssueDetail fateTip). */
 const familyWait = (it: IssueVM) =>
-  P.issueById[it.id] ? WAITS_FOR_TASKS : P.answerSaveWaits(it.id) ? WAITS_FOR_CHECK : FAMILY_UNKNOWN
+  P.issueById[it.id]
+    ? WAITS_FOR_TASKS
+    : P.taskDetail(it.uuid, it.org)?.saving
+      ? WAITS_FOR_SAVE
+      : P.answerSaveWaits(it.id)
+        ? WAITS_FOR_CHECK
+        : FAMILY_UNKNOWN
 
 /* ---------- Move issue ----------
    The task is the window's (`task`), the workspace's or one shown from

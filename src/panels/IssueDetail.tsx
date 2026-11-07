@@ -108,6 +108,7 @@ import {
   FAMILY_UNKNOWN,
   MoveIssueModal,
   WAITS_FOR_CHECK,
+  WAITS_FOR_SAVE,
   WAITS_FOR_TASKS,
 } from './Modals'
 import { type CurrentRelation, type CurrentRelations, RelationPicker } from './RelationPicker'
@@ -131,9 +132,15 @@ function EditorSlot({ fallback, children }: { fallback: ReactNode; children: Rea
 const NO_PROFILE = '__none__'
 /* WAITS_FOR_TASKS (from Modals.tsx) says why moving, archiving or deleting
    a task the workspace holds waits before it holds every task and no answer
-   of its own serves its subtasks, as for the person's new task during a
-   load, since each acts on subtasks and blockers that may be still to
-   arrive. WAITS_FOR_CHECK says why a change to a task
+   of its own serves its subtasks, which only a store that asked for every
+   task reaches, since each acts on subtasks and blockers that may be still
+   to arrive. WAITS_FOR_SAVE says why the controls that read the server
+   about the person's own new task wait while the window shows it from what
+   its create sent (TaskDetailVM saving): the owner, Parent, Subtasks,
+   Linked tasks and Subscribers pickers, Move to sub-project… and Archive
+   or delete…. Its fields, labels, files, comments and the eye take changes
+   at once, which go out behind the create. WAITS_FOR_CHECK says why a
+   change to a task
    the window shows from its own read waits while that read failed or runs
    again, the Parent, Subtasks and Linked tasks changes included, and
    FAMILY_UNKNOWN why Move and Archive or delete are off while that read
@@ -2288,6 +2295,10 @@ function IssueDetail({
   // relations take the same rule (canEdit).
   const answerEdits = answerEditorOn && !stale && !!it && P.editsFromAnswer(it.id)
   const canEdit = canLabel || answerEdits
+  // the person's own new task shown from what its create sent: the
+  // controls that read the server about it wait until its own read
+  // answered (WAITS_FOR_SAVE)
+  const saving = !held && !!detail?.saving
   // every label of the task, named from the workspace or by id
   // (taskLabels.ts useTaskLabels), so none is hidden for not being loaded
   const taskLabels = useTaskLabels(it)
@@ -2387,8 +2398,8 @@ function IssueDetail({
         value={value ? (selectable ? value : undefined) : NO_PROFILE}
         placeholder={(value && P.user(value)?.name) || none}
         menuWidth={220}
-        disabled={!canEdit}
-        title={roTip}
+        disabled={!canEdit || saving}
+        title={saving ? WAITS_FOR_SAVE : roTip}
         options={[
           { value: NO_PROFILE, label: none },
           ...assigneeChoices.map((u) => ({
@@ -2433,11 +2444,13 @@ function IssueDetail({
     ? family
       ? undefined
       : WAITS_FOR_TASKS
-    : !answerEdits
-      ? WAITS_FOR_CHECK
-      : family
-        ? undefined
-        : FAMILY_UNKNOWN
+    : saving
+      ? WAITS_FOR_SAVE
+      : !answerEdits
+        ? WAITS_FOR_CHECK
+        : family
+          ? undefined
+          : FAMILY_UNKNOWN
   const fateWaits = fateTip !== undefined
 
   // issue numbers are org-scoped and immutable (0050), so this link is
@@ -2485,7 +2498,8 @@ function IssueDetail({
     (row.level === 'lead' || row.level === 'user') && P.canWrite(row.project)
   // a link needs Edit on either task (convex/model/issues.ts linkAccess),
   // so someone who only views this task links it to a task they can edit
-  const canLinkAny = !!it && current && !archived && (canRelate || P.editsSomeProject(it.org))
+  const canLinkAny =
+    !!it && current && !archived && !saving && (canRelate || P.editsSomeProject(it.org))
   // A row's removal sends what its list showed as the expected values (a
   // link's kind, a subtask's parent), so it waits while that list failed
   // or reads again.
@@ -3527,6 +3541,7 @@ function IssueDetail({
                         key={it.uuid}
                         issue={it}
                         disabled={held || P.editsFromAnswer(it.id) ? undefined : WAITS_FOR_CHECK}
+                        rosterWaits={saving ? WAITS_FOR_SAVE : undefined}
                       />
                     )}
                     <span data-issue-key className="[display:inline-flex] [align-items:center]">
@@ -4015,10 +4030,10 @@ function IssueDetail({
                           // status — "Delayed" covers overdue; without it, the plain
                           // overdue chip stays as before. Where the workspace cannot
                           // judge it, before it holds every task or for a task shown
-                          // from its answer, the owner's load comes from the server,
-                          // as for a Board card (P.windowDelay), so the window of a
-                          // task the person created during a load can show a verdict
-                          // its card waits for
+                          // from its answer, the person's new task among them, the
+                          // owner's load comes from the server, as for a Board card
+                          // (P.windowDelay), so the window and the card of a task
+                          // the person just created show one verdict
                           const verdict =
                             archived || !P.tracksDelay(it)
                               ? null
@@ -4384,11 +4399,11 @@ function IssueDetail({
                                 className="task-heading-action"
                                 aria-label={hasParent ? 'Change parent' : 'Set parent'}
                                 title={
-                                  roTip ||
+                                  (saving ? WAITS_FOR_SAVE : roTip) ||
                                   (hasParent ? undefined : noParent) ||
                                   (hasParent ? 'Change parent' : 'Set parent')
                                 }
-                                disabled={!canRelate || (!hasParent && !!noParent)}
+                                disabled={!canRelate || saving || (!hasParent && !!noParent)}
                                 onClick={() => openPickerUnder(parentSecRef, setParentAnchor, 340)}
                               >
                                 <Icon name={hasParent ? 'pen' : 'plus'} size={16} />
@@ -4403,8 +4418,8 @@ function IssueDetail({
                                   // the window's own task, also one shown from its
                                   // answer, which sends the parent pair it showed
                                   onClick: () => upd({ parent: null }),
-                                  disabled: !canEdit,
-                                  hint: roTip,
+                                  disabled: !canEdit || saving,
+                                  hint: saving ? WAITS_FOR_SAVE : roTip,
                                 }}
                               />
                             ) : it.hasHiddenParent ? (
@@ -4457,8 +4472,10 @@ function IssueDetail({
                                 size="icon"
                                 className="task-heading-action"
                                 aria-label="Add subtask"
-                                title={roTip || noSubtask || 'Add subtask'}
-                                disabled={!canRelate || !!noSubtask}
+                                title={
+                                  (saving ? WAITS_FOR_SAVE : roTip) || noSubtask || 'Add subtask'
+                                }
+                                disabled={!canRelate || saving || !!noSubtask}
                                 onClick={() => openPickerUnder(subSecRef, setSubAnchor, 340)}
                               >
                                 <Icon name="plus" size={16} />
@@ -4522,7 +4539,13 @@ function IssueDetail({
                                 size="icon"
                                 className="task-heading-action"
                                 aria-label="Link task"
-                                title={canLinkAny ? noLink || 'Link task' : roTip}
+                                title={
+                                  saving
+                                    ? WAITS_FOR_SAVE
+                                    : canLinkAny
+                                      ? noLink || 'Link task'
+                                      : roTip
+                                }
                                 disabled={!canLinkAny || !!noLink}
                                 onClick={() => openPickerUnder(linkSecRef, setLinkAnchor, 340)}
                               >

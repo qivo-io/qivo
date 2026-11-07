@@ -997,10 +997,8 @@ describe('which windows load the sections', { timeout: 20_000 }, () => {
   })
 })
 
-describe('a new task while every task loads', { timeout: 20_000 }, () => {
+describe('a new task before the server stored it', { timeout: 20_000 }, () => {
   afterEach(async () => {
-    double.live?.holdWindow(null)
-    double.live?.failWindow(null)
     const { TASKS } = await import('../store/liveParts')
     TASKS.atBoot = true
     // no write went out on a path that needs every task, and no paint threw
@@ -1008,220 +1006,164 @@ describe('a new task while every task loads', { timeout: 20_000 }, () => {
     expect(__layerProbe?.faults()).toEqual([])
   })
 
-  it("opens the new task's Parent, Subtasks and Linked tasks pickers on the server's candidates, asking for nothing past its create", async () => {
-    const next = fixture()
-    next.orgs[0].next_issue_num = 64 * 200
-    await load(next, async () => {
+  /** Loads the store as the app boots it, without the workspace's tasks,
+      and holds each create until the test accepts it with the number the
+      server gave it. */
+  async function loadNotAsked() {
+    await load(fixture(), async () => {
       const { TASKS } = await import('../store/liveParts')
       TASKS.atBoot = false
     })
-    double.live?.holdWindow('fc000000')
-    network.mutation.mockImplementation(async (ref) =>
-      getFunctionName(ref) === 'issues:create' ? { num: 64 * 200 + 1 } : null,
-    )
-    const { __layerProbe } = await import('../store/planner')
-    let key: string | null = null
-    await act(async () => {
-      key = P.addIssue({ project: 'work', title: 'Order the spare sensors' })
+    const held: { name: string; args: Record<string, unknown>; resolve: (v: unknown) => void }[] =
+      []
+    network.mutation.mockImplementation((ref, args) => {
+      const name = getFunctionName(ref)
+      if (!name.startsWith('issues:create')) return Promise.resolve(null)
+      return new Promise((resolve) => held.push({ name, args, resolve }))
     })
-    // the create asked for every task before it sent, and nothing else did
-    expect(__layerProbe?.asks()).toEqual(['create'])
-    expect(P.taskLoad()).toEqual({ state: 'arriving' })
-    const uuid = P.issueById[key ?? '']?.uuid ?? ''
+    return {
+      /** Accepts the oldest create, answered as the server answers it. */
+      accept: (num: number) =>
+        act(async () => {
+          const create = held.shift()
+          if (!create) throw new Error('no create waits')
+          // the stored row answers, for a linked task the new one's
+          create.resolve(
+            create.name === 'issues:createParent'
+              ? { parent_num: num }
+              : create.name === 'issues:createLinked'
+                ? { id: create.args.new_id, title: create.args.title, num }
+                : { ...create.args, num },
+          )
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }),
+    }
+  }
+
+  /* The reads of task `uuid` the store subscribed, by name. */
+  const readsOf = (uuid: string) =>
+    subs.filter((s) => JSON.stringify(s.args).includes(uuid)).map((s) => s.name)
+  /* The new task's own answer, as the server sends it. */
+  const ownAnswer = (uuid: string, num: number, title: string, kids: unknown[] = []) => ({
+    state: 'ok',
+    task: {
+      ...task(uuid, num, { title, status: 'backlog', priority: 'low' }),
+      has_subtasks: kids.length > 0,
+    },
+    level: 'lead',
+    labels: [],
+    follow: null,
+    parent: null,
+    subtasks: { rows: kids, complete: true },
+  })
+  const button = (label: string) =>
+    document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)
+  const menu = async () => {
+    await act(async () => button('Task actions')?.click())
+    const move = [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
+      b.textContent?.includes('Move to sub-project'),
+    )
+    return { move, fate: document.querySelector<HTMLButtonElement>('[data-task-fate]') }
+  }
+
+  it('shows the new task at once with its lists empty and whole, and keeps the controls that read the server waiting until its own read answered', async () => {
+    const server = await loadNotAsked()
+    let made: string | null = null
+    await act(async () => {
+      made = P.addIssue({ project: 'work', title: 'Order the spare sensors', assignee: 'mira' })
+    })
+    const { refParts } = await import('../lib/taskReference')
+    const uuid = refParts(made)?.uuid ?? ''
+    await openHandle(made ?? '')
+    expect(document.querySelector('[data-task-title]')?.textContent).toContain(
+      'Order the spare sensors',
+    )
+    for (const name of ['subtasks', 'links', 'attachments']) expect(stateOf(name)).toBe('complete')
+    // the pickers that read the server about the task wait
+    for (const label of ['Add subtask', 'Link task', 'Set parent']) {
+      expect(button(label)?.disabled, label).toBe(true)
+      expect(await hintOf(button(label)), label).toBe('Available once this task is saved')
+    }
+    for (const label of ['Assignee', 'Reviewer'])
+      expect(document.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)?.disabled).toBe(
+        true,
+      )
+    const during = await menu()
+    expect(during.move?.disabled).toBe(true)
+    expect(during.fate?.disabled).toBe(true)
+    expect(await hintOf(during.fate)).toBe('Available once this task is saved')
+    // the eye follows at once, and its roster waits
+    expect(button('Unsubscribe from task updates')?.disabled).toBe(false)
+    // nothing that names the task reads the server before it exists
+    expect(readsOf(uuid)).toEqual([])
+    // the server took it: the window reads it, and its own answer ends the wait
+    await server.accept(41)
+    expect(
+      readsOf(uuid)
+        .filter((name) => SECTIONS.includes(name))
+        .sort(),
+    ).toEqual([...SECTIONS].sort())
+    expect(button('Add subtask')?.disabled).toBe(true)
+    await act(async () =>
+      open('taskWindow:task')
+        .find((s) => s.args.ref === uuid)
+        ?.deliver(ownAnswer(uuid, 41, 'Order the spare sensors')),
+    )
     const reads = holdRelations()
-    await openTask(uuid)
     for (const [label, kind] of [
       ['Add subtask', 'subtask'],
       ['Link task', 'link'],
       ['Set parent', 'parent'],
     ] as const) {
-      await act(async () =>
-        document.querySelector<HTMLElement>(`button[aria-label="${label}"]`)?.click(),
-      )
+      expect(button(label)?.disabled, label).toBe(false)
+      await act(async () => button(label)?.click())
       // the picker opens a frame after the press
       await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
       expect(reads.at(-1)?.args).toMatchObject({ issue_id: uuid, kind })
-      await reads.at(-1)?.answer(pickerBatch([pickerRow(row('other'))]))
-      expect(document.querySelector('[data-picker-row="other"]')).not.toBeNull()
     }
-    // still on its way: no picker waited for every task or asked for them
-    expect(P.taskLoad()).toEqual({ state: 'arriving' })
-    expect(__layerProbe?.asks()).toEqual([])
   })
 
-  it('lists empty sections at once, and moves, archives or deletes once every task has loaded', async () => {
-    const next = fixture()
-    // 12,800 task numbers make 64 task windows; the last, from fc000000,
-    // stays on its way
-    next.orgs[0].next_issue_num = 64 * 200
-    await load(next, async () => {
-      const { TASKS } = await import('../store/liveParts')
-      TASKS.atBoot = false
-    })
-    double.live?.holdWindow('fc000000')
-    // the create stays on its way, so its paint stays through the load
-    network.mutation.mockImplementation(() => new Promise(() => {}))
-    // a create asks for every task before it sends
-    let key: string | null = null
-    await act(async () => {
-      const project = next.projects.find((p) => p.type === 'project')
-      key = P.addIssue({ project: project?.id ?? '', title: 'Order the spare sensors' })
-    })
-    expect(P.taskLoad()).toEqual({ state: 'arriving' })
-    const uuid = P.issueById[key ?? '']?.uuid ?? ''
-    await openTask(uuid)
-    // the window takes focus a frame after it opens, which would close a
-    // menu opened before
-    await act(async () => {
-      await vi.waitFor(() => {
-        const frame = document.querySelector('[role="dialog"]')
-        if (!frame?.contains(document.activeElement)) throw new Error('the window has no focus yet')
-      })
-    })
-    // no delivery holds the new task yet, so its lists are its create's own
-    for (const name of ['subtasks', 'links', 'attachments']) expect(stateOf(name)).toBe('complete')
-    const menu = async () => {
-      await act(async () =>
-        document.querySelector<HTMLElement>('[aria-label="Task actions"]')?.click(),
-      )
-      const move = [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
-        b.textContent?.includes('Move to sub-project'),
-      )
-      return { move, fate: document.querySelector<HTMLButtonElement>('[data-task-fate]') }
-    }
-    const during = await menu()
-    expect(during.move?.disabled).toBe(true)
-    expect(during.fate?.disabled).toBe(true)
-    expect(await hintOf(during.fate)).toBe('Available once every task has loaded')
-    // once every task has loaded, the workspace knows its family: none
-    expect(P.familyOf(P.issueById[key ?? ''])).toBeNull()
-    await act(async () => double.live?.holdWindow(null))
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
-    expect(P.tasksHeld()).toBe(true)
-    expect(P.familyOf(P.issueById[key ?? ''])).not.toBeNull()
-  })
-
-  it("moves, archives or deletes once the new task's own answer is current, before every task has loaded", async () => {
-    const next = fixture()
-    next.orgs[0].next_issue_num = 64 * 200
-    await load(next, async () => {
-      const { TASKS } = await import('../store/liveParts')
-      TASKS.atBoot = false
-    })
-    double.live?.holdWindow('fc000000')
-    // the server takes the create
-    network.mutation.mockImplementation(async (ref) =>
-      getFunctionName(ref) === 'issues:create' ? { num: 64 * 200 + 1 } : null,
-    )
-    let key: string | null = null
-    await act(async () => {
-      key = P.addIssue({ project: 'work', title: 'Order the spare sensors' })
-    })
-    const uuid = P.issueById[key ?? '']?.uuid ?? ''
-    await openTask(uuid)
-    await act(async () => {
-      await vi.waitFor(() => {
-        const frame = document.querySelector('[role="dialog"]')
-        if (!frame?.contains(document.activeElement)) throw new Error('the window has no focus yet')
-      })
-    })
-    // its own answer: no subtask, the whole list
-    const made = task(uuid, 64 * 200 + 1, { title: 'Order the spare sensors', status: 'backlog' })
-    const reads = open('taskWindow:task').filter((s) => s.args.ref === uuid)
-    expect(reads).toHaveLength(1)
-    await act(async () =>
-      reads[0].deliver({
-        state: 'ok',
-        task: { ...made, has_subtasks: false, has_hidden_subtasks: false },
-        level: 'lead',
-        labels: [],
-        follow: null,
-        parent: null,
-        subtasks: { rows: [], complete: true },
-      }),
-    )
-    expect(P.taskLoad()).toEqual({ state: 'arriving' })
-    expect(P.familyOf(P.issueById[key ?? ''])).not.toBeNull()
-    await act(async () =>
-      document.querySelector<HTMLElement>('[aria-label="Task actions"]')?.click(),
-    )
-    const move = [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
-      b.textContent?.includes('Move to sub-project'),
-    )
-    expect(move?.disabled).toBe(false)
-    expect(document.querySelector<HTMLButtonElement>('[data-task-fate]')?.disabled).toBe(false)
-  })
-
-  for (const [made, stopped] of [
-    ['parent', 'held'],
-    ['parent', 'failed'],
-    ['linked task', 'held'],
-    ['linked task', 'failed'],
-  ] as const)
-    it(`reads a new ${made}'s thread and lists once the server took it, while the load of every task is ${stopped}`, async () => {
-      const next = fixture()
-      next.orgs[0].next_issue_num = 64 * 200
-      await load(next, async () => {
-        const { TASKS } = await import('../store/liveParts')
-        TASKS.atBoot = false
-      })
-      // the last of 64 task windows answers nothing, or fails
-      if (stopped === 'held') double.live?.holdWindow('fc000000')
-      else double.live?.failWindow('fc000000')
+  for (const made of ['parent', 'linked task'] as const)
+    it(`shows a new ${made} from its creating answer, and reads its thread and lists once the server took it`, async () => {
+      const server = await loadNotAsked()
       // a task without subtasks, which the workspace does not hold, from
       // its answer
       const { taskRef } = await import('../lib/taskReference')
       await openHandle(taskRef({ org: snap.orgs[0].id, num: 31, uuid: 'other' }))
       await answer('taskWindow:task', taskAnswer([], true, false, 'other'))
       expect(P.handleOf('other')).toBeNull()
-      // the server takes the create
-      network.mutation.mockImplementation(async (ref) => {
-        const name = getFunctionName(ref)
-        if (name === 'issues:createParent') return { parent_num: 64 * 200 + 1 }
-        return name === 'issues:createLinked' ? { num: 64 * 200 + 1 } : null
-      })
-      let took = false
       await act(async () => {
-        took =
-          made === 'parent'
-            ? await P.createParent('QN-31', 'Build the rig')
-            : await P.createLinked('QN-31', 'blocks', 'Wire the rig')
+        void (made === 'parent'
+          ? P.createParent('QN-31', 'Build the rig')
+          : P.createLinked('QN-31', 'blocks', 'Wire the rig'))
       })
-      expect(took).toBe(true)
-      await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
-      expect(P.taskLoad().state).toBe(stopped === 'held' ? 'arriving' : 'failed')
       const sent =
         made === 'parent'
           ? sentArgs('issues:createParent').at(-1)?.parent_id
           : sentArgs('issues:createLinked').at(-1)?.new_id
       const uuid = typeof sent === 'string' ? sent : ''
-      // the new task, painted, opens in the window
-      await openTask(uuid)
-      // no delivery holds it, and its window reads its thread and its own
-      // answer all the same
-      const thread = open('snapshot:threadComments').filter((s) => s.args.issue_id === uuid)
-      expect(thread).toHaveLength(1)
+      // the new task opens from its creating answer, reading nothing
+      await openHandle(P.openTask(uuid, snap.orgs[0].id, 40))
+      const title = made === 'parent' ? 'Build the rig' : 'Wire the rig'
+      expect(P.taskDetail(uuid)).toMatchObject({ state: 'ok', saving: true })
+      expect(readsOf(uuid)).toEqual([])
+      expect(titlesOf('subtasks')).toEqual(made === 'parent' ? ['Ship firmware'] : [])
+      // the server takes the create: its window reads its thread and its
+      // own answer
+      await server.accept(40)
+      expect(open('snapshot:threadComments').filter((s) => s.args.issue_id === uuid)).toHaveLength(
+        1,
+      )
       const reads = open('taskWindow:task').filter((s) => s.args.ref === uuid)
       expect(reads).toHaveLength(1)
-      const title = made === 'parent' ? 'Build the rig' : 'Wire the rig'
-      const own = task(uuid, 64 * 200 + 1, { title, status: 'backlog' })
       const kids = made === 'parent' ? [short(row('other'))] : []
-      await act(async () =>
-        reads[0].deliver({
-          state: 'ok',
-          task: { ...own, has_subtasks: kids.length > 0, has_hidden_subtasks: false },
-          level: 'lead',
-          labels: [],
-          follow: null,
-          parent: null,
-          subtasks: { rows: kids, complete: true },
-        }),
-      )
-      // a new parent lists the task it was made for, and Move and Archive
-      // or delete wait only for this answer
+      await act(async () => reads[0].deliver(ownAnswer(uuid, 40, title, kids)))
+      expect(P.taskDetail(uuid)).toMatchObject({ state: 'ok', saving: false })
       expect(titlesOf('subtasks')).toEqual(made === 'parent' ? ['Ship firmware'] : [])
       expect(stateOf('subtasks')).toBe('complete')
-      expect(P.familyOf(P.issueById[P.handleOf(uuid) ?? ''])).not.toBeNull()
+      // Move and Archive or delete wait only for this answer
+      const view = P.taskDetail(uuid)?.view
+      expect(view && P.familyOf(view)).not.toBeNull()
     })
 })
 
