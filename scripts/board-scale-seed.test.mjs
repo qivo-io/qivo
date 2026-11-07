@@ -1673,6 +1673,38 @@ describe('board-scale-seed --projects', () => {
     ])
     expect(new Set(fake.calls.map(([, , as]) => as))).toEqual(new Set(['nora-login']))
   })
+
+  it('counts Partner pilot, which --relations makes in the same run, toward the count', async () => {
+    // Northstar's three and one sub-project for the --relations tasks,
+    // which the fake takes wherever they go
+    fake.projects = [
+      ...['luma', 'cloud', 'pilot'].map((id, n) => ({
+        id,
+        org_id: 'org',
+        type: 'meta',
+        sort_order: n,
+      })),
+      { id: 'project-FW', key: 'FW', org_id: 'org', type: 'project', parent_id: 'luma' },
+    ]
+    fake.issues = []
+    fake.calls = []
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--relations', '--projects', '6'], {
+        env,
+        log: () => {},
+      })
+    } finally {
+      fake.projects = null
+    }
+    // Partner pilot and its sub-project, then two more top-level projects
+    // make six with Northstar's three and Partner pilot
+    expect(fake.calls.filter(([name]) => name === 'projects:create').map(([, f]) => f.id)).toEqual([
+      relationId('project'),
+      relationId('sub-project'),
+      projectSeedId(0),
+      projectSeedId(1),
+    ])
+  })
 })
 
 describe('board-scale-seed --api-accounts', () => {

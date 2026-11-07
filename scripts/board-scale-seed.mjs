@@ -1597,11 +1597,17 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
       log,
     })
   if (options.projects > 0 && stored !== null) {
-    const tops = joined('projects')
-      .filter((p) => p.type === 'meta' && !p.parent_id && !p.archived_at)
-      .map((p) => p.id)
+    const tops = new Set(
+      joined('projects')
+        .filter((p) => p.type === 'meta' && !p.parent_id && !p.archived_at)
+        .map((p) => p.id),
+    )
+    // the workspace was read before --relations ran, so Partner pilot,
+    // which that run made if no id of it was stored, counts too
+    if (options.relations && !stored.projects.has(relationId('project')))
+      tops.add(relationId('project'))
     await seedProjects(
-      planProjects({ org, count: options.projects, tops, present: stored.projects }),
+      planProjects({ org, count: options.projects, tops: [...tops], present: stored.projects }),
       {
         client,
         org,
