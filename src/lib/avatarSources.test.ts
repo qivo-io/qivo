@@ -546,6 +546,34 @@ describe('profile picture bounds', () => {
     expect(f.cache.keptBytes()).toBe(0)
   })
 
+  it.each([
+    ['300 KiB', 300 * KIB, 256],
+    ['2,048-pixel', 30 * KIB, 2048],
+  ])(
+    'never shows a cached %s picture an older app kept, and downloads it again',
+    async (_, bytes, edge) => {
+      const stored = persistentFixture(face(bytes))
+      const shrink = vi.fn(async () => face(18 * KIB))
+      const f = fixture({ shrink })
+      f.cache.setPersistent(stored.cache)
+      f.decode.mockResolvedValue({ width: edge, height: edge })
+      expect(await f.cache.restore()).toBe(false)
+      expect(f.cache.url(KEY)).toBeNull()
+      expect(f.cache.keptBytes()).toBe(0)
+      expect(stored.cache.remove).toHaveBeenCalledWith(KEY)
+      expect(f.cache.needsRefresh(KEY)).toBe(true)
+      // the mint that follows downloads and re-encodes it
+      f.fetcher.mockResolvedValue(new Response(face(bytes)))
+      f.decode.mockReset()
+      f.decode.mockResolvedValueOnce({ width: edge, height: edge })
+      f.decode.mockResolvedValue({ width: 256, height: 256 })
+      expect(await f.cache.prepare(KEY, LEASE)).toBe(true)
+      expect(f.fetcher).toHaveBeenCalledOnce()
+      expect(f.cache.keptBytes()).toBe(18 * KIB)
+      expect(stored.blobs.get(KEY)?.size).toBe(18 * KIB)
+    },
+  )
+
   it('counts restored pictures in the kept bytes', async () => {
     const f = fixture()
     f.cache.setPersistent(persistentFixture(face(30 * KIB)).cache)

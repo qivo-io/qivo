@@ -409,7 +409,10 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
       previous?.dispose()
     },
     /** Shows the persistent cache's pictures, at most its 128 entries at
-        once, each counted in the kept bytes, before their leases renew. */
+        once, each counted in the kept bytes, before their leases renew. A
+        cached picture past pictureBytes or pictureEdge, as an older app
+        kept, leaves the cache instead and downloads and re-encodes as any
+        picture does. */
     async restore() {
       const cache = persistent
       if (!cache) return false
@@ -423,20 +426,30 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
         }
         if (!blob || generation !== restoreGeneration || entries.get(key) !== entry || entry.source)
           return false
+        if (blob.size > AVATAR_SOURCES.pictureBytes) {
+          cache.remove(key)
+          return false
+        }
         if (!roomFor(blob.size)) return false
         const source = deps.createUrl(blob)
         let timeout: ReturnType<typeof setTimeout> | undefined
         const timedOut = new Promise<never>((_, reject) => {
           timeout = setTimeout(() => reject(new Error('Profile picture restore timed out')), 750)
         })
+        let size: unknown
         try {
-          await Promise.race([deps.decode(source), timedOut])
+          size = await Promise.race([deps.decode(source), timedOut])
         } catch {
           deps.revokeUrl(source)
           cache.remove(key)
           return false
         } finally {
           if (timeout) clearTimeout(timeout)
+        }
+        if (!fits(blob, size)) {
+          deps.revokeUrl(source)
+          cache.remove(key)
+          return false
         }
         if (
           generation !== restoreGeneration ||
