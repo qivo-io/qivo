@@ -185,8 +185,11 @@ export function createMintQueue(mint: MintCall, options: Options) {
   return {
     /** The answer for `request`, sharing the one of a request with its key
         that is waiting or on its way. Requests wait until the next
-        microtask, so those one synchronous run makes share calls; requests
-        made in separate tasks go in separate calls. */
+        microtask, so those one synchronous run makes share calls. Requests
+        made in separate tasks go in separate calls while a call slot is
+        free. Those that wait while MINT_QUEUE.inFlight calls are on their
+        way go together in the next call of their kind and organization, up
+        to MINT_QUEUE.batch. */
     request(request: MintRequest): Promise<MintOutcome> {
       const shared = known.get(request.key)
       if (shared) return shared.answer
