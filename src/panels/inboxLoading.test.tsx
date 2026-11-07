@@ -12,12 +12,14 @@ import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFix
 /* An Inbox item whose task the workspace does not hold, while every task
    loads (store/liveParts.ts) or in a session that never asked for them:
    picking it opens its task in the pane from the server, by a reference
-   with the message's organization (lib/taskReference.ts), whose window
-   reads the task's inbox item, and the pane's window
+   with the row's organization, number and uuid (lib/taskReference.ts),
+   whose window reads the task's inbox item, and the pane's window
    stays the same window when the task arrives, or the home organization
    changes. The pane edits, moves and takes images for a task it shows
    from its answer, names an archived one by its key, and offers Open
-   task in board only for a task the workspace holds. Back or Forward to
+   task in board for it, as the row's menu does, since the store holds
+   its project. The Inbox's search goes to the server and asks for no
+   task. Back or Forward to
    such a task (App pendingTask) shows the pane that says it loads, on a
    phone too, and Escape closes a pop-out, then the pane. A related task the workspace does not hold,
    opened from the pop-out, keeps both windows. The pop-out over a task the
@@ -287,12 +289,10 @@ describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () 
         { org_id: org, issue_id: 'fd000000-b', through: Date.parse('2026-09-14T09:00:00.000Z') },
       ]),
     )
-    // by a reference with the message's organization and the task's uuid
+    // by a reference with the row's organization, number and uuid
     const { refParts } = await import('../lib/taskReference')
-    expect(refParts(opened.at(-1))).toEqual({ org, uuid: 'fd000000-b' })
-    expect(container.querySelector('[data-task-loading]')?.textContent).toContain(
-      'Loading this task…',
-    )
+    expect(refParts(opened.at(-1))).toEqual({ org, num: 2, uuid: 'fd000000-b' })
+    expect(container.querySelector('[data-task-loading]')?.textContent).toContain('Loading QN-2…')
     expect(windowReads.map((read) => read.args)).toEqual([{ org_id: org, ref: 'fd000000-b' }])
     await act(async () => windowReads[0]?.next(answerOf(snap)))
     await vi.waitFor(() => expect(paneWindow()?.textContent).toContain('Run the soak test'))
@@ -686,23 +686,14 @@ describe('the Inbox of a session that never asked for every task', { timeout: 20
     expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
   })
 
-  it('searches every task once it has loaded, and never says nothing matches before', async () => {
+  it('searches on the server by task ID and asks for no task', async () => {
     const { store } = await loadingInbox()
-    expect(rows()).toHaveLength(2)
-    // QN-2 is the soak test's task ID, which only a task the workspace holds
-    // gives its row
+    await vi.waitFor(() => expect(rows()).toHaveLength(2))
+    // QN-2 is the soak test's task ID, which the workspace does not hold
     await search('QN-2')
-    expect(store.P.taskLoad()).toEqual({ state: 'arriving' })
-    expect(container.querySelector('[data-inbox-search-wait]')?.textContent).toBe(
-      'Searching every task once it has loaded…',
-    )
-    expect(rows()).toEqual([])
-    expect(container.querySelector('[data-inbox-empty]')).toBeNull()
-    expect(container.textContent).not.toContain('No messages match')
-    // every task arrives, and the search finds the row by its task ID
-    await arrive()
-    expect(store.P.tasksHeld()).toBe(true)
-    expect(container.querySelector('[data-inbox-search-wait]')).toBeNull()
-    expect(rows()).toEqual(['fd000000-b'])
+    await act(() => new Promise((resolve) => setTimeout(resolve, 300)))
+    await vi.waitFor(() => expect(rows()).toEqual(['fd000000-b']))
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+    expect(store.__layerProbe?.asks()).toEqual([])
   })
 })

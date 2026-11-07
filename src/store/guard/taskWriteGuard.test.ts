@@ -135,7 +135,7 @@ describe('the guard against task writes before the ask', () => {
       expect(probe.guardWrite(name), name).toHaveLength(1)
       expect(probe.guardWrite(name, { task: 'task-1', answer: true }), name).toHaveLength(1)
     }
-    store.P.askTasks('inbox')
+    store.P.askTasks('script')
     for (const name of [...CREATES, ...HELD_WRITES])
       expect(probe.guardWrite(name, undefined, argsOf(name)), name).toEqual([])
   })

@@ -12,8 +12,8 @@ import { Progress } from './ui/progress'
     load P.taskLoad reports): "Loading tasks…" with a bar that moves
     without a share, on one line. Once the load stopped it says why and
     that changes show as made until tasks load, with Try again
-    (P.retryTasks), as the Inbox's search does (TasksFailedNote). A stopped
-    load also goes on once a task window answers again. It floats, so it
+    (P.retryTasks). A stopped load also goes on once a task window answers
+    again. It floats, so it
     covers little and the page does not move when it goes, as a large
     Board would lay itself out again. Gone before any ask and once every
     task arrived. Its parent must be positioned. App's useTasksLoadingNews
@@ -52,22 +52,6 @@ export function TasksLoadingBar() {
           <Progress className="h-1.5 w-24" value={null} aria-label="Loading tasks" />
         </div>
       )}
-    </div>
-  )
-}
-
-/** Why a stopped task load stopped, with Try again (P.retryTasks), for a
-    reader that waits for every task. */
-export function TasksFailedNote({ reason, retrying }: { reason: string; retrying: boolean }) {
-  return (
-    <div data-tasks-failed className="flex flex-col items-center gap-2">
-      <p role="alert" className="max-w-sm text-text-1">
-        {TASKS_FAILED_TEXT}
-      </p>
-      <p className="max-w-sm text-xs">{reason}</p>
-      <Button variant="outline" onClick={() => P.retryTasks()} disabled={retrying}>
-        Try again
-      </Button>
     </div>
   )
 }

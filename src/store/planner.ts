@@ -10975,6 +10975,11 @@ export const PLANNER = {
   // the watched people whose latest-comment answer stayed cut short by the
   // server's budgets even when asked alone, so some of their cards lack marks
   lastCommentsCut: [] as string[],
+  /* The workspace inbox part's messages, and their groups one per task.
+     No view reads them since the Inbox lists inbox.page; the desktop
+     alerts read the part (announceNewMessages), and the store's tests and
+     scripts/inbox-snooze-smoke.mjs's checks read these. They go with the
+     part (t3/limits-inbox-feed). */
   messages: [] as MessageVM[],
   messageGroups: [] as MessageGroupVM[],
   /** The loaded message groups (P.messageGroups) that are unread and not
@@ -10985,7 +10990,9 @@ export const PLANNER = {
       (scripts/benchmark-browser.mjs). It goes with the workspace inbox
       part. */
   unreadMessages: 0,
-  readMessageCount: 0, // includes read notifications beyond the displayed snapshot
+  // the read messages the part counts, beyond those it sent too; no view
+  // reads it, the store's tests do, and it goes with the part
+  readMessageCount: 0,
   // whether the Inbox's Mark all as read and Remove all read may change
   // anything, from the unread summary's seat flags, and true while it has
   // no answer (deriveInboxFlags)
@@ -11006,8 +11013,10 @@ export const PLANNER = {
   // progress (runDeletedItems), and the deferred items it watches
   deletedAction: null as DeletedAction | null,
   deletedWaiting: new Set<string>() as ReadonlySet<string>,
-  // whether older messages exist than the Inbox lists (the snapshot's 500),
-  // and which of Mark all as read and Remove all read reach some of them
+  // whether the inbox part left out older messages than it sent (its 500),
+  // and which of Mark all as read and Remove all read reach some of them;
+  // no view reads them since the Inbox lists inbox.page, the store's tests
+  // do, and they go with the part
   inboxCut: false,
   inboxCutReach: { markAllRead: false, removeRead: false },
   loaded: false,
@@ -15257,11 +15266,16 @@ export const PLANNER = {
 
   /* ---- inbox messages (0074) ----
      Rows are created only by the server; the client's whole write surface is
-     read_at (and delete). The inbox acts on an ITEM — every message for one
-     task — so these take an id LIST. The singular forms stay for callers
-     that hold one message. Each checks the pause before its paint, so a
-     paused write paints nothing, and sends one write per organization, each
-     with its own layer, so a seat that refuses takes back only its rows. */
+     read_at (and delete). The Inbox acts on an ITEM, every message for one
+     task, by its organization and task with the row's cutoff (readItem,
+     unreadItem, removeItem, snoozeItem). The id-list actions here
+     (markMessagesRead, markMessagesUnread, deleteMessages, snoozeMessages
+     and the singular forms) act on the workspace inbox part's loaded
+     messages; no view calls them since the Inbox lists inbox.page, the
+     store's tests do, and they go with the part (t3/limits-inbox-feed).
+     Each checks the pause before its paint, so a paused write paints
+     nothing, and sends one write per organization, each with its own
+     layer, so a seat that refuses takes back only its rows. */
   /** Marks messages read and answers whether it sent the mark, for the
       Inbox's rows. */
   markMessagesRead: (ids: string[]): boolean => {
@@ -17546,10 +17560,10 @@ export const PLANNER = {
    part is the new anchor the rows are built from (owe).
 
    Tasks load on demand. The workspace holds no task until something that
-   needs every task asks for them (P.askTasks), such as a create or the
-   Inbox's search, and keeps them once asked until
-   the store resets (`asked`). The views show the server's own answers
-   meanwhile. From the ask until every task window answered, the registry's
+   needs every task asks for them (P.askTasks), a create, and keeps them
+   once asked until the store resets (`asked`). The views show the
+   server's own answers meanwhile. From the ask until every task window
+   answered, the registry's
    reports are partial and carry no task: they repaint the projects, people
    and Inbox, hold no write, and move the share loaded (stillLoading), and
    the store holds only the person's own new tasks. The paint of the
@@ -17602,9 +17616,10 @@ let tasksAll = false
    shows (tasksAll). */
 let tasksNext = false
 
-/** What asked for every task (P.askTasks): the readers that need every one
-    of them, and the scripts and the benchmark. */
-export type AskReason = 'create' | 'inbox' | 'script' | 'benchmark'
+/** What asked for every task (P.askTasks): a create, which needs every
+    one of them, and the scripts and the benchmark. The Inbox's search
+    asks the server instead (inbox.page). */
+export type AskReason = 'create' | 'script' | 'benchmark'
 
 /** Why a task load stopped while the rest of the workspace stays live:
     the sentence the readers that wait for every task show beside Try

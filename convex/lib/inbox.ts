@@ -20,10 +20,10 @@
  *
  * It also holds the rules of an Inbox row's text and kinds (messageDetail,
  * messageLine, inboxSearchText, itemKinds, kindsMatch), which the Inbox
- * page (model/inboxPage.ts) applies on the server. The app's list applies
- * the same rules in src/panels/Inbox.tsx (detailText, secondLine, its
- * search text and its kind filter) until it reads the page, so the two
- * find and show alike. */
+ * page (model/inboxPage.ts) applies on the server. The app's list shows
+ * the page's rows and applies none of them itself; the app's stand-in of
+ * the page (src/store/inboxStandIn.setup.ts) applies the same ones, so the
+ * two find and show alike. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'

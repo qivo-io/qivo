@@ -3,10 +3,10 @@
  * (schema.ts) across every seat of the login, with the order, Unread only,
  * Show snoozed, the kind filter and the search applied before the page is
  * cut, so a page holds up to INBOX_PAGE.rows groups whatever the filters
- * leave out. No app, REST or MCP caller reads it yet. The app lists the
- * workspace inbox part (lib/workspaceParts.ts readInbox) until a later
- * release switches its list to these pages, and REST and MCP are to page
- * with inboxWalk under their own cursors.
+ * leave out. The app's Inbox list (src/panels/Inbox.tsx) reads one page at
+ * a time, open, and moves Next at the shown page's live `next`, so it never
+ * sends `through`. REST and MCP are to page with inboxWalk under their own
+ * cursors.
  *
  * Who sees what. Each seat reads only its own items (recipient_id), and a
  * group shows only when its task is in the seat's working set, the rule of

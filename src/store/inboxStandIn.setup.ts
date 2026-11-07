@@ -56,7 +56,9 @@
    STOPPED_AFTER items (`stopped`), the same with `checked_to` null
    (`blind`), as when no item it examined passed the kind filter and the
    access check, the first shown group left out by a check that could not
-   finish (`unchecked`), and every cursor refused (`badCursor`). The
+   finish (`unchecked`), every cursor refused (`badCursor`), and a page
+   after the first that stopped without moving past its start (`stuck`),
+   which the server's `next` never does, for the list's fail-safe. The
    summary and the item ignore those. It imports nothing the benchmark's
    worker cannot load. */
 
@@ -101,6 +103,7 @@ export type ForcedInbox =
   | 'blind'
   | 'unchecked'
   | 'badCursor'
+  | 'stuck'
 
 /** What a read answers when it never answers (`loading`): nothing is sent
     for it. */
@@ -428,6 +431,15 @@ export function inboxPageStandIn(
     throw new ConvexError({ code: 'bad_request', message: NOT_INBOX_CURSOR })
   const after = args.after === undefined ? null : openCursor(args.after, scope)
   if (args.through !== undefined) openCursor(args.through, scope)
+  if (force === 'stuck' && args.after !== undefined)
+    return {
+      rows: [],
+      next: args.after,
+      stopped: true,
+      checked_to: null,
+      not_ready: [],
+      unchecked: false,
+    }
   const desc = args.order === 'newest'
   // the seats, the first one left out and named when it is not ready
   const seats = seatsOf(w)

@@ -5,6 +5,7 @@ import type { LiveQueries, LiveTransition } from '../../lib/liveQueries'
 import {
   type ForcedInbox,
   INBOX_NO_ANSWER,
+  INBOX_STAND_IN,
   inboxItemStandIn,
   inboxPageStandIn,
   inboxSummaryStandIn,
@@ -185,6 +186,11 @@ export function liveOver(client: Client): LiveQueries & {
   failWindow(from: string | null, error?: unknown, later?: boolean): void
   reconnect(only?: readonly string[]): void
   forceInbox(force: ForcedInbox | null, only?: InboxRead): void
+  /** the bounds of the stand-in this double answers the inbox reads with
+      (store/inboxStandIn.setup.ts INBOX_STAND_IN), which a test lowers
+      here, since vi.resetModules keeps this double and the module it
+      loaded */
+  inboxStandIn: typeof INBOX_STAND_IN
 } {
   const handlers = new Set<(transition: LiveTransition) => void>()
   // the handlers of views' own reads, which start no generation
@@ -488,6 +494,7 @@ export function liveOver(client: Client): LiveQueries & {
         new Set([...watched].flatMap(([token, w]) => (!names || names.has(w.name) ? [token] : []))),
       )
     },
+    inboxStandIn: INBOX_STAND_IN,
     batch(step) {
       batching = new Set()
       try {

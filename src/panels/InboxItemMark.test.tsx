@@ -679,8 +679,10 @@ describe('the Inbox pane and its pop-out', { timeout: 20_000 }, () => {
     if (!markUnread) throw new Error('missing Mark as unread')
     await act(async () => markUnread.click())
     await settle()
-    const unread = writes.find((w) => w.name === 'messages:markUnread')
+    // the item's unread write, by its organization and task
+    const unread = writes.find((w) => w.name === 'messages:unreadItem')
     if (!unread) throw new Error('the row menu sent no unread')
+    expect(unread.args).toEqual({ org_id: snap.orgs[0].id, issue_id: 'task-a' })
     return { rowOf, unread }
   }
 
@@ -718,6 +720,49 @@ describe('the Inbox pane and its pop-out', { timeout: 20_000 }, () => {
     expect(P.inboxItem?.item).toMatchObject({ unread_count: 1, through: Date.parse(at(5)) })
     expect(itemReads()).toHaveLength(2)
     expect(itemReads()[1]).toEqual(itemReads()[0])
+  })
+
+  it("reads later news on open again once the row's Mark as read of the open task is accepted", async () => {
+    const { rowOf, unread } = await markOpenRowUnread()
+    snap.messages = snap.messages.map(({ read_at: _, ...m }) => m)
+    await act(async () => publish())
+    await act(async () => unread.answer())
+    await settle()
+    // Mark as read from the open task's own row, the person's newer choice
+    const open = rowOf()?.querySelector<HTMLElement>('.inbox-message-open')
+    if (!open) throw new Error('missing the row')
+    await act(async () => {
+      open.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+    })
+    const markRead = [
+      ...document.querySelectorAll<HTMLButtonElement>('[data-msg-menu] button'),
+    ].find((b) => b.textContent?.includes('Mark as read'))
+    if (!markRead) throw new Error('missing Mark as read')
+    await act(async () => markRead.click())
+    await settle()
+    expect(itemReads()).toHaveLength(2)
+    expect(itemReads()[1]).toEqual({
+      org_id: snap.orgs[0].id,
+      issue_id: 'task-a',
+      through: Date.parse(at(5)),
+    })
+    // the row turned read at once
+    expect(rowOf()?.hasAttribute('data-unread')).toBe(false)
+    snap.messages = snap.messages.map((m) => ({ ...m, read_at: at(13) }))
+    await act(async () => publish())
+    const read = writes.filter((w) => w.name === 'messages:readItem')[1]
+    await act(async () => read.answer())
+    await settle()
+    // later news on the open task is read on open again
+    snap.messages = [...snap.messages, mine(message('task-a', 14, { kind: 'comment' }))]
+    await act(async () => publish())
+    await settle()
+    expect(itemReads()).toHaveLength(3)
+    expect(itemReads()[2]).toEqual({
+      org_id: snap.orgs[0].id,
+      issue_id: 'task-a',
+      through: Date.parse(at(14)),
+    })
   })
 
   it("draws the pane's divider at the item's first unread, and sends one read for one through from both", async () => {

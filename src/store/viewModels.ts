@@ -2,6 +2,7 @@
 import type { FunctionReturnType } from 'convex/server'
 import type { api } from '../../convex/_generated/api'
 import type { ArchivedPageRow } from '../../convex/lib/archivedTasks'
+import { messageLine } from '../../convex/lib/inbox'
 import { LIMITS } from '../../convex/lib/limits'
 import { reviewerOwns, taskOwnerId } from '../../convex/lib/review'
 import type { SyncStamp } from '../../convex/lib/teamSync'
@@ -13,6 +14,7 @@ import {
   tsToWeek,
 } from '../lib/dates'
 import { sampleAvatarUrl } from '../lib/demoAvatars'
+import type { InboxPageRow } from '../lib/inboxPage'
 import { DEFAULT_PLANNABLE_HOURS } from '../lib/workload'
 import type { Row } from './rows'
 
@@ -462,6 +464,67 @@ export type InboxMark = {
   removed?: true
   snoozedUntil?: string | null
   settled: boolean
+}
+
+/* One row of the Inbox list, as panels/Inbox.tsx shows it: its key (the
+   organization and task, inboxMarkKey), the task's uuid, number and live
+   title, its project and the project above it, its second line
+   (convex/lib/inbox.ts messageLine, which the server and the stand-in
+   write the same), the newest message's kind and the item's kinds, its
+   list time in ms, its counts, whether it is read, its snooze's end in ms
+   or null, and the cutoff the item actions take (`through`) with the
+   newest message's created_at (`latestAt`). */
+export const shapeInboxRow = (row: InboxPageRow) => ({
+  key: inboxMarkKey(row.org_id, row.issue_id),
+  org: row.org_id,
+  uuid: row.issue_id,
+  num: row.num,
+  title: row.title,
+  project: { id: row.project.id, name: row.project.name },
+  parent: row.parent === null ? null : { id: row.parent.id, name: row.parent.name },
+  line: messageLine(row.latest, row.latest.actor_name),
+  kind: row.latest.kind,
+  kinds: row.kinds,
+  ts: Date.parse(row.sort_at),
+  unreadCount: row.unread_count,
+  count: row.count,
+  dropped: row.dropped,
+  read: row.unread_count === 0,
+  snoozedUntil: row.snoozed_until === null ? null : Date.parse(row.snoozed_until),
+  through: row.through,
+  latestAt: row.latest_at,
+})
+export type InboxRowVM = ReturnType<typeof shapeInboxRow>
+
+/**
+ * Inbox row `row` as `mark` says while the person's write waits for the
+ * page to answer it, or null for a row it hides. A mark counts only while
+ * the row's cutoff is the mark's, so news that arrived after the press
+ * shows as the server keeps it. A read mark turns the row read, and hides
+ * it under Unread only (`unreadOnly`); an unread mark, a snooze and its
+ * end turn it unread, as the server leaves every message of the item
+ * unread; a snooze hides it without Show snoozed (`showSnoozed`); a
+ * removed mark hides it.
+ */
+export function markedRow(
+  row: InboxRowVM,
+  mark: InboxMark | undefined,
+  shown: { unreadOnly: boolean; showSnoozed: boolean },
+): InboxRowVM | null {
+  if (mark === undefined || mark.through !== row.through) return row
+  if (mark.removed) return null
+  let next = row
+  if (mark.read === true) next = { ...next, read: true, unreadCount: 0 }
+  if (mark.read === false || mark.snoozedUntil !== undefined)
+    next = { ...next, read: false, unreadCount: Math.max(next.count, 1) }
+  if (mark.snoozedUntil !== undefined)
+    next = {
+      ...next,
+      snoozedUntil: mark.snoozedUntil === null ? null : Date.parse(mark.snoozedUntil),
+    }
+  if (shown.unreadOnly && next.read) return null
+  if (!shown.showSnoozed && next.snoozedUntil !== null) return null
+  return next
 }
 
 /* one archived task outside the snapshot, as the Archived tasks page lists

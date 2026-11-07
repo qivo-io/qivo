@@ -1,14 +1,25 @@
-/* Inbox groups messages by task, displaying the newest message and unread
-   count beside an embedded IssueDetail. Opening a row opens its task in the
+/* Inbox lists the server's pages of task groups (convex/inbox.ts page), one
+   row a task with its newest message and unread count, 50 rows a page with
+   Previous and Next (lib/pagedList.ts usePagedPages), beside an embedded
+   IssueDetail. The order, Unread only, Show snoozed, the kinds and the
+   desktop search are the page's arguments (lib/inboxPage.ts inboxArgs):
+   the list never filters, searches, sorts or counts rows itself, and only
+   the marks of the person's own writes in flight change how a row shows
+   (store/planner.ts P.inboxMarks). The page on screen stays live while the
+   Inbox shows, reads nothing while the tab hides or another view shows a
+   kept Inbox, and only it and the starts behind it are held. Its notes say
+   what its answer says: how far a stopped page looked, a seat whose
+   messages are being prepared, a group a check left out, and the empty
+   sentences only on a complete answer. Opening a row opens its task in the
    pane, whose window freezes the "New" divider from the task's inbox item
-   before it reads the item, as every task window does (IssueDetail).
-   Reading prunes the group to its latest message; retention or removal clears
-   it. Row menus act on the whole group, with separate inbox-wide commands.
-   Snoozed groups stay hidden until server wake unless "Show snoozed" is set.
-   Server rules expose only the viewer's messages and allow read/snooze/delete
-   actions; notification content remains server-owned. */
+   before it reads the item, as every task window does (IssueDetail). Row
+   menus act on the row's item by its organization and task with the row's
+   cutoff (P.readItem, P.unreadItem, P.removeItem, P.snoozeItem), with
+   separate inbox-wide commands. Server rules expose only the viewer's
+   messages and allow read/snooze/delete actions; notification content
+   remains server-owned. */
 import { CheckCheck, ListX, Minus, Plus } from 'lucide-react'
-import React, { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import React, { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,7 +31,6 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { DropdownChevron } from '@/components/ui/select'
 import {
   HoverTooltip,
@@ -29,6 +39,11 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { api } from '../../convex/_generated/api'
+import { LIMITS } from '../../convex/lib/limits'
+import { LimitedInput } from '../components/LimitedField'
+import { PageFold } from '../components/pageFold'
+import { pagesState, useMoveFocus } from '../components/pageMoves'
 import {
   AnchoredPop,
   Icon,
@@ -38,15 +53,29 @@ import {
   ProjectName,
   Seg,
 } from '../components/qivo'
-import { TasksFailedNote } from '../components/TasksLoading'
 import { fmtDateTime } from '../lib/dates'
 import { closeOrAsk, typesText } from '../lib/discardQuestion'
 import { restoreFocus } from '../lib/focusVisibility'
+import {
+  emptyLine,
+  heldLine,
+  type InboxFilters,
+  type InboxKind,
+  type InboxPageAnswer,
+  type InboxPageRow,
+  inboxArgs,
+  inboxBatch,
+  inboxWords,
+  maySnooze,
+  notReadyLine,
+  UNCHECKED_LINE,
+} from '../lib/inboxPage'
 import { UnsentScopeContext, useUnsentScope } from '../lib/leaveGuard'
+import { useLiveView } from '../lib/liveView'
 import { noProjectsHint, seesNoProject } from '../lib/noProjects'
 import { notificationPermission, requestNotificationPermission } from '../lib/notify'
+import { pageEnd, usePagedPages, useSettledSearch } from '../lib/pagedList'
 import { sameTask, taskFacts } from '../lib/router'
-import { matchesAllWords } from '../lib/search'
 import { fmtSnoozeUntil, SNOOZE_UNIT_MS, type SnoozeUnit, snoozeStepMax } from '../lib/snooze'
 import { taskRef } from '../lib/taskReference'
 import { useMobile } from '../lib/useMobile'
@@ -58,8 +87,9 @@ import {
   bulkNoticeText,
   bulkProgressText,
 } from '../store/inboxBulk'
-import { type MessageGroupVM, type MessageVM, P } from '../store/planner'
+import { P } from '../store/planner'
 import { usePlannerVersion } from '../store/usePlannerVersion'
+import { type InboxRowVM, inboxMarkKey, markedRow, shapeInboxRow } from '../store/viewModels'
 import { IssueDetail } from './IssueDetail'
 import { useTaskKey } from './taskKey'
 
@@ -158,83 +188,44 @@ const KIND_ICONS: Record<string, string> = {
   change: 'history',
 }
 
-/* 0075 persisted one privacy-fenced fallback with the former UI noun.
-   Normalize those old rows at render time; new messages already use task. */
-function detailText(m: MessageVM): string {
-  return String(m.detail || '').replace('an issue in another project', 'a task in another project')
-}
-
-/* A null actor is a since-deleted user (the FK
-   set-null cascade can't tell them apart) — the same neutral "Someone" the
-   activity feed and comments use, never a false "API" claim. */
-function secondLine(m: MessageVM): string {
-  if (m.kind === 'mention') {
-    const u = m.actor ? P.user(m.actor) : null
-    return `from @${u ? u.name : 'Someone'}`
-  }
-  if (m.kind === 'comment') return 'New comment'
-  return detailText(m)
-}
-
-/* Where the row's task lives: its project, then its sub-project. Null while
-   the workspace does not hold the task, which before something asks for
-   every task is every task (store/planner.ts P.askTasks), or when an older
-   message outlives its task in the workspace; the row still carries the
-   title it was written with even though it cannot say where the task is. */
-function itemPlace(g: MessageGroupVM) {
-  const it = g.issueKey ? P.issueById[g.issueKey] : null
-  if (!it) return null
-  const meta = P.metaOf(it.project)
-  const sub = P.project(it.project)
-  const parts = [meta, meta && sub && meta.id !== sub.id ? sub : null].filter(Boolean)
-  return parts.length ? { meta, parts } : null
-}
-
 /** The line an inbox row shows when the server's item cap deleted `n` of
     its earlier unread updates. */
-/** What the Inbox's "Older messages are not listed" line adds about the
-    bulk actions that reach the messages it leaves out. */
-const inboxReachLine = (reach: { markAllRead: boolean; removeRead: boolean }) =>
-  reach.markAllRead && reach.removeRead
-    ? ' Mark all as read and Remove all read reach them too.'
-    : reach.markAllRead
-      ? ' Mark all as read reaches them too.'
-      : reach.removeRead
-        ? ' Remove all read reaches them too.'
-        : ''
-
 const droppedLine = (n: number) =>
   n === 1
     ? '1 earlier update on this task is not listed'
     : `${n.toLocaleString('en-US')} earlier updates on this task are not listed`
 
 function MessageRow({
-  g,
+  row,
   selected,
   menuOpen,
   onSelect,
   onMenu,
 }: {
-  g: MessageGroupVM
+  row: InboxRowVM
   selected: boolean
   menuOpen: boolean
-  onSelect: (g: MessageGroupVM) => void
-  onMenu: (e: React.MouseEvent, g: MessageGroupVM) => void
+  onSelect: (row: InboxRowVM) => void
+  onMenu: (e: React.MouseEvent, row: InboxRowVM) => void
 }) {
-  const place = itemPlace(g)
   // the imperative hover below has to fall back to THIS, not to transparent —
   // the pointer leaves the row the moment its context menu opens
   const bg = selected ? 'var(--accent-soft)' : menuOpen ? 'var(--hover)' : 'transparent'
+  const snoozed = row.snoozedUntil !== null
+  const places = row.parent ? [row.parent, row.project] : [row.project]
   return (
     <div
-      data-message={g.id}
-      data-kind={g.kind}
-      data-kinds={g.kinds.join(' ')}
-      data-unread={g.read ? undefined : ''}
-      data-snoozed={g.snoozed ? '' : undefined}
-      data-count={g.unreadCount}
-      data-held={g.count}
-      onContextMenu={(e) => onMenu(e, g)}
+      data-message={row.uuid}
+      data-message-org={row.org}
+      data-message-key={row.key}
+      data-selected={selected ? '' : undefined}
+      data-kind={row.kind}
+      data-kinds={row.kinds.join(' ')}
+      data-unread={row.read ? undefined : ''}
+      data-snoozed={snoozed ? '' : undefined}
+      data-count={row.unreadCount}
+      data-held={row.count}
+      onContextMenu={(e) => onMenu(e, row)}
       style={{ background: bg }}
       className="[display:flex] [gap:8px] [padding:8px] [border-radius:var(--r-md)] [cursor:pointer]"
       onMouseEnter={(e) => {
@@ -248,97 +239,94 @@ function MessageRow({
         type="button"
         variant="unstyled"
         className="inbox-message-open flex min-w-0 flex-1 items-start gap-2 border-0 bg-transparent p-0 text-left text-text-1"
-        onClick={() => onSelect(g)}
+        onClick={() => onSelect(row)}
       >
         <div className="[flex:1] [min-width:0]">
           <div className="[display:flex] [align-items:baseline] [gap:8px]">
             <span
               data-msg-title
-              className={`flex-1 min-w-0 truncate text-base ${g.snoozed ? 'text-text-2' : 'text-text-1'} ${g.read ? 'font-normal' : 'font-semibold'}`}
+              className={`flex-1 min-w-0 truncate text-base ${snoozed ? 'text-text-2' : 'text-text-1'} ${row.read ? 'font-normal' : 'font-semibold'}`}
             >
-              {g.issueTitle}
+              {row.title}
             </span>
             {/* how much has happened to this task since you last read it. The
               line below shows the newest of them; the rest are listed when you
               open it. One alone needs no number — the dot already says it. */}
-            {g.unreadCount > 1 && (
-              <HoverTooltip content={`${g.unreadCount} new updates`}>
+            {row.unreadCount > 1 && (
+              <HoverTooltip content={`${row.unreadCount} new updates`}>
                 <span
                   tabIndex={-1}
                   data-msg-count
                   className="[font-size:var(--fs-xs)] [font-weight:700] !font-mono [flex-shrink:0] [color:var(--text-1)] [background:var(--accent-soft)] [border-radius:var(--r-pill)] [padding:1px_6px]"
                 >
-                  {g.unreadCount}
+                  {row.unreadCount}
                 </span>
               </HoverTooltip>
             )}
             {/* a sleeping row says when it returns instead of how old it is */}
-            {g.snoozedUntil !== null ? (
-              <HoverTooltip content={`Returns ${fmtDateTime(new Date(g.snoozedUntil))}`}>
+            {row.snoozedUntil !== null ? (
+              <HoverTooltip content={`Returns ${fmtDateTime(new Date(row.snoozedUntil))}`}>
                 <span
                   tabIndex={-1}
                   data-msg-until
                   className="[font-size:var(--fs-xs)] [color:var(--text-3)] !font-mono [flex-shrink:0] inline-flex items-center gap-1"
                 >
                   <Icon name="clockFading" size={12} color="var(--text-3)" />
-                  {fmtSnoozeUntil(g.snoozedUntil)}
+                  {fmtSnoozeUntil(row.snoozedUntil)}
                 </span>
               </HoverTooltip>
             ) : (
-              <HoverTooltip content={new Date(g.ts).toLocaleString()}>
+              <HoverTooltip content={new Date(row.ts).toLocaleString()}>
                 <span
                   tabIndex={-1}
                   data-msg-age
                   className="[font-size:var(--fs-xs)] [color:var(--text-3)] !font-mono [flex-shrink:0]"
                 >
-                  {fmtMsgAge(g.ts)}
+                  {fmtMsgAge(row.ts)}
                 </span>
               </HoverTooltip>
             )}
           </div>
           {/* …and under the title, WHERE it is — project → sub-project, the
-            same breadcrumb notation the task window's own crumb uses. This
-            line used to carry the newest message ("Priority: High → Urgent"),
-            which the counter beside the title already promises and the
-            window's Activity section already enumerates in full; the one
-            thing the row could not say was which board the task sits on.
-            An item whose task is not loaded here has no location to give, so
-            it falls back to saying what happened. */}
+            same breadcrumb notation the task window's own crumb uses, from
+            the page's row, so every row says it, whether or not the
+            workspace holds its task. The counter beside the title promises
+            the news and the window's Activity section lists it in full;
+            the one thing the row could not say was which board the task
+            sits on. */}
           <div
             data-msg-line2
             className="[margin-top:3px] [font-size:var(--fs-sm)] [color:var(--text-2)] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]"
           >
-            {place
-              ? place.parts.map((p, i) => (
-                  <React.Fragment key={p.id}>
-                    {i > 0 && (
-                      <Icon
-                        name="chevronRight"
-                        size={11}
-                        color="var(--text-3)"
-                        className="[display:inline-block] [vertical-align:-1px] [margin:0_1px]"
-                      />
-                    )}
-                    <span data-msg-crumb>
-                      <ProjectName project={p} />
-                    </span>
-                  </React.Fragment>
-                ))
-              : secondLine(g)}
+            {places.map((p, i) => (
+              <React.Fragment key={p.id}>
+                {i > 0 && (
+                  <Icon
+                    name="chevronRight"
+                    size={11}
+                    color="var(--text-3)"
+                    className="[display:inline-block] [vertical-align:-1px] [margin:0_1px]"
+                  />
+                )}
+                <span data-msg-crumb>
+                  <ProjectName project={p} />
+                </span>
+              </React.Fragment>
+            ))}
           </div>
-          <div className="inbox-message-preview">{secondLine(g)}</div>
+          <div className="inbox-message-preview">{row.line}</div>
           {/* an item keeps at most 50 unread updates (convex/model/messages.ts
             ITEM_UNREAD_CAP); say how many older ones it no longer lists */}
-          {g.dropped > 0 && (
+          {row.dropped > 0 && (
             <div
-              data-msg-dropped={g.dropped}
+              data-msg-dropped={row.dropped}
               className="[margin-top:3px] [font-size:var(--fs-xs)] [color:var(--text-3)]"
             >
-              {droppedLine(g.dropped)}
+              {droppedLine(row.dropped)}
             </div>
           )}
         </div>
-        {!g.read && (
+        {!row.read && (
           <span
             data-msg-dot
             className="[width:7px] [height:7px] [border-radius:50%] [background:var(--primary)] [flex-shrink:0] [align-self:center]"
@@ -350,8 +338,8 @@ function MessageRow({
         variant="ghost"
         size="icon"
         className="inbox-message-actions"
-        aria-label={`Message actions: ${g.issueTitle}`}
-        onClick={(e) => onMenu(e, g)}
+        aria-label={`Message actions: ${row.title}`}
+        onClick={(e) => onMenu(e, row)}
       >
         <Icon name="more" size={16} />
       </Button>
@@ -370,41 +358,172 @@ function PaneNote({ children }: { children?: React.ReactNode }) {
   )
 }
 
-/** A row, by its item id, and the rows the list showed with it, in order,
-    for focus once the row leaves (focusRowAfter). A null id stands for the
-    whole list, whose first row takes focus. */
+/** A row, by its key (organization and task), and the rows the list showed
+    with it, in order, for focus once the row leaves (focusRowAfter). A
+    null key stands for the whole list, whose first row takes focus. */
 type ListedRows = { id: string | null; ids: string[] }
+
+/** The row menu: where it opened, and the row it opened on as it showed
+    then, which its actions name with that row's cutoff, also when the
+    live page moves or drops the row while the menu is open. */
+type RowMenu = { x: number; y: number; row: InboxRowVM | null }
+
+/** The task a row opens: its handle where the workspace holds the task in
+    the row's organization, else a reference with the organization, the
+    number and the uuid, as two organizations can hold one task id. */
+function rowTask(row: InboxRowVM): string {
+  const open = P.openTask(row.uuid, row.org, row.num)
+  const held = P.issueById[open]
+  return held && held.org !== row.org
+    ? taskRef({ org: row.org, num: row.num, uuid: row.uuid })
+    : open
+}
+
+/** The organization `org` as the notes name it. */
+const orgName = (org: string) => P.orgs.find((o) => o.id === org)?.name ?? 'an organization'
 
 export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadmap }) {
   const mobile = useMobile()
   const listScrollRef = useRef<HTMLDivElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
   const queueScrollTop = useRef(0)
-  const [sort, setSort] = useState('new') // "new" | "old"
+  const [sort, setSort] = useState<'new' | 'old'>('new')
   const [unreadOnly, setUnreadOnly] = useState(false)
   const [showSnoozed, setShowSnoozed] = useState(false) // sleeping items are hidden by default
-  const [kinds, setKinds] = useState([] as string[]) // empty = all
+  const [kinds, setKinds] = useState<InboxKind[]>([]) // empty = all
   // the row menu's Hours / Days steppers — back to 1 on every open
   const [snoozeFor, setSnoozeFor] = useState({ hours: 1, days: 1, weeks: 1 })
   const [search, setSearch] = useState('')
   const [, setNoteN] = useState(0) // re-render after a permission grant
-  const [menu, setMenu] = useState(null as { x: number; y: number; id: string | null } | null) // right-click menu
+  const [menu, setMenu] = useState<RowMenu | null>(null) // right-click menu
   // the rows the list showed when the pane's row was last among them, and
   // when the row menu acted on its row or on the whole list, for focus once
   // that row leaves (focusRowAfter)
   const paneRows = useRef<ListedRows | null>(null)
   const menuRows = useRef<ListedRows | null>(null)
   // the bulk action, which the store runs and keeps (store/inboxBulk.ts),
-  // so an Inbox shown again shows it as it goes on
+  // so an Inbox shown again shows it as it goes on, and the marks of the
+  // person's writes on rows
   usePlannerVersion('inbox')
   const bulk = P.inboxBulk
   const bulkRuns = bulkBusy(bulk)
   // where the bulk action was pressed: a toolbar button, or the row menu
   const bulkFrom = useRef<BulkAction | 'menu' | null>(null)
   // true while the unread summary has no answer, else from its seat flags,
-  // which also count messages the list does not show (P.canMarkAllRead,
+  // which also count messages no page shows (P.canMarkAllRead,
   // P.canRemoveRead, store/planner.ts deriveInboxFlags)
   const hasReadMessages = P.canRemoveRead
   const hasUnreadMessages = P.canMarkAllRead
+
+  /* The page on screen (lib/pagedList.ts usePagedPages). The desktop
+     search goes to the server once typing rests, up to LIMITS.search; past
+     it the page keeps the last text within it and the fold says the
+     limit. A phone has no search, so its list sends none, and a change of
+     width starts the list again. A change of any filter or the search
+     starts again at the first page and drops the starts behind it. */
+  const { tooLong, settled } = useSettledSearch(mobile ? '' : search, LIMITS.search)
+  const filters: InboxFilters = {
+    order: sort === 'old' ? 'oldest' : 'newest',
+    unreadOnly,
+    showSnoozed,
+    kinds,
+    search: settled,
+  }
+  const page = usePagedPages<InboxPageAnswer, InboxPageRow>({
+    key: JSON.stringify(inboxArgs(filters, null)),
+    query: api.inbox.page,
+    args: (after) => inboxArgs(filters, after),
+    batch: inboxBatch,
+  })
+  const shaped = useMemo(() => page.rows.map(shapeInboxRow), [page.rows])
+  // the rows as the person's own writes in flight show them, which only
+  // ever turn a row read, unread, snoozed or woken, or hide it
+  const marks = P.inboxMarks
+  const rows = shaped.flatMap((row) => {
+    const shown = markedRow(row, marks.get(row.key), { unreadOnly, showSnoozed })
+    return shown ? [shown] : []
+  })
+  // A settled mark ends once the page shows an answer that is current
+  // after it settled, which holds the write, so the row shows as the
+  // server keeps it. A page that waits for a fresh answer, as after a
+  // hidden tab, a kept Inbox shown again or a reconnect, keeps the marks.
+  // An Inbox mounted afresh reads afresh, so it ends those settled before.
+  const settledMarks = page.current ? [...marks.values()].filter((mark) => mark.settled) : []
+  useEffect(() => {
+    if (settledMarks.length) P.endInboxMarks(settledMarks)
+  })
+  useLayoutEffect(() => {
+    if (page.phase === 'first') P.endInboxMarks([...P.inboxMarks.values()])
+  }, [])
+
+  // a search or a filter that narrows the list, which pageEnd answers
+  // `none` for; Show snoozed widens it
+  const searching = settled !== ''
+  const filtered = searching || unreadOnly || kinds.length > 0
+  const end = pageEnd(page, filtered)
+  /* An empty first page with Show snoozed off cannot tell whether snoozed
+     groups exist, so it asks the first page with them once, and says
+     "No messages yet." only when that page says there are none. Until it
+     answers, the end says it loads. */
+  const asksSnoozed = end === 'empty' && !showSnoozed
+  const snoozedPage = useLiveView<InboxPageAnswer>(
+    api.inbox.page,
+    asksSnoozed ? JSON.stringify(inboxArgs({ ...filters, showSnoozed: true }, null)) : null,
+  )
+  const snoozedKnown = snoozedPage.key !== null && snoozedPage.value !== undefined
+  const snoozedMay =
+    !asksSnoozed || snoozedPage.error !== undefined
+      ? true
+      : snoozedPage.value !== undefined && maySnooze(snoozedPage.value)
+  const foldEnd = asksSnoozed && !snoozedKnown && snoozedPage.error === undefined ? 'loading' : end
+  const words = inboxWords(page.answer, {
+    order: filters.order,
+    search: searching,
+    filtered,
+    empty: emptyLine({
+      snoozed: asksSnoozed && snoozedMay,
+      hint: seesNoProject() ? noProjectsHint() : null,
+    }),
+    timeOf: (iso) => fmtDateTime(new Date(iso)),
+  })
+  // the notes above the rows of an answer the page shows; an answer with
+  // no rows says them in the fold's held line instead
+  const notes =
+    page.phase === 'held'
+      ? []
+      : [
+          { key: 'not-ready', text: notReadyLine(page.answer, orgName) },
+          { key: 'unchecked', text: page.answer?.unchecked ? UNCHECKED_LINE : null },
+        ].filter((note) => note.text !== null)
+  // the empty sentences take focus when a phone's list lost its last row
+  // (focusRowAfter)
+  const emptyEnd = foldEnd === 'none' || foldEnd === 'empty' || foldEnd === 'nomore'
+  const state = pagesState(page)
+  const move = useMoveFocus(
+    page,
+    'inbox-page',
+    () => listScrollRef.current?.querySelector<HTMLElement>('.inbox-message-open') ?? null,
+    () =>
+      searchRef.current ?? listScrollRef.current?.querySelector<HTMLElement>('[data-inbox-empty]'),
+  )
+  // a page move shows the new page from its top
+  const at = `${page.starts.length}:${String(page.starts[page.starts.length - 1])}`
+  const shownAt = useRef(at)
+  useLayoutEffect(() => {
+    if (shownAt.current === at) return
+    shownAt.current = at
+    if (listScrollRef.current) listScrollRef.current.scrollTop = 0
+  }, [at])
+
+  /** The rows on screen at a bulk press, which its marks follow. */
+  const shownRows = () =>
+    rows.map((row) => ({
+      org: row.org,
+      task: row.uuid,
+      through: row.through,
+      read: row.read,
+      snoozed: row.snoozedUntil !== null,
+    }))
   const runBulkAction = (action: BulkAction) => {
     if (bulkRuns || (action === 'read' ? !hasUnreadMessages : !hasReadMessages)) return
     // from the row menu, focus goes to the first row still listed, at once
@@ -414,7 +533,9 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     bulkFrom.current = menu ? 'menu' : action
     setMenu(null)
     // a long action asks first (the keep-open notice below)
-    void (action === 'read' ? P.markAllMessagesRead(true) : P.deleteReadMessages(true))
+    void (action === 'read'
+      ? P.markAllMessagesRead(true, shownRows())
+      : P.deleteReadMessages(true, shownRows()))
   }
   const bulkActionButtons = (
     <TooltipProvider>
@@ -482,9 +603,6 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
      and the window shows it from the server, or says it loads, can't be
      opened, or couldn't be opened. */
   const paneId = openIssue ?? null
-  // the pane's task's uuid once known, from the workspace, the reference or
-  // its answer, which lights its row
-  const paneUuid = taskFacts(paneId)?.uuid ?? null
   // one key while the pane is on the same task, so neither a reference
   // turning into its handle nor a change of the home organization, which
   // moves handles, remounts the pane's window
@@ -535,66 +653,32 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     return () => window.removeEventListener('keydown', k)
   }, [onExit, paneId, openTask])
 
-  const q = mobile ? '' : search.trim()
-  // A row finds its task by ID and project names only where the workspace
-  // holds the task (itemPlace), so a search asks for every task on its
-  // first word and says that it searches every task once they have loaded,
-  // never showing what it matched so far as the whole result. A row's
-  // press asks nothing: the pane reads its task (IssueDetail).
-  const searching = q !== ''
-  useEffect(() => {
-    if (searching) P.askTasks('inbox')
-  }, [searching])
-  const searchLoad = searching && !P.tasksHeld() ? P.taskLoad() : null
-  const visible = P.messageGroups
-    .filter((g) => showSnoozed || !g.snoozed)
-    .filter((g) => !unreadOnly || !g.read)
-    // an item matches a kind filter when ANY of its folded messages does, so
-    // a mention that arrived behind a change is still findable
-    .filter((g) => !kinds.length || g.kinds.some((k) => kinds.includes(k)))
-    .filter((g) => {
-      if (!q) return true
-      const place = itemPlace(g)
-      // the folded messages and their actors stay in the haystack even though
-      // the row no longer prints them — searching for what somebody changed is
-      // still how you find the item it changed. The project names are new
-      // here because they are now ON the row: what you can read, you can find.
-      const hay = [g.issueTitle, g.issueLabel, secondLine(g)]
-        .concat(place ? place.parts.map((p) => p.name) : [])
-        .concat(
-          g.items.map((m) => {
-            const actor = m.actor ? P.user(m.actor) : null
-            return `${actor ? actor.name : 'API'}\n${detailText(m)}`
-          }),
-        )
-        .filter(Boolean)
-        .join('\n')
-      return matchesAllWords(hay, q)
-    })
-  if (sort === 'old') visible.reverse() // P.messageGroups is newest-first
-
-  // which row is lit: the one whose task the pane holds
-  const selected = paneUuid
-  // the task a row opens: its handle where the workspace holds it, else a
-  // reference by the message's organization and the task's uuid
-  const rowTask = (g: MessageGroupVM) =>
-    g.issueKey ?? taskRef({ org: g.issueOrg, uuid: g.issueUuid })
-  const select = (g: MessageGroupVM) =>
-    closeOrAsk([!sameTask(rowTask(g), openIssue) && taskScope], () => selectNow(g))
+  // which row is lit: the one whose organization and task the pane holds,
+  // by uuid alone while the pane's reference names no organization yet
+  const facts = taskFacts(paneId)
+  const lit = (row: InboxRowVM) =>
+    !!facts?.uuid && facts.uuid === row.uuid && (!facts.org || facts.org === row.org)
+  // the pane's row's key, also while the page does not show it
+  const paneRow = facts?.uuid
+    ? facts.org
+      ? inboxMarkKey(facts.org, facts.uuid)
+      : (rows.find(lit)?.key ?? null)
+    : null
+  const select = (row: InboxRowVM) =>
+    closeOrAsk([!sameTask(rowTask(row), openIssue) && taskScope], () => selectNow(row))
   // A press only opens the row's task. The pane's window freezes where the
   // unread part starts from the task's inbox item and then reads the whole
-  // item, as any task window does, also for updates the list does not load,
-  // and that read's paint turns the row read. A snoozed row's item is not
-  // read, as it is a reminder that returns unread (P.readOnOpen).
-  const selectNow = (g: MessageGroupVM) => {
+  // item, as any task window does, and that read's mark turns the row read
+  // (P.inboxMarks). A snoozed row's item is not read, as it is a reminder
+  // that returns unread (P.readOnOpen).
+  const selectNow = (row: InboxRowVM) => {
     queueScrollTop.current = listScrollRef.current?.scrollTop || 0
     // the list as it shows now, which a read row leaves under Unread only
-    paneRows.current = { id: g.id, ids: visible.map((x) => x.id) }
-    showTask(rowTask(g))
+    paneRows.current = { id: row.key, ids: rows.map((x) => x.key) }
+    showTask(rowTask(row))
   }
-  const menuGroup = menu ? P.messageGroups.find((g) => g.id === menu.id) : null
   const filterCount = (unreadOnly ? 1 : 0) + (showSnoozed ? 1 : 0) + kinds.length
-  const toggleKind = (k: string) =>
+  const toggleKind = (k: InboxKind) =>
     setKinds((cur) => (cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k]))
   const perm = notificationPermission()
 
@@ -607,10 +691,9 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
      to the empty list's line. The menu's Mark all as read and Remove all
      read start at the first row, and the toolbar's at their own button.
      Focus that went elsewhere stays there. */
-  const paneRow = paneUuid
   useLayoutEffect(() => {
     if (!paneRow) return
-    const ids = visible.map((g) => g.id)
+    const ids = rows.map((row) => row.key)
     if (ids.includes(paneRow)) paneRows.current = { id: paneRow, ids }
     else if (paneRows.current?.id !== paneRow) paneRows.current = { id: paneRow, ids: [paneRow] }
   })
@@ -621,24 +704,34 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     if (!list || list.closest(OUT_OF_USE)) return false
     return !active || active === document.body || !active.isConnected
   }
+  // a focus move that found nothing to take focus yet, as a phone's list
+  // whose last row left before its page answered with the empty line,
+  // which the next renders try again while focus stays nowhere
+  const focusLater = useRef<ListedRows | null>(null)
   /** Gives focus to `rows.id`'s row or what took its place, while focus is
       nowhere and the Inbox shows. */
-  const focusRowAfter = (rows: ListedRows) => {
+  const focusRowAfter = (listed: ListedRows) => {
+    focusLater.current = null
     const list = listScrollRef.current
     if (!list || !focusFree()) return
-    const { id, ids } = rows
+    const { id, ids } = listed
     const at = id === null ? -1 : ids.indexOf(id)
     const order =
       id === null ? [] : [id, ...ids.slice(at + 1), ...ids.slice(0, Math.max(at, 0)).reverse()]
-    const shown = [...list.querySelectorAll<HTMLElement>('[data-message]')]
-    const listed = new Map(shown.map((row) => [row.dataset.message, row]))
-    const row = order.map((item) => listed.get(item)).find(Boolean) ?? shown[0]
-    restoreFocus(
+    const shown = [...list.querySelectorAll<HTMLElement>('[data-message-key]')]
+    const byKey = new Map(shown.map((row) => [row.dataset.messageKey, row]))
+    const row = order.map((item) => byKey.get(item)).find(Boolean) ?? shown[0]
+    const target =
       row?.querySelector<HTMLElement>('.inbox-message-open') ??
-        list.closest('[data-inbox]')?.querySelector<HTMLElement>('[data-inbox-search]') ??
-        list.querySelector<HTMLElement>('[data-inbox-empty]'),
-    )
+      list.closest('[data-inbox]')?.querySelector<HTMLElement>('[data-inbox-search]') ??
+      list.querySelector<HTMLElement>('[data-inbox-empty]')
+    if (target) restoreFocus(target)
+    else focusLater.current = listed
   }
+  useEffect(() => {
+    const listed = focusLater.current
+    if (listed) focusRowAfter(listed)
+  })
   // Effects, not layout effects: a phone's task window, which is modal,
   // releases the list it made inert, and gives focus back where it can, in
   // its own effect's cleanup, which runs before these.
@@ -718,22 +811,26 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
 
   // MENU_W: AnchoredPop centers on x, so a cursor menu shifts by half its width
   const MENU_W = 280
-  const openMenu = (e: React.MouseEvent, g?: MessageGroupVM) => {
+  const openMenu = (e: React.MouseEvent, row?: InboxRowVM) => {
     e.preventDefault()
     e.stopPropagation()
-    setMenu({ x: e.clientX + MENU_W / 2, y: e.clientY, id: g?.id ?? null })
+    setMenu({ x: e.clientX + MENU_W / 2, y: e.clientY, row: row ?? null })
     setSnoozeFor({ hours: 1, days: 1, weeks: 1 })
   }
-  /** Runs `fn` on the menu's row and closes the menu, giving focus back to
-      the row or to what took its place (focusRowAfter), unless `fn`
-      `leaves` the Inbox. */
-  const runOnItem = (fn: (g: MessageGroupVM) => void, leaves = false) => {
-    if (menuGroup) {
-      if (!leaves) menuRows.current = { id: menuGroup.id, ids: visible.map((g) => g.id) }
-      fn(menuGroup)
+  /** Runs `fn` on the row the menu opened on, as it showed then, and
+      closes the menu, giving focus back to the row or to what took its
+      place (focusRowAfter), unless `fn` `leaves` the Inbox. */
+  const runOnItem = (fn: (row: InboxRowVM) => void, leaves = false) => {
+    const row = menu?.row
+    if (row) {
+      if (!leaves) menuRows.current = { id: row.key, ids: rows.map((x) => x.key) }
+      fn(row)
     }
     setMenu(null)
   }
+  const menuRow = menu?.row ?? null
+  // the row's project, which Open task in board opens the Board of
+  const menuBoard = menuRow ? P.project(menuRow.project.id) : undefined
 
   return (
     <div
@@ -869,7 +966,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
                     Show snoozed
                   </MenuItem>
                   <MenuDivider />
-                  {Object.keys(KIND_LABELS).map((k) => (
+                  {(Object.keys(KIND_LABELS) as InboxKind[]).map((k) => (
                     <MenuItem key={k} active={kinds.includes(k)} onClick={() => toggleKind(k)}>
                       <Icon name={KIND_ICONS[k]} size={13} />
                       {KIND_LABELS[k]}
@@ -903,8 +1000,13 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
               className="inbox-search-row [display:flex] [align-items:center] [gap:8px] h-control [padding:0_8px] [margin-bottom:8px] [background:var(--surface-1)] [border:1px_solid_var(--border)] [border-radius:var(--r-md)]"
             >
               <Icon name="search" size={16} color="var(--text-3)" />
-              <Input
+              {/* the server searches the whole Inbox once typing rests, up
+                  to LIMITS.search; past it the fold says the limit */}
+              <LimitedInput
+                limit={LIMITS.search}
+                ref={searchRef}
                 data-inbox-search
+                aria-label="Search messages"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Filter messages…"
@@ -914,7 +1016,8 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
                     setSearch('')
                   }
                 }}
-                className="h-full min-w-0 flex-1 rounded-none border-none bg-transparent p-0 font-sans text-base text-text-1 shadow-none focus-visible:outline-none focus-visible:ring-0"
+                wrapperClassName="h-full flex-1"
+                className="h-full min-w-0 rounded-none border-none bg-transparent p-0 font-sans text-base text-text-1 shadow-none focus-visible:outline-none focus-visible:ring-0"
               />
               {search && (
                 <Button
@@ -922,6 +1025,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
                   variant="ghost"
                   size="icon"
                   className="size-6 shrink-0"
+                  aria-label="Clear the search"
                   onClick={() => setSearch('')}
                 >
                   <Icon name="close" size={12} />
@@ -930,61 +1034,53 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
             </div>
           )}
         </div>
-        <div ref={listScrollRef} className="inbox-list-scroll" onContextMenu={(e) => openMenu(e)}>
-          {/* a search waits for every task, and the rows it matched so far
-              show below this note, never as the whole result */}
-          {searchLoad?.state === 'failed' ? (
-            <div
-              data-inbox-search-wait="failed"
-              className="[padding:10px] [font-size:var(--fs-sm)] [color:var(--text-2)]"
+        <div
+          ref={listScrollRef}
+          className="inbox-list-scroll"
+          data-inbox-page-state={state}
+          aria-busy={
+            state === 'loading' || state === 'refreshing' || page.moving !== null || undefined
+          }
+          onContextMenu={(e) => openMenu(e)}
+        >
+          {notes.map((note) => (
+            <p
+              key={note.key}
+              data-inbox-note={note.key}
+              className="m-0 [padding:10px] [font-size:var(--fs-sm)] [color:var(--text-2)]"
             >
-              <TasksFailedNote reason={searchLoad.reason} retrying={searchLoad.retrying} />
-            </div>
-          ) : (
-            searchLoad && (
-              <div
-                data-inbox-search-wait
-                role="status"
-                className="[padding:10px] [font-size:var(--fs-sm)] [color:var(--text-2)]"
-              >
-                Searching every task once it has loaded…
-              </div>
-            )
-          )}
-          {visible.map((g) => (
+              {note.text}
+            </p>
+          ))}
+          {rows.map((row) => (
             <MessageRow
-              key={g.id}
-              g={g}
-              selected={g.id === selected}
-              menuOpen={!!menu && menu.id === g.id}
+              key={row.key}
+              row={row}
+              selected={lit(row)}
+              menuOpen={menu?.row?.key === row.key}
               onSelect={select}
               onMenu={openMenu}
             />
           ))}
-          {visible.length === 0 && !searchLoad && (
-            <div
-              data-inbox-empty
-              // focus comes here when a phone's list lost its last row (focusRowAfter)
-              tabIndex={-1}
-              className="[font-size:var(--fs-base)] [color:var(--text-3)] [font-style:italic] [padding:14px_10px]"
-            >
-              {P.messageGroups.length > 0
-                ? 'No messages match the filters.'
-                : seesNoProject()
-                  ? `No messages yet. ${noProjectsHint()}`
-                  : 'No messages yet.'}
-            </div>
-          )}
-          {/* the Inbox loads the newest 500 messages (convex/lib/workspaceParts.ts readInbox) */}
-          {P.inboxCut && (
-            <div
-              data-inbox-cut
-              className="[font-size:var(--fs-sm)] [color:var(--text-3)] [padding:14px_10px]"
-            >
-              Older messages are not listed.
-              {inboxReachLine(P.inboxCutReach)}
-            </div>
-          )}
+          {/* the line that ends the page, with Previous and Next, which says
+              how far a stopped page looked and calls the Inbox empty only
+              on a complete first page; its empty sentences take focus when
+              a phone's list lost its last row */}
+          <div
+            data-inbox-empty={emptyEnd ? '' : undefined}
+            tabIndex={emptyEnd ? -1 : undefined}
+            className="inbox-page-fold [padding:4px_10px_10px] outline-none"
+          >
+            <PageFold
+              page={page}
+              end={foldEnd}
+              hook="inbox-page"
+              words={words}
+              held={(answer) => heldLine(answer, orgName)}
+              tooLong={tooLong}
+              focus={move}
+            />
+          </div>
         </div>
       </section>
 
@@ -1024,19 +1120,17 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
       {menu && (
         <AnchoredPop x={menu.x} y={menu.y} width={MENU_W} onClose={() => setMenu(null)}>
           <div data-msg-menu className="[padding:5px]">
-            {menuGroup && (
+            {menuRow && (
               <>
                 {/* opening the task is what a plain click does now, so the menu
                 offers the one place the pane can't reach: the board it sits
-                on, which is where the old breadcrumb used to lead */}
-                {menuGroup.issueKey && (
+                on, for any task whose project the store holds, which the
+                Board needs, held by the workspace or not */}
+                {menuBoard && (
                   <MenuItem
                     data-msg-menu-board
                     onClick={() =>
-                      runOnItem((g) => {
-                        const it = P.issueById[g.issueKey]
-                        if (it) showOnBoard(it.project, it.id)
-                      }, true)
+                      runOnItem((row) => showOnBoard(row.project.id, rowTask(row)), true)
                     }
                   >
                     <Icon name="board" size={13} />
@@ -1044,20 +1138,34 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
                   </MenuItem>
                 )}
                 <MenuItem
+                  data-msg-menu-read={menuRow.read ? 'unread' : 'read'}
                   onClick={() =>
-                    runOnItem((g) =>
-                      g.read ? P.markMessagesUnread(g.ids) : P.markMessagesRead(g.ids),
+                    runOnItem((row) =>
+                      row.read
+                        ? P.unreadItem({ org: row.org, task: row.uuid, through: row.through })
+                        : P.readItem({
+                            org: row.org,
+                            task: row.uuid,
+                            through: row.through,
+                            latestAt: row.latestAt,
+                          }),
                     )
                   }
                 >
-                  <Icon name={menuGroup.read ? 'dot' : 'check'} size={13} />
-                  {menuGroup.read ? 'Mark as unread' : 'Mark as read'}
+                  <Icon name={menuRow.read ? 'dot' : 'check'} size={13} />
+                  {menuRow.read ? 'Mark as unread' : 'Mark as read'}
                 </MenuItem>
                 <MenuItem
+                  data-msg-menu-remove
                   onClick={() =>
-                    runOnItem((g) => {
-                      P.deleteMessages(g.ids)
-                      if (selected === g.id) closeTask() // its pane just went away
+                    runOnItem((row) => {
+                      P.removeItem({
+                        org: row.org,
+                        task: row.uuid,
+                        through: row.through,
+                        latestAt: row.latestAt,
+                      })
+                      if (lit(row)) closeTask() // its pane just went away
                     })
                   }
                 >
@@ -1085,7 +1193,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
             </MenuItem>
             {/* last: put the item to sleep, or wake it early. Its own section
                 because it is neither a read state nor a removal. */}
-            {menuGroup && (
+            {menuRow && (
               <>
                 <MenuDivider />
                 <div
@@ -1094,16 +1202,20 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
                 >
                   Snooze
                 </div>
-                {menuGroup.snoozedUntil !== null ? (
+                {menuRow.snoozedUntil !== null ? (
                   <MenuItem
                     data-msg-menu-unsnooze
-                    onClick={() => runOnItem((g) => P.snoozeMessages(g.ids, null))}
+                    onClick={() =>
+                      runOnItem((row) =>
+                        P.snoozeItem({ org: row.org, task: row.uuid, through: row.through }, null),
+                      )
+                    }
                   >
                     <Icon name="rotateCcw" size={13} />
                     Unsnooze
                     <div className="[flex:1]" />
                     <span className="[font-size:var(--fs-xs)] [color:var(--text-2)] !font-mono">
-                      until {fmtSnoozeUntil(menuGroup.snoozedUntil)}
+                      until {fmtSnoozeUntil(menuRow.snoozedUntil)}
                     </span>
                   </MenuItem>
                 ) : (
@@ -1114,9 +1226,12 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
                       count={snoozeFor[unit]}
                       onCount={(n) => setSnoozeFor((cur) => ({ ...cur, [unit]: n }))}
                       onSnooze={(until) =>
-                        runOnItem((g) => {
-                          if (selected === g.id) closeTask() // it just left the list
-                          P.snoozeMessages(g.ids, until)
+                        runOnItem((row) => {
+                          if (lit(row)) closeTask() // it just left the list
+                          P.snoozeItem(
+                            { org: row.org, task: row.uuid, through: row.through },
+                            until,
+                          )
                         })
                       }
                     />

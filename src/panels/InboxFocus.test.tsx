@@ -11,7 +11,8 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
    own menu removes or snoozes it, and after that menu or the toolbar acts
    on the whole list. On the real store, at desktop width unless a test
    takes a phone's, with the server answering every write at once unless a
-   test holds it. */
+   test holds it, and sending the Inbox page a row write changed before its
+   answer, as Convex does (serverWrite). */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -109,7 +110,10 @@ async function openInbox(
     }
   })
   network.mutation.mockReset()
-  network.mutation.mockResolvedValue(null)
+  network.mutation.mockImplementation(async (ref, args) => {
+    serverWrite(getFunctionName(ref), args)
+    return null
+  })
   const store = await import('../store/planner')
   await store.initStore()
   const handle = (n: number) => store.P.issues.find((it) => it.uuid === uuids[n])?.id ?? null
@@ -168,6 +172,33 @@ async function press(element: HTMLElement | null | undefined) {
 function serverRead(ids: readonly string[]) {
   const at = new Date(AT).toISOString()
   snap.messages = snap.messages.map((m) => (ids.includes(m.id) ? { ...m, read_at: at } : m))
+  publishWhole()
+}
+
+/** Applies write `name` with `args` to the server's rows as the server
+    does, for an Inbox row's item write and a task the pane's window
+    archives or deletes, which leaves the working set and so the Inbox's
+    page, and sends them, before the write's answer, as Convex sends the
+    results a write changed first. */
+function serverWrite(name: string, args: Record<string, unknown>) {
+  const ofItem = (m: Snapshot['messages'][number]) =>
+    m.issue_id === args.issue_id && m.org_id === args.org_id
+  const at = new Date(AT).toISOString()
+  if (name === 'issues:archive' || name === 'issues:deleteDeep') {
+    snap.issues = snap.issues.filter((task) => task.id !== args.id)
+    snap.messages = snap.messages.filter((m) => m.issue_id !== args.id)
+  } else if (name === 'messages:removeItem') snap.messages = snap.messages.filter((m) => !ofItem(m))
+  else if (name === 'messages:snoozeItem')
+    snap.messages = snap.messages.map((m) =>
+      ofItem(m)
+        ? { ...m, read_at: undefined, snoozed_until: (args.until as string | null) ?? undefined }
+        : m,
+    )
+  else if (name === 'messages:readItem')
+    snap.messages = snap.messages.map((m) => (ofItem(m) ? { ...m, read_at: at } : m))
+  else if (name === 'messages:unreadItem')
+    snap.messages = snap.messages.map((m) => (ofItem(m) ? { ...m, read_at: undefined } : m))
+  else return
   publishWhole()
 }
 
@@ -311,11 +342,13 @@ describe('Inbox focus when a row leaves', { timeout: 20_000 }, () => {
 
   it('gives focus to the first row still listed after the row menu removes all read', async () => {
     const uuids = await openInbox(3, null, [0])
-    network.mutation.mockImplementation(async (ref) =>
-      getFunctionName(ref) === 'messages:removeRead'
-        ? { ids: ['message-0'], hasMore: false }
-        : null,
-    )
+    network.mutation.mockImplementation(async (ref) => {
+      if (getFunctionName(ref) !== 'messages:removeRead') return null
+      // the server removes the read one, and sends the page before the answer
+      snap.messages = snap.messages.filter((m) => m.id !== 'message-0')
+      publishWhole()
+      return { ids: ['message-0'], hasMore: false }
+    })
     await openRowMenu(uuids[2])
     await press(document.querySelector<HTMLElement>('[data-msg-menu-remove-read]'))
     await settle()
