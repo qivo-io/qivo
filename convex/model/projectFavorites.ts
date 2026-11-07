@@ -59,9 +59,9 @@
  * shows in one list only. A seat's next star of the project resets a row
  * whose copies or organization differ.
  *
- * A row's created_at is no earlier than its seat's: a star writes the
- * star's time, and so does a star that resets a row, and the seed writes
- * the later of its time and the seat's. The favorites repair
+ * A row's created_at is never before its seat's. A star writes the star's
+ * time, and so does a star that resets a row, and the seed writes the
+ * later of its time and the seat's. The favorites repair
  * (internal/favoritesRepair.ts profile_newer) deletes a row its seat's
  * created_at follows, as an earlier seat's row on an id taken again. */
 

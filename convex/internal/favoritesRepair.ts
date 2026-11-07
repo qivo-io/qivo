@@ -211,7 +211,7 @@ async function baseClassOf(
   if (await reads.removing(row.profile_id)) return none('profile_removing')
   const profile = await reads.profile(row.profile_id)
   if (profile === null || profile.org_id !== row.org_id) return none('profile_gone')
-  // strictly later: the public demo writes a seat and its rows at one time
+  // strictly later, as the public demo writes a seat and its rows at one time
   if (profile.created_at > row.created_at) return none('profile_newer')
   const project = await reads.project(row.project_id)
   if (project === null) {
