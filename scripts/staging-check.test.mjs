@@ -20,6 +20,7 @@ import {
   ASSIGNEE_LOAD_QUERY,
   addDays,
   addsQuery,
+  atProject,
   authCorsProblems,
   authRoutesStep,
   BILLING_ACCOUNTS_MARKS,
@@ -31,6 +32,7 @@ import {
   DELETED_ITEMS_MARKS,
   DELETED_ITEMS_STEP,
   deleteOutcome,
+  directoryGroups,
   evaluate,
   FIXTURE_STATUS,
   FORMERLY_BARE,
@@ -46,6 +48,7 @@ import {
   LABELS_STEP,
   LIST_REFUSALS,
   MILESTONE_STEP,
+  NOT_LOADED_YET,
   newerWalk,
   ON_DEMAND_STEP,
   OVERVIEW_EXPECTED,
@@ -57,6 +60,8 @@ import {
   PICKER_STEP,
   PROJECT_DIALOGS_EXPECTED,
   PROJECT_DIALOGS_STEP,
+  PROJECT_DIRECTORY_MARKS,
+  PROJECT_DIRECTORY_STEP,
   PROJECT_SETTINGS_EXPECTED,
   PROJECT_SETTINGS_STEP,
   pace,
@@ -316,6 +321,79 @@ describe('staging check REST contract', () => {
     expect(check).toContain(
       'if (run.projects.L) await deleteProjectInApp(c.writeToken, run.projects.L)',
     )
+  })
+  it('checks the All projects directory on its own marks and words, after Settings › Projects', () => {
+    const page = readFileSync(
+      new URL('../src/components/ProjectDirectory.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(PROJECT_DIRECTORY_STEP).toBe('ui/project-directory')
+    for (const mark of Object.values(PROJECT_DIRECTORY_MARKS)) expect(page).toContain(mark)
+    // the note for a project the workspace has not delivered, which the
+    // step waits out
+    expect(page).toContain(`${NOT_LOADED_YET}. Try again in a moment.`)
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    expect(check.indexOf('await projectDirectoryCheck()')).toBeGreaterThan(
+      check.indexOf('await settingsProjectsCheck()'),
+    )
+    // on the run's own project, while it is active, adding no project the
+    // later tag searches would list
+    expect(check.indexOf('await projectDirectoryCheck()')).toBeLessThan(
+      check.indexOf('await archiveChecks()'),
+    )
+    const step = check.slice(
+      check.indexOf('async function projectDirectoryCheck()'),
+      check.indexOf('/** The step that checks Settings › Projects › Deleted items'),
+    )
+    expect(step).toContain('const { M, A, Z } = run.projects')
+    expect(step).not.toContain("'POST', '/projects'")
+    // it waits for Zulu's own address and name, not any page but the
+    // directory
+    expect(step).toContain('atProject(path(), Z.num)')
+    expect(step).toContain("app.locator('[data-scope-crumb] h1')")
+    // the browse list answered with a row before any search, and the star
+    // puts M ahead of Alpha, which sorts before it by name
+    const browse = /\[\$\{m\.page\}\]\[\$\{m\.state\}="ok"\] \[\$\{m\.row\}\]/
+    expect(step).toMatch(browse)
+    expect(step.search(browse)).toBeLessThan(step.indexOf('await search(run.tag)'))
+    expect(step).toContain('order.indexOf(M.id) < order.indexOf(A.id)')
+  })
+  it('reads the directory’s groups, and refuses a page that breaks favorites first', () => {
+    const fav = { group: 'favorites' }
+    const rest = { group: 'rest' }
+    const on = (row) => ({ row, starred: true })
+    const off = (row) => ({ row, starred: false })
+    expect(directoryGroups([fav, on('m'), rest, off('alpha'), off('n')])).toEqual({
+      m: 'favorites',
+      alpha: 'rest',
+      n: 'rest',
+    })
+    // a page with no favorite has no headings
+    expect(directoryGroups([off('alpha'), off('m')])).toEqual({ alpha: null, m: null })
+    expect(directoryGroups([fav, on('m'), on('k')])).toEqual({ m: 'favorites', k: 'favorites' })
+    // Other projects before Favorites, a heading twice, a starred row under
+    // Other projects and an unstarred one under Favorites
+    for (const broken of [
+      [rest, off('alpha'), fav, on('m')],
+      [fav, on('m'), fav, on('k')],
+      [fav, on('m'), rest, off('alpha'), on('k')],
+      [fav, on('m'), off('alpha'), rest, off('n')],
+    ])
+      expect(directoryGroups(broken), JSON.stringify(broken)).toBeNull()
+  })
+  it("tells Zulu's own project address from every other the directory could open", () => {
+    expect(atProject('/app/acme/board/p/12', 12)).toBe(true)
+    expect(atProject('/app/acme/roadmap/p/12/tasks/AC-4', 12)).toBe(true)
+    // another project, a number that starts or ends the same, the views
+    // over all projects and the directory itself are not Zulu's
+    for (const other of [
+      '/app/acme/board/p/1',
+      '/app/acme/board/p/123',
+      '/app/acme/board/p/112',
+      '/app/acme/overview/all',
+      '/app/~/projects',
+    ])
+      expect(atProject(other, 12), other).toBe(false)
   })
   it("checks Settings › Users and the creators line in the pages' own words", () => {
     const users = readFileSync(

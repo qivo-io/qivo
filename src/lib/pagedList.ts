@@ -10,16 +10,32 @@
    archived project's sub-projects in Settings
    (panels/settings/ProjectLists.tsx), Settings › Teams, a team's members
    and its Add member picker (panels/settings/TeamSettings.tsx), Settings ›
-   Users (panels/settings/UsersSettings.tsx) and the task label picker
-   (panels/LabelPicker.tsx). The editor's @ mention popup, plain DOM outside
-   React, reads through the `once` engine itself (onceList,
-   components/mentionSuggestion.ts). Beside it, a page
+   Users (panels/settings/UsersSettings.tsx), the task label picker
+   (panels/LabelPicker.tsx) and the expanded sub-project list of the All
+   projects directory (components/ProjectDirectory.tsx). The editor's @
+   mention popup, plain DOM outside React, reads through the `once` engine
+   itself (onceList, components/mentionSuggestion.ts). Beside it, a page
    mode (usePagedPages, at the end of this file) shows one page at a time,
    which Previous and Next replace, as Settings › Projects, Archived
-   projects, Users and Deleted items read theirs, and useMoreOnScroll
-   loads the next batch of a list as its end scrolls into view. It holds
-   only what the page shows, in the page, and drops it when the page is
-   left. It imports nothing from the store.
+   projects, Users and Deleted items and the All projects directory read
+   theirs, and useMoreOnScroll loads the next batch of a list as its end
+   scrolls into view. It holds only what the page shows, in the page, and
+   drops it when the page is left. A live list or page that a kept page
+   holds (components/KeptView.tsx), as the All projects directory is, keeps
+   its answers while another page shows, as while the tab is hidden: React
+   stops its effects then, which stops its reads, and when the page shows
+   again it shows what it held at once and reads the same batches or page
+   again, `refreshing` until they answered. One that shows while the tab is
+   hidden reads once the tab shows; its effects first run with the
+   visibility it last rendered, so its reads may open and stop at once. A
+   key changed while it was kept opens the new list alone as it shows. A
+   batch or page whose read failed reads again with them, and its failure
+   goes once it answers. A failed Next or Previous keeps its note until
+   Retry or another move, since its read stopped when it failed. Each
+   visit counts position refusals afresh, so a list a second refusal
+   failed starts again from its first batch or page as the page shows, and
+   its next refusal starts it again rather than failing it. It imports nothing
+   from the store.
 
    A list reads its batches from one of two sources (BatchSource):
 
@@ -59,7 +75,8 @@
        shows twice, and one that moved into it never goes missing.
      - A batch refused for its position, as after the server's secret
        rotated, starts the list again from its first batch, once for one
-       key; a second refusal is the list's failure, and Retry starts it
+       key and visit of a kept page; a second refusal is the list's
+       failure, and Retry, or the kept page showing again, starts it
        again. Any other failure shows in place of that batch with its last
        rows, and the list shows no end while it stands.
      - While the tab or the desktop window is hidden (lib/viewVisibility.ts)
@@ -262,12 +279,20 @@ export function useSettledSearch(
 type ListState<A, Row> = Omit<PagedList<A, Row>, 'more' | 'retry'>
 
 /** One engine under usePagedList: `open` starts it for a key (again after
-    `stop`), `show` follows the page's visibility, and `stop` drops every
-    read and answer, as leaving the page does. */
+    `stop`), `show` follows the tab's visibility, `stop` drops every read
+    and answer, as a caller outside React does when it leaves its list
+    (onceList), and `keep` follows the page's own effects, which React
+    stops while a kept page hides and when the page goes. A live engine
+    keeps its answers while kept and reads the same batches again once
+    shown (`keeps`); the `once` engine drops every read and answer, so the
+    page opens it again. */
 type Engine<A, Row> = {
   open(key: string | null): void
   show(visible: boolean): void
   stop(): void
+  keep(kept: boolean): void
+  /** whether `keep` keeps the answers, so a page shown again opens nothing */
+  keeps: boolean
   view(): ListState<A, Row>
   more(): void
   retry(id?: number): void
@@ -386,6 +411,10 @@ function onceEngine<A, Row>(
       failure = null
       reading = false
     },
+    keep(kept) {
+      if (kept) this.stop()
+    },
+    keeps: false,
     view() {
       const o = options()
       const seen = new Set<string>()
@@ -484,6 +513,11 @@ function liveEngine<A, Row>(
 
   let key: string | null = null
   let visible = true
+  // whether a kept page holds the list hidden, its effects stopped
+  let kept = false
+  /** Whether the batches read: the tab shows and the page is not kept
+      hidden. */
+  const reading = () => visible && !kept
   let shown: Batch[] = []
   let swaps: Swap[] = []
   // the key a position refusal started the list again for, and whether a
@@ -512,7 +546,7 @@ function liveEngine<A, Row>(
     b.fresh = false
     const o = options()
     const args = argsOf(b)
-    if (!visible || key === null || o.source.kind !== 'live' || args === null) return
+    if (!reading() || key === null || o.source.kind !== 'live' || args === null) return
     b.stop = watchLive<A>(
       o.source.query,
       args,
@@ -716,6 +750,18 @@ function liveEngine<A, Row>(
     changed()
   }
 
+  /** Follows a change of `reading()` from `was`: while the tab is hidden
+      or a kept page hides the list every read stops and the answers stay,
+      and once both show the same batches read again. */
+  function rewatch(was: boolean) {
+    if (reading() === was) return
+    for (const b of every()) {
+      if (reading()) watch(b)
+      else unwatch(b)
+    }
+    changed()
+  }
+
   /** Gives up swap `s`, stopping the batches that were to replace. */
   function cancel(s: Swap) {
     for (const b of s.to) unwatch(b)
@@ -777,7 +823,7 @@ function liveEngine<A, Row>(
       full: rows.length >= o.most || shown.length >= Math.ceil(o.most / LIST_BATCH),
       partial: batches.slice(0, -1).some((b) => b.note !== null),
       settling: swaps.some((s) => s.why === 'split'),
-      refreshing: visible && shown.some((b) => b.shown !== null && !current(b)),
+      refreshing: reading() && shown.some((b) => b.shown !== null && !current(b)),
     }
   }
 
@@ -790,19 +836,31 @@ function liveEngine<A, Row>(
     },
     show(next) {
       if (next === visible) return
+      const was = reading()
       visible = next
-      // while hidden every read stops and the answers stay, and once shown
-      // the same batches read again
-      for (const b of every()) {
-        if (visible) watch(b)
-        else unwatch(b)
-      }
-      changed()
+      rewatch(was)
     },
     stop() {
       stopAll()
       failed = false
     },
+    keep(next) {
+      if (next === kept) return
+      const was = reading()
+      kept = next
+      // a kept page shown again counts its position refusals afresh, and a
+      // list a second one failed starts again from its first batch
+      if (!kept) {
+        restarted = null
+        if (failed) {
+          restart()
+          changed()
+          return
+        }
+      }
+      rewatch(was)
+    },
+    keeps: true,
     view,
     more() {
       const last = shown[shown.length - 1]
@@ -849,7 +907,8 @@ function liveEngine<A, Row>(
  * header, for the list `key` names. The page renders `rows` or `batches`
  * and the line listEnd answers, and calls `more` and `retry`. Its answers
  * live in the hook and go when the page unmounts or the key changes, so a
- * later visit reads again.
+ * later visit reads again. A live list that a kept page hides keeps its
+ * answers and reads the same batches again when the page shows.
  */
 export function usePagedList<A, Row>(o: PagedListOptions<A, Row>): PagedList<A, Row> {
   const { visible } = useViewVisibility()
@@ -873,14 +932,26 @@ export function usePagedList<A, Row>(o: PagedListOptions<A, Row>): PagedList<A, 
       e.open(o.key)
     }
   }, [o.key, visible])
-  useEffect(
-    () => () => {
-      opened.current = null
-      e.stop()
-    },
-    [],
-  )
+  useKept(e, opened)
   return { ...e.view(), more: () => e.more(), retry: (id) => e.retry(id) }
+}
+
+/** Follows the page's own effects with engine `e`'s `keep`: React stops
+    them when a kept page hides (components/KeptView.tsx) and when the page
+    goes, and runs them again when a kept page shows. An engine that drops
+    its answers then (`keeps` false) forgets the key it `opened`, so the
+    page opens it again on return. */
+function useKept(
+  e: { keep: (kept: boolean) => void; keeps: boolean },
+  opened: { current: { key: string | null } | null },
+) {
+  useEffect(() => {
+    e.keep(false)
+    return () => {
+      if (!e.keeps) opened.current = null
+      e.keep(true)
+    }
+  }, [])
 }
 
 /* ------------------------------------------------------------- the pages */
@@ -974,6 +1045,11 @@ function pagesEngine<A, Row>(options: () => PagedPagesOptions<A, Row>, changed: 
 
   let key: string | null = null
   let visible = true
+  // whether a kept page holds the list hidden, its effects stopped
+  let kept = false
+  /** Whether the page reads: the tab shows and the page is not kept
+      hidden. */
+  const reading = () => visible && !kept
   let connection = 0
   let starts: (string | null)[] = [null]
   let page: Read | null = null
@@ -1000,7 +1076,7 @@ function pagesEngine<A, Row>(options: () => PagedPagesOptions<A, Row>, changed: 
     r.stop = null
     r.fresh = false
     const o = options()
-    if (!visible || key === null) return
+    if (!reading() || key === null) return
     r.stop = watchLive<A>(
       o.query,
       o.args(r.after),
@@ -1157,6 +1233,19 @@ function pagesEngine<A, Row>(options: () => PagedPagesOptions<A, Row>, changed: 
     return shown.batch.next
   }
 
+  /** Follows a change of `reading()` from `was`: while the tab is hidden
+      or a kept page hides the list the reads stop and the answers stay,
+      and once both show the same pages read again. */
+  function rewatch(was: boolean) {
+    if (reading() === was) return
+    for (const r of [page, move?.read ?? null]) {
+      if (r === null) continue
+      if (reading()) watch(r)
+      else unwatch(r)
+    }
+    changed()
+  }
+
   /** Starts the move `to`, which replaces the page once it answered. */
   function go(to: 'next' | 'previous') {
     if (key === null || failed || move !== null || page === null) return
@@ -1177,20 +1266,27 @@ function pagesEngine<A, Row>(options: () => PagedPagesOptions<A, Row>, changed: 
     },
     show(next: boolean) {
       if (next === visible) return
+      const was = reading()
       visible = next
-      // while hidden the reads stop and the answers stay; once shown the
-      // same pages read again
-      for (const r of [page, move?.read ?? null]) {
-        if (r === null) continue
-        if (visible) watch(r)
-        else unwatch(r)
+      rewatch(was)
+    },
+    keep(next: boolean) {
+      if (next === kept) return
+      const was = reading()
+      kept = next
+      // a kept page shown again counts its position refusals afresh, and a
+      // list a second one failed starts again from its first page
+      if (!kept) {
+        restarted = null
+        if (failed) {
+          openAt([null])
+          changed()
+          return
+        }
       }
-      changed()
+      rewatch(was)
     },
-    stop() {
-      stopAll()
-      failed = false
-    },
+    keeps: true,
     next: () => go('next'),
     previous: () => go('previous'),
     retry() {
@@ -1242,7 +1338,7 @@ function pagesEngine<A, Row>(options: () => PagedPagesOptions<A, Row>, changed: 
         hasPrevious: !failed && starts.length > 1,
         stopped: !!ok && ok.batch.stopped,
         stuck: isStuck(),
-        refreshing: visible && page !== null && page.held !== null && !current(page),
+        refreshing: reading() && page !== null && page.held !== null && !current(page),
         starts: [...starts],
       }
     },
@@ -1275,12 +1371,17 @@ function pagesEngine<A, Row>(options: () => PagedPagesOptions<A, Row>, changed: 
  *   end; one that stopped without moving past its start is `stuck`, with
  *   Retry.
  * - A start refused for its position goes back to the first page once for
- *   one key; a second refusal is the list's failure, and Retry starts from
- *   the first page. A new key starts at the first page, or at the starts a
+ *   one key and visit of a kept page; a second refusal is the list's
+ *   failure, and Retry, or the kept page showing again, starts from the
+ *   first page. A new key starts at the first page, or at the starts a
  *   page remembered for it.
  * - While the tab or the desktop window is hidden the reads stop and the
  *   answer stays; on return the page reads again and is `refreshing` until
- *   it answered on the current connection.
+ *   it answered on the current connection. A kept page that hides
+ *   (components/KeptView.tsx), whose effects React stops, does the same:
+ *   it keeps its answer, its page starts and its place, so it shows the
+ *   page the person was on at once when it shows again. A failed move
+ *   keeps its note until Retry or another move.
  *
  * It holds what it read in the hook and drops it when the page unmounts.
  */
@@ -1302,13 +1403,7 @@ export function usePagedPages<A, Row>(o: PagedPagesOptions<A, Row>): PagedPages<
       e.open(o.key)
     }
   }, [o.key, visible])
-  useEffect(
-    () => () => {
-      opened.current = null
-      e.stop()
-    },
-    [],
-  )
+  useKept(e, opened)
   return { ...e.view(), next: e.next, previous: e.previous, retry: e.retry }
 }
 

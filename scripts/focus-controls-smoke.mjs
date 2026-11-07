@@ -269,7 +269,11 @@ try {
     return prefs
   })
 
+  // All projects opens the project directory, whose rows the sweep covers
   await page.locator('[data-all-nav]').click()
+  await page.locator('[data-project-directory] [data-directory-row]').first().waitFor()
+  await sweep(page.locator('body'), 'All projects directory and sidebar')
+  await page.locator('aside').getByRole('button', { name: 'Luma Sensor', exact: true }).click()
   await page
     .locator('[data-view-switch]')
     .getByRole('radio', { name: 'Board', exact: true })

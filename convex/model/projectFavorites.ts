@@ -1,12 +1,15 @@
 /* A seat's favorite top-level projects (schema.ts project_favorites), which
- * the All projects directory and the sidebar list first, in name order.
- * A star changes that seat's navigation only. It grants nothing, writes no
- * access, reach, subscription, message or activity row, reads no task and
- * changes no other seat's favorites.
+ * the All projects directory (src/components/ProjectDirectory.tsx), the
+ * shared project picker and, later, the sidebar list first, in name order;
+ * the directory's star sets them. A star changes that seat's navigation
+ * only. It grants nothing, writes no access, reach, subscription, message
+ * or activity row, reads no task and changes no other seat's favorites.
  *
  * setFavoriteCore is the one writer (projectNav.setFavorite): it stars a
  * top-level project the seat sees through ordinary access and unstars any
- * project. A rename, an archive or a restore of a starred project brings
+ * project. The Northstar seed writes its people's stars through
+ * insertSeededFavorite, and internal/favoritesRepair.ts deletes and patches
+ * the rows a rollback past the favorites release left. A rename, an archive or a restore of a starred project brings
  * the rows' copies in line (model/projectNav.ts treeFavorites,
  * settleFavorites). The teardowns delete rows through the ranges below:
  * profile removal by seat (favoritesOfProfile), the organization teardowns
@@ -54,7 +57,13 @@
  * project into the other list as if it were no favorite. The list of the
  * rest leaves out a seat's favorites by the same verdict, so a project
  * shows in one list only. A seat's next star of the project resets a row
- * whose copies or organization differ. */
+ * whose copies or organization differ.
+ *
+ * This release never stamps a row before its seat's created_at. A star
+ * writes the star's time, and so does a star that resets a row, and the
+ * seed writes the later of its time and the seat's. The favorites repair
+ * (internal/favoritesRepair.ts profile_newer) deletes a row its seat's
+ * created_at follows, as an earlier seat's row on an id taken again. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
@@ -173,6 +182,37 @@ export async function favoriteShows(
   return (await sight.shows(project)) ? project : null
 }
 
+/**
+ * Inserts `seat`'s favorites row on top-level project `project` of
+ * organization `orgId`, with the project's copies, for the Northstar seed
+ * (model/demoSeed.ts). It writes the row without setFavoriteCore's access
+ * check, because the dataset shares every top-level project with both
+ * teams and every person belongs to one, which the dataset's test holds;
+ * and a seed refuses an organization that holds a favorites row
+ * (internal/marketingDemo.ts holdsNoWork), so the seat holds no row on the
+ * project before. Its created_at is the later of `now`, the seed's time,
+ * and the seat's created_at, since a seat put back after the seed began
+ * (internal/marketingDemo.ts restoreSeat) is newer than the seed's time,
+ * and the favorites repair deletes a row older than its seat.
+ */
+export async function insertSeededFavorite(
+  ctx: MutationCtx,
+  a: {
+    orgId: string
+    seat: Pick<Doc<'profiles'>, 'id' | 'created_at'>
+    project: Pick<Doc<'projects'>, 'id' | 'name' | 'archived_at'>
+    now: string
+  },
+): Promise<void> {
+  await ctx.db.insert('project_favorites', {
+    org_id: a.orgId,
+    profile_id: a.seat.id,
+    project_id: a.project.id,
+    ...copiesOf(a.project),
+    created_at: a.seat.created_at > a.now ? a.seat.created_at : a.now,
+  })
+}
+
 /** The refusal of a star on a sub-project the seat sees. */
 export const TOP_LEVEL_ONLY = 'only a top-level project can be a favorite'
 
@@ -188,8 +228,9 @@ export const TOP_LEVEL_ONLY = 'only a top-level project can be a favorite'
  * the seat cannot see. It writes the seat's one row on the project with
  * the project's copies, an archived one's live false. A row that holds them
  * already stays as it is, with its created_at, so a repeated star writes
- * nothing; one whose copies or organization differ is reset, and a second
- * row of the seat on the project goes.
+ * nothing; one whose copies or organization differ is reset as a new star,
+ * its created_at the star's time, and a second row of the seat on the
+ * project goes.
  *
  * An unstar deletes the seat's rows on the id whatever the project's state
  * or the seat's access, so a seat can always remove its own preference, and
@@ -214,7 +255,8 @@ export async function setFavoriteCore(
   for await (const row of favoriteOf(ctx, me.id, project.id)) {
     if (kept) await ctx.db.delete(row._id)
     else if (row.org_id !== want.org_id || row.name_key !== want.name_key || row.live !== want.live)
-      await ctx.db.patch(row._id, want)
+      // a fresh star, perhaps on a row an earlier seat with this id left
+      await ctx.db.patch(row._id, { ...want, created_at: a.now })
     kept = true
   }
   if (!kept)

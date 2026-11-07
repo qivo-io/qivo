@@ -8,6 +8,7 @@ import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
+import { answerProjectNav, isProjectNavRead } from './store/projectNavStandIn.setup'
 import { answerRoadmap } from './store/roadmapStandIn.setup'
 
 /* The pages of a person who can see no active project, on the real store
@@ -115,6 +116,7 @@ async function app(snap: Snapshot, path = '/app/testbed') {
       next(answerRoadmap(server, name, args))
     else if (name.startsWith('overview:')) answerOverview(server, name, args, next, fail)
     else if (isMilestoneRead(name)) answerMilestones(server, name, args, next, fail)
+    else if (isProjectNavRead(name)) answerProjectNav(server, name, args, next, fail)
     return () => {}
   })
   network.query.mockResolvedValue(null)
@@ -283,16 +285,23 @@ describe('a person with a project', () => {
     expect(savedScope(snap)).toBe('all')
   })
 
-  it('keeps All projects that the person picks while it is App’s', async () => {
+  it('opens the directory from All projects while it is App’s, which stays App’s', async () => {
     const snap = member()
     const publish = await app({ ...snap, access: [] })
     await shows(MEMBER)
+    const before = savedScope(snap)
     const all = document.querySelector<HTMLElement>('[data-all-nav]')
     await act(async () => all?.click())
-    expect(savedScope(snap)).toBe('all')
+    // the directory, which says it lists nothing, and no scope of the person's
+    await vi.waitFor(() => expect(location.pathname).toBe('/app/~/projects'))
+    await shows('You have no active projects.')
+    expect(all?.hasAttribute('data-on')).toBe(true)
+    expect(savedScope(snap)).toBe(before)
+    // so App's All projects still gives way to the project shared meanwhile,
+    // under the directory
     await publish({ ...snap, delivered_at: '2026-09-15T09:00:00.000Z' })
-    await vi.waitFor(() => expect(document.body.textContent).not.toContain(MEMBER))
-    expect(location.pathname).toBe('/app/~/overview/all')
+    await vi.waitFor(() => expect(savedScope(snap)).toBe('plan'))
+    expect(location.pathname).toBe('/app/~/projects')
   })
 
   it('opens the project shared meanwhile on a reload of App’s All projects', async () => {

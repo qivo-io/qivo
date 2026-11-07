@@ -6,6 +6,7 @@ import {
   apiAccountId,
   fileSeedId,
   inboxCommentId,
+  PROJECT_STARS,
   parseSeedArgs,
   planApiAccounts,
   planArchive,
@@ -14,9 +15,11 @@ import {
   planFiles,
   planInbox,
   planLabels,
+  planProjects,
   planRelations,
   planSeed,
   planThread,
+  projectSeedId,
   relationId,
   runBoardScaleSeed,
   seededAgentName,
@@ -24,6 +27,7 @@ import {
   seededFileProject,
   seededFileText,
   seededLabelName,
+  seededProjectName,
   seededTask,
   seededTasks,
   THREAD_LABEL,
@@ -1579,6 +1583,166 @@ describe('board-scale-seed --files', () => {
       storage_id: 'storage-1',
       inline: false,
     })
+  })
+})
+
+describe('board-scale-seed --projects', () => {
+  it('takes a project count from 0 to 200', () => {
+    expect(parseSeedArgs(local).projects).toBe(0)
+    expect(parseSeedArgs([...local, '--tasks', '0', '--projects', '200']).projects).toBe(200)
+    for (const projects of ['-1', '2.5', '201', 'many'])
+      expect(() => parseSeedArgs([...local, '--projects', projects])).toThrow(
+        '--projects takes a whole number from 0 to 200.',
+      )
+  })
+
+  it('counts every live top-level project toward the count and makes the rest, with no sub-project', () => {
+    // Northstar's three and Partner pilot
+    const tops = ['luma', 'cloud', 'pilot', relationId('project')]
+    const plan = planProjects({ org: 'org', count: 200, tops, present: new Set(tops) })
+    expect(plan.projects).toHaveLength(196)
+    expect(plan.projects.every((p) => p.type === 'meta' && p.parent_id === undefined)).toBe(true)
+    expect(plan.projects.map((p) => p.id)).toEqual(
+      Array.from({ length: 196 }, (_, n) => projectSeedId(n)),
+    )
+    // led by the caller, Nora, with the search's names first
+    expect(plan.projects[0]).not.toHaveProperty('lead_id')
+    expect(plan.projects.slice(0, 3).map((p) => p.name)).toEqual([
+      'Café network pilot',
+      'Vantorre depot trial',
+      seededProjectName(2),
+    ])
+    expect(new Set(plan.projects.map((p) => p.name)).size).toBe(196)
+    expect(plan.stars).toEqual(PROJECT_STARS.map(projectSeedId))
+    expect(plan.short).toBe(0)
+    // past the count nothing is made
+    expect(planProjects({ org: 'org', count: 3, tops, present: new Set(tops) }).projects).toEqual(
+      [],
+    )
+  })
+
+  it('adds only what a rerun finds missing, and skips a number an archived or deleted project holds', () => {
+    const made = Array.from({ length: 4 }, (_, n) => projectSeedId(n))
+    // number 4 was archived, or went to Deleted items, by a check
+    const present = new Set(['luma', ...made, projectSeedId(4)])
+    const plan = planProjects({ org: 'org', count: 8, tops: ['luma', ...made], present })
+    expect(plan.projects.map((p) => p.id)).toEqual([5, 6, 7].map(projectSeedId))
+    // the first star is live, the later ones were never made
+    expect(plan.stars).toEqual([projectSeedId(2)])
+    const again = planProjects({
+      org: 'org',
+      count: 8,
+      tops: ['luma', ...made, ...plan.projects.map((p) => p.id)],
+      present: new Set([...present, ...plan.projects.map((p) => p.id)]),
+    })
+    expect(again.projects).toEqual([])
+  })
+
+  it('says how many it falls short once every number is taken, archived and deleted ones included', async () => {
+    // a first run made all 200 numbers; a check archived or deleted five
+    const made = Array.from({ length: 200 }, (_, n) => projectSeedId(n))
+    const live = made.slice(5)
+    const plan = planProjects({
+      org: 'org',
+      count: 200,
+      tops: ['luma', ...live],
+      present: new Set(['luma', ...made]),
+    })
+    // Luma Sensor and 195 live make 196, and no number is left for the rest
+    expect(plan.projects).toEqual([])
+    expect(plan.short).toBe(4)
+    // and a run says so
+    fake.projects = [
+      { id: 'luma', org_id: 'org', type: 'meta', sort_order: 1 },
+      { id: 'sub', org_id: 'org', type: 'project', parent_id: 'luma' },
+      ...live.map((id, n) => ({ id, org_id: 'org', type: 'meta', sort_order: 205 + n })),
+    ]
+    fake.projectRows = [...fake.projects, ...made.slice(0, 5).map((id) => ({ id, org_id: 'org' }))]
+    fake.issues = []
+    fake.calls = []
+    const said = []
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--projects', '200'], {
+        env,
+        log: (line) => said.push(line),
+      })
+    } finally {
+      fake.projects = null
+      fake.projectRows = []
+    }
+    expect(fake.calls.filter(([name]) => name === 'projects:create')).toEqual([])
+    expect(said).toContain(
+      '--projects fell 4 short of its count, as all 200 of its numbers are taken, archived and deleted ones included.',
+    )
+  })
+
+  it('makes the projects as Nora and stars a few, and --files keeps to Northstar’s own projects', async () => {
+    vi.stubGlobal(
+      'fetch',
+      async () => new Response(JSON.stringify({ storageId: 'storage-1' }), { status: 200 }),
+    )
+    // a project an earlier --projects run made, with room, which --files
+    // must pass over for Northstar's own
+    fake.projects = [
+      { id: 'luma', org_id: 'org', type: 'meta', sort_order: 1 },
+      { id: 'sub', org_id: 'org', type: 'project', parent_id: 'luma' },
+      { id: projectSeedId(0), org_id: 'org', type: 'meta', sort_order: 0 },
+    ]
+    fake.issues = []
+    fake.calls = []
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--projects', '4', '--files', '1'], {
+        env,
+        log: () => {},
+      })
+    } finally {
+      vi.unstubAllGlobals()
+      fake.projects = null
+    }
+    const creates = fake.calls.filter(([name]) => name === 'projects:create')
+    // two more top-level projects make four, then the file's sub-project
+    expect(creates.map(([, fields]) => [fields.id, fields.parent_id])).toEqual([
+      [projectSeedId(1), undefined],
+      [projectSeedId(2), undefined],
+      [fileSeedId('project', 0), 'luma'],
+    ])
+    const stars = fake.calls.filter(([name]) => name === 'projectNav:setFavorite')
+    expect(stars.map(([, fields]) => fields)).toEqual([
+      { org_id: 'org', project_id: projectSeedId(2), favorite: true },
+    ])
+    expect(new Set(fake.calls.map(([, , as]) => as))).toEqual(new Set(['nora-login']))
+  })
+
+  it('counts Partner pilot, which --relations makes in the same run, toward the count', async () => {
+    // Northstar's three and one sub-project for the --relations tasks,
+    // which the fake takes wherever they go
+    fake.projects = [
+      ...['luma', 'cloud', 'pilot'].map((id, n) => ({
+        id,
+        org_id: 'org',
+        type: 'meta',
+        sort_order: n,
+      })),
+      { id: 'project-FW', key: 'FW', org_id: 'org', type: 'project', parent_id: 'luma' },
+    ]
+    fake.issues = []
+    fake.calls = []
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--relations', '--projects', '6'], {
+        env,
+        log: () => {},
+      })
+    } finally {
+      fake.projects = null
+    }
+    // Partner pilot and its sub-project, then two more top-level projects
+    // make six with Northstar's three and Partner pilot
+    expect(fake.calls.filter(([name]) => name === 'projects:create').map(([, f]) => f.id)).toEqual([
+      relationId('project'),
+      relationId('sub-project'),
+      projectSeedId(0),
+      projectSeedId(1),
+    ])
   })
 })
 

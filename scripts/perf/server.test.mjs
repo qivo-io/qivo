@@ -1242,6 +1242,12 @@ describe('the benchmark server', () => {
       5,
     )
     expect((await nav('projectnav=error', 'projectNav:page')).answer.error).toContain('fails')
+    expect((await nav('programs=4&projectnav=empty', 'projectNav:page')).answer).toEqual({
+      state: 'ok',
+      rows: [],
+      next: null,
+      stopped: false,
+    })
     const starred = await nav('programs=4&projectnav=favorites', 'projectNav:page')
     expect(starred.answer.rows.map((row) => [row.name, row.favorite])).toEqual([
       ['Testbed program', true],
@@ -1253,6 +1259,60 @@ describe('the benchmark server', () => {
     expect((await nav('', 'projectNav:search', { search: '  ' })).answer.error).toContain(
       'browse with projectNav.page',
     )
+  }, 60_000)
+
+  it('stars and unstars a project of the All projects directory and sends the page again', async () => {
+    const { posted, send } = await server(
+      'tasks=20&programs=4&subprojects=3&latency=0&mbps=100000&projectnav=favorites',
+    )
+    await send({ type: 'watch', id: 'page', name: 'projectNav:page', args: {} })
+    /** The page's latest rows, as name and favorite. */
+    const latest = () => {
+      const results = posted
+        .filter((m) => m.type === 'transition')
+        .flatMap((m) => m.results.filter((r) => r.to === 'page'))
+      const page = JSON.parse(results.at(-1)?.text ?? '{"rows":[]}')
+      return page.rows.map((row) => [row.name, row.favorite])
+    }
+    await vi.waitFor(() => expect(latest()).toHaveLength(4))
+    expect(latest()[0]).toEqual(['Testbed program', true])
+    const page = JSON.parse(
+      posted
+        .filter((m) => m.type === 'transition')
+        .at(-1)
+        .results.at(-1).text,
+    )
+    const fourth = page.rows.find((row) => row.name === 'Testbed program 4')
+    const star = (favorite, project = fourth) =>
+      send({
+        type: 'mutation',
+        id: `star-${favorite}`,
+        name: 'projectNav:setFavorite',
+        args: { org_id: project.org_id, project_id: project.id, favorite },
+      })
+    const sent = posted.length
+    await star(true)
+    // the page comes again before the star's answer, with the program among
+    // the favorites by name
+    const after = posted.slice(sent)
+    const pageAt = after.findIndex(
+      (m) => m.type === 'transition' && m.results.some((r) => r.to === 'page'),
+    )
+    expect(pageAt).toBeGreaterThan(-1)
+    expect(pageAt).toBeLessThan(after.findIndex((m) => m.id === 'star-true'))
+    expect(latest()).toEqual([
+      ['Testbed program', true],
+      ['Testbed program 2', true],
+      ['Testbed program 4', true],
+      ['Testbed program 3', false],
+    ])
+    await star(false)
+    expect(latest().at(-1)).toEqual(['Testbed program 4', false])
+    // a star of a project the person cannot see is refused with its data
+    await star(true, { id: 'perf-unknown', org_id: fourth.org_id })
+    expect(posted.find((m) => m.id === 'star-true' && m.error)?.error).toMatchObject({
+      code: 'not_found',
+    })
   }, 60_000)
 
   it("answers the removal window's reads from the workspace, with the states the page asks for", async () => {

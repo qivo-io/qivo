@@ -8,7 +8,7 @@
      <view>/all|mine           sentinel scope, optionally /tasks/<ref>
      settings/<page>           account, org-*, projects-* or team:<uuid>
      settings/project/<n>      project settings, by number or uuid
-     projects                  directory
+     projects                  the All projects directory, no task over it
      archive                   old Archive address; opens settings/projects-archived-tasks
      inbox[/tasks/<ref>]       inbox, optionally with a task open
      sync[/all|/p/<n>|/team/<uuid>][/people/<uuid>|/agents][/tasks/<ref>]

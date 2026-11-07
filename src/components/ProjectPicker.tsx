@@ -7,10 +7,10 @@
    the fixed rows All projects and an organization's All projects.
 
    - The browse list is projectNav.page, the person's top-level projects 25
-     at a time, their favorites first, with Load more. Nothing in the app
-     stars a project yet, so the guide says only "by name"; once a star
-     control ships, the server's order already puts favorites first and
-     their rows show a star. Once typing rests SEARCH_DELAY_MS, a text
+     at a time, their favorites first, with Load more, a favorite's row
+     with a star mark; the All projects directory's star
+     (components/ProjectDirectory.tsx) sets them. Once typing rests
+     SEARCH_DELAY_MS, a text
      with a name key lists projectNav.search, the projects and sub-projects
      whose own name holds every word typed, each sub-project with its
      project; a text of spaces and accents only, whose name key is empty,

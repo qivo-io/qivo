@@ -297,6 +297,13 @@ describe('the pause while Qivo cannot save', () => {
     void P.addIssue({ title: 'Fresh task', project: snapshot.projects[0].id })
     await settle()
     expect(JSON.parse(notes()[0][1]).at(-1)).toMatchObject({ task: null, what: 'a new task' })
+    // a star names no task and says what kind of change it is
+    void P.setFavorite({ id: snapshot.projects[0].id, org_id: snapshot.orgs[0].id }, true)
+    await settle()
+    expect(JSON.parse(notes()[0][1]).at(-1)).toMatchObject({
+      task: null,
+      what: 'a favorite change',
+    })
   })
 
   it('leaves the read that opening a task sends out of the count and the note', async () => {

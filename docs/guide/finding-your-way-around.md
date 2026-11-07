@@ -1,7 +1,8 @@
 ## Sidebar
 
 The sidebar shows your organization, **Search**, **My view**, **All
-projects**, **Team sync**, the **Projects** tree and **Settings**. The
+projects**, **Team sync**, the **Projects** tree and **Settings**. **All
+projects** opens the project directory ([All projects](#all-projects)). The
 organization name is not a switcher. If you only have a guest identity,
 **Create your organization…** opens the organization-creation dialog. It does
 not show while an organization that deactivated you, or one being deleted,
@@ -45,36 +46,80 @@ Create tasks from the Board controls described in [Creating a task](./how-work-i
 
 ## All projects
 
-**All projects** covers every project you can access, including projects
+**All projects** in the sidebar, and **Projects** on a phone, open the
+project directory. It lists every project you can access through your own
+access: the projects you lead, those you hold a grant or a team share on,
+and the projects above the sub-projects you can open, including projects
 shared by other organizations ([Guest access](./who-sees-what-the-access-model.md#people-outside-your-organization)).
+Your favorites come first and then the rest, each by name, 25 top-level
+projects a page, with **Previous** and **Next**. A project of another
+organization shows that organization's name. The directory loads no tasks;
+opening a project loads what its view needs.
+
+The star on a project adds it to your favorites or removes it. Your
+favorites are yours alone, in that organization alone. A star changes no
+one's access and sends no notification, and it cannot change while the
+organization is read-only. The project then moves between the two groups.
+An archived project, one in Deleted items and one you lost access to leave
+the directory and keep their star, which shows again when the project is
+restored or your access returns. Removing your seat removes its stars.
+
+**Sub-projects** under a project lists its sub-projects, 25 at first and
+more as you scroll or press **Load more**, up to 100, and then asks you to
+search. One project's list is open at a time. Selecting a project or a
+sub-project opens it as the sidebar does; one that has not loaded yet says
+so, and you can try again in a moment. A project's **…** menu opens its
+**Archived tasks** and, for those who may add one, **New sub-project…**.
+
+The field at the top finds projects and sub-projects by their own names,
+every word in any order, ignoring case and accents, so “cafe” finds “Café”.
+It asks once you pause typing, 25 results a page with **Previous** and
+**Next**, your matching favorites first. Each sub-project shows with its
+project, such as “Luma Sensor › Firmware”, and the organization's name is
+not searched. Clearing the field lists your projects again from the first
+page.
+
+The directory says so when its list is not ready yet, when Qivo could not
+finish checking which projects you can see, and when it checked only part of
+them, in which case **Next** or **Load more** goes on. It never shows an
+empty list for any of these.
+
+An organization admin's directory holds the projects they take part in, as
+anyone else's. **Settings › Projects › All projects** lists every project of
+the organization, and the sidebar still shows every project to an admin.
 
 The Board, the Overview and the Roadmap show one project at a time
 ([Which tasks a Board shows](./the-board.md#which-tasks-a-board-shows),
 [The Overview](./the-overview-project-health-at-a-glance.md),
-[The Roadmap](./the-roadmap.md)), so in All projects they list your
-top-level projects, and choosing one opens its Board, its Overview or its
-Roadmap. **My view** shows your own tasks across every project on all
-three. A task link that names no project, such as `…/tasks/qn-12`, opens
-the Board, the Overview or the Roadmap of the task's sub-project instead
-when it would open on All projects. A link that names All projects, such as
-`…/board/all/tasks/qn-12`, keeps it, with the task's window over the list.
+[The Roadmap](./the-roadmap.md)). Over all projects they still show in
+three places, each asking you to choose a project: an address that ends in
+`/all`, such as `…/board/all`, a person's Board or Roadmap jump from Team
+sync across all projects, and the page Qivo opens when you can see no
+project. **All projects** in the sidebar lights there too. **My view**
+shows your own tasks across every project on all three. A task link that
+names no project, such as `…/tasks/qn-12`, opens the Board, the Overview or
+the Roadmap of the task's sub-project instead when it would open over all
+projects. A link that names all projects, such as `…/board/all/tasks/qn-12`,
+keeps it, with the task's window over the list.
 
 To create a task, open its project first. On a desktop, the Board's project
 list and empty states offer no way to create a task; on a phone, **New
 task** in the task list lets you choose its project. The Team strip omits
 **This project only** because the scope already includes all projects.
 
-When you can see no active project, Qivo opens All projects. Its pages, Team
-sync and the Inbox then say that no active projects are shared with you, and
-that an organization admin or a project lead can give you access. An
-organization admin sees every project, so for an admin they say that the
-organization has no active projects. **New project** appears there if you can
-create projects ([Who can create projects](./organization-and-team-settings.md#who-can-create-projects)).
+When you can see no active project, Qivo opens the views over all projects.
+Their pages, Team sync and the Inbox then say that no active projects are
+shared with you, and that an organization admin or a project lead can give
+you access. An organization admin sees every project there, so for an admin
+they say that the organization has no active projects. The directory says
+that you have no active projects, and tells an admin that Settings ›
+Projects › All projects lists every project of the organization. **New
+project** appears there if you can create projects ([Who can create projects](./organization-and-team-settings.md#who-can-create-projects)).
 Team sync covers your home organization only, so it says the same when you can
 see none of that organization's projects, and names the organization if you
 belong to more than one ([Team sync](./planning-against-real-capacity.md#team-sync)).
 Once a project is shared with you, Qivo opens it, at once and on your next
-visit, unless you chose All projects yourself.
+visit, unless you chose the views over all projects yourself.
 
 If you hold a guest identity in another organization, the Team strip lists
 it separately from your home identity. Their capacity is not combined.
@@ -105,16 +150,17 @@ They follow you across devices and reloads.
 ## Pages stay as you left them
 
 Each page you open stays loaded while you use Qivo: the Overview, the Board,
-the Roadmap, the Inbox, Team sync and Projects. Going back to one shows it at
-once, scrolled where you left it, and changes made while it was out of sight
-follow right after. The Board checks which tasks it shows again when it
+the Roadmap, the Inbox, Team sync and All projects. Going back to one shows it
+at once, scrolled where you left it, and changes made while it was out of
+sight follow right after. All projects shows the page it was on and asks
+for it again. The Board checks which tasks it shows again when it
 shows, the Overview asks for its figures and lists again, showing the
 ones it had meanwhile, and Team sync asks for its meeting again, showing
 the one it had meanwhile. All three do the same when you return to a
 browser tab or desktop window you had hidden or minimized, where they stop
 updating meanwhile. The Overview,
 the Board and the Roadmap belong to the
-sidebar choice, such as a project or All projects. Choosing another one loads
+sidebar choice, such as a project or My view. Choosing another one loads
 them again for it. Settings loads each time you open it.
 
 Some parts of a page close when you leave it:
@@ -180,8 +226,8 @@ whatever page you are on, and **Search in** shows that as **All projects**.
 sub-project's tasks, opens Search with **Search in** set to that
 sub-project. An empty search shows nothing.
 
-**Search in** opens a list of your projects by name, 25 at a time with
-**Load more**. Type in it to find any project or sub-project you can open
+**Search in** opens a list of your projects, your favorites first and then
+the rest, each by name, 25 at a time with **Load more**. Type in it to find any project or sub-project you can open
 by its own name, words in any order, ignoring case and accents; each
 sub-project shows with its project. A project's arrow shows its
 sub-projects. Choose **All projects**, an
@@ -254,8 +300,9 @@ your account, use `~` instead of an organization name. For example,
 opens Archived tasks.
 
 Task links accept any case, a bare number or a full key. Project URLs use a
-stable number that survives renaming. All projects and My view have their
-own paths, `…/board/all` and `…/board/mine`. Opening a task adds
+stable number that survives renaming. All projects is `…/projects`, and My
+view has its own paths, such as `…/board/mine`; `…/board/all` shows the
+views over all projects. Opening a task adds
 `/tasks/qn-482`, so a reload preserves both task and scope.
 
 Copying a task link uses its short permanent address. Opening that link

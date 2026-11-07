@@ -62,7 +62,8 @@
 //                        health-over-budget, health-cap (at most 20 rows,
 //                        so the cap note shows) and health-error (its read
 //                        fails); several joined by commas
-//   projectnav           a state the project picker's navigation reads
+//   projectnav           a state the navigation reads of the project
+//                        picker and the All projects directory
 //                        (projectNav.page, children, search and resolve)
 //                        answer whatever the workspace says, for
 //                        screenshots of states a seeded backend cannot
@@ -71,9 +72,15 @@
 //                        refusal), stopped (an open batch stops after two
 //                        projects looked at), small (batches of five, so
 //                        programs=45 reaches the eight batches a list
-//                        gathers at most), error (every read fails) and
-//                        favorites (the first two programs starred);
-//                        several joined by commas
+//                        gathers at most and nine pages of the
+//                        directory), error (every read fails) and
+//                        favorites (the first two programs starred to
+//                        begin with) and empty (projectNav.page, search
+//                        and children list nothing, as for someone who
+//                        sees no project); several joined by commas. A star
+//                        or an unstar (projectNav:setFavorite) changes the
+//                        starred set by the server's rule and sends the
+//                        reads again
 //   roadmap              a state the Roadmap's reads (tasks:roadmap and
 //                        tasks:roadmapDependencies) answer whatever the
 //                        tasks say, for screenshots of states a seeded
@@ -427,7 +434,9 @@
 // navigation reads (projectNav:page, children, search and resolve), through
 // src/store/projectNavStandIn.setup.ts, which judges the signed-in person by
 // ordinary access, reads no budget and has no favorites unless
-// projectnav=favorites asks. Archived tasks' own read (issues:archivedPage) has
+// projectnav=favorites asks or the page stars one: the star
+// (projectNav:setFavorite) changes the starred set by the server's rule
+// (setFavoriteStandIn) and sends the reads that changed. Archived tasks' own read (issues:archivedPage) has
 // no stand-in, so its page fails once projects are chosen here. So are a
 // project's Settings page reads (projectSettings:get, users, teams, candidates,
 // leadCandidates and inviteTarget), through the stand-in the jsdom tests use
@@ -496,7 +505,11 @@ import {
   isPeopleSettingsRead,
   peopleSettingsStandIn,
 } from '../../src/store/peopleSettingsStandIn.setup'
-import { NAV_UNCHECKED, projectNavStandIn } from '../../src/store/projectNavStandIn.setup'
+import {
+  NAV_UNCHECKED,
+  projectNavStandIn,
+  setFavoriteStandIn,
+} from '../../src/store/projectNavStandIn.setup'
 import {
   isProjectListRead,
   LISTS_UNCHECKED,
@@ -668,6 +681,7 @@ const forcedProjectNav = (() => {
     else if (state === 'small') force.batch = 5
     else if (state === 'error') force.fail = true
     else if (state === 'favorites') force.favorites = true
+    else if (state === 'empty') force.empty = true
   }
   return force
 })()
@@ -1947,17 +1961,26 @@ function searchPage({ text, include_archived, scope, cursor }) {
     coverage: { complete: true },
   }
 }
-/** The navigation reads' `force`, with the first two programs as the
-    favorites projectnav=favorites asks for. */
-const projectNavForce = () =>
-  forcedProjectNav.favorites
-    ? { ...forcedProjectNav, favorites: programs.slice(0, 2).map((p) => p.meta.id) }
-    : { ...forcedProjectNav, favorites: [] }
+/* The starred top-level projects, which projectnav=favorites starts with
+   the first two programs and a star or an unstar changes. */
+let starred = null
+/** The starred set, made on its first use, once the programs exist. */
+const starredSet = () => {
+  starred ??= new Set(forcedProjectNav.favorites ? programs.slice(0, 2).map((p) => p.meta.id) : [])
+  return starred
+}
+/** The navigation reads' `force`, with the starred set as its favorites. */
+const projectNavForce = () => ({ ...forcedProjectNav, favorites: starredSet() })
 const read = (name, args = {}) => {
   if (name.startsWith('workspace:')) return readPart(name, args)
   // the project picker's reads (src/store/projectNavStandIn.setup.ts)
-  if (name.startsWith('projectNav:'))
-    return projectNavStandIn(snapshot, name, args, { force: projectNavForce() })
+  if (name.startsWith('projectNav:')) {
+    const answer = projectNavStandIn(snapshot, name, args, { force: projectNavForce() })
+    // projectnav=empty: the lists hold nothing, after the stand-in's checks
+    return forcedProjectNav.empty && answer.state === 'ok' && name !== 'projectNav:resolve'
+      ? { ...answer, rows: [], next: null, stopped: false }
+      : answer
+  }
   // Deleted items (src/store/deletedItemsStandIn.setup.ts)
   if (isDeletedRead(name))
     return name === 'deletedItems:purgeSummary' && deletedStates.has('purge-counting')
@@ -2318,6 +2341,14 @@ function syncAgenda(args) {
 /** Runs mutation `name` with `args` and answers its result. */
 async function mutate(name, args) {
   if (name === 'identity:claimMySeats' || name === 'prefs:save') return null
+  // a star of the All projects directory, by the server's rule, then the
+  // navigation reads it changed, before its answer as Convex sends them
+  if (name === 'projectNav:setFavorite') {
+    const answer = setFavoriteStandIn(snapshot, starredSet(), args)
+    writes++
+    await transition()
+    return answer
+  }
   // a restore or Delete now answers from the stand-in, after its reads
   if (name === 'deletedItems:restore' || name === 'deletedItems:purge') {
     if (forcedDeleted.slow) await new Promise((resolve) => setTimeout(resolve, forcedDeleted.slow))
@@ -2716,9 +2747,12 @@ async function write(data, turn) {
     post({ type: 'answer', id: data.id, value })
   } catch (error) {
     await turn
-    // a Deleted items refusal comes with its data, as Convex sends a
-    // ConvexError's, so the app words it as the server's
-    const refusal = data.name.startsWith('deletedItems:') ? refusalOf(error).data : undefined
+    // a Deleted items refusal or a star's comes with its data, as Convex
+    // sends a ConvexError's, so the app words it as the server's
+    const refusal =
+      data.name.startsWith('deletedItems:') || data.name === 'projectNav:setFavorite'
+        ? refusalOf(error).data
+        : undefined
     post(
       refusal
         ? { type: 'answer', id: data.id, error: refusal }

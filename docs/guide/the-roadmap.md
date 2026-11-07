@@ -1,8 +1,8 @@
 The Roadmap shows scheduled tasks as bars on a weekly timeline, for one
 project, one sub-project or **My view**. In a project, tasks sit under their
 sub-projects. **My view** groups your own tasks by project, then sub-project.
-In **All projects** the Roadmap asks you to choose a project, as the Board
-and the Overview do. Undated tasks appear below the scheduled tasks
+Over all projects, at an address that ends in `/all`, the Roadmap asks you
+to choose a project, as the Board and the Overview do ([All projects](./finding-your-way-around.md#all-projects)). Undated tasks appear below the scheduled tasks
 with an **unplanned** marker and their due date, if set. Click one to open it
 and set its plan. Tasks with subtasks take their dates from them instead.
 

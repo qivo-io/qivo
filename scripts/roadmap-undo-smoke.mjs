@@ -339,7 +339,10 @@ try {
 
   await dragWeeks(child, 1)
   await settled(1)
-  await page.locator('[data-all-nav]').click()
+  // another project and back keep the Roadmap's history; All projects
+  // opens the project directory, a page of its own, which ends the visit
+  const other = fixture.name === 'Luma Cloud' ? 'Pilot & Launch' : 'Luma Cloud'
+  await page.locator('aside').getByText(other, { exact: true }).click()
   await settled(1)
   await page.locator('aside').getByText(fixture.name, { exact: true }).click()
   await settled(1)

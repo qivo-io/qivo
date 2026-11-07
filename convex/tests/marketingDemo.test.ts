@@ -26,7 +26,9 @@ import { NORTHSTAR_BATCH, NORTHSTAR_STEPS } from '../model/demoSeed'
 import { nameKeysReady } from '../model/nameKeys'
 import { newOrgDefaults, newTeamDefaults } from '../model/orgs'
 import { countsReady } from '../model/overviewCounts'
+import { copiesOf } from '../model/projectFavorites'
 import { navReady } from '../model/projectNav'
+import { navPageOf } from '../model/projectNavReads'
 import schema from '../schema'
 import {
   countersFor,
@@ -46,6 +48,7 @@ import {
 } from './helpers.setup'
 import { expectExact } from './nameKeys.setup'
 import { expectCountsExact } from './overviewCounts.setup'
+import { shows } from './projectNav.setup'
 import { expectReachExact, expectReachMatchesAccess } from './projectReach.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
@@ -1387,6 +1390,90 @@ describe('marketing demo rebuild ownership', () => {
     )
   }, 30_000)
 
+  it("seeds each person's favorites with their project's copies, each shown by the reader rule, and again on reset", async () => {
+    const t = newAuthT()
+    const { org_id } = await seeded(t)
+    /** Each favorites row of the organization, named by person and project. */
+    const starred = () =>
+      t.run(async (ctx) => {
+        const rows = (await ctx.db.query('project_favorites').collect()).filter(
+          (row) => row.org_id === org_id,
+        )
+        return await Promise.all(
+          rows.map(async (row) => {
+            const profile = await ctx.db
+              .query('profiles')
+              .withIndex('by_uuid', (q) => q.eq('id', row.profile_id))
+              .unique()
+            const project = await ctx.db
+              .query('projects')
+              .withIndex('by_uuid', (q) => q.eq('id', row.project_id))
+              .unique()
+            return { row, profile, project }
+          }),
+        )
+      })
+    const expected = new Set([
+      'Nora Berg on Pilot & Launch',
+      'Leo Martins on Luma Sensor',
+      'Daniel Park on Luma Cloud',
+      'Ben Carter on Pilot & Launch',
+    ])
+    const check = async () => {
+      const rows = await starred()
+      expect(new Set(rows.map((r) => `${r.profile?.name} on ${r.project?.name}`))).toEqual(expected)
+      for (const { row, profile, project } of rows) {
+        if (!profile || !project) throw new Error('a favorite names no seat or project')
+        // a top-level project's row with its copies, as a star writes it
+        expect(project.parent_id).toBeUndefined()
+        expect({ name_key: row.name_key, live: row.live }).toEqual(copiesOf(project))
+        expect(row.org_id).toBe(profile.org_id)
+        expect(row.created_at >= profile.created_at).toBe(true)
+        // which every reader shows
+        expect(await shows(t, row), `${profile.name} on ${project.name}`).toBe(true)
+      }
+      // Nora's star puts the last project by name first
+      const nora = rows.find((r) => r.profile?.name === 'Nora Berg')?.profile
+      if (!nora) throw new Error('no Nora')
+      const page = await t.run((ctx) => navPageOf(ctx, new Map([[org_id, nora]]), {}))
+      if (page.state !== 'ok') throw new Error(`no page: ${JSON.stringify(page)}`)
+      expect(page.rows.map((r) => [r.name, r.favorite])).toEqual([
+        ['Pilot & Launch', true],
+        ['Luma Cloud', false],
+        ['Luma Sensor', false],
+      ])
+    }
+    await check()
+    await reset(t, NEXT_ANCHOR)
+    await check()
+  })
+
+  it('stamps a seeded star no earlier than its seat, so the favorites repair keeps a seat put back mid-seed', async () => {
+    const t = newAuthT()
+    const { org_id } = await provision(t)
+    // the seed's first call stores the time every step writes with
+    expect(await apply(t, 'seed')).toMatchObject({ state: 'seeding' })
+    const began = (await t.run((ctx) => ctx.db.query('marketing_demo').first()))?.seed?.now
+    if (!began) throw new Error('the seed stored no time')
+    // Nora's seat, put back after the seed began as restoreSeat writes it,
+    // is newer than the seed's time
+    const later = new Date(Date.parse(began) + 60_000).toISOString()
+    const nora = (await profiles(t, org_id)).find((p) => p.name === 'Nora Berg')
+    if (!nora) throw new Error('no Nora')
+    await t.run((ctx) => ctx.db.patch(nora._id, { created_at: later }))
+    await seed(t)
+    const rows = await t.run(async (ctx) =>
+      (await ctx.db.query('project_favorites').collect()).filter((r) => r.org_id === org_id),
+    )
+    expect(rows).toHaveLength(4)
+    for (const row of rows)
+      expect(row.created_at, row.profile_id).toBe(row.profile_id === nora.id ? later : began)
+    // so no row is older than its seat, and the repair's dry run keeps all
+    const dry = await t.action(internal.internal.favoritesRepair.run, { dry_run: true })
+    expect(dry.counts.profile_newer).toBe(0)
+    expect(dry.counts.ok).toBe(4)
+  }, 30_000)
+
   it("wipes the seats' favorites with the projects, and refuses a seed while one is left", async () => {
     const t = newAuthT()
     const result = await seeded(t)
@@ -1432,7 +1519,11 @@ describe('marketing demo rebuild ownership', () => {
       /work was added after wipe.*use reset/,
     )
     expect(await reset(t, NEXT_ANCHOR)).toMatchObject({ state: 'ready' })
-    expect(await ofOrg()).toEqual([])
+    // the reset's seed writes the dataset's four stars again, and only them
+    const after = await ofOrg()
+    expect(after).toHaveLength(
+      MARKETING_DEMO.people.reduce((n, p) => n + (p.favorites?.length ?? 0), 0),
+    )
     await assertNoDanglingRefs(t, 'marketing demo reset after a favorite')
   }, 30_000)
 

@@ -50,6 +50,7 @@ import {
   useFocusAfterRender,
   useFocusWhenGone,
 } from '../../lib/focusWhenGone'
+import { useLoadMore } from '../../lib/loadMore'
 import {
   type ListEnd,
   listEnd,
@@ -70,7 +71,6 @@ import {
   PROJECT_LIST_LIMITS,
   readyBatch,
   tagsOf,
-  useLoadMore,
   useSubProjects,
 } from './projectListReads'
 

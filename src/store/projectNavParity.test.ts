@@ -24,12 +24,19 @@
  * shapes, the admins included, since it judges everyone by ordinary access
  * as the reads do: the page, a batch kept live from the start, each
  * top-level project's sub-projects, each project resolved by id and a few
- * by number, the searches, and the server's refusals. */
+ * by number, the searches, and the server's refusals. Its star
+ * (setFavoriteStandIn) is held to projectNav.setFavorite: a star and an
+ * unstar of each live project of the person's organization and of an
+ * unknown id, through both, answer alike and leave the same favorites.
+ * Northstar's people start with the dataset's stars
+ * (internal/marketingDemoData.ts). */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
 import { nameKey } from '../../convex/lib/nameKey'
 import { allWordsMatcher } from '../../convex/lib/search'
+import { TOP_LEVEL_ONLY } from '../../convex/model/projectFavorites'
 import {
   BLANK_SEARCH,
   EMPTY_ORG,
@@ -66,10 +73,13 @@ import type { Snapshot } from './plannerFixture.setup'
 import {
   NAV_BLANK_SEARCH,
   NAV_EMPTY_ORG,
+  NAV_NOT_FOUND,
   NAV_RESOLVE_FORM,
+  NAV_TOP_LEVEL_ONLY,
   type ProjectNavArgs,
   type ProjectNavRead,
   projectNavStandIn,
+  setFavoriteStandIn,
 } from './projectNavStandIn.setup'
 
 vi.hoisted(() => {
@@ -268,13 +278,75 @@ async function compareStandIn(
 
 describe('the stand-in', () => {
   it('words its refusals as the server does', () => {
-    expect([NAV_BLANK_SEARCH, NAV_EMPTY_ORG, NAV_RESOLVE_FORM]).toEqual([
-      BLANK_SEARCH,
-      EMPTY_ORG,
-      RESOLVE_FORM,
-    ])
+    expect([
+      NAV_BLANK_SEARCH,
+      NAV_EMPTY_ORG,
+      NAV_RESOLVE_FORM,
+      NAV_NOT_FOUND,
+      NAV_TOP_LEVEL_ONLY,
+    ]).toEqual([BLANK_SEARCH, EMPTY_ORG, RESOLVE_FORM, 'project not found', TOP_LEVEL_ONLY])
   })
 })
+
+/** What a star answered: 'ok', or the refusal's code and sentence. */
+async function outcomeOf(run: () => unknown): Promise<string> {
+  try {
+    await run()
+    return 'ok'
+  } catch (e) {
+    const data = (e as { data?: { code?: string; message?: string } }).data
+    return data ? `${data.code}: ${data.message}` : String(e)
+  }
+}
+
+/** The project ids of `profile`'s favorites rows. */
+const favoriteIds = (t: T, profile: Doc<'profiles'>) =>
+  t.run(async (ctx) =>
+    (
+      await ctx.db
+        .query('project_favorites')
+        .withIndex('by_profile_list', (q) => q.eq('profile_id', profile.id))
+        .collect()
+    ).map((row) => row.project_id),
+  )
+
+/**
+ * Stars and then unstars each live project of `profile`'s organization,
+ * and an unknown id, through projectNav.setFavorite and through the
+ * stand-in's star over a set that starts with the profile's favorites, and
+ * holds each answer alike and the favorites each leaves alike. Ends with
+ * the favorites the profile had.
+ */
+async function compareStars(t: T, profile: Doc<'profiles'>, label: string) {
+  const snap = await workspaceOf(as(t, profile))
+  if (snap === null) throw new Error(`no workspace for ${profile.name}`)
+  const had = await favoriteIds(t, profile)
+  const favorites = new Set(had)
+  const projects = await t.run(async (ctx) =>
+    (
+      await ctx.db
+        .query('projects')
+        .withIndex('by_org', (q) => q.eq('org_id', profile.org_id))
+        .collect()
+    ).filter((p) => p.archived_at === undefined),
+  )
+  const both = async (project_id: string, favorite: boolean) => {
+    const args = { org_id: profile.org_id, project_id, favorite }
+    const real = await outcomeOf(() => as(t, profile).mutation(api.projectNav.setFavorite, args))
+    const stand = await outcomeOf(() => setFavoriteStandIn(snap, favorites, args))
+    expect(stand, `${label}: ${favorite ? 'star' : 'unstar'} ${project_id}`).toBe(real)
+    expect(sorted(favorites), `${label}: favorites after ${project_id}`).toEqual(
+      sorted(await favoriteIds(t, profile)),
+    )
+    return real
+  }
+  const answers = new Set<string>()
+  for (const p of [...projects.map((x) => x.id), uuid()]) answers.add(await both(p, true))
+  // an unstar always goes through, and leaves only what the profile had
+  for (const p of projects) if (!had.includes(p.id)) expect(await both(p.id, false)).toBe('ok')
+  expect(sorted(favorites), label).toEqual(sorted(had))
+  return answers
+}
 
 /**
  * Compares the four reads for `profile` with the store booted from their
@@ -400,18 +472,31 @@ describe('Northstar', () => {
       return p
     }
     const [nora, leo, ben] = await Promise.all(['nora', 'leo', 'ben'].map(person))
-    // Northstar has no stars yet, so Leo stars two of his projects, and Ben
-    // one of Leo's he may not see
+    // the dataset stars Luma Sensor for Leo and Pilot & Launch for Ben and
+    // Nora; Leo stars one more of his projects
+    const [sensor, launch] = await Promise.all(
+      ['project:sensor', 'project:launch'].map(northstarId),
+    )
+    expect(await favoriteIds(t, leo)).toEqual([sensor])
+    expect(await favoriteIds(t, ben)).toEqual([launch])
+    expect(await favoriteIds(t, nora)).toEqual([launch])
     const leos = (await storeOf(t, leo)).visibleProjects()
-    for (const p of leos.slice(0, 2)) await star(t, leo, p)
-    for (const p of leos.slice(-1)) await star(t, ben, p)
+    expect(leos.length).toBeGreaterThan(2)
+    const more = leos.find((p) => p.id !== sensor)
+    if (more === undefined) throw new Error('Leo sees one project')
+    await star(t, leo, more)
     expect(await compare(t, leo, 'Leo', NORTHSTAR_TERMS)).toEqual({ beyond: 0, searchBeyond: 0 })
     expect(await compare(t, ben, 'Ben', NORTHSTAR_TERMS)).toEqual({ beyond: 0, searchBeyond: 0 })
-    expect(leos.length).toBeGreaterThan(2)
     const leoPage = await expectedPage(t, [leo])
     expect(sorted(leoPage.filter((r) => r.favorite).map((r) => r.id))).toEqual(
-      sorted(leos.slice(0, 2).map((p) => p.id)),
+      sorted([sensor, more.id]),
     )
+    // Nora's star puts Pilot & Launch, last by name, first
+    expect((await expectedPage(t, [nora])).map((r) => [r.name, r.favorite])).toEqual([
+      ['Pilot & Launch', true],
+      ['Luma Cloud', false],
+      ['Luma Sensor', false],
+    ])
     // the store gives Nora every project and the reads only her ordinary
     // ones, which in Northstar reach every top-level project the store shows
     // and so do her ordinary sub-projects, so the search finds every match
@@ -420,10 +505,14 @@ describe('Northstar', () => {
       beyond: 0,
       searchBeyond: 0,
     })
-    const ids = (ps: { id: string }[]) => ps.map((p) => p.id)
-    await compareStandIn(t, leo, 'Leo', NORTHSTAR_TERMS, ids(leos.slice(0, 2)))
-    await compareStandIn(t, ben, 'Ben', NORTHSTAR_TERMS, ids(leos.slice(-1)))
-    await compareStandIn(t, nora, 'Nora', NORTHSTAR_TERMS)
+    await compareStandIn(t, leo, 'Leo', NORTHSTAR_TERMS, [sensor, more.id])
+    await compareStandIn(t, ben, 'Ben', NORTHSTAR_TERMS, [launch])
+    await compareStandIn(t, nora, 'Nora', NORTHSTAR_TERMS, [launch])
+    // Leo stars every live project, Firmware a sub-project, and an
+    // unknown id, through both
+    expect(await compareStars(t, leo, 'Leo')).toEqual(
+      new Set(['ok', `bad_request: ${TOP_LEVEL_ONLY}`, 'not_found: project not found']),
+    )
   })
 })
 
@@ -448,6 +537,7 @@ async function compareShape(
   const label = `${role}, ${shape?.[0] ?? 'admin'}`
   const { beyond, searchBeyond } = await compare(t, subject, label, SHAPE_TERMS, role === 'admin')
   await compareStandIn(t, subject, label, SHAPE_TERMS, [f.meta.id])
+  await compareStars(t, subject, label)
   const shown = (await expectedPage(t, [subject])).length
   return { beyond, searchBeyond, shown }
 }

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { anyApi } from 'convex/server'
 import { ConvexError } from 'convex/values'
-import { act } from 'react'
+import { Activity, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LIMITS } from '../../convex/lib/limits'
@@ -12,9 +12,10 @@ import type { BatchAt, BatchSource, ListBatch, PagedList, PagedPages } from './p
    small name-ordered server: the `once` source's reads on demand, and the
    `live` source's batches, kept live with ends pinned on Load more, split
    when a pinned batch stops short, holding one moment's answers, stopped
-   while the tab is hidden and on leaving, and started again for a refused
-   position. The page mode (usePagedPages) shows one live page that Next
-   and Previous replace, and useMoreOnScroll loads more as a marker comes
+   while the tab is hidden, while a kept page hides them (keeping what they
+   show) and on leaving, and started again for a refused position. The
+   page mode (usePagedPages) shows one live page that Next and Previous
+   replace, and useMoreOnScroll loads more as a marker comes
    into view. The helpers useSettledSearch, listEnd and pageEnd have cases
    of their own. */
 
@@ -615,6 +616,93 @@ describe('a list kept live a batch at a time', () => {
     expect(now().refreshing).toBe(false)
   })
 
+  it('keeps its batches while a kept page hides it, and reads the same batches again on return', async () => {
+    plant('a', 60)
+    // a kept page hides in React's Activity, which stops its effects
+    const kept = (mode: 'visible' | 'hidden') =>
+      act(async () =>
+        root.render(
+          <Activity mode={mode}>
+            <View listKey="k" source={LIVE('k')} />
+          </Activity>,
+        ),
+      )
+    await kept('visible')
+    await publish()
+    await act(async () => now().more())
+    await publish()
+    const asked = open()
+    expect(names()).toHaveLength(50)
+    await kept('hidden')
+    expect(open()).toEqual([])
+    await kept('visible')
+    // the rows show at once, and the same batches read again
+    expect(names()).toHaveLength(50)
+    expect(open()).toEqual(asked)
+    expect(now().refreshing).toBe(true)
+    await publish(true)
+    expect(now().refreshing).toBe(false)
+    expect(names()).toHaveLength(50)
+    // a list that goes for good leaves no watch
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    expect(open()).toEqual([])
+    expect(transport.handlers.size).toBe(0)
+  })
+
+  it('reads nothing while a kept page shows over a hidden tab, and opens a key changed while it was kept', async () => {
+    plant('a', 60)
+    const kept = (mode: 'visible' | 'hidden', listKey = 'k') =>
+      act(async () =>
+        root.render(
+          <Activity mode={mode}>
+            <View listKey={listKey} source={LIVE(listKey)} />
+          </Activity>,
+        ),
+      )
+    await kept('visible')
+    await publish()
+    await act(async () => now().more())
+    await publish()
+    const asked = open()
+    expect(asked).toHaveLength(2)
+    // the tab hides and shows while the page is kept, then the page shows,
+    // and each batch reads once
+    await kept('hidden')
+    await setVisibility('hidden')
+    await setVisibility('visible')
+    const made = transport.state.n
+    await kept('visible')
+    expect(open()).toEqual(asked)
+    expect(transport.state.n - made).toBe(asked.length)
+    await publish(true)
+    expect(now().refreshing).toBe(false)
+    // the page shows while the tab is still hidden, and no read stays open
+    // until the tab shows (its effects first run with the visibility it
+    // last rendered, so its reads may open and stop at once, as a kept
+    // view's do when its arguments changed while it hid, lib/liveView.ts)
+    await kept('hidden')
+    await setVisibility('hidden')
+    await kept('visible')
+    expect(open()).toEqual([])
+    expect(names()).toHaveLength(50)
+    await setVisibility('visible')
+    expect(open()).toEqual(asked)
+    await publish(true)
+    // a key changed while the page was kept opens the new list alone, and
+    // shows no row of the old one, once the page shows
+    await kept('hidden')
+    await kept('hidden', 'j')
+    expect(open()).toEqual([])
+    const at = transport.state.n
+    await kept('visible', 'j')
+    expect(open()).toEqual([{ list: 'j' }])
+    expect(transport.state.n - at).toBe(1)
+    expect(now().rows).toEqual([])
+    await publish()
+    expect(names()).toHaveLength(25)
+  })
+
   it('waits on return for each batch of a Load more to answer again, so no answer from before the tab hid joins one from after', async () => {
     plant('a', 60)
     await render({ listKey: 'k', source: LIVE('k') })
@@ -700,6 +788,62 @@ describe('a list kept live a batch at a time', () => {
     server.fail = null
     await act(async () => now().retry())
     await publish()
+    expect(names()).toHaveLength(25)
+  })
+
+  it('counts refused positions afresh on each visit of a kept page, and starts a failed list again on return', async () => {
+    plant('a', 60)
+    const kept = (mode: 'visible' | 'hidden') =>
+      act(async () =>
+        root.render(
+          <Activity mode={mode}>
+            <View listKey="k" source={LIVE('k')} />
+          </Activity>,
+        ),
+      )
+    const refusal = new ConvexError({ code: 'bad_request', message: 'not a cursor' })
+    const refuse = (on: boolean) => {
+      server.fail = on ? (args) => (args.after || args.through ? refusal : null) : null
+    }
+    await kept('visible')
+    await publish()
+    await act(async () => now().more())
+    await publish()
+    // a first refusal starts the list again from its first batch
+    refuse(true)
+    await publish()
+    expect(open()).toEqual([{ list: 'k' }])
+    refuse(false)
+    await publish(true)
+    await act(async () => now().more())
+    await publish()
+    expect(names()).toHaveLength(50)
+    // another page shows, and on return the next refusal starts the list
+    // again rather than failing it
+    await kept('hidden')
+    await kept('visible')
+    await publish(true)
+    refuse(true)
+    await publish()
+    expect(now().phase).not.toBe('failed')
+    expect(open()).toEqual([{ list: 'k' }])
+    refuse(false)
+    await publish(true)
+    expect(names()).toHaveLength(25)
+    // a second refusal in one visit fails the list, which starts again
+    // from its first batch once the page shows again
+    await act(async () => now().more())
+    await publish()
+    refuse(true)
+    await publish()
+    expect(now().phase).toBe('failed')
+    expect(open()).toEqual([])
+    refuse(false)
+    await kept('hidden')
+    await kept('visible')
+    expect(open()).toEqual([{ list: 'k' }])
+    await publish()
+    expect(now().phase).toBe('ready')
     expect(names()).toHaveLength(25)
   })
 
@@ -974,6 +1118,62 @@ describe('a list shown a page at a time', () => {
     expect(page().phase).toBe('ready')
   })
 
+  it('counts refused starts afresh on each visit of a kept page, and starts a failed list again on return', async () => {
+    plant('a', 60)
+    const kept = (mode: 'visible' | 'hidden') =>
+      act(async () =>
+        root.render(
+          <Activity mode={mode}>
+            <Pages listKey="k" />
+          </Activity>,
+        ),
+      )
+    const refusal = new ConvexError({ code: 'bad_request', message: 'not a cursor' })
+    const refuse = (on: boolean) => {
+      server.fail = on ? (args) => (args.after ? refusal : null) : null
+    }
+    await kept('visible')
+    await publish()
+    await act(async () => page().next())
+    await publish()
+    // a first refusal goes back to the first page
+    refuse(true)
+    await publish()
+    expect(page().starts).toEqual([null])
+    refuse(false)
+    await publish(true)
+    await act(async () => page().next())
+    await publish()
+    expect(shown()[0]).toBe('a25')
+    // another page shows, and on return the next refusal goes back to the
+    // first page rather than failing the list
+    await kept('hidden')
+    await kept('visible')
+    await publish(true)
+    refuse(true)
+    await publish()
+    expect(page().phase).not.toBe('failed')
+    expect(open()).toEqual([{ list: 'k' }])
+    refuse(false)
+    await publish(true)
+    expect(shown()[0]).toBe('a00')
+    // a second refusal in one visit fails the list, which starts again from
+    // its first page once the page shows again
+    await act(async () => page().next())
+    await publish()
+    refuse(true)
+    await publish()
+    expect(page().phase).toBe('failed')
+    expect(open()).toEqual([])
+    refuse(false)
+    await kept('hidden')
+    await kept('visible')
+    expect(open()).toEqual([{ list: 'k' }])
+    await publish()
+    expect(page().phase).toBe('ready')
+    expect(shown()[0]).toBe('a00')
+  })
+
   it('keeps at most PAGE_LIMITS.starts page starts, so Previous stops at the oldest held', async () => {
     const was = PAGE_LIMITS.starts
     PAGE_LIMITS.starts = 2
@@ -1032,6 +1232,109 @@ describe('a list shown a page at a time', () => {
     expect(page().phase).toBe('held')
     expect(pageEnd(page(), false)).toBe('held')
     expect(shown()).toEqual([])
+  })
+
+  it('keeps the page it was on while a kept page hides it, showing it at once on return', async () => {
+    plant('a', 60)
+    // a kept page hides in React's Activity, which stops its effects; the
+    // rows stay the same elements, so the page keeps its scroll place
+    function Rows({ listKey }: { listKey: string }) {
+      const p = usePagedPages({
+        key: listKey,
+        query: anyApi.labels.settingsPage,
+        args: (after) => argsOf(listKey, { after, through: null }),
+        batch: (a: ListBatch<Row> & { ready?: false }) => ('ready' in a ? null : a),
+      })
+      pages.push(p)
+      return (
+        <ul>
+          {p.rows.map((row) => (
+            <li key={row.id} data-row={row.name} />
+          ))}
+        </ul>
+      )
+    }
+    const kept = (mode: 'visible' | 'hidden') =>
+      act(async () =>
+        root.render(
+          <Activity mode={mode}>
+            <Rows listKey="k" />
+          </Activity>,
+        ),
+      )
+    await kept('visible')
+    await publish()
+    await act(async () => page().next())
+    await publish()
+    expect(shown()[0]).toBe('a25')
+    const row = container.querySelector('[data-row="a25"]')
+    await kept('hidden')
+    expect(open()).toEqual([])
+    expect(shown()[0]).toBe('a25')
+    await kept('visible')
+    // the page it was on, at once, read again at the same start
+    expect(shown()[0]).toBe('a25')
+    expect(container.querySelector('[data-row="a25"]')).toBe(row)
+    expect(open()).toEqual([{ list: 'k', after: cursor('a24') }])
+    expect(page().starts).toEqual([null, cursor('a24')])
+    expect(page().refreshing).toBe(true)
+    await publish(true)
+    expect(page().refreshing).toBe(false)
+    expect(shown()[0]).toBe('a25')
+    await act(async () => page().previous())
+    await publish()
+    expect(shown()[0]).toBe('a00')
+  })
+
+  it('reads nothing while a kept page shows over a hidden tab, and opens a key changed while it was kept', async () => {
+    plant('a', 60)
+    const kept = (mode: 'visible' | 'hidden', listKey = 'k') =>
+      act(async () =>
+        root.render(
+          <Activity mode={mode}>
+            <Pages listKey={listKey} />
+          </Activity>,
+        ),
+      )
+    await kept('visible')
+    await publish()
+    await act(async () => page().next())
+    await publish()
+    const asked = open()
+    expect(asked).toEqual([{ list: 'k', after: cursor('a24') }])
+    // the tab hides and shows while the page is kept, then the page shows,
+    // and the page reads once
+    await kept('hidden')
+    await setVisibility('hidden')
+    await setVisibility('visible')
+    const made = transport.state.n
+    await kept('visible')
+    expect(open()).toEqual(asked)
+    expect(transport.state.n - made).toBe(1)
+    await publish(true)
+    expect(shown()[0]).toBe('a25')
+    // the page shows while the tab is still hidden, and no read stays open
+    // until the tab shows
+    await kept('hidden')
+    await setVisibility('hidden')
+    await kept('visible')
+    expect(open()).toEqual([])
+    expect(shown()[0]).toBe('a25')
+    await setVisibility('visible')
+    expect(open()).toEqual(asked)
+    await publish(true)
+    // a key changed while the page was kept opens the new list alone, at
+    // its first page, once the page shows
+    await kept('hidden')
+    await kept('hidden', 'j')
+    expect(open()).toEqual([])
+    const at = transport.state.n
+    await kept('visible', 'j')
+    expect(open()).toEqual([{ list: 'j' }])
+    expect(transport.state.n - at).toBe(1)
+    expect(page().rows).toEqual([])
+    await publish()
+    expect(shown()[0]).toBe('a00')
   })
 
   it('leaves no read when the page goes', async () => {

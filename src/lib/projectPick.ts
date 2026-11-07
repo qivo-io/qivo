@@ -32,6 +32,12 @@ export const PICK_MOST = 50
     them back. */
 export const PROJECT_PICKER_MOST = { list: 200, children: 50 }
 
+/** The most sub-projects the All projects directory's expanded list
+    gathers (components/ProjectDirectory.tsx): four batches, past the
+    design size's 30 live sub-projects under one project, then it asks for
+    a search, as Settings' open lists do. Tests lower it and set it back. */
+export const DIRECTORY_MOST = { children: 100 }
+
 /** A project as the picker picks it: a navigation row with its top-level
     project, null for a top-level one. */
 export type PickedProject = NavProject & { parent: NavProject | null }

@@ -903,14 +903,16 @@ The project navigation reads `projectNav.page`, `projectNav.children` and
 `projectNav.resolve` first shipped in v0.1.118 (`13f4bcba`), which set no
 rollback floor and needed no step. The shared project picker is the first
 app that calls them, and its paragraph below says which floor that app
-needs. The reads use only the reach rows and name keys every deployment
-holds since v0.1.97 and the favorites rows below. `projectNav.page` and
-`projectNav.children` answer `not_ready` for an organization without both
-of its `org_ready` stamps, and `projectNav.resolve` answers without them.
-The reads skip the favorites a rollback past the favorites release leaves,
-by the reader rule the favorites paragraph below describes, so such a row
-never shows and keeps its project, where the seat sees it, in the list of
-the rest.
+needs. From the release after v0.1.155, whose paragraph below says the
+same, the All projects directory calls `projectNav.page`, `children` and
+`search`; v0.1.126 (`1228de4c`) first shipped `search`. The reads use only
+the reach rows and name keys every deployment holds since v0.1.97 and the
+favorites rows below. `projectNav.page` and `projectNav.children` answer
+`not_ready` for an organization without both of its `org_ready` stamps,
+and `projectNav.resolve` answers without them. The reads skip the
+favorites a rollback past the favorites release leaves, by the reader rule
+the favorites paragraph below describes, so such a row never shows and
+keeps its project, where the seat sees it, in the list of the rest.
 
 The Roadmap's server reads, `tasks.roadmap` and
 `tasks.roadmapDependencies`, first ship in the release after v0.1.119
@@ -1724,6 +1726,31 @@ floor. An older app works against its backend, and this app works against
 any backend the floors above already hold. Returning the app alone to an
 earlier release is safe.
 
+From the release after v0.1.155, the sidebar's **All projects** and the
+phone's **Projects** open the project directory, which lists the person's
+projects from `projectNav.page` and `search` and a project's sub-projects
+from `projectNav.children`, which v0.1.118 (`13f4bcba`) and v0.1.126
+(`1228de4c`) first shipped, and stars a project with
+`projectNav.setFavorite`, which v0.1.106 (`c786ca15`) first shipped,
+instead of filtering the workspace's projects in the browser. Against a
+backend before v0.1.126 the directory's search says it couldn't load your
+projects, before v0.1.118 the whole directory says so, and before v0.1.106
+a star fails, also in a tab that was open when the backend went back, until
+the backend rolls forward. The floors above already hold v0.1.126, so this
+release sets no new floor. From it on, as from them, never return the
+backend to a commit before the newest floor above; roll forward instead.
+Returning the app alone to an earlier release is safe, because that app's
+directory lists the workspace's projects and its pickers keep listing the
+stored favorites first, and the rows stay. The release adds the internal
+module `internal/favoritesRepair`
+([Recovery and compatibility](#recovery-and-compatibility), the favorites
+paragraph), and has no schema change, no backfill and no release step.
+Northstar's dataset becomes version 10, which stars a top-level project for
+Nora, Leo, Daniel and Ben. A deployment whose Northstar is already seeded
+gets them only at its next reset, and a seed refuses there until then, as
+for every dataset change; a seed of an absent or empty demo writes version
+10, and the public demo's new copies have them.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
@@ -2421,8 +2448,12 @@ Returning the app alone changes nothing, because no app calls the link or
 the route.
 
 Each seat's favorite top-level projects are rows in `project_favorites`,
-which only `projectNav:setFavorite` writes; no app calls it yet. The table
-starts empty and needs no backfill. A rename, archive or restore of a
+which the app writes only through `projectNav:setFavorite`, the call of the
+All projects directory's star from the release after v0.1.155; the
+Northstar seed inserts its people's stars from dataset version 10
+(`model/projectFavorites.ts` `insertSeededFavorite`), and
+`internal/favoritesRepair` deletes and patches what a rollback left. The
+table starts empty and needs no backfill. A rename, archive or restore of a
 project keeps the rows' name key and live copies in its transaction, and
 profile removal, organization deletion, the public demo's cleanup, the
 Northstar wipe and the Deleted items purge delete them. A rollback past the
@@ -2438,10 +2469,17 @@ them, and the rows of profiles the earlier code removed, of projects it
 purged from Deleted items and of organizations it finished deleting. No
 reader shows those, except that a seat created later in the same
 organization with a removed seat's id would list that seat's favorites
-among its own, of projects it sees anyway. A Northstar reset under the
-earlier code keeps its seats and recreates its projects with the same ids
-and names, so its seats' earlier stars would show again; reset Northstar
-once more after the roll forward.
+among its own, of projects it sees anyway. After rolling forward past a
+rollback before the favorites release (v0.1.106), run
+`internal/favoritesRepair:run` with `dry_run` true and then false, which
+reports and then deletes those rows and brings the stale copies in line,
+and leaves the rows of a project in Deleted items, a seat that lost access,
+a seat being removed and an organization being deleted; its header gives
+the commands. Each hosted run needs the owner's approval, and a repair on
+production a verified backup first. A Northstar reset under the earlier
+code keeps its seats and recreates its projects with the same ids and
+names, so its seats' earlier stars would show again, and the repair cannot
+tell them from real ones; reset Northstar once more after the roll forward.
 
 Each login's Notification delivery setting and catch-up checkpoint are rows
 in `account_notifications`, its signed-in sessions are rows in

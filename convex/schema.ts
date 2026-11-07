@@ -1679,9 +1679,12 @@ export default defineSchema({
   // The top-level projects a seat starred, which the All projects directory
   // and the sidebar list first, in name order: one row for each seat and
   // project, so each seat of a login keeps its own. A row is a preference
-  // and grants nothing. Only projectNav.setFavorite writes one, for a
-  // top-level project the seat sees through ordinary access, and deletes it
-  // again (model/projectFavorites.ts). A rename, an archive or a restore of
+  // and grants nothing. The app writes one only through
+  // projectNav.setFavorite, for a top-level project the seat sees through
+  // ordinary access, and deletes it again (model/projectFavorites.ts); the
+  // Northstar seed inserts its people's stars (model/projectFavorites.ts
+  // insertSeededFavorite), and internal/favoritesRepair deletes and patches
+  // what a rollback left. A rename, an archive or a restore of
   // the project brings the copies in line in its transaction, within its
   // tree budget (model/projectNav.ts treeFavorites, settleFavorites). A
   // loss of access leaves the row, so every reader shows one only for a
@@ -1701,7 +1704,10 @@ export default defineSchema({
     // whether it is live (archived_at absent)
     name_key: v.string(),
     live: v.boolean(),
-    created_at: v.string(), // when the seat starred it
+    // when the seat starred it, or a star last reset it; this release's
+    // writers never stamp it before the seat's own created_at
+    // (model/projectFavorites.ts)
+    created_at: v.string(),
   })
     // a seat's favorites in name order, live or archived, the project id
     // breaking ties; profile removal reads all of a seat's by its first field

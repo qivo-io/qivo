@@ -184,10 +184,12 @@ describe('snapshot trouble', () => {
     expect(P.issueById[task.id].status).toBe('todo')
     expect(showToast).toHaveBeenCalledWith(store.PAUSED_TEXT, 'error')
     P.markMessagesRead(['message-a'])
+    // a star writes only the seat's own row, which the server checks
+    void P.setFavorite({ id: snapshot.projects[0].id, org_id: snapshot.orgs[0].id }, true)
     P.saveUI({ view: 'kanban' })
     vi.advanceTimersByTime(600)
     await settle()
-    expect(sentNames()).toEqual(['messages:markRead', 'prefs:save'])
+    expect(sentNames()).toEqual(['messages:markRead', 'projectNav:setFavorite', 'prefs:save'])
   })
 
   it('refuses paused edits before their paint, so saved personal state stays on screen', async () => {
@@ -242,6 +244,9 @@ describe('snapshot trouble', () => {
     expect(P.issueById[task.id].subscribed).toBe(false)
     P.createParent(task.id, 'Sensor work')
     P.setAppearance({ mode: 'dark', image_source: 'none' }).catch(() => {})
+    await expect(
+      P.setFavorite({ id: snapshot.projects[0].id, org_id: snapshot.orgs[0].id }, true),
+    ).resolves.toBe(false)
     P.saveUI({ view: 'kanban' })
     vi.advanceTimersByTime(600)
     await settle()
@@ -560,6 +565,7 @@ describe('snapshot trouble', () => {
     expect(P.removeUser('seat-b')).toBe(false)
     expect(P.setMessageRetention(30)).toBe(false)
     void P.revokeMcpToken('token-a')
+    void P.setFavorite({ id: snapshot.projects[0].id, org_id: org.id }, true)
     P.setAppearance({ mode: 'dark', image_source: 'none' })
     void P.revokeOAuthConnection('connection-a')
     vi.advanceTimersByTime(600)

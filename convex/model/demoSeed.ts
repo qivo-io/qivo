@@ -47,6 +47,7 @@ import {
   tallyRows,
 } from './orgs'
 import { countWhole } from './overviewCounts'
+import { insertSeededFavorite } from './projectFavorites'
 import { insertShare, syncLeads } from './projectNav'
 import { cleanProjectName, projectDescription } from './projects'
 import { deleteStamp, writeStamp } from './syncStamps'
@@ -433,6 +434,30 @@ async function writeStep(
     }
     // once every project is in, so a sub-project's parent is there
     for (const p of data.projects) await syncLeads(ctx, projectIds[p.key], [personIds[p.lead]])
+    // each person's favorites, with the project's copies, as
+    // setFavoriteCore writes a star, but without its access check: every
+    // top-level project is shared with both teams above and every person
+    // belongs to a team, so every seat sees every top-level project (the
+    // dataset's test holds each row to the reader rule)
+    for (const person of data.people)
+      for (const key of person.favorites ?? []) {
+        const p = data.projects.find((project) => project.key === key)
+        require(p !== undefined && !p.parent, rule(
+          'marketing demo: a favorite names no top-level project',
+        ))
+        const seat = profiles.find((pr) => pr.id === personIds[person.key])
+        require(seat !== undefined, rule('marketing demo: owned profile missing'))
+        await insertSeededFavorite(ctx, {
+          orgId: org.id,
+          seat,
+          project: {
+            id: projectIds[p.key],
+            name: cleanProjectName(p.name),
+            archived_at: undefined,
+          },
+          now,
+        })
+      }
     // one read of the counters for every project, not one per project
     await tallyRows(
       ctx,

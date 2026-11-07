@@ -1,8 +1,10 @@
 Overview summarizes the selected project, sub-project or My view. Its
 opening sentence reports overdue tasks, projected missed deadlines, paused
 work, completion or remaining work. It describes current signals, not a
-guarantee that deadlines are safe. In **All projects**, Overview asks you to
-choose a project and lists your top-level projects, as the Board does.
+guarantee that deadlines are safe. Over all projects, at an address that
+ends in `/all` ([All projects](./finding-your-way-around.md#all-projects)),
+Overview asks you to choose a project and lists your top-level projects, as
+the Board does.
 
 The status strip shows **Lead**, **Completion**, **In progress**, **Paused**
 and **Next milestone**. Grouping parents do not add to task counts;
@@ -133,7 +135,7 @@ week whose dates differ from the ones shown.
 
 When a scope has no task to summarize, for example a project without
 sub-projects or My view with nothing assigned to you, Overview says why
-once the server has answered. All projects says so when you can see no
-project. If there are milestones to show, **Milestones** stays below that
-note and below the All projects list. Otherwise the note or the list is the
-whole page.
+once the server has answered. Over all projects it says so when you can
+see no project. If there are milestones to show, **Milestones** stays below
+that note and below the list of projects. Otherwise the note or the list is
+the whole page.

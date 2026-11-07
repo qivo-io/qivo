@@ -454,11 +454,26 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     expect(location.pathname).toBe(`/app/${org}/board/p/2`)
   })
 
+  it('closes the waiting window when All projects opens the directory, whose address names no task', async () => {
+    const { org } = await bootLoading(true, undefined, secondProject)
+    await back(`/app/${org}/board/p/1`)
+    await back(`/app/${org}/board/tasks/qn-2`)
+    await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
+    const entries = history.length
+    await pressScope('All projects')
+    expect(location.pathname).toBe('/app/~/projects')
+    expect(history.length).toBe(entries + 1)
+    expect(document.querySelector('[data-task-loading]')).toBeNull()
+    // the task arrives, and no window opens over the directory
+    await arrive()
+    await waitFor(() => document.querySelector('[data-project-directory]'), 'the directory')
+    expect(location.pathname).toBe('/app/~/projects')
+    expect(document.querySelector('[data-task-close]')).toBeNull()
+  })
+
   it.each([
     // the task's address names no project, so the move takes its entry
     ['Second project', (org: string) => `/app/${org}/board/p/2`, 'board/tasks/qn-2', 0],
-    // under All projects the task's address names the scope, so a new entry
-    ['All projects', () => ALL_BOARD, 'board/all/tasks/qn-2', 1],
   ])(
     'names %s moved to while it waits as it would with the task open',
     async (label, _page, withTask, more) => {

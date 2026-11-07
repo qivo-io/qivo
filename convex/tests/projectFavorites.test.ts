@@ -474,7 +474,7 @@ describe('the writer', () => {
     expect(await favorites(t)).toHaveLength(1)
   })
 
-  it('resets a row a rollback or a manual edit left, and keeps when it was starred', async () => {
+  it('resets a row a rollback or a manual edit left as a new star, at the star’s time', async () => {
     const t = newT()
     const f = await ready(t)
     const earlier = new Date(Date.parse(NOW) - DAY).toISOString()
@@ -499,14 +499,17 @@ describe('the writer', () => {
       })
     })
     const [first] = await favorites(t)
+    expect(first?.created_at).toBe(earlier)
     await star(t, f.user, f.meta.id)
+    // the reset row is the seat's star from now, as the favorites repair
+    // tells an earlier seat's row by a created_at before its seat's
     expect(await favorites(t)).toEqual([
       {
         ...first,
         org_id: f.org.id,
         name_key: nameKey(f.meta.name),
         live: true,
-        created_at: earlier,
+        created_at: new Date().toISOString(),
       },
     ])
     await expectAll(t, 'after a reset')
@@ -829,13 +832,20 @@ describe('the one way to write a favorite', () => {
   const PATCH = /\.\s*(?:patch|replace)\(/
   const DELETE = /\.\s*delete\(/
 
-  it('inserts them only in model/projectFavorites.ts', () => {
+  it('inserts them only in model/projectFavorites.ts, the Northstar seed through it', () => {
     // the scan sees the file that inserts them, so its silence means something
     expect(sources['../model/projectFavorites.ts']).toMatch(INSERT)
     const others = Object.entries(sources)
       .filter(([path, source]) => path !== '../model/projectFavorites.ts' && INSERT.test(source))
       .map(([path]) => path)
     expect(others).toEqual([])
+    // the seed's insert skips the writer's access check, so only the seed
+    // calls it, beside its definition
+    const callers = Object.entries(sources)
+      .filter(([, source]) => /\binsertSeededFavorite\(/.test(source))
+      .map(([path]) => path)
+      .sort()
+    expect(callers).toEqual(['../model/demoSeed.ts', '../model/projectFavorites.ts'])
   })
 
   it('patches them only in the writer and the tree changes', () => {
@@ -859,6 +869,11 @@ describe('the one way to write a favorite', () => {
       .filter(([path, source]) => !allowed.has(path) && writesAfterRead(source, PATCH))
       .map(([path]) => path)
     expect(others).toEqual([])
+    // and the rollback repair (internal/favoritesRepair.ts), which patches
+    // the stale copies of the page of rows it read
+    expect(sources['../internal/favoritesRepair.ts']).toMatch(
+      /writer\.db\.patch\(row\._id, copiesOf\(project\)\)/,
+    )
   })
 
   it('deletes them only in the writer and the teardowns', () => {
@@ -868,6 +883,9 @@ describe('the one way to write a favorite', () => {
       '../model/orgDeletion.ts',
       '../internal/demoCleanup.ts',
       '../model/deletedItems.ts',
+      // the rollback repair, which deletes the rows of its page a
+      // rollback left (internal/favoritesRepair.ts)
+      '../internal/favoritesRepair.ts',
     ])
     // the scan sees deletes in the files it allows that delete in place
     for (const path of [
