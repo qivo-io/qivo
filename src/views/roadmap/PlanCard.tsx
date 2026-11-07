@@ -4,7 +4,7 @@ import { personLabel } from '../../components/usePeople'
 import type { captureWeekDates } from '../../lib/weekDrafts'
 import { hasPlannableWeek, type LoadItem, loadByProject } from '../../lib/workload'
 import { type IssueVM, P } from '../../store/planner'
-import { CAPACITY_UNKNOWN, capacityOf } from '../capacity'
+import { CAPACITY_UNKNOWN, capacityOf, hoursLoading } from '../capacity'
 
 /** What the planning panel says under auto-fit while its owner's details,
     and so their weekly hours, are still loading. The first fit waits for
@@ -92,10 +92,12 @@ export function PlanCard({
   const remaining = issue.remaining || 0
   // the owner's weekly capacity, null while the store does not know their
   // hours, when auto-fit stays off rather than fit against the default.
-  // That is while their details load, which the first fit waits for, or
-  // after the read could not give their hours.
+  // While a read for the owner is on its way (hoursLoading) the panel says
+  // their hours are loading, which the first fit waits for, and once that
+  // read failed or left them out it says their capacity is unknown, as the
+  // Roadmap then spends the first fit.
   const cap = owner ? capacityOf(owner) : null
-  const ownerLoading = owner?.state === 'loading'
+  const ownerLoading = hoursLoading(owner)
   const canFit = !!owner && cap !== null && remaining > 0
   const first = owner?.state === 'ok' ? owner.name.split(' ')[0] : ''
   // Match auto-fit: weeks before the measurement anchor cannot dilute load.

@@ -623,6 +623,13 @@ export async function loadBoard(
     consumed,
     /** Answers the Board's open subscriptions now, as after a hold. */
     answer: () => act(async () => answerBoards()),
+    /** Answers the open people.byIds reads now and nothing else, so a
+        case can bring a person's details while the owner loads stay
+        held. */
+    answerPeople: () =>
+      act(async () => {
+        for (const read of server.people.open) answerPeople(read)
+      }),
     /** Asks for every task, as a page that needs them does, and waits
         until the workspace holds them. */
     ask: () =>

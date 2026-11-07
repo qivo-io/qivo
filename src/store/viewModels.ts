@@ -85,9 +85,12 @@ export type UserVM = ReturnType<typeof shapeUser>
     server's answer that leaves them out, not a person of the organization
     (`gone`). `nameOnly` marks a person the store knows by name alone,
     from a picker's answer, painted with their initials on a neutral fill
-    until their face arrives. `plannableHours` is the stored weekly hours,
-    null for none (which plans the organization's default) and for an
-    agent, or undefined while the store knows only the person's name. */
+    until their face arrives. `reading` is true while the read that brings
+    a name-only person's face, with their picture and hours, has neither
+    answered nor failed, and false for everyone else. `plannableHours` is
+    the stored weekly hours, null for none (which plans the organization's
+    default) and for an agent, or undefined while the store knows only the
+    person's name. */
 export type PersonView =
   | {
       state: 'ok'
@@ -106,6 +109,7 @@ export type PersonView =
       active: boolean
       pending: boolean
       nameOnly: boolean
+      reading: boolean
       plannableHours: number | null | undefined
     }
   | { state: 'loading' | 'failed' | 'gone'; id: string }
@@ -165,6 +169,7 @@ export const personOfUser = (u: UserVM): PersonOk => ({
   active: u.active,
   pending: u.pending,
   nameOnly: false,
+  reading: false,
   plannableHours: u.plannableHours,
 })
 
@@ -190,13 +195,15 @@ export const personOfFace = (
   active: face.active,
   pending: face.pending,
   nameOnly: false,
+  reading: false,
   plannableHours: face.kind === 'agent' ? null : face.plannable_hours,
 })
 
 /** A picker's person row of organization `org` as a person view, known by
     name only: the name's initials on a neutral fill, no picture and unknown
-    hours, until their face arrives. */
-export const personOfName = (org: string, row: PersonRow): PersonOk => ({
+    hours, until their face arrives. `reading` is whether the read that
+    brings the face is still on its way. */
+export const personOfName = (org: string, row: PersonRow, reading: boolean): PersonOk => ({
   state: 'ok',
   id: row.id,
   org,
@@ -211,6 +218,7 @@ export const personOfName = (org: string, row: PersonRow): PersonOk => ({
   active: row.active,
   pending: row.pending,
   nameOnly: true,
+  reading,
   plannableHours: undefined,
 })
 

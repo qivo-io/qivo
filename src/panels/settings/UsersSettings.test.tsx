@@ -1390,6 +1390,7 @@ describe('the picture editor', () => {
       active: true,
       pending: false,
       nameOnly: false,
+      reading: false,
       plannableHours: 32,
     }
     // a face gets the menu

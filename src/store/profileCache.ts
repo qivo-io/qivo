@@ -21,7 +21,10 @@
      face or name of that organization goes, while that answer is current;
      a chunk whose read restarts holds no answer until the new one arrives.
      A failed chunk marks its ids `failed`, except those that hold a face or
-     a name, which stay as they are.
+     a name, which stay as they are. A name says whether the read that
+     brings the face is still on its way (`reading`), false once it failed,
+     so the planning panel tells hours on their way from hours that will
+     not come.
    - A picker's rows and picks are taken as names (`take`), which name a
      person at once until a face arrives and never replace one, nor a
      current answer that leaves the person out.
@@ -61,12 +64,13 @@ export const PROFILE_CACHE = { most: 1_000 }
 export type NamedPerson = { org: string; id: string }
 
 /** What the cache knows of one person: their face (a people.byIds row),
-    their name from a picker's answer, or no row yet (`loading`), a read
-    that failed (`failed`) or a current answer that left them out
-    (`gone`). */
+    their name from a picker's answer, with whether the read that brings
+    their face is still on its way (`reading`, false once it failed), or
+    no row yet (`loading`), a read that failed (`failed`) or a current
+    answer that left them out (`gone`). */
 export type CachedPerson =
   | { state: 'face'; org: string; face: PersonFaceRow }
-  | { state: 'name'; org: string; name: PersonRow }
+  | { state: 'name'; org: string; name: PersonRow; reading: boolean }
   | { state: 'loading' | 'failed' | 'gone' }
 
 /** What the cache needs from the store and the transport. */
@@ -120,6 +124,14 @@ export function createProfileCache(deps: ProfileCacheDeps) {
   const touch = () => {
     revision++
     dirty = true
+  }
+
+  /** Whether the read of person `id` in organization `org` failed. A
+      person no read of `org` holds may still be read, as `look` answers
+      them `loading`. */
+  const failedIn = (id: string, org: string) => {
+    const chunk = chunkOf.get(id)
+    return chunk?.org === org && chunk.result === 'failed'
   }
 
   /** Tells the store once that an entry or a state changed. */
@@ -370,7 +382,13 @@ export function createProfileCache(deps: ProfileCacheDeps) {
       const entry = entries.get(id)
       if (entry && ours(entry.org)) {
         if (entry.face) return { state: 'face', org: entry.org, face: entry.face }
-        if (entry.name) return { state: 'name', org: entry.org, name: entry.name }
+        if (entry.name)
+          return {
+            state: 'name',
+            org: entry.org,
+            name: entry.name,
+            reading: !failedIn(id, entry.org),
+          }
       }
       if (chunk?.result === 'failed') return { state: 'failed' }
       return { state: 'loading' }
@@ -383,11 +401,13 @@ export function createProfileCache(deps: ProfileCacheDeps) {
         if (entry.face) out.push({ org: entry.org, face: entry.face })
       return out
     },
-    /** Every name without a face the cache holds, for the store's views. */
-    names(): { org: string; name: PersonRow }[] {
-      const out: { org: string; name: PersonRow }[] = []
-      for (const entry of entries.values())
-        if (entry.name && !entry.face) out.push({ org: entry.org, name: entry.name })
+    /** Every name without a face the cache holds, with whether the read
+        that brings the face is still on its way, for the store's views. */
+    names(): { org: string; name: PersonRow; reading: boolean }[] {
+      const out: { org: string; name: PersonRow; reading: boolean }[] = []
+      for (const [id, entry] of entries)
+        if (entry.name && !entry.face)
+          out.push({ org: entry.org, name: entry.name, reading: !failedIn(id, entry.org) })
       return out
     },
     /** Turns on every change of an entry or a state. */

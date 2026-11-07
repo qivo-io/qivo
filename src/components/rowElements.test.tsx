@@ -34,6 +34,7 @@ const ok = (over: Partial<Extract<PersonView, { state: 'ok' }>> = {}): PersonVie
   active: true,
   pending: false,
   nameOnly: false,
+  reading: false,
   plannableHours: 32,
   ...over,
 })

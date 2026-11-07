@@ -9004,8 +9004,8 @@ function rebuild(now = new Date(), full = false) {
     P.TODAY_POS,
     // the people the cache names and paints beside the people part, and
     // its states: a person read by id whose answer left them out or whose
-    // read failed changes no view of personViews, but every memoized row
-    // that drew them loading draws them again
+    // read failed changes no view of personViews unless a picker named
+    // them, but every memoized row that drew them loading draws them again
     personViews,
     profileCache.version(),
   ]
@@ -9086,8 +9086,8 @@ function shapePersonViews(prev: ReadonlyMap<string, PersonOk>): ReadonlyMap<stri
           face.avatar ? avatarSources.url(`avatar:${face.id}:${face.avatar}`) : null,
         ),
       )
-  for (const { org, name } of profileCache.names())
-    if (!next.has(name.id)) put(personOfName(org, name))
+  for (const { org, name, reading } of profileCache.names())
+    if (!next.has(name.id)) put(personOfName(org, name, reading))
   if (next.size === prev.size && [...next].every(([id, view]) => prev.get(id) === view)) return prev
   return next
 }

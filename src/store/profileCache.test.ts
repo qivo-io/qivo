@@ -231,9 +231,17 @@ describe('the profile cache', () => {
     s.cache.name('board', people(3))
     const [again] = s.reads()
     expect(again?.ids).toEqual(['p0', 'p1', 'p2'])
+    // a name says its read is on its way until it fails
+    expect(s.cache.look('p1')).toMatchObject({ state: 'name', reading: true })
+    expect(s.cache.names()).toEqual([expect.objectContaining({ reading: true })])
     s.fail(again?.token ?? '')
     expect(s.cache.look('p0').state).toBe('face')
-    expect(s.cache.look('p1')).toMatchObject({ state: 'name', name: { name: 'Pat Picked' } })
+    expect(s.cache.look('p1')).toMatchObject({
+      state: 'name',
+      name: { name: 'Pat Picked' },
+      reading: false,
+    })
+    expect(s.cache.names()).toEqual([expect.objectContaining({ reading: false })])
     expect(s.cache.look('p2').state).toBe('failed')
     // a failed read is never taken as gone
     expect(people(3).some((p) => s.cache.look(p.id).state === 'gone')).toBe(false)

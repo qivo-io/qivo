@@ -50,7 +50,7 @@ import {
   type ScopeInfo,
 } from '../store/planner'
 import { planItemsOf } from '../store/viewDelay'
-import { capacityOf } from './capacity'
+import { capacityOf, hoursLoading } from './capacity'
 import { LandscapeRoadmap } from './LandscapeRoadmap'
 import { MobileRoadmap } from './MobileRoadmap'
 import { ResourceStrip, type TeamPerson } from './Resources'
@@ -1019,27 +1019,29 @@ function Roadmap({
       another view may still hold the task (taskOf). */
   const sessionTask = (s: PlanSession): IssueVM | undefined =>
     cannotPlanReason(view) === null ? view.family.byId[s.issueId] : undefined
-  // Initial placement waits for valid workload, for an answer that names
-  // the task and, while auto-fit can place it, for the owner's weekly
-  // hours, which arrive with their details (capacityFor). A bar the
-  // person moves before then gets its first fit from where they dropped
-  // it. Once the owner's read failed or left them out, the panel says
-  // auto-fit is off, so the first fit is spent then and a later answer
-  // with their hours leaves the dates alone, as every later answer does.
+  // The first fit of an unscheduled task, once an answer names the task.
+  // While the owner's weekly hours are unknown (capacityFor), it waits
+  // only while a read for the owner is on its way (hoursLoading). Once
+  // that read failed or left them out, the panel says auto-fit is off, so
+  // the first fit is spent at once, whether or not the workload is in,
+  // and a later answer with their hours leaves the dates alone, as every
+  // later answer does. With the hours known it waits for the workload. A
+  // fit is computed and applied only with both, and a bar the person
+  // moves while it waits gets it from where they dropped it.
   useEffectR(() => {
     const s = sessionRef.current
-    const load = planLoad?.items
-    if (!s?.fitOnLoad || !load) return
+    if (!s?.fitOnLoad) return
     const it = sessionTask(s)
     if (!it) return
-    const fits = s.autoFit && !!it.owner && !P.isGroup(it) && it.remaining > 0 && it.start != null
     const cap = capacityFor(it)
-    const ownerState = it.owner ? P.person(it.owner, it.org)?.state : undefined
-    if (fits && cap === null && ownerState !== 'failed' && ownerState !== 'gone') return
+    const load = planLoad?.items
+    const waits = cap === null ? hoursLoading(it.owner ? P.person(it.owner, it.org) : null) : !load
+    if (waits) return
     const placed = { ...s, fitOnLoad: false }
     sessionRef.current = placed
     setSession(placed)
-    if (fits && cap !== null) autoFitEnd(it.id, it.start, load, cap, it.uuid, it.remaining)
+    const fits = s.autoFit && !!it.owner && !P.isGroup(it) && it.remaining > 0 && it.start != null
+    if (fits && cap !== null && load) autoFitEnd(it.id, it.start, load, cap, it.uuid, it.remaining)
   })
   const toggleAutoFit = () => {
     const s = sessionRef.current
