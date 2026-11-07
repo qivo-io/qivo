@@ -1865,10 +1865,12 @@ function App() {
     // server's number (P.watchHandles above), so it doesn't blank or show
     // the concurrent issue, and a refusal closes it under what it showed
     // last, saying with the task's key what text typed in it went with it.
+    // The window is compared by its task (sameTask), since a refusal can
+    // name a reference that moved before App took the move.
     const open = P.addIssue(issue, (last) => {
-      if (hereRef.current.openIssue !== last) return
+      if (!sameTask(hereRef.current.openIssue, last)) return
       const lost = dropRefusedTask(unsent.task, P.keyOfOpen(last))
-      setOpenIssue((cur) => (cur === last ? null : cur))
+      setOpenIssue((cur) => (sameTask(cur, last) ? null : cur))
       if (lost) window.showToast?.(lost, 'error')
     })
     if (!open) {
