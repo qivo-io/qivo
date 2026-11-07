@@ -1163,6 +1163,39 @@ describe('an open or a check that waits, and the person’s next move', { timeou
     expect(sentProjects()).not.toContain(late)
   })
 
+  it('drops a pick that waits in the chooser once the person searches again, so its answer opens nothing', async () => {
+    const { snap, held, late } = lateWorld()
+    resolveWith = (args) => {
+      deliver(held)
+      return queryProjectNav(held, 'projectNav:resolve', args)
+    }
+    await app(snap, '/app/testbed', {}, () => {
+      server = held
+    })
+    await chooser('choose')
+    await until(() => picks().includes(late), 'the row the workspace lacks')
+    const release = holdResolve()
+    await click(q(`[data-project-pick="${late}"]`))
+    expect(note()).toBe('Opening Late programme…')
+    const field = q<HTMLInputElement>('[data-project-picker-search]')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        field,
+        'Partner',
+      )
+      field?.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(note()).toBe('')
+    await until(() => picks().join() === PORTAL, 'the new results')
+    await release()
+    expect(store.P.project(late)).toBeDefined()
+    expect(chooserState()).toBe('choose')
+    expect(note()).toBe('')
+    expect(shown()).toBeUndefined()
+    expect(viewReads()).toEqual([])
+    expect(sentProjects()).toEqual([])
+  })
+
   it('drops startup’s check for a view pill and for an open that starts to wait in a list, so its answer opens nothing', async () => {
     const { snap, held, late } = lateWorld()
     let release = holdResolve()

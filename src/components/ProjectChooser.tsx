@@ -17,8 +17,10 @@
      row, under a heading and a line that says where the pick opens; `lost`
      adds App's note of why no project opened. A press opens the row by
      the lists' open rule (components/projectNavRows.tsx useNavOpen),
-     whose sentences take the note's place. The panel's list is live, so a
-     project shared meanwhile moves in, and nothing opens by itself.
+     whose sentences take the note's place. A new search in the field
+     drops a pick that waits, with its sentence, and so does any
+     navigation the person makes. The panel's list is live, so a project
+     shared meanwhile moves in, and nothing opens by itself.
    - `empty`: once the browse list ended confirmed empty, the panel gives
      way to the empty state, which says the person has no active projects
      and who can give access, with New project where they may create one.
@@ -164,6 +166,11 @@ export function ProjectChooser({
         onPick={(pick) => {
           const row = pick?.kind === 'projects' ? pick.projects[0] : undefined
           if (row) nav.open(row)
+        }}
+        // a new search drops a pick that waits, and its sentence
+        onSearch={() => {
+          nav.cancel()
+          setSaid(null)
         }}
         rules={{ many: false, oneOrg: false, all: 'none' }}
         label="Search your projects"

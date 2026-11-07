@@ -1,8 +1,8 @@
 /* The shared project picker, which Search's Search in, Settings ›
    Archived tasks and Settings › Projects › Deleted items open in a
    popover, and whose panel the project chooser embeds in the page
-   (components/ProjectChooser.tsx, ProjectPickerPanel's autoFocus, fill
-   and whenEmpty). It lists the person's projects from the server's navigation
+   (components/ProjectChooser.tsx, ProjectPickerPanel's autoFocus, fill,
+   whenEmpty and onSearch). It lists the person's projects from the server's navigation
    reads (convex/projectNav.ts), never from the workspace's projects, each
    judged by ordinary access, and picks by the rules of its caller
    (lib/projectPick.ts): one project, or several of one organization, or
@@ -275,6 +275,10 @@ export type ProjectPickerPanelProps = {
       confirmed empty: no text in the field, no row, and no batch held,
       stopped or failed */
   whenEmpty?: ReactNode
+  /** called with the field's text each time the person changes it, by
+      typing or by Escape, so a caller that opens a pick through a read can
+      drop that open on a new search */
+  onSearch?: (text: string) => void
 }
 
 /**
@@ -292,12 +296,18 @@ export function ProjectPickerPanel({
   autoFocus = true,
   fill = false,
   whenEmpty,
+  onSearch,
 }: ProjectPickerPanelProps) {
   const id = useId()
   // a sub-project's text sits 16 px past its project's, which follows the
   // project's arrow, a 44 px touch target on a phone
   const childIndent = useMobile() ? 'pl-[62px]' : 'pl-[50px]'
   const [text, setText] = useState('')
+  /** Puts the person's `next` text in the field, and tells the caller. */
+  const searchFor = (next: string) => {
+    setText(next)
+    onSearch?.(next)
+  }
   const search = useSettledSearch(text, LIMITS.search)
   const term = nameKey(search.settled)
   const browsing = term === ''
@@ -563,7 +573,7 @@ export function ProjectPickerPanel({
       // the text clears first; an empty field lets Escape close the picker
       event.preventDefault()
       event.stopPropagation()
-      setText('')
+      searchFor('')
     }
   }
 
@@ -739,7 +749,7 @@ export function ProjectPickerPanel({
           value={text}
           placeholder="Search projects…"
           onChange={(event) => {
-            setText(event.target.value)
+            searchFor(event.target.value)
             setActive(null)
           }}
           onKeyDown={onKeyDown}
