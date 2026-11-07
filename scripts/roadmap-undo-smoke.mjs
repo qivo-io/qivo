@@ -250,9 +250,11 @@ async function cleanup() {
     )
     // read the run's milestones again, in its weeks and by the first one's
     // id, so a milestone the cleanup missed fails the run instead of staying
-    // in Northstar, whose counts hold no milestones
+    // in Northstar, whose counts hold no milestones. Each one left is named
+    // once, however many of the two reads found it.
     const left = fixture ? await runMilestones(client, fixture.project, fixture.weeks) : []
-    left.push(...(await firstMilestone(client)))
+    for (const row of await firstMilestone(client))
+      if (!left.some(({ id }) => id === row.id)) left.push(row)
     await cleanupPage.evaluate(() => window.PLANNER?.signOut()).catch(() => {})
     assert.deepEqual(left, [], 'A temporary milestone was left in Northstar')
   } finally {
