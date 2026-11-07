@@ -75,6 +75,7 @@ export function MilestoneSectionPart({
   sentences = {},
   hint,
   className,
+  rowsClassName,
   children,
 }: {
   side: 'upcoming' | 'past'
@@ -93,6 +94,9 @@ export function MilestoneSectionPart({
   /** what follows the too-many note and a read-too-large refusal */
   hint?: string
   className?: string
+  /** the row list's spacing where the view's rows need their own, as the
+      Overview's cards and the agenda's ruled rows do */
+  rowsClassName?: string
   children: ReactNode[]
 }) {
   const root = useRefS<HTMLElement>(null)
@@ -216,7 +220,7 @@ export function MilestoneSectionPart({
             </Button>
           </div>
         )}
-        <div data-milestone-rows className="flex flex-col gap-1">
+        <div data-milestone-rows className={cn('flex flex-col gap-1', rowsClassName)}>
           {children}
         </div>
         {open && view.state === 'loading' && (

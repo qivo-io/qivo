@@ -145,6 +145,7 @@ export function OverviewMilestones({
         header={<SectionHeader label="Upcoming" count={upcoming.view.count} />}
         scroller="[data-overview-root]"
         rowMark="data-overview-milestone"
+        rowsClassName="gap-2"
         sentences={{ noneYet }}
         hint={hint}
       >
@@ -167,6 +168,7 @@ export function OverviewMilestones({
           bodyId={pastBodyId}
           scroller="[data-overview-root]"
           rowMark="data-overview-milestone"
+          rowsClassName="gap-2"
           hint={hint}
           header={
             <Button

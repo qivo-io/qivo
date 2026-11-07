@@ -265,6 +265,7 @@ export function MobileRoadmap({
         header={null}
         scroller="[data-scroll]"
         rowMark="data-agenda-milestone"
+        rowsClassName="gap-0"
         sentences={{
           noneYet: info.mine
             ? 'No milestones in any of your projects yet.'
@@ -285,6 +286,7 @@ export function MobileRoadmap({
           bodyId={pastBodyId}
           scroller="[data-scroll]"
           rowMark="data-agenda-milestone"
+          rowsClassName="gap-0"
           hint={hint}
           className="mt-2"
           header={
