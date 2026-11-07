@@ -145,11 +145,13 @@
  * one archived on its own, and restores it there, which must bring back the
  * project and the carried sub-project only, each checked over REST
  * (ui/settings-projects).
- * It opens All projects from the sidebar, finds its project by name from
- * the deployment's search (projectNav.search), stars it, which the
- * server's answer puts first under Favorites (projectNav.setFavorite),
- * lists Alpha and Zulu under it (projectNav.children), opens Zulu, and
- * unstars the project again (ui/project-directory).
+ * It opens All projects from the sidebar, waits for its browse list
+ * (projectNav.page), finds its project and Alpha by the run's tag from the
+ * deployment's search (projectNav.search), stars the project, which the
+ * server's answer puts under Favorites ahead of Alpha, which sorts before
+ * it by name (projectNav.setFavorite), lists Alpha and Zulu under it
+ * (projectNav.children), opens Zulu, and unstars the project again
+ * (ui/project-directory).
  * It makes 26 tasks of its own in Alpha and deletes them over REST,
  * searches its tag in Settings › Projects › Deleted items, from the
  * deployment's page (deletedItems.page), and waits until the page answers
@@ -6504,11 +6506,31 @@ export const PROJECT_DIRECTORY_MARKS = {
   child: 'data-directory-child',
   favorites: 'data-directory-group',
   status: 'data-directory-status',
+  state: 'data-project-directory-state',
 }
 
 /** The note the directory gives for a project the workspace has not
  *  delivered yet, which the step waits out. */
 export const NOT_LOADED_YET = 'has not loaded yet'
+
+/** The group of each row the directory shows, by id, from `sequence`, its
+ *  group headings (`{ group }`, 'favorites' or 'rest') and rows (`{ row,
+ *  starred }`) in page order: 'favorites' or 'rest' under a heading, null
+ *  on a page without headings. Null for the whole page where it breaks
+ *  favorites first: Other projects before Favorites, a heading twice, a
+ *  starred row under Other projects or an unstarred one under Favorites. */
+export function directoryGroups(sequence) {
+  const groups = {}
+  let group = null
+  for (const item of sequence) {
+    if ('group' in item) {
+      if (group === 'rest' || item.group === group) return null
+      group = item.group
+    } else if (group === 'favorites' ? !item.starred : group === 'rest' && item.starred) return null
+    else groups[item.row] = group
+  }
+  return groups
+}
 
 /** Whether app address `pathname` shows the project numbered `num`, as
  *  src/lib/router.ts writes a project's view (`…/board/p/12`), with or
@@ -6523,31 +6545,46 @@ export function atProject(pathname, num) {
  *  (projectNav.setFavorite), on the run's own project M, which Nora leads,
  *  and its sub-projects Alpha and Zulu, so the step adds no project the
  *  later steps' tag searches would list. In the app it opens All projects
- *  from the sidebar, searches M's name and waits for M's row. It stars M
- *  and waits for the server's answer to put it first under Favorites,
- *  expands it and waits for Alpha and Zulu from projectNav.children,
- *  pressing Load more while one is still to come, opens Zulu from that
- *  list, pressing again while the directory says the workspace has not
- *  loaded it yet, and waits for Zulu's address (`/p/` and its number) and
- *  for the header to name Zulu. Back in All projects it
- *  searches M's name again, unstars M and waits for the Favorites heading
- *  to go; a failure unstars it through the store, so no later step meets
- *  the run's project as a favorite. It reads none of Nora's own favorites,
- *  which a deployment seeded before dataset version 10 does not hold, and
- *  must run before the run archives M. It needs a backend from v0.1.126
- *  on. */
+ *  from the sidebar, waits for the browse list to answer with a row,
+ *  searches the run's tag and waits for M's row and Alpha's, which sorts
+ *  before M by name and so comes first while M is no favorite. It stars M
+ *  and waits for the server's answer to put M under Favorites, ahead of
+ *  Alpha under Other projects (directoryGroups). It expands M and waits
+ *  for Alpha and Zulu from projectNav.children, pressing Load more while
+ *  one is still to come, opens Zulu from that list, pressing again while
+ *  the directory says the workspace has not loaded it yet, and waits for
+ *  Zulu's address (`/p/` and its number) and for the header to name Zulu.
+ *  Back in All projects it searches M's name, unstars M and waits for the
+ *  Favorites heading to go; a failure unstars it through the store, so no
+ *  later step meets the run's project as a favorite. It reads none of
+ *  Nora's own favorites, which a deployment seeded before dataset version
+ *  10 does not hold, and must run before the run archives M. It needs a
+ *  backend from v0.1.126 on. */
 async function projectDirectoryCheck() {
   const m = PROJECT_DIRECTORY_MARKS
   await check(PROJECT_DIRECTORY_STEP, async () => {
     const { M, A, Z } = run.projects
     const row = (p) => app.locator(`[${m.page}] [${m.row}="${p.id}"]`)
-    const order = () =>
-      app
-        .locator(`[${m.page}] [${m.row}]`)
-        .evaluateAll((els, mark) => els.map((el) => el.getAttribute(mark)), m.row)
+    // the page's group headings and rows in order, each row with its star
+    const sequence = () =>
+      app.locator(`[${m.page}]`).evaluate(
+        (page, mk) =>
+          [...page.querySelectorAll(`[${mk.favorites}], [${mk.row}]`)].map((el) =>
+            el.hasAttribute(mk.favorites)
+              ? { group: el.getAttribute(mk.favorites) }
+              : {
+                  row: el.getAttribute(mk.row),
+                  starred:
+                    el.querySelector(`[${mk.star}]`)?.getAttribute('aria-pressed') === 'true',
+                },
+          ),
+        m,
+      )
     const favorites = () => app.locator(`[${m.page}] [${m.favorites}="favorites"]`).count()
-    const searchM = async () => {
-      await app.locator(`[${m.search}]`).fill(M.name)
+    /** The ids of the rows the page shows, in order. */
+    const ids = (shown) => shown.flatMap((item) => ('row' in item ? [item.row] : []))
+    const search = async (text) => {
+      await app.locator(`[${m.search}]`).fill(text)
       await row(M).waitFor({ timeout: 60_000 })
     }
     const starOf = () => row(M).locator(`[${m.star}]`)
@@ -6556,15 +6593,36 @@ async function projectDirectoryCheck() {
       // the sidebar shows over the workspace, not over Settings
       await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board`, { waitUntil: 'domcontentloaded' })
       await app.locator('[data-all-nav]').click({ timeout: 60_000 })
-      await app.locator(`[${m.page}]`).waitFor({ timeout: 60_000 })
-      await searchM()
+      // the browse list from projectNav.page, answered with a row
+      await app
+        .locator(`[${m.page}][${m.state}="ok"] [${m.row}]`)
+        .first()
+        .waitFor({ timeout: 60_000 })
+      // the run's tag finds M and Alpha, which sorts before M by name
+      await search(run.tag)
+      await row(A).waitFor({ timeout: 60_000 })
       eq(await starOf().getAttribute('aria-pressed'), 'false', "M's star before the step")
-      // the star, and the server's answer that puts M first
+      const unstarred = ids(await sequence())
+      expect(
+        unstarred.indexOf(A.id) < unstarred.indexOf(M.id),
+        `Alpha does not come before M by name while M is no favorite: ${unstarred.join(', ')}`,
+      )
+      // the star, and the server's answer that puts M under Favorites,
+      // ahead of Alpha under Other projects
       await starOf().click()
       starred = true
       expect(
-        await until(async () => (await favorites()) === 1 && (await order())[0] === M.id, 30_000),
-        'M does not come first as a favorite',
+        await until(async () => {
+          const shown = await sequence()
+          const groups = directoryGroups(shown)
+          const order = ids(shown)
+          return (
+            groups?.[M.id] === 'favorites' &&
+            groups[A.id] === 'rest' &&
+            order.indexOf(M.id) < order.indexOf(A.id)
+          )
+        }, 30_000),
+        'M does not come first under Favorites, ahead of Alpha under Other projects',
       )
       eq(await starOf().getAttribute('aria-pressed'), 'true', "M's star")
       // its sub-projects from projectNav.children, and Zulu opened there
@@ -6603,7 +6661,7 @@ async function projectDirectoryCheck() {
       // back in All projects, M unstarred leaves the Favorites
       await app.locator('[data-all-nav]').click()
       await app.locator(`[${m.page}]`).waitFor({ timeout: 30_000 })
-      await searchM()
+      await search(M.name)
       await starOf().click()
       expect(
         await until(
@@ -6614,7 +6672,7 @@ async function projectDirectoryCheck() {
         'M stays a favorite once unstarred',
       )
       starred = false
-      return `found ${M.name} by its name, starred it to the top, listed Alpha and Zulu under it, opened Zulu from there and unstarred it again`
+      return `found ${M.name} by the run's tag, starred it ahead of Alpha, listed Alpha and Zulu under it, opened Zulu from there and unstarred it again`
     } finally {
       if (starred)
         await evaluate(

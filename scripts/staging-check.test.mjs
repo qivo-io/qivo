@@ -32,6 +32,7 @@ import {
   DELETED_ITEMS_MARKS,
   DELETED_ITEMS_STEP,
   deleteOutcome,
+  directoryGroups,
   evaluate,
   FIXTURE_STATUS,
   FORMERLY_BARE,
@@ -350,6 +351,35 @@ describe('staging check REST contract', () => {
     // directory
     expect(step).toContain('atProject(path(), Z.num)')
     expect(step).toContain("app.locator('[data-scope-crumb] h1')")
+    // the browse list answered with a row before any search, and the star
+    // puts M ahead of Alpha, which sorts before it by name
+    const browse = /\[\$\{m\.page\}\]\[\$\{m\.state\}="ok"\] \[\$\{m\.row\}\]/
+    expect(step).toMatch(browse)
+    expect(step.search(browse)).toBeLessThan(step.indexOf('await search(run.tag)'))
+    expect(step).toContain('order.indexOf(M.id) < order.indexOf(A.id)')
+  })
+  it('reads the directory’s groups, and refuses a page that breaks favorites first', () => {
+    const fav = { group: 'favorites' }
+    const rest = { group: 'rest' }
+    const on = (row) => ({ row, starred: true })
+    const off = (row) => ({ row, starred: false })
+    expect(directoryGroups([fav, on('m'), rest, off('alpha'), off('n')])).toEqual({
+      m: 'favorites',
+      alpha: 'rest',
+      n: 'rest',
+    })
+    // a page with no favorite has no headings
+    expect(directoryGroups([off('alpha'), off('m')])).toEqual({ alpha: null, m: null })
+    expect(directoryGroups([fav, on('m'), on('k')])).toEqual({ m: 'favorites', k: 'favorites' })
+    // Other projects before Favorites, a heading twice, a starred row under
+    // Other projects and an unstarred one under Favorites
+    for (const broken of [
+      [rest, off('alpha'), fav, on('m')],
+      [fav, on('m'), fav, on('k')],
+      [fav, on('m'), rest, off('alpha'), on('k')],
+      [fav, on('m'), off('alpha'), rest, off('n')],
+    ])
+      expect(directoryGroups(broken), JSON.stringify(broken)).toBeNull()
   })
   it("tells Zulu's own project address from every other the directory could open", () => {
     expect(atProject('/app/acme/board/p/12', 12)).toBe(true)
