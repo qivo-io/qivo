@@ -60,6 +60,8 @@ let asked: { name: string; args: OwnerPickerArgs }[]
 /** reads held back while `holding`, released by hand */
 let held: { name: string; args: OwnerPickerArgs; release: () => void }[]
 let holding: boolean
+/** whether people.byIds answers, for the people the snapshot holds */
+let byIds: boolean
 
 /** Adds `count` people of ordinary names to the fixture's organization,
     the first `viewers` of them organization Viewers, whom no list
@@ -83,17 +85,23 @@ function addPeople(count: number, viewers = 0) {
   }
 }
 
-/** Boots the store on the fixture with `people` people, Zoe Young, who
-    holds the task, and with `john` John Smith, whom only a whole word of
-    his name finds. */
+/** Boots the store on the fixture with `people` people and Zoe Young,
+    with `john` John Smith, whom only a whole word of his name finds, and
+    with `edward` Edward Stone, whose first two letters "Unassigned"
+    also holds. Zoe holds the task, or `holder`, an id the organization
+    may not hold. */
 async function load({
   people = 30,
   viewers = 0,
   john = false,
+  edward = false,
+  holder = HOLDER,
 }: {
   people?: number
   viewers?: number
   john?: boolean
+  edward?: boolean
+  holder?: string
 } = {}) {
   vi.resetModules()
   snap = plannerFixture()
@@ -105,6 +113,15 @@ async function load({
       auth_user_id: 'account-john',
       name: 'John Smith',
       initials: 'JS',
+      org_role: 'user',
+    })
+  if (edward)
+    snap.profiles.push({
+      ...snap.profiles[0],
+      id: 'edward',
+      auth_user_id: 'account-edward',
+      name: 'Edward Stone',
+      initials: 'ES',
       org_role: 'user',
     })
   snap.profiles.push({
@@ -125,14 +142,20 @@ async function load({
     status: 'progress',
     priority: 'medium',
     paused: false,
-    assignee_id: HOLDER,
+    assignee_id: holder,
     created_at: NOW,
     updated_at: NOW,
     has_hidden_subtasks: false,
     has_hidden_parent: false,
   })
-  network.onUpdate.mockImplementation((ref, _args, next) => {
-    if (getFunctionName(ref) === 'workspace:whole') next(structuredClone(snap))
+  network.onUpdate.mockImplementation((ref, args: { ids?: string[] }, next) => {
+    const name = getFunctionName(ref)
+    if (name === 'workspace:whole') next(structuredClone(snap))
+    // people.byIds answers after its subscription opens, as the server does
+    if (name === 'people:byIds' && byIds)
+      void Promise.resolve().then(() =>
+        next({ rows: snap.profiles.filter((p) => args.ids?.includes(p.id)) }),
+      )
     return () => {}
   })
   const store = await import('../store/planner')
@@ -243,6 +266,7 @@ beforeEach(async () => {
   asked = []
   held = []
   holding = false
+  byIds = false
   force = new Set()
   network.query.mockImplementation(async (ref, args: OwnerPickerArgs) => {
     const name = getFunctionName(ref)
@@ -287,7 +311,8 @@ describe('the owner list reads', () => {
     expect(reads('pickers:canOwn').map((a) => a.args)).toEqual([
       { org_id: snap.orgs[0].id, issue_id: 'task-a', field: 'assignee', ids: [HOLDER] },
     ])
-    // closed before the answers arrive: they change nothing and read no more
+    // closed before the answers arrive, which then change nothing and read
+    // no more
     await act(async () =>
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })),
     )
@@ -355,8 +380,8 @@ describe('the owner list’s search', () => {
     expect(reads('pickers:taskOwners')).toHaveLength(1)
     await rest()
     expect(reads('pickers:taskOwners').map((a) => a.args.search)).toEqual([undefined, 'Smith'])
-    // the browser does not filter the server's rows: none holds "smith" in
-    // its id
+    // the browser does not filter the server's rows, and none holds
+    // "smith" in its id
     expect(choiceIds()).toEqual(['john'])
     // Unassigned shows under a search only when its label holds the words
     expect(unassigned()).toBeUndefined()
@@ -420,7 +445,7 @@ describe('the owner list’s search', () => {
     await openList()
     holding = true
     await type('Ben')
-    // the answer is on its way: Enter does nothing
+    // the answer is on its way, so Enter does nothing
     expect(await press('Enter')).toBe(true)
     await rest()
     expect(await press('Enter')).toBe(true)
@@ -437,6 +462,28 @@ describe('the owner list’s search', () => {
     expect(writes).toHaveLength(1)
     expect(network.mutation.mock.calls.at(-1)?.[1]).toMatchObject({
       patch: { assignee_id: first.dataset.ownerChoice },
+    })
+  })
+
+  it('takes Enter on a person when the clear row’s label also holds the typed words', async () => {
+    await load({ edward: true })
+    await openList()
+    holding = true
+    await type('Ed')
+    await rest()
+    await act(async () => {
+      for (const h of held) h.release()
+    })
+    await settle()
+    // "ed" is in "Unassigned" too, which shows, yet Edward takes Enter
+    expect(unassigned()).toBeDefined()
+    expect(choiceIds()).toEqual(['edward'])
+    expect(selected()?.dataset.ownerChoice).toBe('edward')
+    await press('Enter')
+    await settle()
+    expect(writes).toHaveLength(1)
+    expect(network.mutation.mock.calls.at(-1)?.[1]).toMatchObject({
+      patch: { assignee_id: 'edward' },
     })
   })
 })
@@ -500,7 +547,7 @@ describe('the owner list’s batches and states', () => {
       expect(unassigned()?.getAttribute('aria-disabled') === 'true').toBe(closed)
     })
 
-  it('says why a reviewer list on a task with subtasks lists no one', async () => {
+  it('says why a reviewer list on a task with subtasks lists no one, and keeps No reviewer', async () => {
     force.add('group')
     await load()
     const { OwnerPickList } = await import('./AssigneeAvatar')
@@ -509,10 +556,27 @@ describe('the owner list’s batches and states', () => {
       'A task with subtasks has no reviewer of its own; set reviewers on its subtasks.',
     )
     expect(document.querySelector('[data-picker-retry]')).toBeNull()
+    // the write still clears a reviewer the task kept from before
+    const clear = items().find((item) => item.textContent === 'No reviewer')
+    expect(clear).toBeDefined()
+    expect(clear?.getAttribute('aria-disabled')).not.toBe('true')
   })
 
+  it('names a holder the organization does not hold by the field’s own label, marked', async () => {
+    byIds = true
+    await load({ holder: 'gone-person' })
+    await openList()
+    const row = holderRow()
+    expect(row?.textContent).toContain('Unassigned')
+    expect(row?.textContent).not.toContain('Loading…')
+    expect(row?.textContent).toContain('Can no longer take this task')
+    expect(row?.getAttribute('aria-disabled')).toBe('true')
+  })
+
+  // the people figure at its design size, 1,000 people with the fixture's
+  // Planner and Zoe Young, 995 of them eligible
   it('lists 1,000 people 25 at a time up to its cap of 500, each once', async () => {
-    await load({ people: 1000, viewers: 5 })
+    await load({ people: 998, viewers: 5 })
     await openList()
     expect(choices()).toHaveLength(25)
     for (let press = 0; press < 19; press++) await more()
@@ -565,6 +629,26 @@ describe('the owner list’s pick', () => {
     await act(async () => choices()[0].click())
     expect(writes).toHaveLength(0)
     expect(onPick).not.toHaveBeenCalled()
+  })
+
+  it('keeps no name for a holder picked while their name loads, and keeps a picked row’s', async () => {
+    await load({ holder: 'unnamed' })
+    holding = true
+    await openList()
+    const { ownerNameKept } = await import('./ownerNames')
+    const org = snap.orgs[0].id
+    expect(holderRow()?.textContent).toContain('Loading…')
+    await act(async () => holderRow()?.click())
+    expect(ownerNameKept(org, 'unnamed')).toBe(false)
+    await act(async () => {
+      for (const h of held) h.release()
+    })
+    await settle()
+    const person = choices()[0]
+    const id = person.dataset.ownerChoice ?? ''
+    expect(ownerNameKept(org, id)).toBe(false)
+    await act(async () => person.click())
+    expect(ownerNameKept(org, id)).toBe(true)
   })
 
   it('leaves onPick out when the server refuses the pick', async () => {

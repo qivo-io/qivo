@@ -41,16 +41,16 @@ const NONE = '\u0000none'
     the one the task window shows from its own answer. */
 const liveTask = (id: string) => P.anyTask(id) ?? P.taskShown(id)
 
-/** The 28 px face of person `id` beside their name: the store's portrait,
-    or a plain square while the store does not hold them, which never reads
-    as Unassigned. */
+/** The 28 px face of person `id` beside their name. It is the store's
+    portrait, or a plain square while the store does not hold them, which
+    never reads as Unassigned. */
 function OwnerFace({ id }: { id: string }) {
   if (P.user(id)) return <Avatar id={id} size={28} />
   return <span aria-hidden="true" className="size-7 shrink-0 rounded-[5px] bg-surface-3" />
 }
 
-/** The people behind every owner control, as a list the server answers:
- * the people who could become the task's assignee or reviewer
+/** The people behind every owner control, as a list the server answers.
+ * It holds the people who could become the task's assignee or reviewer
  * (pickers.taskOwners through P.ownerChoices), 25 a batch, read once each
  * while the list is open and never before, with the server's search, Load
  * more and at most PICKER_CAPS.owners people kept. The browser filters,
@@ -64,30 +64,39 @@ function OwnerFace({ id }: { id: string }) {
  * shown under a search only when that name holds every typed word. A
  * holder the check answers not eligible, or as a person the organization
  * does not hold, reads disabled with a note; a check that failed or could
- * not finish leaves the holder named and checked with no note. Then the
- * batches' rows, each id once, the holder left out.
+ * not finish leaves the holder named and checked with no note. A holder
+ * no read names yet reads "Loading…", one whose name read failed "Couldn't
+ * load this person", and one people.byIds says the organization does not
+ * hold the field's own "Unassigned" or "No reviewer", as OwnerField names
+ * them. Then the batches' rows, each id once, the holder left out.
  *
  * Rows of an older text read dimmed and take no pick until the answer for
  * the typed text lands, which moves the highlight to its first row; Enter
- * acts only then. Load more moves the highlight to the first new row.
- * A held, refused, unavailable, over-budget, stopped or failed list says
- * so in the field's words (CommandChoiceEnd), never as an empty or ended
- * list; a refused or unavailable list also disables its clear row, which
- * the write would refuse.
+ * acts only then. Under a search that first row is a person whenever the
+ * answer holds one, so Enter after a name never clears the field, even
+ * when the clear row's label also holds the typed words. Load more moves
+ * the highlight to the first new row. A held, refused, unavailable,
+ * over-budget, stopped or failed list says so in the field's words
+ * (CommandChoiceEnd), never as an empty or ended list. An unavailable list
+ * and a refused assignee list also disable the clear row, which the write
+ * would refuse. A refused reviewer list keeps it, since the write still
+ * clears the reviewer a task with subtasks kept from before
+ * (REVIEWER_ON_GROUP), though it refuses a clear below Edit.
  *
  * Picking writes `field` when the pick changes it through P.updateIssue,
  * whose refusal toasts the server's sentence and is the only check of the
  * person, then calls `onPick` once the server saves it. Without `field`
- * it writes the live task's owner field, re-read at the pick: a status
- * move while the list was open can hand the task between assignee and
- * reviewer, which also lists that field's people. `onClose` runs on every
- * accepted pick, changed or not, and is handed the write as `then`, to
- * run once the list has closed (see useMenuBackLayer). `off` says why the
- * list may no longer write, such as Team sync's stale meeting. Given it,
- * its rows, Load more and Try again read disabled with that title and
- * write nothing, also a pick made before the list closes, and the list
- * closes at once through `onClose`, also one that was open before `off`
- * came. */
+ * it writes the live task's owner field, re-read at the pick, since a
+ * status move while the list was open can hand the task between assignee
+ * and reviewer, which also lists that field's people. A picked batch row
+ * keeps its name for the task's fields (keepOwnerName), as the server
+ * answered it. `onClose` runs on every accepted pick, changed or not, and
+ * is handed the write as `then`, to run once the list has closed (see
+ * useMenuBackLayer). `off` says why the list may no longer write, such as
+ * Team sync's stale meeting. Given it, its rows, Load more and Try again
+ * read disabled with that title and write nothing, also a pick made before
+ * the list closes, and the list closes at once through `onClose`, also one
+ * that was open before `off` came. */
 export function OwnerPickList({
   issue,
   field,
@@ -172,20 +181,24 @@ export function OwnerPickList({
   const stale = !answered
   const people = list.rows.filter((row) => row.id !== holder)
   const first = list.answers[0]
-  // the write refuses a clear on a task the list could not open
+  // the write refuses a clear on a task the list could not open. A refused
+  // assignee list is one below Edit. A refused reviewer list may be a task
+  // with subtasks, whose dormant reviewer the write still clears.
   const closed =
-    list.phase === 'held' && (first?.state === 'refused' || first?.state === 'unavailable')
+    list.phase === 'held' &&
+    (first?.state === 'unavailable' || (first?.state === 'refused' && shown === 'assignee'))
   const end = answered ? listEnd(list, query !== '') : 'loading'
 
   // the highlighted row, which the answer for the typed text moves to its
-  // first row, and Load more to the first new row
+  // first row, and Load more to the first new row. Under a search a person
+  // comes before the clear row, whose label may also hold the typed words
+  // ("Ed" is in "Unassigned"), so Enter after a name never clears the field.
   const [value, setValue] = useState('')
-  const firstValue = () =>
-    showNone && !closed
-      ? NONE
-      : showHolder && !ineligible && holder
-        ? holder
-        : (people[0]?.id ?? '')
+  const firstValue = () => {
+    const person = showHolder && !ineligible && holder ? holder : people[0]?.id
+    if (typed !== '' && person) return person
+    return showNone && !closed ? NONE : (person ?? '')
+  }
   const highlighted = useRef<string | null>(null)
   useEffect(() => {
     if (!answered || highlighted.current === listKey) return
@@ -209,12 +222,10 @@ export function OwnerPickList({
     list.more()
   }
 
-  const pick = (person: { id: string; name: string } | null) => {
+  const pick = (id: string | null) => {
     if (off) return
     const live = liveTask(issue.id)
     if (!live || !P.canWrite(live.project)) return
-    if (person) keepOwnerName(issue.org, { id: person.id, name: person.name, active: true })
-    const id = person?.id ?? null
     onClose(() => {
       const now = liveTask(issue.id)
       if (!now) return
@@ -275,15 +286,23 @@ export function OwnerPickList({
             data-owner-holder=""
             disabled={closes || ineligible}
             title={off}
-            onSelect={() => pick({ id: holder, name: holderLabel ?? '' })}
+            onSelect={() => pick(holder)}
             // the chosen person reads like a chosen dropdown row (deviation #326)
             className={cn(rowClass, 'font-semibold')}
           >
-            <OwnerFace id={holder} />
+            {holderLabel === null && holderName?.state === 'gone' ? (
+              <Avatar id={null} size={28} />
+            ) : (
+              <OwnerFace id={holder} />
+            )}
             <span className="min-w-0 flex-1">
               <span className="block truncate">
                 {holderLabel ??
-                  (holderName?.state === 'failed' ? "Couldn't load this person" : 'Loading…')}
+                  (holderName?.state === 'failed'
+                    ? "Couldn't load this person"
+                    : holderName?.state === 'gone'
+                      ? none
+                      : 'Loading…')}
               </span>
               {ineligible && (
                 <span data-owner-ineligible="" className="block text-sm font-normal text-text-2">
@@ -303,7 +322,11 @@ export function OwnerPickList({
             data-owner-choice={person.id}
             disabled={closes || stale}
             title={off}
-            onSelect={() => pick(person)}
+            onSelect={() => {
+              // a name the server answered, kept for the task's fields
+              keepOwnerName(issue.org, person)
+              pick(person.id)
+            }}
             className={rowClass}
           >
             <OwnerFace id={person.id} />
@@ -323,7 +346,7 @@ export function OwnerPickList({
   )
 }
 
-/** The task window's Assignee or Reviewer field (`field`) of `issue`: a
+/** The task window's Assignee or Reviewer field (`field`) of `issue`, a
  * button in FieldSelect's look, marked data-fieldselect with `aria-label`
  * "Assignee" or "Reviewer", that opens the shared owner list
  * (OwnerPickList) in a popover. It names the holder by face and name
