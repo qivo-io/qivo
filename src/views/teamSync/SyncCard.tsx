@@ -349,13 +349,14 @@ const MENTION_SEARCH = 'data-sync-mention-search'
     choice the check finds no longer eligible goes to `onGone`, which
     clears it, says why and leaves the choice to the person, but only while
     it is still the choice, so a person picked before the answer keeps
-    their pick. A check that answers after this window closed changes
-    nothing, as a later opening holds its own choice and check. `initial`
-    is chosen (`onWho` without a press) once a batch row or an `eligible`
-    answer holds them, while the person has picked no one (`picked`). A
-    failed or refused check chooses nothing. The list's end shows only once
-    the list for the typed text has opened, so a changed search never
-    shows the older search's end. */
+    their pick. A check that answers once this window's list has gone,
+    after its closing fade, changes nothing, as the next opening sends its
+    own check. A reopening inside the fade keeps this check, under the same
+    guard. `initial` is chosen (`onWho` without a press) once a batch row or
+    an `eligible` answer holds them, while the person has picked no one
+    (`picked`). A failed or refused check chooses nothing. The list's end
+    shows only once the list for the typed text has opened, so a changed
+    search never shows the older search's end. */
 function MentionPeople({
   it,
   initial,
@@ -405,8 +406,9 @@ function MentionPeople({
   useEffect(() => {
     const id = openedWith?.id ?? initial
     if (!id) return
-    // an answer after the window closed is an older opening's, which says
-    // nothing of the choice a later opening holds
+    // an answer after this list unmounted, once the window has faded out,
+    // is an older opening's, which says nothing of the choice a later
+    // opening holds
     let live = true
     void P.ownerChecks({ task, field: 'recipient', ids: [id] }).then((answer) => {
       if (!live) return
