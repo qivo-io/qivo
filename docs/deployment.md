@@ -1574,7 +1574,7 @@ The release removes `billing.usageReport`, with its internal
 `billing.currentUsage`, which v0.1.145 kept for tabs loaded before it, and
 adds them to the Instant Rollback list above. An app from before v0.1.145,
 also a tab that was open when this release deploys, shows Billing's error
-in place of its details and usage until it reloads. An app from v0.1.135 up
+in place of its details and usage until it reloads. An app from v0.1.145 up
 to this release says a paid period's sample was measured at the start of the
 period "without files in Deleted items", which a sample from this release
 does not leave out and may have measured later; no paid period exists yet,
@@ -1617,7 +1617,11 @@ as Convex measured them, the update of the run row that ends each one
 included. The ticks are not in them. Add one indexed read of at most one
 run row for each tick, one write of the run row for the tick that starts the
 day's run, and one more read and write of it for each tick that resumed the
-run (`restarts`). A run row is about 500 bytes.
+run (`restarts`). A run row is about 500 bytes. From the release after
+v0.1.158, on a deployment with billing on, each tick also reads one index
+range of at most one billing period, which is not in the counters either,
+and the step that ends a run one more, which is; with billing off, as on
+staging, neither runs, and there is nothing to add.
 `database_queries` is Convex's own count, not the index ranges the code
 opens; a local backend counted 7 before a transaction's first read.
 Each sample written (`written`) is one row of about 230 bytes. The rows
@@ -1791,6 +1795,86 @@ changes no server function, sets no new rollback floor and needs no release
 step. Returning the app alone to an earlier release is safe, because that
 app reads the workspace's milestones, which the backend still sends. There
 is no schema change and no backfill.
+
+From the release after v0.1.158, a paid period can be charged for storage
+on the average of its organization's daily storage samples instead of the
+sample at its start. The Convex variable `DAILY_STORAGE_BILLING` switches
+it on when it is exactly `true`, and it is unset on every deployment until
+the owner decides from the staging reading. While it is unset nothing
+bills differently. Every period is sampled at its start as before, and the
+only new work, while billing is on, is one index range in each hourly call
+of `storage-daily-samples` and one in the step that ends each day's run,
+each finding no period; with billing off, as on every hosted deployment
+now, neither reads anything. The variable is read only when a paid period
+is recorded, so setting it acts at each organization's next renewal, and
+removing it makes later periods sampled at their start again while a daily
+period already open stays daily.
+
+A period recorded while it is set holds `storage_basis: 'daily'`, takes no
+sample at its start, and is recorded once. Its days are the UTC dates from
+its start's date to the day before its end's date. The run of its last day
+records it when that day has the organization's sample, normally about a
+day or more before the end. When that day has none, the next day's run
+records it from its own sample once the last day's run can write no more,
+and at the latest the first hourly call within two hours of the end records
+it, a day still without a sample taking the most recent one, an earlier
+period's included. Every later run and call tries a period that is still open,
+for up to 3 days after its end, then stops with an error log and a
+`billing.storage_finalize_stopped` audit row, and
+`billingSync:finalizeStorage` with the period records it by the same rules,
+as that function's docstring shows. The average, rounded up to a whole
+byte, goes through the same allowance, blocks and single charge as a
+sample. With no sample of the organization at all the period records no
+storage charge and a `billing.storage_unavailable` audit row, never 0. A
+subscription that ends or is revoked before the period's recorded end gets
+no storage charge for that period, since the charge is recorded near the
+end and its delivery stops at the end, where the sample at the start had
+sent it already. `billing.usageFigures` answers the basis and the average,
+which this release's app shows only for a daily period, with how many days
+were estimated. An app from v0.1.145 up to this release says "Not measured
+yet for this period." for a daily period until it reloads. Switching it on
+also changes what the pricing page and the administration and organization
+guides say about storage, so a docs change goes out before or with it;
+qivo-internal `docs/billing-operations.md` keeps the texts.
+
+The release adds the optional fields `storage_basis`, `storage_days`,
+`storage_unavailable` and `storage_finalized_at` and the index
+`by_storage_open` to `billing_periods`, no table and no backfill. While no
+row holds the new fields, a commit before the release deploys, and Convex
+drops the index, which the deploy forward builds again. Once the switch is
+set and a daily period is recorded, a backend before the release does not
+deploy, since its schema validation refuses the period row for the field
+`storage_basis`, and that code would also sample the period at its start.
+A disposable local backend showed both on 2026-11-07. So from the first
+daily period on never return the backend to a commit before this release;
+roll forward instead. Until then the floors above stand, and the
+release sets none. Returning the app alone is safe, since an earlier app
+reads only the sample fields. For the owner's cost reading, each daily
+period costs one `billingSync:finalizeStorage` call when it is recorded,
+reading its period row, its days' samples (at most 31) and a few documents
+more, 37 documents and 8 index ranges for 31 days at 1,000 people in
+`convex/tests/billing.test.ts`, and writing the period and its charge, one
+more call each time a run or hourly call finds it waiting for its last day,
+and one `billingSync:finalizeDue` call for each 25 periods a run or call
+lists. `billing.usageFigures` reads at most 31 more documents for an admin
+of an open daily period.
+
+Switching daily storage billing on is the owner's decision, never a stage's.
+First ship the docs change above. Then accept one daily period in the Polar
+sandbox, its storage charge sent between about an hour and two days before
+the period's end and landing on that period's closing invoice, as the
+limits plan requires before daily billing is enabled. Then, with the
+owner's approval, set the variable on production:
+
+```sh
+"${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
+  production npx convex env set DAILY_STORAGE_BILLING true
+```
+
+Periods recorded afterwards are daily, and periods already open keep their
+basis. From the first daily period on, this release is the backend's floor.
+Removing the variable makes later periods sampled at their start again and
+leaves open daily periods daily.
 
 ## Node.js version
 
