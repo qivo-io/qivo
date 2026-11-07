@@ -37,6 +37,7 @@ import {
   plantSeat,
   type T,
   uuid,
+  withOrg,
   withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
@@ -1522,6 +1523,9 @@ describe('the projects and people parts', () => {
       auth_user_id: `seat_${uuid()}`,
     })
     const tops = await plantPortfolio(t, f, member, { tops: 20, subs: 3 })
+    // the member reads the portfolio through the User grants, and withOrg's
+    // admin, who holds no grant, through the fixture team's Viewer shares,
+    // as admin status gives no level
     const before = [await projectsWindow(t, f.admin), await projectsWindow(t, member)]
     for (const read of before) {
       expect(read.answer).toMatchObject({ state: 'ok' })
