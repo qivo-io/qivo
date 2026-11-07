@@ -6,8 +6,9 @@ import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup
 
 /* Inline settings editors restore their draft when the store reports that
    it wrote nothing. updateLabel returns false for a refusal or an unchanged
-   name; updateUser returns false when a client rule refuses the patch. Both
-   return true once a change is painted and sent. */
+   name, and else the write's promise, which resolves whether the server
+   accepted it; updateUser returns false when a client rule refuses the
+   patch, and true once a change is painted and sent. */
 
 type Planner = typeof import('./planner')['P']
 
@@ -115,7 +116,9 @@ describe('settings edits through the client store', () => {
     // Changed with the roster cache stage: the store reads no catalogue for
     // a duplicate, and the server refuses a name another label holds
     it('sends a name another label in the organization has, leaving the refusal to the server', () => {
-      expect(P.updateLabel('l-feat', { name: ' bug ' }, {}, labelShownOf(P, 'l-feat'))).toBe(true)
+      expect(
+        P.updateLabel('l-feat', { name: ' bug ' }, {}, labelShownOf(P, 'l-feat')),
+      ).toBeInstanceOf(Promise)
       expect(showToast).not.toHaveBeenCalled()
       expect(requests).toMatchObject([
         { name: 'labels:update', args: { id: 'l-feat', patch: { name: 'bug' } } },
@@ -123,9 +126,9 @@ describe('settings edits through the client store', () => {
     })
 
     it('writes a trimmed new name', () => {
-      expect(P.updateLabel('l-feat', { name: '  Firmware ' }, {}, labelShownOf(P, 'l-feat'))).toBe(
-        true,
-      )
+      expect(
+        P.updateLabel('l-feat', { name: '  Firmware ' }, {}, labelShownOf(P, 'l-feat')),
+      ).toBeInstanceOf(Promise)
       expect(P.labelById['l-feat'].name).toBe('Firmware')
       expect(requests).toMatchObject([
         { name: 'labels:update', args: { id: 'l-feat', patch: { name: 'Firmware' } } },
@@ -133,20 +136,24 @@ describe('settings edits through the client store', () => {
     })
 
     it('allows a case change of its own name', () => {
-      expect(P.updateLabel('l-feat', { name: 'feature' }, {}, labelShownOf(P, 'l-feat'))).toBe(true)
+      expect(
+        P.updateLabel('l-feat', { name: 'feature' }, {}, labelShownOf(P, 'l-feat')),
+      ).toBeInstanceOf(Promise)
       expect(P.labelById['l-feat'].name).toBe('feature')
     })
 
     it("ignores another organization's labels", () => {
-      expect(P.updateLabel('l-feat', { name: 'Hardware' }, {}, labelShownOf(P, 'l-feat'))).toBe(
-        true,
-      )
+      expect(
+        P.updateLabel('l-feat', { name: 'Hardware' }, {}, labelShownOf(P, 'l-feat')),
+      ).toBeInstanceOf(Promise)
       expect(showToast).not.toHaveBeenCalled()
     })
 
     it('reports a name that shortens to the stored one as nothing written', () => {
       const long = 'A'.repeat(40)
-      expect(P.updateLabel('l-feat', { name: long }, {}, labelShownOf(P, 'l-feat'))).toBe(true)
+      expect(P.updateLabel('l-feat', { name: long }, {}, labelShownOf(P, 'l-feat'))).toBeInstanceOf(
+        Promise,
+      )
       requests = []
       expect(
         P.updateLabel('l-feat', { name: `${long} and more` }, {}, labelShownOf(P, 'l-feat')),
@@ -156,9 +163,9 @@ describe('settings edits through the client store', () => {
     })
 
     it('restores the stored name when the server refuses', async () => {
-      expect(P.updateLabel('l-feat', { name: 'Firmware' }, {}, labelShownOf(P, 'l-feat'))).toBe(
-        true,
-      )
+      expect(
+        P.updateLabel('l-feat', { name: 'Firmware' }, {}, labelShownOf(P, 'l-feat')),
+      ).toBeInstanceOf(Promise)
       requests[0].reject(
         new ConvexError({ code: 'rule', message: 'a label with that name already exists' }),
       )
@@ -365,9 +372,9 @@ describe('settings edits through the client store', () => {
       }
       // the field began before the first save's paint, which the screen shows
       expect(P.labelById['l-feat'].name).toBe('Firmware')
-      expect(P.updateLabel('l-feat', { name: 'Field test' }, save, labelShownOf(P, 'l-feat'))).toBe(
-        true,
-      )
+      expect(
+        P.updateLabel('l-feat', { name: 'Field test' }, save, labelShownOf(P, 'l-feat')),
+      ).toBeInstanceOf(Promise)
       expect(latest().args.expected).toEqual({ name: 'Feature' })
       latest().reject(changed('label', 'l-feat', 'name'))
       // a recolor sends the color on screen

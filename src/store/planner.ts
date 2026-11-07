@@ -18635,17 +18635,20 @@ export const PLANNER = {
   /** Renames or recolors label `id` as the page showed it (`shown`,
       LabelShown). Returns false when nothing was written, either refused
       with a toast or already as shown, so an inline editor can keep or put
-      back its text. It goes to the organization the page showed, with the
-      name and color the row showed as `expected`, the draft's `save.seen`
-      over them, whether or not the store holds the label, and paints only
-      where it does. The server refuses a name another label holds, in any
-      case, and a refusal keeps the draft (keepUnsaved). */
+      back its text, else the write's promise, which resolves whether the
+      server accepted it, so a page that shows a label the store does not
+      hold takes the new name or color as saved only then. It goes to the
+      organization the page showed, with the name and color the row showed
+      as `expected`, the draft's `save.seen` over them, whether or not the
+      store holds the label, and paints only where it does. The server
+      refuses a name another label holds, in any case, and a refusal keeps
+      the draft. */
   updateLabel: (
     id: string,
     patch: { name?: string; color?: string },
     save: FieldSave,
     shown: LabelShown,
-  ): boolean => {
+  ): Promise<boolean> | false => {
     if (refusePausedEdit()) return false
     const wire: FunctionArgs<typeof api.labels.update>['patch'] = {}
     if ('name' in patch) {
@@ -18664,7 +18667,7 @@ export const PLANNER = {
         if (wire.name !== undefined) live.name_lower = wire.name.toLowerCase()
       },
     }
-    void send(
+    return send(
       api.labels.update,
       { org_id: shown.orgId, id, patch: wire },
       rows.labels.has(id) ? view : {},
@@ -18677,7 +18680,6 @@ export const PLANNER = {
         ...fieldSendOptions(save),
       },
     )
-    return true
   },
 
   /** Deletes label `id` as the page showed it (`shown`, LabelShown): to its

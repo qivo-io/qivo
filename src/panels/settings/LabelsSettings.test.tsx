@@ -673,6 +673,42 @@ describe('Settings › Labels', () => {
       },
     })
   })
+
+  it('keeps a refused rename and recolor of a label the store does not hold unsaved, and sends what the answer shows after them', async () => {
+    await load((snap) => labelRow(snap, 'fw', 'Firmware'))
+    // another admin's label reaches the answer before the catalogue
+    labelRow(server.snap, 'new', 'New from elsewhere', '#0891B2')
+    await render()
+    const refusal = () =>
+      new ConvexError({ code: 'rule', message: 'a label with that name already exists' })
+    await rename('new', 'Firmware')
+    expect(requests.at(-1)).toMatchObject({
+      name: 'labels:update',
+      args: { id: 'new', patch: { name: 'Firmware' }, expected: { name: 'New from elsewhere' } },
+    })
+    await answer('labels:update', refusal())
+    // the typed text stays, unsaved, and the row still names the label as
+    // the answer does
+    expect(nameField('new').value).toBe('Firmware')
+    expect(nameField('new').getAttribute('aria-label')).toBe('Name of label New from elsewhere')
+    const { hasUnsaved } = await import('../../lib/leaveGuard')
+    expect(hasUnsaved()).toBe(true)
+    // a refused recolor leaves the answer's color
+    await click(find('[aria-label="Change color for New from elsewhere"]'))
+    await click(find('[aria-label="Label colors"] [aria-label="Red"]'))
+    expect(requests.at(-1)).toMatchObject({
+      name: 'labels:update',
+      args: { id: 'new', patch: { color: '#F0555D' }, expected: { color: '#0891B2' } },
+    })
+    await answer('labels:update', 'refuse')
+    // Delete sends the name and color the row shows, the answer's
+    await click(find<HTMLButtonElement>('[data-delete-label="new"]'))
+    await click(button('Delete', find('[data-modal-shell]')))
+    expect(requests.at(-1)).toMatchObject({
+      name: 'labels:remove',
+      args: { id: 'new', expected: { name: 'New from elsewhere', color: '#0891B2' } },
+    })
+  })
 })
 
 describe('a label name on the draft model', () => {

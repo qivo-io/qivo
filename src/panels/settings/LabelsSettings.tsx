@@ -12,7 +12,8 @@
 
    A row's name and color come from the store's catalogue while it holds
    the label, which paints this session's writes at once, else from the
-   page's answers with what the page saved over them. Every write sends
+   page's answers with what the server accepted from the page over them,
+   so a refused rename or recolor never shows as saved. Every write sends
    what the row showed (store/planner.ts LabelShown) to the page's
    organization with its `expected` from it, so no control waits for the
    store. A name is a draft against the saved name it began from
@@ -139,10 +140,11 @@ function LabelRow({
   kept: 'Added' | 'Not in this list' | null
   canEdit: boolean
   onUnsaved: (id: string, unsaved: boolean) => void
-  /** a rename the page sent, with the name it saved */
-  onRenamed: (id: string, name: string) => void
-  /** a recolor the page sent, with the color it saved */
-  onRecolored: (id: string, color: string) => void
+  /** a rename the page sent, with the name and the write's answer,
+      whether the server accepted it */
+  onRenamed: (id: string, name: string, accepted: Promise<boolean>) => void
+  /** a recolor the page sent, with the color and the write's answer */
+  onRecolored: (id: string, color: string, accepted: Promise<boolean>) => void
   onDelete: (id: string, name: string, color: string) => void
 }) {
   const ready = canEdit
@@ -163,7 +165,8 @@ function LabelRow({
     }
     if (draft.conflict || P.refusePausedEdit()) return
     const save = draft.save(next)
-    if (P.updateLabel(id, { name: next }, save.as('name'), shown)) onRenamed(id, next)
+    const sent = P.updateLabel(id, { name: next }, save.as('name'), shown)
+    if (sent) onRenamed(id, next, sent)
     else save.keepUnsaved()
   }
   return (
@@ -207,11 +210,10 @@ function LabelRow({
                   aria-label={colorName}
                   aria-pressed={color.toLowerCase() === option.toLowerCase()}
                   onClick={() => {
-                    if (
+                    const sent =
                       option.toLowerCase() !== color.toLowerCase() &&
                       P.updateLabel(id, { color: option }, {}, shown)
-                    )
-                      onRecolored(id, option)
+                    if (sent) onRecolored(id, option, sent)
                     close()
                   }}
                 >
@@ -389,32 +391,51 @@ export function OrgLabelsPage() {
   const [drafts, setDrafts] = useState<ReadonlySet<string>>(() => new Set())
   const [deleting, setDeleting] = useState<ReadonlySet<string>>(() => new Set())
   // the name and color the page last showed for each label, from its
-  // answers or as it created the label, and what the page saved over them
-  // since, which a kept row shows and a loaded row shows until the answer
-  // holds it
+  // answers or as it created the label, and what the server accepted from
+  // the page over them since, which a kept row shows and a loaded row shows
+  // until the answer holds it. A rename or recolor counts as saved only
+  // once the server accepts it, so a refused one never shows as the
+  // label's name or color, or goes out later as `expected`.
   const known = useRef(new Map<string, { name: string; color: string }>())
   const [saved, setSaved] = useState<ReadonlyMap<string, { name?: string; color?: string }>>(
     () => new Map(),
   )
+  // the names on their way, by label, which a renamed label's kept row
+  // waits for in a loaded batch until the server answers
+  const [sending, setSending] = useState<ReadonlyMap<string, string>>(() => new Map())
   const onUnsaved = useCallback((id: string, unsaved: boolean) => {
     setDrafts((s) => (unsaved === s.has(id) ? s : toggled(s, id, unsaved)))
   }, [])
-  const onRenamed = (id: string, name: string) => {
+  const onRenamed = (id: string, name: string, accepted: Promise<boolean>) => {
     setRenamed((s) => toggled(s, id, true))
-    setSaved((m) => new Map(m).set(id, { ...m.get(id), name }))
+    setSending((m) => new Map(m).set(id, name))
+    void accepted.then((ok) => {
+      setSending((m) => {
+        if (m.get(id) !== name) return m
+        const next = new Map(m)
+        next.delete(id)
+        return next
+      })
+      if (ok) setSaved((m) => new Map(m).set(id, { ...m.get(id), name }))
+    })
   }
-  const onRecolored = (id: string, color: string) => {
-    setSaved((m) => new Map(m).set(id, { ...m.get(id), color }))
+  const onRecolored = (id: string, color: string, accepted: Promise<boolean>) => {
+    void accepted.then((ok) => {
+      if (ok) setSaved((m) => new Map(m).set(id, { ...m.get(id), color }))
+    })
   }
   const loaded = new Map(list.rows.map((row) => [row.id, row]))
   for (const row of list.rows) known.current.set(row.id, { name: row.name, color: row.color })
   // a created or renamed label goes from the kept rows once a loaded batch
-  // holds it under the name the page saved; what the page saved goes once
-  // the answer shows it
+  // holds it under the name the page sent or saved; what the page saved
+  // goes once the answer shows it
   useEffect(() => {
     const settled = (id: string) => {
       const row = loaded.get(id)
-      return !!row && row.name === (saved.get(id)?.name ?? known.current.get(id)?.name)
+      return (
+        !!row &&
+        row.name === (sending.get(id) ?? saved.get(id)?.name ?? known.current.get(id)?.name)
+      )
     }
     setMade((s) => without(s, settled))
     setRenamed((s) => without(s, settled))
