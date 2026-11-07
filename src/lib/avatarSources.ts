@@ -116,9 +116,11 @@ type Dependencies = {
  * Named again, one mint shows it with no download.
  *
  * AVATAR_SOURCES bounds the downloads at once, each kept picture and the
- * bytes kept in all. pause(true) holds everything while the page is hidden:
- * nothing renews, downloads or is released, and on return a held picture
- * past its renewal shows until its renewal answers, at most STALE_GRACE. */
+ * bytes kept in all. pause(true) holds everything while the page is hidden,
+ * so nothing renews, downloads or is released. On return a held picture a
+ * view names that is past its renewal shows until its renewal answers, at
+ * most STALE_GRACE. One no view names is not renewed, and past its grace it
+ * shows neither while the page is hidden nor after the return. */
 export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
   const deps: Dependencies = {
     now: () => Date.now(),
