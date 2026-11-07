@@ -1175,26 +1175,36 @@ describe('a mine read at the design size', () => {
     expect(answer.stopped).toBeNull()
   })
 
-  it("lists 20 top-level projects whose 500 archived sub-projects each hold 7 of the caller's open tasks", async () => {
-    // the 500 archived sub-projects one person can read, 25 under each of
-    // 20 top-level projects the caller holds a grant on, each keeping 7 of
-    // the caller's open tasks, as archiving leaves them; beside them each
-    // top-level project has 3 live sub-projects of everyday work, 30 open
-    // tasks with 7 of them the caller's. At the fixed sizes, 6 KiB a
-    // project row and 2 KiB a task, the archived rows alone would decide
-    // at about 9.8 MiB
+  it("lists 20 top-level projects of everyday work beside 500 archived sub-projects that each hold 7 of the caller's open tasks", async () => {
+    // the 500 archived sub-projects one person can read, 3 under each of
+    // 167 top-level projects archived whole (2 under the last), as
+    // archiving a project leaves them, each keeping 7 of the caller's open
+    // tasks, with the caller's grant on each archived top-level project;
+    // beside them 20 live top-level projects the caller holds a grant on,
+    // each with 3 live sub-projects of everyday work, 30 open tasks with 7
+    // of them the caller's. At the fixed sizes, 6 KiB a project row and
+    // 2 KiB a task, the archived sub-projects and their tasks alone would
+    // decide at about 9.8 MiB
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const me = await seatOf(t, f.org.id, { org_role: 'user' })
-    const trees = await plantTrees(t, f.org.id, me, 20, () => 25, {
+    const trees = await plantTrees(t, f.org.id, me, 20, () => 0, {
       live: 3,
       own: 7,
       others: { other: f.user, n: 23 },
       grant: 'top',
-      each: 2,
+      each: 10,
+    })
+    const closed = await plantTrees(t, f.org.id, me, 167, (i) => (i < 166 ? 3 : 2), {
+      live: 0,
+      own: 7,
+      grant: 'top',
+      each: 25,
+      closed: true,
+      first: 20,
     })
     expect(trees.live).toHaveLength(60)
-    expect(trees.archived).toHaveLength(500)
+    expect(closed.archived).toHaveLength(500)
     await plantMany(
       t,
       trees.tops.map((p, i) => ({ project: p.id, week: plus(MONDAY, 7 * i), name: `Gate ${i}` })),
@@ -1203,7 +1213,7 @@ describe('a mine read at the design size', () => {
     const got = await measureMine(
       t,
       me,
-      '20 projects, 60 live and 500 archived sub-projects with 7 own tasks each, limit 10',
+      '20 projects of 60 live sub-projects, 500 archived sub-projects with 7 own tasks each under 167 archived projects, limit 10',
       10,
     )
     expect(got).toMatchObject({ answer: { projects: 20, rows: 10, next: true, stopped: null } })

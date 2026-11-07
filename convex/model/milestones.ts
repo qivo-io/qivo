@@ -1158,11 +1158,13 @@ export async function milestoneProjects(
  *   the finding would decide at 6.63 MiB in 1,753 ranges. The 2,500 ranges
  *   this share held before refused it.
  * - 20 top-level projects the caller holds a grant on, each with 3 live
- *   sub-projects of 30 open tasks, 7 of them the caller's, and 25 archived
- *   sub-projects that keep 7 of the caller's open tasks each (500 archived
- *   sub-projects one person can read). The finding takes 711, 4,583, 1.99
- *   and 2.43, the request 789, 4,641 and 2.01. At every other view's
- *   charges the finding would decide at 10.55 MiB.
+ *   sub-projects of 30 open tasks, 7 of them the caller's, beside 500
+ *   archived sub-projects that keep 7 of the caller's open tasks each, 3
+ *   under each of 167 top-level projects archived whole (2 under the last)
+ *   that the caller holds a grant on (500 archived sub-projects one person
+ *   can read). The finding takes 1,360, 5,205, 2.13 and 2.57, the request
+ *   1,448, 5,273 and 2.15. At every other view's charges the finding would
+ *   decide at 10.56 MiB.
  * - 300 open and 150 Done tasks of the caller in one sub-project (open and
  *   Done at their sum). The finding takes 100, 466, 0.27 and 0.29, the
  *   request 103, 478 and 0.28.
