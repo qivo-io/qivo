@@ -412,9 +412,9 @@ async function nextSiblingPlace(
  * (lib/projectCreators.ts), and a sub-project needs management of its
  * parent (subProjectParent), which must be a top-level project that is not
  * archived. Naming another lead or any grant takes a person. A creator who
- * is not an org admin and names someone else as lead of a top-level project
- * gets User access unless the request names their own (lib/projectGrants.ts
- * creatorGrant).
+ * names someone else as lead of a top-level project, an organization admin
+ * as anyone, gets User access unless the request names their own
+ * (lib/projectGrants.ts creatorGrant).
  * The org's counter gives the number; the key comes from the name. A
  * sort_order that is not a finite number is refused, as Convex's number
  * validator lets NaN and the infinities through.
@@ -505,7 +505,6 @@ export async function createProjectCore(
   if (p.type === 'meta') {
     const own = p.access?.[me.id]
     const mine = creatorGrant({
-      admin: me.org_role === 'admin',
       creator: me.id,
       lead: lead_id,
       own: own === 'lead' ? undefined : own,

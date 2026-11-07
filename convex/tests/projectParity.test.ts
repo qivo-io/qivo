@@ -453,7 +453,7 @@ describe('creating projects and sub-projects', () => {
     }
   })
 
-  it('a creator naming another lead keeps User access, unless an admin', async () => {
+  it('a creator naming another lead keeps User access, an admin as anyone', async () => {
     const fx = await setup()
     const byUser = await parsed(
       fx.t.mutation(internal.machine.projects.mcpCreateProject, {
@@ -464,6 +464,9 @@ describe('creating projects and sub-projects', () => {
     )
     expect(byUser.lead_id).toBe(fx.pia.id)
     expect(await grants(fx.t, byUser.id as string)).toEqual({ [fx.user.id]: 'user' })
+    // admin status gives no access to the project's work, so the admin
+    // keeps it in sight by the same default grant, and leading their own
+    // project gives them none
     const byAdmin = await parsed(
       fx.t.mutation(internal.machine.projects.mcpCreateProject, {
         ...as_(fx.admin),
@@ -471,7 +474,26 @@ describe('creating projects and sub-projects', () => {
         lead_id: fx.pia.id,
       }),
     )
-    expect(await grants(fx.t, byAdmin.id as string)).toEqual({})
+    expect(await grants(fx.t, byAdmin.id as string)).toEqual({ [fx.admin.id]: 'user' })
+    expect(byAdmin.access).toEqual({ read: true, write: true })
+    const ownAdmin = await parsed(
+      fx.t.mutation(internal.machine.projects.mcpCreateProject, {
+        ...as_(fx.admin),
+        name: 'Kept',
+      }),
+    )
+    expect(await grants(fx.t, ownAdmin.id as string)).toEqual({})
+    // and the app's create stores the same
+    const inApp = await as(fx.t, fx.admin).mutation(api.projects.create, {
+      org_id: fx.org.id,
+      id: uuid(),
+      type: 'meta',
+      key: 'APPG',
+      name: 'App given',
+      sort_order: 9,
+      lead_id: fx.pia.id,
+    })
+    expect(await grants(fx.t, inApp.id)).toEqual({ [fx.admin.id]: 'user' })
     // a lead must be someone who can lead
     await refused(
       fx.t.mutation(internal.machine.projects.mcpCreateProject, {
@@ -765,13 +787,13 @@ describe('creating projects and sub-projects', () => {
     expect(withSubs.reads - withTops.reads).toBe(1)
   })
 
-  it('creatorGrant: an own entry decides, else User for a non-admin naming another lead', () => {
+  it('creatorGrant: an own entry decides, else User for a creator naming another lead', () => {
     const base = { creator: 'me', lead: 'leo', own: undefined }
-    expect(creatorGrant({ ...base, admin: false })).toBe('user')
-    expect(creatorGrant({ ...base, admin: true })).toBeNull()
-    expect(creatorGrant({ ...base, admin: false, lead: 'me' })).toBeNull()
-    expect(creatorGrant({ ...base, admin: false, own: null })).toBeNull()
-    expect(creatorGrant({ ...base, admin: true, own: 'viewer' })).toBe('viewer')
+    expect(creatorGrant(base)).toBe('user')
+    expect(creatorGrant({ ...base, lead: 'me' })).toBeNull()
+    expect(creatorGrant({ ...base, own: null })).toBeNull()
+    expect(creatorGrant({ ...base, own: 'viewer' })).toBe('viewer')
+    expect(creatorGrant({ ...base, lead: 'me', own: 'user' })).toBe('user')
   })
 })
 

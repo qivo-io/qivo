@@ -1696,10 +1696,10 @@ defaults to you, and only a person may name someone else. An agent always
 leads what it creates, and naming another lead gets `only people can change
 who has access, not agents`. An agent that leads projects cannot be made a
 Viewer until an organization admin hands them over, so setting it to
-Inactive is the way to stop it at once. A creator who is not an
-organization admin and names someone else as lead of a top-level project
-gets User access to it, as in the app. The tool takes no grants; add them
-with `set_project_access`.
+Inactive is the way to stop it at once. A creator who names someone else
+as lead of a top-level project gets User access to it, as in the app, an
+organization admin too, since admin status gives no access to a project's
+work. The tool takes no grants; add them with `set_project_access`.
 
 **Changing.** `update_project` needs managing the project, as its lead or
 an organization admin (`requires lead access to this project` for someone

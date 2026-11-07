@@ -39,7 +39,7 @@ export function afterLeadChange(draft: AccessDraft, lead: string, creator: Creat
   }
   if (draft.self === 'none' && !access[creator.id]) {
     // the grant the server gives the creator when they send none
-    const level = creatorGrant({ admin: false, creator: creator.id, lead, own: undefined })
+    const level = creatorGrant({ creator: creator.id, lead, own: undefined })
     if (level !== null) {
       access[creator.id] = level
       return { access, self: 'auto' }

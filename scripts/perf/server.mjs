@@ -2911,12 +2911,11 @@ async function mutate(name, args) {
       )
       // the creator's own grant on a top-level project, as the server gives
       // it (convex/model/projects.ts createProjectCore): User for a creator
-      // who is not an admin and names someone else as lead, unless the
+      // who names someone else as lead, an admin as anyone, unless the
       // request names their own entry, a level or null for none
       if (row.type === 'meta') {
         const own = args.access?.[me.id]
         const mine = creatorGrant({
-          admin: me.org_role === 'admin',
           creator: me.id,
           lead: row.lead_id,
           own: own === 'lead' ? undefined : own,

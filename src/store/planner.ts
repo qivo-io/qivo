@@ -9530,7 +9530,6 @@ function newProjectGrants(
   if (p.type === 'meta' && creator) {
     const own = p.access?.[creator]
     const mine = creatorGrant({
-      admin: PLANNER.isAdmin(creator),
       creator,
       lead,
       own: own === 'lead' ? undefined : own,

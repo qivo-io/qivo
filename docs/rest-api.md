@@ -668,9 +668,10 @@ read, `access` flags included.
   agent that leads projects cannot be made a Viewer until an organization
   admin hands them over, so setting it to Inactive is the way to stop it at
   once.
-- A creator who is not an organization admin and names someone else as the
-  lead of a top-level project gets User access to it, as in the app, so the
-  project stays in their sight.
+- A creator who names someone else as the lead of a top-level project gets
+  User access to it, as in the app, so the project stays in their sight.
+  That includes an organization admin, since admin status gives no access
+  to a project's work.
 - `name` is trimmed, may not be blank (`a project name cannot be blank`) and
   holds at most 80 characters (`a project name must be at most 80
   characters. Shorten it.`), counted as in [Limits](#limits), so most emoji
