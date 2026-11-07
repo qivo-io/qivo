@@ -8,10 +8,12 @@ import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixture.setup'
 
-/* A task picked in Search while the Board shows, on App and the real store
-   in a session that never asked for every task. The task window opens
-   over the Board, and the Board rings the task's card, which only its
-   answer brings, as the workspace holds no task. */
+/* A task picked in Search while the Board shows, and a task an Inbox row
+   opens with Open task in board, on App and the real store in a session
+   that never asked for every task. The task window opens over the Board,
+   and the Board rings the task's card, which only its answer brings, as
+   the workspace holds no task: App reveals the handle the Board names a
+   referenced task by (P.handleOfOpen). */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => {
@@ -178,6 +180,86 @@ describe('a task picked in Search over the Board', { timeout: 30_000 }, () => {
       () => card()?.closest('.board-card')?.hasAttribute('data-board-revealed'),
       'the ring',
     )
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+  })
+})
+
+describe("an Inbox row's Open task in board", { timeout: 30_000 }, () => {
+  it("rings the Board's card of a task the workspace does not hold, by its handle", async () => {
+    vi.resetModules()
+    history.replaceState(null, '', '/app/~/inbox')
+    const snap: Snapshot = underProgram(plannerFixture())
+    snap.orgs[0].next_issue_num = 2
+    const project = snap.projects[0]
+    snap.issues.push({
+      id: SOAK,
+      org_id: snap.orgs[0].id,
+      project_id: project.id,
+      num: 2,
+      title: 'Run the soak test',
+      description: '',
+      status: 'progress',
+      priority: 'medium',
+      paused: false,
+      created_at: AT,
+      updated_at: AT,
+      has_hidden_subtasks: false,
+      has_hidden_parent: false,
+    })
+    snap.messages.push({
+      id: 'message-soak',
+      org_id: snap.orgs[0].id,
+      recipient_id: snap.profiles[0].id,
+      issue_id: SOAK,
+      issue_title: 'Run the soak test',
+      kind: 'comment',
+      detail: 'New comment',
+      created_at: AT,
+    })
+    network.onUpdate.mockImplementation((ref, args, next, fail) => {
+      const name = getFunctionName(ref)
+      if (name === 'workspace:whole') next(structuredClone(snap))
+      else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+      else if (name === 'tasks:board') next(boardStandIn(snap, args as BoardArgs))
+      else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
+      return () => {}
+    })
+    network.query.mockResolvedValue(null)
+    network.mutation.mockResolvedValue(null)
+    const { TASKS } = await import('./store/liveParts')
+    TASKS.atBoot = false
+    const store = await import('./store/planner')
+    await store.initStore()
+    const { syncStatus } = await import('./lib/syncStatus')
+    syncStatus.setSocket({ connected: true, everConnected: true })
+    const { default: App } = await import('./App')
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <App />
+        </TooltipProvider>,
+      ),
+    )
+    const row = await waitFor(
+      () => document.querySelector<HTMLElement>(`[data-message="${SOAK}"]`),
+      "the Inbox's row",
+    )
+    expect(store.P.handleOf(SOAK)).toBeNull()
+    await act(async () => {
+      row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+    })
+    const board = await waitFor(
+      () => document.querySelector<HTMLElement>('[data-msg-menu-board]'),
+      'Open task in board',
+    )
+    await act(async () => board.click())
+    // the Board of the task's project, its window over it and its card ringed
+    const card = () => document.querySelector<HTMLElement>('[data-card="QN-2"]')
+    await waitFor(
+      () => card()?.closest('.board-card')?.hasAttribute('data-board-revealed'),
+      'the ring',
+    )
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
     expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
   })
 })

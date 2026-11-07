@@ -810,12 +810,18 @@ describe("the Inbox's row actions", { timeout: 30_000 }, () => {
     snap.messages.push({ ...snap.messages[1], id: 'news', created_at: minute(-5) })
     await act(async () => publishWhole())
     await until(() => expect(rows()[0].dataset.message).toBe('task-a-0001'))
+    holding = true
     await press(item('Mark as read'))
-    const read = network.mutation.mock.calls.find(
-      ([ref]) => getFunctionName(ref) === 'messages:readItem',
-    )
-    expect(read?.[1]).toMatchObject({ issue_id: 'task-a-0001', through: Date.parse(minute(1)) })
+    expect(held.at(-1)).toMatchObject({
+      name: 'messages:readItem',
+      args: { issue_id: 'task-a-0001', through: Date.parse(minute(1)) },
+    })
+    // while the read waits, its mark of the old cutoff leaves the row with
+    // news as the page shows it, unread
+    expect(row('task-a-0001')?.hasAttribute('data-unread')).toBe(true)
     // the server read up to the cutoff, and the news stays unread
+    await act(async () => held.at(-1)?.answer())
+    await settle()
     await until(() => expect(row('task-a-0001')?.hasAttribute('data-unread')).toBe(true))
     expect(row('task-a-0001')?.dataset.count).toBe('1')
   })
