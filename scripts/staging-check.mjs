@@ -192,7 +192,15 @@
  * flags from the deployment's range read (milestones.between) and show the
  * milestone in its header, and a fresh load of My view's Roadmap must show
  * it on the project's own row with no header band, and drop it once it is
- * deleted over REST (ui/roadmap-milestones). It makes a task of the Standard agent's in Alpha over
+ * deleted over REST (ui/roadmap-milestones). It makes another milestone
+ * over REST on its project from three weeks on, one in a past week and a
+ * task of Nora's in Alpha, then a fresh load of the project's Overview
+ * must read Upcoming from the deployment's section read
+ * (milestones.section) with the milestone, show no past milestone until
+ * Past is expanded and then the past one, and a fresh load of My view's
+ * Overview must read it with `mine` and no projects, show the milestone
+ * with the project's name and drop it once it is deleted over REST
+ * (ui/overview-milestones). It makes a task of the Standard agent's in Alpha over
  * REST and opens Team sync on its project in a fresh load, which must
  * subscribe Team sync's agenda (teamSync.agenda) and no task window, and
  * show the task's card on the agent's line from the rail (ui/team-sync).
@@ -5895,6 +5903,155 @@ async function roadmapMilestonesCheck() {
   })
 }
 
+/** The step that checks the Overview's milestone sections on the
+ *  deployment's section read (overviewMilestonesCheck). */
+export const OVERVIEW_MILESTONES_STEP = 'ui/overview-milestones'
+
+/** The section read the Overview's Upcoming and Past subscribe
+ *  (convex/milestones.ts section), in place of the workspace's
+ *  milestones. */
+export const MILESTONES_SECTION_QUERY = 'milestones:section'
+
+/** The arguments of every subscription to the query `udfPath` that a frame
+ *  `text` the page sent on its sync socket adds, as addsQuery finds them.
+ *  None for any other frame, also one that is no JSON. */
+export function addedArgs(text, udfPath) {
+  let message
+  try {
+    message = JSON.parse(text)
+  } catch {
+    return []
+  }
+  if (message?.type !== 'ModifyQuerySet' || !Array.isArray(message.modifications)) return []
+  return message.modifications.flatMap((m) =>
+    m?.type === 'Add' && m.udfPath === udfPath && Array.isArray(m.args) ? m.args : [],
+  )
+}
+
+/** Presses Load more in the section `section` until it shows `row`, as an
+ *  Upcoming of 10 at first grows by 10 for each press up to its 100 rows.
+ *  Fails when the row is not there once nothing more loads. */
+async function loadUntil(section, row, what) {
+  const more = section.locator('[data-milestone-more]:not([aria-busy])')
+  for (let press = 0; press < 10; press++) {
+    expect(
+      await until(async () => (await row.count()) > 0 || (await more.count()) > 0, 60_000),
+      `${what} neither showed nor offered Load more`,
+    )
+    if ((await row.count()) > 0) return
+    await more.click()
+  }
+  await row.waitFor({ timeout: 60_000 })
+}
+
+/** The Overview's milestones on the deployment's section read. The run
+ *  makes `<tag> Overview milestone` over REST on M in the first week from
+ *  three weeks on that M leaves free (freeMilestoneWeek), `<tag> Overview
+ *  past milestone` in the first past week M leaves free
+ *  (freePastMilestoneWeek), and a To Do task of Nora's in Alpha, which she
+ *  owns by the Reviewer rule as its assignee, so M is one of her My view's
+ *  projects. A fresh load of M's Overview must subscribe
+ *  MILESTONES_SECTION_QUERY and reach Upcoming's ok state with the
+ *  milestone's row (loadUntil), ask nothing for Past and show no past row
+ *  until Past's disclosure is pressed, and then show the past milestone. A
+ *  fresh load of My view's Overview must ask the section with `mine` and
+ *  no projects, show the milestone among Upcoming's rows (pressing Load
+ *  more, as Nora's other projects' milestones can come first) with M's
+ *  name on it, and drop it once the run deleted it over REST. It deletes
+ *  the past milestone and the task at the end, and the cleanup that
+ *  deletes M removes whatever a failure left. It runs while M is active,
+ *  after ui/roadmap-milestones, and leaves the saved view on M's Board. */
+async function overviewMilestonesCheck() {
+  const w = run.creds.writeToken
+  const { M, A } = run.projects
+  await check(OVERVIEW_MILESTONES_STEP, async () => {
+    expect(Number.isInteger(M.num), 'the run project has no number')
+    const me = await restOk(w, 'GET', '/me')
+    const held = ((await restOk(w, 'GET', `/projects/${M.id}`)).milestones ?? []).map((m) => m.date)
+    const weekStart = me.organization.week_start
+    const made = await restOk(w, 'POST', `/projects/${M.id}/milestones`, {
+      name: `${run.tag} Overview milestone`,
+      date: freeMilestoneWeek(held, todayUtc(), weekStart),
+    })
+    const past = await restOk(w, 'POST', `/projects/${M.id}/milestones`, {
+      name: `${run.tag} Overview past milestone`,
+      date: freePastMilestoneWeek(held, todayUtc(), weekStart),
+    })
+    const task = await restOk(w, 'POST', '/tasks', {
+      project: A.id,
+      title: `${run.tag} overview milestone`,
+      status: 'todo',
+      assignee_id: run.nora.id,
+    })
+    run.created.push(task)
+    eq(task.assignee_id, run.nora.id, "the task's assignee")
+    const sent = []
+    const record = (ws) => ws.on('framesent', (frame) => sent.push(String(frame.payload)))
+    app.on('websocket', record)
+    try {
+      const root = app.locator('[data-workspace-view] [data-overview-milestones]')
+      const upcoming = root.locator(
+        '[data-milestone-section="upcoming"][data-milestone-section-state="ok"]',
+      )
+      const asked = () => sent.flatMap((f) => addedArgs(f, MILESTONES_SECTION_QUERY))
+      const fresh = async (url) => {
+        sent.length = 0
+        await app.goto(url, { waitUntil: 'domcontentloaded' })
+        await upcoming.waitFor({ timeout: 60_000 })
+      }
+      // M's Overview: Upcoming from the deployment, Past only once expanded
+      await fresh(`${cfg.appOrigin}/app/${ORG_SLUG}/overview/p/${M.num}`)
+      expect(
+        sent.some((f) => addsQuery(f, MILESTONES_SECTION_QUERY)),
+        "M's Overview did not subscribe the section read",
+      )
+      await loadUntil(
+        upcoming,
+        upcoming.locator(`[data-overview-milestone="${made.id}"]`),
+        made.name,
+      )
+      const toggle = root.locator('[data-milestone-past-toggle]')
+      await toggle.waitFor({ timeout: 10_000 })
+      eq(await toggle.getAttribute('aria-expanded'), 'false', "Past's disclosure")
+      const pastRow = root.locator(
+        `[data-milestone-section="past"] [data-overview-milestone="${past.id}"]`,
+      )
+      eq(await pastRow.count(), 0, 'past milestones shown before Past was expanded')
+      eq(
+        asked().filter((a) => a.side === 'past').length,
+        0,
+        'section reads of Past before it was expanded',
+      )
+      await toggle.click()
+      await pastRow.waitFor({ timeout: 60_000 })
+      // My view's Overview: `mine` with no projects, M's milestone with its name
+      await fresh(`${cfg.appOrigin}/app/~/overview/mine`)
+      const args = asked()
+      expect(
+        args.some((a) => a.mine === true && Array.isArray(a.projects) && a.projects.length === 0),
+        "My view's Overview did not ask the section read with mine",
+      )
+      expect(
+        args.every((a) => a.mine === true),
+        "My view's Overview named projects in a section read",
+      )
+      const mine = upcoming.locator(`[data-overview-milestone="${made.id}"]`)
+      await loadUntil(upcoming, mine, made.name)
+      expect((await mine.innerText()).includes(M.name), `My view's row does not name ${M.name}`)
+      await restOk(w, 'DELETE', `/projects/${M.id}/milestones/${made.id}`)
+      await mine.waitFor({ state: 'detached', timeout: 60_000 })
+      return `showed ${made.name} in ${M.key}'s Upcoming and ${past.name} only once Past was expanded, from the deployment's section read, and in My view from a read with mine and no projects, with ${M.key}'s name, until it was deleted over REST`
+    } finally {
+      app.off('websocket', record)
+      await rest(w, 'DELETE', `/projects/${M.id}/milestones/${past.id}`)
+      await rest(w, 'DELETE', `/tasks/${task.key}`)
+      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/p/${M.num}`, {
+        waitUntil: 'domcontentloaded',
+      })
+    }
+  })
+}
+
 /** The step that checks Settings › Labels (settingsLabelsCheck). */
 export const LABELS_STEP = 'ui/settings-labels'
 
@@ -9167,6 +9324,10 @@ async function main() {
   // the Roadmap's flags from the deployment's range read, in M's header
   // and on M's row in My view, with a milestone and a task of its own
   await roadmapMilestonesCheck()
+  // the Overview's Upcoming and collapsed Past from the deployment's
+  // section read, in M and in My view with `mine`, with milestones and a
+  // task of its own
+  await overviewMilestonesCheck()
   // Team sync on the deployment's agenda, with a task of its own, while
   // the project is active
   await teamSyncCheck()

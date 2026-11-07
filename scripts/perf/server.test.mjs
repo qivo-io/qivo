@@ -1280,6 +1280,26 @@ describe('the benchmark server', () => {
       (await section('milestones=more-error&milestonecap=2', { side: 'upcoming', limit: 2 })).answer
         .rows,
     ).toHaveLength(2)
+    // the Overview's first Upcoming batch of 10 and the window's 25 are
+    // not a Load more, the Overview's 20 is, and a one-row read is not
+    const more = (limit) => section('milestones=more-error', { side: 'upcoming', limit })
+    expect((await more(10)).answer.rows).toHaveLength(3)
+    expect((await more(25)).answer.rows).toHaveLength(3)
+    expect((await more(1)).answer.rows).toHaveLength(1)
+    expect((await more(20)).answer.error).toContain('failed')
+    // My view's sections read with `mine`, which a project's do not
+    const mine = { side: 'upcoming', projects: [], mine: true }
+    const listed = await section('', mine)
+    expect(listed.answer.projects?.length).toBeGreaterThan(0)
+    expect((await section('milestones=mine-refused', mine)).answer.data).toMatchObject({
+      reason: 'milestone_read_too_large',
+    })
+    expect((await section('milestones=mine-too-many', mine)).answer.data).toMatchObject({
+      reason: 'milestone_too_many',
+    })
+    expect(
+      (await section('milestones=mine-too-many', { side: 'upcoming' })).answer.rows,
+    ).toHaveLength(3)
   }, 60_000)
 
   it("answers the project picker's navigation reads from the workspace, with the states the page asks for", async () => {

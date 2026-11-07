@@ -258,8 +258,15 @@ try {
   await modal().waitFor({ state: 'detached' })
   log('Escape cancels the edit; Done closes the window')
 
-  // ---- an Overview row and a roadmap diamond reopen it on that row's editor
-  await page.locator('.overview-milestone', { hasText: `${prefix} B` }).click()
+  // ---- an Overview row and a roadmap diamond reopen it on that row's editor.
+  // The Overview lists the first 10 upcoming milestones from the server, and
+  // the row, two weeks on, has at most two before it, as a project holds one
+  // milestone a week
+  await page
+    .locator('[data-workspace-view] [data-overview-milestones] .overview-milestone', {
+      hasText: `${prefix} B`,
+    })
+    .click()
   await editor().waitFor()
   assert.equal(
     await editor().getByRole('textbox', { name: 'Name', exact: true }).inputValue(),

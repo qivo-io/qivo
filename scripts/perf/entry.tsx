@@ -27,18 +27,24 @@ async function boot() {
   const states = (parameters.get('milestones') ?? '').split(',')
   if (reads && (states.includes('sync-too-many') || states.includes('roadmap-too-many')))
     reads.projects = 0
-  // milestonecap=<n>: the Milestones window's sections read batches of n
-  // and hold at most 2n rows (src/lib/milestoneSection.ts), so the moved-on
-  // note shows with few milestones. A baseline from before that module has
-  // none, so it is found through a glob, which answers nothing there
+  // milestonecap=<n>: the sections of the Milestones window, the Overview
+  // and the phone agenda read batches of n and hold at most 2n rows
+  // (src/lib/milestoneSection.ts), so the moved-on note shows with few
+  // milestones. A baseline from before that module has none, so it is
+  // found through a glob, which answers nothing there, and one from before
+  // the Overview's sections has no OVERVIEW_MILESTONES
   const cap = Number(parameters.get('milestonecap'))
   if (cap > 0) {
-    const found = import.meta.glob<{ MILESTONE_SECTION: { batch: number; rows: number } }>(
-      '@perf/lib/milestoneSection.ts',
-      { eager: true },
-    )
-    for (const module of Object.values(found))
+    type Sizes = { batch: number; rows: number }
+    const found = import.meta.glob<{
+      MILESTONE_SECTION: Sizes
+      OVERVIEW_MILESTONES?: { upcoming: Sizes; past: Sizes }
+    }>('@perf/lib/milestoneSection.ts', { eager: true })
+    for (const module of Object.values(found)) {
       Object.assign(module.MILESTONE_SECTION, { batch: cap, rows: 2 * cap })
+      for (const sizes of Object.values(module.OVERVIEW_MILESTONES ?? {}))
+        Object.assign(sizes, { batch: cap, rows: 2 * cap })
+    }
   }
   // threadkeep=<n>: the task window keeps at most n comments and changes
   // of the open task (src/lib/threadBudget.ts), so the benchmark's thread

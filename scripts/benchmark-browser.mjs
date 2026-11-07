@@ -418,9 +418,14 @@ async function openPage(origin, tasks, metrics, query = '') {
    neither loading nor refreshing, and no data-ov-health-kept), and the
    Roadmap's answer for the selection on screen (data-roadmap-state ok, not
    the last answer kept while a new one loads) with no Team utilization
-   cell waiting for its owner's load (data-load-waiting). A build from
-   before the Roadmap read the server marks neither, so its Roadmap counts
-   as complete once it shows. A view that mounts in slices marks its
+   cell waiting for its owner's load (data-load-waiting), and the Overview's
+   Upcoming milestones (data-overview-milestones' Upcoming section no longer
+   loading or refreshing) where the page shows that section; Past reads
+   nothing until it is opened, so it is not waited for. A build from before
+   the Overview read its milestones from the server marks no such section
+   and counts as complete without it, and a build from before the Roadmap
+   read the server marks neither, so its Roadmap counts as complete once it
+   shows. A view that mounts in slices marks its
    pending part with data-board-mount; one that mounts whole never sets
    it. Only the shown view counts: a view kept
    hidden while another one shows (KeptView) waits until it shows again. On
@@ -436,6 +441,9 @@ const boardComplete = () => {
   const lists = [...document.querySelectorAll('[data-workspace-view] [data-ov-list]')]
   const health = document.querySelector('[data-workspace-view] [data-ov-health]')
   const roadmap = document.querySelector('[data-workspace-view] [data-roadmap-root]')
+  const upcoming = document.querySelector(
+    '[data-workspace-view] [data-overview-milestones] [data-milestone-section="upcoming"]',
+  )
   const healthSection = [
     ...document.querySelectorAll('[data-workspace-view] [data-overview-root] h2'),
   ].some((title) => (title.textContent ?? '').endsWith('health'))
@@ -450,6 +458,8 @@ const boardComplete = () => {
     (roadmap === null || roadmap.getAttribute('data-roadmap-state') === 'ok') &&
     !document.querySelector('[data-workspace-view] [data-load-waiting]') &&
     (overview === null || overview.getAttribute('data-overview-state') === 'ok') &&
+    (upcoming === null ||
+      !['loading', 'refreshing'].includes(upcoming.getAttribute('data-milestone-section-state'))) &&
     lists.every(
       (list) => !['loading', 'refreshing'].includes(list.getAttribute('data-ov-list-state')),
     ) &&
