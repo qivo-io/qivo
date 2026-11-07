@@ -172,8 +172,8 @@
  * description through issues:update that shows them one a paragraph, with
  * a paragraph of text between. Every id comes from its number, so a second
  * run uploads only the images missing and saves the description again,
- * and a task a check archived or deleted gets nothing. It runs after
- * --files.
+ * and a task a check archived or deleted, or one in a project a check
+ * archived, gets nothing. It runs after --files.
  *
  * `--pictures` gives every active person and agent of Northstar without a
  * picture one, for checking how profile pictures load: as Nora, an admin
@@ -684,15 +684,16 @@ export function imagesDescription(count) {
  * The --images work in organization `org` for `count` images: `task`, the
  * issues:create fields of the task when it is missing, else null; `uploads`,
  * the images still missing, each its id, name and bytes; and `description`,
- * the text the run saves. `stored` holds the ids that count as made and
- * those with a row (storedIdsOf). A task that counts as made but has no
- * row, in Deleted items or deleted for good, gets nothing, so the plan is
+ * the text the run saves. `stored` holds the ids that count as made, those
+ * with a row and the archived ones (storedIdsOf). A task that counts as
+ * made but has no row, in Deleted items or deleted for good, or that is
+ * archived or lies in an archived project, gets nothing, so the plan is
  * null then.
  */
 export function planImages({ org, count, project, stored }) {
   const id = imageSeedId('task')
   const made = stored.tasks.has(id)
-  if (made && !stored.rows.tasks.has(id)) return null
+  if (made && (!stored.rows.tasks.has(id) || stored.rows.archived?.has(id))) return null
   return {
     task: made
       ? null
@@ -1721,7 +1722,8 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   if (files !== null) await seedFiles(files, { client, org, target, log })
   if (options.images > 0) {
     const plan = planImages({ org, count: options.images, project: projects[0], stored })
-    if (plan === null) log('The --images task is in Deleted items or deleted for good; skipped.')
+    if (plan === null)
+      log('The --images task is archived, in Deleted items or deleted for good; skipped.')
     else await seedImages(plan, { client, org, target, log })
   }
   if (options.pictures)
@@ -2002,13 +2004,26 @@ async function seedLabels(count, { client, org, seeded, target, log }) {
     attachment rows, every copy Deleted items stores, and the project and
     task ids used_ids keeps after a delete for good, which projects:create
     and issues:create refuse. `rows` holds the project and task ids that
-    have a row, which alone can take a new task or file. */
+    have a row, which alone can take a new task or file, and `archived`
+    the task ids of those rows that are archived or lie in an archived
+    project or under an archived top-level project. */
 async function storedIdsOf(client, org) {
-  const rows = { projects: new Set(), tasks: new Set() }
+  const rows = { projects: new Set(), tasks: new Set(), archived: new Set() }
+  const projects = new Map()
   for (const project of await tableRows(client, 'projects'))
-    if (project.org_id === org) rows.projects.add(project.id)
+    if (project.org_id === org) {
+      rows.projects.add(project.id)
+      projects.set(project.id, project)
+    }
+  const archivedProject = (id) => {
+    const project = projects.get(id)
+    return !!project && (!!project.archived_at || !!projects.get(project.parent_id)?.archived_at)
+  }
   for (const task of await tableRows(client, 'issues'))
-    if (task.org_id === org) rows.tasks.add(task.id)
+    if (task.org_id === org) {
+      rows.tasks.add(task.id)
+      if (task.archived_at || archivedProject(task.project_id)) rows.archived.add(task.id)
+    }
   const ids = { projects: new Set(rows.projects), tasks: new Set(rows.tasks), files: new Set() }
   for (const file of await tableRows(client, 'issue_attachments'))
     if (file.org_id === org) ids.files.add(file.id)

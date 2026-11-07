@@ -2390,7 +2390,7 @@ describe('board-scale-seed --images and --pictures', () => {
   const none = () => ({
     tasks: new Set(),
     files: new Set(),
-    rows: { tasks: new Set(), projects: new Set() },
+    rows: { tasks: new Set(), projects: new Set(), archived: new Set() },
   })
 
   afterEach(() => {
@@ -2436,9 +2436,60 @@ describe('board-scale-seed --images and --pictures', () => {
     const rerun = planImages({ org: 'org', count: 6, project: 'sub', stored })
     expect(rerun.task).toBeNull()
     expect(rerun.uploads.map((u) => u.n)).toEqual([4, 5])
+    // an archived task gets nothing
+    stored.rows.archived.add(imageSeedId('task'))
+    expect(planImages({ org: 'org', count: 6, project: 'sub', stored })).toBeNull()
     // a task in Deleted items gets nothing
+    stored.rows.archived.clear()
     stored.rows.tasks.clear()
     expect(planImages({ org: 'org', count: 6, project: 'sub', stored })).toBeNull()
+  })
+
+  it.each([
+    ['archived', { archived_at: '2026-10-29T00:00:00.000Z' }, []],
+    [
+      'in an archived sub-project',
+      {},
+      [{ id: 'sub', org_id: 'org', archived_at: '2026-10-29T00:00:00.000Z' }],
+    ],
+    [
+      'under an archived top-level project',
+      {},
+      [
+        { id: 'sub', org_id: 'org', parent_id: 'top' },
+        { id: 'top', org_id: 'org', archived_at: '2026-10-29T00:00:00.000Z' },
+      ],
+    ],
+  ])('leaves an --images task %s untouched on a rerun', async (_, task, projects) => {
+    // six images seeded before, then the task or its project archived
+    fake.archived = [
+      {
+        id: imageSeedId('task'),
+        org_id: 'org',
+        project_id: 'sub',
+        title: 'Review the bench rig photos',
+        ...task,
+      },
+    ]
+    fake.projectRows = projects
+    fake.fileRows = Array.from({ length: 6 }, (_, n) => ({
+      id: imageSeedId('image', n),
+      org_id: 'org',
+    }))
+    const logged = []
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--images', '8'], {
+        env,
+        log: (line) => logged.push(line),
+      })
+    } finally {
+      fake.archived = []
+      fake.projectRows = []
+    }
+    expect(fake.calls.map(([name]) => name)).toEqual([])
+    expect(logged).toContain(
+      'The --images task is archived, in Deleted items or deleted for good; skipped.',
+    )
   })
 
   it('makes the task, uploads its images inline and saves the description, then gives every person and agent without a picture one', async () => {
