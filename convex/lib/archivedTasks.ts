@@ -14,10 +14,10 @@
  * same row (archivedRowOf) and the rule of archivedTaskCore below.
  *
  * Both surfaces page through archivedTasksPage, under one read budget, over a
- * scope (ArchiveScope) that either merges a list of projects or reads the
- * organization's whole archive and keeps only the tasks the scope holds. The
- * app's page asks for some projects of one organization or for all of them
- * (ArchivedPageScope). Both search with archivedTaskMatcher, the task search
+ * scope (ArchiveScope) that merges a list of projects the caller can read,
+ * side by side, for every caller, an organization admin included. The app's
+ * page asks for some projects of one organization or for all the ones the
+ * caller reads (ArchivedPageScope). Both search with archivedTaskMatcher, the task search
  * rule (lib/search.ts taskSearchText) that reads a task's labels, assignee
  * and subtasks only when they can change the answer, never the
  * organization's roster, and its labels only up to ARCHIVE_LABELS.scan. The
@@ -70,9 +70,9 @@ const SEALED_MAX = 2 + 2 * (65 + 284 + 16)
 
 /** A cursor as callers see it, `2~` and the position sealed
  * (lib/archiveCursorSeal.ts) together with `projectId`, the project whose
- * list it came from. The position is the last task a page looked at, which in
- * a read of the organization's whole archive can belong to a project the
- * caller cannot see, so callers never see its id or times. */
+ * list it came from. The position is the last task a page looked at, a task
+ * of the list's projects, and callers never see its id or times, so they
+ * can pass back only a position a page gave them. */
 export const archiveCursorText = async (c: ArchiveCursor, projectId: string): Promise<string> =>
   `2~${await sealCursorText(`${projectId}~${positionText(c)}`)}`
 
@@ -85,13 +85,11 @@ const positionOf = (text: string): ArchiveCursor | null => {
 
 /** The position `text` names for the list of `projectId`, or null when it
  * is not a cursor archiveCursorText wrote for that project. Only sealed
- * cursors page. A position the caller could choose, such as a plain
- * `1~<position>` cursor from before sealing, would let it probe the
- * organization's whole archive: whether a page from that position ends inside
- * its task budget tells it how many hidden tasks follow, and so their archive
- * times. A list paged across the change starts again. A cursor from another
- * project's list is refused too, since it would start this list part way and
- * skip its newer tasks. */
+ * cursors page, so a position the caller chose, such as a plain
+ * `1~<position>` cursor from before sealing, is refused, and a list paged
+ * across the change starts again. A cursor from another project's list is
+ * refused too, since it would start this list part way and skip its newer
+ * tasks. */
 export async function parseArchiveCursor(
   text: string,
   projectId: string,

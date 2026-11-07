@@ -1108,7 +1108,7 @@ function record(what: string, figures: Figures): void {
   }
 }
 
-describe('reads at the design size, under the stand-in', () => {
+describe('reads at the design size', () => {
   it('reads an admin page beside the catalogue of 2,000 projects with 25 task items the admin cannot read', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)

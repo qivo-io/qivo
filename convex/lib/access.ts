@@ -172,11 +172,13 @@ async function directLevel(ctx: QueryCtx, me: Doc<'profiles'>, project: Doc<'pro
  * nothing as complete (agent decision, 5 November 2026, closing
  * t3/limits-reach-access-checks). The figure is per call, so a request that
  * asks about one parent twice walks it twice, as a REST or MCP sub-project
- * create does (machine/projects.ts readableProject, then model/projects.ts
- * subProjectParent). canSeeProject, profileCanSeeProject and
- * subProjectParent's default level ask with navigation; canAccessProject
- * and hasProjectLevel ask without it, since navigation only ever gives
- * 'viewer'. The walk never runs for a sub-project, so a task in a
+ * create does for a caller who does not manage the parent
+ * (machine/projects.ts managedProject, then model/projects.ts
+ * subProjectParent); a manager's create walks it neither time.
+ * canSeeProject, profileCanSeeProject and subProjectParent's default level
+ * ask with navigation; canAccessProject and hasProjectLevel ask without
+ * it, since navigation only ever gives 'viewer'. The walk never runs for a
+ * sub-project, so a task in a
  * sub-project never walks; a legacy task stored on a top-level project does
  * (snapshot.ts threadTask, lib/core.ts findIssue). */
 export async function projectLevel(

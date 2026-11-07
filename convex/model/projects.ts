@@ -518,9 +518,12 @@ export async function createProjectCore(
   // Grant rows ride along on either project level. Root grants are inherited
   // by children by the access helpers; child grants can further narrow a
   // workstream without introducing an owning team. A sub-project's creator
-  // manages its parent and so the sub-project, whether or not they see it
-  // (the New sub-project dialog says when they will not), so only a
-  // top-level project applies creatorGrant.
+  // manages its parent (subProjectParent). As the parent's lead they keep
+  // the User level the new sub-project inherits from it, though they do not
+  // manage a sub-project someone else leads, and an organization admin
+  // manages it whoever leads it and sees it only by their own access (the
+  // New sub-project dialog says when they will not). So only a top-level
+  // project applies creatorGrant.
   const grants = new Map(grantEntries(p.access))
   if (p.type === 'meta') {
     const own = p.access?.[me.id]
