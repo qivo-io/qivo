@@ -458,6 +458,33 @@ describe('a phone layer that closes with the move it started', { timeout: 30_000
   })
 })
 
+describe('a phone layer over the project chooser', { timeout: 30_000 }, () => {
+  it('closes with Back and leaves the chooser at its front door, not the Inbox a boot there opens', async () => {
+    // nothing remembered, so a phone's Board address shows the chooser,
+    // whose entry takes the front door in place
+    await boot('/app/testbed/board', true)
+    await waitFor(
+      () => document.querySelector('[data-project-chooser][data-project-chooser-state="choose"]'),
+      'the project chooser',
+    )
+    await settle()
+    expect(location.pathname).toBe('/app/testbed')
+    await press('Search tasks and projects')
+    await waitFor(() => document.querySelector('[cmdk-root] input'), 'the search box')
+    await settle()
+    expect(history.state?.qivoLayer).toBeTruthy()
+    // Back to the chooser's own entry closes the search and moves nothing
+    await act(async () => history.back())
+    await settle()
+    await waitFor(() => !document.querySelector('[cmdk-root]'), 'the search closed')
+    expect(location.pathname).toBe('/app/testbed')
+    expect(
+      document.querySelector('[data-project-chooser]')?.getAttribute('data-project-chooser-state'),
+    ).toBe('choose')
+    expect(document.querySelector('.mobile-page-title')?.textContent).toBe('Projects')
+  })
+})
+
 describe('a task someone else removes while the Inbox shows it', { timeout: 30_000 }, () => {
   it("keeps the address in the task's organization, with no new entry", async () => {
     const drop = await boot('/app/testbed/inbox/tasks/qn-1', false)

@@ -72,6 +72,7 @@ import { type RevealRequest, type TaskPlace, taskPlaceOf, withoutTaken } from '.
 import {
   ARCHIVED_TASKS_PAGE,
   buildPath,
+  isFrontDoor,
   namesProjectPage,
   ORG_NONE,
   orgSegmentOf,
@@ -1383,11 +1384,19 @@ function App() {
       // a Remaining number typed on Team sync and not yet committed: history
       // unmounts its box without a blur, so commit it before the page moves
       flushWalkInput()
-      // same two grammars as the boot read, same order — Back can land on a
-      // legacy entry from earlier in this session's history
-      const r = parsePath(location.pathname) || parseHash(location.hash)
-      if (!r) return
+      // the same two grammars as the boot read, in the same order, as Back
+      // can land on a legacy entry from earlier in this session's history
+      const parsed = parsePath(location.pathname) || parseHash(location.hash)
       const was = hereRef.current
+      /* The front door names no page. A move onto it from another page
+         shows no scope and the startup rule, as a boot there does, with the
+         Inbox on a phone, so the chooser's entry that Back left for the
+         Inbox shows the chooser again on Forward. A move that stays on the
+         front door's page, as a phone layer's Back over the chooser does,
+         changes nothing, and neither does a path outside the app. */
+      const door = !parsed && isFrontDoor(location.pathname) && !!parsePath(buildPath(was))
+      if (!parsed && !door) return
+      const r: Route = parsed ?? {}
       /* Issue URLs carry no scope: keep the current scope when the issue is
          inside it, else re-scope to the issue's own sub-project. One case
          must NOT keep it — `/app/<org>/<view>/tasks/<task>` IS the project-scope form
@@ -1425,13 +1434,14 @@ function App() {
          in place; one no read can ask about shows the chooser with a note. */
       const unheld = !r.sync && !r.issue && !liveScope(r.scope) && r.unheld !== undefined
       const next = {
-        scope: unheld ? undefined : liveScope(sc) ? sc : was.scope,
+        scope: door || unheld ? undefined : liveScope(sc) ? sc : was.scope,
         // viewless issue links keep the current view; Settings, #/inbox and
         // Team sync sit over/instead of the current view, so they must not
-        // reset it either
+        // reset it either, and the front door keeps it as a boot keeps the
+        // saved one
         view: r.view
           ? r.view
-          : !r.issue && !r.inbox && !r.settings && !r.projects && !r.sync
+          : !door && !r.issue && !r.inbox && !r.settings && !r.projects && !r.sync
             ? 'overview'
             : was.view,
         openIssue: issue,
@@ -1441,7 +1451,8 @@ function App() {
         settingsPage: namesProjectPage(location.pathname, was.settingsPage)
           ? was.settingsPage
           : r.settings || null,
-        inboxOpen: !!r.inbox,
+        // the phone opens the Inbox at the front door, as on a boot
+        inboxOpen: door ? mobileRef.current : !!r.inbox,
         projectsOpen: !!r.projects,
         sync: r.sync && P.homeOrg ? syncPlaceFor(r.sync, mobileRef.current) : null,
       }
@@ -1502,6 +1513,7 @@ function App() {
             : { kind: 'choose', n, note: ADDRESS_UNAVAILABLE, lost: null },
         )
       }
+      if (door) showOpening(startupOpening)
       // a scope the task's address chose is not remembered (taskScope)
       if (!r.sync && !liveScope(r.scope) && task && liveScope(sc)) taskScope.current = sc ?? null
       else if (next.scope !== was.scope) taskScope.current = null

@@ -437,6 +437,16 @@ export function orgSegmentOf(pathname: string): string {
   return seg.length ? decodeURIComponent(seg[0]) : ''
 }
 
+/** Whether `pathname` is an app front door, bare /app or /app/<org> with
+    nothing after it. parsePath answers null for it, as for a path outside
+    the app, which is not one. App reads it on Back and Forward, which show
+    at a front door what a boot there shows. */
+export function isFrontDoor(pathname: string): boolean {
+  const path = (pathname || '').split('?')[0].split('#')[0]
+  if (path !== APP_PREFIX && path.indexOf(`${APP_PREFIX}/`) !== 0) return false
+  return path.slice(APP_PREFIX.length).split('/').filter(Boolean).length <= 1
+}
+
 export function parsePath(pathname: string): Route | null {
   const path = (pathname || '').split('?')[0].split('#')[0]
   if (path !== APP_PREFIX && path.indexOf(`${APP_PREFIX}/`) !== 0) return null

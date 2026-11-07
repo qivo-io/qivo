@@ -565,6 +565,40 @@ describe('the chooser', { timeout: 60_000 }, () => {
     expect(saves.at(-1)?.lastProject).toEqual({ org_id: PARTNER, project_id: PORTAL })
   })
 
+  it('shows the chooser again when Forward returns to its entry, which Back left for the Inbox', async () => {
+    const snap = world()
+    await app(snap, '/app/testbed', { view: 'kanban' })
+    await chooser('choose')
+    // the Inbox takes the chooser's entry in place
+    await click(q('[data-view-switch] [aria-label^="Inbox"]'))
+    await until(() => location.pathname === '/app/~/inbox', 'the Inbox')
+    expect(q('[data-project-chooser]')).toBeNull()
+    // a view pill leaves the Inbox for the chooser, in an entry of its own
+    await click(
+      [...document.querySelectorAll('[data-view-switch] button')].find(
+        (b) => b.textContent?.trim() === 'Roadmap',
+      ),
+    )
+    await chooser('choose')
+    expect(location.pathname).toBe('/app/testbed')
+    const entries = history.length
+    await act(async () => history.back())
+    await settle()
+    await until(() => location.pathname === '/app/~/inbox', 'the Inbox again')
+    expect(q('[data-project-chooser]')).toBeNull()
+    // Forward shows the chooser on the view it showed, at its own address
+    await act(async () => history.forward())
+    await settle()
+    await chooser('choose')
+    expect(location.pathname).toBe('/app/testbed')
+    expect(q('[data-project-chooser]')?.textContent).toContain(
+      'The project you choose opens on the Roadmap.',
+    )
+    expect(history.length).toBe(entries)
+    expect(asks).toEqual([])
+    expect(viewReads()).toEqual([])
+  })
+
   it('keeps the filters through a loss and the pick that follows', async () => {
     const snap = world()
     await app(snap, `/app/testbed/board/p/10`)
