@@ -756,6 +756,43 @@ describe('Milestones', { timeout: 30_000 }, () => {
   })
 
   it.each([
+    ['Overview', false, 'overview', 'data-overview-milestone', '[data-overview-milestones]'],
+    ['phone agenda', true, 'roadmap', 'data-agenda-milestone', '[data-agenda-milestones]'],
+  ])(
+    "gives focus to Upcoming's empty line once the %s row in My view deleted the last milestone",
+    async (_, onPhone, view, attr, root) => {
+      phone(onPhone)
+      // My view, where Plan's task is the person's; it has no New milestone
+      history.replaceState(null, '', `/app/~/${view}/mine`)
+      await boot((snap) => {
+        plan(snap)
+        snap.issues[0].assignee_id = snap.profiles[0].id
+        // in Upcoming, as a collapsed Past shows no row
+        snap.milestones.forEach((m, n) => {
+          m.week = mondayIn(n + 1)
+        })
+      })
+      vi.useFakeTimers({ toFake: ['Date'] })
+      const row = (id: string) =>
+        waitFor(() => document.querySelector<HTMLElement>(`[${attr}="${id}"]`), id)
+      await deleteFrom(await row('alpha'))
+      expect(document.activeElement).toBe(await row('beta'))
+      await deleteFrom(await row('beta'))
+      expect(document.querySelector(`[${attr}]`)).toBeNull()
+      // must fail for a fallback that leaves focus on the page's body
+      const empty = await waitFor(
+        () =>
+          document.querySelector<HTMLElement>(
+            `${root} [data-milestone-section="upcoming"] [data-milestone-note="empty"]`,
+          ),
+        "Upcoming's empty line",
+      )
+      expect(empty.textContent).toBe('No milestones in any of your projects yet.')
+      expect(document.activeElement).toBe(empty)
+    },
+  )
+
+  it.each([
     ['Overview', false, 'data-overview-milestone', 'New sub-project'],
     ['phone agenda', true, 'data-agenda-milestone', 'New milestone'],
   ])(

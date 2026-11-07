@@ -10,12 +10,12 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
    views/overview/OverviewMilestones.tsx): Upcoming 10 at a time with Load
    more and the move on at a lowered cap, a collapsed Past that reads
    nothing until it opens, 25 at a time with its search on the server, the
-   Next milestone cell in each state, a kept answer's included, My view's
-   own too-many sentence, My view's `mine` read, All projects reading none,
-   the note pages, the section staying under a note while Retry and Show
-   from the start read again, another person's rename, move and delete
-   arriving while the page shows, a hidden tab, a kept page, a scope
-   switch, P.releaseOverview and a new week. The reads answer through the milestone
+   Next milestone cell in each state, a kept answer's included, the empty
+   lines and My view's own sentences, My view's `mine` read, All projects
+   reading none, the note pages, the section staying under a note while
+   Retry and Show from the start read again, another person's rename, move
+   and delete arriving while the page shows, a hidden tab, a kept page, a
+   scope switch, P.releaseOverview and a new week. The reads answer through the milestone
    stand-in over the fixture's workspace (store/milestoneStandIn.setup.ts).
    Every case asks for no task. */
 
@@ -470,6 +470,21 @@ describe('My view and All projects', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(noteOf('upcoming')).toEqual([
       'too-many: Your work spans more than 200 projects, so their milestones are not listed here. Open a project to see its milestones.',
     ])
+  })
+
+  it("says No milestones yet. without the + to a reader who may not add one, and My view's own line", async () => {
+    await overview((snap) => {
+      plan({ up: 0 })(snap)
+      snap.profiles[0].org_role = 'viewer'
+      snap.access.push({ project_id: 'plan', profile_id: snap.profiles[0].id, level: 'viewer' })
+    })
+    // must fail for an empty line that names the + where none shows
+    expect(noteOf('upcoming')).toEqual(['empty: No milestones yet.'])
+    expect(q('[aria-label="New milestone"]')).toBeNull()
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await overview(plan({ up: 0 }), { scope: 'mine' })
+    expect(noteOf('upcoming')).toEqual(['empty: No milestones in any of your projects yet.'])
   })
 
   it('asks nothing in All projects, whose chooser is the whole page', async () => {

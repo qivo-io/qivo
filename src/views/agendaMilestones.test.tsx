@@ -15,8 +15,9 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
    My view, the reads stopped while the task schedule or the landscape
    timeline shows and freed by P.releaseRoadmap, the reads under a note
    whatever section the person chose, the section staying under a note
-   while Retry and Show from the start read again, My view's too-many
-   note, and the Roadmap's own flag read stopped while the agenda shows. */
+   while Retry and Show from the start read again, the empty lines and My
+   view's too-many note, and the Roadmap's own flag read stopped while the
+   agenda shows. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -294,6 +295,34 @@ describe("the phone agenda's milestones", { timeout: BOARD_TEST_TIMEOUT }, () =>
     expect(rowsOf('upcoming')).toContain('u1')
     expect(rowsOf('upcoming')).not.toContain('s1')
     expect(document.body.textContent).toContain('Open a project to add a milestone to its roadmap.')
+  })
+
+  it('says each empty line: with the +, to a reader who may not add one, and in My view', async () => {
+    // Plan without milestones, whose first answer says it holds no past
+    // one either
+    const bare = (snap: Snapshot) => {
+      snap.milestones = snap.milestones.filter((m) => m.project_id !== 'plan')
+    }
+    const empty = () =>
+      sectionOf('upcoming')?.querySelector('[data-milestone-note="empty"]')?.textContent
+    await agenda('plan', { prepare: bare })
+    expect(empty()).toBe('No milestones yet. Add one with the + button.')
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await agenda('plan', {
+      prepare: (snap) => {
+        bare(snap)
+        snap.profiles[0].org_role = 'viewer'
+        snap.access.push({ project_id: 'plan', profile_id: snap.profiles[0].id, level: 'viewer' })
+      },
+    })
+    // must fail for an empty line that names the + where none shows
+    expect(empty()).toBe('No milestones yet.')
+    expect(q('[data-agenda-milestones] [data-new-milestone]')).toBeNull()
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await agenda('mine', { prepare: bare })
+    expect(empty()).toBe('No milestones in any of your projects yet.')
   })
 
   it("says My view's own too-many sentence, which asks for no fewer projects", async () => {
