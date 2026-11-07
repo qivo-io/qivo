@@ -748,6 +748,33 @@ describe('a window move', { timeout: 30_000 }, () => {
     },
   )
 
+  it.each([
+    ['My view', '/app/~/roadmap/mine'],
+    ['a project', '/app/testbed/roadmap/p/1'],
+  ])(
+    'says nothing in %s on a pan whose shared weeks hold no flag while its read waits',
+    async (_, path) => {
+      // Plan's one milestone is in the week before this one, which the pan
+      // leaves, so the weeks both windows share hold none
+      const snap = world()
+      snap.milestones = [
+        { id: 'early', project_id: 'plan', name: 'Early', week: mondayIn(-1), created_at: AT },
+      ]
+      await app(snap, path)
+      await roadmap()
+      await waitFor(() => flag('early'), 'the first window')
+      const { iso, w0 } = await grid()
+      holds = (sub) => sub.args.from !== iso(w0)
+      await forward()
+      await roadmap('refreshing')
+      expect(liveRanges()).toHaveLength(2)
+      expect(flag('early')).toBeNull()
+      // must fail: a line that comes and goes on each pan, though the shown
+      // answer read the shared weeks and found no flag there
+      expect(line()).toBeNull()
+    },
+  )
+
   it('drops the new window’s read on a pan back before it answers', async () => {
     await app(spread(), '/app/~/roadmap/mine')
     await roadmap()

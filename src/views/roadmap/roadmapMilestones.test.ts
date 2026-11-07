@@ -188,13 +188,17 @@ describe('markerView', () => {
     // answer never read
     expect(view.rows.map((r) => r.id)).toEqual(['both', 'edge'])
     const unread = ok([row('far', W + 9)])
-    expect(markerView(plan, unread, LOADING, W + 2, W + 10, ['plan']).rows).toEqual([])
-    // a flag of the shown answer shows, so the new window's read is no
-    // wait with nothing to show
+    const bare = markerView(plan, unread, LOADING, W + 2, W + 10, ['plan'])
+    expect(bare.rows).toEqual([])
+    // the shown answer read the shared weeks, so the new window's read is
+    // no wait to announce, whether a flag of it shows or none does
     expect(view.waiting).toBe(false)
+    // must fail: a line that comes and goes on each pan whose shared weeks
+    // hold no flag
+    expect(bare.waiting).toBe(false)
   })
 
-  it('says a new window that shares no week with the shown one waits with no flag to show', () => {
+  it('says a new read waits while the shown answer read none of the weeks or projects on screen', () => {
     const shown = planOf(['plan'], W - 2, W + 6)
     const later = nextPlan(shown, markerAsk(['plan'], W + 8, W + 14), true) as MarkerPlan
     const read = ok([row('a', W)])
@@ -214,6 +218,13 @@ describe('markerView', () => {
     expect(swapped).toMatchObject({ state: 'ok', waiting: false })
     // a kept answer that refreshes with no flag in its window is no new read
     expect(markerView(shown, ok([], false), null, W - 2, W + 6, ['plan']).waiting).toBe(false)
+    // must fail: projects none of which the shown answer read wait the same
+    // way, as after My view's tracks move to other projects
+    const other = nextPlan(shown, markerAsk(['luma'], W - 2, W + 6), true) as MarkerPlan
+    expect(markerView(other, read, LOADING, W - 2, W + 6, ['luma']).waiting).toBe(true)
+    // one more project beside those the shown answer read is no such wait
+    const more = nextPlan(shown, markerAsk(['luma', 'plan'], W - 2, W + 6), true) as MarkerPlan
+    expect(markerView(more, ok([]), LOADING, W - 2, W + 6, ['luma', 'plan']).waiting).toBe(false)
   })
 
   it('says a stopped answer is partial, with its flags up to the stop and the day it stopped at', () => {
@@ -301,9 +312,9 @@ describe('markerLine', () => {
     for (const state of ['ok', 'refreshing', 'none'] as const) expect(line(of(state))).toBeNull()
   })
 
-  it('says a new read with no flag to show meanwhile is loading, also beside a stopped answer', () => {
+  it('says a new read is loading while the shown answer read nothing on screen, also beside a stopped answer', () => {
     // must fail: nothing said while the new window's flags are on their way
-    // and none of the shown answer's shows
+    // and the shown answer read none of its weeks
     expect(line({ ...of('refreshing'), waiting: true })).toBe('Loading milestones…')
     const stopped = { ...of('partial'), stopped: '2026-12-07', waiting: true }
     expect(line(stopped, true)).toBe('Loading milestones…')
