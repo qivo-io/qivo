@@ -1501,6 +1501,25 @@ function watchedRow(): Row<'issues'> | undefined {
   return row && (!watchedOrg || row.org_id === watchedOrg) ? row : undefined
 }
 
+/* Whether the workspace holds task `uuid` in organization `org`. It holds
+   one task by an id, and two organizations can hold one task id, so a
+   held task of another organization is another task, which no write or
+   paint of this one reaches. */
+const holdsIn = (uuid: string, org: string): boolean => rows.issues.get(uuid)?.org_id === org
+
+/* Whether the workspace holds another organization's task than `org`'s
+   by id `uuid` (holdsIn). */
+function heldElsewhere(uuid: string, org: string): boolean {
+  const row = rows.issues.get(uuid)
+  return !!row && row.org_id !== org
+}
+
+/* The views' copies of task `uuid` of organization `org` that a paint may
+   change (store/viewRows.ts edit), without another organization's task of
+   the same id that a view holds. */
+const viewCopiesIn = (uuid: string, org: string) =>
+  viewRows.edit(uuid).filter((copy) => copy.org_id === org)
+
 /* The organization of the watched task, the one kept for it (watchedOrg),
    else its row's while the workspace holds it, or undefined. */
 function watchedOrgOf(): string | undefined {
@@ -3147,13 +3166,15 @@ function purgeIssueRows(subtree: Set<string>) {
   })
 }
 
-/* The paint of an accepted archive of task `rootId` at `at`. With
-   `keepSubtasks` the server detached every active direct child first (it
-   keeps its own subtasks) and archived the task alone, so only the task
-   leaves the board; otherwise the whole visible subtree goes with it. */
-function archivePaint(rootId: string, keepSubtasks: boolean, at: string): Paint {
+/* The paint of an accepted archive of task `rootId` of organization `org`
+   at `at`. With `keepSubtasks` the server detached every active direct
+   child first (it keeps its own subtasks) and archived the task alone, so
+   only the task leaves the board; otherwise the whole visible subtree goes
+   with it. It skips while the workspace does not hold the task in that
+   organization (holdsIn). */
+function archivePaint(rootId: string, keepSubtasks: boolean, at: string, org: string): Paint {
   return () => {
-    if (!rows.issues.has(rootId)) return
+    if (!holdsIn(rootId, org)) return
     if (!keepSubtasks) {
       purgeIssueRows(issueSubtree(rootId))
       return
@@ -3192,9 +3213,13 @@ function dropProjectRows(id: string) {
   })
 }
 
-/* The paint of a task delete at `at`: the tasks in `gone` leave, and their
-   subtasks outside it become top-level tasks, as the server detaches them. */
-function dropDeletedTasks(gone: Set<string>, at: string) {
+/* The paint of a task delete in organization `org` at `at`: the tasks in
+   `gone` leave, and their subtasks outside it become top-level tasks, as
+   the server detaches them. A held task of another organization with an
+   id in `gone` is another task, which stays with its subtasks
+   (heldElsewhere). */
+function dropDeletedTasks(deleted: ReadonlySet<string>, at: string, org: string) {
+  const gone = new Set([...deleted].filter((uuid) => !heldElsewhere(uuid, org)))
   // the SET NULL cascade fires the touch server-side — mirror both
   for (const r of rows.issues.where(
     (i) => !!i.parent_id && gone.has(i.parent_id) && !gone.has(i.id),
@@ -7575,10 +7600,13 @@ function describeWrite(name: string, args: unknown, taskId = ''): UnconfirmedCha
     (name === 'issues:removeLink' ? text(a.a) : '') ||
     (name.startsWith('issues:') ? text(a.id) : '') ||
     (name.startsWith('comments:') ? (rows.comments.get(text(a.id))?.issue_id ?? '') : '')
-  // a task the window shows from its answer has its key there
+  // a task the window shows from its answer has its key there, also
+  // while the workspace holds another organization's task of its id
+  const org = text(a.org_id)
   const detail = PLANNER.detail
-  const task =
-    uuidToDisplayKey.get(issueId) ?? (detail?.task === issueId ? detail.view?.key : undefined)
+  const held = org && heldElsewhere(issueId, org) ? undefined : uuidToDisplayKey.get(issueId)
+  const shown = detail?.task === issueId && (!org || detail.org === org) ? detail.view : null
+  const task = held ?? shown?.key
   const fields =
     name === 'issues:update' && a.patch && typeof a.patch === 'object'
       ? [...new Set(Object.keys(a.patch).map((key) => TASK_FIELD[key] ?? key))]
@@ -8733,10 +8761,12 @@ const emailRefusal = (v: unknown): string => {
 }
 
 /* --- sub-issue remaining rollup (0066) — the optimistic mirror ------------
-   A task that gains a subtask loses its own hours, at `at`. */
-function clearParentHours(parentUuid: string | null | undefined, at: string) {
+   A task that gains a subtask of organization `org` loses its own hours,
+   at `at`. A parent is of its subtask's organization, so a held task of
+   another organization with the parent's id keeps its hours. */
+function clearParentHours(parentUuid: string | null | undefined, at: string, org: string) {
   const pRow = parentUuid ? rows.issues.get(parentUuid) : null
-  if (pRow && (pRow.remaining_hours != null || pRow.review_at != null)) {
+  if (pRow?.org_id === org && (pRow.remaining_hours != null || pRow.review_at != null)) {
     pRow.remaining_hours = undefined
     pRow.remaining_set_at = undefined // the server stamp pairs the two (0072)
     pRow.review_at = undefined // a group has no review hand-off of its own
@@ -9443,16 +9473,17 @@ type UpdateOptions = {
   parentRow?: RelationCandidate
 }
 
-/** Puts label `labelId` on task `uuid` in the workspace's rows, or takes
-    it off with `on` false, as a label toggle paints them. Skips while the
-    workspace does not hold the task, so a write from the window's own
-    answer paints the workspace once it holds the task. A label the
+/** Puts label `labelId` on task `uuid` of organization `org` in the
+    workspace's rows, or takes it off with `on` false, as a label toggle
+    paints them. Skips while the workspace does not hold the task in that
+    organization (holdsIn), so a write from the window's own answer paints
+    the workspace once it holds the task. A label the
     workspace does not hold paints too: the task's labels list every id
     (store/taskIndex.ts), and the window names one it does not hold from
     labels.byIds. */
-function labelRowsPaint(uuid: string, labelId: string, on: boolean): Paint {
+function labelRowsPaint(uuid: string, labelId: string, on: boolean, org: string): Paint {
   return () => {
-    if (!rows.issues.has(uuid)) return
+    if (!holdsIn(uuid, org)) return
     const has = workspaceRows
       .peekList('issueLabels')
       .some((il) => il.issue_id === uuid && il.label_id === labelId)
@@ -9466,12 +9497,13 @@ function labelRowsPaint(uuid: string, labelId: string, on: boolean): Paint {
   }
 }
 
-/** Makes profile `me` follow task `uuid` in the workspace's rows, or stop
-    following it with `on` false, as of `at`. Skips while the workspace does
-    not hold the task, as labelRowsPaint does. */
-function followRowsPaint(uuid: string, me: string, on: boolean, at: string): Paint {
+/** Makes profile `me` follow task `uuid` of organization `org` in the
+    workspace's rows, or stop following it with `on` false, as of `at`.
+    Skips while the workspace does not hold the task in that organization,
+    as labelRowsPaint does. */
+function followRowsPaint(uuid: string, me: string, on: boolean, at: string, org: string): Paint {
   return () => {
-    if (!rows.issues.has(uuid)) return
+    if (!holdsIn(uuid, org)) return
     const has = workspaceRows
       .peekList('issueSubs')
       .some((s) => s.issue_id === uuid && s.profile_id === me)
@@ -9595,11 +9627,11 @@ function sendArchive(
     // until one does. An 'already' answer changed nothing, and the earlier
     // archive may have kept or taken the subtasks, so nothing paints and
     // the board shows the task until a delivery holds that archive. A task
-    // the workspace does not hold paints nothing (archivePaint skips): its
-    // window's answer turns archived first.
+    // the workspace does not hold in its organization paints nothing
+    // (archivePaint skips): its window's answer turns archived first.
     {
       keep: (out) =>
-        out?.archived === false ? null : { workspace: archivePaint(uuid, keepSubtasks, at) },
+        out?.archived === false ? null : { workspace: archivePaint(uuid, keepSubtasks, at, org) },
       ...(about ? { about } : {}),
     },
   ).then(
@@ -9631,23 +9663,25 @@ function paintMoved(
 }
 
 /** A move's paint of the workspace's rows: the tasks `family` (the task
-    first, then the subtasks it carries) in sub-project `projectId` at
-    `at`, and the task without its parent when it `leavesParent`. Each row
-    the workspace does not hold skips. */
+    first, then the subtasks it carries) of organization `org` in
+    sub-project `projectId` at `at`, and the task without its parent when
+    it `leavesParent`. Each row the workspace does not hold in that
+    organization skips (holdsIn). */
 function moveRowsPaint(
   family: readonly string[],
   projectId: string,
   leavesParent: boolean,
   at: string,
+  org: string,
 ): Paint {
   return () => {
     for (const taskId of family) {
       const moved = rows.issues.get(taskId)
-      if (moved) paintMoved(moved, projectId, at)
+      if (moved?.org_id === org) paintMoved(moved, projectId, at)
     }
     const uuid = family[0]
     const moved = uuid === undefined ? undefined : rows.issues.get(uuid)
-    if (leavesParent && moved && uuid !== undefined) {
+    if (leavesParent && moved?.org_id === org && uuid !== undefined) {
       moved.parent_id = undefined
       rows.hiddenParentTasks.delete(uuid)
     }
@@ -9690,7 +9724,7 @@ function moveAnswerTask(a: AnswerTask, projectId: string): string | null {
     },
     view: viewPaint(moving, () => {
       for (const taskId of moving)
-        for (const copy of viewRows.edit(taskId)) {
+        for (const copy of viewCopiesIn(taskId, a.org)) {
           paintMoved(copy, projectId, at)
           if (leavesParent && taskId === uuid) {
             copy.parent_id = undefined
@@ -9698,7 +9732,7 @@ function moveAnswerTask(a: AnswerTask, projectId: string): string | null {
           }
         }
     }),
-    workspace: moveRowsPaint(moving, projectId, leavesParent, at),
+    workspace: moveRowsPaint(moving, projectId, leavesParent, at, a.org),
   }
   void send(
     api.issues.move,
@@ -9756,7 +9790,7 @@ function deleteAnswerTask(a: AnswerTask, subtasks: string[], reason?: string): P
   if (!subtaskIds) return Promise.resolve(false)
   const gone = new Set([a.uuid, ...subtaskIds])
   const at = new Date().toISOString()
-  const view: View = { workspace: () => dropDeletedTasks(gone, at) }
+  const view: View = { workspace: () => dropDeletedTasks(gone, at, a.org) }
   const text = (reason || '').trim()
   const epoch = storeEpoch
   return sendAwaited(
@@ -9793,13 +9827,18 @@ type AnswerTask = { uuid: string; org: string; answer: TaskOk; model: IssueVM }
     serves until the task side answers) edits nothing until the task side
     answered. It is the answer the window
     draws, not a newer delivery the window has yet to draw, so the write
-    never sends another member's change as what the person saw. */
+    never sends another member's change as what the person saw. The
+    workspace may hold another organization's task of the same id
+    instead (watchedRow), which is another task: then the window's handle
+    names the watched task, a reference (P.handleNow), and the uuid alone
+    names neither for certain, so a write by it fails closed. */
 function answerTaskOf(id: string): AnswerTask | null {
   const t = watchedComments
   const detail = PLANNER.detail
-  if (!t || !detail || detail.task !== t || rows.issues.has(t)) return null
+  if (!t || !detail || detail.task !== t || watchedRow()) return null
   if (detail.state !== 'ok' || !detail.view || sectionsWatched.task?.task !== t) return null
-  if (id !== t && id !== detail.view.id) return null
+  const byUuid = id === t && !rows.issues.has(t)
+  if (!byUuid && id !== detail.view.id) return null
   const answer = drawnAnswer
   if (!answer || answer.task.id !== t || answer.task.org_id !== detail.org) return null
   return { uuid: t, org: detail.org, answer, model: detail.view }
@@ -9886,7 +9925,7 @@ function toggleAnswerLabel(a: AnswerTask, labelId: string, created?: Promise<boo
       },
     },
     view: marker,
-    workspace: labelRowsPaint(uuid, labelId, on),
+    workspace: labelRowsPaint(uuid, labelId, on, a.org),
   }
   void send(api.labels.toggle, { org_id: a.org, issue_id: uuid, label_id: labelId, on }, view, {
     about: { task: uuid, answer: true },
@@ -9913,7 +9952,7 @@ function followAnswerTask(a: AnswerTask, on: boolean) {
         shown.follow = on ? { issue_id: uuid, profile_id: me, created_at: at } : null
       },
     },
-    workspace: followRowsPaint(uuid, me, on, at),
+    workspace: followRowsPaint(uuid, me, on, at, a.org),
   }
   void send(
     on ? api.issues.subscribe : api.issues.unsubscribe,
@@ -10064,7 +10103,7 @@ function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions)
   // the new parent's short row as the window's next answer holds it
   const parentShort = newParent && parentRow ? parentShortOf(parentRow, at) : null
   const viewPart = viewPaint([uuid], () => {
-    for (const copy of viewRows.edit(uuid)) {
+    for (const copy of viewCopiesIn(uuid, a.org)) {
       stampTaskPatch(copy, viewDb, at)
       if (parentChange) copy.has_hidden_parent = false
     }
@@ -10085,11 +10124,11 @@ function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions)
       },
     },
     view: viewPart,
-    // skips until the workspace holds the task, then paints it as the held
-    // path does
+    // skips until the workspace holds the task in its organization, then
+    // paints it as the held path does
     workspace: () => {
-      clearParentHours(newParent, at)
-      if (!rows.issues.has(uuid)) return
+      clearParentHours(newParent, at, a.org)
+      if (!holdsIn(uuid, a.org)) return
       patchIssueRow(uuid, paintDb, at)
       if (parentChange) rows.hiddenParentTasks.delete(uuid)
       if ('description' in paintDb)
@@ -10234,7 +10273,7 @@ function newTaskPaint(row: Row<'issues'>, created: { num: number | null }): Pain
     const num = created.num ?? Math.max(row.num, (org.next_issue_num || 0) + 1)
     org.next_issue_num = Math.max(org.next_issue_num || 0, num)
     rows.issues.set(row.id, { ...row, num })
-    clearParentHours(row.parent_id, row.created_at)
+    clearParentHours(row.parent_id, row.created_at, row.org_id)
   }
 }
 
@@ -12290,10 +12329,11 @@ export const PLANNER = {
       holds a subtask stored before the rule of one level, so both windows
       say they cannot read every subtask, or wait for every task. */
   familyOf: (it: IssueVM): TaskFamily | null => {
-    const held = rows.issues.has(it.uuid)
+    const held = holdsIn(it.uuid, it.org)
     if (held && tasksAll) return { root: it, byId: PLANNER.issueById, done: PLANNER.isDone(it) }
-    const answer =
-      watchedComments === it.uuid && sectionFailure.task === 'none' ? paintedAnswer() : null
+    // the watched task's answer, of its own organization's task
+    const watched = watchedComments === it.uuid && watchedOrgOf() === it.org
+    const answer = watched && sectionFailure.task === 'none' ? paintedAnswer() : null
     return answer ? answerFamilyOf(it, answer) : null
   },
   /** The tasks, by uuid, whose text a view's row does not send, their
@@ -13046,7 +13086,8 @@ export const PLANNER = {
       if (!PLANNER.refuseStaleEdit(it.parent)) toast(PARENT_UNKNOWN, 'error')
       return null
     }
-    const shownParent = parentId && !rows.issues.has(parentId) ? answerTaskOf(parentId) : null
+    const shownParent =
+      it.parent && parentId && !holdsIn(parentId, orgRow.id) ? answerTaskOf(it.parent) : null
     const uuid = crypto.randomUUID()
     const now = new Date().toISOString()
     const previewNum = (orgRow.next_issue_num || 0) + 1
@@ -13296,7 +13337,7 @@ export const PLANNER = {
           }
         : {}),
       workspace: () => {
-        clearParentHours(newParent, at)
+        clearParentHours(newParent, at, row.org_id)
         patchIssueRow(uuid, paintDb, at)
         // a new visible parent or a detach replaces a hidden one
         if ('parent_id' in paintDb && rows.issues.has(uuid)) rows.hiddenParentTasks.delete(uuid)
@@ -13401,10 +13442,11 @@ export const PLANNER = {
     const view: View = {
       workspace: () => {
         // a task the window shows from its answer gets its new parent at
-        // once, and its own row once the workspace holds it
-        if (!shown && !rows.issues.has(it.uuid)) return
+        // once, and its own row once the workspace holds it in its
+        // organization
+        if (!shown && !holdsIn(it.uuid, it.org)) return
         paintParent()
-        if (!rows.issues.has(it.uuid)) return
+        if (!holdsIn(it.uuid, it.org)) return
         if (rows.issues.get(it.uuid)?.parent_id === parentId) return
         patchIssueRow(it.uuid, child, at)
         rows.hiddenParentTasks.delete(it.uuid)
@@ -13422,7 +13464,7 @@ export const PLANNER = {
         },
       },
     }
-    const row = rows.issues.get(it.uuid)
+    const row = holdsIn(it.uuid, it.org) ? rows.issues.get(it.uuid) : undefined
     const over: Over | undefined = row
       ? overOf('issues', row, ['parent_id'])
       : shown
@@ -13514,9 +13556,9 @@ export const PLANNER = {
     }
     const view: View = {
       workspace: () => {
-        if (!shown && !rows.issues.has(it.uuid)) return
+        if (!shown && !holdsIn(it.uuid, it.org)) return
         paintTask()
-        if (!rows.issues.has(it.uuid) || !rows.issues.has(taskId) || rows.links.has(link.id)) return
+        if (!holdsIn(it.uuid, it.org) || !holdsIn(taskId, it.org) || rows.links.has(link.id)) return
         rows.links.set(link.id, { ...link })
       },
     }
@@ -13569,7 +13611,9 @@ export const PLANNER = {
     const { leavesParent, carried } = PLANNER.moveFamily(it, projectId)
     const at = new Date().toISOString() // the server's move fires the touch
     const family = [uuid, ...carried.map((task) => task.uuid)]
-    const view: View = { workspace: moveRowsPaint(family, projectId, leavesParent, at) }
+    const view: View = {
+      workspace: moveRowsPaint(family, projectId, leavesParent, at, row.org_id),
+    }
     void send(
       api.issues.move,
       {
@@ -13655,7 +13699,7 @@ export const PLANNER = {
     // the paint of the delete; the server moves the rows to Deleted items
     // (convex/model/deletedItems.ts) and keeps the attachment bytes there
     const at = new Date().toISOString()
-    const view: View = { workspace: () => dropDeletedTasks(gone, at) }
+    const view: View = { workspace: () => dropDeletedTasks(gone, at, row.org_id) }
     const text = (reason || '').trim()
     const args = {
       org_id: row.org_id,
@@ -14135,7 +14179,7 @@ export const PLANNER = {
       return Promise.resolve(false)
     }
     const handle = uuidToKey.get(child.uuid)
-    if (handle !== undefined && rows.issues.has(child.uuid))
+    if (handle !== undefined && holdsIn(child.uuid, org))
       return PLANNER.updateIssue(
         handle,
         { parent: on ? openUuid : null },
@@ -14150,7 +14194,7 @@ export const PLANNER = {
     const uuid = child.uuid
     const view: View = {
       view: viewPaint([uuid], () => {
-        for (const copy of viewRows.edit(uuid)) {
+        for (const copy of viewCopiesIn(uuid, org)) {
           stampTaskPatch(copy, patch, at)
           copy.has_hidden_parent = false
         }
@@ -14160,8 +14204,8 @@ export const PLANNER = {
       // once the workspace holds it, takes the new parent in place of the
       // one it had, a hidden one too, as the held path paints it
       workspace: () => {
-        clearParentHours(parentId, at)
-        if (!rows.issues.has(uuid)) return
+        clearParentHours(parentId, at, org)
+        if (!holdsIn(uuid, org)) return
         patchIssueRow(uuid, patch, at)
         rows.hiddenParentTasks.delete(uuid)
       },
@@ -14196,7 +14240,7 @@ export const PLANNER = {
     }
     if (other.uuid === it.uuid) return Promise.resolve(false)
     const otherHandle = uuidToKey.get(other.uuid)
-    if (heldOpen && otherHandle !== undefined && rows.issues.has(other.uuid))
+    if (heldOpen && otherHandle !== undefined && holdsIn(other.uuid, it.org))
       return PLANNER.addLink(open, kind, otherHandle)
     const full = linkBlock(capInputs(it).links)
     if (full) {
@@ -14214,7 +14258,7 @@ export const PLANNER = {
     }
     const view: View = {
       workspace: () => {
-        if (!rows.issues.has(source) || !rows.issues.has(target)) return
+        if (!holdsIn(source, it.org) || !holdsIn(target, it.org)) return
         if (rows.links.keysWhere((l) => l.pair_key === row.pair_key).length) return
         rows.links.set(row.id, { ...row })
       },
@@ -14246,13 +14290,13 @@ export const PLANNER = {
     }
     const a = it.uuid
     const b = other.uuid
-    const bothHeld = !!heldOpen && uuidToKey.get(b) !== undefined && rows.issues.has(b)
+    const bothHeld = !!heldOpen && uuidToKey.get(b) !== undefined && holdsIn(b, it.org)
     const pair = (l: Row<'issue_links'>) =>
       (l.source_id === a && l.target_id === b) || (l.source_id === b && l.target_id === a)
     const kind = shownKind === 'blocks' || shownKind === 'blocked_by' ? shownKind : 'relates'
     const view: View = {
       workspace: () => {
-        if (!rows.issues.has(a) || !rows.issues.has(b)) return
+        if (!holdsIn(a, it.org) || !holdsIn(b, it.org)) return
         for (const id of rows.links.keysWhere(pair)) rows.links.delete(id)
       },
     }
@@ -17492,7 +17536,7 @@ export const PLANNER = {
       toast(full)
       return
     }
-    const view: View = { workspace: labelRowsPaint(uuid, labelId, on) }
+    const view: View = { workspace: labelRowsPaint(uuid, labelId, on, issue.org_id) }
     void send(
       api.labels.toggle,
       { org_id: issue.org_id, issue_id: uuid, label_id: labelId, on },
@@ -17551,7 +17595,7 @@ export const PLANNER = {
       {
         onOk: () => onSuccess?.(),
         onSettled,
-        about: { task: issue.uuid, ...(rows.issues.has(issue.uuid) ? {} : { answer: true }) },
+        about: { task: issue.uuid, ...(holdsIn(issue.uuid, issue.org) ? {} : { answer: true }) },
       },
     )
   },
@@ -17578,7 +17622,7 @@ export const PLANNER = {
     if (has === on) return // already in the asked-for state
     if (refusePausedWrite(on ? api.issues.subscribe : api.issues.unsubscribe)) return
     const at = new Date().toISOString()
-    const view: View = { workspace: followRowsPaint(uuid, me, on, at) }
+    const view: View = { workspace: followRowsPaint(uuid, me, on, at, row.org_id) }
     void send(
       on ? api.issues.subscribe : api.issues.unsubscribe,
       { org_id: row.org_id, issue_id: uuid },

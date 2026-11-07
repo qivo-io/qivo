@@ -16,8 +16,9 @@ import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixt
    the workspace holds no task: App reveals the handle the Board names a
    referenced task by (P.handleOfOpen). And an Inbox row of another
    organization's task with the id of a task the workspace holds, which
-   the Inbox pane shows with that organization's New mark, reads on open
-   and comments on in that organization, never as the held task. */
+   the Inbox pane shows with that organization's New mark, reads on open,
+   comments on and saves a title to in that organization, through that
+   task's own answer, never as the held task. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => {
@@ -75,6 +76,20 @@ afterEach(async () => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
+
+/* The arguments of each write of mutation `name` the store sent, in
+   order. */
+const sentArgs = (name: string) =>
+  network.mutation.mock.calls
+    .filter(([ref]) => getFunctionName(ref) === name)
+    .map(([, args]) => args as Record<string, unknown>)
+
+/* Types `value` into text field `field`, as a person does. */
+const typeInto = (field: HTMLTextAreaElement, value: string) =>
+  act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(field, value)
+    field.dispatchEvent(new Event('input', { bubbles: true }))
+  })
 
 /** Waits for `find` to answer, through lazy modules that can take seconds
     to load on a busy worker. */
@@ -383,7 +398,7 @@ describe("the Inbox pane's Open task in board", { timeout: 30_000 }, () => {
 describe("an Inbox row of another organization's task with a held task's id", {
   timeout: 30_000,
 }, () => {
-  it("shows that organization's task in the pane and reads it there, not the held one", async () => {
+  it("shows, reads and edits that organization's task in the pane, never the held one", async () => {
     vi.resetModules()
     history.replaceState(null, '', '/app/~/inbox')
     const GUEST = 'org-guest'
@@ -543,10 +558,27 @@ describe("an Inbox row of another organization's task with a held task's id", {
     await act(async () => composer.chain().focus().insertContent('Rig calibrated').run())
     const send = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Comment')
     await act(async () => send?.click())
-    expect(
-      network.mutation.mock.calls
-        .filter(([ref]) => getFunctionName(ref) === 'comments:create')
-        .map(([, args]) => (args as { org_id: string }).org_id),
-    ).toEqual([GUEST])
+    expect(sentArgs('comments:create').map((args) => args.org_id)).toEqual([GUEST])
+    // a title saved there goes to that organization's task through its own
+    // answer, and the held task of the same id keeps its title
+    await act(async () => document.querySelector<HTMLElement>('[data-task-title]')?.click())
+    const titleField = await waitFor(
+      () => document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]'),
+      'the title field',
+    )
+    await typeInto(titleField, 'Calibrate the guest rig twice')
+    await act(async () => titleField.blur())
+    expect(sentArgs('issues:update')).toEqual([
+      expect.objectContaining({
+        org_id: GUEST,
+        id: SOAK,
+        patch: { title: 'Calibrate the guest rig twice' },
+      }),
+    ])
+    expect(title()).toBe('Calibrate the guest rig twice')
+    expect(store.P.issueById[store.P.handleOf(SOAK) ?? '']?.title).toBe('Run the soak test')
+    // the id alone names either task, so a write by it fails closed
+    expect(await store.P.updateIssue(SOAK, { title: 'Calibrate by id' })).toBe(false)
+    expect(sentArgs('issues:update')).toHaveLength(1)
   })
 })
