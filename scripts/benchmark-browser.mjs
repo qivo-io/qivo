@@ -1351,24 +1351,33 @@ async function runSyncSample(origin, metrics, query = '') {
     }
     return null
   })
-  assert.ok(card, "Team sync's first person has a card this week's load counts")
-  const chip = page.locator('[data-sync-person] [data-sync-load]')
-  const box = page.locator(`[data-sync-card="${card}"] [data-sync-input]`)
-  const before = await chip.textContent()
-  const hours = String(Number((await box.inputValue()) || '0') + 37)
-  await box.fill(hours)
-  phase('syncEdit')
-  metrics.syncEdit.push(
-    await timed(async () => {
-      await box.press('Enter')
-      await page.waitForFunction(
-        (was) => document.querySelector('[data-sync-person] [data-sync-load]')?.textContent !== was,
-        before,
-        { timeout: timeout * 10 },
-      )
-    }),
-  )
-  await settle()
+  // With many people (--files people=1000) the first person may hold no
+  // card this week's load counts, which syncEdit needs: then the sample
+  // leaves syncEdit out, says so, and opens the first card's lists
+  if (card) {
+    const chip = page.locator('[data-sync-person] [data-sync-load]')
+    const box = page.locator(`[data-sync-card="${card}"] [data-sync-input]`)
+    const before = await chip.textContent()
+    const hours = String(Number((await box.inputValue()) || '0') + 37)
+    await box.fill(hours)
+    phase('syncEdit')
+    metrics.syncEdit.push(
+      await timed(async () => {
+        await box.press('Enter')
+        await page.waitForFunction(
+          (was) =>
+            document.querySelector('[data-sync-person] [data-sync-load]')?.textContent !== was,
+          before,
+          { timeout: timeout * 10 },
+        )
+      }),
+    )
+    await settle()
+  } else
+    console.warn("syncEdit left out: Team sync's first person has no card this week's load counts")
+  const listCard =
+    card ?? (await page.locator('[data-sync-card]').first().getAttribute('data-sync-card'))
+  assert.ok(listCard, "Team sync's first person has a card")
   // the card's owner list, until it shows a person: a row other than the
   // clear row and the list's end, from the roster on a build before the
   // owner pickers, from the server's first batch or check on this branch
@@ -1381,7 +1390,7 @@ async function runSyncSample(origin, metrics, query = '') {
       within,
       { timeout: timeout * 10 },
     )
-  const owner = await handle(page.locator(`[data-sync-card="${card}"] [data-assignee-edit]`))
+  const owner = await handle(page.locator(`[data-sync-card="${listCard}"] [data-assignee-edit]`))
   phase('syncOwnerOpen')
   metrics.syncOwnerOpen.push(
     await timed(async () => {
@@ -1392,7 +1401,7 @@ async function runSyncSample(origin, metrics, query = '') {
   await page.keyboard.press('Escape')
   await page.locator('[data-slot="popover-content"] [cmdk-root]').waitFor({ state: 'detached' })
   await settle()
-  const mention = await handle(page.locator(`[data-sync-mention="${card}"]`))
+  const mention = await handle(page.locator(`[data-sync-mention="${listCard}"]`))
   phase('syncMentionOpen')
   metrics.syncMentionOpen.push(
     await timed(async () => {
