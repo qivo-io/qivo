@@ -943,8 +943,10 @@ describe('the benchmark server', () => {
       const answer = posted.find((m) => m.to === 'read')
       return { snap, answer: answer.error ? { error: answer.error } : JSON.parse(answer.text) }
     }
-    const owners = await read('people=1000', 'pickers:taskOwners', () => ({ field: 'assignee' }))
+    // a batch's shape, on the everyday workspace of 50 people in 5 teams
+    const owners = await read('', 'pickers:taskOwners', () => ({ field: 'assignee' }))
     expect(owners.answer).toMatchObject({ state: 'ready', stopped: false })
+    expect(owners.snap.teams).toHaveLength(5)
     expect(owners.answer.rows).toHaveLength(25)
     expect(Object.keys(owners.answer.rows[0]).sort()).toEqual([
       'active',
