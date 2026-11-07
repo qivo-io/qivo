@@ -1928,12 +1928,12 @@ person's top-level projects from `projectNav.page`, their favorites first,
 of the workspace's projects. The reads judge every project by ordinary
 access, so an organization admin's tree holds the projects they take part
 in. Against a backend before v0.1.118 the tree says it couldn't load your
-projects, also in a tab that was open when the backend went back, until the
-backend rolls forward. The floors above already hold v0.1.118, so the
-release sets no new floor. Returning the app alone to an earlier release is
-safe, because that app's tree lists the workspace's projects. The release
-changes no server function, and has no schema change, no backfill and no
-release step.
+projects, and in a tab that was open when the backend went back it keeps the
+rows it held and says it couldn't load more of them, until the backend rolls
+forward. The floors above already hold v0.1.118, so the release sets no new
+floor. Returning the app alone to an earlier release is safe, because that
+app's tree lists the workspace's projects. The release changes no server
+function, and has no schema change, no backfill and no release step.
 
 ## Node.js version
 
