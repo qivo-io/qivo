@@ -296,10 +296,10 @@ has saved it. Each opens the same way from there. A new task's title,
 description, status, priority, dates, hours, due date, pause, labels,
 files, comments and the eye take changes at once, and Qivo saves each of
 them after the task. Its assignee and reviewer, **Parent**, **Subtasks**
-and **Linked tasks**, **Subscribers**, **Move to sub-project…** and
-**Archive or delete…** read the task on the server, so they wait with **Available once
-this task is saved** until Qivo has saved it and the window has read it,
-a moment later. The owner's portrait on its card waits the same way. If
+and **Linked tasks**, **Subscribers**, **Plan on roadmap**, **Move to
+sub-project…** and **Archive or delete…** read the task on the server, so
+they wait with **Available once this task is saved** until Qivo has saved
+it and the window has read it, a moment later. The owner's portrait on its card waits the same way. If
 Qivo cannot save the task, as when you no longer have access to its
 sub-project, the task leaves the Board, the window Qivo opened for it
 closes and a message says why, and the changes you made in it meanwhile go

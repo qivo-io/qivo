@@ -287,6 +287,12 @@ describe('the window of a task just created', { timeout: 30_000 }, () => {
       expect(control?.disabled, label).toBe(true)
       expect(await hintOf(control), label).toBe('Available once this task is saved')
     }
+    // the Roadmap's answer holds no task the server has not stored, so
+    // planning it there waits too
+    const plan = document.querySelector<HTMLButtonElement>('button[data-plan-on-roadmap]')
+    expect(plan?.textContent).toContain('Plan on roadmap')
+    expect(plan?.disabled).toBe(true)
+    expect(await hintOf(plan)).toBe('Available once this task is saved')
     // the server took it: the controls read the server once the window's
     // own read answers, which this test leaves on its way
     await act(async () => accept(41))

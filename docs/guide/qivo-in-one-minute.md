@@ -25,9 +25,10 @@ archiving and deleting such a task work at once too, once its window has
 read every subtask of it. A task you create from **New task** or a
 status column's **+** opens at once and takes changes at once, which Qivo
 saves after the task. Its assignee and reviewer, its **Parent**,
-**Subtasks** and **Linked tasks** pickers, **Subscribers**, **Move to
-sub-project…** and **Archive or delete…** wait with **Available once this
-task is saved** until Qivo has saved it, a moment later. An open task's
+**Subtasks** and **Linked tasks** pickers, **Subscribers**, **Plan on
+roadmap**, **Move to sub-project…** and **Archive or delete…** wait with
+**Available once this task is saved** until Qivo has saved it, a moment
+later. An open task's
 subtasks, linked tasks and attachments load on their own, and its
 **Parent**, **Subtasks** and **Linked tasks** pickers search every task on
 the server. Settings and all its pages open at once. A link to one task

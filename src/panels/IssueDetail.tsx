@@ -137,8 +137,9 @@ const NO_PROFILE = '__none__'
    to arrive. WAITS_FOR_SAVE says why the controls that read the server
    about the person's own new task wait while the window shows it from what
    its create sent (TaskDetailVM saving): the owner, Parent, Subtasks,
-   Linked tasks and Subscribers pickers, Move to sub-project… and Archive
-   or delete…. Its fields, labels, files, comments and the eye take changes
+   Linked tasks and Subscribers pickers, Plan on roadmap, Move to
+   sub-project… and Archive or delete…. Its fields, labels, files,
+   comments and the eye take changes
    at once, which go out behind the create. WAITS_FOR_CHECK says why a
    change to a task
    the window shows from its own read waits while that read failed or runs
@@ -4222,21 +4223,28 @@ function IssueDetail({
                                     keep the task past its filters and spotlights
                                     it once its answer holds it, also one shown
                                     from a current answer, whoever looks; an
-                                    archived one says why its fields are off */}
+                                    archived one says why its fields are off,
+                                    and the person's new task waits until it
+                                    is saved, as the Roadmap's answer holds
+                                    no task the server has not stored */}
                                 <Button
                                   type="button"
                                   variant="ghost"
                                   data-plan-on-roadmap
                                   className="text-text-1 h-control-sm"
-                                  disabled={(!held && (archived || stale)) || nothingToPlan}
+                                  disabled={
+                                    (!held && (archived || stale)) || saving || nothingToPlan
+                                  }
                                   title={
                                     !held && (archived || stale)
                                       ? archived
                                         ? roTip
                                         : WAITS_FOR_CHECK
-                                      : nothingToPlan
-                                        ? DONE_WITHOUT_DATES
-                                        : undefined
+                                      : saving
+                                        ? WAITS_FOR_SAVE
+                                        : nothingToPlan
+                                          ? DONE_WITHOUT_DATES
+                                          : undefined
                                   }
                                   onClick={() => onPlanOnRoadmap?.(it.id)}
                                 >
