@@ -2891,7 +2891,8 @@ function workspaceSections(
    A section without an answer yet lists what a workspace that holds every
    task holds (workspaceSections), and says it loads otherwise, since a
    task the person created while tasks load has lists that only its
-   answers bring. */
+   answers bring. A held task of another organization with the watched
+   task's id is another task, so its lists never stand in (watchedRow). */
 function sectionsNow(): TaskSectionsVM | null {
   const t = watchedComments
   if (!t || sectionOwners.size === 0) return null
@@ -2899,9 +2900,10 @@ function sectionsNow(): TaskSectionsVM | null {
     sectionAnswers.issue === t
       ? sectionAnswers
       : { issue: t, task: null, links: null, attachments: null }
-  // the workspace's lists, built only while one section has no answer
+  // the workspace's lists, built only while one section has no answer and
+  // the workspace holds the watched task in its own organization
   const waits = answers.task === null || answers.links === null || answers.attachments === null
-  const handle = waits && tasksAll ? uuidToKey.get(t) : undefined
+  const handle = waits && tasksAll && watchedRow() ? uuidToKey.get(t) : undefined
   const held = handle === undefined ? undefined : PLANNER.issueById[handle]
   const fallback =
     held &&

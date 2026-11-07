@@ -19,8 +19,9 @@ import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixt
    organization's task with the id of a task the workspace holds, which
    the Inbox pane shows with that organization's New mark, reads on open,
    comments on, saves a title to and uploads an image to in that
-   organization, through that task's own answer, never as the held task.
-   And two rows of one task id
+   organization, through that task's own answer, never as the held task,
+   whose files its lists never show, even with every task held. And two
+   rows of one task id
    in two organizations, neither held, where the pane goes from the first
    row's task to the second's and reads the second's item. */
 
@@ -401,14 +402,18 @@ describe("the Inbox pane's Open task in board", { timeout: 30_000 }, () => {
 
 /* The guest organization of the two-organization Inbox cases. */
 const GUEST = 'org-guest'
+/* The held home task's file in the two-organization Inbox cases. */
+const HOME_FILE = 'fa000000-0000-4000-8000-000000000001'
 
 /* Two organizations that each hold a task of id SOAK, on App's Inbox: the
    home organization's QN-2 'Run the soak test', which the workspace holds
    when `homeHeld`, else only the server does, and the guest
    organization's QN-7 'Calibrate the guest rig', which only the server
-   holds. Each has an Inbox item, the home one read when `homeRead`, and
-   the guest one unread with a comment on its thread after it. The
-   window's own read answers the task of the organization it names. */
+   holds. The held home task has a file, HOME_FILE. Each has an Inbox
+   item, the home one read when `homeRead`, and the guest one unread with
+   a comment on its thread after it. The window's own read answers the
+   task of the organization it names, and its links and attachments reads
+   never answer. */
 async function twoOrganizations({ homeHeld, homeRead }: { homeHeld: boolean; homeRead: boolean }) {
   vi.resetModules()
   history.replaceState(null, '', '/app/~/inbox')
@@ -444,7 +449,19 @@ async function twoOrganizations({ homeHeld, homeRead }: { homeHeld: boolean; hom
   // the tasks the parts do not send, which only the server holds
   const homeTask = task(home, snap.projects[0].id, 2, 'Run the soak test')
   const guestTask = task(GUEST, guestProject.id, 7, 'Calibrate the guest rig')
-  if (homeHeld) snap.issues.push(homeTask)
+  if (homeHeld) {
+    snap.issues.push(homeTask)
+    snap.attachments.push({
+      id: HOME_FILE,
+      issue_id: SOAK,
+      name: 'soak-log.txt',
+      mime: 'text/plain',
+      size_bytes: 1200,
+      storage_id: 'storage-soak-log',
+      inline: false,
+      created_at: AT,
+    } as Snapshot['attachments'][number])
+  }
   const unheld = homeHeld ? [guestTask] : [homeTask, guestTask]
   Object.assign(snap, { unheld: { issues: unheld } })
   for (const [org, recipient, read] of [
@@ -534,6 +551,11 @@ describe("an Inbox row of another organization's task with a held task's id", {
       homeHeld: true,
       homeRead: true,
     })
+    // every task is held, so a window waiting for its lists' answers lists
+    // the workspace's rows of its task, but only of a task held in its own
+    // organization
+    await act(async () => store.P.askTasks('script'))
+    await waitFor(() => store.P.tasksHeld(), 'every task')
     expect(store.P.issueById[store.P.handleOf(SOAK) ?? '']?.org).toBe(home)
     const divider = () => document.querySelector('.inbox-detail-frame [data-unread-divider]')
     // the held task's row opens it, whose item is read, so it shows no New
@@ -567,6 +589,23 @@ describe("an Inbox row of another organization's task with a held task's id", {
     expect(reads()).toEqual([expect.objectContaining({ org_id: GUEST, issue_id: SOAK })])
     expect(location.pathname).toBe('/app/guest/inbox/tasks/qn-7')
     expect(title()).toBe('Calibrate the guest rig')
+    // its pop-out shows its lists, which wait for its own answers and never
+    // list the held task's file, which a Remove there would delete
+    await act(async () =>
+      document.querySelector<HTMLElement>('.inbox-detail-frame [data-task-popout]')?.click(),
+    )
+    const popOut = () => document.querySelector('[role="dialog"]:not(.inbox-detail-frame *)')
+    const files = await waitFor(
+      () => popOut()?.querySelector('[data-section="attachments"]'),
+      "the pop-out's attachments",
+    )
+    expect(store.P.detail?.org).toBe(GUEST)
+    expect(store.P.sections?.task).toBe(SOAK)
+    expect(store.P.sections?.attachments.rows).toEqual([])
+    expect(files.getAttribute('data-section-source')).toBe('answer')
+    expect(files.textContent).not.toContain('soak-log.txt')
+    await act(async () => popOut()?.querySelector<HTMLElement>('[data-task-close]')?.click())
+    expect(popOut()).toBeNull()
     // a comment typed there goes to that organization's task too
     const composer = await waitFor(
       () =>
@@ -665,7 +704,7 @@ describe("an Inbox row of another organization's task with a held task's id", {
     expect(sentArgs('files:attach')).toEqual([
       expect.objectContaining({ org_id: GUEST, issue_id: SOAK, inline: true }),
     ])
-    expect(held()?.attachmentCount).toBe(0)
+    expect(held()?.attachments.map((file) => file.id)).toEqual([HOME_FILE])
   })
 })
 
