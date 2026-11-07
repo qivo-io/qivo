@@ -25,8 +25,8 @@
  * every visible live project for a reader with Edit on the opened task,
  * and else the projects they can edit (model/issues.ts linkAccess).
  * Levels are the writes' levels of the reader (lib/access.ts
- * projectLevel), so an organization admin holds lead on every project, as
- * the writes give it, never ordinaryOf's level. The family's come from
+ * projectLevel), an organization admin's from their own rows like
+ * anyone's. The family's come from
  * viewAccess.levels and the rest of the organization's from
  * projectLevelsForOrg, which the tests compare with projectLevel.
  *

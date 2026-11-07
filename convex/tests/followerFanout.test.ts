@@ -19,7 +19,7 @@ import {
   plantSubscription,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { deleteTask, itemFor } from './trash.setup'
 
@@ -87,7 +87,7 @@ const comment = (t: T, f: OrgFixture, task: Doc<'issues'>, body: string) =>
 describe('the follower notices of a task followed before the cap', () => {
   it("tell an organization's 1,000 people of a comment, the first in the comment and the rest in steps, within the limits", async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // with the fixture's five people, an organization of 1,000
     const followers = await plantFollowers(t, f, task, 995)
@@ -104,7 +104,7 @@ describe('the follower notices of a task followed before the cap', () => {
   it('tell no one more once the task is deleted', async () => {
     Object.assign(FOLLOWER_FANOUT, { inline: 2, step: 2 })
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await plantFollowers(t, f, task, 6)
     await comment(t, f, task, 'Closing this one.')
@@ -120,7 +120,7 @@ describe('a step whose followers hold many snoozed rows', () => {
     // convex-test counts no range for a write, which reads its row first,
     // so the writes stand in for those ranges
     const t = newT({ transactionLimits: { documentsWritten: 4096 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const kept = await plantIssue(t, {
       org_id: f.org.id,
@@ -188,7 +188,7 @@ describe('a comment whose followers hold many snoozed rows', () => {
     // convex-test counts no range for a write, which reads its row first,
     // so the writes stand in for those ranges
     const t = newT({ transactionLimits: { documentsWritten: 4096 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const followers = await plantFollowers(t, f, task, 100)
     await plantSnoozed(t, f, task, followers)
@@ -212,7 +212,7 @@ describe('a comment whose followers hold many snoozed rows', () => {
 
   it('tells 100 mentioned people the same way, the first in the comment and the rest in steps', async () => {
     const t = newT({ transactionLimits: { documentsWritten: 4096 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // people who see the task but do not follow it yet
     const people = await plantFollowers(t, f, task, 100)
@@ -241,7 +241,7 @@ describe('notices a step posts after their author was removed', () => {
   it('do not name the removed author', async () => {
     Object.assign(FOLLOWER_FANOUT, { inline: 1, step: 2, inlineRoom: 0 })
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const followers = await plantFollowers(t, f, task, 4)
     // the author mentions two followers; the room leaves both mentions and
@@ -280,7 +280,7 @@ describe('a restore from Deleted items', () => {
   it("tells the task's followers past the first in steps", async () => {
     Object.assign(FOLLOWER_FANOUT, { inline: 2, step: 2 })
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const followers = await plantFollowers(t, f, task, 7)
     await deleteTask(t, f, task.id)
@@ -299,7 +299,7 @@ describe('a restore from Deleted items', () => {
 describe('a change told in steps', () => {
   it('reads to each follower as it does in the change itself', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     /* One task with six followers, changed so every reader-side line
      * appears: the new assignee and reviewer follow already, one follower
@@ -340,7 +340,7 @@ describe('a change told in steps after the task changed', () => {
   async function scene() {
     Object.assign(FOLLOWER_FANOUT, { inline: 0, step: 10 })
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'Draft' })
     const outsider = await plantSeat(t, { org_id: f.org.id, org_role: 'user' })
     const insider = await plantSeat(t, { org_id: f.org.id, org_role: 'user' })
@@ -431,7 +431,7 @@ describe('a change told in steps after the task changed', () => {
 describe('a notice that arrives after newer ones', () => {
   it('keeps the newest message of each kind when it trims the item', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const at = (minute: number) => `2026-10-01T10:${String(minute).padStart(2, '0')}:00.000Z`
     // 50 unread: a comment, a change at minute 2 and 48 later comments
@@ -489,7 +489,7 @@ describe('a deferred mention step', () => {
 
   it('tells only those who see the task where it was written and where it is now', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // written in Skunkworks, which the guest cannot see, and moved to
     // Firmware, which they can, before the step ran
@@ -500,7 +500,7 @@ describe('a deferred mention step', () => {
 
   it('tells nobody about a task deleted before it ran', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await t.run((ctx) => ctx.db.delete(task._id))
     await mentionStep(t, f, task, f.sub.id)

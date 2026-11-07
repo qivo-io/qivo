@@ -25,7 +25,7 @@ import {
   plantIssue,
   plantProject,
   type T,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 const DEFAULT_TASK_WINDOW = structuredClone(TASK_WINDOW)
@@ -37,7 +37,7 @@ type Fx = OrgFixture & { t: T }
 
 async function setup(): Promise<Fx> {
   const t = newT()
-  return { t, ...(await withOrg(t)) }
+  return { t, ...(await withReadingAdmin(t)) }
 }
 
 /** taskWindow.task of task `id` as `who` reads it. */

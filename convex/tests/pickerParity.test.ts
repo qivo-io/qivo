@@ -10,10 +10,9 @@
  * next and no comment rate or follower row builds up.
  *
  * Levels come from levelsFrom in the pickers and from levelUnder in the
- * writes, and both give an organization admin Lead on every project today,
- * so an admin without any grant is offered and accepted. The admin access
- * split removes both branches, and these expectations change together; a
- * split that removed one branch alone fails here. */
+ * writes, and neither gives an organization admin a level of their own, so
+ * an admin without any grant is neither offered nor accepted; a branch
+ * restored in one of them alone fails here. */
 /// <reference types="vite/client" />
 
 import { ConvexError } from 'convex/values'
@@ -257,18 +256,28 @@ describe('the pickers against the writes, over every access shape', () => {
     ])
   })
 
-  it('offers an organization admin without any grant, as the writes accept them', async () => {
+  it('neither offers nor accepts an organization admin without a grant, and both take one with a grant', async () => {
     const t = newT()
     const { f, writer, tasks } = await scene(t)
     await keyOrg(t, f.org.id)
-    // the split changes both expectations together
     for (const task of Object.values(tasks)) {
       const pickers = await pickersOn(t, writer, task.id, f.admin.id)
-      expect(pickers.assignee).toEqual({ offered: true, checked: true })
-      expect(pickers.reviewer).toEqual({ offered: true, checked: true })
-      expect(await accepts(t, writer, task.id, 'assignee', f.admin.id)).toBe(true)
-      expect(await accepts(t, writer, task.id, 'reviewer', f.admin.id)).toBe(true)
+      expect(pickers.assignee).toEqual({ offered: false, checked: false })
+      expect(pickers.reviewer).toEqual({ offered: false, checked: false })
+      expect(typeof (await accepts(t, writer, task.id, 'assignee', f.admin.id))).toBe('string')
+      expect(typeof (await accepts(t, writer, task.id, 'reviewer', f.admin.id))).toBe('string')
     }
+    // a User grant on Firmware lets both take them there, as anyone
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: f.sub.id,
+        profile_id: f.admin.id,
+        level: 'user',
+      }),
+    )
+    const pickers = await pickersOn(t, writer, tasks.FW.id, f.admin.id)
+    expect(pickers.assignee).toEqual({ offered: true, checked: true })
+    expect(await accepts(t, writer, tasks.FW.id, 'assignee', f.admin.id)).toBe(true)
   })
 
   it('offers on a task stored on a top-level project, as a recipient and not as an owner, who reaches only one of its sub-projects', async () => {
@@ -371,9 +380,10 @@ describe('the owner pickers against the chain check', () => {
       }
     }
     // the people with Edit on Firmware, each where they see the parent
-    expect(offered['sibling assignee']).toEqual(['Ben', 'Writer', 'admin', 'guest', 'user'])
-    expect(offered['hidden assignee']).toEqual(['Cy', 'admin', 'user'])
-    expect(offered['navigation assignee']).toEqual(['Di', 'Ed', 'admin'])
+    // the admin, who leads Elsewhere, edits no Firmware task
+    expect(offered['sibling assignee']).toEqual(['Ben', 'Writer', 'guest', 'user'])
+    expect(offered['hidden assignee']).toEqual(['Cy', 'user'])
+    expect(offered['navigation assignee']).toEqual(['Di', 'Ed'])
     for (const key of Object.keys(subtasks))
       expect(offered[`${key} reviewer`]).toEqual(offered[`${key} assignee`])
   })

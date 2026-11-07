@@ -34,7 +34,7 @@ import {
   type T,
   TODAY,
   uuid,
-  withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
 import { countOrg } from './overviewCounts.setup'
@@ -51,7 +51,7 @@ type Fx = OrgFixture & {
 /* withOrg, with the agent holding Edit on TBED, the guest Edit on FW and PCB
  * only, and the sub-projects hiddenSib and an archived ARC under TBED. */
 async function setup(t: T = newT()): Promise<Fx> {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   await t.run(async (ctx) => {
     await ctx.db.insert('project_access', {
       project_id: f.meta.id,

@@ -55,7 +55,7 @@ import {
   plantSubscription,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import {
   deleteProject,
@@ -112,7 +112,7 @@ async function createTask(
 
 /* withOrg, with the agent holding Edit on TBED and a task in FW. */
 async function setup(t: T = newT()): Promise<Fx> {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   await t.run((ctx) =>
     ctx.db.insert('project_access', {
       project_id: f.meta.id,

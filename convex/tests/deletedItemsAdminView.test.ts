@@ -1,25 +1,21 @@
 /* Deleted items as an organization admin reads it (model/deletedItems.ts
  * viewOf and roleReadsEveryTask). An admin keeps every item that is not
  * purging, with its metadata, Restore by the ordinary rule and Delete now,
- * and reads its tasks as their role reads them, every task today and, once
- * the admin access split takes the role's blanket level away, only the
- * tasks their ordinary access reaches.
+ * and reads its tasks only as their ordinary access reaches them: admin
+ * status gives no level (lib/access.ts levelUnder and levelsFrom), so
+ * roleReadsEveryTask is false for every role and a task item whose project
+ * the admin cannot read shows as a hidden row. A split that left either
+ * admin branch fails these cases, since roleReadsEveryTask asks levelsFrom
+ * while a restore asks projectLevel through liveLevel.
  *
- * The split is not built. The cases of "under a stand-in for the admin
- * access split" spy on lib/access.ts levelsFrom and projectLevel so that
- * they judge an admin through ordinaryOf, as they will once the split
- * removes their admin branches (standInForTheSplit), as
- * tests/accessRemovalPreview.test.ts does for its own reader. Its first
- * case fails without the spies. When the split lands it drops the helper
- * and keeps those assertions as plain cases, and the cases of "an admin
- * today" change with it. A split that removed only one of the two admin
- * branches fails those plain cases, since roleReadsEveryTask asks
- * levelsFrom while a restore asks projectLevel through liveLevel. The spies
- * reach the calls in model/deletedItems.ts (viewOf, sightOf, storedLevels,
- * roleReadsEveryTask and restoreBlock), not those inside lib/access.ts,
- * such as a reveal's rechecks (hasProjectLevel, projectLevelsForOrg), and
- * no case here claims more. installTrashTimers' afterEach restores the
- * spies, and the afterEach below the budgets the cases lower.
+ * Two of the review points for this view are agent decisions of the admin
+ * access split (7 November 2026): an admin's probe for rows stored before
+ * the page stays organization-wide (model/deletedItemsPage.ts Seat.admin,
+ * olderRows), so `legacy` can come from projects they cannot read, and the
+ * admin's assignee index can end a short page at a row it dropped, which
+ * the next page's cursor moves past. Both say nothing a task they cannot
+ * read holds. t3/limits-project-old-paths removes the read-everything
+ * branch with the old list.
  *
  * The last block reads at the design size, one figure raised a case, and
  * logs its reads as tests/deletedItemsPageReads.test.ts does. */
@@ -73,22 +69,6 @@ afterEach(() => {
 
 type Profile = Doc<'profiles'>
 type Item = Doc<'deleted_items'>
-
-/* The functions the stand-in wraps, as lib/access.ts exports them. */
-const real = { levelsFrom: access.levelsFrom, projectLevel: access.projectLevel }
-
-/** Stands in for the admin access split until it lands. levelsFrom and
- * projectLevel judge an organization admin as ordinary access does
- * (lib/access.ts ordinaryOf), as they will once the split removes their
- * admin branches. installTrashTimers' afterEach restores both. */
-function standInForTheSplit(): void {
-  vi.spyOn(access, 'levelsFrom').mockImplementation((me, ...rest) =>
-    real.levelsFrom(access.ordinaryOf(me), ...rest),
-  )
-  vi.spyOn(access, 'projectLevel').mockImplementation((ctx, me, ...rest) =>
-    real.projectLevel(ctx, access.ordinaryOf(me), ...rest),
-  )
-}
 
 /** A person with a login in `org_id`. */
 const person = (
@@ -236,8 +216,8 @@ const byGuest = (f: OrgFixture) => ({
   who: `${f.guest.id}|app`,
 })
 
-describe('an admin today', () => {
-  it("gives an admin every item whole in the list, the item, the old search and the page, for every shape of the list's cases", async () => {
+describe('an admin without ordinary access', () => {
+  it("gives an admin every item in the list, the item and the page, a task item as a hidden row and a project item whole, for every shape of the list's cases", async () => {
     const t = newT()
     const f = await withOrg(t)
     const dana = await person(t, f.org.id, 'Dana')
@@ -306,20 +286,20 @@ describe('an admin today', () => {
     expect(listed.map((r) => r.id).sort()).toEqual(items.map((i) => i.id).sort())
     for (const item of items) {
       const row = listed.find((r) => r.id === item.id)
-      // the whole item, its title, status and reason, never hidden
+      // every item with its counts, projects and Delete now; a task item's
+      // title, status and reason only where the admin reads its tasks,
+      // which they read nowhere; a project item's name is management data
       expect(row, item.name).toMatchObject({
-        title: item.name,
+        title: item.kind === 'project' ? item.name : '',
         counts: item.counts,
-        state: item.state,
         can_purge: true,
       })
       expect(
         row?.projects.map((p) => p.id),
         item.name,
       ).toEqual(item.projects.map((p) => p.id))
-      expect(row?.reason, item.name).toBe(item.reason)
-      expect(row, item.name).not.toHaveProperty('hidden')
-      expect(row, item.name).not.toHaveProperty('redacted')
+      if (item.kind === 'task') expect(row, item.name).toMatchObject({ hidden: true })
+      else expect(row, item.name).not.toHaveProperty('hidden')
       expect(await itemRow(t, f.admin, item.id), item.name).toEqual(row)
     }
     // the page gives the same rows, each item once
@@ -330,59 +310,28 @@ describe('an admin today', () => {
         walked.items.find((r) => r.id === row.id),
         row.title,
       ).toEqual(row)
-    // the old search finds every task, the subtask with its root's title
-    const found = await search(t, f.admin, 'alpha')
-    expect(found.matches.map((m) => m.title).sort()).toEqual([
-      'Family alpha root',
-      'Family alpha subtask',
-      'Lab alpha',
-      'Own alpha',
-      'Site alpha',
-      'Stuck alpha',
-      'Waiting alpha',
-    ])
-    expect(found.matches.find((m) => m.title === 'Family alpha subtask')).toMatchObject({
-      root_key: `QN-${root.num}`,
-      root_title: 'Family alpha root',
-    })
-    // the page's search too, with an admin's honest note
+    // neither search finds a task the admin cannot read
+    expect((await search(t, f.admin, 'alpha')).matches).toEqual([])
     const scope = { org_id: f.org.id, all: true as const }
-    const searched = await walk(t, f.admin, { scope, search: 'alpha' })
-    // a task item once, with its first matching task, and each task of a
-    // project item once
-    expect(searched.ids).toHaveLength(6)
-    expect(searched.pages.every((p) => p.missing === undefined)).toBe(true)
-    const hit = (await page(t, f.admin, { scope, search: 'subtask' })).entries
-    expect(hit).toEqual([
-      {
-        item_id: (await itemFor(t, root.id)).id,
-        task: {
-          key: `QN-${sub.num}`,
-          title: 'Family alpha subtask',
-          root_key: `QN-${root.num}`,
-          root_title: 'Family alpha root',
-          archived: false,
-          path: ['Operations', 'Infra'],
-        },
-      },
+    expect((await page(t, f.admin, { scope, search: 'alpha' })).entries).toEqual([])
+    // a member who reads them finds them, as before
+    expect((await search(t, f.guest, 'Own alpha')).matches.map((m) => m.title)).toEqual([
+      'Own alpha',
     ])
   })
 })
 
 describe('whether a role reads every task', () => {
-  it('is true for an admin and false for a user, guest, viewer and agent, and for an admin under the stand-in', async () => {
+  it('is false for every role, an admin included', async () => {
     const t = newT()
     const f = await withOrg(t)
-    expect(roleReadsEveryTask(f.admin)).toBe(true)
-    for (const who of [f.user, f.guest, f.viewer, f.agent])
+    for (const who of [f.admin, f.user, f.guest, f.viewer, f.agent])
       expect(roleReadsEveryTask(who), who.name).toBe(false)
-    standInForTheSplit()
-    expect(roleReadsEveryTask(f.admin)).toBe(false)
   })
 })
 
-describe('under a stand-in for the admin access split', () => {
-  it('reaches model/deletedItems.ts, as the same reads without it show', async () => {
+describe('an admin by ordinary access', () => {
+  it('judges an admin by their rows in model/deletedItems.ts, as anyone', async () => {
     const t = newT()
     const f = await withOrg(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -394,9 +343,10 @@ describe('under a stand-in for the admin access split', () => {
         sight: (await sightOf(ctx, f.admin)).levels.levelOf(f.sub),
         block: await restoreBlock(ctx, f.admin, item),
       }))
-    expect(await judged()).toEqual({ reads: true, sight: 'lead', block: null })
-    standInForTheSplit()
     expect(await judged()).toEqual({ reads: false, sight: null, block: 'no_access' })
+    // a grant of their own reads it, as anyone's
+    await grant(t, f.meta.id, f.admin.id, 'user')
+    expect(await judged()).toEqual({ reads: false, sight: 'user', block: null })
   })
 
   it('keeps a task item the admin cannot read as a hidden row, with its key, path, counts and deleter and without its title, status or reason', async () => {
@@ -416,13 +366,6 @@ describe('under a stand-in for the admin access split', () => {
     })
     await deleteTask(t, f.guest, root.id, { subtask_ids: [sub.id], reason: 'confidential' })
     const item = await itemFor(t, root.id)
-    // today the admin reads it whole
-    expect(await rowOf(t, f.admin, item.id)).toMatchObject({
-      title: 'Contoso acquisition due diligence',
-      status: 'review',
-      reason: 'confidential',
-    })
-    standInForTheSplit()
     const row = await rowOf(t, f.admin, item.id)
     expect(row).toEqual({
       id: item.id,
@@ -473,10 +416,12 @@ describe('under a stand-in for the admin access split', () => {
       title: 'Order the parts',
     })
     await deleteTask(t, f.guest, task.id)
+    // the admin deletes one while a grant lets them edit it, and loses it
+    await grant(t, f.meta.id, f.admin.id, 'user')
     await deleteTask(t, f.admin, mine.id)
+    await ungrant(t, f.meta.id, f.admin.id)
     const item = await itemFor(t, task.id)
     const own = await itemFor(t, mine.id)
-    standInForTheSplit()
     const titleOf = async (id: string) => {
       const row = await rowOf(t, f.admin, id)
       return row?.hidden === true ? null : row?.title
@@ -532,7 +477,6 @@ describe('under a stand-in for the admin access split', () => {
     })
     await deleteTask(t, dana, root.id, { subtask_ids: [sub.id] })
     const item = await itemFor(t, root.id)
-    standInForTheSplit()
     const row = await rowOf(t, f.admin, item.id)
     expect(row).toMatchObject({
       key: `QN-${root.num}`,
@@ -590,10 +534,6 @@ describe('under a stand-in for the admin access split', () => {
     const holder = await itemFor(t, f.meta.id)
     const gone = plantedItem(f, { id: uuid(), name: 'Gone', key: 'GN', type: 'project' })
     await t.run((ctx) => ctx.db.insert('deleted_items', gone))
-    // today the admin reads both
-    expect(await rowOf(t, f.admin, waiting.id)).toMatchObject({ title: 'Waiting on the platform' })
-    expect(await rowOf(t, f.admin, gone.id)).toMatchObject({ title: 'Waiting for its project' })
-    standInForTheSplit()
     expect(await rowOf(t, f.admin, waiting.id)).toMatchObject({
       title: '',
       hidden: true,
@@ -637,7 +577,6 @@ describe('under a stand-in for the admin access split', () => {
     await deleteProject(t, lena, top.id, { reason: 'moved to the new lab' })
     await runSteps(t)
     const item = await itemFor(t, top.id)
-    standInForTheSplit()
     const row = await rowOf(t, f.admin, item.id)
     expect(row).toMatchObject({
       kind: 'project',
@@ -663,8 +602,8 @@ describe('under a stand-in for the admin access split', () => {
     expect(await titles('trench')).toEqual({ page: [], matches: [] })
     // the stored rows give the admin the top-level project for navigation
     // to Lab, which counts as it does in anyone else's view of a project
-    // item, so its own tasks show; the split's review keeps or changes
-    // that for everyone (model/deletedItems.ts adminView)
+    // item, so its own tasks show, as they do to a member, one rule for
+    // every seat (agent decision of the admin access split, 7 November 2026)
     expect(await titles('Kickoff')).toEqual({ page: ['Kickoff notes'], matches: ['Kickoff notes'] })
   })
 
@@ -684,22 +623,10 @@ describe('under a stand-in for the admin access split', () => {
       DELETED_PAGE.results = 1
     }
     const item = await itemFor(t, task.id)
-    // today the admin finds it, and a source that read its allowance, or a
-    // cut gathering, says so
-    const today = await page(t, f.admin, { scope, search: 'audit' })
-    expect(today.entries).toEqual([{ item_id: item.id }])
-    expect(today.missing).toBeUndefined()
-    lowered()
-    expect((await page(t, f.admin, { scope, search: 'audit' })).missing).toBe('matches')
-    Object.assign(DELETED_PAGE, DEFAULT_PAGE)
-    DELETED_PAGE.gather = { ...DEFAULT_PAGE.gather, ranges: 1 }
-    expect((await page(t, f.admin, { scope, search: 'audit' })).missing).toBe('reads')
-    Object.assign(DELETED_PAGE, DEFAULT_PAGE)
-    expect((await page(t, f.admin, { scope, search: `QN-${task.num}` })).entries).toEqual([
+    // the guest, who reads it, finds it
+    expect((await page(t, f.guest, { scope, search: 'audit' })).entries).toEqual([
       { item_id: item.id },
     ])
-
-    standInForTheSplit()
     const none = { entries: [], items: [], next_cursor: null, missing: 'matches' }
     expect(await page(t, f.admin, { scope, search: 'audit' })).toEqual(none)
     expect(await page(t, f.admin, { scope, search: `QN-${task.num}` })).toEqual(none)
@@ -770,7 +697,6 @@ describe('under a stand-in for the admin access split', () => {
     await deleteTask(t, dana, root.id, { subtask_ids: [sub.id] })
     const family = await itemFor(t, root.id)
     const plain = await itemFor(t, readable.id)
-    standInForTheSplit()
     const scope = { org_id: f.org.id, all: true as const }
     const expectOnlyReadable = (walked: Awaited<ReturnType<typeof walk>>) => {
       expect(walked.ids).toEqual([family.id, plain.id])
@@ -807,7 +733,7 @@ describe('under a stand-in for the admin access split', () => {
     expect(all.items.filter((r) => r.hidden === true)).toHaveLength(7)
   })
 
-  it('says capped after a budget stop of the old search only while the admin reads every task', async () => {
+  it('says no budget stop of the old search to an admin, who reads no task of these items', async () => {
     const t = newT()
     const f = await withOrg(t)
     const lena = await person(t, f.org.id, 'Lena')
@@ -818,24 +744,51 @@ describe('under a stand-in for the admin access split', () => {
       later()
     }
     await runSteps(t)
-    expect(await search(t, f.admin, 'survey')).toMatchObject({ capped: false })
-    // the largest budget the search spends before its last hit, which the
-    // admin is told about today
-    let ranges = 0
-    for (let r = 64; r > 0 && ranges === 0; r--) {
-      LIST.call = { ...DEFAULT_LIST.call, ranges: r }
-      const cut = await search(t, f.admin, 'survey')
-      if (cut.matches.length > 0 && cut.matches.length < 4) {
-        expect(cut.capped).toBe(true)
-        ranges = r
-      }
+    // an admin who reads none of them reads each item's stored rows, and
+    // a budget that stops the search is not said, whatever it is
+    for (const ranges of [DEFAULT_LIST.call.ranges, 24, 8]) {
+      LIST.call = { ...DEFAULT_LIST.call, ranges }
+      expect(await search(t, f.admin, 'survey'), `${ranges}`).toEqual({
+        matches: [],
+        capped: false,
+      })
     }
-    expect(ranges).toBeGreaterThan(0)
-    // an admin who reads none of them reads more of each item, the project
-    // item's stored rows, so the same budget stops the search sooner, and
-    // the stop is not said
-    standInForTheSplit()
-    expect(await search(t, f.admin, 'survey')).toEqual({ matches: [], capped: false })
+    // Lena, who leads them, finds every one
+    Object.assign(LIST, DEFAULT_LIST)
+    expect((await search(t, lena, 'survey')).matches).toHaveLength(4)
+  })
+
+  it('restores a project item for an admin without stored levels, and clears an admin holder who cannot work there, as the reveal judges every holder', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const lena = await person(t, f.org.id, 'Lena')
+    const ada = await person(t, f.org.id, 'Ada', 'admin')
+    const { top, subs } = await tree(t, f, 'Field trial', lena, [{ name: 'Site' }])
+    // one task held by Lena, who leads the project, and one by Ada, an
+    // admin with no lead, grant or share on it
+    const kept = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: subs[0].id,
+      assignee_id: lena.id,
+    })
+    const cleared = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: subs[0].id,
+      assignee_id: ada.id,
+    })
+    await deleteProject(t, lena, top.id)
+    await runSteps(t)
+    const item = await itemFor(t, top.id)
+    // the fixture's admin, who holds no stored level on it, restores it:
+    // a project item's restore is management
+    expect(await rowOf(t, f.admin, item.id)).toMatchObject({ can_restore: true })
+    expect((await restore(t, f.admin, [item.id])).refused).toEqual([])
+    await runSteps(t)
+    const holderOf = async (id: string) =>
+      (await t.run((ctx) => byId(ctx, 'issues', id)))?.assignee_id
+    expect(await holderOf(kept.id)).toBe(lena.id)
+    // keepsHolder asks the holder's ordinary level, which Ada lacks
+    expect(await holderOf(cleared.id)).toBeUndefined()
   })
 
   it('refuses to restore a hidden task item for want of access, and deletes it for good', async () => {
@@ -844,7 +797,6 @@ describe('under a stand-in for the admin access split', () => {
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await deleteTask(t, f.guest, task.id)
     const item = await itemFor(t, task.id)
-    standInForTheSplit()
     expect((await restore(t, f.admin, [item.id])).refused).toEqual([
       { id: item.id, reason: 'no_access' },
     ])
@@ -866,7 +818,6 @@ describe('under a stand-in for the admin access split', () => {
     const item = await itemFor(t, task.id)
     // the sub-project's parent dangles, so a level read on it throws
     await patch(t, 'projects', f.sub.id, { parent_id: uuid() })
-    standInForTheSplit()
     const broken = (await t.run((ctx) => byId(ctx, 'projects', f.sub.id))) as Doc<'projects'>
     await expectRefusal(
       t.run((ctx) => access.projectLevel(ctx, f.admin, broken)),
@@ -911,8 +862,6 @@ describe('under a stand-in for the admin access split', () => {
     const unnamed =
       /Testbed platform \(TBED, in Deleted items\) would have milestones on 2026-05-10 and 2026-05-11/
     const plain = await deleted(false)
-    expect(await messageOf(plain.t, plain.f)).toMatch(named)
-    standInForTheSplit()
     const hidden = await messageOf(plain.t, plain.f)
     expect(hidden).toMatch(unnamed)
     expect(hidden).not.toMatch(/Alpha|Beta/)
@@ -1183,7 +1132,6 @@ describe('reads at the design size, under the stand-in', () => {
     await insertProjects(t, rows)
     for (let i = 0; i < 25; i++)
       await plantTaskItem(t, f, subs[i], subs[i].parent_id ?? '', START + i * 1000)
-    standInForTheSplit()
     const scope = { org_id: f.org.id, all: true as const }
     const browse = await readPage(t, f.admin, { scope })
     record('a catalogue of 2,000 projects, an admin browsing 25 hidden items', browse.figures)
@@ -1210,7 +1158,6 @@ describe('reads at the design size, under the stand-in', () => {
     // 26 open tasks in each live sub-project, 780 in the project, inside the
     // design size of 800 open tasks a project with all its sub-projects
     await plantProjectItem(t, f, { root, subs, perSub: 26, shares })
-    standInForTheSplit()
     const scope = { org_id: f.org.id, all: true as const }
     const browse = await readPage(t, f.admin, { scope })
     record('a project item of 70 sub-projects, an admin in 3 teams browsing', browse.figures)
@@ -1237,7 +1184,6 @@ describe('reads at the design size, under the stand-in', () => {
     )
     const shares = teams.map((team, i): [string, ProjectRow] => [team, subs[i % 3]])
     await plantProjectItem(t, f, { root, subs, perSub: 30, shares })
-    standInForTheSplit()
     const scope = { org_id: f.org.id, all: true as const }
     const browse = await readPage(t, f.admin, { scope })
     record('an everyday project item, an admin in 5 teams browsing', browse.figures)

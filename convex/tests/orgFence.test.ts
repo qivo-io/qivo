@@ -45,7 +45,7 @@ import {
   settleScheduled,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
 
@@ -133,7 +133,7 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
 
   beforeAll(async () => {
     t = newT()
-    f = await withOrg(t)
+    f = await withReadingAdmin(t)
     ownIssue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     ownLabel = await plantLabel(t, f.org.id, 'Bug')
     otherIssue = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id })
@@ -811,7 +811,7 @@ describe('0056 residuals — viewer assignee, hidden endpoints, archived arrival
 
   beforeAll(async () => {
     t = newT()
-    f = await withOrg(t)
+    f = await withReadingAdmin(t)
     subIssue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     hiddenIssue = await plantIssue(t, { org_id: f.org.id, project_id: f.hidden.id })
     otherIssue = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id })
@@ -1039,7 +1039,7 @@ describe("0056 §C — planted forbidden rows grant nothing ('the design assumes
 
   beforeAll(async () => {
     t = newT()
-    f = await withOrg(t)
+    f = await withReadingAdmin(t)
   })
   afterEach(() => settleScheduled(t))
 
@@ -1097,7 +1097,7 @@ describe('0056 §D — guest write-probes into the hidden pair of their own org'
 
   beforeAll(async () => {
     t = newT()
-    f = await withOrg(t)
+    f = await withReadingAdmin(t)
     hiddenIssue = await plantIssue(t, { org_id: f.org.id, project_id: f.hidden.id })
   })
   afterEach(() => settleScheduled(t))

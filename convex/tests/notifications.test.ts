@@ -30,7 +30,7 @@ import {
   runInAuth,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { archiveRaw, grant, plantItems, post } from './inboxItems.setup'
 
@@ -169,7 +169,7 @@ const eventOf = (m: Doc<'messages'> | null) => {
 /** A fixture organization and a session of its guest, who sees the meta
  * project's two sub-projects. */
 async function guestFixture(t: T): Promise<{ f: OrgFixture; s: Session }> {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   return { f, s: await signIn(t, f.guest.auth_user_id as string) }
 }
 
@@ -1236,7 +1236,7 @@ describe('claimSummary', () => {
 
   it('answers unchecked when a check of a seat’s access stops, and summary when another seat holds new activity', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a seat that sees PCB only through its team, as in the unread
     // summary's case (tests/inboxReads.test.ts)
     const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
@@ -1261,7 +1261,8 @@ describe('claimSummary', () => {
       org_role: 'admin',
       accepted_at: NOW,
     })
-    const elsewhere = await plantProject(t, { org_id: later.id })
+    // which the admin leads, as admin status alone shows no project
+    const elsewhere = await plantProject(t, { org_id: later.id, lead_id: second.id })
     const news = async (to: Doc<'profiles'>, minute: number) => {
       const [org, project_id] = to === me ? [f.org, f.sub2.id] : [later, elsewhere.id]
       const task = await plantIssue(t, { org_id: org.id, project_id })

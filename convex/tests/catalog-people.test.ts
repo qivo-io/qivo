@@ -28,7 +28,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 const profileById = (t: T, id: string) =>
@@ -69,7 +69,7 @@ const personArgs = (f: OrgFixture, extra: Record<string, unknown> = {}) => ({
 describe('profiles.create — the org-seat invitation', () => {
   it('stamps defaults, lands team rows, narrates added and grows beyond the old seat allowance', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await as(t, f.admin).mutation(api.profiles.create, {
       org_id: f.org.id,
@@ -125,7 +125,7 @@ describe('profiles.create — the org-seat invitation', () => {
 
   it('agent shape: no mailbox, user/viewer only, no plannable week; the agent detail', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await as(t, f.admin).mutation(api.profiles.create, {
       org_id: f.org.id,
@@ -175,7 +175,7 @@ describe('profiles.create — the org-seat invitation', () => {
 
   it('person email rules: required with shape, unique per org; teams fenced; admin only', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const needs = await expectRefusal(
       as(t, f.admin).mutation(api.profiles.create, personArgs(f, { email: null })),
       'rule',
@@ -246,7 +246,7 @@ describe('profiles.create — the org-seat invitation', () => {
 
   it('avatar color: #rrggbb in either case is stored; any other text is refused and nothing lands', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (const color of ['#0F766E', '#abcdef']) {
       const args = personArgs(f, { color })
       await as(t, f.admin).mutation(api.profiles.create, args)
@@ -273,7 +273,7 @@ describe('profiles.create — the org-seat invitation', () => {
 
   it('retention inheritance (0112): the oldest sibling by address wins, copying even Never', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantSeat(t, {
       org_id: f.otherOrg.id,
       email: 'bo@x.se',
@@ -302,7 +302,7 @@ describe('profiles.create — the org-seat invitation', () => {
 describe('profiles.update — the admin door', () => {
   it('a real rename writes ONE renamed row with the old name; a same-value write is silent', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await as(t, f.admin).mutation(api.profiles.update, {
       org_id: f.org.id,
       id: f.user.id,
@@ -364,7 +364,7 @@ describe('profiles.update — the admin door', () => {
 
   it('email: the claimed-seat refusal verbatim; an unclaimed address is corrected, never emptied', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // f.user signed in with their address — it is no longer the admin's to edit
     const claimed = await expectRefusal(
       as(t, f.admin).mutation(api.profiles.update, {
@@ -416,7 +416,7 @@ describe('profiles.update — the admin door', () => {
 
   it('role edges: demote-self last admin; viewer-leads-nothing; the teams diff and its guest fence', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (const patch of [{ org_role: 'user' as const }, { active: false }]) {
       const r = await expectRefusal(
         as(t, f.admin).mutation(api.profiles.update, { org_id: f.org.id, id: f.admin.id, patch }),
@@ -491,7 +491,7 @@ describe('profiles.update — the admin door', () => {
 
   it('a seat on a team becomes a guest only when the same patch leaves every team', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const update = (id: string, patch: Record<string, unknown>) =>
       as(t, f.admin).mutation(api.profiles.update, { org_id: f.org.id, id, patch })
     await update(f.viewer.id, { teams: [f.team.id] })
@@ -541,7 +541,7 @@ describe('profiles.update — the admin door', () => {
 
   it('leaving the guest role drops memberships kept from before', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const update = (id: string, patch: Record<string, unknown>) =>
       as(t, f.admin).mutation(api.profiles.update, { org_id: f.org.id, id, patch })
     const stale = () =>
@@ -570,7 +570,7 @@ describe('profiles.update and the project-creation right', () => {
 
   it('an admin turns the right on and off for a standard user; off is stored as absent', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const update = (patch: { can_create_projects: boolean }) =>
       as(t, f.admin).mutation(api.profiles.update, { org_id: f.org.id, id: f.user.id, patch })
     await update({ can_create_projects: true })
@@ -584,7 +584,7 @@ describe('profiles.update and the project-creation right', () => {
 
   it('gives the right to a Standard user agent like a person, and off is stored as absent', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const update = (can_create_projects: boolean) =>
       as(t, f.admin).mutation(api.profiles.update, {
         org_id: f.org.id,
@@ -599,7 +599,7 @@ describe('profiles.update and the project-creation right', () => {
 
   it('refuses the right for viewers, Viewer agents, guests and admins; turning it off is accepted', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const viewerAgent = await plantSeat(t, {
       org_id: f.org.id,
       name: 'Ledger',
@@ -633,7 +633,7 @@ describe('profiles.update and the project-creation right', () => {
 
   it('only an org admin may set the right', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const seat = await plantSeat(t, { org_id: f.org.id })
     for (const caller of [f.user, f.viewer, f.guest, f.otherAdmin]) {
       await expectRefusal(
@@ -651,7 +651,7 @@ describe('profiles.update and the project-creation right', () => {
 
   it('a role change away from standard user clears the right; deactivating keeps it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const update = (id: string, patch: Record<string, unknown>) =>
       as(t, f.admin).mutation(api.profiles.update, { org_id: f.org.id, id, patch })
     for (const org_role of ['viewer', 'admin', 'guest'] as const) {
@@ -672,7 +672,7 @@ describe('profiles.update and the project-creation right', () => {
 
   it('making someone a standard user sets the right only when the same patch turns it on', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const update = (id: string, patch: Record<string, unknown>) =>
       as(t, f.admin).mutation(api.profiles.update, { org_id: f.org.id, id, patch })
     const promoted = await plantSeat(t, { org_id: f.org.id, org_role: 'viewer' })
@@ -701,7 +701,7 @@ describe('profiles.update and the project-creation right', () => {
     vi.stubEnv('POLAR_ACCESS_TOKEN', 'test-token')
     try {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const scheduled = () => t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
       const update = (patch: Record<string, unknown>) =>
         as(t, f.admin).mutation(api.profiles.update, { org_id: f.org.id, id: f.user.id, patch })
@@ -721,7 +721,7 @@ describe('profiles.update and the project-creation right', () => {
 describe('profiles.deactivate', () => {
   it("switches a seat off with update's guards and refuses a non-admin", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await expectRefusal(
       as(t, f.user).mutation(api.profiles.deactivate, { org_id: f.org.id, id: f.viewer.id }),
       'forbidden',
@@ -745,7 +745,7 @@ describe('profiles.remove', () => {
       vi.useRealTimers()
     })
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the SQL raised the same sentence for all three — a probing uuid learns nothing
     await expectRefusal(
       as(t, f.user).mutation(api.profiles.remove, { org_id: f.org.id, id: f.viewer.id }),
@@ -827,7 +827,7 @@ describe('profiles.setPlannableHours — the rights matrix', () => {
 
   it('admin and a shared-team leader may; everyone else reads ONE sentence; agent and range verbatim', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const set = (caller: Doc<'profiles'>, profile_id: string, hours: number) =>
       as(t, caller).mutation(api.profiles.setPlannableHours, {
         org_id: f.org.id,
@@ -917,7 +917,7 @@ describe("profiles.setPlannableHours — a leader's check walks the person's tea
 
   it("passes a leader of one of the person's teams, and nobody through a team that is foreign, gone or not the person's", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const set = setter(t, f.org.id)
     const pat = await plantSeat(t, { org_id: f.org.id, name: 'Pat Ito' })
     // the user leads a team Pat is not in, and Pat is in a team the user
@@ -943,7 +943,7 @@ describe("profiles.setPlannableHours — a leader's check walks the person's tea
 
   it('passes a leader at a lowered bound and refuses one past it for a person in more teams, with its own sentence, and still judges a leader in more teams', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const set = setter(t, f.org.id)
     const most = OWN_READS.teams
     OWN_READS.teams = 2
@@ -989,7 +989,7 @@ describe("profiles.setPlannableHours — a leader's check walks the person's tea
 describe('profiles.setDisplayName — the self door, fanned out', () => {
   it('renames every matched seat with ONE renamed row per touched org, actor per org', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const thirdOrgId = uuid()
     await t.run((ctx) =>
       ctx.db.insert('organizations', {
@@ -1048,7 +1048,7 @@ describe('profiles.setDisplayName — the self door, fanned out', () => {
 
   it('returns its sentences instead of throwing; nothing moves on a refusal', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     expect(await as(t, f.user).mutation(api.profiles.setDisplayName, { name: '   ' })).toBe(
       'a name cannot be blank',
     )
@@ -1068,7 +1068,7 @@ describe('profiles.setDisplayName — the self door, fanned out', () => {
 describe('profiles.setMessageRetention', () => {
   it('follows the person across seats; null stores as ABSENT; the range sentence verbatim', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const seatInvite = await plantSeat(t, { org_id: f.otherOrg.id, email: f.user.email })
     await as(t, f.user).mutation(api.profiles.setMessageRetention, { days: 30 })
     expect((await profileById(t, f.user.id))?.message_retention_days).toBe(30)
@@ -1098,7 +1098,7 @@ describe('profiles.setMessageRetention', () => {
 describe('teams.create / teams.update', () => {
   it('create is admin-only, silent, and stamps newTeamDefaults; a replayed uuid is refused', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await as(t, f.admin).mutation(api.teams.create, { org_id: f.org.id, id, name: 'Design' })
     expect(await teamById(t, id)).toMatchObject({
@@ -1120,7 +1120,7 @@ describe('teams.create / teams.update', () => {
 
   it('settings narrate nothing; icon and day fields are gone', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the team leader qualifies, not just the admin
     await as(t, f.user).mutation(api.teams.update, {
       org_id: f.org.id,
@@ -1163,7 +1163,7 @@ describe('teams.create / teams.update', () => {
 describe('teams attachment cap removal', () => {
   it('rejects the legacy team setting at the wire boundary even for an administrator', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await expect(
       as(t, f.admin).mutation(api.teams.update, {
         org_id: f.org.id,
@@ -1177,7 +1177,7 @@ describe('teams attachment cap removal', () => {
 describe('teams membership — the three verbs', () => {
   it('addMember/removeMember narrate against the USER on the team branch; both idempotent', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const args = { org_id: f.org.id, team_id: f.team.id, profile_id: f.viewer.id }
     await as(t, f.user).mutation(api.teams.addMember, args) // the leader qualifies
     expect((await membership(t, f.team.id, f.viewer.id))?.is_leader).toBe(false)
@@ -1218,7 +1218,7 @@ describe('teams membership — the three verbs', () => {
 
   it('setLeader: made/demoted verbs; a viewer never; same-value and missing rows silent', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const lead = (profile_id: string, is_leader: boolean) =>
       as(t, f.admin).mutation(api.teams.setLeader, {
         org_id: f.org.id,
@@ -1250,7 +1250,7 @@ describe('teams membership — the three verbs', () => {
 
   it('setLeader: a guest with a stale membership is never promoted, and can be demoted', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const lead = (is_leader: boolean) =>
       as(t, f.admin).mutation(api.teams.setLeader, {
         org_id: f.org.id,
@@ -1282,7 +1282,7 @@ describe('teams membership — the three verbs', () => {
 
   it('setLeader: an agent is never promoted, and an older agent leader row can be demoted', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const lead = (caller: Doc<'profiles'>, is_leader: boolean) =>
       as(t, caller).mutation(api.teams.setLeader, {
         org_id: f.org.id,
@@ -1318,7 +1318,7 @@ describe('teams membership — the three verbs', () => {
 
   it('an agent with a leader row cannot run the team or change it; a person leader still can', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // Agents have no login. The planted one stands in for any surface that
     // brings an agent caller to these handlers, next to an agent leader row.
     const agent = await t.run(async (ctx) => {
@@ -1371,7 +1371,7 @@ describe('teams membership — the three verbs', () => {
 describe('teams.deleteDeep', () => {
   it('guard order fence → admin sentence → last-team; the cascade names its full inventory', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await expectRefusal(
       as(t, f.user).mutation(api.teams.deleteDeep, { org_id: f.org.id, id: f.team.id }),
       'rule',
@@ -1465,7 +1465,8 @@ describe('teams.deleteDeep', () => {
     )
     expect(left.issues).toHaveLength(1)
     expect(left.milestones).toHaveLength(1)
-    expect(left.grants).toHaveLength(2)
+    // the guest's and the viewer's grants on TBED, and the admin's
+    expect(left.grants).toHaveLength(3)
     expect(left.pairs).toHaveLength(1)
     expect(left.label).not.toBeNull() // labels are org-level and SURVIVE
     expect(await messagesFor(t, f.admin.id, issue.id)).toHaveLength(1)

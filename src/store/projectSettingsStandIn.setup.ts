@@ -7,8 +7,8 @@
 
    It applies the reads' rules (convex/model/projectSettings.ts) to the
    workspace's rows:
-   - the gate (settingsGate): whoever sees the project, navigation
-     included, or manages it reads it, by the level rule of
+   - the gate (settingsGate): whoever manages the project or sees it,
+     navigation included, reads it, by the level rule of
      convex/lib/access.ts levelsFrom over the workspace's grants, team
      shares and memberships, copied here because the benchmark's worker
      cannot load that module; `unavailable` alike for an unknown project,
@@ -199,7 +199,7 @@ export function levelIn(ws: SettingsWorkspace, me: Profile, project: Project): L
   const tree = treeOf(ws, project)
   if (tree === null || project.org_id !== me.org_id) return null
   let level = own(project.id)
-  if (me.org_role === 'admin' || isLead(me, project, tree.root)) level = 'lead'
+  if (isLead(me, project, tree.root)) level = 'lead'
   else if (project.id !== tree.root.id)
     level = higher(level, isLead(me, tree.root, tree.root) ? 'user' : own(tree.root.id))
   return me.org_role === 'viewer' && level !== null ? 'viewer' : level
@@ -238,6 +238,7 @@ type Gate =
       parent: Project | null
       root: Project
       level: Level | null
+      accessible: boolean
       manages: boolean
     }
 
@@ -247,11 +248,13 @@ function gateOf(ws: SettingsWorkspace, me: Profile, id: string): Gate {
   if (!project || project.org_id !== me.org_id) return { state: 'unavailable' }
   const tree = treeOf(ws, project)
   if (tree === null) return { state: 'unavailable' }
-  const level = levelOf(ws, me, project)
   const managed = manages(ws, me, project)
+  const level = levelOf(ws, me, project)
   if (level === null && !managed) return { state: 'unavailable' }
   if (project.archived_at !== undefined) return { state: 'archived', project, parent: tree.parent }
-  return { state: 'ok', project, ...tree, level, manages: managed }
+  // a level of the caller's own, which a new sub-project under it inherits
+  const accessible = levelIn(ws, me, project) !== null
+  return { state: 'ok', project, ...tree, level, accessible, manages: managed }
 }
 
 /** model/projectSettings.ts settingsRights, outside the demo. */
@@ -332,6 +335,7 @@ export function projectSettingsGet(ws: SettingsWorkspace, args: { id: string }):
         : resolveReviewHours(undefined, gate.parent.review_hours),
     lead: lead ? { ...personRow(lead), inherited: p.lead_id === undefined } : null,
     level: gate.level,
+    accessible: gate.accessible,
     ...rightsOf(me, gate),
   }
 }
@@ -607,14 +611,18 @@ export function leadCandidatesStandIn(
   } else if (args.parent_id !== undefined) {
     if (force.unavailable) return { state: 'unavailable' }
     const parent = ws.projects.find((p) => p.id === args.parent_id)
+    // model/projects.ts subProjectParent: a top-level meta the caller
+    // manages passes without its level, any other parent by its level
+    const managed =
+      !!parent && parent.parent_id === undefined && manages(ws, me, parent)
     const level =
       parent && parent.org_id === me.org_id && treeOf(ws, parent) !== null
         ? levelOf(ws, me, parent)
         : null
-    if (!parent || level === null) return { state: 'unavailable' }
+    if (!parent || (!managed && level === null)) return { state: 'unavailable' }
     if (parent.type !== 'meta') return refused(PARENT_NOT_TOP_LEVEL)
     if (parent.archived_at !== undefined) return refused(PARENT_ARCHIVED)
-    if (level !== 'lead' || force.refused) return refused(LEAD_ACCESS_NEEDED)
+    if ((!managed && level !== 'lead') || force.refused) return refused(LEAD_ACCESS_NEEDED)
     if (me.kind !== 'person') return refused(ACCESS_NEEDS_A_PERSON)
   } else {
     const org = ws.orgs.find((o) => o.id === me.org_id)

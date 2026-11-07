@@ -1996,10 +1996,14 @@ describe('marketing demo seed steps', () => {
   // the end (model/overviewCounts.ts countWhole), write a group row for each
   // of the 90 tasks and their count rows, and the call moves its receipt on:
   // 196 documents, measured. That call alone may write COUNTS_WRITES.
-  it('seeds, checks and wipes in calls of at most 300 index ranges, 350 documents read and 150 written', async () => {
+  // Since the admin access split a notice's check of whether Nora, the
+  // organization admin, sees its task reads her own grants and team
+  // shares, as anyone's, which took the costliest step from under 300 index
+  // ranges to between 311 and 330, measured.
+  it('seeds, checks and wipes in calls of at most 340 index ranges, 350 documents read and 150 written', async () => {
     // convex-test reads these at the start of each call, so the counts
     // call can get its own cap
-    const limits = { databaseQueries: 300, documentsRead: 350, documentsWritten: 150 }
+    const limits = { databaseQueries: 340, documentsRead: 350, documentsWritten: 150 }
     const t = newAuthT({ transactionLimits: limits })
     const { org_id } = await provision(t)
     const counts = RESERVED_PARTS + NORTHSTAR_STEPS.findIndex((step) => step.kind === 'counts')

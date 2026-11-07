@@ -394,11 +394,12 @@ describe('creating projects and sub-projects', () => {
       'this agent has been deactivated',
     )
     expect((await projectRow(fx.t, out.id as string))?.lead_id).toBe(fx.agent.id)
-    // once a person hands the project over, the agent can become a Viewer
-    await fx.t.mutation(internal.machine.projects.mcpUpdateProject, {
-      ...as_(fx.admin),
-      project: out.key as string,
-      lead_id: fx.user.id,
+    // once a person hands the project over, the agent can become a Viewer;
+    // the admin, who manages the project without reading it, does in the app
+    await as(fx.t, fx.admin).mutation(api.projects.update, {
+      org_id: fx.org.id,
+      id: out.id as string,
+      patch: { lead_id: fx.user.id },
     })
     await as(fx.t, fx.admin).mutation(api.profiles.update, {
       org_id: fx.org.id,

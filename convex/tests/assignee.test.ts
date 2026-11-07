@@ -15,6 +15,7 @@ import {
   plantSeat,
   uuid,
   withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 const ASSIGNEE_SENTENCE =
@@ -27,7 +28,7 @@ describe('assignee project permission', () => {
     'refuses new assignments to an organization %s with only a direct View grant',
     async (org_role) => {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const recipient = await plantSeat(t, { org_id: f.org.id, org_role })
       await t.run(async (ctx) => {
         await ctx.db.insert('project_access', {
@@ -68,7 +69,7 @@ describe('assignee project permission', () => {
 
   it('uses the highest team or individual grant inherited by a sub-project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const recipient = await plantSeat(t, { org_id: f.org.id })
     const teamGrantId = await t.run(async (ctx) => {
       await ctx.db.insert('team_members', {
@@ -113,10 +114,14 @@ describe('assignee project permission', () => {
     await expectRefusal(create(), 'rule', ASSIGNEE_SENTENCE)
   })
 
-  it('preserves assignment eligibility from admin, project lead and explicit grants', async () => {
+  it('preserves assignment eligibility from project lead and explicit grants, and gives admin status none', async () => {
     const t = newT()
     const f = await withOrg(t)
-    const projectLead = await plantSeat(t, { org_id: f.org.id, org_role: 'user' })
+    const projectLead = await plantSeat(t, {
+      org_id: f.org.id,
+      org_role: 'user',
+      auth_user_id: uuid(),
+    })
     await t.run(async (ctx) => {
       await ctx.db.patch(f.meta._id, { lead_id: projectLead.id })
       for (const profile of [f.admin, projectLead]) {
@@ -127,8 +132,8 @@ describe('assignee project permission', () => {
         })
       }
     })
-    for (const recipient of [f.admin, projectLead, f.guest]) {
-      const task = await as(t, f.admin).mutation(api.issues.create, {
+    for (const recipient of [projectLead, f.guest]) {
+      const task = await as(t, projectLead).mutation(api.issues.create, {
         org_id: f.org.id,
         id: uuid(),
         project_id: f.sub.id,
@@ -137,22 +142,28 @@ describe('assignee project permission', () => {
       })
       expect(task.assignee_id).toBe(recipient.id)
     }
-    await expectRefusal(
-      as(t, f.admin).mutation(api.issues.create, {
-        org_id: f.org.id,
-        id: uuid(),
-        project_id: f.sub.id,
-        title: 'Team leadership is not project access',
-        assignee_id: f.user.id,
-      }),
-      'rule',
-      ASSIGNEE_SENTENCE,
-    )
+    // an admin with a Viewer grant holds View only, and team leadership is
+    // not project access either
+    for (const [title, assignee_id] of [
+      ['An admin with View', f.admin.id],
+      ['Team leadership is not project access', f.user.id],
+    ])
+      await expectRefusal(
+        as(t, projectLead).mutation(api.issues.create, {
+          org_id: f.org.id,
+          id: uuid(),
+          project_id: f.sub.id,
+          title,
+          assignee_id,
+        }),
+        'rule',
+        ASSIGNEE_SENTENCE,
+      )
   })
 
   it('refuses a move when its assignee has View access only at the destination', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const destination = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
@@ -186,7 +197,7 @@ describe('assignee project permission', () => {
 
   it('keeps existing assignments after a downgrade while refusing reassignment after clearing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await as(t, f.admin).mutation(api.issues.create, {
       org_id: f.org.id,
       id: uuid(),
@@ -231,7 +242,7 @@ describe('assignee project permission', () => {
     '%s keeps View-only profiles available as reporters but refuses them as assignee or reviewer and marks them unassignable',
     async (surface) => {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const recipient = await plantSeat(t, { org_id: f.org.id })
       await t.run(async (ctx) => {
         await ctx.db.insert('project_access', {
@@ -389,7 +400,7 @@ describe('assignee project permission', () => {
     '%s accepts the current assignee and reviewer resent after they lose eligibility',
     async (surface) => {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const assignee = await plantSeat(t, { org_id: f.org.id, name: 'Assignee' })
       const reviewer = await plantSeat(t, { org_id: f.org.id, name: 'Reviewer' })
       const other = await plantSeat(t, { org_id: f.org.id, name: 'Other' })

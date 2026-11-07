@@ -25,7 +25,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 declare class Blob {
@@ -355,7 +355,7 @@ describe('organization export', () => {
 
   it('requires an active admin in the requested organization on every page', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const args = { org_id: f.org.id, section: 'profiles' as const, cursor: null }
     await expectRefusal(t.query(page, args), 'forbidden', /not signed in/)
     for (const profile of [f.user, f.viewer, f.guest]) {
@@ -370,7 +370,7 @@ describe('organization export', () => {
 
   it('leaves the retired Gravatar setting out of the organization row', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run((ctx) => ctx.db.patch(f.org._id, { gravatar_avatars: true }))
     const [row] = (
       await as(t, f.admin).query(page, { org_id: f.org.id, section: 'organizations', cursor: null })
@@ -381,7 +381,7 @@ describe('organization export', () => {
 
   it('exports the counters from org_counters on the organization row', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const caller = as(t, f.admin)
     const organization = async () =>
       (await caller.query(page, { org_id: f.org.id, section: 'organizations', cursor: null }))
@@ -398,7 +398,7 @@ describe('organization export', () => {
 
   it("exports each person's Team sync stamp from their sync_stamps row on the profile row", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const caller = as(t, f.admin)
     await caller.mutation(api.teamSync.stamp, { org_id: f.org.id, profile_id: f.user.id })
     await caller.mutation(api.teamSync.stamp, { org_id: f.org.id, profile_id: f.agent.id })
@@ -424,7 +424,7 @@ describe('organization export', () => {
 
   it('exports every org-owned section including archived work, files, and safe key metadata', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const inactive = await plantSeat(t, {
       org_id: f.org.id,
       name: 'Former colleague',
@@ -633,7 +633,7 @@ describe('organization export', () => {
 
   it('leaves out Deleted items, the tasks a moving project still has in the live tables and links to them', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const comment = (issue_id: string) =>
       t.run((ctx) =>
         ctx.db.insert('comments', { id: uuid(), issue_id, body: 'Notes', created_at: NOW }),
@@ -703,7 +703,7 @@ describe('organization export', () => {
 
   it('reads the parents of a page of tasks only while a deleted item is in flight, two tasks a page then', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 10 parents, then a child under each
     const parents: Doc<'issues'>[] = []
     for (let i = 0; i < 10; i++)
@@ -775,7 +775,7 @@ describe('organization export', () => {
 
   it('reads no task projects while nothing is in flight', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // A task under a project whose row is gone, and links from a live task
     // to three tasks there. While a project item is in flight the export
     // leaves them out, as it reads their projects then. With nothing in
@@ -813,7 +813,7 @@ describe('organization export', () => {
 
   it('requires owned parents and refuses malformed section scopes', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const foreignTask = await plantIssue(t, {
       org_id: f.otherOrg.id,
       project_id: f.otherProject.id,
@@ -861,7 +861,7 @@ describe('organization export', () => {
 
   it('does not disclose foreign endpoints through damaged membership, grant, label, or issue links', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const foreignTask = await plantIssue(t, {
       org_id: f.otherOrg.id,
@@ -926,7 +926,7 @@ describe('organization export', () => {
 
   it('paginates all retained history beyond the snapshot cap and rechecks demotion mid-export', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run(async (ctx) => {
       for (let index = 0; index < 603; index++) {
         await ctx.db.insert('activity_events', {

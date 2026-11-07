@@ -6,7 +6,16 @@ import type { Id } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
 import { LIMITS } from '../lib/limits'
 import { PANORAMA_MAX_BYTES } from '../lib/panoramaImage'
-import { as, expectRefusal, NOW, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
+import {
+  as,
+  expectRefusal,
+  NOW,
+  newT,
+  plantIssue,
+  type T,
+  uuid,
+  withReadingAdmin,
+} from './helpers.setup'
 import { plantTicket } from './uploadTickets.setup'
 
 declare class Blob {
@@ -170,7 +179,7 @@ afterEach(() => {
 describe('manual background library uploads', () => {
   it('refuses anonymous, organization-admin and revoked-operator callers without touching their known file', async () => {
     const { t, op, opRow } = await setup()
-    const org = await withOrg(t)
+    const org = await withReadingAdmin(t)
     const sid = await store(t)
     await t.run((ctx) => ctx.db.delete(opRow))
     for (const caller of [t, as(t, org.admin), op]) {
@@ -488,7 +497,7 @@ describe('manual background library uploads', () => {
 
   it('preserves claimed attachment, avatar and background files when asked to adopt them', async () => {
     const { t, op } = await setup()
-    const org = await withOrg(t)
+    const org = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: org.org.id, project_id: org.sub.id })
     const attached = await store(t, jpeg(1920, 1080, 1))
     const avatar = await store(t, jpeg(1920, 1080, 2))

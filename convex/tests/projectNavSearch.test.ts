@@ -299,7 +299,9 @@ async function compareShape(
   const t = newT()
   const f = await withOrg(t)
   const subject =
-    role === 'admin' ? f.admin : await person(t, f.org.id, 'Subject', { org_role: role })
+    role === 'admin' && shape === null
+      ? f.admin
+      : await person(t, f.org.id, 'Subject', { org_role: role })
   if (shape !== null) await t.run((ctx) => shape[1](ctx, f, subject))
   await ready(t, f)
   await plantStar(t, subject, await now(t, f.meta.id))
@@ -318,7 +320,7 @@ async function compareShape(
 }
 
 describe('access', () => {
-  for (const role of ['user', 'guest', 'viewer'] as const)
+  for (const role of ['user', 'guest', 'viewer', 'admin'] as const)
     it(`finds by the rule for a ${role} in every access shape`, async () => {
       let showing = 0
       for (const shape of SHAPES) if ((await compareShape(shape, role)) > 0) showing++
@@ -326,7 +328,7 @@ describe('access', () => {
       expect(showing).toBeGreaterThan(SHAPES.length / 3)
     })
 
-  it('finds nothing for an admin without grants, whom the admin rule gives every project', async () => {
+  it('finds nothing for an admin without grants, whose levels hold nothing either', async () => {
     expect(await compareShape(null, 'admin')).toBe(0)
     const t = newT()
     const f = await withOrg(t)

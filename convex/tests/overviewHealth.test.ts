@@ -32,7 +32,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import {
   BEFORE_RULE,
@@ -150,7 +150,7 @@ const byIdOrder = (profiles: Doc<'profiles'>[]) =>
 describe('arguments', () => {
   it('refuses a malformed clock, an unknown column or direction, a limit outside 1 to 200 and a search past its limit', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await countOrg(t, f.org.id)
     const scope = scopeOf(f.user, f.meta)
     await expectRefusal(health(t, f.user, scope, { day: '2026-11-31' }), 'bad_request', /day/)
@@ -190,8 +190,8 @@ describe('arguments', () => {
 describe('access', () => {
   it('answers unavailable alike for every scope the caller does not hold', async () => {
     const t = newT()
-    const f = await withOrg(t)
-    const other = await withOrg(t)
+    const f = await withReadingAdmin(t)
+    const other = await withReadingAdmin(t)
     const me = await plantSeat(t, {
       org_id: f.org.id,
       org_role: 'user',
@@ -226,7 +226,7 @@ describe('access', () => {
 
   it("answers unavailable with access_unchecked where a bound of the caller's own reads stopped a check", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await plantSeat(t, {
       org_id: f.org.id,
       accepted_at: NOW,
@@ -263,7 +263,7 @@ describe('access', () => {
 
   it('gives a hidden or archived sub-project no row, no count and no search match', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a member who sees FW only
     const me = await plantSeat(t, {
       org_id: f.org.id,
@@ -301,7 +301,7 @@ describe('access', () => {
 
   it("keeps an admin's My view to their own tasks, never a whole project's", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, assignee_id: f.user.id })
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, assignee_id: f.user.id })
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, assignee_id: f.admin.id })
@@ -322,7 +322,7 @@ describe('access', () => {
 
   it("gives a guest and a Viewer the rows their summary counts, and their own work's figures", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (const [i, project] of [f.sub, f.sub2].entries())
       for (let k = 0; k <= i; k++)
         await plantIssue(t, {
@@ -353,10 +353,16 @@ describe('access', () => {
 describe('rows', () => {
   it("answers every visible live sub-project of a project, an empty one included, and My view's projects with the person's tasks, a group-only one included", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, assignee_id: f.admin.id })
     // a project where the admin holds only a group, whose subtask is the user's
-    const groups = await plantProject(t, { org_id: f.org.id, name: 'Groups only' })
+    // the admin, who reads the table, leads the projects planted here, as
+    // admin status alone shows none
+    const groups = await plantProject(t, {
+      org_id: f.org.id,
+      name: 'Groups only',
+      lead_id: f.admin.id,
+    })
     const groupSub = await subOf(t, groups, 'Group work')
     const group = await plantIssue(t, {
       org_id: f.org.id,
@@ -371,7 +377,11 @@ describe('rows', () => {
       assignee_id: f.user.id,
     })
     // a project with only other people's work
-    const theirs = await plantProject(t, { org_id: f.org.id, name: 'Not mine' })
+    const theirs = await plantProject(t, {
+      org_id: f.org.id,
+      name: 'Not mine',
+      lead_id: f.admin.id,
+    })
     const theirSub = await subOf(t, theirs, 'Their work')
     await plantIssue(t, { org_id: f.org.id, project_id: theirSub.id, assignee_id: f.user.id })
     await countOrg(t, f.org.id)
@@ -402,7 +412,7 @@ describe('rows', () => {
 describe('figures', () => {
   it("counts each row's leaves, paused leaves, Left, Delayed and Slipping from its tasks", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run((ctx) => ctx.db.patch(f.sub._id, { track_delay: true }))
     const task = (fields: Partial<Doc<'issues'>>, project = f.sub) =>
       plantIssue(t, {
@@ -444,7 +454,7 @@ describe('figures', () => {
 
   it("answers My view's own figures, Left added up in tenths across sub-projects", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const mine = { assignee_id: f.user.id }
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, remaining_hours: 0.1, ...mine })
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, remaining_hours: 0.2, ...mine })
@@ -471,9 +481,14 @@ describe('figures', () => {
  * browser's localeCompare, read by the admin. */
 async function orderCase() {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const zed = await plantSeat(t, { org_id: f.org.id, name: 'Zed', accepted_at: BEFORE_RULE })
   const top = await plantProject(t, { org_id: f.org.id, name: 'Ordered' })
+  // the admin, who reads it, holds a grant on it, so a sub-project without
+  // a lead of its own keeps none
+  await t.run((ctx) =>
+    ctx.db.insert('project_access', { project_id: top.id, profile_id: f.admin.id, level: 'user' }),
+  )
   const plan = [
     {
       name: 'Pilot',
@@ -621,10 +636,10 @@ describe('order', () => {
 
   it("orders by no lead's name where a row's lead is another organization's profile", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a name that sorts first, on a profile of another organization
     await t.run((ctx) => ctx.db.patch(f.otherAdmin._id, { name: 'Aaron' }))
-    const top = await plantProject(t, { org_id: f.org.id, name: 'Leads' })
+    const top = await plantProject(t, { org_id: f.org.id, name: 'Leads', lead_id: f.admin.id })
     await subOf(t, top, 'Theirs', { lead_id: f.otherAdmin.id })
     await subOf(t, top, 'Ours', { lead_id: f.admin.id })
     await countOrg(t, f.org.id)
@@ -645,7 +660,7 @@ describe('order', () => {
  * in PCB one of the higher. */
 async function twoOwners() {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   for (const p of [f.sub, f.sub2]) await t.run((ctx) => ctx.db.patch(p._id, { track_delay: true }))
   const [low, high] = byIdOrder([f.user, f.admin]) as [Doc<'profiles'>, Doc<'profiles'>]
   await projectedLate(t, f.sub, low, 'The lower owner’s')
@@ -695,7 +710,7 @@ describe('the name fallback', () => {
 
   it('sorts the count columns by name while the counts are counting, and keeps the others', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, due_date: shift(DAY, -2) })
     // not counted: the counts answer counting
     const scope = scopeOf(f.admin, f.meta)
@@ -721,13 +736,21 @@ describe('the name fallback', () => {
 
   it("answers My view's counts counting while one of the login's organizations is not counted", async () => {
     const t = newT()
-    const f = await withOrg(t)
-    const other = await withOrg(t)
+    const f = await withReadingAdmin(t)
+    const other = await withReadingAdmin(t)
     const there = await plantSeat(t, {
       org_id: other.org.id,
       org_role: 'admin',
       auth_user_id: f.user.auth_user_id,
     })
+    // who works there through a grant on its platform
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: other.meta.id,
+        profile_id: there.id,
+        level: 'user',
+      }),
+    )
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, assignee_id: f.user.id })
     await plantIssue(t, { org_id: other.org.id, project_id: other.sub.id, assignee_id: there.id })
     await countOrg(t, f.org.id)
@@ -752,7 +775,7 @@ describe('the name fallback', () => {
 
   it("answers every judged row's delays unavailable past the budget, and sorts by name", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run((ctx) => ctx.db.patch(f.sub._id, { track_delay: true }))
     await plantTasks(t, f.sub, 30, (i) => ({ title: `Task ${i}`, due_date: shift(DAY, i - 15) }))
     await countOrg(t, f.org.id)
@@ -777,7 +800,7 @@ describe('the name fallback', () => {
 describe('search', () => {
   it('finds every word anywhere in the name key, accents ignored, past the first 10 rows, and counts the matches', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (let i = 1; i <= 12; i++) await subOf(t, f.meta, `Workstream ${String(i).padStart(2, '0')}`)
     await subOf(t, f.meta, 'Café Renovation')
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -808,7 +831,7 @@ describe('search', () => {
 describe('the cut and the cap', () => {
   it('answers the first rows of the order asked, at most OVERVIEW.healthRows, and says how many it holds', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (let i = 0; i < 28; i++) await subOf(t, f.meta, `Part ${String(i).padStart(2, '0')}`)
     await countOrg(t, f.org.id)
     const scope = scopeOf(f.admin, f.meta)
@@ -833,7 +856,7 @@ describe('the cut and the cap', () => {
 describe('which rows are judged', () => {
   it('reads no task of a row outside the answer sorted by Progress, and every row sorted by Delayed', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const subs: Doc<'projects'>[] = []
     for (let i = 0; i < 28; i++)
       subs.push(await subOf(t, f.meta, `Part ${String(i).padStart(2, '0')}`))
@@ -866,7 +889,7 @@ describe('which rows are judged', () => {
 describe('continuation', () => {
   it('moves a row whose Delayed changed in the next answer, with no row twice', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const third = await subOf(t, f.meta, 'Third')
     for (const p of [f.sub, f.sub2])
       await t.run((ctx) => ctx.db.patch(p._id, { track_delay: true }))
@@ -903,7 +926,7 @@ describe('owner reads', () => {
    * load passes the owner reader's bounds. */
   async function ownersCase(order: 'forwards' | 'backwards') {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const people = byIdOrder(await plantPeople(t, f.org.id, 3))
     const made = order === 'forwards' ? people : [...people].reverse()
     const subs = new Map<string, Doc<'projects'>>()
@@ -944,7 +967,7 @@ describe('owner reads', () => {
 
   it("can turn a row's Delayed unknown as Load more judges more rows: a guest's by the owner order, staff's by the budget", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (const p of [f.sub, f.sub2])
       await t.run((ctx) => ctx.db.patch(p._id, { track_delay: true }))
     const [low, high] = byIdOrder([f.user, f.admin]) as [Doc<'profiles'>, Doc<'profiles'>]
@@ -997,7 +1020,7 @@ describe('owner reads', () => {
  * and a task of theirs in PCB of that title. */
 async function hiddenCase(title: string) {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const me = await plantSeat(t, {
     org_id: f.org.id,
     org_role: 'user',
@@ -1157,7 +1180,7 @@ function expectWhole(answer: HealthAnswer, sort: HealthSort) {
  * `subs` sub-projects through their teams' shares, and nine more owners. */
 async function sharedCase(o: { tops: number; subs: number | ((top: number) => number) }) {
   const t = newT({ transactionLimits: true })
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const me = await plantSeat(t, {
     org_id: f.org.id,
     org_role: 'user',

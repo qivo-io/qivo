@@ -36,7 +36,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
 
@@ -136,7 +136,7 @@ const namesOf = (rows: readonly { name: string }[]) => rows.map((r) => r.name).s
  * who holds User on TBED. `keyed` keys every name and stamps the
  * organization ready; call it once everything is planted. */
 async function base(t: T = newT()) {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const person = (name: string, extra: Partial<Doc<'profiles'>> = {}) =>
     plantSeat(t, { org_id: f.org.id, name, accepted_at: NOW, auth_user_id: uuid(), ...extra })
   const grant = (project: Doc<'projects'>, who: Doc<'profiles'>, level: GrantLevel = 'user') =>
@@ -1004,7 +1004,13 @@ describe("the pickers inside Convex's limits", () => {
   /* A top-level project with `subs` sub-projects, keyed, and `archived`
    * more archived ones. */
   async function projectWith(t: T, f: OrgFixture, name: string, subs: number, archived = 0) {
-    const meta = await plantProject(t, { org_id: f.org.id, name, name_key: nameKey(name) })
+    // led by the admin, who sees it by that alone
+    const meta = await plantProject(t, {
+      org_id: f.org.id,
+      name,
+      name_key: nameKey(name),
+      lead_id: f.admin.id,
+    })
     const all: Doc<'projects'>[] = []
     for (let i = 0; i < subs + archived; i++)
       all.push(
@@ -1034,7 +1040,7 @@ describe("the pickers inside Convex's limits", () => {
 
   it('reads the owner and recipient lists among 1,000 people, 995 of them in a team sharing the sub-project', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const platform = await keyedTeam(t, f, 'Platform')
     const ops = await keyedTeam(t, f, 'Ops')
     await t.run((ctx) =>
@@ -1095,7 +1101,7 @@ describe("the pickers inside Convex's limits", () => {
 
   it('reads the owners among 1,000 people of whom 3 hold Edit by grants, and canOwn with 100 ids', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const atlas = await projectWith(t, f, 'Atlas', 3)
     const platform = await keyedTeam(t, f, 'Platform')
     const ops = await keyedTeam(t, f, 'Ops')
@@ -1111,7 +1117,7 @@ describe("the pickers inside Convex's limits", () => {
       (ctx) => taskOwnersOf(ctx, f.admin, { issue_id: issue.id, field: 'assignee' }),
       true,
     )
-    // the admin, while levelsFrom gives admins Lead, and the three
+    // the admin, who leads Atlas, and the three
     expect(first.batch.rows.map((r) => r.id)).toEqual([f.admin.id, ...keepers.map((p) => p.id)])
     const ids = crowd.slice(95, 195).map((p) => p.id)
     expect(ids).toHaveLength(BY_IDS_MAX)
@@ -1130,7 +1136,7 @@ describe("the pickers inside Convex's limits", () => {
 
   it('reads both lists on a sub-project shared with five teams under a top-level project shared with five others', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const teams: string[] = []
     for (let i = 0; i < 10; i++) teams.push(await keyedTeam(t, f, `Crew ${i}`))
     await t.run(async (ctx) => {
@@ -1165,7 +1171,7 @@ describe("the pickers inside Convex's limits", () => {
 
   it('reads the reviewers of a subtask whose parent sits on a top-level project of 30 live and 40 archived sub-projects', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const atlas = await projectWith(t, f, 'Atlas', 30, 40)
     const platform = await keyedTeam(t, f, 'Platform')
     const ops = await keyedTeam(t, f, 'Ops')
@@ -1193,13 +1199,14 @@ describe("the pickers inside Convex's limits", () => {
       (ctx) => taskOwnersOf(ctx, f.user, { issue_id: subtask.id, field: 'reviewer' }),
       true,
     )
-    // the admin, the lead and Rae; Pia and the guest do not see Atlas
+    // the admin, who leads Atlas, the lead and Rae; Pia and the guest do
+    // not see Atlas
     expect(namesOf(first.batch.rows)).toEqual(['Rae', 'admin', 'user'])
   }, 60_000)
 
   it('reads the recipients and the gate of a task stored on a top-level project of 30 live and 40 archived sub-projects', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const atlas = await projectWith(t, f, 'Atlas', 30, 40)
     const platform = await keyedTeam(t, f, 'Platform')
     const ops = await keyedTeam(t, f, 'Ops')

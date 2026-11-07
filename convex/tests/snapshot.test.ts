@@ -3,11 +3,14 @@
  * that snapshot.threadHistory answers beside a task's comments.
  *
  * Extra scenery beside withOrg's mini-Testbed:
+ * - the admin holds User grants on TBED and Skunkworks, so they see every
+ *   project of the organization through ordinary access, as admin status
+ *   gives no level (lib/access.ts levelUnder)
  * - hiddenSub: a sub under f.hidden (lead: user) — invisible to guest/viewer,
- *   visible to admin (org admin) and user (lead)
+ *   visible to admin (by their grant) and user (lead)
  * - hidden2 / hidden2Sub: a second hidden family led by ADMIN — the project
  *   plain staff `user` cannot see, which is what the staff-anonymization
- *   assertions need (admin sees everything, so f.hidden can't test it)
+ *   assertions need (the admin sees everything, so f.hidden can't test it)
  * - issueVis: scheduled+estimated work in f.sub, the identified control row */
 
 /// <reference types="vite/client" />
@@ -35,6 +38,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
 
@@ -55,6 +59,14 @@ beforeEach(async () => {
   t = newT()
   f = await withOrg(t)
   hiddenSub = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.hidden.id })
+  await t.run(async (ctx) => {
+    for (const project of [f.meta, f.hidden])
+      await ctx.db.insert('project_access', {
+        project_id: project.id,
+        profile_id: f.admin.id,
+        level: 'user',
+      })
+  })
   hidden2 = await plantProject(t, { org_id: f.org.id, lead_id: f.admin.id })
   hidden2Sub = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: hidden2.id })
   issueVis = await plantIssue(t, {
@@ -113,7 +125,10 @@ describe('workspace scoping', () => {
     const projectIds = snap.projects.map((p) => p.id)
     expect(projectIds.sort()).toEqual([f.meta.id, f.sub.id, f.sub2.id].sort())
     expect(snap.access.every((a) => a.project_id === f.meta.id)).toBe(true)
-    expect(snap.access.map((a) => a.profile_id).sort()).toEqual([f.guest.id, f.viewer.id].sort())
+    // with the admin's own grant
+    expect(snap.access.map((a) => a.profile_id).sort()).toEqual(
+      [f.guest.id, f.viewer.id, f.admin.id].sort(),
+    )
     expect(snap.issues.map((i) => i.id)).toContain(issueVis.id)
     expect(snap.issues.map((i) => i.id)).not.toContain(issueHid.id)
     expect(snap.auth_user_id).toBe(f.guest.auth_user_id)
@@ -2199,7 +2214,7 @@ describe('the task window history near the read limits', () => {
     // a limit of 256 KiB on the bytes a transaction reads, which 40 tasks of
     // about 8 KB pass as 40 tasks of 500 KB passed the real 16 MiB
     const big = newT({ transactionLimits: { bytesRead: 256 * 1024 } })
-    const g = await withOrg(big)
+    const g = await withReadingAdmin(big)
     const task = await plantIssue(big, { org_id: g.org.id, project_id: g.sub.id })
     const description = 'Notes from the review of the board layout and the open questions. '.repeat(
       120,

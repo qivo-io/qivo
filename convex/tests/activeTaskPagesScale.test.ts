@@ -43,24 +43,27 @@ const CATALOGUE = {
 }
 
 describe('active pages at the design size', () => {
-  it('pages an admin over a catalogue of 2,000 projects to the budget, a search that finds nothing included, and a guest', async () => {
+  it('pages the lead of every programme over a catalogue of 2,000 projects to the budget, a search that finds nothing included, and a guest', async () => {
     const e = await pageOrg(CATALOGUE)
-    const before = await readBefore(e.t, e.admin.id)
-    console.log('active page figures, an admin before the page:', JSON.stringify(before))
-    const admin = await readPage(e.t, { callerId: e.admin.id, limit: '200' })
-    record('an admin over 700 live projects, 200 rows', admin.figures)
-    expect(admin.figures.rows).toBe(200)
-    expect(admin.figures.next).toBe(true)
+    const before = await readBefore(e.t, e.user.id)
+    console.log(
+      'active page figures, the lead of every programme before the page:',
+      JSON.stringify(before),
+    )
+    const lead = await readPage(e.t, { callerId: e.user.id, limit: '200' })
+    record('the lead of 700 live projects, 200 rows', lead.figures)
+    expect(lead.figures.rows).toBe(200)
+    expect(lead.figures.next).toBe(true)
     // a search that matches nothing reads every text it passes, so it ends
     // at the page's budget with a cursor
-    const rare = await readPage(e.t, { callerId: e.admin.id, limit: '200', search: 'quokka' })
-    record('an admin, a search that finds nothing', rare.figures)
+    const rare = await readPage(e.t, { callerId: e.user.id, limit: '200', search: 'quokka' })
+    record('the lead, a search that finds nothing', rare.figures)
     expect(rare.figures.rows).toBe(0)
     expect(rare.figures.next).toBe(true)
     // the guest of withOrg reads TBED alone
     const guest = await readPage(e.t, { callerId: e.guest.id, limit: '200' })
     record('a guest', guest.figures)
-    for (const page of [admin, rare, guest]) inside(page.figures)
+    for (const page of [lead, rare, guest]) inside(page.figures)
   })
 
   it('pages a member of 60 sub-projects over a catalogue of 2,000 projects, with a search and a second page', async () => {
@@ -120,18 +123,18 @@ describe('active pages at the design size', () => {
     for (const page of [member, rare, searched]) inside(page.figures)
   })
 
-  it('pages an admin and a member in an organization of 1,000 people', async () => {
+  it('pages the lead of every programme and a member in an organization of 1,000 people', async () => {
     // 993 people beside withOrg's and the member, about 1,000
     const e = await pageOrg({ tops: 7, subs: 20, people: 993, tasks: 600, archived: 0 })
     const before = await readBefore(e.t, e.member.id)
     console.log('active page figures, 1,000 people before the page:', JSON.stringify(before))
-    const admin = await readPage(e.t, { callerId: e.admin.id, limit: '200' })
-    record('an admin of 1,000 people, 200 rows', admin.figures)
-    expect(admin.figures.rows).toBe(200)
+    const lead = await readPage(e.t, { callerId: e.user.id, limit: '200' })
+    record('the lead, of 1,000 people, 200 rows', lead.figures)
+    expect(lead.figures.rows).toBe(200)
     const member = await readPage(e.t, { callerId: e.member.id, limit: '200' })
     record('a member of 1,000 people, 200 rows', member.figures)
     expect(member.figures.rows).toBe(200)
-    for (const page of [admin, member]) inside(page.figures)
+    for (const page of [lead, member]) inside(page.figures)
   })
 
   it('pages a member in 5 teams', async () => {
@@ -229,9 +232,9 @@ describe('active pages at the design size', () => {
     )
   })
 
-  it('pages an admin past the oldest active tasks of an archived sub-project to the end, reading none of them', async () => {
+  it('pages the lead of every programme past the oldest active tasks of an archived sub-project to the end, reading none of them', async () => {
     const e = await pageOrg({ tops: 7, subs: 20, people: 20, tasks: 600, archived: 0 })
-    const page = () => readPage(e.t, { callerId: e.admin.id, limit: '200' })
+    const page = () => readPage(e.t, { callerId: e.user.id, limit: '200' })
     const without = await page()
     // 300 open tasks, older than every other, that a sub-project archived
     // since keeps active
@@ -250,7 +253,7 @@ describe('active pages at the design size', () => {
         created_at: new Date(Date.parse('2024-01-01T00:00:00.000Z') + i * 60_000).toISOString(),
       })
     const withShelf = await page()
-    record('an admin, an archived sub-project holding the oldest 300', withShelf.figures)
+    record('the lead, an archived sub-project holding the oldest 300', withShelf.figures)
     // the page reads the shelf's project row and none of its tasks
     expect(withShelf.figures.documents - without.figures.documents).toBeLessThan(5)
     expect(withShelf.page.tasks.map((task) => task.id)).toEqual(
@@ -260,7 +263,7 @@ describe('active pages at the design size', () => {
     let pages = 0
     const seen: string[] = []
     do {
-      const got = await readPage(e.t, { callerId: e.admin.id, limit: '200', cursor })
+      const got = await readPage(e.t, { callerId: e.user.id, limit: '200', cursor })
       seen.push(...got.page.tasks.map((task) => task.id))
       cursor = got.page.next_cursor ?? undefined
       pages++
@@ -281,10 +284,10 @@ describe('active pages at the design size', () => {
       archived: 0,
       owners: 25,
     })
-    const admin = await readPage(e.t, { callerId: e.admin.id, limit: '200' })
-    record('an admin, 200 rows, owners of about 100 tasks', admin.figures)
-    inside(admin.figures)
-    const delays = admin.page.tasks.map((task) => (task.delay as { status: string } | null)?.status)
+    const lead = await readPage(e.t, { callerId: e.user.id, limit: '200' })
+    record('the lead, 200 rows, owners of about 100 tasks', lead.figures)
+    inside(lead.figures)
+    const delays = lead.page.tasks.map((task) => (task.delay as { status: string } | null)?.status)
     const judged = delays.filter((status) => status !== undefined && status !== 'unavailable')
     const unavailable = delays.filter((status) => status === 'unavailable')
     console.log(

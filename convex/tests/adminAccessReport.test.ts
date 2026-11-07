@@ -271,11 +271,12 @@ describe('the projects phase', () => {
   it('reports every in-tree live project as leaving an admin with no grant, share or lead', async () => {
     const t = newT()
     const f = await withOrg(t)
-    // the fixture's admin is a plain member of a team that shares nothing
+    // the fixture's admin is a plain member of a team that shares nothing;
+    // the other organization's admin leads its project, which they keep
     const findings = await findingsOf(t, 'projects')
     expect(lines(findings)).toEqual(
-      lines([
-        ...[f.meta, f.sub, f.sub2, f.hidden].map((p) => ({
+      lines(
+        [f.meta, f.sub, f.sub2, f.hidden].map((p) => ({
           kind: 'leaves' as const,
           org_id: f.org.id,
           profile_id: f.admin.id,
@@ -283,19 +284,11 @@ describe('the projects phase', () => {
           key: p.key,
           top_level_id: p.parent_id ?? p.id,
         })),
-        {
-          kind: 'leaves',
-          org_id: f.otherOrg.id,
-          profile_id: f.otherAdmin.id,
-          project_id: f.otherProject.id,
-          key: f.otherProject.key,
-          top_level_id: f.otherProject.id,
-        },
-      ]),
+      ),
     )
     const pages = await pagesOf(t, 'projects')
     expect(pages.reduce((n, page) => n + page.checked, 0)).toBe(5)
-    expect(pages.reduce((n, page) => n + page.kept, 0)).toBe(0)
+    expect(pages.reduce((n, page) => n + page.kept, 0)).toBe(1)
   })
 
   it('keeps what leadership, grants, team shares and navigation reach', async () => {
@@ -332,7 +325,8 @@ describe('the projects phase', () => {
     const pages = await pagesOf(t, 'projects')
     // five admins of the organization on four projects, and the other's one
     expect(pages.reduce((n, page) => n + page.checked, 0)).toBe(5 * 4 + 1)
-    expect(pages.reduce((n, page) => n + page.kept, 0)).toBe(3 + 1 + 1)
+    // and the other organization's admin keeps the project they lead
+    expect(pages.reduce((n, page) => n + page.kept, 0)).toBe(3 + 1 + 1 + 1)
   })
 
   it('leaves out inactive admins, other roles, projects outside a meta tree and archived projects', async () => {
@@ -366,17 +360,15 @@ describe('the projects phase', () => {
     await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: archived.id })
 
     const findings = await findingsOf(t, 'projects')
-    expect(new Set(findings.map((finding) => finding.profile_id))).toEqual(
-      new Set([f.admin.id, f.otherAdmin.id]),
-    )
+    // the other organization's admin leads its project, so only the
+    // fixture's admin has findings
+    expect(new Set(findings.map((finding) => finding.profile_id))).toEqual(new Set([f.admin.id]))
     expect(await projectKinds(t, f.admin.id)).toEqual(
       Object.fromEntries([f.meta, f.sub, f.sub2, f.hidden].map((p) => [p.id, 'leaves'])),
     )
-    expect(findings).toHaveLength(5)
+    expect(findings).toHaveLength(4)
     const all = await t.action(report.run, {})
-    expect(all.findings.filter((finding) => finding.profile_id !== f.admin.id)).toEqual([
-      expect.objectContaining({ kind: 'leaves', profile_id: f.otherAdmin.id }),
-    ])
+    expect(all.findings.filter((finding) => finding.profile_id !== f.admin.id)).toEqual([])
   })
 
   it('leaves a top-level project with more sub-projects than a page reads unchecked', async () => {
@@ -905,7 +897,7 @@ describe('paging', () => {
       expect(pages).toHaveLength(1)
       whole.set(phase, pages[0].findings)
     }
-    expect(lines(whole.get('projects') ?? [])).toHaveLength(9)
+    expect(lines(whole.get('projects') ?? [])).toHaveLength(8)
     expect(lines(whole.get('work') ?? [])).toHaveLength(22)
     expect(lines(whole.get('machine') ?? [])).toHaveLength(8)
     const cursors: string[] = []
@@ -977,10 +969,10 @@ describe('paging', () => {
           const findings = await findingsOf(t, phase, size)
           expect(findings.filter((found) => found.org_id === f.org.id)).toEqual([orgFinding])
         }
-        // the other organization's admin is still judged
-        expect(await findingsOf(t, 'projects', size)).toContainEqual(
-          expect.objectContaining({ kind: 'leaves', profile_id: f.otherAdmin.id }),
-        )
+        // the other organization's admin is still judged, and keeps the
+        // project they lead
+        const pages = await pagesOf(t, 'projects', size)
+        expect(pages.reduce((n, page) => n + page.kept, 0)).toBe(1)
       }
     } finally {
       ADMINS.most = 1_000
@@ -1028,10 +1020,11 @@ describe('paging', () => {
     const result = await t.action(report.run, { page_size: 1 })
     expect(result.failed).toEqual(expect.any(String))
     // what the pages before it found is kept: the admin keeps none of the
-    // four projects before it, and the other organization's admin theirs
+    // four projects before it, and the other organization's admin keeps the
+    // one they lead, a page of its own
     expect(result.checked).toBeGreaterThanOrEqual(4)
-    expect(result.counts.kept).toBe(0)
-    expect(result.findings).toHaveLength(result.checked)
+    expect(result.counts.kept).toBeLessThanOrEqual(1)
+    expect(result.findings).toHaveLength(result.checked - result.counts.kept)
     const at = JSON.parse(result.cursor ?? 'null')
     expect(at).toMatchObject({ phase: 'projects', org: f.org.id })
     // the page it names fails again, and the one before it did not

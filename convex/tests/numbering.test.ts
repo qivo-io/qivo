@@ -18,7 +18,7 @@ import {
   plantProject,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 const issueRow = (t: T, id: string): Promise<Doc<'issues'>> =>
@@ -43,7 +43,7 @@ const createAs = (t: T, f: OrgFixture, extra: Partial<CreateIssueArgs> = {}) =>
 describe('issue numbering', () => {
   it('numbers are dense per org, and a refused duplicate uuid consumes nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sharedId = uuid()
     const a = await createAs(t, f, { id: sharedId })
     const b = await createAs(t, f)
@@ -62,7 +62,7 @@ describe('issue numbering', () => {
 
   it('numbering stays dense from the stored counters and never writes the organization row', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 41 tasks in
     await t.run((ctx) => patchCounters(ctx, f.org.id, { next_issue_num: 41 }))
     const before = await t.run((ctx) => ctx.db.get(f.org._id))
@@ -86,7 +86,7 @@ describe('issue numbering', () => {
 
   it('num is immutable: no public patch carries it, edits keep it, and the sentence is pinned', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const created = await createAs(t, f)
     await expect(
       as(t, f.admin).mutation(api.issues.update, {
@@ -112,7 +112,7 @@ describe('issue numbering', () => {
 
   it('move keeps the num: the QN key survives a project change', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const created = await createAs(t, f)
     const moved = await as(t, f.admin).mutation(api.issues.move, {
       org_id: f.org.id,
@@ -126,7 +126,7 @@ describe('issue numbering', () => {
 
   it('organizations count independently', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const otherSub = await plantProject(t, {
       org_id: f.otherOrg.id,
       type: 'project',

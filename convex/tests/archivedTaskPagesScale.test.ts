@@ -110,8 +110,9 @@ type Lister = { who: string; caller: Doc<'profiles'>; project: string }
 
 /* An organization of `sizes`, the catalogue by default, with archived tasks
  * in the two families the pages list: the three sub-projects of the first
- * top-level project, which the member and the admin list, and FW and PCB
- * under TBED, which the guest reads alone. */
+ * top-level project, which the member and the admin list, the admin through
+ * a User grant on it, as admin status gives no access to project work, and
+ * FW and PCB under TBED, which the guest reads alone. */
 async function archivedOrg(
   sizes: PageOrgSizes = CATALOGUE,
 ): Promise<{ e: PageOrg; listers: Lister[] }> {
@@ -122,6 +123,13 @@ async function archivedOrg(
   expect(e.readable).toEqual(expect.arrayContaining(family))
   await plantArchive(e, family)
   await plantArchive(e, [e.sub, e.sub2])
+  await e.t.run((ctx) =>
+    ctx.db.insert('project_access', {
+      project_id: first.id,
+      profile_id: e.admin.id,
+      level: 'user',
+    }),
+  )
   const listers = [
     { who: 'a member', caller: e.member, project: first.id },
     { who: 'a guest', caller: e.guest, project: e.meta.id },

@@ -6,7 +6,16 @@ import type { Id } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
 import { LIMITS } from '../lib/limits'
 import { PANORAMA_MAX_BYTES } from '../lib/panorama'
-import { as, expectRefusal, NOW, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
+import {
+  as,
+  expectRefusal,
+  NOW,
+  newT,
+  plantIssue,
+  type T,
+  uuid,
+  withReadingAdmin,
+} from './helpers.setup'
 import { plantTicket } from './uploadTickets.setup'
 
 declare class Blob {
@@ -106,7 +115,7 @@ afterEach(() => {
 describe('operator-only standalone image upload', () => {
   it('refuses anonymous, organization-admin and revoked-operator callers on all public surfaces', async () => {
     const { t, op, opRow } = await setup()
-    const org = await withOrg(t)
+    const org = await withReadingAdmin(t)
     const sid = await store(t)
     await t.run((ctx) => ctx.db.delete(opRow))
     for (const caller of [t, as(t, org.admin), op]) {
@@ -360,7 +369,7 @@ describe('operator-only standalone image upload', () => {
 
   it('refuses claimed attachment, avatar and background IDs without deleting those files', async () => {
     const { t, op } = await setup()
-    const org = await withOrg(t)
+    const org = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: org.org.id, project_id: org.sub.id })
     const attached = await store(t, jpeg(1))
     const avatar = await store(t, jpeg(2))

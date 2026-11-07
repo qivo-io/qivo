@@ -46,7 +46,7 @@ import {
   type T,
   TODAY,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { withReach } from './projectReach.setup'
 
@@ -214,7 +214,7 @@ describe('issues.archivedPage', () => {
 
   it('lists a project family’s archived tasks, newest archived first, ties newest created first', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'active' })
     const early = await plantIssue(t, {
       org_id: f.org.id,
@@ -245,7 +245,7 @@ describe('issues.archivedPage', () => {
 
   it('pages 230 tasks over three sub-projects once each, 25 a page, across a tie of 40', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const doc = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
     const subs = [f.sub.id, f.sub2.id, doc.id]
     // interleaved stamps, then 40 that share one moment from task 80 to 119
@@ -274,7 +274,7 @@ describe('issues.archivedPage', () => {
 
   it('answers rows with their place, owner and Restore, without descriptions or parents', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const gone = await plantSeat(t, { org_id: f.org.id, name: 'Gone' })
     const group = await plantIssue(t, {
       org_id: f.org.id,
@@ -462,7 +462,7 @@ describe('issues.archivedPage', () => {
 
   it('searches every field of the task search rule, as REST does, with either label read', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await grantAgent(t, f)
     const x = await searchable(t, f)
     const family = [f.meta.id, f.sub.id, f.sub2.id]
@@ -505,7 +505,7 @@ describe('issues.archivedPage', () => {
 
   it('keeps label names in the organization’s order for REST’s wildcard, with either label read', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const label = async (name: string) => {
       const id = uuid()
       await t.run(async (ctx) => {
@@ -546,7 +546,7 @@ describe('issues.archivedPage', () => {
 
   it('reads only the profiles of the tasks a search judges, and each task’s labels past the scan', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 995 people, with withOrg's five the organization's 1,000, and 150
     // labels, past a scan lowered to 100
     const people = await t.run(async (ctx) => {
@@ -631,7 +631,7 @@ describe('issues.archivedPage', () => {
 
   it('reads 1,000 labels at the longest names in one range, under 300 KiB', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run(async (ctx) => {
       for (let i = 0; i < ARCHIVE_LABELS.scan; i++) {
         const name = `${String(i).padStart(4, '0')} ${'w'.repeat(LIMITS.labelName.max - 5)}`
@@ -665,7 +665,7 @@ describe('issues.archivedPage', () => {
 
   it('ends a search page at its scan budget and finds every match once', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // every 30th of 300 tasks holds the word
     const ids = await plantMany(t, f, 300, (i) => ({
       project_id: i % 2 === 0 ? f.sub.id : f.sub2.id,
@@ -688,7 +688,7 @@ describe('issues.archivedPage', () => {
 
   it('loads a page and a search of 2,500 archived tasks inside one transaction', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const label = uuid()
     await t.run(async (ctx) => {
       await ctx.db.insert('labels', {
@@ -731,7 +731,7 @@ describe('issues.archivedPage', () => {
       (f: OrgFixture) => allOf(f.org.id),
     ]) {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       await plantMany(t, f, 25, (i) => ({ project_id: f.sub.id, archived_at: day(1 + (i % 9)) }))
       const expected = (await archiveOrder(t, f.org.id, [f.sub.id])).map((row) => row.id)
       const restore = expected[10]
@@ -756,7 +756,7 @@ describe('issues.archivedPage', () => {
 
   it('answers an empty last page alike for ids the caller cannot see, and without a seat', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (const project_id of [f.hidden.id, f.otherProject.id]) {
       await plantIssue(t, {
         org_id: project_id === f.hidden.id ? f.org.id : f.otherOrg.id,
@@ -785,7 +785,7 @@ describe('issues.archivedPage', () => {
 
   it('never shows an out-of-scope task in the cursor of an admin page that reads the whole archive', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // an archived top-level project, whose tasks the page leaves out, archived most recently
     const secret = await plantProject(t, {
       org_id: f.org.id,
@@ -842,7 +842,7 @@ describe('issues.archivedPage', () => {
 
   it('refuses a cursor from another scope, organization, kind or version', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (let d = 1; d <= 3; d++) {
       await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: day(d) })
       await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, archived_at: day(d) })
@@ -887,13 +887,21 @@ describe('issues.archivedPage', () => {
 
   it('merges named projects of different families in archive order, each id once', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
+    // the admin reads the second family through a grant, as TBED's
     const other = await plantProject(t, { org_id: f.org.id, type: 'meta' })
     const otherSub = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
       parent_id: other.id,
     })
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: other.id,
+        profile_id: f.admin.id,
+        level: 'user',
+      }),
+    )
     const shelved = await plantProject(t, {
       org_id: f.org.id,
       type: 'meta',
@@ -930,7 +938,7 @@ describe('issues.archivedPage', () => {
 
   it('refuses a family past its sub-project bound for anyone but an admin, who reads it whole', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the guest sees FW and PCB, not this third sub-project of TBED
     const sibling = await plantHiddenSibling(t, f, f.guest)
     const doc = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
@@ -991,7 +999,7 @@ describe('issues.archivedPage', () => {
 
   it('lists for All projects every archived task of the live projects the caller sees, only', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const ungranted = await plantPerson(t, f)
     const shelvedSub = await plantProject(t, {
       org_id: f.org.id,
@@ -1049,7 +1057,7 @@ describe('issues.archivedPage', () => {
 
   it('lists only the sub-projects a guest can see under the top-level project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const fw = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: day(3) })
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, archived_at: day(4) })
     const reader = await t.run(async (ctx) => {
@@ -1076,7 +1084,7 @@ describe('issues.archivedPage', () => {
 
   it('answers a member, a Viewer and a guest alike with or without archived tasks they cannot see', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a member with a grant on TBED, in the Hardware team; the Viewer and
     // the guest hold grants on TBED too
     const member = await plantPerson(t, f)
@@ -1231,7 +1239,7 @@ describe('issues.archivedPage', () => {
 
   it('answers a family the caller cannot see past the bound as it answers an unknown id', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // Skunkworks gets three sub-projects, none of which the guest can see
     const subs: Doc<'projects'>[] = []
     for (let i = 0; i < 3; i++)
@@ -1253,7 +1261,7 @@ describe('issues.archivedPage', () => {
 
   it('counts only live sub-projects toward the bound, with or without their archive state', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // five archived sub-projects beside TBED's two live ones
     for (let i = 0; i < 5; i++)
       await plantProject(t, {
@@ -1301,7 +1309,7 @@ describe('issues.archivedPage', () => {
 
   it('answers Restore and owners on All projects for a Viewer and a guest, and past the bound for an admin', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await withReach(t)
     const owned = await plantIssue(t, {
       org_id: f.org.id,
@@ -1342,7 +1350,7 @@ describe('issues.archivedPage', () => {
 
   it('leaves out a task stored in a top-level project its caller sees only to reach a sub-project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the guest's grant moves from TBED onto FW
     await t.run(async (ctx) => {
       const grant = await ctx.db
@@ -1384,7 +1392,7 @@ describe('issues.archivedPage', () => {
 
   it('counts every reach row it reads toward its bound, navigation-only and repeated ones too', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the guest's grant moves from TBED onto FW, and they get one on a sub-project
     // of another top-level project: two root rows for navigation only and two child rows
     const other = await plantProject(t, { org_id: f.org.id, type: 'meta' })
@@ -1432,7 +1440,7 @@ describe('issues.archivedPage', () => {
 
   it('counts a project once toward the bound when the seat and a team both reach it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a member with grants of their own on FW and PCB, in the Hardware team,
     // which gets a share on TBED: the seat's child rows come before the
     // team's root row, whose family holds FW and PCB again
@@ -1466,7 +1474,7 @@ describe('issues.archivedPage', () => {
 
   it('refuses a scope whose projects’ newest tasks with long text do not fit one page side by side', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 28 more sub-projects of TBED, 30 in all, as many as the design size
     // puts under one project
     const subs = [f.sub.id, f.sub2.id]
@@ -1564,7 +1572,7 @@ describe('issues.archivedPage', () => {
 
   it('answers each organization of a login with two seats through its seat there', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the user also holds a guest seat in Other, with Viewer on one of two sub-projects
     const away = await plantProject(t, {
       org_id: f.otherOrg.id,
@@ -1618,7 +1626,7 @@ describe('issues.archivedPage', () => {
 
   it('leaves out a sub-project archived on its own', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const shelved = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
@@ -1644,7 +1652,7 @@ describe('issues.archivedPage', () => {
 
   it('refuses a malformed cursor or limit, and a search past its limit', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const scope = scopeOf(f.org.id, f.meta.id)
     // a plain position is refused too, so a caller cannot choose where a page starts
     for (const cursor of [
@@ -1688,7 +1696,7 @@ describe('issues.archivedPage', () => {
 
   it('refuses a call without a scope or with project_id, and project ids past the bound', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a call needs a scope, and project_id is no argument
     for (const args of [
       {},
@@ -1709,7 +1717,7 @@ describe('issues.archivedPage', () => {
 
   it('answers an All projects search of 1,500 archived tasks inside Convex’s limits', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 995 people, with withOrg's five the organization's 1,000, and 1,100
     // labels, past ARCHIVE_LABELS.scan
     await t.run(async (ctx) => {
@@ -1824,7 +1832,7 @@ describe('a check of the caller access that a bound stops', () => {
 
   it('refuses the page with its reason, and one bound up answers as with the default bounds', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a member of a team sharing FW, with an archived task there
     const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
     await t.run(async (ctx) => {
@@ -1856,7 +1864,7 @@ describe('a check of the caller access that a bound stops', () => {
     // each, pass teamReads
     Object.assign(OWN_READS, { projectShares: 4, rows: 10, teamReads: 20 })
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
     const meta = await plantProject(t, { org_id: f.org.id, name: 'Wide family' })
     const subs: Doc<'projects'>[] = []

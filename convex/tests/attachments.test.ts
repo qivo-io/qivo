@@ -32,7 +32,7 @@ import {
   reap,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
 import { plantTicket } from './uploadTickets.setup'
@@ -130,7 +130,7 @@ const attachAs = async (
 
 const setup = async () => {
   const t = newT()
-  const fx = await withOrg(t)
+  const fx = await withReadingAdmin(t)
   const issue = await plantIssue(t, { org_id: fx.org.id, project_id: fx.sub.id })
   return { t, fx, issue }
 }

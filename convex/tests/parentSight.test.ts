@@ -26,7 +26,7 @@ import {
   plantIssue,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { plantNorthstar } from './northstar.setup'
 
@@ -41,7 +41,7 @@ const issueRow = (t: T, id: string): Promise<Doc<'issues'>> =>
   })
 
 async function scene(t: T) {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const hiddenSub = await plantHiddenSibling(t, f, f.guest)
   const base = { org_id: f.org.id, project_id: f.sub.id }
   // an epic the guest cannot see, a visible feature under it, a task below,

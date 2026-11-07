@@ -18,7 +18,7 @@ import {
   plantIssue,
   plantProject,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 const REPORTER_SENTENCE = /^a task's reporter must be a user who can see its project$/
@@ -29,7 +29,7 @@ const ASSIGNEE_SENTENCE =
 describe('reporter attribution', () => {
   it('browser creation sets the authenticated actor as reporter', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const row = await as(t, f.admin).mutation(api.issues.create, {
       org_id: f.org.id,
       id: uuid(),
@@ -43,7 +43,7 @@ describe('reporter attribution', () => {
 
   it('machine creation can credit a different visible profile, including an inactive viewer', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run(async (ctx) => {
       await ctx.db.patch(f.viewer._id, { active: false })
     })
@@ -78,7 +78,7 @@ describe('reporter attribution', () => {
 
   it('a visible agent is a valid reporter, including when it is the default actor', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run(async (ctx) => {
       await ctx.db.insert('project_access', {
         project_id: f.meta.id,
@@ -106,7 +106,7 @@ describe('reporter attribution', () => {
 
   it('refuses reporter changes and clears atomically, including a repeated current value', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -139,7 +139,7 @@ describe('reporter attribution', () => {
 
   it('refuses hidden, foreign and nonexistent reporters without consuming a task number', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (const reporter_id of [f.agent.id, f.otherAdmin.id, uuid()]) {
       await expectRefusal(
         t.run(async (ctx) =>
@@ -168,7 +168,7 @@ describe('reporter attribution', () => {
 
   it('refuses an explicit null reporter instead of creating unknown attribution', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const args = {
       id: uuid(),
       project_id: f.sub.id,
@@ -186,7 +186,7 @@ describe('reporter attribution', () => {
 
   it('also refuses an otherwise assignable same-org user who cannot see the project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
 
     await expectRefusal(
@@ -204,7 +204,7 @@ describe('reporter attribution', () => {
 
   it('preserves reporter through access loss and moves while enforcing destination access for assignees', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const hiddenSub = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',

@@ -40,7 +40,7 @@ import {
   shareCreationTime,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 const DEFAULT_PICKER = structuredClone(RELATION_PICKER)
@@ -138,7 +138,7 @@ const linkRow = (
 describe('arguments', () => {
   it('refuses an unknown picker, a search past its limit and every cursor but an earlier batch of the same picker, task, search and person', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub)
     const other = await task(t, f, f.sub)
     for (let i = 0; i < 3; i++) await task(t, f, f.sub2, { title: `Board ${i}` })
@@ -200,7 +200,7 @@ describe('arguments', () => {
 describe('access', () => {
   it('answers one unavailable for every task the reader may not open, for each picker', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const shelved = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
@@ -240,7 +240,7 @@ describe('access', () => {
 
   it('answers access_unchecked where a bound stops the check of the family, unavailable where it stops the opened task, and as usual one bound up', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a user grant on FW, which no team shares, and a team that shares PCB
     const me = await seat(t, f)
     await t.run(async (ctx) => {
@@ -279,7 +279,7 @@ describe('access', () => {
 
   it("answers a typed task ID whose project's check a bound stops as a hidden one, and finds its task in all your projects", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a user grant on TBED, which needs no team share, and a team that
     // shares Skunkworks
     const me = await seat(t, f)
@@ -329,7 +329,7 @@ describe('access', () => {
 
   it('refuses Parent and Subtasks to a reader without Edit on the task, whose Linked tasks lists only the projects they edit', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // Viewer on FW and User on PCB, nothing on TBED itself
     const me = await seat(t, f)
     await t.run(async (ctx) => {
@@ -440,7 +440,7 @@ describe('access', () => {
       let withRows = 0
       for (const [name, plant] of SHAPES) {
         const t = newT()
-        const f = await withOrg(t)
+        const f = await withReadingAdmin(t)
         const me = await seat(t, f, role)
         await t.run((ctx) => plant(ctx, f, me).then(() => undefined))
         const archived = await t.run(async (ctx) => {
@@ -481,9 +481,8 @@ describe('access', () => {
         }
       }
       // the shapes give every role tasks to open and to offer
-      expect(opened).toBeGreaterThanOrEqual(
-        role === 'admin' ? 4 * SHAPES.length - 4 : MOST_SHAPES.opened,
-      )
+      // an admin, like anyone, opens what their own rows reach
+      expect(opened).toBeGreaterThanOrEqual(MOST_SHAPES.opened)
       expect(withRows).toBeGreaterThanOrEqual(role === 'viewer' ? 0 : MOST_SHAPES.rows)
     })
 })
@@ -491,7 +490,7 @@ describe('access', () => {
 describe('never a hidden task', () => {
   it('leaves out a task in a hidden or archived sub-project, an archived task, a hidden project and another organization, by title and by number', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the guest's grant on TBED moves to FW and PCB, and a third
     // sub-project the guest cannot see joins them
     const sibling = await plantHiddenSibling(t, f, f.guest)
@@ -535,7 +534,7 @@ describe('never a hidden task', () => {
 describe('the Parent picker', () => {
   it('offers top-level tasks with room in projects the reader edits, and never the task, its parent, a subtask, a full task or another project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sibling = await plantHiddenSibling(t, f, f.guest)
     const shelved = await plantProject(t, {
       org_id: f.org.id,
@@ -591,7 +590,7 @@ describe('the Parent picker', () => {
 
   it('blocks a task with any subtask, archived ones included, with no row', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub)
     const other = await task(t, f, f.sub)
     expect(okOf(await pick(t, f.user, open.id, 'parent'))).toMatchObject({
@@ -613,7 +612,7 @@ describe('the Parent picker', () => {
 describe('the Subtasks picker', () => {
   it('offers tasks without subtasks with their parent as the reader sees it, and never a task with subtasks or a current subtask', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sibling = await plantHiddenSibling(t, f, f.guest)
     const shelved = await plantProject(t, {
       org_id: f.org.id,
@@ -672,7 +671,7 @@ describe('the Subtasks picker', () => {
 
   it('blocks a subtask and a task with 100 active subtasks, not one with 99 and an archived one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const above = await task(t, f, f.sub)
     const isSubtask = await task(t, f, f.sub, { parent_id: above.id })
     const full = await task(t, f, f.sub)
@@ -697,7 +696,7 @@ describe('the Subtasks picker', () => {
 describe('the Linked tasks picker', () => {
   it("lists the family first, never the task or one it is linked to, and the organization's other projects only once asked", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub)
     const own = await task(t, f, f.sub)
     const inPcb = await task(t, f, f.sub2)
@@ -728,7 +727,7 @@ describe('the Linked tasks picker', () => {
 
   it('blocks a task with 100 links, whatever their other ends, not one with 99', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub)
     const other = await task(t, f, f.sub2)
     const ends = await plantTasks(t, f.hidden, LIMITS.links.max)
@@ -751,7 +750,7 @@ describe('the Linked tasks picker', () => {
 
   it('blocks a task with 100 links for a reader without Edit on it only where a batch could offer them a task', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub)
     await task(t, f, f.sub2)
     const ends = await plantTasks(t, f.hidden, LIMITS.links.max)
@@ -797,7 +796,7 @@ describe('the Linked tasks picker', () => {
 describe('search', () => {
   it('matches every fragment in the ID or the title, in any order and case, inside words, never in the text', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub, { num: 1 })
     const a = await task(t, f, f.sub, { title: 'Check the power rails', num: 43_210 })
     const b = await task(t, f, f.sub2, { title: 'Rail power budget' })
@@ -814,7 +813,7 @@ describe('search', () => {
 
   it("puts a typed task ID's task first and once, outside the order too", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub, { num: 1 })
     await task(t, f, f.sub, { num: 7 })
     const seventy = await task(t, f, f.sub2, { num: 70 })
@@ -834,7 +833,7 @@ describe('search', () => {
 describe('Done tasks', () => {
   it('offers a Done task not yet archived in every picker, and never an archived Done task', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub)
     const done = await task(t, f, f.sub2, {
       title: 'Wombat finished',
@@ -857,7 +856,7 @@ describe('Done tasks', () => {
 describe('order and continuation', () => {
   it('answers the scope in its order a batch at a time, every eligible task once', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const later = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
     const open = await task(t, f, f.sub2)
     const inFw = await plantTasks(t, f.sub, 3)
@@ -875,7 +874,7 @@ describe('order and continuation', () => {
 
   it('stops after RELATION_PICKER.scan tasks, says so, and goes on', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub)
     await plantTasks(t, f.sub, 7)
     const last = await task(t, f, f.sub2, { title: 'Needle' })
@@ -891,7 +890,7 @@ describe('order and continuation', () => {
 
   it('costs no row and repeats none when a project leaves the scope between batches', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const later = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
     const open = await task(t, f, f.sub)
     const [a1, a2, a3] = await plantTasks(t, f.sub, 3)
@@ -910,7 +909,7 @@ describe('order and continuation', () => {
 
   it('refuses a cursor read before the opened task moved, so no row is skipped as if the list ended', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub)
     const inFw = await plantTasks(t, f.sub, 2)
     const inPcb = await plantTasks(t, f.sub2, 3)
@@ -981,7 +980,7 @@ describe('tasks created at one time', () => {
 
   it('goes past more of them than a batch holds room for at ROW_BYTES each, every one once, and to the tasks after them', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub)
     // one transaction's inserts, at one creation time, far more than the
     // 128 tasks a batch's 8 MiB holds at ROW_BYTES each, then a later task,
@@ -1005,7 +1004,7 @@ describe('tasks created at one time', () => {
 
   it('stops at them, never as an ended list, once they weigh more than a lowered batch budget holds beside one more task', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub)
     const group = await plantTasks(t, f.sub, 60, () => ({}), 60)
     const needle = await task(t, f, f.sub, { title: 'Needle' })
@@ -1034,7 +1033,7 @@ describe('tasks created at one time', () => {
 
   it('keeps room for those of them that leave until a range reads past the group, then names only those still there', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub)
     const g = await plantTasks(t, f.sub, 80, () => ({}), 80)
     const needle = await task(t, f, f.sub, { title: 'Needle' })
@@ -1082,7 +1081,7 @@ describe('tasks created at one time', () => {
 describe('the budget', () => {
   it('stops with the rows so far under a lowered batch budget, and reaches every eligible task', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub)
     const all = await plantTasks(t, f.sub, 6)
     // room for the step's rows and two parent checks
@@ -1096,7 +1095,7 @@ describe('the budget', () => {
 
   it('answers over_budget when the reads before the batch leave no room for it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const open = await task(t, f, f.sub)
     await task(t, f, f.sub)
     expect((await pick(t, f.user, open.id, 'link')).state).toBe('ok')
@@ -1109,7 +1108,7 @@ describe('the budget', () => {
 describe('what hidden data moves', () => {
   it('answers the same whatever the hidden tasks hold, how many hidden subtasks a candidate has, and the family a reader cannot see', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sibling = await plantHiddenSibling(t, f, f.guest)
     const open = await task(t, f, f.sub)
     const candidates = await plantTasks(t, f.sub, 6, (i) => ({ title: `Board ${i}` }))
@@ -1184,7 +1183,7 @@ describe('what hidden data moves', () => {
 
   it('stops alike whether Subtasks candidates share a hidden parent or have their own, in the family or outside it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sibling = await plantHiddenSibling(t, f, f.guest)
     const open = await task(t, f, f.sub)
     const candidates = await plantTasks(t, f.sub, 8, (i) => ({ title: `Board ${i}` }))
@@ -1228,7 +1227,7 @@ describe('what hidden data moves', () => {
 
   it('reads a typed number alike whether it names a hidden, an archived, a foreign or no task', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sibling = await plantHiddenSibling(t, f, f.guest)
     const open = await task(t, f, f.sub)
     await plantTasks(t, f.sub, 9)

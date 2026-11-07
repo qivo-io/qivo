@@ -2078,15 +2078,12 @@ export type ItemView = {
 }
 
 /** Whether `me`'s role alone gives a level on every project of their
- * organization, as an organization admin's does until the admin access
- * split removes levelsFrom's admin branch (lib/access.ts). Asked of
- * levelsFrom itself, with no grant on a top-level project without a lead,
- * so the split turns it false with no change here. It reads nothing. Only
- * levelsFrom's branch is asked. A split that removed levelUnder's alone
- * would leave this true and every Deleted items read whole for an admin,
- * and one that removed levelsFrom's alone would let liveLevel's
- * projectLevel give an admin every restore, so the split removes both, and
- * the cases of tests/deletedItemsAdminView.test.ts fail if it does not. */
+ * organization. Asked of levelsFrom itself, with no grant on a top-level
+ * project without a lead, and it reads nothing. Since the admin access
+ * split no role does, so it is false for every seat and adminView's
+ * read-everything branch never runs; t3/limits-project-old-paths removes
+ * it with that branch. tests/adminSplit.test.ts and
+ * tests/deletedItemsAdminView.test.ts fail if it answers true again. */
 export function roleReadsEveryTask(me: Doc<'profiles'>): boolean {
   const probe = { id: '', org_id: me.org_id, type: 'meta' as const }
   return levelsFrom(me, [probe], [], []).levelOf(probe) !== null

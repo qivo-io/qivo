@@ -48,7 +48,7 @@ import {
   type T,
   TODAY,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { northstarId, plantNorthstar } from './northstar.setup'
 import { lowered, restPage, restPages } from './taskPages.setup'
@@ -65,7 +65,7 @@ const exportPage = makeFunctionReference<
 /** withOrg with the agent able to write the fixture's sub-projects, for
  * REST and MCP. */
 async function machineOrg(t: T): Promise<OrgFixture> {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   await t.run((ctx) =>
     ctx.db.insert('project_access', {
       project_id: f.meta.id,
@@ -868,7 +868,7 @@ const ORDINARY_TEXT = 'Check the bracket fit and the cable route before the next
 describe('real limits', () => {
   it('a window of 200 tasks whose rows are near 900 KB overflows, and the cut that fits answers, past PAGE.hard by one row at most', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const text = 'n'.repeat(900 * 1024)
     await plantMany(
       t,
@@ -905,7 +905,7 @@ describe('real limits', () => {
 
   it('the narrowest window answers a parent whose subtasks are legacy rows near 1 MiB, its text one row past PAGE.hard at most', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the narrowest window of the grid, which cannot be cut
     const narrowest: IdWindow = { from: 'fff00000', to: null }
     const parent = await plantIssue(t, {
@@ -940,7 +940,7 @@ describe('real limits', () => {
 
   it('a window of 200 tasks with both copies answers or splits within a lowered PAGE.hard', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // both copies of an ordinary text, about 240 KB in all, under parts'
     // bytes lowered to 32 and 64 KiB, as 200 at the cap in a three-byte
     // script, 24 MB, passed the real 4 and 8 MiB
@@ -1505,7 +1505,7 @@ describe('real limits', () => {
 
   it('an export issues page with description rows near 1 MiB stays within the limits and goes on', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const text = (i: number) => `${i} `.padEnd(1000 * 1024, 'x')
     const ids = await plantMany(t, f, 24, text, () => undefined, 8)
     const rows: OrgExportRow[] = []

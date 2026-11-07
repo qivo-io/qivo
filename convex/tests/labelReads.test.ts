@@ -45,7 +45,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { plantNorthstar } from './northstar.setup'
 
@@ -141,7 +141,7 @@ const staffSeat = (t: T, f: OrgFixture, name = 'Subject') =>
 describe('labels.settingsPage', () => {
   it('orders by name_lower, then creation, with a batch boundary between two labels of one name', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 24 before them, so the first batch ends after the first of the two
     await plantLabels(t, f.org.id, [...names('l', 24), 'Twin', 'zed'])
     // a duplicate stored before names were unique, created after the first
@@ -157,7 +157,7 @@ describe('labels.settingsPage', () => {
 
   it('reads 60 labels in batches of 25, each once, and says the end in a batch that ends at the last', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sixty = names('l', 60)
     await plantLabels(t, f.org.id, sixty)
     const read = await batches((after) => settings(t, f.admin, f.org.id, { after }))
@@ -166,7 +166,7 @@ describe('labels.settingsPage', () => {
     for (const b of read) expect(b.stopped).toBe(false)
 
     const u = newT()
-    const h = await withOrg(u)
+    const h = await withReadingAdmin(u)
     await plantLabels(u, h.org.id, names('l', 50))
     const fifty = await batches((after) => settings(u, h.admin, h.org.id, { after }))
     // the second batch is full and the last, so no third call is needed
@@ -178,7 +178,7 @@ describe('labels.settingsPage', () => {
 
   it('searches every fragment in any order, ignoring case and accents, over the whole list', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantLabels(t, f.org.id, [...names('a', 60), 'Café', 'UI bug', 'Debug', 'zz cafeteria'])
     const find = async (search: string) =>
       rowNames(await batches((after) => settings(t, f.admin, f.org.id, { search, after })))
@@ -195,7 +195,7 @@ describe('labels.settingsPage', () => {
 
   it('stops a search at the read budget with only the matches so far, and goes on to every match and the end', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const list = names('l', 40)
     for (const at of [5, 22, 37]) list[at] = `${list[at]} needle`
     await plantLabels(t, f.org.id, list)
@@ -226,7 +226,7 @@ describe('labels.settingsPage', () => {
 
   it('moves forward by one label a call when the request has no room left', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantLabels(t, f.org.id, names('l', 5))
     NAMED_READ.ranges = 0
     NAMED_READ.documents = 0
@@ -245,7 +245,7 @@ describe('labels.settingsPage', () => {
 
   it('keeps a batch live between two cursors as labels come, go and move', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const labels = await plantLabels(t, f.org.id, names('l', 60))
     const first = await settings(t, f.admin, f.org.id)
     const second = await settings(t, f.admin, f.org.id, { after: first.next ?? '' })
@@ -279,7 +279,7 @@ describe('labels.settingsPage', () => {
 
   it('stops a batch under through that would hold more than four batches, for the app to split', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantLabels(t, f.org.id, names('l', 140))
     // the cursor after five batches, at the 125th label
     const five = (await batches((after) => settings(t, f.admin, f.org.id, { after }))).slice(0, 5)
@@ -298,7 +298,7 @@ describe('labels.settingsPage', () => {
 
   it('answers active_tasks from the count rows, and never a missing count as zero', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [counted, plain, foreign] = await t.run(async (ctx) => [
       await insertLabel(ctx, f.org.id, 'Counted'),
       await insertLabel(ctx, f.org.id, 'Plain', false),
@@ -339,7 +339,7 @@ describe('labels.settingsPage', () => {
 
   it('agrees with the counted rows after task writes through the public functions', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const label = async (name: string) => {
       const id = uuid()
       await as(t, f.admin).mutation(api.labels.create, {
@@ -391,7 +391,7 @@ describe('labels.settingsPage', () => {
 
   it('finds an exact name in any case that no batch read, and none for a blank search', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantLabels(t, f.org.id, [...names('a', 40), 'Zeta Release'])
     NAMED_READ.documents = 12
     for (const search of ['zeta release', 'ZETA RELEASE', '  Zeta Release ']) {
@@ -411,7 +411,7 @@ describe('labels.settingsPage', () => {
 describe('labels.picker', () => {
   it('answers every seat, guests and viewers included, with names and colors only', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantLabels(t, f.org.id, ['Bug', 'Chore'])
     for (const who of [f.guest, f.viewer, f.user, f.admin]) {
       const b = await picker(t, who, f.org.id, { search: 'bug' })
@@ -423,7 +423,7 @@ describe('labels.picker', () => {
 
   it('answers can_create in a first batch by the label rule, and leaves it out later', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantLabels(t, f.org.id, names('l', 30))
     const may = async (who: Doc<'profiles'>) => (await picker(t, who, f.org.id)).can_create
     expect(await may(f.admin)).toBe(true)
@@ -488,7 +488,7 @@ describe('labels.picker', () => {
     ]
     for (const [name, plant, expected] of cases) {
       const u = newT()
-      const h = await withOrg(u)
+      const h = await withReadingAdmin(u)
       const me = await staffSeat(u, h)
       await u.run((ctx) => plant(ctx, h, me))
       expect((await picker(u, me, h.org.id)).can_create, name).toBe(expected)
@@ -570,7 +570,7 @@ describe('canWriteOrgLabels', () => {
     const seen = new Set<string>()
     for (const [name, plant] of [...SHAPES, ...LABEL_SHAPES]) {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       // the fixture's user leads both metas; the subject is plain staff
       const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
       await t.run((ctx) => plant(ctx, f, subject))
@@ -621,7 +621,7 @@ describe('canWriteOrgLabels', () => {
 
   it("finds User through a later team, however many projects an earlier team's shares name", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await staffSeat(t, f, 'All staff, then Design')
     const subs = await Promise.all(
       Array.from({ length: 12 }, () =>
@@ -662,7 +662,7 @@ describe('canWriteOrgLabels', () => {
 
   it('gives no rights through a meta under another meta, which no writer makes', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
     await t.run(async (ctx) => {
       // createProjectCore refuses a meta with a parent; only bad data has one
@@ -681,7 +681,7 @@ describe('canWriteOrgLabels', () => {
 
   it('answers null past its row cap or its read guard, and every create refuses with the sentence', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const person = await staffSeat(t, f, 'Many grants')
     const SECRET = `qva_${'labelchk'.repeat(6)}`
     const key_hash = await sha256hex(SECRET)
@@ -766,7 +766,7 @@ describe('canWriteOrgLabels', () => {
 describe('labels.byIds', () => {
   it('answers the labels of the organization among the ids, each once', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a, b, gone] = await plantLabels(t, f.org.id, ['Alpha', 'Beta', 'Gone'])
     const [foreign] = await plantLabels(t, f.otherOrg.id, ['Elsewhere'])
     await t.run((ctx) => ctx.db.delete(gone._id))
@@ -787,7 +787,7 @@ describe('labels.byIds', () => {
 describe('refusals', () => {
   it('lets only active organization admins read settingsPage', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (const who of [f.user, f.viewer, f.guest]) {
       await expectRefusal(
         settings(t, who, f.org.id),
@@ -799,7 +799,7 @@ describe('refusals', () => {
 
   it('refuses a login without a seat and an organization being deleted', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const calls = (who: Doc<'profiles'>) => [
       settings(t, who, f.org.id),
       picker(t, who, f.org.id),
@@ -824,7 +824,7 @@ describe('refusals', () => {
 
   it('refuses a long search, foreign or changed cursors and too many ids', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantLabels(t, f.org.id, names('l', 30))
     await plantLabels(t, f.otherOrg.id, names('o', 30))
     await expectRefusal(
@@ -910,7 +910,7 @@ describe('real limits', () => {
         count,
       ).toBeLessThan(CONVEX_READS[count])
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantLabels(
       t,
       f.org.id,
@@ -1008,7 +1008,7 @@ describe('real limits', () => {
     // is shared with, as Viewer, which proves nothing, so the check reads
     // all 1,000 shares under its default budget
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantLabels(t, f.org.id, names('Label ', 60))
     const me = await staffSeat(t, f, 'Viewer through five teams')
     const subs = await plantSubProjects(t, f, 200, 50)
@@ -1042,7 +1042,7 @@ describe('real limits', () => {
 
   it('finds User through Design after an All staff team shared on 200 sub-projects, live and archived', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await staffSeat(t, f, 'All staff, then Design')
     // the 50 live and 150 archived projects one team is shared with, more
     // than LABEL_WRITE_READ.lookups, so the check reads the top-level
@@ -1075,7 +1075,7 @@ describe('real limits', () => {
 
   it("reads the caller's rights once in a REST or MCP create whose proof takes most of the request", async () => {
     const t = newT({ transactionLimits: { databaseQueries: CREATE_RANGES } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a proof through a second team, after an All staff team shared on the
     // 200 sub-projects one team is shared with, which costs a range for each
     // of the first LABEL_WRITE_READ.lookups projects: more than half of the

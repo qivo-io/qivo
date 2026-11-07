@@ -26,7 +26,7 @@ import {
   plantProject,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
 
@@ -87,7 +87,7 @@ async function plantChain(t: T, f: OrgFixture, n: number): Promise<Doc<'issues'>
 describe('issue scheduling and hierarchy', () => {
   it('a date write on a group is refused for any value, archived groups included; archived-only subtasks make no group', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const span = { start_week: '2026-03-02', end_week: '2026-03-08' }
     const group = await plantIssue(t, { ...base, ...span })
@@ -129,7 +129,7 @@ describe('issue scheduling and hierarchy', () => {
 
   it("a pause on a group is refused; clearing a group's stored pause passes", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const group = await plantIssue(t, { ...base, status: 'progress' })
     await plantIssue(t, { ...base, parent_id: group.id, status: 'todo' })
@@ -149,7 +149,7 @@ describe('issue scheduling and hierarchy', () => {
 
   it('no subtask write changes an ancestor: reschedule, scheduled create and restore leave every ancestor and its followers alone', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const narrow = { start_week: '2026-02-02', end_week: '2026-02-08' }
     const top = await plantIssue(t, { ...base, title: 'unscheduled top' })
@@ -201,7 +201,7 @@ describe('issue scheduling and hierarchy', () => {
 
   it('one level of subtasks: a legacy chain takes no new level, and can still be taken apart', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a chain of 21 tasks from before the one level of subtasks
     const deep = await plantChain(t, f, 21)
     const under = await expectRefusal(createAs(t, f, { parent_id: deep[20].id }), 'rule')
@@ -226,7 +226,7 @@ describe('issue scheduling and hierarchy', () => {
 
   it('the parent fence: foreign-org and missing parents both answer not_found, self is refused', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const foreign = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id })
     const mine = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     for (const parent_id of [foreign.id, uuid()]) {
@@ -244,7 +244,7 @@ describe('issue scheduling and hierarchy', () => {
 
   it('the parent fence: a hidden parent reads like a missing one and stays untouched; a read-only one is refused', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // f.guest holds User on f.meta and nothing on f.hidden
     const hiddenSub = await plantProject(t, {
       org_id: f.org.id,
@@ -327,7 +327,7 @@ describe('issue scheduling and hierarchy', () => {
 
   it('week pair: both-or-neither and ordering, on create and on a half-clear', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const half = await expectRefusal(createAs(t, f, { start_week: '2026-02-02' }), 'bad_request')
     expect(half.data.message).toBe('start_week and end_week must be set (or cleared) together')
     const backwards = await expectRefusal(
@@ -350,7 +350,7 @@ describe('issue scheduling and hierarchy', () => {
 
   it('archived-parent guard, non-inverted: no ACTIVE row under an archived parent — yet archiving a parent with active children is the normal cascade', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const buried = await plantIssue(t, { ...base, archived_at: NOW })
     const onCreate = await expectRefusal(createAs(t, f, { parent_id: buried.id }), 'rule')
@@ -377,7 +377,7 @@ describe('issue scheduling and hierarchy', () => {
 
   it('archive refuses to change a subtask in a project the caller cannot edit', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a sub-project of TBED that f.guest cannot see, while they edit FW and PCB
     const hiddenSub = await plantHiddenSibling(t, f, f.guest)
     const asGuest = as(t, f.guest)
@@ -438,7 +438,7 @@ describe('issue scheduling and hierarchy', () => {
     ['can only read', 'viewer'],
   ] as const)('restore refuses to change a parent task the caller %s', async (_, level) => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // f.guest holds User on f.meta and nothing on f.hidden
     const hiddenSub = await plantProject(t, {
       org_id: f.org.id,
@@ -498,7 +498,7 @@ describe('issue scheduling and hierarchy', () => {
 
   it('REST and MCP archives follow the same cascade rule', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run((ctx) =>
       ctx.db.insert('project_access', {
         project_id: f.meta.id,

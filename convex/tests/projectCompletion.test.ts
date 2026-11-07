@@ -34,7 +34,7 @@ import {
   settleScheduled,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { countOrg, countStep } from './overviewCounts.setup'
 
@@ -43,7 +43,7 @@ type Fx = OrgFixture & { t: T; fwOnly: Doc<'profiles'> }
 /* withOrg, with the agent holding User access on TBED, and a person who
  * holds it on FW alone, so PCB is hidden from them. */
 async function setup(t: T = newT()): Promise<Fx> {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const fwOnly = await plantLogin(
     t,
     await plantSeat(t, { org_id: f.org.id, name: 'Firmware only' }),
@@ -455,7 +455,7 @@ describe('project completion from the counts', () => {
     expect(created.completion).toEqual(NO_TASKS)
     // a top-level project without a live sub-project counts none
     const empty = await plantProject(fx.t, { org_id: fx.org.id, key: 'EMPTY', lead_id: fx.user.id })
-    expect(await restCompletion(fx, fx.admin.id, empty.key)).toEqual(NO_TASKS)
+    expect(await restCompletion(fx, fx.user.id, empty.key)).toEqual(NO_TASKS)
     await settleScheduled(fx.t)
   })
 })

@@ -42,7 +42,7 @@ import {
   type T,
   TODAY,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { countOrg } from './overviewCounts.setup'
 import { lowered, mcpPage, mcpPages, restPage, restPages } from './taskPages.setup'
@@ -62,7 +62,7 @@ const grant = (t: T, project_id: string, profile_id: string) =>
 
 /* withOrg, with the agent holding Edit on TBED (FW and PCB). */
 async function setup(t: T = newT()): Promise<Fx> {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   await grant(t, f.meta.id, f.agent.id)
   return { t, ...f }
 }
@@ -1263,9 +1263,15 @@ describe('archived task lists page one project with a cursor', () => {
   it('finds every archived task through the active and archived project lists', async () => {
     const fx = await setup()
     const { subs } = await archive(fx)
-    // an archived top-level project, and a reader who holds only FW and its
-    // archived sub-project, so both top-level projects are navigation-only
-    const oldMeta = await plantProject(fx.t, { org_id: fx.org.id, key: 'OLDM', archived_at: NOW })
+    // an archived top-level project, which the admin leads, and a reader who
+    // holds only FW and its archived sub-project, so both top-level
+    // projects are navigation-only
+    const oldMeta = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      key: 'OLDM',
+      archived_at: NOW,
+      lead_id: fx.admin.id,
+    })
     const oldSub = await plantProject(fx.t, {
       org_id: fx.org.id,
       type: 'project',

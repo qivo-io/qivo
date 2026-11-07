@@ -66,7 +66,7 @@ import {
   type T,
   TODAY,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 /* Every download link minted while a test runs (lib/fileTokens.ts
@@ -119,7 +119,7 @@ type Fx = OrgFixture & {
 /* withOrg, with the agent holding Edit on TBED (FW and PCB) and SKS, a
  * sub-project of SKNK, that it cannot read. */
 async function setup(t: T = newT()): Promise<Fx> {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   await t.run((ctx) =>
     ctx.db.insert('project_access', {
       project_id: f.meta.id,

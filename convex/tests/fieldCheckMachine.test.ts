@@ -25,7 +25,7 @@ import {
   plantProject,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 const SECRET = `qva_${'fieldchk'.repeat(6)}`
@@ -35,7 +35,7 @@ type Fx = OrgFixture & { t: T }
 /* withOrg, with the agent Relay holding User on TBED and a key. */
 async function setup(): Promise<Fx> {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const key_hash = await sha256hex(SECRET)
   await t.run(async (ctx) => {
     await ctx.db.insert('project_access', {

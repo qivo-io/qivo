@@ -18,7 +18,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 let t: T
@@ -31,7 +31,7 @@ let ownHidden: Doc<'issues'> // in hidden2Sub (lead: admin), assignee user — u
 
 beforeEach(async () => {
   t = newT()
-  f = await withOrg(t)
+  f = await withReadingAdmin(t)
   hiddenSub = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.hidden.id })
   hidden2 = await plantProject(t, { org_id: f.org.id, lead_id: f.admin.id })
   hidden2Sub = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: hidden2.id })

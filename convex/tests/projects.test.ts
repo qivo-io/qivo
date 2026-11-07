@@ -22,6 +22,7 @@ import {
   tick,
   uuid,
   withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 const createArgs = (f: OrgFixture, extra: Record<string, unknown> = {}) => ({
@@ -58,7 +59,7 @@ const lastEvent = async (t: T, orgId: string) => {
 describe('projects.create', () => {
   it('admin creates a teamless meta: counter num returned, created narration', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const res = await as(t, f.admin).mutation(api.projects.create, createArgs(f))
     expect(res.num).toBe(6) // fixture next_project_num 5 → bump
     expect(res.key).toBe('NEW') // a free suggested key is kept
@@ -86,7 +87,7 @@ describe('projects.create', () => {
      longer take them, and the schema no longer has them. */
   it('refuses icon fields without inserting the project or consuming a number', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (const extra of [{ icon: 'rocket' }, { icon_color: '#0366D6' }, { icon: null }]) {
       const args = { ...createArgs(f), ...extra }
       await expect(as(t, f.admin).mutation(api.projects.create, args)).rejects.toThrow(
@@ -113,7 +114,7 @@ describe('projects.create', () => {
    * covers that case on the shared rule. */
   const creatorsFixture = async (setting?: Doc<'organizations'>['project_creators']) => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     if (setting !== undefined) {
       await as(t, f.admin).mutation(api.orgs.update, {
         org_id: f.org.id,
@@ -207,7 +208,7 @@ describe('projects.create', () => {
 
   it('sub creation: lead standing required; parent fenced with the hierarchy sentences', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const subArgs = (parent: string, key: string) =>
       createArgs(f, { type: 'project' as const, parent_id: parent, key })
     const res = await as(t, f.user).mutation(api.projects.create, subArgs(f.meta.id, 'SUB1'))
@@ -240,7 +241,7 @@ describe('projects.create', () => {
 
   it('key shape is checked; replayed uuid refused', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await expectRefusal(
       as(t, f.admin).mutation(api.projects.create, createArgs(f, { key: 'toolong' })),
       'bad_request',
@@ -256,7 +257,7 @@ describe('projects.create', () => {
 
   it('a taken key is replaced by the first free candidate from the name', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // TBED belongs to the fixture meta; the name derives TES instead
     const res = await as(t, f.admin).mutation(
       api.projects.create,
@@ -269,7 +270,7 @@ describe('projects.create', () => {
 
   it('keys of archived projects and projects the caller cannot see are skipped', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the admin's "Test" has no grants, so the user cannot see it
     const hidden = await as(t, f.admin).mutation(
       api.projects.create,
@@ -303,7 +304,7 @@ describe('projects.create', () => {
 
   it('lead rules: a viewer or a foreign profile cannot lead', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await expectRefusal(
       as(t, f.admin).mutation(api.projects.create, createArgs(f, { lead_id: f.viewer.id })),
       'rule',
@@ -318,7 +319,7 @@ describe('projects.create', () => {
 
   it("the access map lands as grant rows; 'lead' entries are dropped", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const res = await as(t, f.admin).mutation(
       api.projects.create,
       createArgs(f, { access: { [f.guest.id]: 'viewer', [f.user.id]: 'lead' } }),
@@ -337,7 +338,7 @@ describe('projects.create', () => {
 describe('projects.update', () => {
   it('rename narrates with the old name; a same-value rename is a silent no-op', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await as(t, f.admin).mutation(api.projects.update, {
       org_id: f.org.id,
       id: f.meta.id,
@@ -360,7 +361,7 @@ describe('projects.update', () => {
 
   it('update refuses icon fields', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (const patch of [{ icon: null }, { icon_color: 'red' }]) {
       await expect(
         // @ts-expect-error the patch no longer takes icon fields
@@ -378,7 +379,7 @@ describe('projects.update', () => {
 
   it('lead handovers narrate both sides and a project lead cannot be cleared', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await as(t, f.admin).mutation(api.projects.update, {
       org_id: f.org.id,
       id: f.meta.id,
@@ -408,6 +409,7 @@ describe('projects.update', () => {
     'a top-level lead handover by the %s moves only the two leads’ own grants',
     async (who) => {
       const t = newT()
+      // the admin manages TBED without a grant of their own
       const f = await withOrg(t)
       // TBED holds the guest's and the viewer's grants; the team gets a share
       await as(t, f.admin).mutation(api.projects.setAccess, {
@@ -453,7 +455,7 @@ describe('projects.update', () => {
 
   it('refuses an access or team_access map at the validator and writes nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const state = () =>
       t.run(async (ctx) => ({
         project: await ctx.db.get(f.meta._id),
@@ -480,7 +482,7 @@ describe('projects.update', () => {
 
   it("create's access map speaks vGrantLevel (plus the dropped 'lead') only — anything else dies in the validator", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // forged wire values a typed client could never send
     const admin = 'admin' as unknown as 'user'
     const member = 'member' as unknown as 'user' // the pre-0098 word is DEAD
@@ -495,7 +497,7 @@ describe('projects.update', () => {
 
   it('key change is allowed with shape + uniqueness revalidated; non-lead callers are refused', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await as(t, f.admin).mutation(api.projects.update, {
       org_id: f.org.id,
       id: f.meta.id,
@@ -557,7 +559,7 @@ describe('projects.setAccess', () => {
 
   it('gives or changes one grant and leaves every other grant as it is', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const set = (subject: { user_id?: string; team_id?: string }, level: 'user' | 'viewer') =>
       as(t, f.admin).mutation(api.projects.setAccess, {
         org_id: f.org.id,
@@ -583,7 +585,7 @@ describe('projects.setAccess', () => {
 
   it('refuses whoever does not control the project, the lead, and a subject outside the organization', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const before = await grants(t, f.meta.id)
     const set = (who: Doc<'profiles'>, subject: { user_id?: string; team_id?: string }) =>
       as(t, who).mutation(api.projects.setAccess, {
@@ -605,7 +607,7 @@ describe('projects.setAccess', () => {
 
   it('grants on a sub-project are scoped there; viewer grantees stay capped', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const set = (who: Doc<'profiles'>, id: string, user_id: string) =>
       as(t, who).mutation(api.projects.setAccess, { org_id: f.org.id, id, user_id, level: 'user' })
     await set(f.admin, f.sub.id, f.guest.id)
@@ -628,7 +630,7 @@ describe('projects.setAccess', () => {
 
   it('who may grant: organization admins and project leads; the grantee must hold a seat in the org', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const set = (who: Doc<'profiles'>, user_id: string, level: 'user' | 'viewer') =>
       as(t, who).mutation(api.projects.setAccess, {
         org_id: f.org.id,
@@ -670,7 +672,7 @@ describe('project review time', () => {
 
   it('the lead sets it on a project or sub-project at the 0.1 h grain; null clears it; no narration', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await setReviewHours(t, f, f.meta.id, 2.25)
     expect((await stored(t, f.meta.id))?.review_hours).toBe(2.3)
     await setReviewHours(t, f, f.sub.id, 0)
@@ -684,7 +686,7 @@ describe('project review time', () => {
 
   it('refuses out-of-range values and non-leads; a new project inherits (absent)', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // just past the cap counts, though it would round to the cap
     for (const bad of [-1, -0.01, LIMITS.reviewHours.max + 0.01, LIMITS.reviewHours.max + 1]) {
       const e = await expectRefusal(setReviewHours(t, f, f.sub.id, bad), 'rule')
@@ -712,7 +714,7 @@ describe('project description limits', () => {
     'creates %s descriptions trimmed through the 500-unit boundary, including null and omission',
     async (type) => {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       expect(LIMITS.projectDescription.max).toBe(500)
       // the cap counts the text once trimmed, and an emoji counts two
       const boundary = ` \n${'x'.repeat(500)}\n `
@@ -748,7 +750,7 @@ describe('project description limits', () => {
     'refuses oversized %s creation without consuming a number or creating rows',
     async (type) => {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const before = await snapshot(t)
       for (const description of ['x'.repeat(501), `${'😀'.repeat(250)}x`]) {
         const e = await expectRefusal(
@@ -774,7 +776,7 @@ describe('project description limits', () => {
     'updates %s descriptions trimmed at the boundary and preserves empty-string semantics',
     async (type) => {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const project = type === 'meta' ? f.meta : f.sub
       for (const description of [` \n${'x'.repeat(500)}\n `, '😀'.repeat(250), '', null]) {
         await as(t, f.admin).mutation(api.projects.update, {
@@ -793,7 +795,7 @@ describe('project description limits', () => {
     'refuses an oversized %s description atomically with other settings and a lead handover',
     async (type) => {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const project = type === 'meta' ? f.meta : f.sub
       const before = await snapshot(t)
       for (const description of ['x'.repeat(501), `${'😀'.repeat(250)}x`]) {
@@ -823,7 +825,7 @@ describe('project description limits', () => {
 
   it('keeps permission and organization fences ahead of description validation', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const patch = { description: 'x'.repeat(501) }
     await expectRefusal(
       as(t, f.guest).mutation(api.projects.update, { org_id: f.org.id, id: f.meta.id, patch }),
@@ -844,7 +846,7 @@ describe('project description limits', () => {
 describe('projects.archive / unarchive', () => {
   it('archiving a meta stamps active subs with the SAME instant and counts them', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await as(t, f.admin).mutation(api.projects.archive, { org_id: f.org.id, id: f.meta.id })
     const rows = await t.run(async (ctx) => ({
       meta: await ctx.db
@@ -873,7 +875,7 @@ describe('projects.archive / unarchive', () => {
 
   it('restoring a meta brings back exactly the subs its own archiving carried down', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // sub2 archived on its own instant first — it must NOT ride the restore.
     // tick() forces the meta's archive onto a strictly later millisecond: the
     // restore matches subs by archived_at EQUALITY (0106), so a same-ms
@@ -909,7 +911,7 @@ describe('projects.archive / unarchive', () => {
 
   it('restoring a sub surfaces its parent and nothing else', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await as(t, f.admin).mutation(api.projects.archive, { org_id: f.org.id, id: f.meta.id })
     await as(t, f.admin).mutation(api.projects.unarchive, { org_id: f.org.id, id: f.sub.id })
     const rows = await t.run(async (ctx) => ({
@@ -939,7 +941,7 @@ describe('projects.unarchive of a sub-project under an archived parent', () => {
 
   it('needs lead on the parent, because it restores the parent too', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the guest leads FW and holds a User grant on the parent f.user leads
     await t.run(async (ctx) => ctx.db.patch(f.sub._id, { lead_id: f.guest.id }))
     await as(t, f.user).mutation(api.projects.archive, { org_id: f.org.id, id: f.meta.id })
@@ -958,7 +960,7 @@ describe('projects.unarchive of a sub-project under an archived parent', () => {
 
   it('still lets the sub-project lead restore it while the parent is active', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run(async (ctx) => ctx.db.patch(f.sub._id, { lead_id: f.guest.id }))
     await as(t, f.guest).mutation(api.projects.archive, { org_id: f.org.id, id: f.sub.id })
     expect(await archivedAt(t, f.sub._id)).not.toBeNull()
@@ -970,7 +972,7 @@ describe('projects.unarchive of a sub-project under an archived parent', () => {
 describe('projects.deleteDeep', () => {
   it('guards: uniform not-found for foreign rows, the RPC sentence for missing rights', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await expectRefusal(
       as(t, f.admin).mutation(api.projects.deleteDeep, { org_id: f.org.id, id: f.otherProject.id }),
       'not_found',
@@ -985,7 +987,7 @@ describe('projects.deleteDeep', () => {
 
   it("a project's delete event has no owning-team branch", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await as(t, f.admin).mutation(api.projects.deleteDeep, { org_id: f.org.id, id: f.sub.id })
     let e = await lastEvent(t, f.org.id)
@@ -1024,7 +1026,7 @@ describe('projects.inviteGuest', () => {
 
   it('an unknown address gets a guest seat and a grant on the selected sub-project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { id: pid, emailed } = await invite(t, f, { project_id: f.sub.id })
     expect(emailed).toBe(true)
     const p = await t.run(async (ctx) =>
@@ -1073,7 +1075,7 @@ describe('projects.inviteGuest', () => {
 
   it('a known address in the org gets the grant only; retention follows a sibling seat', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { id: pid, emailed } = await invite(t, f, { email: f.guest.email })
     expect(pid).toBe(f.guest.id)
     expect(emailed).toBe(false)
@@ -1105,7 +1107,7 @@ describe('projects.inviteGuest', () => {
 
   it('grants a member whose stored address the address rule now refuses, and checks only a new seat', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a provider login's address, or a seat invited before the rule
     const held = await plantSeat(t, { org_id: f.org.id, email: 'jørn@example.no' })
     const out = await invite(t, f, { email: 'Jørn@Example.no', project_id: f.sub.id })
@@ -1126,7 +1128,7 @@ describe('projects.inviteGuest', () => {
 
   it('refusal sentences, verbatim — including the 0098-missed level sentence', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await expectRefusal(
       invite(t, f, { level: 'lead' }),
       'rule',
@@ -1158,7 +1160,7 @@ describe('projects.inviteGuest', () => {
 describe('milestones', () => {
   it('add narrates at the org-grid week label; the arrival guard keeps its own sentence', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await as(t, f.user).mutation(api.projects.addMilestone, {
       org_id: f.org.id,
@@ -1176,8 +1178,10 @@ describe('milestones', () => {
       detail: `at ${weekLabel('2026-05-11', f.org)}`,
       project_id: f.meta.id,
     })
+    // the admin leads it, so the write reaches its archive guard
     const archived = await plantProject(t, {
       org_id: f.org.id,
+      lead_id: f.admin.id,
       archived_at: '2026-01-02T00:00:00.000Z',
     })
     await expectRefusal(
@@ -1206,7 +1210,7 @@ describe('milestones', () => {
 
   it('update verbs name what actually changed — a pure rename must not read as a move', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await as(t, f.user).mutation(api.projects.addMilestone, {
       org_id: f.org.id,
@@ -1273,7 +1277,7 @@ describe('milestones', () => {
 
   it('remove deletes the row and narrates; foreign milestones read not-found', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await as(t, f.user).mutation(api.projects.addMilestone, {
       org_id: f.org.id,
@@ -1303,7 +1307,7 @@ describe('milestones', () => {
 
   it('stores a milestone named against a sub-project on its top-level project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await as(t, f.user).mutation(api.projects.addMilestone, {
       org_id: f.org.id,
@@ -1322,7 +1326,7 @@ describe('milestones', () => {
 
   it('needs User access on the top-level project, not only on a sub-project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const subOnly = await plantSeat(t, {
       org_id: f.org.id,
       name: 'sub only',
@@ -1353,7 +1357,7 @@ describe('milestones', () => {
 
   it('reads projects and milestones the caller cannot see as not found', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const subOnly = await plantSeat(t, {
       org_id: f.org.id,
       name: 'sub only',
@@ -1417,7 +1421,7 @@ describe('milestones', () => {
 
   it('refuses a milestone named against an archived sub-project of an active project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run((ctx) => ctx.db.patch(f.sub._id, { archived_at: '2026-01-02T00:00:00.000Z' }))
     await expectRefusal(
       as(t, f.user).mutation(api.projects.addMilestone, {
@@ -1434,7 +1438,7 @@ describe('milestones', () => {
 
   it('accepts real calendar days, including a leap day', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await as(t, f.user).mutation(api.projects.addMilestone, {
       org_id: f.org.id,
@@ -1455,7 +1459,7 @@ describe('milestones', () => {
 
   it('refuses impossible dates and other text on add and update, writing nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await as(t, f.user).mutation(api.projects.addMilestone, {
       org_id: f.org.id,

@@ -46,7 +46,16 @@ import { deleteOrgStep } from '../model/orgDeletion'
 import { newOrgDefaults } from '../model/orgs'
 import { runOf, SAMPLE_PAGE, SAMPLE_STALLED_MS } from '../model/storageSamples'
 import { addToOrg, addToProject, orgTotalsRow, startOrgTotals } from '../model/storageTotals'
-import { as, expectRefusal, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
+import {
+  as,
+  expectRefusal,
+  newT,
+  plantIssue,
+  type T,
+  uuid,
+  type withOrg,
+  withReadingAdmin,
+} from './helpers.setup'
 import { deleteTask } from './trash.setup'
 import { plantTicket } from './uploadTickets.setup'
 
@@ -208,7 +217,7 @@ function terms(name = 'Founding', cents = 100): PlanInput {
 }
 async function fixture(options: Parameters<typeof newT>[0] = {}) {
   const t = newT(options)
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const operatorId = 'billing-operator'
   await t.run((ctx) =>
     ctx.db.insert('platform_admins', { auth_user_id: operatorId, note: 'test', created_at: NOW }),
@@ -382,7 +391,8 @@ const pastSeatCeiling = (t: T, orgId: string) =>
   })
 
 async function createTask(t: T, f: Awaited<ReturnType<typeof withOrg>>, title = 'Billable test') {
-  return await as(t, f.admin).mutation(api.issues.create, {
+  // TBED's lead, who works on Firmware
+  return await as(t, f.user).mutation(api.issues.create, {
     org_id: f.org.id,
     id: uuid(),
     project_id: f.sub.id,

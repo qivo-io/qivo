@@ -23,7 +23,7 @@ import {
   plantIssue,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
 
@@ -198,7 +198,7 @@ async function family(t: T, f: OrgFixture) {
 describe('archiving a task', () => {
   it('marks the rows of the task and its subtree and flags them once the steps run; the snapshot sends none of them before or after', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { other, parent, child } = await family(t, f)
     expect(await shown(t, f, parent.id)).toEqual(ALL)
 
@@ -221,7 +221,7 @@ describe('archiving a task', () => {
 
   it('through the machine toggle marks the subtree too', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await grantAgent(t, f)
     const { parent, child } = await family(t, f)
 
@@ -233,7 +233,7 @@ describe('archiving a task', () => {
 
   it('by the nightly sweep marks the tasks it archives', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const done = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -252,7 +252,7 @@ describe('archiving a task', () => {
 
   it('a project archive stamps no task and marks nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { parent, child } = await family(t, f)
 
     await as(t, f.user).mutation(api.projects.archive, { org_id: f.org.id, id: f.meta.id })
@@ -266,7 +266,7 @@ describe('archiving a task', () => {
 
   it('a restore before the step runs leaves the rows unmarked and in the snapshot', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { parent, child } = await family(t, f)
 
     await archive(t, f, parent)
@@ -283,7 +283,7 @@ describe('archiving a task', () => {
 describe('a restore', () => {
   it('sends the rows of the task and every archived ancestor in the very next snapshot, and clears their marks in the background', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { other, parent, child } = await family(t, f)
     await archive(t, f, parent)
     await runSteps(t)
@@ -308,7 +308,7 @@ describe('a restore', () => {
 
   it('through the machine toggle does the same', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await grantAgent(t, f)
     const { parent, child } = await family(t, f)
     await machineArchive(t, f, parent, true)
@@ -326,7 +326,7 @@ describe('a restore', () => {
 
   it('keeps a link hidden while either end is archived and sends it once both are active', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const b = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await plantRelations(t, f, a, [b])
@@ -354,7 +354,7 @@ describe('a restore', () => {
   it('of a task with more relation rows than one transaction may write succeeds, and its marks clear in bounded steps', async () => {
     Object.assign(ARCHIVE_MARKS, { rows: 40 })
     const t = newT({ transactionLimits: { documentsWritten: 100 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     for (let from = 0; from < 240; from += 80) {
       await t.run(async (ctx) => {
@@ -381,7 +381,7 @@ describe('a restore', () => {
 
   it('stays right in the snapshot when its clear step is lost, and the nightly sweep schedules it again', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { other, parent } = await family(t, f)
     await archive(t, f, parent)
     await runSteps(t)
@@ -405,7 +405,7 @@ describe('a restore', () => {
   it('archived again while its marks are cleared leaves the rows to the mark steps', async () => {
     Object.assign(ARCHIVE_MARKS, { rows: 2 })
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await plantRelations(t, f, task, [other])
@@ -441,7 +441,7 @@ describe('the background steps', () => {
   it('continue across steps with lowered limits and change nothing when run again', async () => {
     Object.assign(ARCHIVE_MARKS, { rows: 2, tasks: 2 })
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const archived = { org_id: f.org.id, project_id: f.sub.id, archived_at: NOW }
     const a = await plantIssue(t, archived)
     const active = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -486,7 +486,7 @@ describe('the background steps', () => {
   it('read only the rows they change, so a step that continues on a task reads none twice', async () => {
     Object.assign(ARCHIVE_MARKS, { rows: 10 })
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await t.run(async (ctx) => {
       for (let i = 0; i < 30; i++)
@@ -519,7 +519,7 @@ describe('the background steps', () => {
   it('are scheduled in steps of at most ARCHIVE_MARKS.tasks tasks', async () => {
     Object.assign(ARCHIVE_MARKS, { tasks: 2 })
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     for (let i = 0; i < 4; i++)
       await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: parent.id })
@@ -537,7 +537,7 @@ describe('the background steps', () => {
 describe('rows of tasks archived before marks existed', () => {
   it('stay out of the snapshot until a scheduled step marks them', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const old = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: NOW })
     const active = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await plantRelations(t, f, old, [active])
@@ -556,7 +556,7 @@ describe('rows of tasks archived before marks existed', () => {
 describe('a follow of an archived task', () => {
   it('is not sent, still brings news, and is sent again at once after a restore', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await plantRelations(t, f, task)
     await archive(t, f, task)

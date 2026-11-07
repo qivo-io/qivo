@@ -22,7 +22,8 @@ import {
   plantIssue,
   type T,
   uuid,
-  withOrg,
+  type withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
@@ -95,7 +96,7 @@ const terms = (): PlanInput => ({
 /* An organization on a connected plan, enrolled while billing runs. */
 async function billed() {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const operatorId = 'billing-operator'
   await t.run((ctx) =>
     ctx.db.insert('platform_admins', { auth_user_id: operatorId, note: 'test', created_at: NOW }),
@@ -115,7 +116,7 @@ async function billed() {
 async function unbilled() {
   vi.stubEnv('BILLING_ENABLED', 'false')
   const t = newT()
-  return { t, f: await withOrg(t) }
+  return { t, f: await withReadingAdmin(t) }
 }
 
 function remote(orgId: string, overrides: Record<string, unknown> = {}) {

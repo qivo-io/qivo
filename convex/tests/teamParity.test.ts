@@ -41,7 +41,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
 import { teamsJson } from './teamMembers.setup'
@@ -77,7 +77,7 @@ type Fx = OrgFixture & {
  * its name key, as on a deployment (nameKeys.setup.ts keyOrg). */
 async function setup(): Promise<Fx> {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const person = (name: string) =>
     plantSeat(t, {
       org_id: f.org.id,
@@ -1142,7 +1142,7 @@ describe("deleting a team settles its members' open tasks", () => {
 
   it('reads a legacy owned project once, however long its old description', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run(async (ctx) => {
       await ctx.db.insert('teams', {
         id: uuid(),

@@ -24,10 +24,10 @@
  * (lib/access.ts canBeAssignedFor and canSeeProjectFor), so a batch reads
  * the access rows once and a person costs no read of their own. Levels
  * come only from levelsFrom, as the writes' per-person checks come from
- * levelUnder. An organization admin is offered while both give admins
- * Lead, and follows ordinary access after the admin access split removes
- * both branches. tests/pickerParity.test.ts holds the pickers to the writes
- * over every access shape.
+ * levelUnder, and neither knows the organization role, so an organization
+ * admin is offered and accepted only with ordinary access, like anyone
+ * else. tests/pickerParity.test.ts holds the pickers to the writes over
+ * every access shape.
  *
  * The lists walk the organization's people in name order (lib/namedPages.ts
  * listBatch over model/nameKeys.ts indexes), keep each person the rule lets

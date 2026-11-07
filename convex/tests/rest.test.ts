@@ -43,7 +43,7 @@ import {
   TODAY,
   tick,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
 import { lowered, restPage, restPages } from './taskPages.setup'
@@ -65,7 +65,7 @@ async function refused(p: Promise<unknown>, code: RefusalCode, sentence: string)
 /* withOrg + an agent-shaped grant: the fixture agent holds a `user`
  * grant on the TBED meta (reads+writes FW/PCB); SKNK stays invisible. */
 async function machineOrg(t: T): Promise<OrgFixture> {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   await t.run(async (ctx) => {
     await ctx.db.insert('project_access', {
       project_id: f.meta.id,
@@ -404,7 +404,7 @@ describe('GET /v1/projects', () => {
 
   it('the viewer ceiling (0102): both viewer shapes read, neither writes', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const roleViewer = await plantAgent(t, f.org.id, 'Role viewer bot', 'viewer')
     await grant(t, f.meta.id, roleViewer.id, 'user') // org-role viewer holding a user grant
     const grantViewer = await plantAgent(t, f.org.id, 'Grant viewer bot', 'user')
@@ -557,7 +557,7 @@ describe('/v1/users', () => {
 
   it('not gated on a project grant — a grantless agent still reads the roster', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await keyOrg(t, f.org.id)
     const page = await t.query(internal.machine.rest.listUsers, {
       callerId: f.agent.id,
@@ -1438,7 +1438,7 @@ describe('POST /v1/tasks', () => {
 
   it('viewer agents write nothing (0102): read-only standing on a valid pair answers 403', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const roleViewer = await plantAgent(t, f.org.id, 'Role viewer bot', 'viewer')
     await grant(t, f.meta.id, roleViewer.id, 'user')
     const grantViewer = await plantAgent(t, f.org.id, 'Grant viewer bot', 'user')

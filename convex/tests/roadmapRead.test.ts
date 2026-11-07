@@ -41,7 +41,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { plantShared } from './overview.setup'
 import { countOrg } from './overviewCounts.setup'
@@ -114,7 +114,7 @@ const doneIn = (day: string): Partial<Doc<'issues'>> => ({
 describe('arguments', () => {
   it('refuses more than ROADMAP.owners owners, a search past LIMITS.search and a window that is not one, and answers at the bounds', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const scope = projectScope(f.guest, f.sub.id)
     const owners = (n: number) => Array.from({ length: n }, () => uuid())
     await expectRefusal(
@@ -153,7 +153,7 @@ describe('arguments', () => {
 describe('access', () => {
   it('answers unavailable alike for every selection it does not hold', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const archived = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
@@ -176,7 +176,7 @@ describe('access', () => {
 
   it("answers unavailable with access_unchecked from both reads where a bound of the caller's own reads stopped a check, never ok", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
     await t.run(async (ctx) => {
       await ctx.db.insert('project_access', {
@@ -220,7 +220,7 @@ describe('access', () => {
 
   it('adds no row, parent, subtask or Remaining of a hidden or an archived sub-project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sibling = await plantHiddenSibling(t, f, f.guest)
     const archived = await plantProject(t, {
       org_id: f.org.id,
@@ -256,7 +256,7 @@ describe('access', () => {
 
   it("reads no one else's task into an admin's My view", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await task(t, f.sub, { title: 'The admin’s', assignee_id: f.admin.id })
     await task(t, f.sub, { title: 'The user’s', assignee_id: f.user.id })
     await task(t, f.sub2, { title: 'Nobody’s' })
@@ -269,7 +269,7 @@ describe('access', () => {
     it(`answers the rows the Board answers, for a ${role} in every access shape, over every selection`, async () => {
       for (const shapeOf of SHAPES) {
         const t = newT()
-        const f = await withOrg(t)
+        const f = await withReadingAdmin(t)
         const me = await plantLogin(
           t,
           await plantSeat(t, { org_id: f.org.id, org_role: role, accepted_at: NOW }),
@@ -310,7 +310,7 @@ describe('visibility', () => {
    * 2025-12-15 to 2026-02-09, Mondays. */
   async function visibilityCase() {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sibling = await plantHiddenSibling(t, f, f.guest)
     const first = DEFAULT_WINDOW.from
     const last = DEFAULT_WINDOW.to
@@ -431,7 +431,7 @@ describe('visibility', () => {
 describe('filters', () => {
   it('applies My tasks and the people filter by the Reviewer rule, Priority and the text filter', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await task(t, f.sub, { title: 'Mine', assignee_id: f.guest.id, priority: 'high' })
     await task(t, f.sub, {
       title: 'Handed to review',
@@ -490,7 +490,7 @@ describe('filters', () => {
 describe('the planned task', () => {
   it('keeps the planning session’s task past the filter row only, never a task the caller does not hold, one the window hides, one named with another sub-project or an id of nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sibling = await plantHiddenSibling(t, f, f.guest)
     await task(t, f.sub, { title: 'Mine', assignee_id: f.guest.id })
     const theirs = await task(t, f.sub, { title: 'Theirs', assignee_id: f.user.id })
@@ -542,7 +542,7 @@ describe('the planned task', () => {
 
   it('reads nothing by the planned task’s id, so a task of another organization, one in a hidden project and an id of nothing answer and read the same, at a lowered document budget too', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sibling = await plantHiddenSibling(t, f, f.guest)
     await task(t, f.sub, { title: 'Mine', assignee_id: f.guest.id })
     // other people's tasks, which the read of FW's active tasks takes
@@ -603,7 +603,7 @@ describe('the planned task', () => {
 
   it('counts the planned task toward the ceiling', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     ROADMAP.ceiling = 3
     await plantTasks(t, f.sub, 3, (i) => ({ ...ordinary(i), priority: 'high' }))
     const low = await task(t, f.sub, { title: 'Low', priority: 'low' })
@@ -632,7 +632,7 @@ describe('the planned task', () => {
 describe('the ceiling', () => {
   it('counts groups: five subtasks under five groups fit a ceiling of 10, one more task does not, and Done tasks outside the window do not count', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     ROADMAP.ceiling = 10
     const groups = await plantTasks(t, f.sub, 5, ordinary)
     await plantTasks(t, f.sub, 5, (i) => ({ ...ordinary(i), parent_id: groups[i].id }))
@@ -698,7 +698,7 @@ describe('the ceiling', () => {
 
   it('answers over_ceiling from the counts with no task read, and falls back to the read while counting, under Priority and under a text filter', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     ROADMAP.ceiling = 10
     await plantTasks(t, f.sub, 6, (i) => ({ ...ordinary(i), assignee_id: f.guest.id }))
     await plantTasks(t, f.sub2, 4, (i) => ({
@@ -745,7 +745,7 @@ describe('the ceiling', () => {
 
   it('answers over_budget where a budget stops the read first, never ok with fewer rows', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantTasks(t, f.sub, 40, ordinary)
     const scope = projectScope(f.guest, f.sub.id)
     const whole = await roadmapRead(t, [f.guest], scope)
@@ -765,7 +765,7 @@ describe('the ceiling', () => {
 describe('the headings', () => {
   it("answers each sub-project's unfinished leaves' Remaining in tenths, Backlog included and Done left out, before the filters, and counting while the counts are not whole", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const hours: [Doc<'projects'>, Partial<Doc<'issues'>>][] = [
       [f.sub, { status: 'todo', remaining_hours: 1.5, assignee_id: f.guest.id }],
       [f.sub, { status: 'backlog', remaining_hours: 2 }],
@@ -800,7 +800,7 @@ describe('the headings', () => {
 describe("My view's sub-projects", () => {
   it('names a sub-project the person holds a task of by the Reviewer rule, whatever its status, dates or the filters', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const subs: Record<string, Doc<'projects'>> = {}
     for (const key of ['backlog', 'doneOutside', 'others', 'handedOn', 'group', 'reviewing'])
       subs[key] = await plantProject(t, {
@@ -867,7 +867,7 @@ describe("My view's sub-projects", () => {
 describe('parents and subtasks', () => {
   it("sends a row's parent in a sibling sub-project only where the caller is shown it, and a group row's subtasks that are not rows", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sibling = await plantHiddenSibling(t, f, f.guest)
     const shownParent = await task(t, f.sub2, { title: 'Parent in PCB', priority: 'low' })
     const hiddenParent = await task(t, sibling, { title: 'Parent in the sibling' })
@@ -937,7 +937,7 @@ describe('parents and subtasks', () => {
  * count row's bytes measured), which this case leaves alone. */
 async function hiddenOrg(wide: boolean) {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const planted = await plantHiddenSibling(t, f, f.guest)
   const sibling = await t.run(async (ctx) => {
     await ctx.db.patch(planted._id, { id: `ffffffff${planted.id.slice(8)}` })
@@ -1069,7 +1069,7 @@ async function plantOpen(t: T, project: Doc<'projects'>, n: number, from = 0) {
 describe('real limits', () => {
   it('answers a project of 800 open and 200 Done tasks over 3 sub-projects, and a search of it', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const subs = [f.sub, f.sub2, ...(await plantSubs(t, f.meta, 1))]
     // the project's open and Done tasks at their sum, as the read takes
     // both, the Board's design-size shape over the everyday 3 sub-projects,
@@ -1113,7 +1113,7 @@ describe('real limits', () => {
 
   it('answers a project of 30 sub-projects with 20 open tasks each', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const subs = [f.sub, f.sub2, ...(await plantSubs(t, f.meta, 28))]
     for (const [k, sub] of subs.entries()) await plantOpen(t, sub, 20, 100 * k)
     await countOrg(t, f.org.id)
@@ -1124,7 +1124,7 @@ describe('real limits', () => {
 
   it('answers a sub-project of 300 open tasks beside two of 30', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const third = (await plantSubs(t, f.meta, 1))[0]
     await plantOpen(t, f.sub, 300)
     await plantOpen(t, f.sub2, 30, 1000)
@@ -1142,7 +1142,7 @@ describe('real limits', () => {
 
   it('answers 200 Done tasks not yet archived beside 90 open ones, in a window that holds them all and one that holds none', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const third = (await plantSubs(t, f.meta, 1))[0]
     // 67, 67 and 66 Done tasks, within a sub-project's 150
     for (const [k, sub] of [f.sub, f.sub2, third].entries()) {
@@ -1178,7 +1178,7 @@ describe('real limits', () => {
 
   it("answers My view of 400 of the reader's tasks over the 200 sub-projects their teams share", async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await plantSeat(t, {
       org_id: f.org.id,
       org_role: 'user',
@@ -1197,7 +1197,7 @@ describe('real limits', () => {
 
   it('answers My view of a person in 5 teams, each sharing 20 sub-projects', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await plantSeat(t, {
       org_id: f.org.id,
       org_role: 'user',
@@ -1250,7 +1250,7 @@ describe('real limits', () => {
 
   it("answers the largest My view the ceiling allows, 1,000 of the person's subtasks under 800 parents, every other figure everyday", async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await plantSeat(t, {
       org_id: f.org.id,
       org_role: 'user',

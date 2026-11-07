@@ -64,7 +64,7 @@ import {
   type T,
   TODAY,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
 import { plantTicket } from './uploadTickets.setup'
@@ -109,7 +109,7 @@ type Fx = OrgFixture & {
  * deployment, since the workload lists people in name order. */
 async function setup(): Promise<Fx> {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   await t.run((ctx) =>
     ctx.db.insert('project_access', {
       project_id: f.meta.id,

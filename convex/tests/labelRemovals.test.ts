@@ -26,7 +26,7 @@ import {
   type T,
   TODAY,
   uuid,
-  withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
@@ -144,7 +144,7 @@ describe('a label on more tasks than one delete removes', () => {
     LABEL_REMOVAL.step = 3
     const info = vi.spyOn(console, 'info').mockImplementation(() => {})
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const bug = await plantLabel(t, f.org.id, 'Bug')
     const keep = await plantLabel(t, f.org.id, 'Keep')
     const tasks = await plantLabelledTasks(t, f, 10, [bug, keep])
@@ -252,7 +252,7 @@ describe('a label on more tasks than one delete removes', () => {
     LABEL_REMOVAL.inline = 3
     vi.spyOn(console, 'info').mockImplementation(() => {})
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const exact = await plantLabel(t, f.org.id, 'Exact')
     const over = await plantLabel(t, f.org.id, 'Over')
     await plantLabelledTasks(t, f, 3, [exact])
@@ -276,7 +276,7 @@ describe('a label on more tasks than one delete removes', () => {
     LABEL_REMOVAL.step = 40
     vi.spyOn(console, 'info').mockImplementation(() => {})
     const t = newT({ transactionLimits: { documentsWritten: 50 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const bug = await plantLabel(t, f.org.id, 'Bug')
     // planted in batches the limit allows
     for (let n = 0; n < 10; n++) await plantLabelledTasks(t, f, 20, [bug])
@@ -298,7 +298,7 @@ describe('recovery', () => {
     vi.spyOn(console, 'info').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const bug = await plantLabel(t, f.org.id, 'Bug')
     await plantLabelledTasks(t, f, 10, [bug])
     await remove(t, f, bug)
@@ -331,7 +331,7 @@ describe('recovery', () => {
     LABEL_REMOVAL.inline = 2
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const bug = await plantLabel(t, f.org.id, 'Bug')
     await plantLabelledTasks(t, f, 5, [bug])
     await remove(t, f, bug)

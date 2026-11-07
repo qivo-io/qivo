@@ -17,10 +17,10 @@ import type { QueryCtx } from '../_generated/server'
 import {
   ACCESS_NEEDS_A_PERSON,
   canChangeAccess,
+  canManageOwnProjectAccess,
   canManageProjectTeams,
   canManageProjectUsers,
   canSeeProject,
-  hasProjectLevel,
   NO_USER_MANAGEMENT,
   OWN_READS,
   projectLevel,
@@ -419,6 +419,56 @@ describe('the gate', () => {
 /* -------------------------------------------------------------------- get */
 
 describe('projectSettings.get', () => {
+  it('answers an admin who takes part in no project by management, and keeps them in once their level check stops', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const pia = await seat(t, f, 'Pia')
+    // Pia sees TBED only for navigation, through Firmware
+    await grant(t, f.sub, pia.id, nameKey('Pia'))
+    const every = {
+      can_edit: true,
+      can_change_lead: true,
+      can_manage_users: true,
+      can_manage_teams: true,
+      can_invite: true,
+      can_archive: true,
+      can_delete: true,
+      can_create_sub_project: true,
+    }
+    expect(await read.get(t, f.admin, f.meta.id)).toMatchObject({
+      state: 'ok',
+      level: null,
+      accessible: false,
+      ...every,
+    })
+    expect(await read.get(t, f.user, f.meta.id)).toMatchObject({
+      state: 'ok',
+      level: 'lead',
+      accessible: true,
+      ...every,
+    })
+    expect(await read.get(t, pia, f.meta.id)).toMatchObject({
+      state: 'ok',
+      level: 'viewer',
+      accessible: false,
+      can_edit: false,
+      can_create_sub_project: false,
+    })
+    // a bound that stops the navigation walk under TBED stops the level
+    // check: the admin keeps the page by management, with the level
+    // unknown, and Pia, who does not manage it, gets unavailable
+    OWN_READS.subProjects = 1
+    expect(await read.get(t, f.admin, f.meta.id)).toMatchObject({
+      state: 'ok',
+      level: null,
+      accessible: null,
+      ...every,
+    })
+    expect(await read.get(t, pia, f.meta.id)).toEqual({ state: 'unavailable' })
+    // the lead holds a level of their own before any walk
+    expect(await read.get(t, f.user, f.meta.id)).toMatchObject({ level: 'lead', accessible: true })
+  })
+
   it('answers the stored fields, the parent, the effective lead and the review time an empty field means', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -445,10 +495,10 @@ describe('projectSettings.get', () => {
       parent: null,
       inherited_review_hours: DEFAULT_REVIEW_HOURS,
       lead: { ...personOf(f.user), inherited: false },
-      // The admin access split makes an admin's level their ordinary one,
-      // projectLevel of lib/access.ts ordinaryOf(admin),
-      // here null; no right below changes with it.
-      level: 'lead',
+      // the admin's level is their ordinary one, none here, and every
+      // right below is management's
+      level: null,
+      accessible: false,
       can_edit: true,
       can_change_lead: true,
       can_manage_users: true,
@@ -536,19 +586,20 @@ async function writeRules(
   me: Doc<'profiles'>,
   p: Doc<'projects'>,
 ): Promise<SettingsRights> {
-  const lead = await hasProjectLevel(ctx, me, p.id, 'lead')
+  // model/projects.ts assertManages, deleteDeep and removalSummary
+  const manages = await canManageOwnProjectAccess(ctx, me, p)
   const person = canChangeAccess(me)
   const users = await canManageProjectUsers(ctx, me, p)
   return {
-    can_edit: lead,
-    can_change_lead: person && (p.type === 'meta' ? users : lead),
+    can_edit: manages,
+    can_change_lead: person && (p.type === 'meta' ? users : manages),
     can_manage_users: person && users,
     can_manage_teams: person && (await canManageProjectTeams(ctx, me, p)),
     can_invite: users,
-    can_archive: lead,
-    can_delete: lead,
-    can_create_sub_project:
-      (await canSeeProject(ctx, me, p)) && p.type === 'meta' && p.archived_at === undefined && lead,
+    can_archive: manages,
+    can_delete: manages,
+    // subProjectParent passes a top-level meta its caller manages
+    can_create_sub_project: p.type === 'meta' && p.archived_at === undefined && manages,
   }
 }
 
@@ -805,25 +856,33 @@ describe('rights', () => {
     const t = newT()
     const f = await withOrg(t)
     // a meta-typed row under TBED, which create and the header of
-    // projects.ts rule out for new rows; TBED's lead and the admin lead it
+    // projects.ts rule out for new rows; TBED's lead leads it, and the
+    // admin manages it
     const legacy = await plantProject(t, { org_id: f.org.id, type: 'meta', parent_id: f.meta.id })
     await keyOrg(t, f.org.id)
-    for (const me of [f.admin, f.user]) {
+    for (const [me, level] of [
+      [f.admin, null],
+      [f.user, 'lead'],
+    ] as const) {
       expect(await read.get(t, me, legacy.id), me.name).toMatchObject({
         state: 'ok',
-        level: 'lead',
+        level,
         can_edit: true,
         can_create_sub_project: false,
       })
-      // the lead picker of a new sub-project follows the create's own checks
-      // (model/projects.ts subProjectParent), which take the row
-      expect((await read.leadCandidates(t, me, { parent_id: legacy.id })).state, me.name).toBe(
-        'ready',
-      )
     }
-    // and the create takes it: the flag is stricter, as a sub-project there
-    // would sit outside every meta tree, where nobody could reach it
-    const created = await as(t, f.admin).mutation(api.projects.create, {
+    // the lead picker of a new sub-project follows the create's own checks
+    // (model/projects.ts subProjectParent): a parent that is not top level
+    // goes the level path, so the lead takes the row and the admin, who
+    // holds no level on it, reads it as missing
+    expect((await read.leadCandidates(t, f.user, { parent_id: legacy.id })).state).toBe('ready')
+    expect(await read.leadCandidates(t, f.admin, { parent_id: legacy.id })).toEqual({
+      state: 'unavailable',
+    })
+    // and the create takes it from the lead: the flag is stricter, as a
+    // sub-project there would sit outside every meta tree, where nobody
+    // could reach it
+    const created = await as(t, f.user).mutation(api.projects.create, {
       org_id: f.org.id,
       id: uuid(),
       type: 'project',

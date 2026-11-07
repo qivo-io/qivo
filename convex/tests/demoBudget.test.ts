@@ -24,7 +24,15 @@ import {
   demoStorageFull,
   PREVIEW_RETRY,
 } from '../model/demoUploads'
-import { as, expectRefusal, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
+import {
+  as,
+  expectRefusal,
+  newT,
+  plantIssue,
+  type T,
+  uuid,
+  withReadingAdmin,
+} from './helpers.setup'
 import { runSteps } from './trash.setup'
 
 declare class Request {
@@ -67,7 +75,7 @@ type Demo = Awaited<ReturnType<typeof setup>>
 async function setup() {
   const t = newT()
   t.registerComponent('betterAuth', authSchema, import.meta.glob('../betterAuth/**/*.*s'))
-  const fx = await withOrg(t)
+  const fx = await withReadingAdmin(t)
   const issue = await plantIssue(t, { org_id: fx.org.id, project_id: fx.sub.id })
   const user = (await t.mutation(components.betterAuth.adapter.create, {
     input: {

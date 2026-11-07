@@ -26,7 +26,7 @@ import {
   plantProject,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 import {
@@ -139,7 +139,7 @@ function nextUuids(...uuids: string[]) {
 describe('a used task or project id', () => {
   it('is refused for a new task in the same organization and in another once purged', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await createTask(t, f.user, f.sub.id, id)
     expect(await usedOf(t, id)).toMatchObject([{ table: 'issues', org_id: f.org.id }])
@@ -172,7 +172,7 @@ describe('a used task or project id', () => {
 
   it('is refused for a new project in the same organization and in another once purged', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await createProject(t, f.admin, id, f.meta.id)
     expect(await usedOf(t, id)).toMatchObject([{ table: 'projects', org_id: f.org.id }])
@@ -185,7 +185,7 @@ describe('a used task or project id', () => {
 
   it('is refused on REST and MCP creates, whose ids the server picks, should it pick one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = uuid()
     const project = uuid()
     await createTask(t, f.user, f.sub.id, task)
@@ -242,7 +242,7 @@ describe('a used task or project id', () => {
 
   it('is refused for an id the server chose, and a restore keeps the row its id has', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await createTask(t, f.user, f.sub.id, id)
     await purge(t, f, id, 'task')
@@ -299,7 +299,7 @@ describe('a used task or project id', () => {
 
   it('comes back with a restore from Deleted items, which records an id stored before the table', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = uuid()
     const kept = uuid()
     const project = uuid()
@@ -398,7 +398,7 @@ async function deleteInSteps(t: T, f: OrgFixture, count: number) {
 describe('teardowns', () => {
   it("an organization's deletion lets its ids go last, keeps those named outside, and leaves the others", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const live = uuid()
     const stored = uuid()
     const purged = uuid()
@@ -483,7 +483,7 @@ describe('teardowns', () => {
 
   it('the Northstar wipe takes out the totals, keeps an id a pending detach names, and lets it go at the next wipe once it ended', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const named = uuid()
     const other = uuid()
     await t.run((ctx) => startOrgTotals(ctx, f.org.id))
@@ -525,7 +525,7 @@ describe('teardowns', () => {
 
   it('a wipe in small calls looks at every kept row before it is done, past held ones at the front', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const ids = Array.from({ length: 6 }, () => uuid())
     for (const id of ids) await createTask(t, f.user, f.sub.id, id)
     const detaches = await t.run(async (ctx) => {
@@ -566,7 +566,7 @@ describe('teardowns', () => {
 
   it('deleteOrgDeep lets the ids go after the organization, so the guest fixture rebuilds with its own', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await createTask(t, f.user, f.sub.id, id)
     await createTask(t, f.user, f.sub.id, uuid())
@@ -717,7 +717,7 @@ describe('internal/usedIdsBackfill', () => {
 
   it('records live and stored tasks and projects, after a dry run that writes nothing, and nothing more the second time', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const w = await plantWork(t, f)
     const live = await t.run(async (ctx) => ({
       issues: (await ctx.db.query('issues').collect()).map((r) => `issues:${r.id}:${r.org_id}`),
@@ -784,7 +784,7 @@ describe('internal/usedIdsBackfill', () => {
 
   it('stops between steps once its time is up and goes on where it stopped', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantWork(t, f)
     const whole = await backfill(t, true)
     Object.assign(RUN, { ms: 0 })
@@ -807,7 +807,7 @@ describe('internal/usedIdsBackfill', () => {
 
   it('records a task an earlier release wrote with an id another organization used, and audits a call that fails', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await createTask(t, f.user, f.sub.id, id)
     await purge(t, f, id, 'task')
@@ -848,7 +848,7 @@ describe('internal/usedIdsBackfill', () => {
 
   it("stops inside a page of a project item's projects, and the next call writes the rest of it", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const top = uuid()
     const subs = [uuid(), uuid(), uuid()]
     await createProject(t, f.admin, top)
@@ -904,7 +904,7 @@ describe('internal/usedIdsBackfill', () => {
 
   it('keeps and audits the batches before one that fails, and reads that page again', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const ids = [uuid(), uuid(), uuid()]
     for (const id of ids) await createTask(t, f.user, f.sub.id, id)
     for (const id of ids) await forgetUsedId(t, id)

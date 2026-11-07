@@ -206,7 +206,8 @@ describe('reach rows follow ordinary access', () => {
       await syncReach(ctx, grantee.profile(f.otherAdmin.id), f.meta.id)
     })
     expect(await rowsOf(t, f.pia.id)).toEqual([])
-    expect(await rowsOf(t, f.otherAdmin.id)).toEqual([])
+    // the other organization's admin leads its project, which is theirs
+    expect((await rowsOf(t, f.otherAdmin.id)).filter((row) => row.org_id === f.org.id)).toEqual([])
     await expectAll(t, f)
   })
 })

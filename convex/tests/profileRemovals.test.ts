@@ -35,7 +35,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
 import { countOrg } from './overviewCounts.setup'
@@ -239,7 +239,7 @@ const remove = (t: T, profile: Doc<'profiles'>, now = new Date().toISOString()) 
 describe('the removal transaction under real limits', () => {
   it('removes a fresh invite and cancels another in an organization with 600 tasks', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 300 open tasks in one sub-project, the design size, and 300 done and
     // archived
     await t.run(async (ctx) => {
@@ -284,7 +284,7 @@ describe('the removal transaction under real limits', () => {
       rows: DEFAULT_BUDGET.rows / 8,
       bytes: DEFAULT_BUDGET.bytes / 8,
     })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const agent = f.agent.id
     // The agent created, reports and is assigned every task, 300 open tasks
     // in one sub-project, the design size. Clearing all 900 fields in one
@@ -340,7 +340,7 @@ describe('background steps', () => {
   it('clear 2×budget+1 rows per range over many steps, never more than the row budget in one', async () => {
     REMOVAL_BUDGET.rows = 3
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const history = { org_id: f.org.id, project_id: f.sub.id, other: f.admin, agent: f.agent }
     await plantHistory(t, { ...history, profile: f.user }, 7)
     await remove(t, f.user)
@@ -381,7 +381,7 @@ describe('background steps', () => {
 
   it('stop on the byte budget, so very large comments cannot wedge a step', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // 15 comments near the 1 MiB document limit, 15 MiB: one read still fits
     const body = 'x'.repeat(1000 * 1024)
@@ -540,7 +540,7 @@ describe('background steps', () => {
     REMOVAL_BUDGET.rows = 2
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const history = { org_id: f.org.id, project_id: f.sub.id, other: f.admin, agent: f.agent }
     await plantHistory(t, { ...history, profile: f.user }, 2)
     await remove(t, f.user)
@@ -574,7 +574,7 @@ describe('recovery', () => {
     REMOVAL_BUDGET.rows = 2
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const history = { org_id: f.org.id, project_id: f.sub.id, other: f.admin, agent: f.agent }
     await plantHistory(t, { ...history, profile: f.user }, 2)
     await remove(t, f.user)
@@ -603,7 +603,7 @@ describe('access ends in the removal transaction', () => {
   it('refuses the session, the personal token, the agent key and the OAuth grant before any step', async () => {
     const t = newT()
     t.registerComponent('betterAuth', authSchema, import.meta.glob('../betterAuth/**/*.*s'))
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // the fixture's real Better Auth login for the user
     const login = { _id: f.user.auth_user_id! }
@@ -765,7 +765,7 @@ describe('access rows past the first pass', () => {
     const t = newT({ transactionLimits: { documentsWritten: 100 } })
     ACCESS_FIRST_PASS.rows = DEFAULT_FIRST_PASS.rows / 16
     REMOVAL_BUDGET.rows = DEFAULT_BUDGET.rows / 16
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const user = f.user.id
     // 100 tokens, 3 more teams beside the fixture's and grants on 28
     // sub-projects, which with FW and PCB make the 30 the design size puts
@@ -842,7 +842,7 @@ describe('access rows past the first pass', () => {
   it('leaves rows that grant nothing and that no reader shows until the steps delete them', async () => {
     ACCESS_FIRST_PASS.rows = 1
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const tokenHashes = ['d4'.repeat(32), 'e5'.repeat(32)]
     const keyHashes = ['f6'.repeat(32), '17'.repeat(32)]
     await t.run(async (ctx) => {
@@ -977,7 +977,7 @@ describe('access rows past the first pass', () => {
 
   it(`refuses to remove someone who leads more than ${LIMITS.removalLeads.max} projects`, async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the fixture's user leads two projects already
     const more = (n: number) =>
       t.run(async (ctx) => {
@@ -1026,7 +1026,7 @@ describe('access rows past the first pass', () => {
 describe('the reserved id and its end states', () => {
   it('profiles.create refuses an id with a pending removal until the cleanup ends', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await as(t, f.admin).mutation(api.profiles.remove, { org_id: f.org.id, id: f.viewer.id })
     const create = (id: string, email: string) =>
       as(t, f.admin).mutation(api.profiles.create, {
@@ -1052,7 +1052,7 @@ describe('the reserved id and its end states', () => {
   it('ends the job when a re-seed created a live profile with the id', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const history = { org_id: f.org.id, project_id: f.sub.id, other: f.admin, agent: f.agent }
     await plantHistory(t, { ...history, profile: f.user }, 1)
     await remove(t, f.user)
@@ -1074,7 +1074,7 @@ describe('the reserved id and its end states', () => {
 
   it('a cancelled invitation can be sent again and claimed at sign-in', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const email = 'anna@testbed.test'
     const invite = await plantSeat(t, { org_id: f.org.id, email })
     await t.run((ctx) =>
@@ -1114,7 +1114,7 @@ describe('the reserved id and its end states', () => {
 
   it('finishes after deleteOrgDeep removed the organization', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const history = { org_id: f.org.id, project_id: f.sub.id, other: f.admin, agent: f.agent }
     await plantHistory(t, { ...history, profile: f.user }, 2)
     await remove(t, f.user)
@@ -1134,7 +1134,7 @@ describe('the reserved id and its end states', () => {
 
   it('a task restored before its step keeps the stale id until the step clears it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const archived = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -1163,7 +1163,7 @@ describe('the reserved id and its end states', () => {
 describe('bounds a long credential and file history', () => {
   it('revokes at most REVOKE_AT_ONCE connections at once and deletes every one in the steps', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run(async (ctx) => {
       for (let i = 0; i < REVOKE_AT_ONCE + 44; i++) {
         await ctx.db.insert('oauth_connections', {
@@ -1194,7 +1194,7 @@ describe('bounds a long credential and file history', () => {
 
   it('clears attachments with very large names in small reads under real limits', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // 25 names of 800 KiB pass the 16 MiB read limit if read in one go
     const name = 'n'.repeat(800 * 1024)
@@ -1235,7 +1235,7 @@ describe('bounds a long credential and file history', () => {
     // query: 256 of 20,000 comments read four at a time took 10.3 s. A step
     // here reads about 13 ranges in one pass, and 75 four at a time
     const t = newT({ transactionLimits: { databaseQueries: 40 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await t.run(async (ctx) => {
       for (let i = 0; i < 2 * REMOVAL_BUDGET.rows; i++)

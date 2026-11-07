@@ -40,7 +40,7 @@ import {
   plantProject,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 import {
@@ -71,7 +71,7 @@ afterEach(() => {
 /** withOrg with the agent able to write the fixture's sub-projects, for
  * REST and MCP. */
 async function machineOrg(t: T): Promise<OrgFixture> {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   await t.run((ctx) =>
     ctx.db.insert('project_access', {
       project_id: f.meta.id,
@@ -242,7 +242,7 @@ describe('the writers keep one equal row per task', () => {
 
   it('gives a task stored before the table its row on its first description save', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const old = await plantOldTask(t, f, 'Old text')
     await edit(t, f, old, { title: 'Renamed' })
     expect(await rowsOf(t, old)).toEqual([])
@@ -255,7 +255,7 @@ describe('the writers keep one equal row per task', () => {
 
   it('settles description images and the row in one save', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await copyTaskTexts(t, f.org.id)
     const image = await t.run(async (ctx) => {
@@ -295,7 +295,7 @@ describe('the writers keep one equal row per task', () => {
 
   it('the over-cap fix trims the row and unsets the copy, and its dry run neither', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -313,7 +313,7 @@ describe('the writers keep one equal row per task', () => {
 
   it("the over-cap fix's pages read each task's description row, within Convex's limits", async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 20 rows near Convex's 1 MiB document limit beside task rows without
     // text, as the third release leaves them, planted first, then 80
     // untrimmed descriptions of 20,000 three-byte characters in both
@@ -515,7 +515,7 @@ describe('a task row that still holds a copy of its text', () => {
 
   it("a move, an archive and the nightly archive keep the row's text when the copy differs", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const done_at = new Date(Date.now() - 60 * 86_400_000).toISOString()
     const base = { org_id: f.org.id, project_id: f.sub.id, description: 'Row text' }
     const moved = await plantIssue(t, base)
@@ -565,7 +565,7 @@ const staleRow = (t: T, id: string, description: string) =>
 describe('Deleted items', () => {
   it("stores the task row's text, else the row's, its steps drop the row, and a restore writes it back", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const root = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -603,7 +603,7 @@ describe('Deleted items', () => {
 
   it('keeps issues.description over a row an earlier release left behind, in a task and a project item', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -636,7 +636,7 @@ describe('Deleted items', () => {
 
   it("takes a project's tasks with their rows and brings them back, and a purge leaves none", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const kept = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -674,7 +674,7 @@ describe('Deleted items', () => {
 
   it('stores the shown text of a task without a copy whose first row is stale, as a task item and in a project item, and restores it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const alone = await twoRows(t, f, f.sub.id, 'Old text', 'Current text')
     const inProject = await twoRows(t, f, f.sub2.id, 'Old project text', 'Current project text')
     // the task item's steps have not run, so both of its rows wait for them
@@ -726,7 +726,7 @@ describe('Deleted items', () => {
 
   it('charges a move for both rows it reads of a task without a copy whose first row is stale', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const filler = 'x'.repeat(15_000)
     // the person's delete moves the first task of the project itself, then
     // two tasks each with two rows of about 15 KB as its bytes allow
@@ -833,7 +833,7 @@ async function createWithId(t: T, f: OrgFixture, id: string, where: 'same' | 'ot
 describe('a task id that comes back', () => {
   it("leaves another organization's row that waits for its own steps when a split stopped partway goes on", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { item, sub } = await splitHalfway(t, f)
     await createWithId(t, f, sub.id, 'other')
     // the other organization deletes the task, and its row waits for that
@@ -857,7 +857,7 @@ describe('a task id that comes back', () => {
     const org = where === 'same' ? 'the same organization' : 'another organization'
     it(`keeps its row when a split stopped partway goes on, in ${org}`, async () => {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const { sub } = await splitHalfway(t, f)
       const orgId = await createWithId(t, f, sub.id, where)
       await runSteps(t)
@@ -868,7 +868,7 @@ describe('a task id that comes back', () => {
 
     it(`keeps its row when a teardown clears the Deleted items of a split stopped partway, in ${org}`, async () => {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const { sub } = await splitHalfway(t, f)
       const orgId = await createWithId(t, f, sub.id, where)
       await t.run((ctx) => clearOrgTrash(ctx, f.org.id, { left: Number.POSITIVE_INFINITY }))
@@ -879,7 +879,7 @@ describe('a task id that comes back', () => {
 
   it("takes over the row with its own organization, which the first one's teardown leaves alone", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const first = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -950,7 +950,7 @@ describe('teardowns', () => {
 
   it("an organization's deletion in steps deletes its rows and leaves the others", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantWork(t, f)
     await as(t, f.admin).mutation(api.orgRemovals.recordExport, { org_id: f.org.id })
     const { delete_after } = await as(t, f.admin).action(api.orgRemovals.request, {
@@ -976,7 +976,7 @@ describe('teardowns', () => {
 
   it('the deep delete and the Northstar wipe delete every row of the organization', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantWork(t, f)
     for (let done = false; !done; )
       done = await t.run((ctx) => wipeWorkStep(ctx, f.org.id, [f.user.id]))
@@ -1230,7 +1230,7 @@ describe('the project and archived copies', () => {
 
   it('the nightly archive stamps the rows of the tasks it archives', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const done_at = new Date(Date.now() - 60 * 86_400_000).toISOString()
     const due = await plantIssue(t, {
       org_id: f.org.id,
@@ -1254,7 +1254,7 @@ describe('the project and archived copies', () => {
 
   it('a restore from Deleted items writes the copies of the task as it comes back', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const archived = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -1280,7 +1280,7 @@ describe('the project and archived copies', () => {
 
   it('a task without a row gets none from a move or an archive, and the backfill inserts it with them', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const old = await plantOldTask(t, f, 'Before the table')
     await as(t, f.admin).mutation(api.issues.move, {
       org_id: f.org.id,
@@ -1300,7 +1300,7 @@ describe('the project and archived copies', () => {
 
   it('a write that skips them leaves the rows stale, which the check sees', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // as an earlier release archives it, without its row
     await t.run((ctx) => ctx.db.patch(task._id, { archived_at: NOW }))
@@ -1309,7 +1309,7 @@ describe('the project and archived copies', () => {
 
   it('a second row of a task stops no move, archive, restore or nightly archive, and the repair deletes it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -1353,7 +1353,7 @@ describe('the project and archived copies', () => {
 
   it('search_description filters by organization, project and archived state', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const plant = async (project_id: string, archived_at?: string, org_id = f.org.id) =>
       (
         await plantIssue(t, {
@@ -1413,7 +1413,7 @@ describe("the copies at Convex's limits", () => {
     // the largest descriptions fill it under Convex's own limits
     Object.assign(ARCHIVE_LIMITS, { bytes: 60_000 })
     const t = newT({ transactionLimits: { bytesRead: 230_000 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const done_at = new Date(Date.now() - 60 * 86_400_000).toISOString()
     await plantLong(
       t,
@@ -1443,7 +1443,7 @@ describe("the copies at Convex's limits", () => {
     // are lowered too, to stay inside the limit.
     Object.assign(PAGE, { bytes: 200_000 })
     const t = newT({ transactionLimits: { bytesRead: 1024 * 1024 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const done_at = new Date(Date.now() - 60 * 86_400_000).toISOString()
     const near = (c: string) => c.repeat(64_000)
     const ids: string[] = []
@@ -1495,7 +1495,7 @@ describe("the copies at Convex's limits", () => {
 
   it('with both copies, a subtree archive or move of long descriptions finishes, or refuses and changes nothing', async () => {
     const t = newT({ transactionLimits: SUBTREE_READ })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const away = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
@@ -1591,7 +1591,7 @@ describe("the copies at Convex's limits", () => {
 
   it(`with cleared task rows, ${LIMITS.moveSubtree.max} subtasks of 6,000 characters, half of them archived, move in ASCII and are refused in a three-byte script, changing nothing`, async () => {
     const t = newT({ transactionLimits: SUBTREE_READ })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const away = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
@@ -1674,7 +1674,7 @@ describe("the copies at Convex's limits", () => {
   for (const copied of [true, false])
     it(`refuses a subtree of descriptions stored before the caps before one patch could pass the read limit, ${copied ? 'with both copies' : 'with cleared task rows'}`, async () => {
       const t = newT({ transactionLimits: true })
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const away = await plantProject(t, {
         org_id: f.org.id,
         type: 'project',
@@ -1878,7 +1878,7 @@ const KINDS_FOUND = (k: Awaited<ReturnType<typeof plantKinds>>) => ({
 describe('the backfill', () => {
   it('reports every kind in its dry run and writes nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const k = await plantKinds(t, f)
     const before = await snapshot(t)
     expect(await backfill(t, { dry_run: true })).toMatchObject({
@@ -1892,7 +1892,7 @@ describe('the backfill', () => {
 
   it('inserts missing rows, mends the rest only with repair, never writes a waiting or skipped row, and then reports zeros', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const k = await plantKinds(t, f)
     const found = KINDS_FOUND(k)
     const { ids: _ids, ...counts } = found
@@ -1956,7 +1956,7 @@ describe('the backfill', () => {
 
   it('reports rows without the copies or with stale ones as differ, and only repair stamps them', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = async () => (await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })).id
     const fine = await task()
     const unstamped = await task()
@@ -2016,7 +2016,7 @@ describe('the backfill', () => {
 
   it('counts a second row of a task without a copy, and its repair keeps the text readers showed', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const plant = async (description: string) =>
       await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description })
     // the first row's archived copy is stale and the second holds the
@@ -2089,7 +2089,7 @@ describe('the backfill', () => {
 
   it('a clear unsets exactly the held copies, no task of another kind, with its audit row', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const k = await plantKinds(t, f)
     const before = await snapshot(t)
     const result = await backfill(t, { dry_run: false, clear: true })
@@ -2182,7 +2182,7 @@ describe('the backfill', () => {
 
   it('refuses a clear with repair or with a dry run before it reads', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantCopiedIssue(t, { org_id: f.org.id, project_id: f.sub.id, description: 'Held' })
     const before = await snapshot(t)
     await expect(backfill(t, { dry_run: false, clear: true, repair: true })).rejects.toThrow(
@@ -2197,7 +2197,7 @@ describe('the backfill', () => {
 
   it('counts every document a page reads, long rows, repair and clear pages included', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // four tasks whose texts are long in both copies; two rows are stale
     // and one task has a second row, so a repair page patches and deletes
     // them, and a fifth whose copy a clear page unsets. The page's bytes
@@ -2294,7 +2294,7 @@ describe('the backfill', () => {
 
   it('goes on from its cursor, a call at a time', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (let i = 0; i < 6; i++) await plantOldTask(t, f, `Old ${i}`)
     Object.assign(PAGE, { rows: 2 })
     Object.assign(RUN, { ms: 0 })
@@ -2327,7 +2327,7 @@ describe('the backfill', () => {
   it('records the pages it committed and where to go on when a page fails', async () => {
     // a page that inserts more than 30 rows fails
     const t = newT({ transactionLimits: { documentsWritten: 30 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (let i = 0; i < 15; i++) await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     for (let i = 0; i < 55; i++) await plantOldTask(t, f, `Old ${i}`)
     // the first page holds 15 tasks with rows and 20 without, the second 35
@@ -2367,7 +2367,7 @@ describe('the backfill', () => {
 
   it('stays exact while the writers change tasks between its pages', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const olds: string[] = []
     for (let i = 0; i < 4; i++) olds.push(await plantOldTask(t, f, `Old ${i}`))
     Object.assign(PAGE, { rows: 1 })
@@ -2403,7 +2403,7 @@ describe('the backfill', () => {
 
   it('stays exact while the writers change tasks between the pages of a clear', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const ids: string[] = []
     for (let i = 0; i < 4; i++)
       ids.push((await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })).id)

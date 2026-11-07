@@ -30,7 +30,7 @@ import {
   type T,
   taskWithText,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 /* The print the app sends for a title or a comment body it read. */
@@ -56,7 +56,7 @@ type Fx = OrgFixture & { t: T }
 
 async function setup(): Promise<Fx> {
   const t = newT()
-  return { t, ...(await withOrg(t)) }
+  return { t, ...(await withReadingAdmin(t)) }
 }
 
 /* issues.update as `who`. */
@@ -556,34 +556,35 @@ describe('comments', () => {
     const fx = await setup()
     const row = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
     const id = uuid()
-    await as(fx.t, fx.user).mutation(api.comments.create, {
+    await as(fx.t, fx.guest).mutation(api.comments.create, {
       org_id: fx.org.id,
       id,
       issue_id: row.id,
       body: 'First words',
     })
-    await as(fx.t, fx.admin).mutation(api.comments.update, {
+    // the project's lead edits the guest's comment
+    await as(fx.t, fx.user).mutation(api.comments.update, {
       org_id: fx.org.id,
       id,
-      body: 'Admin words',
+      body: 'Lead words',
       expected: { body: titlePrint('First words') },
     })
     const update = (body: string, seen: string) =>
-      as(fx.t, fx.user).mutation(api.comments.update, {
+      as(fx.t, fx.guest).mutation(api.comments.update, {
         org_id: fx.org.id,
         id,
         body,
         expected: { body: titlePrint(seen) },
       })
-    const data = await fieldChanged(update('User words', 'First words'))
+    const data = await fieldChanged(update('Guest words', 'First words'))
     const stored = await fx.t.run((ctx) => byId(ctx, 'comments', id))
     expect(data.changes).toEqual([
-      { record: 'comment', id, field: 'body', by: fx.admin.id, at: stored?.edited_at },
+      { record: 'comment', id, field: 'body', by: fx.user.id, at: stored?.edited_at },
     ])
-    expect(data.message).toBe(sentence('admin', 'body', `comment ${id} on ${key(row)}`))
-    expect(stored?.body).toBe('Admin words')
-    await update('User words', 'Admin words')
-    expect((await fx.t.run((ctx) => byId(ctx, 'comments', id)))?.body).toBe('User words')
+    expect(data.message).toBe(sentence('user', 'body', `comment ${id} on ${key(row)}`))
+    expect(stored?.body).toBe('Lead words')
+    await update('Guest words', 'Lead words')
+    expect((await fx.t.run((ctx) => byId(ctx, 'comments', id)))?.body).toBe('Guest words')
   })
 })
 

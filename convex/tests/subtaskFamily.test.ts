@@ -35,7 +35,7 @@ import {
   plantSubscription,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 const ARCHIVED = '2026-01-02T00:00:00.000Z'
@@ -46,14 +46,16 @@ const grant = (t: T, project_id: string, profile_id: string) =>
   })
 
 async function scene(t: T) {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const cloud = await plantProject(t, { org_id: f.org.id, key: 'CLD', name: 'Cloud' })
   const sub = { org_id: f.org.id, type: 'project' as const, parent_id: cloud.id }
   const backend = await plantProject(t, { ...sub, key: 'BE', name: 'Backend' })
   const frontend = await plantProject(t, { ...sub, key: 'FE', name: 'Frontend' })
-  // the agent writes both top-level projects; the user leads TBED and edits Cloud
+  // the agent writes both top-level projects; the user leads TBED and edits
+  // Cloud; the admin, who moves tasks between them, edits Cloud too
   for (const project of [f.meta.id, cloud.id]) await grant(t, project, f.agent.id)
   await grant(t, cloud.id, f.user.id)
+  await grant(t, cloud.id, f.admin.id)
   return { f, cloud, backend, frontend }
 }
 

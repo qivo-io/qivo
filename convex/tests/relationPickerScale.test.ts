@@ -5,7 +5,8 @@
  * open tasks a sub-project). The figures are the open tasks of one
  * project, of one sub-project, the sub-projects under one project with the
  * archived ones at their sum, a project's Done tasks, the catalogue at its
- * sum for a member and an admin, one batch at its full scan, the teams a
+ * sum for a member and the lead of every project, one batch at its full
+ * scan, the teams a
  * person is in, the sub-projects one person reads, the teams a project is
  * shared with and a team's shares. Each case prints what each first batch read,
  * the figures RELATION_PICKER's docstring quotes, and checks that it
@@ -33,7 +34,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { pageOrg } from './pageOrg.setup'
 
@@ -202,7 +203,7 @@ type Sizes = {
  */
 async function pickerOrg(o: Sizes = {}) {
   const t = newT({ transactionLimits: true })
-  const f: OrgFixture = await withOrg(t)
+  const f: OrgFixture = await withReadingAdmin(t)
   const familySubs = o.familySubs ?? 3
   const tops: Doc<'projects'>[] = []
   const subs: Doc<'projects'>[][] = []
@@ -323,7 +324,7 @@ describe('relation picker reads at the design size', () => {
     await pickers(e.t, 'a family shared with 5 teams', e.member, e.open)
   })
 
-  it('reads Search all your projects over a catalogue of 2,000 projects, for a member and an admin', async () => {
+  it('reads Search all your projects over a catalogue of 2,000 projects, for a member and the lead of every project', async () => {
     // 200 and 500 live, 300 and 1,000 archived, with withOrg's four, 2
     // tasks a live sub-project, and a member who reads 60 sub-projects
     const e = await pageOrg({
@@ -344,7 +345,7 @@ describe('relation picker reads at the design size', () => {
     )
     for (const [who, me] of [
       ['a member of 60 sub-projects', e.member],
-      ['an admin of 700 live projects', e.admin],
+      ['the lead of 700 live projects', e.user],
     ] as const) {
       const family = await measure(e.t, me, { issue_id: open.id, kind: 'link', search: 'quokka' })
       record(`the catalogue, ${who}, the family`, family.figures)
@@ -368,9 +369,9 @@ describe('relation picker reads at the design size', () => {
     }
   })
 
-  it('reads one batch of Search all your projects at its full scan, for an admin', async () => {
+  it('reads one batch of Search all your projects at its full scan, for the lead of every project', async () => {
     // 167 sub-projects of about 30 tasks, groups' subtasks included, about
-    // half the organization's open tasks, every one the admin's to see
+    // half the organization's open tasks, every one the lead's to see
     const e = await pageOrg({ tops: 56, subs: 167, tasks: 5000, archived: 0 })
     const open = await e.t.run(
       async (ctx) =>
@@ -379,19 +380,19 @@ describe('relation picker reads at the design size', () => {
           .withIndex('by_project', (q) => q.eq('project_id', (e.subs[0] as Doc<'projects'>).id))
           .first()) as Doc<'issues'>,
     )
-    const family = await measure(e.t, e.admin, {
+    const family = await measure(e.t, e.user, {
       issue_id: open.id,
       kind: 'link',
       search: 'quokka',
     })
     const cursor = family.answer.state === 'ok' ? (family.answer.all_projects as string) : ''
-    const all = await measure(e.t, e.admin, {
+    const all = await measure(e.t, e.user, {
       issue_id: open.id,
       kind: 'link',
       search: 'quokka',
       cursor,
     })
-    record('an admin, a rare word at the full scan', all.figures)
+    record('the lead, a rare word at the full scan', all.figures)
     expect(all.figures).toMatchObject({ rows: 0, stopped: true, end: false })
   })
 

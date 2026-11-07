@@ -29,7 +29,7 @@ import {
   type T,
   TODAY,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
 import { itemFor, plantCredential, storedRows } from './trash.setup'
@@ -147,7 +147,7 @@ type Fx = OrgFixture & { t: T }
  * meta (reads/writes sub + sub2, blind to hidden). */
 async function machineOrg(): Promise<Fx> {
   const t = newT()
-  const fx = await withOrg(t)
+  const fx = await withReadingAdmin(t)
   await t.run(async (ctx) => {
     await ctx.db.insert('project_access', {
       project_id: fx.meta.id,
@@ -1700,12 +1700,14 @@ describe('write tools', () => {
       /^sub-project XSUB does not belong to project TBED, and tasks are never created under another project's sub-project$/,
     )
     void sub3
-    // an archived meta answers "archived", never "no sub-projects yet"
+    // an archived meta answers "archived", never "no sub-projects yet",
+    // to the admin, who leads it
     await plantProject(fx.t, {
       org_id: fx.org.id,
       key: 'ARCM',
       archived_at: NOW,
       team_id: fx.team.id,
+      lead_id: fx.admin.id,
     })
     await expectRefusal(
       fx.t.mutation(internal.machine.mcp.createIssue, {
