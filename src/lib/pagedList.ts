@@ -25,8 +25,13 @@
    its answers while another page shows, as while the tab is hidden: React
    stops its effects then, which stops its reads, and when the page shows
    again it shows what it held at once and reads the same batches or page
-   again, `refreshing` until they answered. It imports nothing from the
-   store.
+   again, `refreshing` until they answered. A batch or page whose read
+   failed reads again with them, and its failure goes once it answers. A
+   failed Next or Previous keeps its note until Retry or another move,
+   since its read stopped when it failed. Each visit counts position
+   refusals afresh: a list a second refusal failed starts again from its
+   first batch or page as the page shows, and its next refusal starts it
+   again rather than failing it. It imports nothing from the store.
 
    A list reads its batches from one of two sources (BatchSource):
 
@@ -66,7 +71,8 @@
        shows twice, and one that moved into it never goes missing.
      - A batch refused for its position, as after the server's secret
        rotated, starts the list again from its first batch, once for one
-       key; a second refusal is the list's failure, and Retry starts it
+       key and visit of a kept page; a second refusal is the list's
+       failure, and Retry, or the kept page showing again, starts it
        again. Any other failure shows in place of that batch with its last
        rows, and the list shows no end while it stands.
      - While the tab or the desktop window is hidden (lib/viewVisibility.ts)
@@ -829,6 +835,16 @@ function liveEngine<A, Row>(
       if (next === kept) return
       const was = reading()
       kept = next
+      // a kept page shown again counts its position refusals afresh, and a
+      // list a second one failed starts again from its first batch
+      if (!kept) {
+        restarted = null
+        if (failed) {
+          restart()
+          changed()
+          return
+        }
+      }
       rewatch(was)
     },
     keeps: true,
@@ -1245,6 +1261,16 @@ function pagesEngine<A, Row>(options: () => PagedPagesOptions<A, Row>, changed: 
       if (next === kept) return
       const was = reading()
       kept = next
+      // a kept page shown again counts its position refusals afresh, and a
+      // list a second one failed starts again from its first page
+      if (!kept) {
+        restarted = null
+        if (failed) {
+          openAt([null])
+          changed()
+          return
+        }
+      }
       rewatch(was)
     },
     keeps: true,
@@ -1332,15 +1358,17 @@ function pagesEngine<A, Row>(options: () => PagedPagesOptions<A, Row>, changed: 
  *   end; one that stopped without moving past its start is `stuck`, with
  *   Retry.
  * - A start refused for its position goes back to the first page once for
- *   one key; a second refusal is the list's failure, and Retry starts from
- *   the first page. A new key starts at the first page, or at the starts a
+ *   one key and visit of a kept page; a second refusal is the list's
+ *   failure, and Retry, or the kept page showing again, starts from the
+ *   first page. A new key starts at the first page, or at the starts a
  *   page remembered for it.
  * - While the tab or the desktop window is hidden the reads stop and the
  *   answer stays; on return the page reads again and is `refreshing` until
  *   it answered on the current connection. A kept page that hides
  *   (components/KeptView.tsx), whose effects React stops, does the same:
  *   it keeps its answer, its page starts and its place, so it shows the
- *   page the person was on at once when it shows again.
+ *   page the person was on at once when it shows again. A failed move
+ *   keeps its note until Retry or another move.
  *
  * It holds what it read in the hook and drops it when the page unmounts.
  */

@@ -738,6 +738,62 @@ describe('a list kept live a batch at a time', () => {
     expect(names()).toHaveLength(25)
   })
 
+  it('counts refused positions afresh on each visit of a kept page, and starts a failed list again on return', async () => {
+    plant('a', 60)
+    const kept = (mode: 'visible' | 'hidden') =>
+      act(async () =>
+        root.render(
+          <Activity mode={mode}>
+            <View listKey="k" source={LIVE('k')} />
+          </Activity>,
+        ),
+      )
+    const refusal = new ConvexError({ code: 'bad_request', message: 'not a cursor' })
+    const refuse = (on: boolean) => {
+      server.fail = on ? (args) => (args.after || args.through ? refusal : null) : null
+    }
+    await kept('visible')
+    await publish()
+    await act(async () => now().more())
+    await publish()
+    // a first refusal starts the list again from its first batch
+    refuse(true)
+    await publish()
+    expect(open()).toEqual([{ list: 'k' }])
+    refuse(false)
+    await publish(true)
+    await act(async () => now().more())
+    await publish()
+    expect(names()).toHaveLength(50)
+    // another page shows, and on return the next refusal starts the list
+    // again rather than failing it
+    await kept('hidden')
+    await kept('visible')
+    await publish(true)
+    refuse(true)
+    await publish()
+    expect(now().phase).not.toBe('failed')
+    expect(open()).toEqual([{ list: 'k' }])
+    refuse(false)
+    await publish(true)
+    expect(names()).toHaveLength(25)
+    // a second refusal in one visit fails the list, which starts again
+    // from its first batch once the page shows again
+    await act(async () => now().more())
+    await publish()
+    refuse(true)
+    await publish()
+    expect(now().phase).toBe('failed')
+    expect(open()).toEqual([])
+    refuse(false)
+    await kept('hidden')
+    await kept('visible')
+    expect(open()).toEqual([{ list: 'k' }])
+    await publish()
+    expect(now().phase).toBe('ready')
+    expect(names()).toHaveLength(25)
+  })
+
   it('keeps a failed batch’s rows with its note in place, and Retry reads it again', async () => {
     plant('a', 60)
     await render({ listKey: 'k', source: LIVE('k') })
@@ -1007,6 +1063,62 @@ describe('a list shown a page at a time', () => {
     await publish()
     expect(shown()[0]).toBe('a00')
     expect(page().phase).toBe('ready')
+  })
+
+  it('counts refused starts afresh on each visit of a kept page, and starts a failed list again on return', async () => {
+    plant('a', 60)
+    const kept = (mode: 'visible' | 'hidden') =>
+      act(async () =>
+        root.render(
+          <Activity mode={mode}>
+            <Pages listKey="k" />
+          </Activity>,
+        ),
+      )
+    const refusal = new ConvexError({ code: 'bad_request', message: 'not a cursor' })
+    const refuse = (on: boolean) => {
+      server.fail = on ? (args) => (args.after ? refusal : null) : null
+    }
+    await kept('visible')
+    await publish()
+    await act(async () => page().next())
+    await publish()
+    // a first refusal goes back to the first page
+    refuse(true)
+    await publish()
+    expect(page().starts).toEqual([null])
+    refuse(false)
+    await publish(true)
+    await act(async () => page().next())
+    await publish()
+    expect(shown()[0]).toBe('a25')
+    // another page shows, and on return the next refusal goes back to the
+    // first page rather than failing the list
+    await kept('hidden')
+    await kept('visible')
+    await publish(true)
+    refuse(true)
+    await publish()
+    expect(page().phase).not.toBe('failed')
+    expect(open()).toEqual([{ list: 'k' }])
+    refuse(false)
+    await publish(true)
+    expect(shown()[0]).toBe('a00')
+    // a second refusal in one visit fails the list, which starts again from
+    // its first page once the page shows again
+    await act(async () => page().next())
+    await publish()
+    refuse(true)
+    await publish()
+    expect(page().phase).toBe('failed')
+    expect(open()).toEqual([])
+    refuse(false)
+    await kept('hidden')
+    await kept('visible')
+    expect(open()).toEqual([{ list: 'k' }])
+    await publish()
+    expect(page().phase).toBe('ready')
+    expect(shown()[0]).toBe('a00')
   })
 
   it('keeps at most PAGE_LIMITS.starts page starts, so Previous stops at the oldest held', async () => {
