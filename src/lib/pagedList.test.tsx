@@ -6,7 +6,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LIMITS } from '../../convex/lib/limits'
 import type { LiveTransition } from './liveQueries'
-import type { BatchAt, BatchSource, ListBatch, PagedList, PagedPages } from './pagedList'
+import type { BatchAt, BatchSource, ListBatch, OnceList, PagedList, PagedPages } from './pagedList'
 
 /* The shared paged list (lib/pagedList.ts) over a transport double and a
    small name-ordered server: the `once` source's reads on demand, and the
@@ -646,6 +646,59 @@ describe('a list read once a batch', () => {
         shown.retry()
       })
       expect(page.asked).toHaveLength(2)
+    })
+
+    it('settles a refresh started while the view changes once, when its own read lands', async () => {
+      plant('a', 30)
+      /** A list read through `d` whose next change starts a refresh, and
+          what each refresh's promise has done. */
+      const nesting = (d: ReturnType<typeof deferred>) => {
+        const settled = { outer: false, inner: false }
+        let armed = false
+        const list: OnceList<ListBatch<Row>, Row> = onceList<ListBatch<Row>, Row>(
+          () => ({ key: null, source: d.source, batch: (a) => a, id: (row) => row.id, most: 200 }),
+          () => {
+            if (!armed) return
+            armed = false
+            void list.refresh().then(() => {
+              settled.inner = true
+            })
+          },
+        )
+        const arm = () => {
+          armed = true
+        }
+        const outer = () =>
+          void list.refresh().then(() => {
+            settled.outer = true
+          })
+        return { list, settled, arm, outer }
+      }
+      // a refresh whose answer, as it lands, starts another
+      const kept = deferred()
+      const one = nesting(kept)
+      one.list.open('k')
+      await kept.reply()
+      one.outer()
+      one.arm()
+      await kept.reply()
+      expect(kept.asked).toHaveLength(3)
+      expect(one.settled).toEqual({ outer: true, inner: false })
+      await kept.reply()
+      expect(one.settled).toEqual({ outer: true, inner: true })
+      // a refresh that starts a failed list again, whose start starts another
+      const again = deferred()
+      const two = nesting(again)
+      two.list.open('k')
+      await again.reply(null)
+      two.arm()
+      await act(async () => two.outer())
+      expect(again.asked).toHaveLength(3)
+      // the first, dropped for the second, settled; the second waits for its read
+      expect(two.settled).toEqual({ outer: true, inner: false })
+      await again.reply()
+      expect(two.settled).toEqual({ outer: true, inner: true })
+      expect(two.list.view().rows).toHaveLength(25)
     })
 
     it('reads nothing for a live list', async () => {

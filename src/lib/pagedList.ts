@@ -417,13 +417,25 @@ function onceEngine<A, Row>(
       reads = [...reads, { answer, batch }]
       phase = 'ready'
     }
+    // the refresh this read answers settles after the view changed, and a
+    // refresh started while it changes keeps its own promise
+    const done = landed
+    landed = null
     changed()
-    settleRefresh()
+    done?.()
   }
 
+  /** Starts the list again from its first batch, dropping the refresh on
+      its way. */
   function start() {
-    sequence++
     settleRefresh()
+    begin()
+  }
+
+  /** Starts the list again from its first batch, leaving `landed` to the
+      read it starts. */
+  function begin() {
+    sequence++
     reads = []
     held = null
     failure = null
@@ -445,11 +457,17 @@ function onceEngine<A, Row>(
 
   function refresh(): Promise<void> {
     if (key === null || !opened) return Promise.resolve()
+    // a refresh on its way is dropped, so its promise settles now; this
+    // one's is set before anything reads or changes, so a refresh started
+    // while the view changes takes it over and this one settles once
+    settleRefresh()
+    const done = new Promise<void>((resolve) => {
+      landed = resolve
+    })
     // with no batch to keep, a refresh starts the list again
-    if (reads.length === 0) start()
+    if (reads.length === 0) begin()
     else {
       sequence++
-      settleRefresh()
       // a Load more on its way is dropped, a failed one's note goes, and
       // the rows stay
       phase = 'ready'
@@ -458,9 +476,7 @@ function onceEngine<A, Row>(
       read(null, true)
       changed()
     }
-    return new Promise((resolve) => {
-      landed = resolve
-    })
+    return done
   }
 
   return {
