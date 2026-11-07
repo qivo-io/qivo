@@ -7512,8 +7512,9 @@ async function mintCredential(scheme: 'qva' | 'qvt') {
    descriptions and comments load through one loader (lib/inlineImages.ts)
    near view, four at a time, behind P.attachmentUrl's row gate. Pictures
    download six at a time within a byte budget (lib/avatarSources.ts
-   AVATAR_SOURCES) and repaint the store once a frame, and while the page
-   is hidden nothing renews or downloads and no held picture is released.
+   AVATAR_SOURCES) and repaint the store once a frame. While the page is
+   hidden no mint call starts, nothing renews or downloads and no held
+   picture is released.
 
    mintUrls is a QUERY but must be consumed ONE-SHOT (convex.query), never
    subscribed: exp comes from Date.now(), which is not a reactive dependency —
@@ -7762,18 +7763,20 @@ function sweepPictures() {
     })
 }
 
-/** Holds the pictures and the inline images while the page is hidden
-    (lib/viewVisibility.ts, by visibility and not focus): the sweep and the
-    rebuild's prime skip, no picture is released, and no inline image
-    starts a mint or a download. On return the due pictures mint once,
-    renewing the held ones without downloading them again, and the near
-    images ask again. Started with the first picture or inline image, it
-    lasts as long as the page. */
+/** Holds the mint queue, the pictures and the inline images while the
+    page is hidden (lib/viewVisibility.ts, by visibility and not focus): no
+    mint call starts, the sweep and the rebuild's prime skip, no picture is
+    released, and no inline image starts a mint or a download. The calls
+    and downloads on their way finish. On return the waiting mints go, the
+    due pictures mint once, renewing the held ones without downloading
+    them again, and the near images ask again. Started with the first
+    picture or inline image, it lasts as long as the page. */
 function watchFileVisibility() {
   if (fileVisibility) return
   fileVisibility = watchVisibility(({ visible }) => {
     const resumed = filesHidden && visible
     filesHidden = !visible
+    mintQueue.pause(!visible)
     avatarSources.pause(!visible)
     inlineImages.pause(!visible)
     if (resumed) sweepPictures()

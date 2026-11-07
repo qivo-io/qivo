@@ -238,6 +238,39 @@ describe('the mint queue', () => {
     expect((await fresh).state).toBe('lease')
   })
 
+  it('starts no call while the page is hidden, and sends the waiting ones once it shows', async () => {
+    MINT_QUEUE.batch = 1
+    const h = harness()
+    const answers = [0, 1, 2, 3].map((i) => h.queue.request(item('attachment', i)))
+    await flush()
+    expect(h.calls).toHaveLength(2)
+    h.queue.pause(true)
+    // the calls on their way finish, and their slots start nothing
+    answer(h.calls[0] as Call)
+    answer(h.calls[1] as Call)
+    await flush()
+    expect((await answers[0])?.state).toBe('lease')
+    expect(h.calls).toHaveLength(2)
+    // a request made while hidden waits too
+    const late = h.queue.request(item('attachment', 4))
+    await flush()
+    expect(h.calls).toHaveLength(2)
+    h.queue.pause(false)
+    await flush()
+    expect(h.calls.map((c) => c.ids)).toEqual([
+      ['attachment-0'],
+      ['attachment-1'],
+      ['attachment-2'],
+      ['attachment-3'],
+    ])
+    answer(h.calls[2] as Call)
+    answer(h.calls[3] as Call)
+    await flush()
+    answer(h.calls[4] as Call)
+    expect((await late).state).toBe('lease')
+    expect(h.most()).toBe(2)
+  })
+
   it('holds a lowered batch and calls in flight', async () => {
     MINT_QUEUE.batch = 7
     MINT_QUEUE.inFlight = 3

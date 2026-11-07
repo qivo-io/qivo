@@ -5,8 +5,10 @@
    pictures never in one call, and attachment calls before picture calls,
    so an image someone is looking at overtakes the roster's pictures. The
    server refuses a call past its own caps (convex/files.ts MINT_IDS), which
-   these chunks stay under. The planner builds one queue a store, with its
-   query injected, so the tests need no store. */
+   these chunks stay under. While the page is hidden no call starts
+   (pause); the calls on their way finish, and the waiting requests go once
+   it shows. The planner builds one queue a store, with its query
+   injected, so the tests need no store. */
 
 /** The queue's bounds, an object the tests lower. A call that has not
     answered after `timeout` ms answers failed for its ids and keeps its
@@ -70,6 +72,7 @@ export function createMintQueue(mint: MintCall, options: Options) {
   let sent = 0
   let generation = 0
   let pumping = false
+  let paused = false
 
   /* The next chunk to send: attachments first, then pictures, each the
      longest-waiting organization's first `batch` requests. */
@@ -135,7 +138,7 @@ export function createMintQueue(mint: MintCall, options: Options) {
   }
 
   const pump = () => {
-    while (running < MINT_QUEUE.inFlight) {
+    while (!paused && running < MINT_QUEUE.inFlight) {
       const chunk = nextChunk()
       if (!chunk) return
       send(chunk)
@@ -177,6 +180,14 @@ export function createMintQueue(mint: MintCall, options: Options) {
     mostRunning: () => mostRunning,
     /** How many calls the queue has sent. */
     sent: () => sent,
+    /** While the page is hidden (true) no call starts. The calls on their
+        way finish, and the requests waiting go once it shows (false). A
+        clear() keeps the pause, which follows the page. */
+    pause(hidden: boolean) {
+      if (paused === hidden) return
+      paused = hidden
+      if (!hidden) pump()
+    },
     /** Answers every request still waiting or on its way `failed` and lets
         the calls on their way go, for sign-out, a demo's end and
         reinitialization. Their answers are dropped when they come. */
