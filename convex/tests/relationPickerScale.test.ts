@@ -5,10 +5,9 @@
  * open tasks a sub-project). The figures are the open tasks of one
  * project, of one sub-project, the sub-projects under one project with the
  * archived ones at their sum, a project's Done tasks, the catalogue at its
- * sum for a member and the lead of every project, one batch at its full
- * scan, the teams a
- * person is in, the sub-projects one person reads, the teams a project is
- * shared with and a team's shares. Each case prints what each first batch read,
+ * sum for a member and an admin in the member's teams, one batch at its
+ * full scan, the teams a person is in, the sub-projects one person reads,
+ * the teams a project is shared with and a team's shares. Each case prints what each first batch read,
  * the figures RELATION_PICKER's docstring quotes, and checks that it
  * answered whole within the default budgets. */
 /// <reference types="vite/client" />
@@ -36,7 +35,7 @@ import {
   uuid,
   withReadingAdmin,
 } from './helpers.setup'
-import { pageOrg } from './pageOrg.setup'
+import { joinMemberTeams, pageOrg } from './pageOrg.setup'
 
 /* What one batch read, as the request's reads Convex counts and the
  * batch's own count (lib/relationPicker.ts batchCount), and what it
@@ -324,9 +323,10 @@ describe('relation picker reads at the design size', () => {
     await pickers(e.t, 'a family shared with 5 teams', e.member, e.open)
   })
 
-  it('reads Search all your projects over a catalogue of 2,000 projects, for a member and the lead of every project', async () => {
+  it("reads Search all your projects over a catalogue of 2,000 projects, for a member and an admin in the member's teams alike", async () => {
     // 200 and 500 live, 300 and 1,000 archived, with withOrg's four, 2
-    // tasks a live sub-project, and a member who reads 60 sub-projects
+    // tasks a live sub-project, and a member who reads 60 sub-projects, the
+    // everyday 3 teams of 20, which the admin joins
     const e = await pageOrg({
       tops: 198,
       subs: 498,
@@ -343,9 +343,12 @@ describe('relation picker reads at the design size', () => {
           .withIndex('by_project', (q) => q.eq('project_id', (e.subs[0] as Doc<'projects'>).id))
           .first()) as Doc<'issues'>,
     )
+    await joinMemberTeams(e, e.admin)
+    // the rows of each caller's blank batch in all your projects
+    const rows: unknown[] = []
     for (const [who, me] of [
       ['a member of 60 sub-projects', e.member],
-      ['the lead of 700 live projects', e.user],
+      ["an admin in the member's teams", e.admin],
     ] as const) {
       const family = await measure(e.t, me, { issue_id: open.id, kind: 'link', search: 'quokka' })
       record(`the catalogue, ${who}, the family`, family.figures)
@@ -366,7 +369,10 @@ describe('relation picker reads at the design size', () => {
       const blank = await measure(e.t, me, { issue_id: open.id, kind: 'link', cursor: next })
       record(`the catalogue, ${who}, no search in all your projects`, blank.figures)
       expect(blank.figures).toMatchObject({ rows: 25, stopped: false, end: false })
+      rows.push(blank.answer.state === 'ok' ? blank.answer.rows : blank.answer)
     }
+    // the admin's batch is the member's
+    expect(rows[1]).toEqual(rows[0])
   })
 
   it('reads one batch of Search all your projects at its full scan, for the lead of every project', async () => {

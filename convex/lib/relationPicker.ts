@@ -205,9 +205,10 @@ import { taskFields } from './workspaceParts'
  *   rare word in all your projects 105 ranges and 1,833 documents in each.
  * - With the catalogue at its sum, 2,000 projects live and archived, a
  *   rare word in all your projects reads 101 ranges, 2,170 documents and
- *   1 MiB for a member, the catalogue's 2,000 documents included, and 707
- *   ranges, 3,089 documents and 1.65 MiB for the lead of every project
- *   over its 700 live projects.
+ *   1 MiB for a member of 60 sub-projects, the catalogue's 2,000 documents
+ *   included, and 103 ranges, 2,172 documents and 1 MiB for an
+ *   organization admin in the member's teams, whose batches hold the
+ *   member's rows (7 November 2026, after the admin access split).
  * - One batch at its full `scan` for the lead of every project, over 167
  *   sub-projects of about 30 tasks, reads 242 ranges, 5,642 documents and
  *   3.82 MiB, and stops at `scan` with its own count at 3.72 MiB.
@@ -216,13 +217,15 @@ import { taskFields } from './workspaceParts'
  *   documents and 0.58 MiB for one whose team shares 50 live and 150
  *   archived projects.
  *
- * The Boat timing of its slowest calls (owner, 31 October 2026) takes the
- * rare word over the catalogue's 700 live projects and the batch at its
- * full `scan` of a caller who reads every project, an organization admin
- * then and the lead of every project since the admin access split, whose
- * reads the tests measured the same on 7 November 2026, and a member's
- * rare word over the project of 800 open tasks, as those cases build
- * them. If the slowest call's JavaScript passes 0.5 s, lower `scan`.
+ * The slowest calls inside the design size are the batch at its full
+ * `scan`, whose caller reads 167 sub-projects, a member's rare word over
+ * the project of 800 open tasks and a member's rare word in all your
+ * projects over 200 sub-projects, as those cases build them. The Boat
+ * timing of 31 October 2026 (owner) took the first two, beside a rare word
+ * over the catalogue's 700 live projects for an organization admin, who
+ * then read every project, which no caller inside the design size reads
+ * since the admin access split. If the slowest call's JavaScript passes
+ * 0.5 s, lower `scan`.
  */
 export const RELATION_PICKER = {
   rows: 25,

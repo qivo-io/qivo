@@ -19,7 +19,15 @@
 import { describe, expect, it } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
 import { plantIssue, plantProject } from './helpers.setup'
-import { type Figures, type PageOrg, pageOrg, readBefore, readPage, record } from './pageOrg.setup'
+import {
+  type Figures,
+  joinMemberTeams,
+  type PageOrg,
+  pageOrg,
+  readBefore,
+  readPage,
+  record,
+} from './pageOrg.setup'
 import { lowered, mcpPages, restPages } from './taskPages.setup'
 
 /* The figures of a page inside Convex's limits on every count. */
@@ -43,27 +51,39 @@ const CATALOGUE = {
 }
 
 describe('active pages at the design size', () => {
-  it('pages the lead of every programme over a catalogue of 2,000 projects to the budget, a search that finds nothing included, and a guest', async () => {
+  it("pages an admin in the member's teams over a catalogue of 2,000 projects as the member, a search that finds nothing included, and a guest", async () => {
     const e = await pageOrg(CATALOGUE)
-    const before = await readBefore(e.t, e.user.id)
+    // the admin takes the member's everyday access, 3 teams of 20
+    // sub-projects, and admin status adds no project
+    await joinMemberTeams(e, e.admin)
+    const before = await readBefore(e.t, e.admin.id)
     console.log(
-      'active page figures, the lead of every programme before the page:',
+      "active page figures, an admin in the member's teams before the page:",
       JSON.stringify(before),
     )
-    const lead = await readPage(e.t, { callerId: e.user.id, limit: '200' })
-    record('the lead of 700 live projects, 200 rows', lead.figures)
-    expect(lead.figures.rows).toBe(200)
-    expect(lead.figures.next).toBe(true)
-    // a search that matches nothing reads every text it passes, so it ends
-    // at the page's budget with a cursor
-    const rare = await readPage(e.t, { callerId: e.user.id, limit: '200', search: 'quokka' })
-    record('the lead, a search that finds nothing', rare.figures)
+    const admin = await readPage(e.t, { callerId: e.admin.id, limit: '200' })
+    record("an admin in the member's teams, 200 rows", admin.figures)
+    expect(admin.figures.rows).toBe(200)
+    expect(admin.figures.next).toBe(true)
+    // a search that matches nothing reads every text of the 60 sub-projects
+    const rare = await readPage(e.t, { callerId: e.admin.id, limit: '200', search: 'quokka' })
+    record("an admin in the member's teams, a search that finds nothing", rare.figures)
     expect(rare.figures.rows).toBe(0)
-    expect(rare.figures.next).toBe(true)
+    // the member's pages, task for task
+    for (const [page, search] of [
+      [admin, undefined],
+      [rare, 'quokka'],
+    ] as const) {
+      const member = await readPage(e.t, { callerId: e.member.id, limit: '200', search })
+      expect(page.page.tasks.map((task) => task.id)).toEqual(
+        member.page.tasks.map((task) => task.id),
+      )
+      expect(page.figures.next).toBe(member.figures.next)
+    }
     // the guest of withOrg reads TBED alone
     const guest = await readPage(e.t, { callerId: e.guest.id, limit: '200' })
     record('a guest', guest.figures)
-    for (const page of [lead, rare, guest]) inside(page.figures)
+    for (const page of [admin, rare, guest]) inside(page.figures)
   })
 
   it('pages a member of 60 sub-projects over a catalogue of 2,000 projects, with a search and a second page', async () => {

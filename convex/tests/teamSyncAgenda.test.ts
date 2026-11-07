@@ -39,8 +39,10 @@ import {
   plantIssue,
   plantProject,
   plantSeat,
+  readableLiveSubProjects,
   type T,
   uuid,
+  withOrg,
   withReadingAdmin,
 } from './helpers.setup'
 import { plantPeople } from './overview.setup'
@@ -1409,22 +1411,49 @@ describe('real limits', () => {
     expect(counting.answer).toEqual({ state: 'over_ceiling', ceiling: TEAM_SYNC_TASKS })
   })
 
-  it('answers over_ceiling for All projects over 200 top-level projects for the lead of every project, from the counts and while counting', async () => {
-    // the first 25 projects by name hold open tasks, 30 in each of the
-    // member's sub-projects and 18 in each other, 1,458 in all, more than
-    // the ceiling's worth the counts bound and the read pass first; while
-    // counting the group checks wait past the first ceiling's worth, so the
-    // read goes on through every top-level project before it establishes
-    // the ceiling
-    const c = await allProjectsOrg((top, mine) => (top >= 25 ? 0 : mine ? 30 : 18))
-    await allProjectsReads(c, c.f.user, 'the lead of every project')
+  it("answers over_ceiling for All projects over 200 top-level projects for a member in 3 teams and an admin in the member's teams alike, from the counts and while counting", async () => {
+    // the member's sub-projects hold 30 open tasks each, the first 48 of
+    // their 54 by name, 1,440 in all, more than the ceiling's worth; the
+    // admin, in the same 3 teams, reads what the member reads
+    const c = await allProjectsOrg((top, mine) => (mine && top < 150 ? 30 : 0), true)
+    await allProjectsReads(c, c.me, 'a member in 3 teams, over 200 top-level projects')
+    // the counts again, which the member's second read took away
+    await countOrg(c.t, c.f.org.id)
+    await allProjectsReads(
+      c,
+      c.f.admin,
+      "an admin in the member's teams, over 200 top-level projects",
+    )
   })
 
-  it('answers over_ceiling for All projects over 200 top-level projects for a member in 3 teams, from the counts and while counting', async () => {
-    // the member's sub-projects hold 30 open tasks each, the first 48 of
-    // their 54 by name, 1,440 in all, more than the ceiling's worth
-    const c = await allProjectsOrg((top, mine) => (mine && top < 150 ? 30 : 0))
-    await allProjectsReads(c, c.me, 'a member in 3 teams')
+  it('answers over_ceiling for All projects for an admin who reads 200 live sub-projects through grants on their top-level projects, from the counts and while counting', async () => {
+    // 200 live sub-projects one person reads, the one raised figure, under
+    // 67 top-level projects of 3 but one of 2 on which the admin holds User,
+    // beside 3 they do not read; 30 open tasks in each sub-project of the
+    // first 16 by name, 1,410 in all, more than the ceiling's worth
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const owners = await plantPeople(t, f.org.id, 10)
+    const all = await plantSharedTops(t, f, f.admin, {
+      tops: 70,
+      subs: (i) => (i === 0 ? 2 : 3),
+      teams: false,
+    })
+    const read = all.tops.slice(0, 67)
+    await t.run(async (ctx) => {
+      for (const p of read)
+        await ctx.db.insert('project_access', {
+          project_id: p.id,
+          profile_id: f.admin.id,
+          level: 'user',
+        })
+    })
+    for (const [i, p] of read.slice(0, 16).entries())
+      for (const sub of all.subsOf.get(p.id) ?? []) await plantOpen(t, sub, 30, owners, 100 * i)
+    await withReach(t)
+    await countOrg(t, f.org.id)
+    expect(await readableLiveSubProjects(t, f.admin)).toBe(200)
+    await allProjectsReads({ t, f, me: f.admin }, f.admin, 'an admin who reads 200 sub-projects')
   })
 
   it('answers an everyday project whose 90 tasks 90 people of a roster of 1,000 own', async () => {
@@ -1515,13 +1544,15 @@ const peopleOf = (t: T, orgId: string): Promise<number> =>
  * under the first 102 planted and two under the other 96, and 1,000
  * archived ones, six under each of the first 10 and five under the rest. A
  * member in 3 teams, `me`, whose teams share 21 projects spread over the
- * names, three of every 29, 54 sub-projects, 18 a team. Each live
- * sub-project of the planted top-level project at place `top` holds
- * `tasks(top, mine)` open tasks, `mine` where the member's teams share it,
- * so a case plants only the tasks its read reaches before the ceiling. */
-async function allProjectsOrg(tasks: (top: number, mine: boolean) => number) {
+ * names, three of every 29, 54 sub-projects, 18 a team, and with
+ * `adminInTeams` the fixture's admin, who holds no row of their own, in
+ * those teams too. Each live sub-project of the planted top-level project
+ * at place `top` holds `tasks(top, mine)` open tasks, `mine` where the
+ * member's teams share it, so a case plants only the tasks its read
+ * reaches before the ceiling. */
+async function allProjectsOrg(tasks: (top: number, mine: boolean) => number, adminInTeams = false) {
   const t = newT({ transactionLimits: true })
-  const f = await withReadingAdmin(t)
+  const f = await withOrg(t)
   const me = await seatOf(t, f)
   const owners = [me, ...(await plantPeople(t, f.org.id, 9))]
   const theirs = (i: number) => i % 29 < 3
@@ -1530,6 +1561,7 @@ async function allProjectsOrg(tasks: (top: number, mine: boolean) => number) {
     subs: (i) => (i < 102 ? 3 : 2),
     archived: (i) => (i < 10 ? 6 : 5),
     shared: theirs,
+    ...(adminInTeams ? { members: [me, f.admin] } : {}),
   })
   expect(await projectsOf(t, f.org.id)).toEqual({ tops: 200, subs: 500, archivedSubs: 1000 })
   const mine = all.tops.filter((_, i) => theirs(i)).flatMap((p) => all.subsOf.get(p.id) ?? [])
@@ -1553,15 +1585,11 @@ async function allProjectsReads(
   label: string,
 ): Promise<void> {
   const bound = await agendaRead(c.t, who, ALL)
-  record(`All projects over 200 projects for ${label}, the counts bound`, bound.answer, bound.read)
+  record(`All projects for ${label}, the counts bound`, bound.answer, bound.read)
   expect(bound.answer).toEqual({ state: 'over_ceiling', ceiling: TEAM_SYNC_TASKS })
   await c.t.run((ctx) => unstampOverview(ctx.db, c.f.org.id))
   const counting = await agendaRead(c.t, who, ALL)
-  record(
-    `All projects over 200 projects for ${label}, while counting`,
-    counting.answer,
-    counting.read,
-  )
+  record(`All projects for ${label}, while counting`, counting.answer, counting.read)
   expect(counting.answer).toEqual({ state: 'over_ceiling', ceiling: TEAM_SYNC_TASKS })
   // the counts establish the ceiling before the read gets as far
   expect(bound.read.ranges).toBeLessThan(counting.read.ranges)
