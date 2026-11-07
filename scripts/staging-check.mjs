@@ -5198,6 +5198,19 @@ export function answersMutation(text, requestId) {
   }
 }
 
+/** The task number a create's answer frame `text` names, the number the
+ *  server stored the task with (convex/issues.ts create answers the stored
+ *  row), or null for a refusal or a frame that names none. */
+export function answeredNum(text) {
+  try {
+    const message = JSON.parse(text)
+    const num = message?.type === 'MutationResponse' && message.success ? message.result?.num : null
+    return Number.isInteger(num) ? num : null
+  } catch {
+    return null
+  }
+}
+
 /** Whether frame `text` the page sent subscribes query `udfPath` with
  *  arguments that name task `uuid`. */
 export function addsQueryFor(text, udfPath, uuid) {
@@ -5218,8 +5231,9 @@ export function addsQueryFor(text, udfPath, uuid) {
 
 /** The order rule of a create on the socket, over the frames of one page in
  *  the order they passed, each `{ out, text }` (`out` for a frame the page
- *  sent): the create's request, the frame that answers it, and the frames
- *  sent before that answer that subscribe a read of the new task
+ *  sent): the new task's uuid from the create's request, whether a frame
+ *  answers it and the number that answer stored the task with (`num`), and
+ *  the frames sent before that answer that subscribe a read of the new task
  *  (NEW_TASK_READS) or the task windows (TASK_WINDOWS_QUERY), which a
  *  correct app never sends. Null when no create went out. */
 export function createOrder(frames) {
@@ -5232,6 +5246,7 @@ export function createOrder(frames) {
   return {
     uuid,
     answered: answered >= 0,
+    num: answered >= 0 ? answeredNum(frames[answered].text) : null,
     early: before
       .filter((f) => f.out && NEW_TASK_READS.some((query) => addsQueryFor(f.text, query, uuid)))
       .map((f) => f.text),
@@ -5244,13 +5259,17 @@ export function createOrder(frames) {
  *  an active task it did not make, with one task over REST so its Board
  *  shows its columns: from a fresh load of that sub-project's Board it
  *  presses New task in To Do, types the run's tagged title, presses
- *  Create, and once the window and the card show it renames the task in the
- *  window at once. On the frames of that load it checks that nothing
- *  subscribed the task windows (TASK_WINDOWS_QUERY) and that no read of the
- *  new task (NEW_TASK_READS) was subscribed before the create's answer
- *  arrived (createOrder), then that the window shows the new title and,
- *  over REST, that the task holds it. The run's sweep removes the task and
- *  the sub-project by their tag. It runs before the run archives M. */
+ *  Create, and once the window shows it renames the task in the window at
+ *  once. On the frames of that load it checks that nothing subscribed the
+ *  task windows (TASK_WINDOWS_QUERY) and that no read of the new task
+ *  (NEW_TASK_READS) was subscribed before the create's answer arrived
+ *  (createOrder). It knows the task by the uuid its create sent and its key
+ *  by the number that answer stored, since another create in the
+ *  organization meanwhile can move the key the window showed first. It then
+ *  checks that the window and the card show that key, that the window
+ *  shows the new title and, over REST by the uuid, that the task holds the
+ *  title under that key. The run's sweep removes the task and the
+ *  sub-project by their tag. It runs before the run archives M. */
 async function createAnswerCheck() {
   const w = run.creds.writeToken
   const { M } = run.projects
@@ -5301,18 +5320,6 @@ async function createAnswerCheck() {
       const editor = app.locator('[role="dialog"] textarea[aria-label="Task title"]')
       await editor.fill(renamed)
       await editor.press('Enter')
-      const key = (
-        (await app.locator('[role="dialog"] [data-issue-key]').first().textContent()) ?? ''
-      ).trim()
-      expect(/^QN-\d+$/.test(key), `the window names no key (${key})`)
-      await app
-        .locator(`[data-workspace-view] [data-card="${key}"]`)
-        .first()
-        .waitFor({ timeout: 30_000 })
-      expect(
-        await until(async () => ((await shown.textContent()) ?? '').trim() === renamed),
-        'the window does not show the new title',
-      )
       const order = await (async () => {
         let found = null
         await until(async () => {
@@ -5325,8 +5332,28 @@ async function createAnswerCheck() {
       expect(order.answered, "the create's answer did not arrive")
       eq(order.taskWindows, 0, 'the create subscribed task windows')
       eq(order.early.length, 0, 'a read of the new task went out before its create answered')
+      expect(order.num !== null, "the create's answer names no number")
+      // the key the server stored it under, which the window and the card
+      // show once the create answered
+      const key = `QN-${order.num}`
+      const windowKey = app.locator('[role="dialog"] [data-issue-key]').first()
       expect(
-        await until(async () => (await restOk(w, 'GET', `/tasks/${key}`)).title === renamed),
+        await until(async () => ((await windowKey.textContent()) ?? '').trim() === key),
+        `the window does not name ${key}`,
+      )
+      await app
+        .locator(`[data-workspace-view] [data-card="${key}"]`)
+        .first()
+        .waitFor({ timeout: 30_000 })
+      expect(
+        await until(async () => ((await shown.textContent()) ?? '').trim() === renamed),
+        'the window does not show the new title',
+      )
+      expect(
+        await until(async () => {
+          const task = await restOk(w, 'GET', `/tasks/${order.uuid}`)
+          return task.title === renamed && task.key === key
+        }),
         `${key} does not hold the new title`,
       )
       return `created ${key} through the Board in ${sub.name} and renamed it in its window at once, with no read of it before its create answered and no task window`

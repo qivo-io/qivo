@@ -23,6 +23,7 @@ import {
   addedArgs,
   addsQuery,
   addsQueryFor,
+  answeredNum,
   answersMutation,
   appBatches,
   atProject,
@@ -899,7 +900,7 @@ describe('staging check REST contract', () => {
       read('snapshot:threadComments', { org_id: 'org', issue_id: uuid }),
       read('inbox:item', { issue_id: uuid }),
     ])
-    expect(good).toEqual({ uuid, answered: true, early: [], taskWindows: 0 })
+    expect(good).toEqual({ uuid, answered: true, num: 41, early: [], taskWindows: 0 })
     // a read of the task sent before the answer, and the task windows, are caught
     const early = createOrder([create, windowRead, answer, read('workspace:tasks', {})])
     expect(early?.early).toEqual([windowRead.text])
@@ -911,6 +912,10 @@ describe('staging check REST contract', () => {
     expect(createOrder([create, back({ type: 'MutationResponse', requestId: 8 })])?.answered).toBe(
       false,
     )
+    // the number the server stored the task with, which a refusal names not
+    const refused = back({ type: 'MutationResponse', requestId: 7, success: false, result: 'no' })
+    expect(createOrder([create, refused])).toMatchObject({ answered: true, num: null })
+    expect(answeredNum('not json')).toBeNull()
     expect(createOrder([rename, answer])).toBeNull()
     expect(mutationRequest('not json', CREATE_MUTATION)).toBeNull()
     expect(answersMutation('not json', 7)).toBe(false)
@@ -932,6 +937,12 @@ describe('staging check REST contract', () => {
     expect(step).toContain("restOk(w, 'POST', '/projects', {")
     expect(step).toContain('`$' + '{run.tag} create answer`')
     expect(step).toContain("'framereceived'")
+    // it knows the task by the uuid its create sent and its key by the
+    // number the create's answer stored, never by the key the window
+    // showed first, which another create meanwhile moves
+    expect(step).toContain('`/tasks/$' + '{order.uuid}`')
+    expect(step).toContain('const key = `QN-$' + '{order.num}`')
+    expect(step.indexOf('createOrder(frames)')).toBeLessThan(step.indexOf('[data-card="'))
     // the marks it presses and reads
     const board = readFileSync(new URL('../src/views/Kanban.tsx', import.meta.url), 'utf8')
     expect(board).toContain('aria-label={`New task in $' + '{s.name}`}')

@@ -367,8 +367,12 @@ creates a task with its run tag through the dialog and renames it in its
 window at once. No frame may subscribe the workspace's task windows, and
 no read of the new task (`taskWindow:task`, `snapshot:threadComments` or
 `inbox:item`) may be sent before the answer to the create's `issues:create`
-mutation arrives. The window must show the new title, and the task must
-hold it over REST (`ui/create-answer`). The run's sweep removes the task and
+mutation arrives. The step knows the task by the uuid its create sent and
+its key by the number that answer stored, since another create in the
+organization meanwhile can move the key the window showed first. The window
+and the card must show that key, the window must show the new title, and
+the task, read over REST by its uuid, must hold the title under that key
+(`ui/create-answer`). The run's sweep removes the task and
 the sub-project, and an app from before a create stopped loading every task
 fails it. Next it makes a label
 with its run tag over REST, puts it on one of its fixture tasks, opens
