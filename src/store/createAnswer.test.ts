@@ -223,12 +223,12 @@ async function openBoard(rows = THREE()) {
   return read
 }
 
-/* Dates and hours whose verdict reads the owner's load: next week, 30
-   hours, due in three weeks. */
+/* Dates and hours whose verdict reads the owner's load and misses the due
+   date: next week, 200 hours, due in ten days. */
 function soon() {
   const week = P().isoToWeek(P().TODAY_ISO) + 1
-  const due = new Date(Date.now() + 21 * 86_400_000).toISOString().slice(0, 10)
-  return { start: week, end: week, remaining: '30', due }
+  const due = new Date(Date.now() + 10 * 86_400_000).toISOString().slice(0, 10)
+  return { start: week, end: week, remaining: '200', due }
 }
 
 /* Creates a task of the person's own in Work, as the New task dialog does. */
@@ -313,6 +313,25 @@ describe('a create in a store that never asked for every task', () => {
     const request = take('issues:create')
     // the Board's answer under a filter leaves the task out, unchanged
     board.deliver(boardOf(THREE()))
+    await settle()
+    expect(P().viewTask(BOARD, uuid)).toBeDefined()
+    request.resolve(answerOf(stored(request.args, 4)))
+    await settle()
+    expect(P().viewTask(BOARD, uuid)).toBeUndefined()
+    expect(store.__layerProbe?.layerCount()).toBe(0)
+  })
+
+  it("takes the card away at acceptance where the Board's answer did not change, as Convex sends no unchanged result", async () => {
+    await boot()
+    await openBoard()
+    const { uuid } = create()
+    expect(P().viewTask(BOARD, uuid)).toBeDefined()
+    // the Board's filter leaves the task out, so its answer is the same and
+    // no delivery of it comes before the create answers; the workspace's
+    // does, with the organization's counter the create raised
+    const request = take('issues:create')
+    snap.orgs[0].next_issue_num = 4
+    deliverWhole()
     await settle()
     expect(P().viewTask(BOARD, uuid)).toBeDefined()
     request.resolve(answerOf(stored(request.args, 4)))
@@ -656,6 +675,8 @@ describe('a create in a store that never asked for every task', () => {
     const card = P().viewTask(BOARD, uuid)
     const window = P().taskDetail(uuid)?.view
     if (!card || !window) throw new Error('no card or window')
+    // a verdict, and the window's own
+    expect(P().delayOf(card)).toMatchObject({ status: 'late' })
     expect(P().delayOf(card)).toEqual(P().windowDelay(window))
   })
 

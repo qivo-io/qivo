@@ -505,10 +505,12 @@ describe("New sub-project's starter task under tasks on demand", { timeout: 30_0
     TASKS.atBoot = true
   })
 
+  // the starter task paints the new sub-project's views and asks for no
+  // task, as every create does (store/planner.ts P.addIssue)
   it.each<[string, boolean, string[]]>([
-    ['with', true, ['create']],
+    ['with', true, []],
     ['without', false, []],
-  ])('asks for every task only for a create %s a starter task', async (_, starter, asks) => {
+  ])('asks for no task for a create %s a starter task', async (_, starter, asks) => {
     await boot()
     const { __layerProbe } = await import('./store/planner')
     // the boot asks for no task, as the app's does on a project
