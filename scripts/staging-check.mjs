@@ -1912,14 +1912,16 @@ async function deleteConnectionInUi(clientName) {
   }
 }
 
-/** Archives a project of the run over REST and deletes it with the app's
- *  own store, which takes its sub-projects, tasks, comments, files, grants
- *  and milestones, then waits until REST no longer finds it. The store
- *  holds a project Nora takes part in, and the delete waits for its
- *  archived row; one she only manages, which the store no longer holds
- *  since the admin access split, goes at once by the organization `shown`
- *  names (P.removeProject's third argument), Nora's home one unless it
- *  says another. */
+/** Deletes a project of the run with the app's own store, which takes its
+ *  sub-projects, tasks, comments, files, grants and milestones, then waits
+ *  until REST no longer finds it. A project the store holds, one Nora
+ *  takes part in, is archived over REST first and the delete waits for
+ *  its archived row. One she only manages, which the store does not hold
+ *  since the admin access split, is deleted live at once by the
+ *  organization `shown` names (P.removeProject's third argument), Nora's
+ *  home one unless it says another, so a delete that fails leaves it live,
+ *  where the sweep's managed projects find it; REST's archived list leaves
+ *  it out. */
 async function deleteProjectInApp(cred, project, shown) {
   const current = await rest(cred, 'GET', `/projects/${project.id}`)
   if (current.status === 404) return
@@ -1929,7 +1931,7 @@ async function deleteProjectInApp(cred, project, shown) {
       !!window.PLANNER.project(id) || !!window.PLANNER.archivedProjects?.some((x) => x.id === id),
     project.id,
   )
-  if (!current.json?.archived)
+  if (held && !current.json?.archived)
     await restOk(cred, 'PATCH', `/projects/${project.id}`, { archived: true })
   if (held)
     await app.waitForFunction(
@@ -7316,12 +7318,13 @@ export const PROJECT_DIALOGS_EXPECTED = { team: 'viewer', nora: 'user' }
  *  projects with sub_project_parents) and its create, which the app sends
  *  without a sort_order. In the app as Nora it opens New project from the
  *  sidebar's header, names it `<tag> Dialogs`, picks the Standard agent as
- *  lead through the Lead popover's search, and in Project access checks the
- *  run's team, found by search, as Viewer, and checks that Nora holds the
- *  automatic User entry the dialog adds for a creator who names someone
- *  else as lead, an organization admin as anyone, without clicking her
- *  option, then presses Create project. Over REST the project's lead must be the agent, the
- *  team's share Viewer and Nora's grant User. Then it opens New
+ *  lead through the Lead popover's search, and in Project access first
+ *  checks, while the search is empty and Selected shows, that Nora holds
+ *  the automatic User entry the dialog adds for a creator who names
+ *  someone else as lead, an organization admin as anyone, without
+ *  clicking her option, then checks the run's team, found by search, as
+ *  Viewer and presses Create project. Over REST the project's lead must be
+ *  the agent, the team's share Viewer and Nora's grant User. Then it opens New
  *  sub-project from the sidebar menu of the run's project M, waits for
  *  M's parent check, names it `<tag> Dialogs sub`, picks the new project
  *  from the Project popover's search of the run's tag, waits until the
@@ -7348,16 +7351,12 @@ async function projectDialogsCheck() {
     await dialog.locator('[data-project-lead-picker]').click()
     await app.locator('[data-lead-picker-search]').fill(std.name)
     await app.locator(`[data-lead-choice="${std.id}"]`).click({ timeout: 30_000 })
-    // Project access, from the server's teams and people
+    // Project access, from the server's teams and people. Opening it
+    // clears its search, so Selected shows Nora's own entry, which the
+    // dialog added at User once someone else leads, as for any creator; a
+    // click on her option would take it away. Selected hides while the
+    // search holds text.
     await dialog.locator('[data-new-project-access]').click()
-    const search = app.locator('[data-project-access-search]')
-    await search.fill(team.name)
-    await app.locator(`[data-project-access-team-option="${team.id}"]`).click({ timeout: 30_000 })
-    await app
-      .locator(`[data-project-team-role="${team.id}"]`)
-      .selectOption(PROJECT_DIALOGS_EXPECTED.team)
-    // Nora's own entry, which the dialog added at User once someone else
-    // leads, as for any creator; a click on her option would take it away
     const mine = app.locator(`[data-project-access-selected-option="user:${run.nora.id}"]`)
     await mine.waitFor({ timeout: 30_000 })
     eq(await mine.getAttribute('data-state'), 'checked', "Nora's automatic entry")
@@ -7366,6 +7365,12 @@ async function projectDialogsCheck() {
       PROJECT_DIALOGS_EXPECTED.nora,
       "Nora's automatic level",
     )
+    const search = app.locator('[data-project-access-search]')
+    await search.fill(team.name)
+    await app.locator(`[data-project-access-team-option="${team.id}"]`).click({ timeout: 30_000 })
+    await app
+      .locator(`[data-project-team-role="${team.id}"]`)
+      .selectOption(PROJECT_DIALOGS_EXPECTED.team)
     // Escape clears the search, then closes the popover alone
     await search.press('Escape')
     await search.press('Escape')
@@ -7473,12 +7478,12 @@ export const ADMIN_MANAGEMENT_MARKS = {
  *  Projects searched for the run's tag lists the project, its row's
  *  Archived tasks says the page can't show its tasks, and Search for the
  *  tasks' common words, once it has answered, holds the control task and
- *  not the managed one. The step archives the project over REST and
- *  deletes it through the app's store by the organization at its end, also
- *  after a failure, and the sweep finds a project left behind through
- *  Settings' list of the parents Nora manages. It needs a backend from
- *  this release on; against an older one Nora reads the project and the
- *  step fails, as it should. */
+ *  not the managed one. The step deletes the project, still live, through
+ *  the app's store by the organization at its end, also after a failure
+ *  (deleteProjectInApp), and the sweep finds a project left behind, which
+ *  stays live, through Settings' list of the parents Nora manages. It
+ *  needs a backend from this release on; against an older one Nora reads
+ *  the project and the step fails, as it should. */
 async function adminManagementCheck() {
   const w = run.creds.writeToken
   const k = run.creds.stdKey
@@ -7530,7 +7535,12 @@ async function adminManagementCheck() {
       await row.waitFor({ timeout: 60_000 })
       await row.hover()
       await row.getByRole('button', { name: 'Project actions', exact: true }).click()
-      await app.getByRole('button', { name: 'Archived tasks', exact: true }).click()
+      // the row menu's entry, not the Settings navigation's item of the
+      // same name beside it
+      await app
+        .locator('[data-slot="popover-content"]')
+        .getByRole('button', { name: 'Archived tasks', exact: true })
+        .click()
       expect(
         await until(
           async () =>

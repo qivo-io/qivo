@@ -449,11 +449,17 @@ describe('staging check REST contract', () => {
       step.indexOf(`.locator(\`[data-new-subproject-parent="\${project.id}"]\`)`),
     )
     expect(step).toContain(`eq(madeSub.parent_id, project.id, "the sub-project's parent")`)
-    // Nora's automatic entry is checked as it is, never clicked
-    expect(step).toContain(
-      `app.locator(\`[data-project-access-selected-option="user:\${run.nora.id}"]\`)`,
-    )
+    // Nora's automatic entry is checked as it is, never clicked, once the
+    // popover opened with its search cleared and before the team's search,
+    // since Selected shows only while the search is empty
+    const mine = `app.locator(\`[data-project-access-selected-option="user:\${run.nora.id}"]\`)`
+    expect(step).toContain(mine)
     expect(step).not.toContain(`[data-project-access-user-option="\${run.nora.id}"]`)
+    expect(source).toContain("const selected = typed === '' &&")
+    expect(step.indexOf("await dialog.locator('[data-new-project-access]').click()")).toBeLessThan(
+      step.indexOf(mine),
+    )
+    expect(step.indexOf(mine)).toBeLessThan(step.indexOf('await search.fill(team.name)'))
     // its project goes in the cleanup
     expect(check).toContain(
       'if (run.projects.D) await deleteProjectInApp(c.writeToken, run.projects.D)',
@@ -492,6 +498,12 @@ describe('staging check REST contract', () => {
     expect(step.indexOf('(await item(control.key).count()) === 1')).toBeLessThan(
       step.indexOf("eq(await item(managed.key).count(), 0, 'the managed task in Search')"),
     )
+    // the row menu's Archived tasks, apart from the Settings navigation's
+    // item of the same name, which shows beside the non-modal menu
+    expect(step).toContain(
+      `.locator('[data-slot="popover-content"]')\n        .getByRole('button', { name: 'Archived tasks', exact: true })`,
+    )
+    expect(step).not.toContain("app.getByRole('button', { name: 'Archived tasks', exact: true })")
     // the step deletes its project itself, also after a failure
     expect(step).toContain('} finally {')
     expect(step).toContain('if (project) await deleteProjectInApp(w, project)')
@@ -503,6 +515,9 @@ describe('staging check REST contract', () => {
       check.indexOf('async function deleteProjectInApp('),
       check.indexOf('async function appMessages('),
     )
+    // only a project the store holds is archived first, so one Nora only
+    // manages stays live, where the sweep finds it, if its delete fails
+    expect(remove).toContain('if (held && !current.json?.archived)')
     // the archived row is waited for only for a project the store holds
     expect(remove.indexOf('if (held)')).toBeLessThan(
       remove.indexOf(
