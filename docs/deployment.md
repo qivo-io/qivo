@@ -428,11 +428,12 @@ list shows its search, and a token search that matches nothing says so
 than 25 rows. On a deployment with fewer, the step reads the run's rows from
 the list's first batch, the store's read for the run tag must answer the
 run's two rows alone, and the store's read answers the token search with no
-match. Against a backend from
-before the release after v0.1.158 the run stops at setup
-(`setup/ui/personal-token-write`), and its cleanup cannot list tokens and
-connections. Back in the run's task window it attaches a small file, which
-must go on an upload ticket: its `POST` must go to
+match. Against a backend from before the release after v0.1.158 the run
+stops at `setup/target`, whose visit to **MCP access** waits for
+**New token**, which the app shows only once `tokens.personalTokens` has
+answered, so the run creates nothing and sweeps nothing, and a `--cleanup`
+run stops there too. Back in the run's task window it attaches a small
+file, which must go on an upload ticket: its `POST` must go to
 `/attachment-uploads/` on the API origin and answer 200, the window must list
 the file and its download must match the bytes, and the step deletes it again
 (`ui/attachment-upload`). That step and `uploads/confirm-retry` fail against a
