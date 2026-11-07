@@ -8980,8 +8980,12 @@ function rebuild(now = new Date(), full = false) {
     P.gridEpoch,
     P.TODAY_ISO,
     P.TODAY_POS,
-    // the people the cache names and paints beside the people part
+    // the people the cache names and paints beside the people part, and
+    // its states: a person read by id whose answer left them out or whose
+    // read failed changes no view of personViews, but every memoized row
+    // that drew them loading draws them again
     personViews,
+    profileCache.version(),
   ]
   // a Team sync stamp (UserVM.sync) gives P.users a new identity, but no row
   // that compares contextVersion reads it; Team sync compares its own since

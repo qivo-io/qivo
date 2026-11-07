@@ -203,6 +203,38 @@ describe('people the workspace does not hold, on each page', () => {
   )
 
   it(
+    'draws a Board card’s loading portrait again once the answer leaves its person out or fails',
+    async () => {
+      const { board } = await load(
+        (snap) => {
+          snap.issues.push({ ...taskRow(snap, 'g1', 'todo', 1), assignee_id: GINA })
+        },
+        { metaViz: 'assignees' },
+      )
+      await board.render(root)
+      await repaint()
+      const card = () =>
+        [...document.querySelectorAll<HTMLElement>(`[data-card] [data-avatar="${GINA}"]`)].map(
+          (el) => el.dataset.avatarState ?? 'ok',
+        )
+      expect(card()).toEqual(['loading'])
+      // no face arrives, so the people the store paints stay the same, and
+      // the card, which skips a render while its context holds, must still
+      // draw the server's answer
+      board.server.people.force = 'error'
+      board.server.people.hold = false
+      await board.answer()
+      await repaint()
+      expect(card()).toEqual(['failed'])
+      board.server.people.force = 'gone'
+      await board.answer()
+      await repaint()
+      expect(card()).toEqual(['gone'])
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
     'names the Overview’s lead and its lists’ owners, loading and then by name',
     async () => {
       const { board, names } = await load(
