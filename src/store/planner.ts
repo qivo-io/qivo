@@ -257,8 +257,10 @@ import {
   byOrder,
   type CommentVM,
   duplicateNameTags,
+  type InboxMark,
   type IssueSubscribers,
   type IssueVM,
+  inboxMarkKey,
   isNewer,
   type LabelVM,
   type MessageGroupVM,
@@ -486,8 +488,10 @@ let watchedHeld: {
 } | null = null
 /* The task and organization of the thread the parts watch, or null. */
 let threadWatched: { task: string; org: string } | null = null
+
 /** The unread summary across the login's seats, as convex/inbox.ts
     summary answers it. */
+export type { InboxMark } from './viewModels'
 export type InboxSummaryAnswer = FunctionReturnType<typeof api.inbox.summary>
 /** The open task's inbox item, as convex/inbox.ts item answers it. */
 export type InboxItemAnswer = FunctionReturnType<typeof api.inbox.item>
@@ -546,6 +550,21 @@ const freeHold = () => ({ waiting: 0, accepted: false, keptBack: false })
    write of an earlier visit changes nothing. Forgotten when the thread
    changes or stops. */
 let itemHold = freeHold()
+/* How many writes took a hold on the watched task's read on open
+   (holdWatched), so a row's Mark as read frees only a hold no later write
+   took (P.readItem). */
+let holdWrites = 0
+
+/* The marks of the person's Inbox writes by `${org}:${task}`
+   (inboxMarkKey), which P.inboxMarks shows. A write sets its mark as it
+   goes out, replacing any before, and settles only its own: a refusal or a
+   failure ends it at once, and an acceptance keeps it until an Inbox shows
+   an answer that is current after the settle (P.endInboxMarks), since a
+   list that waits for a fresh answer, as after a hidden tab, a kept Inbox
+   shown again or a reconnect, still shows one from before the write. So
+   they are bounded by the session's writes. */
+const inboxMarks = new Map<string, InboxMark>()
+
 /* How many answers of the open task's inbox item arrived, so the read on
    open can tell an answer that came after its read went out
    (P.readOnOpen). */
@@ -1587,15 +1606,10 @@ function stopItem() {
 }
 
 /* Holds off the read on open of the watched task while a write about the
-   loaded messages `ids` waits, when they name one of its messages, as the
-   person's own Mark as unread or snooze does (itemHold), and answers the
-   handlers send() runs for that write. The hold stays for the rest of the
-   visit once the server accepts the write. A refusal or a failure takes
-   away only this write's part, so an unread choice the server accepted,
-   before or since, still holds. Once nothing holds, a read on open the
-   hold turned away runs again, so an update that arrived while the write
-   waited is read as it would have been without it. A write of an earlier
-   visit changes nothing. Call it just before the write goes out. */
+   loaded messages `ids` waits, when they name one of its messages, as an
+   id-list Mark as unread or snooze does (holdWatched). Only the tests and
+   the focus smokes send those since the Inbox acts on items
+   (holdUnreadOfItem); it goes with them. */
 function holdUnreadOf(ids: readonly string[]): SendOptions<unknown> {
   const watched = threadWatched
   if (!watched) return {}
@@ -1603,7 +1617,30 @@ function holdUnreadOf(ids: readonly string[]): SendOptions<unknown> {
     const row = rows.messages.get(id)
     return row?.issue_id === watched.task && row.org_id === watched.org
   })
-  if (!ofTask) return {}
+  return ofTask ? holdWatched(watched.task) : {}
+}
+
+/* Holds off the read on open of the watched task while a write about its
+   inbox item waits, when `org` and `task` name it, as the person's own
+   Mark as unread, snooze or its end does (holdWatched). Another
+   organization's task of the same id holds nothing. */
+function holdUnreadOfItem(org: string, task: string): SendOptions<unknown> {
+  const watched = threadWatched
+  return watched?.task === task && watched.org === org ? holdWatched(task) : {}
+}
+
+/* Holds off the read on open of the watched task `task` while one write
+   waits (itemHold), and answers the handlers send() runs for that write.
+   The hold stays for the rest of the visit once the server accepts the
+   write, until a row's Mark as read of the task frees it (P.readItem). A
+   refusal or a failure takes away only this write's part, so an unread
+   choice the server accepted, before or since, still holds. Once nothing
+   holds, a read on open the hold turned away runs again, so an update
+   that arrived while the write waited is read as it would have been
+   without it. A write of an earlier visit changes nothing. Call it just
+   before the write goes out. */
+function holdWatched(task: string): SendOptions<unknown> {
+  holdWrites++
   const hold = itemHold
   hold.waiting++
   return {
@@ -1617,7 +1654,79 @@ function holdUnreadOf(ids: readonly string[]): SendOptions<unknown> {
       // out, unless another unread choice still holds
       if (hold.waiting > 0 || hold.accepted || !hold.keptBack) return
       hold.keptBack = false
-      PLANNER.readOnOpen(watched.task)
+      PLANNER.readOnOpen(task)
+    },
+  }
+}
+
+/* Sets the mark of the item of task `task` in organization `org` for a
+   write that goes out now, replacing any before, and answers it, so the
+   write settles only its own (settleInboxMark). */
+function setInboxMark(org: string, task: string, mark: Omit<InboxMark, 'settled'>): InboxMark {
+  const [set] = setInboxMarks([{ org, task, mark }])
+  return set.mark
+}
+
+/* One mark of a write, with the item it marks. */
+type MarkOf = { org: string; task: string; mark: InboxMark }
+
+/* setInboxMark for several items at once, with one repaint. */
+function setInboxMarks(
+  marks: readonly { org: string; task: string; mark: Omit<InboxMark, 'settled'> }[],
+): MarkOf[] {
+  const set = marks.map(({ org, task, mark }) => {
+    const one: InboxMark = { ...mark, settled: false }
+    inboxMarks.set(inboxMarkKey(org, task), one)
+    return { org, task, mark: one }
+  })
+  if (set.length) showInboxMarks()
+  return set
+}
+
+/* Settles `mark` of the item of task `task` in organization `org` once its
+   write was answered: an accepted one stays until an Inbox shows a current
+   answer (P.endInboxMarks), a refused or failed one ends at once. A mark a
+   later write replaced is not touched. */
+function settleInboxMark(org: string, task: string, mark: InboxMark, accepted: boolean) {
+  settleInboxMarks([{ org, task, mark }], accepted)
+}
+
+/* settleInboxMark for several marks at once, with one repaint. */
+function settleInboxMarks(marks: readonly MarkOf[], accepted: boolean) {
+  let changed = false
+  for (const { org, task, mark } of marks) {
+    const key = inboxMarkKey(org, task)
+    if (inboxMarks.get(key) !== mark) continue
+    if (accepted) inboxMarks.set(key, { ...mark, settled: true })
+    else inboxMarks.delete(key)
+    changed = true
+  }
+  if (changed) showInboxMarks()
+}
+
+/* Publishes the marks to the Inbox (P.inboxMarks). */
+function showInboxMarks() {
+  PLANNER.inboxMarks = new Map(inboxMarks)
+  emit('inbox')
+}
+
+/* The send() handlers that settle `mark` of the item of task `task` in
+   organization `org`, with `then`'s, which run after. */
+function settlingMark(
+  org: string,
+  task: string,
+  mark: InboxMark,
+  then: SendOptions<unknown> = {},
+): SendOptions<unknown> {
+  let accepted = false
+  return {
+    onOk: (result) => {
+      accepted = true
+      then.onOk?.(result)
+    },
+    onSettled: () => {
+      settleInboxMark(org, task, mark, accepted)
+      then.onSettled?.()
     },
   }
 }
@@ -3235,10 +3344,10 @@ function messagesByOrg(ids: string[]): Map<string, string[]> {
   return m
 }
 
-/* Sends messages.readItem for the item `target` names (P.readItem), and
-   runs `confirmed` once the server accepted it and its paint settled, so
-   `confirmed` may send another write. Answers false when the pause refuses
-   it. */
+/* Sends messages.readItem for the item `target` names (P.readItem), with a
+   read mark on its Inbox row (setInboxMark), and runs `confirmed` once the
+   server accepted it and its paint settled, so `confirmed` may send
+   another write. Answers false when the pause refuses it, with no mark. */
 function sendItemRead(
   target: { org: string; task: string; through: number; latestAt: string },
   quiet: boolean,
@@ -3258,6 +3367,7 @@ function sendItemRead(
     )
       ids.push(row.id)
   let accepted = false
+  const mark = setInboxMark(target.org, target.task, { through: target.through, read: true })
   void send(
     api.messages.readItem,
     { org_id: target.org, issue_id: target.task, through: target.through },
@@ -3265,16 +3375,14 @@ function sendItemRead(
     {
       // the read that opening a task sends is not a change the person made
       about: { background: quiet },
-      ...(confirmed
-        ? {
-            onOk: () => {
-              accepted = true
-            },
-            onSettled: () => {
-              if (accepted) confirmed()
-            },
-          }
-        : {}),
+      ...settlingMark(target.org, target.task, mark, {
+        onOk: () => {
+          accepted = true
+        },
+        onSettled: () => {
+          if (accepted) confirmed?.()
+        },
+      }),
     },
   )
   return true
@@ -10143,6 +10251,17 @@ async function askReach(action: BulkAction) {
     batch there passes. */
 type BulkSeat = { org: string; before?: number }
 
+/** A row the Inbox showed when a bulk action was pressed
+    (P.markAllMessagesRead, P.deleteReadMessages): its organization, task
+    and cutoff, and whether it was read and snoozed. */
+export type ShownInboxRow = {
+  org: string
+  task: string
+  through: number
+  read: boolean
+  snoozed: boolean
+}
+
 /** The seats bulkReach says a bulk Inbox action has work in, in seat
     order, each with its cutoff, whether the action needs more than one
     round and why (InboxBulk.why): a seat with more than one batch, or more
@@ -10184,7 +10303,13 @@ function dropStopToast(key: string) {
    (P.hostInboxNotice). Then the `messages` it reached when pressed show
    `paint`, under one umbrella layer per seat, and the `flags` it clears
    under one more; rows that arrived later stay as they are, as the press's
-   cutoff leaves them out. The seats run on the shared runner
+   cutoff leaves them out. The Inbox's rows on screen at the press, `shown`,
+   that the action changes in a planned seat, the unread ones that are not
+   snoozed for Mark all as read and the read ones that are not snoozed for
+   Remove all read, take a read or removed mark at their cutoff
+   (P.inboxMarks): a seat's marks settle when its lane ends, a stop ends
+   them at once, so a refused seat's rows come back, and a fault ends them
+   all. The seats run on the shared runner
    (lib/batchRunner.ts runLanes), at most BULK_SEATS at once, a long action
    on the app's shared lanes: each sends `batch` until an answer has no
    more, every Mark all as read batch with its seat's cutoff from the
@@ -10219,6 +10344,7 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
     count: (answer: R) => number
   },
   batch: (seat: BulkSeat, previous: R | null, keep: (answer: R) => View) => Promise<R>,
+  shown: readonly ShownInboxRow[] = [],
 ): Promise<void> {
   if (bulkBusy(PLANNER.inboxBulk) || refusePausedWrite(a.ref)) return
   const epoch = storeEpoch
@@ -10230,6 +10356,12 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
   // the rows the press reaches, as loaded now
   const pressed = messagesByOrg(a.messages().map((message) => message.id))
   const opened: Layer[] = []
+  // the marks of the shown rows the action changes, by seat
+  const marked = new Map<string, MarkOf[]>()
+  const endMarks = (org: string | null, accepted: boolean) => {
+    for (const [seat, marks] of marked)
+      if (org === null || seat === org) settleInboxMarks(marks, accepted)
+  }
   try {
     let bulk: InboxBulk = {
       action,
@@ -10272,6 +10404,25 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
       if (!go || refusePausedWrite(a.ref)) return setInboxBulk(null)
     }
     asking = null
+    for (const { org } of plan.seats)
+      marked.set(
+        org,
+        setInboxMarks(
+          shown
+            .filter(
+              (row) =>
+                row.org === org && !row.snoozed && (action === 'read' ? !row.read : row.read),
+            )
+            .map((row) => ({
+              org,
+              task: row.task,
+              mark:
+                action === 'read'
+                  ? { through: row.through, read: true }
+                  : { through: row.through, removed: true },
+            })),
+        ),
+      )
     const name = getFunctionName(a.ref)
     const flag = openUmbrella(name, a.flags)
     opened.push(flag)
@@ -10309,6 +10460,8 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
         setInboxBulk(bulk)
       },
       onStop: ({ lane: seat, reason, paused }) => {
+        // the seat's rows show as the server keeps them, at once
+        endMarks(seat.org, false)
         // the first stop takes the flags back
         if (stops.length === 0) endUmbrella(flag, false)
         stops.push({ org: seat.org, done: doneIn.get(seat.org) ?? 0, reason, paused })
@@ -10316,13 +10469,14 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
         setInboxBulk(bulk)
       },
       onLaneEnd: (seat, lastSeat) => {
+        endMarks(seat.org, true)
         const umbrella = umbrellas.get(seat.org)
         // the last seat's umbrella ends with the flags in one repaint
         if (lastSeat) last = umbrella ?? null
         else if (umbrella) endUmbrella(umbrella, false)
       },
     })
-    if (ran === null) return
+    if (ran === null) return endMarks(null, false)
     const finished = ran.finished.map((seat) => seat.org)
     together(() => {
       if (last) endUmbrella(last, false)
@@ -10354,6 +10508,7 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
     if (stops.length === 0 && bulk.long) toast(bulkDoneText(bulk), 'success')
   } catch (fault) {
     if (asking === press) asking = null
+    endMarks(null, false)
     if (!live()) return
     reportFault(fault)
     noticeAnswer = null
@@ -10844,6 +10999,9 @@ export const PLANNER = {
   inboxItem: null as InboxItemVM | null,
   // the bulk action running or last run, with its progress (store/inboxBulk.ts)
   inboxBulk: null as InboxBulk | null,
+  // the marks of the person's own Inbox writes by inboxMarkKey, which the
+  // Inbox shows its rows by until its page answers them (inboxMarks)
+  inboxMarks: new Map() as ReadonlyMap<string, InboxMark>,
   // the Deleted items restore or Delete now running or last run, with its
   // progress (runDeletedItems), and the deferred items it watches
   deletedAction: null as DeletedAction | null,
@@ -15136,11 +15294,23 @@ export const PLANNER = {
       the answer is painted read and comes back unread when the server
       answers. `quiet` refuses a paused read without a toast and leaves it
       out of what the notice counts, for the read that opening a task sends
-      on its own (P.readOnOpen). */
+      on its own (P.readOnOpen). Its read mark turns the Inbox's row read
+      at once (P.inboxMarks). Once the server accepts it, a read of the
+      watched task frees the hold an earlier Mark as unread or snooze set
+      (holdWatched), so later news on it is read on open again, as the
+      person's newest choice is read, unless a Mark as unread or snooze
+      went out after it, which is newer. The read on open never frees it. */
   readItem: (
     target: { org: string; task: string; through: number; latestAt: string },
     { quiet = false } = {},
-  ): boolean => sendItemRead(target, quiet),
+  ): boolean => {
+    const holdsBefore = holdWrites
+    return sendItemRead(target, quiet, () => {
+      const watched = threadWatched
+      if (holdWrites !== holdsBefore) return
+      if (watched?.task === target.task && watched.org === target.org) itemHold = freeHold()
+    })
+  },
   /** The read on open of task `task`, which a window shows once it froze
       where its unread part starts. It reads the task's inbox item through
       P.readItem, with the organization, the task and the `through` of its
@@ -15216,12 +15386,13 @@ export const PLANNER = {
     PLANNER.inboxSummary = { state: 'loading', answer: null, current: false }
     emit('inbox')
   },
-  /* Mark every current notification read, including messages hidden by the
-     snapshot cap and notifications in other organization seats. Each seat
-     keeps the cutoff bulkReach answered at the press, so new arrivals stay
-     unread (bulkInboxAction). The Inbox passes `ask`, so a long action
-     waits for the keep-open notice. */
-  markAllMessagesRead: async (ask = false): Promise<void> => {
+  /* Mark every current notification read, including messages the
+     workspace did not load and notifications in other organization seats.
+     Each seat keeps the cutoff bulkReach answered at the press, so new
+     arrivals stay unread (bulkInboxAction). The Inbox passes `ask`, so a
+     long action waits for the keep-open notice, and the rows it shows,
+     `shown`, so they turn read at once. */
+  markAllMessagesRead: async (ask = false, shown: readonly ShownInboxRow[] = []): Promise<void> => {
     if (!PLANNER.canMarkAllRead) return
     const at = new Date().toISOString()
     await bulkInboxAction<FunctionReturnType<typeof api.messages.markAllRead>>(
@@ -15247,6 +15418,7 @@ export const PLANNER = {
           'none',
           { keep },
         ),
+      shown,
     )
   },
   /* Back to unread, the same column the other way. Nothing is pruned by
@@ -15280,12 +15452,12 @@ export const PLANNER = {
       void send(api.messages.remove, { org_id: org, ids: list }, removeMessagesPaint(list))
     })
   },
-  /* Inbox cleanup spans every seat and the full server inbox, beyond the
-     snapshot's display cap. Each bounded batch selects current read rows,
-     so unread arrivals and messages reopened on another device survive
-     (bulkInboxAction). Completion means all writes settled. The Inbox
-     passes `ask`, as for markAllMessagesRead. */
-  deleteReadMessages: async (ask = false): Promise<void> => {
+  /* Inbox cleanup spans every seat and the full server inbox, loaded or
+     not. Each bounded batch selects current read rows, so unread arrivals
+     and messages reopened on another device survive (bulkInboxAction).
+     Completion means all writes settled. The Inbox passes `ask` and
+     `shown`, as for markAllMessagesRead, so its read rows leave at once. */
+  deleteReadMessages: async (ask = false, shown: readonly ShownInboxRow[] = []): Promise<void> => {
     if (!PLANNER.canRemoveRead) return
     await bulkInboxAction<FunctionReturnType<typeof api.messages.removeRead>>(
       'remove',
@@ -15307,6 +15479,7 @@ export const PLANNER = {
       },
       (seat, _previous, keep) =>
         sendAwaited(api.messages.removeRead, { org_id: seat.org }, 'none', { keep }),
+      shown,
     )
   },
   /* The person's answer to the keep-open notice of the bulk action that
@@ -15384,6 +15557,123 @@ export const PLANNER = {
       }
       void send(api.messages.snooze, { org_id: org, ids: list, until }, view, holdUnreadOf(list))
     })
+  },
+
+  /** Marks the person's inbox item about task `task` in organization
+      `org` unread (messages.unreadItem), every message of it, loaded or
+      not, and answers whether it sent the write. An unread mark turns the
+      Inbox's row, whose cutoff is `through`, unread at once (P.inboxMarks),
+      and the paint marks the item's loaded messages unread. On the watched
+      task it holds off the read on open for the rest of the visit, unless
+      the server refuses it or it fails (holdUnreadOfItem). The pause
+      refuses it first, with no mark. */
+  unreadItem: (target: { org: string; task: string; through: number }): boolean => {
+    if (refusePausedWrite(api.messages.unreadItem)) return false
+    const { org, task } = target
+    const mark = setInboxMark(org, task, { through: target.through, read: false })
+    void send(
+      api.messages.unreadItem,
+      { org_id: org, issue_id: task },
+      {
+        workspace: () =>
+          rows.messages
+            .where((r) => r.issue_id === task && r.org_id === org)
+            .forEach((r) => {
+              r.read_at = undefined
+            }),
+      },
+      settlingMark(org, task, mark, holdUnreadOfItem(org, task)),
+    )
+    return true
+  },
+  /** Removes the person's inbox item about task `task` in organization
+      `org` (messages.removeItem), every message the server stored up to
+      `through`, the row's cutoff, loaded or not, and answers whether it
+      sent the write. A message stored after it stays as the item's only
+      one. A removed mark hides the Inbox's row at once (P.inboxMarks), and
+      the paint removes the item's loaded messages no newer than
+      `latestAt`, its newest one at the press. The pause refuses it first,
+      with no mark. */
+  removeItem: (target: {
+    org: string
+    task: string
+    through: number
+    latestAt: string
+  }): boolean => {
+    if (refusePausedWrite(api.messages.removeItem)) return false
+    const { org, task } = target
+    const latest = Date.parse(target.latestAt)
+    const mark = setInboxMark(org, task, { through: target.through, removed: true })
+    void send(
+      api.messages.removeItem,
+      { org_id: org, issue_id: task, through: target.through },
+      {
+        workspace: () =>
+          rows.messages
+            .where(
+              (r) => r.issue_id === task && r.org_id === org && Date.parse(r.created_at) <= latest,
+            )
+            .forEach((r) => {
+              rows.messages.delete(r.id)
+            }),
+      },
+      settlingMark(org, task, mark),
+    )
+    return true
+  },
+  /** Snoozes the person's inbox item about task `task` in organization
+      `org` until the ISO instant `until`, or with null wakes it now
+      (messages.snoozeItem), and answers whether it sent the write. Both
+      leave it unread, as a reminder returns bold, and the timed return is
+      the server's scheduled wake. A snooze mark shows the Inbox's row,
+      whose cutoff is `through`, snoozed or woken at once (P.inboxMarks),
+      and the paint stamps the item's loaded messages. On the watched task
+      either holds off the read on open for the rest of the visit, unless
+      the server refuses it or it fails (holdUnreadOfItem). The pause
+      refuses it first, with no mark. */
+  snoozeItem: (
+    target: { org: string; task: string; through: number },
+    until: string | null,
+  ): boolean => {
+    if (refusePausedWrite(api.messages.snoozeItem)) return false
+    const { org, task } = target
+    const mark = setInboxMark(org, task, { through: target.through, snoozedUntil: until })
+    void send(
+      api.messages.snoozeItem,
+      { org_id: org, issue_id: task, until },
+      {
+        workspace: () =>
+          rows.messages
+            .where((r) => r.issue_id === task && r.org_id === org)
+            .forEach((r) => {
+              if (until === null) {
+                if (r.snoozed_until === undefined) return
+                r.snoozed_until = undefined
+                r.read_at = undefined
+              } else {
+                r.snoozed_until = until
+                r.read_at = undefined
+                r.woke_at = undefined
+              }
+            }),
+      },
+      settlingMark(org, task, mark, holdUnreadOfItem(org, task)),
+    )
+    return true
+  },
+  /** Ends the settled marks `marks` (P.inboxMarks), which an Inbox passes
+      once it shows an answer that is current after they settled, so its
+      rows show as the server keeps them. A mark that a later write
+      replaced, or that is not settled, stays. */
+  endInboxMarks: (marks: readonly InboxMark[]) => {
+    const ended = new Set(marks.filter((mark) => mark.settled))
+    let changed = false
+    for (const [key, mark] of inboxMarks)
+      if (ended.has(mark)) {
+        inboxMarks.delete(key)
+        changed = true
+      }
+    if (changed) showInboxMarks()
   },
 
   /* How long this person keeps a message they have read (0110); null = for
@@ -17754,6 +18044,8 @@ export function disposeDemoStore() {
   PLANNER.inboxBulk = null
   inboxWrites.clear()
   stopToasts.clear()
+  inboxMarks.clear()
+  PLANNER.inboxMarks = new Map()
   // a Deleted items action and its deferred items' watches end with it too
   PLANNER.deletedAction = null
   stopDeferredWatches()

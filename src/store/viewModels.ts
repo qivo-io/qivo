@@ -446,6 +446,24 @@ export const shapeMessageGroup = (issueUuid: string, newestFirst: MessageVM[]) =
 }
 export type MessageGroupVM = ReturnType<typeof shapeMessageGroup>
 
+/** The key of the Inbox row, and of its mark, of task `task` in
+    organization `org`: two organizations can hold one task id
+    (convex/model/inboxPage.ts), so a row is never named by its task alone. */
+export const inboxMarkKey = (org: string, task: string) => `${org}:${task}`
+
+/** What the person's own write says of one Inbox row until the list shows
+    the server's answer to it (store/planner.ts P.inboxMarks): read or
+    unread (`read`), removed, or snoozed until a time or woken
+    (`snoozedUntil`, null), for the row whose cutoff was `through` at the
+    press. `settled` says the server accepted the write. */
+export type InboxMark = {
+  through: number
+  read?: boolean
+  removed?: true
+  snoozedUntil?: string | null
+  settled: boolean
+}
+
 /* one archived task outside the snapshot, as the Archived tasks page lists
    it (shapeArchivedListRow), so it carries the same handle/key split live
    ones get in rebuild(). The server searches the archive, so a row carries
