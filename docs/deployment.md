@@ -1815,12 +1815,14 @@ sample at its start, and is recorded once. Its days are the UTC dates from
 its start's date to the day before its end's date. The run of its last day
 records it when that day has the organization's sample, normally about a
 day or more before the end. When that day has none, the next day's run
-records it from its own sample once the last day's run can write no more,
-and at the latest the first hourly call within two hours of the end records
-it, a day still without a sample taking the most recent one, an earlier
-period's included. Every later run and call tries a period that is still open,
-for up to 3 days after its end, then stops with an error log and a
-`billing.storage_finalize_stopped` audit row, and
+records it from its own sample once the last day has no run, its run has
+finished or its run has taken no step for 15 minutes. The record stops
+such a stalled run in the same transaction, so the run writes no sample of
+that day afterwards. At the latest the first hourly call within two hours
+of the end records it, a day still without a sample taking the most recent
+one, an earlier period's included. Every later run and call tries a period
+that is still open, for up to 3 days after its end, then stops with an
+error log and a `billing.storage_finalize_stopped` audit row, and
 `billingSync:finalizeStorage` with the period records it by the same rules,
 as that function's docstring shows. The average, rounded up to a whole
 byte, goes through the same allowance, blocks and single charge as a

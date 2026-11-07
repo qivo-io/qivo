@@ -34,7 +34,9 @@ export const SAMPLE_PAGE = { orgs: 100 }
  * a stall delays the rest of the day's samples by at most about 75 minutes
  * within the run's UTC day. A tick never resumes an earlier day's run, so a
  * run that stalls with its last step after 23:05 UTC stays unfinished, and
- * its remaining organizations have no sample that day. */
+ * its remaining organizations have no sample that day. A daily period's
+ * finalize counts its last day's run as stalled this long after its last
+ * step too, and then fences it (billingSync.ts dayClosed). */
 export const SAMPLE_STALLED_MS = 15 * 60_000
 
 /** How many samples, and how many run rows, one expiry step deletes at

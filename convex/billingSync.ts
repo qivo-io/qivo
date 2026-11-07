@@ -969,14 +969,27 @@ export type FinalizeOutcome = 'recorded' | 'unavailable' | 'waiting' | null
 const readingOf = (row: Doc<'storage_daily_samples'> | null): DayReading | null =>
   row && { day: row.day, bytes: row.bytes }
 
-/* Whether no step of UTC day `day`'s run of the daily samples can still
- * write a sample of that day at `now`, which holds when it has no run row,
- * its run finished or its last step is SAMPLE_STALLED_MS old. Asked only
- * once a later day has a sample, when no tick resumes or starts that
- * day's run (storageSamples.ts tick). */
+/* Whether no step of UTC day `day`'s run of the daily samples can write a
+ * sample of that day once this transaction commits. That holds when the
+ * day has no run row or its run finished. A run whose last step is
+ * SAMPLE_STALLED_MS old or older at `now` is fenced first: its id is
+ * replaced, as a tick's resume does, keeping its cursor, counters and
+ * step_at, so a step still queued under the old id stops at its run check
+ * (storageSamples.ts step) and writes nothing. The fence commits in the
+ * same transaction as the period's record, so a recorded period never
+ * leaves that run able to write. A fenced run stays unfinished, so a later
+ * call for another organization's period fences it again, one write of the
+ * run row each, and its row expires by its day like every run row
+ * (storageSamples.ts expire). A run whose last step is younger may still
+ * write, so the answer is false and nothing is written. Asked only before
+ * the deadline and once a later day has a sample, when no tick resumes or
+ * starts that day's run (storageSamples.ts tick). */
 async function dayClosed(ctx: MutationCtx, day: string, now: number): Promise<boolean> {
   const run = await runOf(ctx, day)
-  return run === null || run.finished_at !== undefined || now - run.step_at >= SAMPLE_STALLED_MS
+  if (run === null || run.finished_at !== undefined) return true
+  if (now - run.step_at < SAMPLE_STALLED_MS) return false
+  await ctx.db.patch(run._id, { run: newUuid() })
+  return true
 }
 
 /** Records the storage of daily period `period` once, from its
@@ -987,8 +1000,10 @@ async function dayClosed(ctx: MutationCtx, day: string, now: number): Promise<bo
  * Before its deadline, STORAGE_FINALIZE_LEAD_MS before its end, it records
  * only a period whose every day resolves without the cutoff, which is when
  * its last day has its own sample, or when a later day's sample stands for
- * the last day and that day's run can no longer write one (dayClosed).
- * Otherwise it waits and writes nothing. At or after the deadline it
+ * the last day and that day's run has no row, has finished or has taken no
+ * step for SAMPLE_STALLED_MS. A stalled run is fenced in the same
+ * transaction as the record, so its queued step writes nothing after it
+ * (dayClosed). Otherwise it waits and writes nothing. At or after the deadline it
  * records the period whatever is missing. A day without a sample takes the
  * first later one, the next period's first day included, else the most
  * recent one before it, an earlier period's included. With a reading, the

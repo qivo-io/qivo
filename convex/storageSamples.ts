@@ -40,8 +40,11 @@
  * write. Two runs of one day that meet on an organization both read its
  * sample of the day, so Convex commits one insert and reruns the other,
  * which then finds it present. The job writes only its own two tables and
- * schedules the finalize, which writes billing's, does nothing on the demo
- * deployment, and a branch preview registers no cron.
+ * schedules the finalize, which writes billing's and, to stop a stalled
+ * earlier day's run before it stands a later sample in for that day,
+ * replaces that run's id (billingSync.ts dayClosed); a step of that run
+ * that meets the fence reruns and stops at its run check. The job does
+ * nothing on the demo deployment, and a branch preview registers no cron.
  *
  * The cost reading on staging, a hosted read that needs the owner's
  * approval, with the private helper:
@@ -93,7 +96,11 @@ const finalizeDueRef = makeFunctionReference<
  * check. Does nothing more once the day's run finished, while its steps go
  * on, and nothing at all on the demo deployment. It never goes back to an
  * earlier day's run, which keeps the samples it wrote and, unfinished, its
- * cursor until the row expires. The hourly cron calls it.
+ * cursor until the row expires. A step such a run still has queued can
+ * write that day's samples when it runs, unless a daily period's finalize
+ * has fenced the run by replacing its id once its last step was
+ * SAMPLE_STALLED_MS old (billingSync.ts dayClosed). The hourly cron calls
+ * it.
  *
  * First, while billing is on and whatever the day's run does, it starts
  * the finalize of every open daily period that ends within
@@ -223,7 +230,10 @@ async function record(
  * run just sampled is normally recorded about a day or more before its
  * end. An organization created behind the cursor waits for the next day.
  * Does nothing unless the day's run row holds this run and has not
- * finished. */
+ * finished. A tick's resume replaces the run id, and so does a daily
+ * period's finalize that stands a later day's sample in for this day once
+ * the run's last step is SAMPLE_STALLED_MS old (billingSync.ts dayClosed),
+ * so a step still queued under the old id writes nothing. */
 export const step = internalMutation({
   args: { day: v.string(), run: v.string() },
   handler: async (ctx, { day, run }): Promise<null> => {
