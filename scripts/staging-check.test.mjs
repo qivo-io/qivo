@@ -17,9 +17,11 @@ import { endText } from '../src/lib/deletedItems'
 import { creatorPhrase } from '../src/lib/projectCreators'
 import {
   AGENDA_QUERY,
+  APP_BATCHES_MAX,
   ASSIGNEE_LOAD_QUERY,
   addDays,
   addsQuery,
+  appBatches,
   atProject,
   authCorsProblems,
   authRoutesStep,
@@ -53,6 +55,9 @@ import {
   LABELS_EXPECTED,
   LABELS_STEP,
   LIST_REFUSALS,
+  MCP_ACCESS_EXPECTED,
+  MCP_ACCESS_LISTS_STEP,
+  MCP_ACCESS_MARKS,
   MILESTONE_STEP,
   MILESTONES_BETWEEN_QUERY,
   NOT_LOADED_YET,
@@ -744,6 +749,62 @@ describe('staging check REST contract', () => {
     expect(step).toContain(`await app.locator(\`[\${m.search}]\`).fill(run.tag)`)
     expect(step).toContain(`await app.locator(\`[\${m.namesSearch}="billable"]\`).fill(run.tag)`)
     expect(step).toContain(`eq(await app.locator(\`[\${m.accessPeriod}]\`).inputValue(), period`)
+  })
+
+  it("checks MCP access's two lists on the run's connections and tokens, after the Billing accounts step", () => {
+    const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8')
+    const sources = [
+      read('../src/panels/ConnectedApps.tsx'),
+      read('../src/panels/settings/PersonalTokens.tsx'),
+    ].join('\n')
+    // every mark the step and the credential helpers read is on the page
+    for (const mark of Object.values(MCP_ACCESS_MARKS)) expect(sources).toContain(mark)
+    expect(sources).toContain(`line('${MCP_ACCESS_EXPECTED.none}')`)
+    expect(MCP_ACCESS_LISTS_STEP).toBe('ui/mcp-access-lists')
+    const check = read('./staging-check.mjs')
+    const at = check.indexOf('await mcpAccessListsCheck()')
+    expect(at).toBeGreaterThan(check.indexOf('await billingAccountsCheck()'))
+    // while the run's tokens and connections are still live
+    expect(at).toBeLessThan(check.indexOf("check('read-token/ui/revoke'"))
+    expect(at).toBeLessThan(check.indexOf("check('oauth-read/ui/delete'"))
+    // the app's lists are read a batch at a time, never the deprecated queries
+    for (const old of ['listMcpTokens', 'listOAuthConnections', 'oauthConnections.list'])
+      expect(check).not.toContain(old)
+    const step = check.slice(
+      check.indexOf('async function mcpAccessListsCheck()'),
+      check.indexOf('export const SETTINGS_PROJECTS_STEP'),
+    )
+    // it writes nothing, and falls back to the store's read without the box
+    expect(step).not.toMatch(/restOk\(|\.mutation\(|\.click\(/)
+    expect(step).toContain('window.PLANNER.personalTokens(search, null)')
+  })
+
+  it('reads every batch of an app list, going on after a stopped one and failing on a failed read', async () => {
+    const batches = [
+      { rows: ['a', 'b'], next: 'first', stopped: false },
+      { rows: [], next: 'second', stopped: true },
+      { rows: ['c'], next: null, stopped: false },
+    ]
+    const asked = []
+    const rows = await appBatches('personal tokens', async (cursor) => {
+      asked.push(cursor)
+      return batches[asked.length - 1]
+    })
+    expect(rows).toEqual(['a', 'b', 'c'])
+    expect(asked).toEqual([null, 'first', 'second'])
+    // a failed read fails the list, never reads as an empty one
+    await expect(
+      appBatches('OAuth connections', async (cursor) => (cursor === null ? batches[0] : null)),
+    ).rejects.toThrow('the app could not list OAuth connections')
+    // it stops at the cap rather than reading without end
+    let reads = 0
+    await expect(
+      appBatches('personal tokens', async () => {
+        reads++
+        return { rows: [], next: 'again', stopped: true }
+      }),
+    ).rejects.toThrow(`more than ${APP_BATCHES_MAX} batches`)
+    expect(reads).toBe(APP_BATCHES_MAX)
   })
 
   it("loads a description's images near view at phone size, after the upload step", () => {
