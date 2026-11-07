@@ -5,6 +5,7 @@ import { ConvexError } from 'convex/values'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { FIELD_CHANGED, printOf, trimmedForm } from '../convex/lib/fieldPrints'
 import { TooltipProvider } from './components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
@@ -20,8 +21,9 @@ import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixt
    the Inbox pane shows with that organization's New mark, reads on open,
    comments on, saves a title to and uploads an image to in that
    organization, through that task's own answer, never as the held task,
-   whose files its lists never show, even with every task held. And two
-   rows of one task id
+   whose files its lists never show, even with every task held. A refused
+   title save there rebases on that task's own title. And two rows of one
+   task id
    in two organizations, neither held, where the pane goes from the first
    row's task to the second's and reads the second's item. */
 
@@ -486,6 +488,17 @@ async function twoOrganizations({ homeHeld, homeRead }: { homeHeld: boolean; hom
     body: 'The rig drifts',
     created_at: '2026-09-14T08:05:00.000Z',
   }
+  const taskAnswer = (row: typeof homeTask) => ({
+    state: 'ok',
+    task: { ...row, has_subtasks: false },
+    level: 'lead',
+    labels: [],
+    follow: null,
+    parent: null,
+    subtasks: { rows: [], complete: true },
+  })
+  // the watches of the window's own read of the guest task
+  const guestReads = new Set<(value: unknown) => void>()
   network.onUpdate.mockImplementation((ref, args, next) => {
     const name = getFunctionName(ref)
     const a = args as { org_id?: string; ref?: string }
@@ -495,16 +508,8 @@ async function twoOrganizations({ homeHeld, homeRead }: { homeHeld: boolean; hom
     else if (name === 'taskWindow:task') {
       // the window's own read, of the task of the organization it names
       const row = [homeTask, guestTask].find((it) => it.org_id === a.org_id && it.id === a.ref)
-      if (row)
-        next({
-          state: 'ok',
-          task: { ...row, has_subtasks: false },
-          level: 'lead',
-          labels: [],
-          follow: null,
-          parent: null,
-          subtasks: { rows: [], complete: true },
-        })
+      if (row) next(taskAnswer(row))
+      if (row === guestTask) guestReads.add(next)
     }
     return () => {}
   })
@@ -540,6 +545,13 @@ async function twoOrganizations({ homeHeld, homeRead }: { homeHeld: boolean; hom
     title: () => document.querySelector('[data-task-title]')?.textContent,
     /** The reads of an item the store sent, in order. */
     reads: () => sentArgs('messages:readItem'),
+    /** Renames the guest task to `title` on the server, as another member
+        does, and answers the window's reads of it again. */
+    renameGuest: (title: string) =>
+      act(async () => {
+        guestTask.title = title
+        for (const next of guestReads) next(taskAnswer(guestTask))
+      }),
   }
 }
 
@@ -547,7 +559,7 @@ describe("an Inbox row of another organization's task with a held task's id", {
   timeout: 30_000,
 }, () => {
   it("shows, reads and edits that organization's task in the pane, never the held one", async () => {
-    const { store, home, rowOpen, title, reads } = await twoOrganizations({
+    const { store, home, rowOpen, title, reads, renameGuest } = await twoOrganizations({
       homeHeld: true,
       homeRead: true,
     })
@@ -619,39 +631,53 @@ describe("an Inbox row of another organization's task with a held task's id", {
     await act(async () => send?.click())
     expect(sentArgs('comments:create').map((args) => args.org_id)).toEqual([GUEST])
     // a title saved there goes to that organization's task through its own
-    // answer. The server refuses the first save, and the field opens again
-    // with the draft, whose next save goes through, while the held task of
-    // the same id keeps its title
-    let refuse = true
+    // answer. Another member renames the task while the field is open, so
+    // the server refuses the first save over that rename, and the field
+    // opens again with the draft over that organization's title, never the
+    // held task's. It refuses the next save for another reason, and the
+    // field opens again with the draft, whose last save goes through over
+    // the rename, while the held task of the same id keeps its title
+    const refusals: unknown[] = [
+      new ConvexError({
+        code: 'conflict',
+        reason: FIELD_CHANGED,
+        message: 'The title of QN-7 changed since you read it',
+        changes: [{ record: 'task', id: SOAK, field: 'title', by: 'guest-member', at: AT }],
+      }),
+      new ConvexError({ code: 'rule', message: 'The title is locked.' }),
+    ]
     network.mutation.mockImplementation((ref) => {
-      if (getFunctionName(ref) !== 'issues:update' || !refuse) return Promise.resolve(null)
-      refuse = false
-      return Promise.reject(new ConvexError({ code: 'rule', message: 'The title is locked.' }))
+      const refusal = getFunctionName(ref) === 'issues:update' ? refusals.shift() : undefined
+      return refusal ? Promise.reject(refusal) : Promise.resolve(null)
     })
     const held = () => store.P.issueById[store.P.handleOf(SOAK) ?? '']
+    const titleField = () =>
+      waitFor(
+        () => document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]'),
+        'the title field',
+      )
     await act(async () => document.querySelector<HTMLElement>('[data-task-title]')?.click())
-    const titleField = await waitFor(
-      () => document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]'),
-      'the title field',
-    )
-    await typeInto(titleField, 'Calibrate the guest rig twice')
-    await act(async () => titleField.blur())
-    const kept = await waitFor(
-      () => document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]'),
-      'the title field after the refusal',
-    )
-    expect(kept.value).toBe('Calibrate the guest rig twice')
-    await act(async () => kept.blur())
+    const first = await titleField()
+    await typeInto(first, 'Calibrate the guest rig twice')
+    await renameGuest('Calibrate the guest rig at noon')
+    await act(async () => first.blur())
+    for (let refusal = 0; refusal < 2; refusal++) {
+      const kept = await titleField()
+      expect(kept.value).toBe('Calibrate the guest rig twice')
+      await act(async () => kept.blur())
+    }
     const save = { org_id: GUEST, id: SOAK, patch: { title: 'Calibrate the guest rig twice' } }
+    const seen = (shown: string) => ({ ...save, expected: { title: printOf(trimmedForm(shown)) } })
     expect(sentArgs('issues:update')).toEqual([
-      expect.objectContaining(save),
-      expect.objectContaining(save),
+      seen('Calibrate the guest rig'),
+      seen('Calibrate the guest rig at noon'),
+      seen('Calibrate the guest rig at noon'),
     ])
     expect(title()).toBe('Calibrate the guest rig twice')
     expect(held()?.title).toBe('Run the soak test')
     // the id alone names either task, so a write by it fails closed
     expect(await store.P.updateIssue(SOAK, { title: 'Calibrate by id' })).toBe(false)
-    expect(sentArgs('issues:update')).toHaveLength(2)
+    expect(sentArgs('issues:update')).toHaveLength(3)
     // an image pasted into its description uploads to that organization's
     // task too, and its file never shows on the held task
     vi.stubGlobal(

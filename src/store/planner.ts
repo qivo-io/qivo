@@ -10145,12 +10145,26 @@ function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions)
         paintDescriptionImages(uuid, prevDesc, String(paintDb.description || ''), at)
     },
   }
+  // a kept draft rebases on the value on screen (shownOf), which reads the
+  // workspace's row of the task first. While the workspace holds another
+  // organization's task of this id, that row is another task's, so the
+  // value comes from the window's own answer of this task, or none once
+  // the window shows another
+  const keep = opts.keepDraft
   return send(api.issues.update, { org_id: a.org, id: uuid, patch: wire }, view, {
     over: {
       ...overOf('issues', row, Object.keys(wire), opts.seen),
       hiddenParent: row.has_hidden_parent,
     },
-    keepDraft: opts.keepDraft,
+    keepDraft:
+      keep &&
+      ((shown) => {
+        if (!heldElsewhere(uuid, a.org)) return keep(shown)
+        const field = Object.keys(wire)[0]
+        const now = paintedAnswer()?.task
+        const own = now?.id === uuid && now.org_id === a.org ? now : undefined
+        return keep(own && Object.entries(own).find(([key]) => key === field)?.[1])
+      }),
     keepUnsaved: opts.keepUnsaved,
     about: { task: uuid, answer: true },
   })
