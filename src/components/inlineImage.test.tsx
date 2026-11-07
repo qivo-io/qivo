@@ -54,6 +54,7 @@ vi.mock('../store/planner', async () => {
 
 const { Markdown } = await import('./markdown')
 const { InlineImageBody } = await import('./inlineImage')
+const { P } = await import('../store/planner')
 
 let container: HTMLDivElement
 let root: Root
@@ -168,7 +169,7 @@ describe('description images', () => {
     expect(img?.hasAttribute('loading')).toBe(false)
   })
 
-  it('shows an external image that has not loaded in 15 s as unavailable, with a retry', async () => {
+  it('gives a slow external image’s slot back after 15 s and keeps it loading, and shows a failed one as unavailable with a retry', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     await render(<Markdown text="![chart](https://slow.example.com/chart.png)" />)
     await act(async () => {
@@ -176,16 +177,29 @@ describe('description images', () => {
         for (const target of obs.elements) obs.receive([{ target, isIntersecting: true }])
     })
     expect(container.querySelector('img')).not.toBeNull()
+    expect(P.inlineImages.stats().externalLoading).toBe(1)
     await act(async () => {
       vi.advanceTimersByTime(INLINE_IMAGES.externalTimeout)
     })
+    // the slot went back, and the image goes on loading
+    expect(P.inlineImages.stats().externalLoading).toBe(0)
+    expect(container.querySelector('img')?.getAttribute('src')).toBe(
+      'https://slow.example.com/chart.png',
+    )
+    expect(container.textContent).not.toContain('Image unavailable')
+    // a load that fails shows it as unavailable, with a retry
+    await act(async () => {
+      container.querySelector('img')?.dispatchEvent(new Event('error'))
+    })
     expect(container.querySelector('img')).toBeNull()
     expect(container.textContent).toContain('Image unavailable')
+    expect(P.inlineImages.stats().externalLoading).toBe(0)
     const retry = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Retry')
     await act(async () => retry?.click())
     expect(container.querySelector('img')?.getAttribute('src')).toBe(
       'https://slow.example.com/chart.png',
     )
+    expect(P.inlineImages.stats().externalLoading).toBe(1)
   })
 
   it('opens the editor’s image on a double-click and keeps the editor’s focus on its buttons', async () => {

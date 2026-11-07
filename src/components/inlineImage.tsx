@@ -45,7 +45,6 @@ export function InlineImageBody({ alt, attId, external, editor = false, iconSize
   const [reach, setReach] = useState<HTMLSpanElement | null>(null)
   const image = useInlineImage(P.inlineImages, attId, reach)
   const outside = useExternalImage(P.inlineImages, attId ? null : external, reach)
-  const [broken, setBroken] = useState(false)
   // a view already showing an attachment keeps it through a renewal
   const [showing, setShowing] = useState(false)
   const shows = attId
@@ -57,7 +56,7 @@ export function InlineImageBody({ alt, attId, external, editor = false, iconSize
     if (!shows) setShowing(false)
   }, [shows])
 
-  const gone = attId ? image.state === 'gone' : !external || broken || outside.unavailable
+  const gone = attId ? image.state === 'gone' : !external || outside.unavailable
   const url = (attId ? image.url : external) as string
   const freshUrl = async () => (attId ? await P.attachmentUrl(attId) : url)
   const open = () => void openImageFull(freshUrl)
@@ -103,14 +102,11 @@ export function InlineImageBody({ alt, attId, external, editor = false, iconSize
                     width: img.naturalWidth,
                     height: img.naturalHeight,
                   })
-                } else outside.settled()
+                } else outside.settled(true)
               }}
               onError={() => {
                 if (attId) P.inlineImages.loaded(attId, null)
-                else {
-                  outside.settled()
-                  setBroken(true)
-                }
+                else outside.settled(false)
               }}
             />
           </HoverTooltip>

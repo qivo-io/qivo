@@ -51,8 +51,11 @@ import type { MintOutcome } from './mintQueue'
     - `leave`: how long a download whose views all went far or unmounted
       goes on before it stops and gives its slot to a near image, so a
       quick scroll back keeps it.
-    - `externalTimeout`: how long an external image may load before it
-      shows as unavailable, with a retry.
+    - `externalTimeout`: how long an external image holds its slot in the
+      external pool. Past it the slot goes back and the image goes on
+      loading, so a slow host never holds the pool and a large image on a
+      slow link still arrives. Only a failed load shows it as unavailable,
+      with a retry.
     - `skew`: how long before its lease ends a cached image needs a mint
       that names it again before it shows again.
     Measured on the benchmark page (images=100, photos of 1,200 by 800 and
@@ -863,15 +866,16 @@ export function useInlineImage(
 }
 
 /** An external image's turn to load: `load` stays false until the view
-    is near and the external pool grants it a slot, then true until the
-    image passes INLINE_IMAGES.externalTimeout, which shows it as
-    `unavailable` until `retry`. The view calls `settled` once its <img>
-    loads or fails, which gives the slot back. */
+    is near and the external pool grants it a slot, then true. The view
+    calls `settled` once its <img> loads (true) or fails (false), which
+    gives the slot back; a failure shows it as `unavailable` until
+    `retry`. One still loading after INLINE_IMAGES.externalTimeout gives
+    its slot back and goes on loading. */
 export function useExternalImage(
   loader: InlineImages,
   src: string | null,
   element: Element | null,
-): { load: boolean; unavailable: boolean; settled: () => void; retry: () => void } {
+): { load: boolean; unavailable: boolean; settled: (ok: boolean) => void; retry: () => void } {
   const [near, setNear] = useState(false)
   const [load, setLoad] = useState(false)
   const [unavailable, setUnavailable] = useState(false)
@@ -899,12 +903,8 @@ export function useExternalImage(
     }
     release = loader.external(() => {
       setLoad(true)
-      timer = setTimeout(() => {
-        if (done) return
-        finish()
-        setLoad(false)
-        setUnavailable(true)
-      }, INLINE_IMAGES.externalTimeout)
+      // the slot goes back; the <img> keeps loading, uncounted
+      timer = setTimeout(finish, INLINE_IMAGES.externalTimeout)
     })
     give.current = finish
     return finish
@@ -912,7 +912,10 @@ export function useExternalImage(
   return {
     load,
     unavailable,
-    settled: () => give.current(),
+    settled: (ok) => {
+      give.current()
+      if (!ok) setUnavailable(true)
+    },
     retry: () => setAttempt((n) => n + 1),
   }
 }
