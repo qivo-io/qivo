@@ -44,7 +44,9 @@ open view has loaded, and initials otherwise. Someone whose details are
 still loading shows as a plain square, with **Loading…** in place of their
 name, for a moment. Your browser keeps recently shown pictures for your
 signed-in account, so a page you open again shows them without loading
-them again.
+them again. They stay in this browser after you sign out, until another
+account signs in here or newer pictures need their room, and Qivo shows a
+kept picture only for a person whose current details still name it.
 
 Other people's changes appear automatically, also while your own changes are
 still saving. Your edits appear immediately. If the server refuses an edit,
