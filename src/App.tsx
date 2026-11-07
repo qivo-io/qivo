@@ -84,6 +84,7 @@ import {
   scopeTaskOf,
   subscribeProjectPages,
   syncPlaceOf,
+  taskFacts,
   type UiState,
   viewBehindTask,
 } from './lib/router'
@@ -1066,11 +1067,15 @@ function App() {
   const [toasts, setToasts] = useState<Toast[]>([])
   const rev = usePlannerVersion()
   // The read of a task App holds by a reference (lib/taskReference.ts)
-  // answers on the comments channel: App follows it while it holds one, so
-  // the address names what the answer taught and the page moves to the
-  // task's project (pendingTask). Null otherwise, which renders nothing.
+  // answers on the comments channel: App follows what the store knows of
+  // that task while it holds one (lib/router.ts taskFacts), which is all
+  // the address and the pending task's scope below read of it, so the
+  // address names what the answer taught and the page moves to the task's
+  // project (pendingTask). Any other emit of the channel, such as each
+  // section answer of a new task's window, renders no App. Null otherwise,
+  // which renders nothing.
   const refRev = useSyncExternalStore(P.updates.comments.subscribe, () =>
-    isTaskRef(openIssue) ? P.updates.comments.getSnapshot() : null,
+    isTaskRef(openIssue) ? JSON.stringify(taskFacts(openIssue) ?? null) : null,
   )
   // A project settings page names the organization of a project the
   // workspace does not hold once its read answers (lib/router.ts
