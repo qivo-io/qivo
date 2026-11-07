@@ -1438,7 +1438,7 @@ describe('issues.archivedPage', () => {
     })
   })
 
-  it('counts a project once toward the bound when the seat and a team both reach it', async () => {
+  it('counts a sub-project once toward the bound when the seat and a team both reach it, and its top-level project not at all', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     // a member with grants of their own on FW and PCB, in the Hardware team,
@@ -1465,10 +1465,11 @@ describe('issues.archivedPage', () => {
       archived_at: day(1 + i),
     }))
     const listed = (await archiveOrder(t, f.org.id, [f.sub.id, f.sub2.id])).map((row) => row.id)
-    // TBED, FW and PCB are three projects
-    ARCHIVED_SCOPE.subProjects = 3
-    expect((await everyPage(t, member, allOf(f.org.id))).ids).toEqual(listed)
+    // FW and PCB are two sub-projects, however many rows reach them, and
+    // TBED above them counts toward no bound
     ARCHIVED_SCOPE.subProjects = 2
+    expect((await everyPage(t, member, allOf(f.org.id))).ids).toEqual(listed)
+    ARCHIVED_SCOPE.subProjects = 1
     expect(await pageOf(t, member, allOf(f.org.id))).toEqual(TOO_WIDE)
   })
 
