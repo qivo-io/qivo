@@ -110,7 +110,9 @@ async function inspectFile(file: File) {
    (lib/appearanceContext.ts usePreview), shown only for this image and
    its preview version. Settings mints no URL of its own: the provider's
    lease and shared background cache serve the canvas and this preview
-   alike, and the preview's read stops when the page closes. */
+   alike, and the preview's read stops when the page closes. Reload preview
+   asks the provider again, which also asks again for a lease it was
+   refused or failed to get. */
 function PrivatePreview({ image }: { image: NonNullable<AppearancePreferences['custom_image']> }) {
   const { preview, retry } = usePreview()
   const [error, setError] = useState('')

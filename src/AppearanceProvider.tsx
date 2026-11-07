@@ -38,8 +38,10 @@ type ImageLease = NonNullable<FunctionReturnType<typeof api.appearance.mintCusto
    already shown stays for display while its renewal is due or on its way,
    past its end too, so the background never goes away for a renewal, and
    the provider starts no new fetch with its URL once it has ended. A
-   refusal, no image or another image, drops it. */
-function usePrivateImage(imageId: string | null, previewVersion: number | null) {
+   refusal, no image or another image, drops it. A new `attempt` asks for
+   the lease again at once, as Settings' Reload preview does after a
+   refusal or a failure. */
+function usePrivateImage(imageId: string | null, previewVersion: number | null, attempt: number) {
   const [lease, setLease] = useState<(ImageLease & { previewVersion: number | null }) | null>(null)
   const [failed, setFailed] = useState(false)
   const shown = useRef<string | null>(null)
@@ -104,7 +106,8 @@ function usePrivateImage(imageId: string | null, previewVersion: number | null) 
       clearTimeout(timer)
       stop()
     }
-  }, [imageId, previewVersion])
+    // attempt asks again after a refusal or a failure
+  }, [imageId, previewVersion, attempt])
   return { lease: lease?.image_id === imageId ? lease : null, failed }
 }
 
@@ -267,24 +270,32 @@ export function AppearanceProvider({
     !preferencesFailed && preferences?.image_source === 'custom'
       ? (preferences.custom_image?.id ?? null)
       : null
+  // Settings' Reload preview after the custom lease was refused or failed
+  const [leaseAttempt, setLeaseAttempt] = useState(0)
   const { lease: privateImage, failed: privateFailed } = usePrivateImage(
     customId,
     preferences?.custom_image?.preview_version ?? null,
+    leaseAttempt,
+  )
+  // the custom image the preferences name, whether or not its lease came
+  const customSelection = useMemo<BackgroundSelection | null>(
+    () =>
+      customId
+        ? {
+            key: `custom:${customId}`,
+            previewVersion:
+              preferences?.custom_image?.preview_version == null
+                ? null
+                : String(preferences.custom_image.preview_version),
+          }
+        : null,
+    [customId, preferences],
   )
   const selection = useMemo<BackgroundSelection | null | undefined>(() => {
     if (preferencesFailed) return null
     if (!preferences) return undefined
     if (preferences.image_source === 'none') return null
-    if (preferences.image_source === 'custom')
-      return customId && !privateFailed
-        ? {
-            key: `custom:${customId}`,
-            previewVersion:
-              preferences.custom_image.preview_version === null
-                ? null
-                : String(preferences.custom_image.preview_version),
-          }
-        : null
+    if (preferences.image_source === 'custom') return privateFailed ? null : customSelection
     if (!dailyLoaded) return undefined
     return dailyImage?.image_url
       ? {
@@ -293,7 +304,7 @@ export function AppearanceProvider({
           previewVersion: dailyImage.preview_url ? new URL(dailyImage.preview_url).pathname : null,
         }
       : null
-  }, [preferences, preferencesFailed, customId, privateFailed, dailyLoaded, dailyImage])
+  }, [preferences, preferencesFailed, customSelection, privateFailed, dailyLoaded, dailyImage])
   useEffect(() => {
     if (selection === undefined) return
     restorationVersion.current++
@@ -369,10 +380,20 @@ export function AppearanceProvider({
     setPreviewAsks((n) => n + 1)
     return () => setPreviewAsks((n) => n - 1)
   }, [])
-  const retryPreview = useCallback(() => setPreviewAttempt((n) => n + 1), [])
+  // a refused or failed custom lease is asked for again too
+  const leaseFailed = useRef(false)
+  leaseFailed.current = privateFailed
+  const retryPreview = useCallback(() => {
+    setPreviewAttempt((n) => n + 1)
+    if (leaseFailed.current) setLeaseAttempt((n) => n + 1)
+  }, [])
   const previewWanted = previewAsks > 0
-  const previewKey = selection?.key ?? null
-  const previewVersion = selection?.previewVersion ?? null
+  // A custom image whose lease was refused or failed has no selection, but
+  // its preview is still that image's: unavailable, with Reload preview.
+  const previewSelection =
+    selection ?? (preferences?.image_source === 'custom' ? customSelection : null)
+  const previewKey = previewSelection?.key ?? null
+  const previewVersion = previewSelection?.previewVersion ?? null
   const customPreview = previewKey?.startsWith('custom:') ?? false
   // the custom lease of this derivative version, else none yet
   const customLease =

@@ -2,6 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { TooltipProvider } from './components/ui/tooltip'
 import type { DailyImage } from './lib/appearanceContext'
 import type { AppearancePreferences } from './store/planner'
 
@@ -11,15 +12,24 @@ import type { AppearancePreferences } from './store/planner'
    answers it. jsdom has no IndexedDB, so the background cache keeps its
    bytes in memory, as a blocked storage does. */
 
-const store = vi.hoisted(() => ({
-  deliver: null as ((value: AppearancePreferences) => void) | null,
-  mint: vi.fn(),
-}))
+const store = vi.hoisted(() => {
+  // the provider and Settings each subscribe to the preference
+  const watchers = new Set<(value: AppearancePreferences) => void>()
+  return {
+    watchers,
+    deliver: (value: AppearancePreferences) => {
+      for (const next of watchers) next(value)
+    },
+    mint: vi.fn(),
+  }
+})
 vi.mock('./store/planner', () => ({
   P: {
     watchAppearance: (next: (value: AppearancePreferences) => void) => {
-      store.deliver = next
-      return () => {}
+      store.watchers.add(next)
+      return () => {
+        store.watchers.delete(next)
+      }
     },
     mintAppearanceImageUrl: store.mint,
   },
@@ -57,6 +67,7 @@ vi.mock('./lib/demoCanvas', () => ({
 
 const { AppearanceProvider } = await import('./AppearanceProvider')
 const { usePreview } = await import('./lib/appearanceContext')
+const { AppearanceSettings } = await import('./panels/AppearanceSettings')
 
 function daily(id: string, preview: string | null): DailyImage {
   return {
@@ -224,7 +235,7 @@ const deliverWeek = (image: DailyImage | null) =>
 describe('the Canvas background and its preview', () => {
   it('reads the weekly preview from the derivative only, while Settings shows it, and stops it when Settings closes while the canvas loads on', async () => {
     await render(true)
-    await act(async () => store.deliver?.(preferences('daily')))
+    await act(async () => store.deliver(preferences('daily')))
     await deliverWeek(daily('week-1', 'https://storage.test/week-1/preview.webp'))
     await settle()
     // the canvas asks for the original, the preview for the derivative
@@ -243,7 +254,7 @@ describe('the Canvas background and its preview', () => {
 
   it('goes on reading the preview while the canvas loads beside it', async () => {
     await render(true)
-    await act(async () => store.deliver?.(preferences('daily')))
+    await act(async () => store.deliver(preferences('daily')))
     await deliverWeek(daily('week-1', 'https://storage.test/week-1/preview.webp'))
     await settle()
     const preview = fetched('preview')[0] as Download
@@ -259,7 +270,7 @@ describe('the Canvas background and its preview', () => {
 
   it('shows the cached preview again on a second visit with no download', async () => {
     await render(true)
-    await act(async () => store.deliver?.(preferences('daily')))
+    await act(async () => store.deliver(preferences('daily')))
     await deliverWeek(daily('week-1', 'https://storage.test/week-1/preview.webp'))
     await settle()
     fetched('preview')[0]?.answer()
@@ -274,7 +285,7 @@ describe('the Canvas background and its preview', () => {
 
   it('shows the canvas’s own image for a weekly image without a derivative, and unavailable while the canvas has none', async () => {
     await render(true)
-    await act(async () => store.deliver?.(preferences('daily')))
+    await act(async () => store.deliver(preferences('daily')))
     await deliverWeek(daily('broken', null))
     await settle()
     expect(shown().status).toBe('loading')
@@ -292,7 +303,7 @@ describe('the Canvas background and its preview', () => {
 
   it('never shows an older selection’s preview that answers after a newer selection', async () => {
     await render(true)
-    await act(async () => store.deliver?.(preferences('daily')))
+    await act(async () => store.deliver(preferences('daily')))
     await deliverWeek(daily('week-1', 'https://storage.test/week-1/preview.webp'))
     await settle()
     const old = fetched('week-1/preview')[0] as Download
@@ -308,7 +319,7 @@ describe('the Canvas background and its preview', () => {
 
   it('stops the weekly image’s read while hidden, keeping the background, and reads again on return', async () => {
     await render(false)
-    await act(async () => store.deliver?.(preferences('daily')))
+    await act(async () => store.deliver(preferences('daily')))
     await deliverWeek(daily('week-1', null))
     await settle()
     fetched('original')[0]?.answer()
@@ -335,7 +346,7 @@ describe('the Canvas background and its preview', () => {
       })
       store.mint.mockImplementation(async () => lease())
       await render(false)
-      await act(async () => store.deliver?.(preferences('custom')))
+      await act(async () => store.deliver(preferences('custom')))
       await settle()
       expect(store.mint).toHaveBeenCalledOnce()
       fetched('/backgrounds/')[0]?.answer()
@@ -359,10 +370,47 @@ describe('the Canvas background and its preview', () => {
     }
   })
 
+  it('shows a refused custom lease in Settings as unavailable with Reload preview, which asks for the lease again', async () => {
+    store.mint.mockResolvedValue(null)
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <AppearanceProvider accountId="account-1">
+            <AppearanceSettings />
+          </AppearanceProvider>
+        </TooltipProvider>,
+      ),
+    )
+    await settle()
+    await act(async () => store.deliver(preferences('custom')))
+    await settle()
+    expect(store.mint).toHaveBeenCalledOnce()
+    const text = () => container.querySelector('.aspect-video')?.textContent ?? ''
+    expect(text()).toBe('Preview unavailable.')
+    const reload = () =>
+      [...container.querySelectorAll('button')].find((b) => b.textContent === 'Reload preview')
+    expect(reload()).toBeDefined()
+    // the image is back: Reload asks for the lease, and the preview shows
+    store.mint.mockResolvedValue({
+      image_id: 'image-1',
+      url: 'https://site.test/backgrounds/image-1?t=2',
+      preview_url: 'https://site.test/background-previews/image-1?t=2',
+      expires_at: Date.now() + 600_000,
+    })
+    await act(async () => reload()?.click())
+    await settle()
+    expect(store.mint).toHaveBeenCalledTimes(2)
+    fetched('/background-previews/')[0]?.answer()
+    await settle()
+    expect(container.querySelector('[data-appearance-preview]')?.getAttribute('src')).toMatch(
+      /^blob:/,
+    )
+  })
+
   it('hands the demo’s derivative URL to the preview and pauses its public feed while hidden', async () => {
     demo.on = true
     await render(true)
-    await act(async () => store.deliver?.(preferences('daily')))
+    await act(async () => store.deliver(preferences('daily')))
     await settle()
     expect(shown()).toMatchObject({ status: 'ready', url: 'https://public.test/preview.webp' })
     expect(demo.polls).toBe(1)
