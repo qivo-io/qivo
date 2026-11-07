@@ -442,12 +442,14 @@ describe('project creation through the client store', () => {
       )
     })
 
-    it('lets an org admin see every project, and a viewer see one shared with their team', () => {
+    it('lets a viewer see one shared with their team, and an org admin only by their own rows', () => {
       expect(P.seesNewProject({ lead: 'leo' }, 'ingrid')).toBe(false)
       expect(P.seesNewProject({ lead: 'leo', teamAccess: { mine: 'user' } }, 'ingrid')).toBe(true)
       snap.profiles[0].org_role = 'admin'
       deliver(structuredClone(snap))
-      expect(P.seesNewProject({ lead: 'leo' })).toBe(true)
+      // admin status gives no sight of a project someone else leads
+      expect(P.seesNewProject({ lead: 'leo', access: { [me]: null } })).toBe(false)
+      expect(P.seesNewProject({ lead: 'leo', access: { [me]: 'viewer' } })).toBe(true)
     })
 
     /* App's toast after a create reads the draft through seesNewProject, so

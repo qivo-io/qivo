@@ -16,6 +16,9 @@ import { billingBytes, CALLS_COUNTING, STORAGE_COUNTING } from '../src/lib/billi
 import { endText } from '../src/lib/deletedItems'
 import { creatorPhrase } from '../src/lib/projectCreators'
 import {
+  ADMIN_MANAGEMENT_CLEANUP,
+  ADMIN_MANAGEMENT_MARKS,
+  ADMIN_MANAGEMENT_STEP,
   AGENDA_QUERY,
   APP_BATCHES_MAX,
   ASSIGNEE_LOAD_QUERY,
@@ -99,6 +102,7 @@ import {
   parseArgs,
   peoplePagesMax,
   pressSettled,
+  projectDeleteRoute,
   RATE_BUDGET,
   REGROUP_WAIT,
   RELATION_EXPECTED,
@@ -414,6 +418,8 @@ describe('staging check REST contract', () => {
       "'data-project-team-role'",
       "'data-project-access-user-option': row.id",
       "'data-project-role'",
+      "{ 'data-project-access-selected-option': `user:",
+      "'data-project-access-selected-role'",
       'data-new-subproject-parent=',
       'probe="data-new-subproject-parent-search"',
       'data-new-subproject-parent-choice={row.id}',
@@ -445,10 +451,125 @@ describe('staging check REST contract', () => {
       step.indexOf(`.locator(\`[data-new-subproject-parent="\${project.id}"]\`)`),
     )
     expect(step).toContain(`eq(madeSub.parent_id, project.id, "the sub-project's parent")`)
+    // Nora's automatic entry is checked as it is, never clicked, once the
+    // popover opened with its search cleared and before the team's search,
+    // since Selected shows only while the search is empty
+    const mine = `app.locator(\`[data-project-access-selected-option="user:\${run.nora.id}"]\`)`
+    expect(step).toContain(mine)
+    expect(step).not.toContain(`[data-project-access-user-option="\${run.nora.id}"]`)
+    expect(source).toContain("const selected = typed === '' &&")
+    expect(step.indexOf("await dialog.locator('[data-new-project-access]').click()")).toBeLessThan(
+      step.indexOf(mine),
+    )
+    expect(step.indexOf(mine)).toBeLessThan(step.indexOf('await search.fill(team.name)'))
     // its project goes in the cleanup
     expect(check).toContain(
       'if (run.projects.D) await deleteProjectInApp(c.writeToken, run.projects.D)',
     )
+  })
+
+  it("checks an admin's management of a project she takes no part in, after the dialogs step, and deletes that project itself", () => {
+    const pages = [
+      '../src/panels/settings/ProjectLists.tsx',
+      '../src/panels/settings/ArchivedTasks.tsx',
+    ]
+      .map((file) => readFileSync(new URL(file, import.meta.url), 'utf8'))
+      .join('\n')
+    for (const mark of [
+      ADMIN_MANAGEMENT_MARKS.search,
+      ADMIN_MANAGEMENT_MARKS.list,
+      ADMIN_MANAGEMENT_MARKS.row,
+      ADMIN_MANAGEMENT_MARKS.subRow,
+      ADMIN_MANAGEMENT_MARKS.archived,
+    ])
+      expect(pages).toContain(mark)
+    expect(pages).toContain(ADMIN_MANAGEMENT_MARKS.unavailable)
+    expect(ADMIN_MANAGEMENT_STEP).toBe('ui/admin-management')
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    expect(check.indexOf('await adminManagementCheck()')).toBeGreaterThan(
+      check.indexOf('await projectDialogsCheck()'),
+    )
+    expect(check.indexOf('await adminManagementCheck()')).toBeLessThan(
+      check.indexOf('await archiveChecks()'),
+    )
+    const step = check.slice(
+      check.indexOf('async function adminManagementCheck()'),
+      check.indexOf('export const BILLING_STORAGE_STEP'),
+    )
+    // the row menu opens only once the search has answered, as the list
+    // before it goes with any menu opened on it
+    expect(step.indexOf('names.every((name) => name.includes(run.tag))')).toBeLessThan(
+      step.indexOf("getByRole('button', { name: 'Project actions', exact: true })"),
+    )
+    // Nora takes no part in the project before anything is checked
+    expect(step.indexOf('/access/users/')).toBeLessThan(step.indexOf('eq(read.access?.read, false'))
+    // Search must hold its control row before the managed task's absence counts
+    expect(step.indexOf('(await item(control.key).count()) === 1')).toBeLessThan(
+      step.indexOf("eq(await item(managed.key).count(), 0, 'the managed task in Search')"),
+    )
+    // the row menu's Archived tasks, apart from the Settings navigation's
+    // item of the same name, which shows beside the non-modal menu
+    expect(step).toContain(
+      `.locator('[data-slot="popover-content"]')\n      .getByRole('button', { name: 'Archived tasks', exact: true })`,
+    )
+    expect(step).not.toContain("app.getByRole('button', { name: 'Archived tasks', exact: true })")
+    // the step deletes its project itself, also after a failure, under its
+    // own id, so a failed delete never replaces the step's own failure
+    expect(ADMIN_MANAGEMENT_CLEANUP).toBe('cleanup/admin-management')
+    expect(step).not.toContain('} finally {')
+    const cleanup =
+      'if (project) await check(ADMIN_MANAGEMENT_CLEANUP, () => deleteProjectInApp(w, project))'
+    expect(step.indexOf(cleanup)).toBeGreaterThan(
+      step.indexOf('await check(ADMIN_MANAGEMENT_STEP, async () => {'),
+    )
+    expect(step.indexOf(cleanup)).toBeGreaterThan(step.lastIndexOf('  })\n'))
+  })
+
+  it('archives first only a project the server says the caller reads, and deletes any other as it is', () => {
+    const read = (json) => projectDeleteRoute({ status: 200, json })
+    expect(read({ access: { read: true, write: true }, archived: false })).toBe('archive')
+    expect(read({ access: { read: true, write: false }, archived: true })).toBe('archive')
+    // a project Nora only manages, live or archived
+    expect(read({ access: { read: false, write: false }, archived: false })).toBe('direct')
+    expect(read({ access: { read: false, write: false }, archived: true })).toBe('direct')
+    // an answer that says nothing of reading never archives
+    expect(read({ archived: false })).toBe('direct')
+    expect(projectDeleteRoute({ status: 500, json: null })).toBe('direct')
+    expect(projectDeleteRoute(undefined)).toBe('direct')
+  })
+
+  it("deletes a project by the server's answer through the store, and sweeps the projects Nora only manages, live and archived", () => {
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const remove = check.slice(
+      check.indexOf('async function deleteProjectInApp('),
+      check.indexOf('async function appMessages('),
+    )
+    // the server's answer decides, never the store's copy
+    expect(remove).not.toContain('window.PLANNER.project(id)')
+    expect(remove.indexOf("if (projectDeleteRoute(current) === 'archive') {")).toBeLessThan(
+      remove.indexOf(
+        'window.PLANNER.archivedProjects?.some((x) => x.id === id),\n      project.id',
+      ),
+    )
+    expect(remove).toContain('window.PLANNER.removeProject(id, undefined, {')
+    const sweep = check.slice(
+      check.indexOf('async function sweep('),
+      check.indexOf('async function removeTokenInApp('),
+    )
+    expect(sweep).toContain(
+      'window.PLANNER.subProjectParents(window.PLANNER.homeOrg, search, after)',
+    )
+    expect(sweep).toContain(
+      'window.PLANNER.settingsArchivedProjects(window.PLANNER.homeOrg, search, after)',
+    )
+    // an archived entry alone, as a row beneath an archived parent goes
+    // with it
+    expect(sweep).toContain('.filter((p) => !p.under && matches(p.name))')
+    for (const pass of ["step('managed projects'", "step('managed archived projects'"])
+      expect(sweep.indexOf(pass)).toBeLessThan(sweep.indexOf("step('tasks'"))
+    // and the check for leftovers in the app reads both
+    const left = sweep.slice(sweep.indexOf("step('the check for leftovers in the app'"))
+    expect(left).toContain('[...(await managedLive()), ...(await managedArchived())]')
   })
   it("checks Settings › Projects and Archived projects on the pages' own marks, after a project's Settings page", () => {
     const pages = readFileSync(

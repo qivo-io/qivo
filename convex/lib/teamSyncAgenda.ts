@@ -132,13 +132,17 @@ import {
  *   0.99, and while the counts are not whole from the read in 1,759, 2,628
  *   and 1.42.
  * - All projects over 200 live top-level projects with 500 live and 1,000
- *   archived sub-projects, the organization's whole figures, over_ceiling
- *   from the counts in 1,117, 1,686 and 0.96 for an admin, 1,146, 1,688
- *   and 0.95 for a member in 3 teams who sees 54 sub-projects across the
- *   names; while counting from the read, after every top-level project, in
- *   2,222, 3,160 and 1.68 for the admin over 1,458 open tasks in the first
- *   25 projects by name and in 1,256, 1,874 and 1.10 for the member over
- *   1,440 in theirs.
+ *   archived sub-projects, the organization's whole figures, for a member
+ *   in 3 teams who sees 54 sub-projects across the names, over_ceiling
+ *   from the counts in 1,146, 1,688 and 0.95, and while counting from the
+ *   read in 1,256, 1,874 and 1.10 over 1,440 open tasks in theirs. An
+ *   organization admin in the same teams reads the same, two ranges and
+ *   one document more (7 November 2026, after the admin access split).
+ * - All projects for an organization admin who reads 200 live
+ *   sub-projects through User grants on their 67 top-level projects, of
+ *   70, over_ceiling from the counts in 1,246, 1,584 and 0.87, and while
+ *   counting from the read in 1,681, 1,933 and 1.08 over 1,410 open tasks
+ *   in the first 47 sub-projects by name (7 November 2026).
  * - An everyday project whose 90 tasks 90 people of a roster of 1,000 own:
  *   1,026, 375 and 0.19, every walker's week.
  * - An everyday team whose 600 rows 200 of its members own, of a roster of

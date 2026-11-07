@@ -5,6 +5,7 @@
  * its parent in the same change. withOrg's TBED holds FW (f.sub) and PCB
  * (f.sub2); the scene adds a second top-level project, Cloud, with the
  * Backend and Frontend sub-projects. */
+/// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
@@ -35,7 +36,7 @@ import {
   plantSubscription,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 const ARCHIVED = '2026-01-02T00:00:00.000Z'
@@ -46,14 +47,16 @@ const grant = (t: T, project_id: string, profile_id: string) =>
   })
 
 async function scene(t: T) {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const cloud = await plantProject(t, { org_id: f.org.id, key: 'CLD', name: 'Cloud' })
   const sub = { org_id: f.org.id, type: 'project' as const, parent_id: cloud.id }
   const backend = await plantProject(t, { ...sub, key: 'BE', name: 'Backend' })
   const frontend = await plantProject(t, { ...sub, key: 'FE', name: 'Frontend' })
-  // the agent writes both top-level projects; the user leads TBED and edits Cloud
+  // the agent writes both top-level projects; the user leads TBED and edits
+  // Cloud; the admin, who moves tasks between them, edits Cloud too
   for (const project of [f.meta.id, cloud.id]) await grant(t, project, f.agent.id)
   await grant(t, cloud.id, f.user.id)
+  await grant(t, cloud.id, f.admin.id)
   return { f, cloud, backend, frontend }
 }
 
@@ -336,6 +339,15 @@ describe('moving a task to another top-level project', () => {
     })
     expect((await expectRefusal(asEditor, 'rule')).data.message).toBe(MOVE_SUBTREE_EDIT_RULE)
     expect(await row(t, root.id)).toEqual(root)
+    // the public docs quote it as it is sent, a wrapped line as one space
+    const docs = import.meta.glob(['../../docs/rest-api.md', '../../docs/mcp.md'], {
+      eager: true,
+      query: '?raw',
+      import: 'default',
+    }) as Record<string, string>
+    expect(Object.keys(docs)).toHaveLength(2)
+    for (const [path, text] of Object.entries(docs))
+      expect(text.replace(/\s+/g, ' '), path).toContain(MOVE_SUBTREE_EDIT_RULE)
     // the guest edits TBED but nothing in Cloud
     await t.run(async (ctx) => {
       await ctx.db.patch(inPcb._id, { assignee_id: f.guest.id })

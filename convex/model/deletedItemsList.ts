@@ -110,8 +110,8 @@ type Item = Doc<'deleted_items'>
  * documents (LEGACY_READ), which the rows and bytes of the call bound
  * rather than its ranges. So 1,536 ranges
  * build about 500 such rows for a person in one team, and about 48 for one
- * in 30 teams, and more when finding spent less. Once the admin access
- * split lands an admin's rows of project items read those stored rows too
+ * in 30 teams, and more when finding spent less. Since the admin access
+ * split an admin's rows of project items read those stored rows too
  * (model/deletedItems.ts viewOf), so an admin's list of many project items
  * says `capped` sooner. A mutable object, so tests can lower it; replace
  * `call` and `find` whole rather than change their fields.
@@ -174,9 +174,9 @@ export type Deleter = {
  * show only what the viewer may see; a redacted row shows one task the
  * viewer can see instead of the root. An organization admin's row shows the
  * whole item, and a hidden one, a task item whose root's project the admin
- * cannot read once the admin access split lands, its key with an empty
- * title and no status or reason. `blocked` explains a ready row that
- * cannot be restored by the viewer; rows in other states say so by `state`. */
+ * cannot read, its key with an empty title and no status or reason.
+ * `blocked` explains a ready row that cannot be restored by the viewer;
+ * rows in other states say so by `state`. */
 export type DeletedRow = {
   id: string
   org_id: string
@@ -413,10 +413,10 @@ async function candidatesOf(
 
 /**
  * `item` as `sight`'s person sees it, or null when it is hidden from them.
- * An organization admin's row is the whole item, and once the admin access
- * split lands a task item whose root's project they cannot read is a
- * hidden row, with its key, path, counts and deleter and no title, status
- * or reason (model/deletedItems.ts ItemView). With `out`, the caller's
+ * An organization admin's row is the whole item, and a task item whose
+ * root's project they cannot read is a hidden row, with its key, path,
+ * counts and deleter and no title, status or reason (model/deletedItems.ts
+ * ItemView). With `out`, the caller's
  * check of its read budget, a redacted task item's row checks it after
  * each of the item's tasks it reads to find the one it shows, and answers
  * 'unread' when the budget ran out first, as each task's row holds its
@@ -453,7 +453,7 @@ export async function rowOf(
   const block = view.redacted ? 'no_access' : await restoreBlock(ctx, me, item, memo)
   let blocked: BlockDetail | undefined
   if (ready && block !== null)
-    blocked = view.redacted ? { reason: block } : await blockDetail(ctx, memo, item, block)
+    blocked = view.redacted ? { reason: block } : await blockDetail(ctx, memo, me, item, block)
   const base = {
     id: item.id,
     org_id: item.org_id,
@@ -701,7 +701,7 @@ export async function matchesFor(
       if (ready && block !== null)
         blocked = view.redacted
           ? { reason: block }
-          : await blockDetail(reader, sight.memo, item, block)
+          : await blockDetail(reader, sight.memo, me, item, block)
       // the row of a task item names its root, unless it is redacted, and
       // a hidden row by its key alone
       const subtask = item.kind === 'task' && !view.redacted && task.task_id !== item.target_id

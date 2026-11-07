@@ -16,8 +16,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { ACCESS_UNCHECKED, hasProjectLevel, OWN_READS } from '../lib/access'
-import { newWindowKey } from '../lib/db'
+import { ACCESS_UNCHECKED, canManageOwnProjectAccess, OWN_READS } from '../lib/access'
+import { byId, newWindowKey } from '../lib/db'
 import type { Refusal } from '../lib/functions'
 import { LIMITS, LIST_BATCH } from '../lib/limits'
 import { NAMED_READ, namedCursor } from '../lib/namedPages'
@@ -861,7 +861,10 @@ describe('rights', () => {
         }
         checked.delete++
         // projects.deleteDeep's own check
-        const deletes = await t.run((ctx) => hasProjectLevel(ctx, me, row.id, 'lead'))
+        const deletes = await t.run(async (ctx) => {
+          const p = await byId(ctx, 'projects', row.id)
+          return p !== null && (await canManageOwnProjectAccess(ctx, me, p))
+        })
         expect(row.can_delete, `${me.name} deletes ${row.name}`).toBe(deletes)
       }
     }

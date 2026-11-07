@@ -55,7 +55,7 @@ import {
   restTasks,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
 import { orgLoadRows } from './orgLoad.setup'
@@ -87,7 +87,7 @@ type Fx = OrgFixture & {
  * delay, the agent holding Edit on FW and PCB (so it is staff that cannot
  * see the sub-project) and a person without plannable hours. */
 async function setup(t: T = newT()): Promise<Fx> {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const sib = await plantHiddenSibling(t, f, f.guest)
   const lee = await t.run(async (ctx) => {
     for (const project_id of [f.sub.id, f.sub2.id]) {

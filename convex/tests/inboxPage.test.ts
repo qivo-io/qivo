@@ -49,7 +49,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { archiveRaw, at, drift, grant, measure } from './inboxItems.setup'
 import { plantNorthstar } from './northstar.setup'
@@ -410,7 +410,7 @@ describe('the shared rules of an Inbox row', () => {
 describe('the arguments', () => {
   it('refuse a kind named twice and a search past LIMITS.search, and take a blank search as none', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantGroups(t, f.guest, 3, () => f.sub.id)
     await expectRefusal(
       pageOf(t, f.guest, { kinds: ['mention', 'mention'] }),
@@ -435,7 +435,7 @@ describe('the arguments', () => {
 
   it('refuse an after or through of another login, order, filter or search, a changed one and another list’s', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the guest and the viewer both see TBED's sub-projects
     await plantGroups(t, f.guest, 5, () => f.sub.id)
     await plantGroups(t, f.viewer, 5, () => f.sub.id)
@@ -638,7 +638,7 @@ describe('parity with the workspace inbox part', () => {
 describe('who sees what', () => {
   it('never shows a group about a task the caller is not shown, and shows it again when access returns', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = (project_id = f.sub.id) => plantIssue(t, { org_id: f.org.id, project_id })
     const shown = await task()
     await deliver(t, f.guest, shown, { minute: 1 })
@@ -697,7 +697,7 @@ describe('who sees what', () => {
 
   it('leaves a task moved into a hidden project out at once, and shows one moved into a visible project once its re-key runs', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const hidden = await plantHiddenSibling(t, f, f.guest)
     const move = (id: string, project_id: string) =>
       as(t, f.admin).mutation(api.issues.move, { org_id: f.org.id, id, project_id })
@@ -726,7 +726,7 @@ describe('who sees what', () => {
     for (const [name, plant] of SHAPES)
       for (const role of ['guest', 'viewer']) {
         const t = newT()
-        const f = await withOrg(t)
+        const f = await withReadingAdmin(t)
         const me = await reader(t, f, [], role)
         await t.run((ctx) => plant(ctx, f, me))
         const tasks: Doc<'issues'>[] = []
@@ -755,7 +755,7 @@ describe('who sees what', () => {
 
   it('names an actor only from the seat’s own organization, in the row and in the search', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [own, foreign] = await plantGroups(t, f.guest, 2, () => f.sub.id, {
       title: (i) => ['Own', 'Foreign'][i],
       sent: (i) => [
@@ -778,7 +778,7 @@ describe('who sees what', () => {
 
   it('lists for an organization admin what the summary counts for them', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (const [i, p] of [f.meta, f.sub, f.sub2, f.hidden].entries())
       await deliver(t, f.admin, await plantIssue(t, { org_id: f.org.id, project_id: p.id }), {
         minute: i,
@@ -797,7 +797,7 @@ describe('who sees what', () => {
 describe('a check of the caller’s access that a bound stops', () => {
   it('leaves its groups out and says unchecked, keeps the others, and one bound up answers as with the default bounds', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await reader(t, f, [f.sub], 'user')
     await t.run(async (ctx) => {
       await ctx.db.insert('team_members', {
@@ -833,7 +833,7 @@ describe('a check of the caller’s access that a bound stops', () => {
 describe('the seats of a login', () => {
   it('merges two seats in one order, and names a seat that is not ready instead of walking it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const elsewhere = await plantSeat(t, {
       org_id: f.otherOrg.id,
       auth_user_id: f.guest.auth_user_id,
@@ -891,7 +891,7 @@ describe('the seats of a login', () => {
 
   it('keeps two seats’ items at one list time and task id apart, each once in both orders, also where a page ends between them', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const elsewhere = await plantSeat(t, {
       org_id: f.otherOrg.id,
       auth_user_id: f.guest.auth_user_id,
@@ -942,7 +942,7 @@ describe('the seats of a login', () => {
 describe('the filters and the order', () => {
   it('apply Unread only, Show snoozed with a wake, the kinds and the phone’s segments before the page is cut', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const guest = as(t, f.guest)
     // 8 groups, minute order: change, mention, comment, change+mention, read change, ...
     const tasks = await plantGroups(t, f.guest, 8, () => f.sub.id, {
@@ -1019,7 +1019,7 @@ describe('the filters and the order', () => {
 
   it('breaks equal list times by task id, descending newest first and ascending oldest first', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const tasks = await plantGroups(t, f.guest, 7, () => f.sub.id, {
       sent: (i) => [{ minute: i < 5 ? 10 : i }],
     })
@@ -1045,7 +1045,7 @@ describe('the filters and the order', () => {
 describe('the search', () => {
   it('finds every word in the title, key, second line, places and every message, in any case, accents kept', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a person with a name of their own, an actor of the organization
     const ada = await plantSeat(t, { org_id: f.org.id, name: 'Ada Lovelace', accepted_at: NOW })
     const [plain, older, mention, comment, moved, machine, cafe] = await plantGroups(
@@ -1103,7 +1103,7 @@ describe('the search', () => {
 
   it('searches the whole Inbox, never a hidden group, and answers a search that is not finished as stopped, page after page', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 120 groups, the oldest one holding a word no other does
     const tasks = await plantGroups(t, f.guest, 120, () => f.sub.id, {
       title: (i) => (i === 0 ? 'Wire the zebra harness' : `Calibrate fixture ${i}`),
@@ -1141,7 +1141,7 @@ describe('the search', () => {
 describe('continuation', () => {
   it('gives 120 groups as 50, 50 and 20, and keeps a live page whole as groups move between pages', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const guest = as(t, f.guest)
     const tasks = await plantGroups(t, f.guest, 120, () => f.sub.id)
     const all = await pages(t, f.guest)
@@ -1206,7 +1206,7 @@ describe('continuation', () => {
 
   it('keeps loaded pages live with through, together holding every group once as groups move, leave or are read, and stops one past four times its rows', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const guest = as(t, f.guest)
     const tasks = await plantGroups(t, f.guest, 12, () => f.sub.id)
     INBOX_PAGE.rows = 4
@@ -1267,7 +1267,7 @@ describe('continuation', () => {
 
   it('oldest first, shows a group a new message moved past the cursor again on a later page, never twice on one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const tasks = await plantGroups(t, f.guest, 6, () => f.sub.id)
     INBOX_PAGE.rows = 2
     const first = await pageOf(t, f.guest, { order: 'oldest' })
@@ -1291,7 +1291,7 @@ describe('continuation', () => {
 describe('the read budget', () => {
   it('ends pages short and stopped under a lowered budget, each moving forward, every group once to the end', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const tasks = await plantGroups(t, f.guest, 30, () => f.sub.id)
     // a ceiling the request has passed: one group a page, read whatever the budget
     INBOX_PAGE.reads = { ranges: 0, documents: 0, bytes: 0 }
@@ -1309,7 +1309,7 @@ describe('the read budget', () => {
 
   it('counts the task reads of groups it leaves out, so archived tasks stop a page within its budget', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const shown = await plantGroups(t, f.guest, 5, () => f.sub.id)
     // 200 groups of archived tasks in a visible project, newer than the shown ones
     const archived = await plantGroups(t, f.guest, 200, () => f.sub.id, {
@@ -1328,7 +1328,7 @@ describe('the read budget', () => {
 
   it('counts the checks of projects whose groups it skips by their hint', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const shown = await plantGroups(t, f.guest, 3, () => f.sub.id)
     // 60 projects the guest no longer sees, a group each, newer than the shown ones
     for (let i = 0; i < 60; i++) {
@@ -1348,7 +1348,7 @@ describe('the read budget', () => {
 
   it('counts every message a search and an unread change read, so a lowered document or byte budget alone ends pages within it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 30 groups at the item cap: a read change that holds the search word,
     // then 50 unread mentions in comments, so the search reads every message
     // of each group and unreadChange walks every unread one
@@ -1396,7 +1396,7 @@ describe('the read budget', () => {
 
   it('says how far it checked by the last shown group, never a later hidden one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const lost = await plantProject(t, { org_id: f.org.id })
     const hiddenTask = (minute: number) =>
       plantIssue(t, { org_id: f.org.id, project_id: lost.id }).then((task) =>
@@ -1431,7 +1431,7 @@ describe('the read budget', () => {
 describe('the rows', () => {
   it('answer every field for unread, read, snoozed, woken and trimmed groups, with the item read’s unread fields and cutoff', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const guest = as(t, f.guest)
     const [unread, read, snoozed, woken, trimmed] = await plantGroups(
       t,
@@ -1701,7 +1701,7 @@ async function every(t: T, who: Doc<'profiles'>, label: string, a: Partial<Inbox
 describe('reads at the design size', () => {
   it('1. the everyday Inbox, 60 groups over 3 sub-projects, browsed and searched', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { me, subs } = await everyday(t, f)
     const people = await actors(t, f, 10)
     await plantGroups(t, me, 60, (i) => subs[i % 3].id, {
@@ -1728,7 +1728,7 @@ describe('reads at the design size', () => {
 
   it('2. one sub-project’s 300 open and 150 Done tasks, a group each, in each order, filtered and searched', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { me, subs } = await everyday(t, f)
     const people = await actors(t, f, 50)
     // the open and Done-not-archived figures at their sum, as one page reads
@@ -1786,7 +1786,7 @@ describe('reads at the design size', () => {
 
   it('3. one project’s 800 open and 200 Done tasks over 3 sub-projects, the same calls', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { me, subs } = await everyday(t, f)
     const people = await actors(t, f, 50)
     // every fifth group is of a Done task, at their sum as in case 2
@@ -1841,7 +1841,7 @@ describe('reads at the design size', () => {
 
   it('4. one project’s 200 Done tasks not yet archived, a read group each, browsed', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { me, subs } = await everyday(t, f)
     await plantGroups(t, me, 200, (i) => subs[i % 3].id, {
       title,
@@ -1856,7 +1856,7 @@ describe('reads at the design size', () => {
 
   it('6. a project of 800 groups the reader no longer sees, newer than every visible group', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { me, subs } = await everyday(t, f)
     const visible = await plantGroups(t, me, 60, (i) => subs[i % 3].id, { title })
     // a top-level project of 3 sub-projects the reader does not see
@@ -1876,7 +1876,7 @@ describe('reads at the design size', () => {
 
   it('7. a person in 5 teams with an everyday Inbox', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { me, subs } = await everyday(t, f, 5)
     await plantGroups(t, me, 60, (i) => subs[i % 3].id, { title })
     const browse = await first(t, me, 'in 5 teams, browse')
@@ -1886,7 +1886,7 @@ describe('reads at the design size', () => {
 
   it('8. 50 groups at the item cap, 51 messages each, browsed and searched for each group’s oldest message', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { me, subs } = await everyday(t, f)
     const at51 = (i: number, unread: (j: number) => Sent): Sent[] => [
       {
@@ -1925,7 +1925,7 @@ describe('reads at the design size', () => {
     expect(ids(found.page.rows)).toEqual(newestFirst(tasks))
     // every unread message a mention in a comment, which unreadChange walks
     const t2 = newT()
-    const f2 = await withOrg(t2)
+    const f2 = await withReadingAdmin(t2)
     const second = await everyday(t2, f2)
     await plantGroups(t2, second.me, 50, () => second.subs[0].id, {
       title,
@@ -1955,7 +1955,7 @@ describe('reads at the design size', () => {
 
   it('reads one task for each group of an archived task it passes, so pages over them can be counted', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { me, subs } = await everyday(t, f)
     const shown = await plantGroups(t, me, 60, (i) => subs[i % 3].id, { title })
     const base = await first(t, me, 'oldest first, 60 visible groups', { order: 'oldest' })
@@ -1998,7 +1998,7 @@ describe.runIf(process.env.QIVO_INBOX_PERSON_READS === '1')(
   () => {
     it('5. the 200 sub-projects one person can read, 30 groups each', async () => {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       // 63 sub-projects through the person's 3 teams and 137 through grants
       // on 46 more, the last of them with 2, so exactly 200 in all
       const { me, subs } = await everyday(t, f, 3, 46, 2)

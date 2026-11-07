@@ -54,7 +54,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from '../../convex/tests/helpers.setup'
 import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
@@ -647,15 +647,15 @@ const SHAPE_ROWS = (f: OrgFixture): Filters[] => [
 ]
 
 /** One access case, `shape` planted for a fresh seat of `role`, or the
- * fixture's admin without a shape, compared over every selection. */
+ * fixture's admin, who reads by grants, without a shape, compared over every selection. */
 async function compareShape(
   shape: (typeof SHAPES)[number] | null,
   role: 'user' | 'guest' | 'viewer' | 'admin',
 ) {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const subject =
-    role === 'admin'
+    role === 'admin' && shape === null
       ? f.admin
       : await plantSeat(t, { org_id: f.org.id, org_role: role, auth_user_id: `auth_${uuid()}` })
   if (shape !== null) await t.run((ctx) => shape[1](ctx, f, subject))
@@ -679,14 +679,15 @@ async function compareShape(
 }
 
 describe('access shapes', () => {
-  it('answers what the store derives for the admin', async () => {
+  it('answers what the store derives for the fixture’s admin, who reads by grants', async () => {
     const { found, moves } = await compareShape(null, 'admin')
     expect(found.get('no filter')).toBeGreaterThan(0)
     expect(moves).toBeGreaterThan(0)
   })
 
-  for (const role of ['user', 'guest', 'viewer'] as const)
-    it(`answers what the store derives for a ${role} in every shape`, async () => {
+  // an admin's seat is judged by its own rows, as any member's
+  for (const role of ['admin', 'user', 'guest', 'viewer'] as const)
+    it(`answers what the store derives for ${role === 'admin' ? 'an' : 'a'} ${role} in every shape`, async () => {
       let showing = 0
       for (const shape of SHAPES)
         if (((await compareShape(shape, role)).found.get('no filter') ?? 0) > 0) showing++
@@ -1194,7 +1195,7 @@ async function plantTeam(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
  * store booted and every person's answers read. */
 async function teamShape(shape: (typeof SHAPES)[number] | null, role: 'user' | 'guest' | 'viewer') {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const subject = await plantSeat(t, {
     org_id: f.org.id,
     org_role: role,

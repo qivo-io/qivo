@@ -38,6 +38,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
 import { withReach } from './projectReach.setup'
@@ -152,7 +153,7 @@ function narrowestOf(key: string) {
 describe('a tasks window', () => {
   it('answers split past its rows and keeps answering, so the app cuts it while it shows', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const tasks = await plantTasks(t, f, 5)
     PAGE.tasks.split = 4
     const answer = await as(t, f.admin).query(api.workspace.tasks, { org_id: f.org.id, ...whole })
@@ -171,7 +172,7 @@ describe('a tasks window', () => {
 
   it('stops before it reads too much and answers overflow, which the app cuts until every task loads', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const tasks = await plantTasks(t, f, 9)
     PAGE.tasks.most = 4
     const answer = await as(t, f.admin).query(api.workspace.tasks, { org_id: f.org.id, ...whole })
@@ -183,7 +184,7 @@ describe('a tasks window', () => {
 
   it('refuses with a sentence a window it cannot cut further', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (let i = 0; i < 3; i++)
       await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, window_key: 'fff00000' })
     PAGE.tasks.most = 1
@@ -197,7 +198,7 @@ describe('a tasks window', () => {
 
   it('stops between batches once its reads pass the hard budget', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantTasks(t, f, 6)
     PAGE.batch = 2
     PAGE.hard.ranges = 1
@@ -217,7 +218,7 @@ describe('a tasks window', () => {
     })
     SCALED_BYTES(128)
     TEXT_READ.bytes = DEFAULT_TEXT_READ.bytes / 128
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const planted: string[] = []
     // in writes of 100
     for (let from = 0; from < 300; from += 100)
@@ -264,7 +265,7 @@ describe('a tasks window', () => {
 describe('links of a restored task', () => {
   it('a marked link goes out once, with its source, before its marks are cleared', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a, b, c] = await plantTasks(t, f, 3)
     const hiddenSource = await plantIssue(t, { org_id: f.org.id, project_id: f.hidden.id })
     // b was archived, its links marked, then restored before the clear ran
@@ -298,7 +299,7 @@ describe('links of a restored task', () => {
 describe('reads a window cannot bound by its rows', () => {
   it('asks to be cut past half its relation rows of one kind, while it still shows them', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantTasks(t, f, 3)
     PAGE.relations = 4
     const answer = await as(t, f.admin).query(api.workspace.tasks, { org_id: f.org.id, ...whole })
@@ -308,7 +309,7 @@ describe('reads a window cannot bound by its rows', () => {
 
   it('answers overflow past its relation rows of one kind, flagged tasks included, and its cuts send them all', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const tasks = await plantTasks(t, f, 8)
     PAGE.relations = 3
     expect(await as(t, f.admin).query(api.workspace.tasks, { org_id: f.org.id, ...whole })).toEqual(
@@ -336,7 +337,7 @@ describe('reads a window cannot bound by its rows', () => {
 
   it('reads subtasks a few at a time without missing one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [p1, p2, p3, leaf] = await plantTasks(t, f, 4)
     const kid = (parent: Doc<'issues'>, project: Doc<'projects'>) =>
       plantIssue(t, { org_id: f.org.id, project_id: project.id, parent_id: parent.id })
@@ -362,7 +363,7 @@ describe('reads a window cannot bound by its rows', () => {
   it('refuses with a sentence a window whose subtasks would pass its budget', async () => {
     const t = newT(REAL_LIMITS)
     SCALED_BYTES()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // three parents in the narrowest window, with 99 subtasks each of
     // about 8 KB: 300 tasks, the design size for one sub-project, and about
     // 2.4 MB of subtasks, which no cut can part under an eighth of the
@@ -389,7 +390,7 @@ describe('reads a window cannot bound by its rows', () => {
 
   it('reads tasks shared with more teams than it reads at once within the real limits', async () => {
     const t = newT(REAL_LIMITS)
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 25 projects shared with the same 5 teams, the viewer in one, past an
     // OWN_READS.projectShares lowered to 4, as 100 teams passed the real 64
     OWN_READS.projectShares = 4
@@ -445,7 +446,7 @@ describe('reads a window cannot bound by its rows', () => {
   it('cuts an inbox whose tasks would pass its budget, and says so', async () => {
     const t = newT(REAL_LIMITS)
     SCALED_BYTES()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 300 archived tasks of about 8 KB each, about 2.4 MB, each named by an
     // unread message, older than one about a task the person is shown, past
     // an eighth of the inbox's budgets as 900 tasks of about 60 KB were
@@ -552,7 +553,7 @@ describe('windows', () => {
 
   it('send the same workspace in many windows as in one, relation rows across windows included, people cut as they overflow', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // tasks in four windows of four, by their window keys
     const at = (key: string, extra: Partial<Doc<'issues'>> = {}) =>
       plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, window_key: key, ...extra })
@@ -660,7 +661,7 @@ describe('windows', () => {
 describe('window keys', () => {
   it("the server picks a new task's key, so a writer who crowds ids into one window does not crowd the windows", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const ids = [0, 1, 2].map((i) => `abc00000-0000-4000-8000-00000000000${i}`)
     for (const id of ids)
       await as(t, f.user).mutation(api.issues.create, {
@@ -686,7 +687,7 @@ describe('window keys', () => {
 
   it("every writer of a relation row gives it its task's key", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a, b] = [uuid(), uuid()]
     const admin = as(t, f.admin)
     for (const id of [a, b])
@@ -755,7 +756,7 @@ describe('window keys', () => {
 
   it('windows hold tasks by key, not id: ids in one narrowest window load apart, keys in one refuse', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const crowded = (i: number) => `fff00000-0000-4000-8000-00000000000${i}`
     const keys = ['10000000', '50000000', 'd0000000']
     for (const [i, key] of keys.entries())
@@ -776,7 +777,7 @@ describe('window keys', () => {
 
   it('a task stored before window keys loads in the first window with its rows, until the backfill gives them one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const old = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -867,7 +868,7 @@ describe('window keys', () => {
 
   it("no part sends a window key, an archive mark, a mark flag or a relation row's organization", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [task] = await plantTasks(t, f, 1)
     await t.run(async (ctx) => {
       await ctx.db.patch(task._id, { relations_marked: true })
@@ -903,7 +904,7 @@ describe('window keys', () => {
 describe('what a part reveals', () => {
   it('a guest reads only the tasks they are shown, and no hidden id leaves', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const shown = await plantTasks(t, f, 3)
     const hidden: Doc<'issues'>[] = []
     for (let i = 0; i < 40; i++)
@@ -948,7 +949,7 @@ describe('what a part reveals', () => {
 
   it('hidden load: staff get anonymized rows, anyone else only their own, from the window of the task', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const plan = { start_week: '2026-01-05', end_week: '2026-01-05', remaining_hours: 3 }
     const own = await plantIssue(t, {
       id: '3fa85f64-5717-4562-b3fc-2c963f66afa6',
@@ -995,7 +996,7 @@ describe('what a part reveals', () => {
 
   it('answers gone without a seat, and refuses without a sign-in', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     expect(
       await as(t, f.admin).query(api.workspace.tasks, { org_id: f.otherOrg.id, ...whole }),
     ).toEqual({ state: 'gone' })
@@ -1009,7 +1010,7 @@ describe('what a part reveals', () => {
 describe('answers Convex need not re-send', () => {
   it('are the same on every run of the same data, and log nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantTasks(t, f, 3)
     const log = vi.spyOn(console, 'log')
     const warn = vi.spyOn(console, 'warn')
@@ -1021,7 +1022,7 @@ describe('answers Convex need not re-send', () => {
 
   it('a rename elsewhere changes only the window that holds the task', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const tasks = await plantTasks(t, f, 12)
     const windows = idWindows(4)
     const read = () =>
@@ -1046,7 +1047,7 @@ describe('answers Convex need not re-send', () => {
 describe('many projects', () => {
   it('a part reads only the projects its rows name, and a parent of 30 sub-projects shows for navigation within the real limits', async () => {
     const t = newT(REAL_LIMITS)
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a parent the viewer reaches only through the last of its 30
     // sub-projects, as many as the design size puts under one project
     const parent = uuid()
@@ -1096,18 +1097,8 @@ describe('many projects', () => {
 
   it('shows a task exactly where the person sees its project, for every kind of grant, however their own rows are read', async () => {
     const shownProjects = {
-      admin: [
-        'led',
-        'grant',
-        'viewerGrant',
-        'share',
-        'otherTeam',
-        'foreignTeam',
-        'none',
-        'parentShared',
-        'parentLed',
-        'parentGrant',
-      ],
+      // an admin by their own rows, as a user
+      admin: ['led', 'grant', 'viewerGrant', 'share', 'parentShared', 'parentLed', 'parentGrant'],
       user: ['led', 'grant', 'viewerGrant', 'share', 'parentShared', 'parentLed', 'parentGrant'],
       // a viewer leads nothing
       viewer: ['grant', 'viewerGrant', 'share', 'parentShared', 'parentGrant'],
@@ -1116,7 +1107,7 @@ describe('many projects', () => {
     } as const
     for (const [role, expected] of Object.entries(shownProjects)) {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const me = await plantSeat(t, {
         org_id: f.org.id,
         org_role: role as keyof typeof shownProjects,
@@ -1259,7 +1250,7 @@ describe('many projects', () => {
 
   it("a person's grants, memberships and team shares are read once a window, not once a project", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await plantSeat(t, { org_id: f.org.id, org_role: 'user' })
     // one task in each of 60 sub-projects of 30 parents, five shared with a
     // team of the person's three, each parent granted to them
@@ -1337,20 +1328,24 @@ describe('many projects', () => {
           shown: answer.issues.length,
         }
       })
-    const [member, admin] = [await reads(me), await reads(f.admin)]
+    // the lead of TBED and Skunkworks, who leads none of these projects, as
+    // a caller who reads no access rows for them is now none
+    const [member, other] = [await reads(me), await reads(f.user)]
     expect(member.shown).toBe(60)
-    // an admin reads no access rows; the member asks about the first
-    // projects one by one and then reads their own rows once, so they cost
-    // less than half of the two ranges for each of the 90 projects
-    expect(member.ranges - admin.ranges).toBeLessThan(90)
+    expect(other.shown).toBe(0)
+    // the member asks about the first projects one by one and then reads
+    // their own rows once, so they cost less than half of the two ranges
+    // for each of the 90 projects more than a caller without rows on them
+    expect(member.ranges - other.ranges).toBeLessThan(90)
   })
 })
 
 describe('the projects and people parts', () => {
   it('a projects window answers overflow past its rows or its reads, its cuts send every project, and the narrowest one refuses', async () => {
     const t = newT()
-    const f = await withOrg(t)
-    for (let i = 0; i < 4; i++) await plantProject(t, { org_id: f.org.id })
+    const f = await withReadingAdmin(t)
+    // led by the admin, who reads the window
+    for (let i = 0; i < 4; i++) await plantProject(t, { org_id: f.org.id, lead_id: f.admin.id })
     const ids = (snap: Awaited<ReturnType<typeof workspaceOf>>) =>
       snap?.projects.map((p) => p.id).sort()
     const one = await workspaceOf(as(t, f.admin))
@@ -1377,7 +1372,7 @@ describe('the projects and people parts', () => {
 
   it('a projects window does not ask to be cut for reads every part of the caller repeats', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // every other project far from the window under test
     await t.run(async (ctx) => {
       for (const p of await ctx.db.query('projects').collect())
@@ -1528,6 +1523,9 @@ describe('the projects and people parts', () => {
       auth_user_id: `seat_${uuid()}`,
     })
     const tops = await plantPortfolio(t, f, member, { tops: 20, subs: 3 })
+    // the member reads the portfolio through the User grants, and withOrg's
+    // admin, who holds no grant, through the fixture team's Viewer shares,
+    // as admin status gives no level
     const before = [await projectsWindow(t, f.admin), await projectsWindow(t, member)]
     for (const read of before) {
       expect(read.answer).toMatchObject({ state: 'ok' })
@@ -1596,7 +1594,7 @@ describe('the projects and people parts', () => {
 
   it('a people window too full to cut refuses with a sentence', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const crowded = [0, 1, 2].map((i) => `fff00000-0000-4000-8000-00000000000${i}`)
     const { _id, _creationTime, ...viewer } = f.viewer
     await t.run(async (ctx) => {
@@ -1621,7 +1619,7 @@ describe('the projects and people parts', () => {
 describe('the people part', () => {
   it('names how many pieces to cut an overflowing window into, from how far its read reached', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const w = { from: 'a0000000', to: 'a0400000' }
     const { _id, _creationTime, ...viewer } = f.viewer
     await t.run(async (ctx) => {
@@ -1650,7 +1648,7 @@ describe('the people part', () => {
 
   it("sends each person's memberships with them, and the app keeps those of teams it holds", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run(async (ctx) => {
       // a membership of a team that no longer exists
       await ctx.db.insert('team_members', {
@@ -1730,7 +1728,7 @@ function narrowest(key: string): IdWindow {
 describe('a check of the caller access that a bound stops', () => {
   it('cuts the projects and tasks parts where the room of their reads ran out and refuses them where their own rows stop it, cuts the inbox, and one bound up answers as with the default bounds', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await plantTeamMember(t, f)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // a task an earlier version stored on TBED, which shows the member only
@@ -1781,7 +1779,7 @@ describe('a check of the caller access that a bound stops', () => {
 
   it('cuts a window whose projects shared with many teams use up its room, and loads every piece', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await plantTeamMember(t, f)
     // eight more sub-projects of TBED, each shared with 5 teams that are
     // not the member's, past an OWN_READS.projectShares lowered to 4, and
@@ -1825,7 +1823,7 @@ describe('a check of the caller access that a bound stops', () => {
 
   it('shows a parent of 30 sub-projects for navigation from reach rows, reading a few documents', async () => {
     const t = newT(REAL_LIMITS)
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const parent = uuid()
     const subs = await t.run(async (ctx) => {
       const row = (n: number, parent_id?: string) => ({
@@ -1874,7 +1872,7 @@ describe('a check of the caller access that a bound stops', () => {
     // pass them, as people in 129 and 257 teams passed the real ones
     Object.assign(OWN_READS, { navTeams: 2, teams: 4, rows: 20, navRows: 20 })
     const t = newT(REAL_LIMITS)
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a person per case, each with a team that shares FW, so TBED shows
     // them only for navigation, and more teams beside it
     const person = async (teams: number, sharesEach: number) => {

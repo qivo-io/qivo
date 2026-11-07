@@ -30,7 +30,7 @@ import {
   type T,
   tick,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 const REVIEWER_SENTENCE =
@@ -93,7 +93,7 @@ describe('the rule', () => {
 describe('review time on entering Review', () => {
   it('lands the project review time with a fresh stamp, even when the hours are unchanged', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
 
     const fresh = await plantIssue(t, { ...base, status: 'todo' })
@@ -141,7 +141,7 @@ describe('review time on entering Review', () => {
 
   it('reads the sub-project value, else its project value, else 2 h', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const enter = async () => {
       const row = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
       return (await update(t, f, row.id, { status: 'review' })).remaining_hours
@@ -159,7 +159,7 @@ describe('review time on entering Review', () => {
 
   it('explicit hours in the same write win; null takes the review time', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const a = await plantIssue(t, { ...base })
     expect(
@@ -173,7 +173,7 @@ describe('review time on entering Review', () => {
 
   it('a write that stays in Review, or leaves it, keeps the hours and the stamp', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const inReview = { org_id: f.org.id, project_id: f.sub.id, status: 'review' as const }
     const stay = await plantIssue(t, { ...inReview, remaining_hours: 5, remaining_set_at: NOW })
     const kept = await update(t, f, stay.id, { status: 'review', title: 'x' })
@@ -189,7 +189,7 @@ describe('review time on entering Review', () => {
 
   it('a task with active subtasks is refused before any review time lands', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const parent = await plantIssue(t, { ...base })
     await plantIssue(t, { ...base, parent_id: parent.id })
@@ -234,7 +234,7 @@ describe('the review hand-off stamp (review_at)', () => {
 
   it('stamps entering Review and a new reviewer there, and keeps it through other writes', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const row = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, status: 'progress' })
     // a reviewer named outside Review hands nothing over
     expect('review_at' in (await update(t, f, row.id, { reviewer_id: f.guest.id }))).toBe(false)
@@ -259,7 +259,7 @@ describe('the review hand-off stamp (review_at)', () => {
 
   it('keeps it from Review to Done, and clears it on every other way out', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const inReview = {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -284,7 +284,7 @@ describe('the review hand-off stamp (review_at)', () => {
 
   it('stamps a task created In Review, and no other', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const born = await create(t, f, { status: 'review', reviewer_id: f.guest.id })
     expect(born.review_at).toBe(born.created_at)
     expect('review_at' in (await create(t, f, { status: 'done' }))).toBe(false)
@@ -295,7 +295,7 @@ describe('the review hand-off stamp (review_at)', () => {
 
   it('never lands on a group: refused into Review, and dropped when a leaf gains a subtask', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const group = await plantIssue(t, { ...base, status: 'progress' })
     await plantIssue(t, { ...base, parent_id: group.id })
@@ -316,7 +316,7 @@ describe('the review hand-off stamp (review_at)', () => {
 
   it('every writer stamps it: REST and MCP into Review', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const rest = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const out = await t.mutation(internal.machine.rest.updateIssue, {
       callerId: f.admin.id,
@@ -369,7 +369,7 @@ describe('the status stamp (status_at)', () => {
 
   it('every create stamps it at creation: the app, REST and MCP', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const app = await create(t, f)
     expect(app.status_at).toBe(app.created_at)
     const rest = await issueRow(t, (await restCreate(t, f, 'By REST')).id)
@@ -397,7 +397,7 @@ describe('the status stamp (status_at)', () => {
 
   it('every status change stamps it: the app, REST and MCP', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     await stamped(t, f)
     const rest = await plantIssue(t, base)
@@ -416,7 +416,7 @@ describe('the status stamp (status_at)', () => {
 
   it('keeps it through writes that leave the status as it was', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await stamped(t, f)
     const keeps = async (patch: IssuePatch) => {
       await tick()
@@ -444,7 +444,7 @@ describe('the status stamp (status_at)', () => {
 
   it('a move to another project clears it, on the task and every subtask it carries', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // between sub-projects of one top-level project
     const near = await stamped(t, f)
     expect('status_at' in (await move(t, f, near.id, f.sub2.id))).toBe(false)
@@ -476,7 +476,7 @@ describe('the status stamp (status_at)', () => {
 
   it('a machine update that moves and changes the status ends stamped', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await stamped(t, f)
     await tick()
     const out = await restUpdate(t, f, task.id, {
@@ -492,7 +492,7 @@ describe('the status stamp (status_at)', () => {
 
   it('keeps it when a leaf gains a subtask, which clears the hand-off', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const leaf = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, status: 'progress' })
     const handed = await update(t, f, leaf.id, { status: 'review' })
     expect(handed.status_at).toBe(handed.updated_at)
@@ -506,7 +506,7 @@ describe('the status stamp (status_at)', () => {
 
   it('keeps it through a delete and a restore from Deleted items', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await stamped(t, f)
     await as(t, f.user).mutation(api.issues.deleteDeep, { org_id: f.org.id, id: task.id })
     expect(await t.run((ctx) => byId(ctx, 'issues', task.id))).toBeNull()
@@ -538,7 +538,7 @@ describe('the hand-off and Done times across a move', () => {
 
   it('a move to another sub-project restarts them at the move; one to the same does not', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const review = await plant(t, f, 'review')
     const moved = await move(t, f, review.id, f.sub2.id)
     expect(moved.review_at).toBe(moved.updated_at)
@@ -558,7 +558,7 @@ describe('the hand-off and Done times across a move', () => {
 
   it('every subtask the move carries restarts them too', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const far = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.hidden.id })
     const top = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const child = await plantIssue(t, {
@@ -586,7 +586,7 @@ describe('the hand-off and Done times across a move', () => {
 
   it('a move to another sub-project keeps the remaining-hours measurement', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const measured = {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -606,7 +606,7 @@ describe('the hand-off and Done times across a move', () => {
 
   it('every subtask the move carries keeps its measurement, archived ones too', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const far = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.hidden.id })
     const measured = {
       org_id: f.org.id,
@@ -629,7 +629,7 @@ describe('the hand-off and Done times across a move', () => {
 describe('every writer', () => {
   it('REST PATCH into Review gets the review time and narrates it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const row = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const out = await t.mutation(internal.machine.rest.updateIssue, {
       callerId: f.admin.id,
@@ -647,7 +647,7 @@ describe('every writer', () => {
 
   it('MCP update_task into Review gets the review time without echoing it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const row = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const out = JSON.parse(
       await t.mutation(internal.machine.mcp.updateIssue, {
@@ -665,7 +665,7 @@ describe('every writer', () => {
 describe('created in Review', () => {
   it('takes the review time unless hours are stated; other statuses get none', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const a = await create(t, f, { status: 'review', remaining_hours: null })
     expect(a.remaining_hours).toBe(2)
     expect(a.remaining_set_at).toBe(a.created_at)
@@ -678,7 +678,7 @@ describe('created in Review', () => {
 describe('reviewer eligibility (browser path)', () => {
   it('stores an eligible reviewer; null leaves the column absent', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const row = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     expect((await update(t, f, row.id, { reviewer_id: f.guest.id })).reviewer_id).toBe(f.guest.id)
     await update(t, f, row.id, { reviewer_id: null })
@@ -688,7 +688,7 @@ describe('reviewer eligibility (browser path)', () => {
 
   it('a standing reviewer survives a later downgrade on unrelated and same-value writes', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const row = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await update(t, f, row.id, { reviewer_id: f.guest.id })
     await t.run(async (ctx) => {
@@ -707,7 +707,7 @@ describe('reviewer eligibility (browser path)', () => {
 
   it('refuses ineligible reviewers with one sentence on update and create', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const inactive = await plantSeat(t, { org_id: f.org.id, active: false })
     const viewOnly = await plantSeat(t, { org_id: f.org.id })
     await t.run(async (ctx) => {
@@ -739,7 +739,7 @@ describe('reviewer eligibility (browser path)', () => {
 
   it('a move keeps an eligible reviewer and refuses one without Edit at the destination', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const row = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -773,7 +773,7 @@ describe('reviewer eligibility (browser path)', () => {
 
   it("a group's dormant reviewer never blocks a move: kept when eligible, else cleared", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id, status: 'review' as const }
     const group = await plantIssue(t, { ...base, reviewer_id: f.guest.id })
     await plantIssue(t, { ...base, parent_id: group.id })
@@ -799,7 +799,7 @@ describe('reviewer eligibility (browser path)', () => {
 
   it('a task with active subtasks takes no new reviewer; clearing one passes', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const parent = await plantIssue(t, { ...base, reviewer_id: f.admin.id })
     await plantIssue(t, { ...base, parent_id: parent.id })
@@ -816,7 +816,7 @@ describe('reviewer eligibility (browser path)', () => {
 describe('machine sentence', () => {
   it('names the role in the Edit-permission sentence', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const viewOnly = await plantSeat(t, { org_id: f.org.id })
     await t.run((ctx) =>
       ctx.db.insert('project_access', {

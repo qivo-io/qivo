@@ -29,7 +29,7 @@ import {
   type T,
   TODAY,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
 import { itemFor, plantCredential, storedRows } from './trash.setup'
@@ -136,8 +136,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = '3c13be6ddfd22a3224bb3875a74c680e97bbbb626c3d6b312e3e9b7bfaa7165a'
-const SHA_TOOLS_MODERN = '42eb02aa3d15db0d57d1321576c938a2f2e0033fa27b7dd57b5ee1766c8bea93'
+const SHA_TOOLS_LEGACY = '04a47d690e42d249c5f654d9cdd16972f2e1a1bf5207a99c1b61ace95a6219f8'
+const SHA_TOOLS_MODERN = 'a546a833ac7de522f5f8d4e35f7b759e90e19f0e70c72c9ed329f85df7bb6596'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -147,7 +147,7 @@ type Fx = OrgFixture & { t: T }
  * meta (reads/writes sub + sub2, blind to hidden). */
 async function machineOrg(): Promise<Fx> {
   const t = newT()
-  const fx = await withOrg(t)
+  const fx = await withReadingAdmin(t)
   await t.run(async (ctx) => {
     await ctx.db.insert('project_access', {
       project_id: fx.meta.id,
@@ -981,7 +981,8 @@ describe('read tools', () => {
     })
     expect(Object.keys(members)).toEqual(['next_cursor', 'team', 'members'])
 
-    // guest reads only the granted meta tree; admin reads all four
+    // guest reads only the granted meta tree; the admin reads the four
+    // their grants reach, and an admin without grants none
     const guestProjects = JSON.parse(
       await fx.t.query(internal.machine.mcp.listProjects, {
         callerId: fx.guest.id,
@@ -1010,6 +1011,16 @@ describe('read tools', () => {
       }),
     ) as Record<string, unknown>[]
     expect(adminProjects.map((p) => p.key)).toEqual(['FW', 'PCB', 'SKNK', 'TBED'])
+    const rowless = await plantSeat(fx.t, { org_id: fx.org.id, name: 'Ada', org_role: 'admin' })
+    await keyOrg(fx.t, fx.org.id)
+    expect(
+      JSON.parse(
+        await fx.t.query(internal.machine.mcp.listProjects, {
+          callerId: rowless.id,
+          access: 'read',
+        }),
+      ),
+    ).toEqual([])
 
     const usersPage = JSON.parse(
       await fx.t.query(internal.machine.mcp.listUsers, { callerId: fx.agent.id, access: 'read' }),
@@ -1700,12 +1711,14 @@ describe('write tools', () => {
       /^sub-project XSUB does not belong to project TBED, and tasks are never created under another project's sub-project$/,
     )
     void sub3
-    // an archived meta answers "archived", never "no sub-projects yet"
+    // an archived meta answers "archived", never "no sub-projects yet",
+    // to the admin, who leads it
     await plantProject(fx.t, {
       org_id: fx.org.id,
       key: 'ARCM',
       archived_at: NOW,
       team_id: fx.team.id,
+      lead_id: fx.admin.id,
     })
     await expectRefusal(
       fx.t.mutation(internal.machine.mcp.createIssue, {

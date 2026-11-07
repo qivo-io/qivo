@@ -25,8 +25,8 @@
  * every visible live project for a reader with Edit on the opened task,
  * and else the projects they can edit (model/issues.ts linkAccess).
  * Levels are the writes' levels of the reader (lib/access.ts
- * projectLevel), so an organization admin holds lead on every project, as
- * the writes give it, never ordinaryOf's level. The family's come from
+ * projectLevel), an organization admin's from their own rows like
+ * anyone's. The family's come from
  * viewAccess.levels and the rest of the organization's from
  * projectLevelsForOrg, which the tests compare with projectLevel.
  *
@@ -205,22 +205,28 @@ import { taskFields } from './workspaceParts'
  *   rare word in all your projects 105 ranges and 1,833 documents in each.
  * - With the catalogue at its sum, 2,000 projects live and archived, a
  *   rare word in all your projects reads 101 ranges, 2,170 documents and
- *   1 MiB for a member, the catalogue's 2,000 documents included, and 707
- *   ranges, 3,089 documents and 1.65 MiB for an organization admin over
- *   its 700 live projects.
- * - One batch at its full `scan` for an admin, over 167 sub-projects of
- *   about 30 tasks, reads 242 ranges, 5,642 documents and 3.82 MiB, and
- *   stops at `scan` with its own count at 3.72 MiB.
+ *   1 MiB for a member of 60 sub-projects, the catalogue's 2,000 documents
+ *   included, and 103 ranges, 2,172 documents and 1 MiB for an
+ *   organization admin in the member's teams, whose batches hold the
+ *   member's rows (7 November 2026, after the admin access split).
+ * - One batch at its full `scan` for the lead of every project, over 167
+ *   sub-projects of about 30 tasks, reads 242 ranges, 5,642 documents and
+ *   3.82 MiB, and stops at `scan` with its own count at 3.72 MiB.
  * - Search all your projects reads 288 ranges, 1,407 documents and 0.85
  *   MiB for a member who reads 200 sub-projects, and 131 ranges, 1,099
  *   documents and 0.58 MiB for one whose team shares 50 live and 150
  *   archived projects.
  *
- * The Boat timing of its slowest calls (owner, 31 October 2026) takes the
- * admin's rare word over the catalogue's 700 live projects, the admin's
- * batch at its full `scan`, and a member's rare word over the project of
- * 800 open tasks, as those cases build them. If the slowest call's
- * JavaScript passes 0.5 s, lower `scan`.
+ * Inside the design size the batch at its full `scan`, whose caller reads
+ * 167 sub-projects, reads the most documents and bytes of these cases, and
+ * a member's Search all your projects over 200 sub-projects the most
+ * ranges. The Boat
+ * timing of its slowest calls (owner, 31 October 2026) took that batch and
+ * a member's rare word over the project of 800 open tasks, as those cases
+ * build them, beside a rare word over the catalogue's 700 live projects
+ * for an organization admin, who then read every project, which no caller
+ * inside the design size reads since the admin access split. If the
+ * slowest call's JavaScript passes 0.5 s, lower `scan`.
  */
 export const RELATION_PICKER = {
   rows: 25,

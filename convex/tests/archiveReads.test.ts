@@ -28,7 +28,7 @@ import {
   plantSubscription,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 type Patch = FunctionArgs<typeof api.issues.update>['patch']
@@ -87,7 +87,7 @@ const grantAgent = (t: T, f: OrgFixture) =>
 describe('archiving a task', () => {
   it('stores the Archived notice read, then marks every recipient read and keeps each item to its newest message', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     for (const who of [f.admin, f.guest]) await subscribe(t, who, task.id)
@@ -122,7 +122,7 @@ describe('archiving a task', () => {
 
   it('stores the archive reason read and reaches every subtask', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const child = await plantIssue(t, {
       org_id: f.org.id,
@@ -160,7 +160,7 @@ describe('archiving a task', () => {
 
   it('the machine toggle (update_task archived) reaches the subtree too', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await grantAgent(t, f)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const child = await plantIssue(t, {
@@ -186,7 +186,7 @@ describe('archiving a task', () => {
 
   it('a restore before the step runs keeps the messages unread; the Restored notice arrives unread', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await subscribe(t, f.guest, task.id)
     await update(t, f.user, task.id, { priority: 'high' })
@@ -206,7 +206,7 @@ describe('archiving a task', () => {
 
   it('after the step, a restore brings only the Restored notice unread', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await subscribe(t, f.guest, task.id)
     await update(t, f.user, task.id, { priority: 'high' })
@@ -222,7 +222,7 @@ describe('archiving a task', () => {
 
   it('a snoozed item becomes read and loses its snooze, and its scheduled wake finds nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await subscribe(t, f.admin, task.id)
     await threeChanges(t, f, task.id)
@@ -249,7 +249,7 @@ describe('archiving a task', () => {
   })
   it('a snooze set on the item of an archived task wakes it read, not unread', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: 'x' })
     const until = '2026-01-05T00:00:00.000Z'
     // snoozed before the archive step reached it: unread rows and one read
@@ -288,7 +288,7 @@ describe('archiving a task', () => {
 describe('arrivals about archived tasks', () => {
   it('a comment, a mention and an edit about an archived task or one in an archived project arrive read', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const archived = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const shelved = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     for (const id of [archived.id, shelved.id]) await subscribe(t, f.guest, id)
@@ -325,7 +325,7 @@ describe('arrivals about archived tasks', () => {
 describe('the nightly archive and archiving a project', () => {
   it('the nightly sweep posts nothing and marks the messages about the tasks it archives read', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const done = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -349,7 +349,7 @@ describe('the nightly archive and archiving a project', () => {
 
   it('archiving a project reaches the active tasks of every sub-project it carries; a restore before the step keeps them unread', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const inSub = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const inSub2 = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     const outside = await plantIssue(t, { org_id: f.org.id, project_id: f.hidden.id })
@@ -381,7 +381,7 @@ describe('the nightly archive and archiving a project', () => {
 describe('the background steps', () => {
   it('continue across steps with a lowered batch and change nothing when run again', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: 'x' })
     const b = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: 'x' })
     const active = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -442,7 +442,7 @@ describe('the background steps', () => {
     // unread rows by index instead of scanning these (convex-test counts only
     // returned rows, so the scan itself cannot be measured here).
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: 'x' })
     await t.run(async (ctx) => {
       for (let n = 0; n < 300; n++) {
@@ -473,7 +473,7 @@ describe('the background steps', () => {
 
   it('release a read snoozed row even when the unread rows fill the batch exactly', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: 'x' })
     for (let n = 1; n <= 2; n++) {
       await plantMessage(t, {
@@ -505,7 +505,7 @@ describe('the background steps', () => {
 
   it('walk an archived project from where the last step stopped', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const tasks = []
     for (let n = 0; n < 3; n++) {
       const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -530,7 +530,7 @@ describe('the background steps', () => {
 
   it('continue past a task deleted between steps without skipping another', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const tasks: Doc<'issues'>[] = []
     for (let n = 0; n < 3; n++) {
       const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -549,7 +549,7 @@ describe('the background steps', () => {
 
   it('stop a project walk after `tasks` tasks, also when none of them holds a row to mark', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const tasks = []
     for (let n = 0; n < 3; n++) {
       tasks.push(await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }))
@@ -577,7 +577,7 @@ describe('the background steps', () => {
 describe('the machine inbox', () => {
   it('lists the active tasks it listed before, unread as before, once an archived task is marked read', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await grantAgent(t, f)
     const kept = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const gone = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -615,7 +615,7 @@ describe('the machine inbox', () => {
 describe('deleting', () => {
   it('a task or a project deletes its messages, archived or not', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const inSub2 = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     const kept = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -708,7 +708,7 @@ const bothArchived = (task: Doc<'issues'>) =>
  * PCB archived with one active and one archived task in it. The agent and
  * the guest hold one message about each task, as `row` plants it. */
 async function archivedInbox(t: T, row: { read_at?: string; snoozed_until?: string }) {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   await grantAgent(t, f)
   const active = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
   const archived = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: NOW })

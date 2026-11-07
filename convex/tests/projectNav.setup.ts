@@ -9,7 +9,7 @@
  *
  * A top-level project shows a seat for navigation when it is a live meta
  * of the seat's organization the seat holds a level on for a reason of its
- * own (projectLevel without navigation, of ordinaryOf(seat)), or under
+ * own (projectLevel without navigation), or under
  * which a live sub-project gives the seat a level. A sub-project shows when
  * it and its parent are live and the seat holds a level on it. The search
  * lists every project and sub-project that shows whose own name holds
@@ -18,13 +18,12 @@
 import { compareValues } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { ordinaryOf, projectLevel } from '../lib/access'
+import { projectLevel } from '../lib/access'
 import { byId } from '../lib/db'
 import { nameKey } from '../lib/nameKey'
 import type { T } from './helpers.setup'
 
-/* projectLevel of `seat` as ordinary access judges it, null where it
- * throws for a broken tree. */
+/* projectLevel of `seat`, null where it throws for a broken tree. */
 async function levelOf(
   ctx: QueryCtx,
   seat: Doc<'profiles'>,
@@ -32,7 +31,7 @@ async function levelOf(
   navigation = true,
 ): Promise<string | null> {
   try {
-    return await projectLevel(ctx, ordinaryOf(seat), p, navigation)
+    return await projectLevel(ctx, seat, p, navigation)
   } catch {
     return null
   }

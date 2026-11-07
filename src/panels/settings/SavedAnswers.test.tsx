@@ -97,6 +97,8 @@ async function load(betaName = 'Beta', { crewName = 'Crew', labelName = '' } = {
     sort_order: 1,
     track_delay: true,
     created_at: NOW,
+    // the fixture's person leads it, so they edit its milestones
+    lead_id: snap.profiles[0].id,
   })
   // a past one and one of this week, whatever the day the test runs on, so
   // Gamma shows in the Milestones window's Upcoming

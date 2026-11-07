@@ -113,7 +113,9 @@ function mondayIn(weeks: number, from = new Date()) {
 /** Plan, a top-level project with sub-project Work, `up` weekly milestones
     from this week on (u1 first, named Step 1 and on) and `past` weekly ones
     before it (p1 newest, Audit or Review by turns), and `edit`'s changes.
-    I am the organization's admin unless `edit` says otherwise. */
+    I am the organization's admin and Plan's lead (plannerFixture's
+    project), so I may change Plan's milestones, unless `edit` says
+    otherwise. */
 function fixture(o: { up?: number; past?: number; edit?: (s: Snapshot) => void } = {}) {
   snap = plannerFixture()
   const base = snap.projects[0]
@@ -1078,7 +1080,7 @@ describe("a kept editor's own read", { timeout: 30_000 }, () => {
 
   it("must fail: keeps the window's right where its own read answers that the person may not change it", async () => {
     await keepEditor({ canWrite: false })
-    // the window's own right is the store's, the organization's admin
+    // the window's own right is the store's, which I hold as Plan's lead
     expect(q('[data-milestone-new]')).not.toBeNull()
     const editor = q('[data-milestone-editor="u2"]')
     expect(editor?.hasAttribute('data-milestone-locked')).toBe(true)

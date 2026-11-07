@@ -113,13 +113,15 @@ const batch = (names: string[], next: string | null = null, stopped = false): Re
 /* `viaTeam` gives Leo his access through the Crew team, one of two teams,
    instead of a grant. With `ada`, Ada Berg, who holds no task, has a User
    grant of her own. */
-async function load({ viaTeam = false, ada = false } = {}) {
+async function load({ viaTeam = false, ada = false, lead = true } = {}) {
   vi.resetModules()
   snap = plannerFixture()
   const org = snap.orgs[0].id
   work = snap.projects[0].id
   snap.projects[0].type = 'meta'
   snap.projects[0].name = 'Work'
+  // without its lead, the signed-in admin manages Work by admin status alone
+  if (!lead) delete snap.projects[0].lead_id
   snap.profiles.push({
     ...snap.profiles[0],
     id: 'leo',
@@ -430,6 +432,27 @@ describe('the removal window from the server preview', () => {
     expect(pickerButton().disabled).toBe(true)
     expect(shellButton('Reassign and remove')?.disabled).toBe(true)
     expect(shellButton('Cancel')?.disabled).toBe(false)
+  })
+
+  it('offers Keep as Viewer alone to a caller who may not reassign, with the refusal and the hidden count', async () => {
+    // an organization admin who manages Work without Edit on its tasks
+    await open(
+      answer({
+        hidden: 1,
+        reassign: { allowed: false, refusal: 'no write access to this project', permitted: false },
+      }),
+    )
+    const keep = find('[data-access-removal-keep]')
+    expect(find<HTMLInputElement>('input', keep).checked).toBe(true)
+    expect(find<HTMLInputElement>('input', keep).disabled).toBe(false)
+    const reassign = find('[data-access-removal-reassign]')
+    expect(reassign.textContent).toContain('No write access to this project.')
+    expect(find<HTMLInputElement>('input', reassign).disabled).toBe(true)
+    expect(pickerButton().disabled).toBe(true)
+    expect(find('[data-access-removal-hidden]').textContent).toBe(
+      "1 task in projects you can't see",
+    )
+    expect(shellButton('Change to Viewer')?.disabled).toBe(false)
   })
 })
 
@@ -1017,7 +1040,8 @@ describe('the press on the Settings pages', () => {
   })
 
   it('gives focus to the empty list once someone else removed the access meanwhile', async () => {
-    await load()
+    // no lead, so the list of individual users empties
+    await load({ lead: false })
     await projectPage()
     await press(remove('leo'))
     snap.access = snap.access.filter((a) => a.profile_id !== 'leo')

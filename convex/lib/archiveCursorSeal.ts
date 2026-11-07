@@ -1,8 +1,9 @@
 /* Sealed archive cursors (lib/archivedTasks.ts archiveCursorText).
  *
- * An archive cursor names the last task a page looked at. When a page reads
- * the organization's whole archive, that task can belong to a project the
- * caller cannot see, so its id and times must not reach the caller. The
+ * An archive cursor names the last task a page looked at, a task of the
+ * projects the page merges, which the caller can read. Its id and times stay
+ * out of the caller's hands all the same, so a caller can only pass back a
+ * position a page gave them and never start a list where it chose. The
  * cursor therefore goes out sealed with AES-256-GCM-SIV (RFC 8452) from
  * @noble/ciphers, which is plain JavaScript and runs the same in the Convex
  * isolate and in the edge-runtime tests. GCM-SIV derives its IV from the

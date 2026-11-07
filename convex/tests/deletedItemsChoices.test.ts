@@ -38,7 +38,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
 import { installTrashTimers, itemFor, runSteps, START } from './trash.setup'
@@ -213,7 +213,7 @@ const plantedProject = (
 describe('deletedItems.roles', () => {
   it("tells each seat its own role: an admin's, a lead's of a live, archived or deleted project, and anyone else's", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const live = await person(t, f.org.id, 'Lena')
     const archived = await person(t, f.org.id, 'Arlo')
     const deleted = await person(t, f.org.id, 'Dora')
@@ -248,7 +248,7 @@ describe('deletedItems.roles', () => {
 
   it("does not read a seat that reuses a removed lead's id as a lead, and reads only the newest stored row, as its docstring says", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const dora = await person(t, f.org.id, 'Dora')
     const project = await plantProject(t, { org_id: f.org.id, lead_id: dora.id })
     await deleteProject(t, f.admin, project.id)
@@ -284,7 +284,7 @@ describe('deletedItems.roles', () => {
 
   it("answers every seat of the login, each with its own organization's role, and Delete now only while the organization can write", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantSeat(t, {
       org_id: f.otherOrg.id,
       name: 'admin',
@@ -313,7 +313,7 @@ describe('deletedItems.roles', () => {
 describe('deletedItems.people', () => {
   it('answers every profile in name order with ties by id, as person rows with pending and you', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const first = await person(t, f.org.id, 'Sam Lee')
     const second = await person(t, f.org.id, 'Sam Lee', 'user', { auth_user_id: 'auth_sam_two' })
     const pat = await plantSeat(t, { org_id: f.org.id, name: 'Pat Pending', org_role: 'user' })
@@ -353,7 +353,7 @@ describe('deletedItems.people', () => {
 
   it('keeps every word of a search ignoring case and accents, 25 a batch, with cursors sealed to the organization and search', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run(async (ctx) => {
       for (let i = 0; i < 30; i++)
         await ctx.db.insert('profiles', {
@@ -409,7 +409,7 @@ describe('deletedItems.people', () => {
 
   it('answers an organization without an active seat of the caller as an empty last batch, after it refuses its arguments', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await keyOrg(t, f.org.id)
     await keyOrg(t, f.otherOrg.id)
     const empty = { state: 'ready', rows: [], next: null, stopped: false }
@@ -428,7 +428,7 @@ describe('deletedItems.people', () => {
 
   it('stops a batch at a lowered candidate bound or read share with a cursor that pages on to the end', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run(async (ctx) => {
       for (let i = 0; i < 12; i++)
         await ctx.db.insert('profiles', {
@@ -466,7 +466,7 @@ describe('deletedItems.people', () => {
 describe('deletedItems.purgeSummary', () => {
   it('counts the items a purge of a project item purges, both levels and both purgeable states, as the purge then does', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = (project_id: string, title: string) =>
       plantIssue(t, { org_id: f.org.id, project_id, title })
     const deleted = async (project_id: string, title: string) => {
@@ -515,7 +515,7 @@ describe('deletedItems.purgeSummary', () => {
 
   it('answers an admin of the item’s organization only, and null alike for every other seat and item', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const planted = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await deleteTask(t, f.user, planted.id)
     await deleteProject(t, f.user, f.sub2.id)
@@ -539,7 +539,7 @@ describe('deletedItems.purgeSummary', () => {
 
   it('answers the count so far as inexact past a lowered bound', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (let i = 0; i < 4; i++) {
       const planted = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
       await deleteTask(t, f.user, planted.id)
@@ -563,7 +563,7 @@ describe('deletedItems.purgeSummary', () => {
 describe("the page's someone", () => {
   it('keeps the deletes of removed people and of an id a new seat reuses, for an admin across the organization and a lead within their ranges', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const kim = await person(t, f.org.id, 'Kim')
     const lou = await person(t, f.org.id, 'Lou')
     const elsewhere = await plantProject(t, { org_id: f.org.id, name: 'Elsewhere' })
@@ -573,8 +573,9 @@ describe("the page's someone", () => {
       parent_id: elsewhere.id,
       name: 'Away',
     })
-    for (const who of [kim, lou]) {
-      await grant(t, f.meta.id, who.id, 'user')
+    // the admin reads Elsewhere through a grant too, as TBED and Skunkworks
+    for (const who of [kim, lou, f.admin]) {
+      if (who !== f.admin) await grant(t, f.meta.id, who.id, 'user')
       await grant(t, elsewhere.id, who.id, 'user')
     }
     const deleted = async (who: Profile, project_id: string) => {
@@ -628,7 +629,7 @@ describe("the page's someone", () => {
 
   it('goes with neither deleted_by nor via, and opens no cursor of a page without it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (let i = 0; i < 2; i++) {
       const planted = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
       await deleteTask(t, f.guest, planted.id)
@@ -658,7 +659,7 @@ describe("the page's someone", () => {
 
   it('ends a browse page early on a lowered budget, and pages on to the end', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const kim = await person(t, f.org.id, 'Kim')
     await grant(t, f.meta.id, kim.id, 'user')
     const kims: string[] = []
@@ -688,7 +689,7 @@ describe("the page's someone", () => {
 describe("the page's via", () => {
   it('matches a kind of credential for every viewer, and a credential only where the viewer may know which', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const token = (name: string) => ({ table: 'mcp_tokens' as const, id: uuid(), name })
     const laptop = token('Laptop')
     const desk = token('Desk')
@@ -787,7 +788,7 @@ function record(what: string, figures: { ranges: number; documents: number; mib:
 describe('reads at the design size', () => {
   it('reads the people of an organization of 1,000, with no search and with one whose matches sit last', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // with withOrg's five, 995 people with ordinary names, the last three
     // after every other name
     await t.run(async (ctx) => {
@@ -830,7 +831,7 @@ describe('reads at the design size', () => {
 
   it("counts Delete now's summary of a project item that stores 30 live and 40 archived sub-projects", async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const at = new Date(START).toISOString()
     const before = new Date(START - 86_400_000).toISOString()
     const root = uuid()

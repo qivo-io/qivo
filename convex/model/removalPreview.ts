@@ -643,9 +643,9 @@ async function effectOf(
  * a parent's top-level project also each of its sub-projects, live and
  * archived. It shares the reads of a top-level project and of a team
  * between them, then answers each person without a read. Levels come only
- * from levelsFrom, so an organization admin can take every task while it
- * gives them Lead, and follows ordinary access after the admin access
- * split. It checks the room before each read, so call it within
+ * from levelsFrom, so an organization admin takes a task only with
+ * ordinary access to its project, like anyone else. It checks the room
+ * before each read, so call it within
  * withinRoom. With nothing lost it lets in everyone who can hold work, as
  * the write then checks no new holder.
  */

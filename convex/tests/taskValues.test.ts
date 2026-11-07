@@ -11,7 +11,7 @@ import {
   plantIssue,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 const taskRow = (t: T, id: string) =>
@@ -34,7 +34,7 @@ async function refusedHours(promise: Promise<unknown>): Promise<void> {
 describe('task value guards', () => {
   it('refuses invalid calendar dates on create and update without partial writes', async () => {
     const t = newT()
-    const org = await withOrg(t)
+    const org = await withReadingAdmin(t)
     const caller = as(t, org.admin)
     const row = await plantIssue(t, {
       org_id: org.org.id,
@@ -84,7 +84,7 @@ describe('task value guards', () => {
 
   it('keeps valid leap days, partial plan updates, non-Monday weeks and null clearing', async () => {
     const t = newT()
-    const org = await withOrg(t)
+    const org = await withReadingAdmin(t)
     const caller = as(t, org.admin)
     const created = await caller.mutation(api.issues.create, {
       org_id: org.org.id,
@@ -113,7 +113,7 @@ describe('task value guards', () => {
 
   it('refuses estimates outside 0 to LIMITS.remainingHours.max and keeps the ones inside', async () => {
     const t = newT()
-    const org = await withOrg(t)
+    const org = await withReadingAdmin(t)
     const caller = as(t, org.admin)
     const row = await plantIssue(t, {
       org_id: org.org.id,
@@ -180,7 +180,7 @@ describe('task value guards', () => {
 describe('task value guards over HTTP', () => {
   it('returns REST 400 and MCP tool refusals for impossible dates and overflowing JSON numbers', async () => {
     const t = newT()
-    const org = await withOrg(t)
+    const org = await withReadingAdmin(t)
     const secret = `qva_${'task-values'.repeat(6)}`
     const keyHash = await sha256hex(secret)
     await t.run(async (ctx) => {
@@ -272,7 +272,7 @@ describe('a task storing hours above the cap', () => {
    * `expected` cannot name them. Lowering them saves. */
   it('refuses them sent back on the app, REST and MCP, and saves lower hours', async () => {
     const t = newT()
-    const org = await withOrg(t)
+    const org = await withReadingAdmin(t)
     const secret = `qva_${'over-cap'.repeat(6)}`
     const keyHash = await sha256hex(secret)
     await t.run(async (ctx) => {

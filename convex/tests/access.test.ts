@@ -129,15 +129,15 @@ describe('rootMetaOf', () => {
 })
 
 describe('canSeeProject', () => {
-  it('admin sees every project in the org, including the hidden control', async () => {
+  it('an admin without a lead, grant or team share sees no project, as anyone would', async () => {
     await t.run(async (ctx) => {
-      expect(await canSeeProject(ctx, f.admin, f.meta)).toBe(true)
-      expect(await canSeeProject(ctx, f.admin, f.sub)).toBe(true)
-      expect(await canSeeProject(ctx, f.admin, f.hidden)).toBe(true)
+      expect(await canSeeProject(ctx, f.admin, f.meta)).toBe(false)
+      expect(await canSeeProject(ctx, f.admin, f.sub)).toBe(false)
+      expect(await canSeeProject(ctx, f.admin, f.hidden)).toBe(false)
     })
   })
 
-  it('admin does NOT see another org (the org fence beats the admin branch)', async () => {
+  it('admin does NOT see another org (the org fence holds whatever the role)', async () => {
     expect(await t.run((ctx) => canSeeProject(ctx, f.admin, f.otherProject))).toBe(false)
   })
 
@@ -222,8 +222,12 @@ describe('hasProjectLevel', () => {
     })
   })
 
-  it("admin's lead branch satisfies even min 'admin' (rank 3 = rank 3)", async () => {
-    expect(await t.run((ctx) => hasProjectLevel(ctx, f.admin, f.meta.id, 'admin'))).toBe(true)
+  it("a lead satisfies even min 'admin' (rank 3 = rank 3), and admin status alone nothing", async () => {
+    await t.run(async (ctx) => {
+      expect(await hasProjectLevel(ctx, f.user, f.meta.id, 'admin')).toBe(true)
+      expect(await hasProjectLevel(ctx, f.admin, f.meta.id, 'admin')).toBe(false)
+      expect(await hasProjectLevel(ctx, f.admin, f.meta.id, 'user')).toBe(false)
+    })
   })
 
   it('no grant, no standing: a plain org user has no level at all', async () => {

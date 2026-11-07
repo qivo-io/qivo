@@ -185,8 +185,8 @@ const higher = (a: Level | null, b: Level | null) => (rank(b) > rank(a) ? b : a)
 
 /** The person's own level on project `projectId` of `workspace`, without
     navigation, as the app's level rule reads it (store/planner.ts
-    levelOnProject): an organization admin leads every project, a lead
-    leads their own, and a grant or a team share gives its level, which a
+    levelOnProject): the lead leads their own, and a grant or a team share
+    gives its level, for an organization admin as for anyone, which a
     Viewer's role caps. A sub-project adds its parent's. */
 function ownLevel(workspace: Server, projectId: string): Level | null {
   const project = workspace.projects.find((p) => p.id === projectId)
@@ -195,7 +195,6 @@ function ownLevel(workspace: Server, projectId: string): Level | null {
     (p) => p.org_id === project.org_id && workspace.myProfileIds.includes(p.id),
   )
   if (!me?.active) return null
-  if (me.org_role === 'admin') return 'lead'
   const teams = new Set(
     workspace.teamMembers.filter((m) => m.profile_id === me.id).map((m) => m.team_id),
   )

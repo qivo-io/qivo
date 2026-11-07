@@ -24,7 +24,7 @@ import {
   type T,
   tick,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 const HEX64 = 'ab'.repeat(32)
@@ -61,7 +61,7 @@ const orgRow = (t: T, id: string) =>
 describe('orgs.update — settings, silently', () => {
   it('patches validated fields and narrates nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await as(t, f.admin).mutation(api.orgs.update, {
       org_id: f.org.id,
       patch: {
@@ -83,7 +83,7 @@ describe('orgs.update — settings, silently', () => {
 
   it('takes default plannable hours from 1 to 168 and refuses the rest unchanged', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const update = (hours: number) =>
       as(t, f.admin).mutation(api.orgs.update, {
         org_id: f.org.id,
@@ -103,7 +103,7 @@ describe('orgs.update — settings, silently', () => {
 
   it('refuses a bad week_start, a blank name, and a non-admin', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await expectRefusal(
       as(t, f.admin).mutation(api.orgs.update, { org_id: f.org.id, patch: { week_start: 7 } }),
       'bad_request',
@@ -121,7 +121,7 @@ describe('orgs.update — settings, silently', () => {
 
   it('refuses the retired Gravatar setting instead of storing it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const before = (await orgRow(t, f.org.id))?.gravatar_avatars
     const retired = { gravatar_avatars: true } as unknown as { name?: string }
     await expect(
@@ -132,7 +132,7 @@ describe('orgs.update — settings, silently', () => {
 
   it('refuses the retired team leads policy instead of storing it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // orgs.update no longer accepts the retired setting, so a caller cannot store it again.
     const retired = { only_team_leads_manage_project_users: false } as unknown as { name?: string }
     await expect(
@@ -143,7 +143,7 @@ describe('orgs.update — settings, silently', () => {
 
   it('only an administrator of this organization can change its attachment cap', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // `user` leads Hardware; team leadership grants no organization settings rights.
     for (const actor of [f.user, f.viewer, f.guest, f.otherAdmin]) {
       await expectRefusal(
@@ -166,7 +166,7 @@ describe('orgs.update — settings, silently', () => {
 
   it('only an org admin sets who can create projects, to one of the three settings', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     expect((await orgRow(t, f.org.id))?.project_creators).toBeUndefined()
     for (const setting of PROJECT_CREATORS) {
       await as(t, f.admin).mutation(api.orgs.update, {
@@ -199,7 +199,7 @@ describe('orgs.update — settings, silently', () => {
 
   it('takes an attachment cap of whole MiB from 1 to 20 and refuses the rest unchanged', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const update = (mb: number) =>
       as(t, f.admin).mutation(api.orgs.update, {
         org_id: f.org.id,
@@ -221,7 +221,7 @@ describe('orgs.update — settings, silently', () => {
 describe('orgs.setSlug — the one narrated org write', () => {
   it('changes the address and writes exactly the 0108 row', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await as(t, f.admin).mutation(api.orgs.setSlug, { org_id: f.org.id, slug: 'testbed-2' })
     expect((await orgRow(t, f.org.id))?.slug).toBe('testbed-2')
     const events = await activityFor(t, f.org.id)
@@ -240,7 +240,7 @@ describe('orgs.setSlug — the one narrated org write', () => {
 
   it('a same-value write is a silent no-op (the 0108 probe)', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await as(t, f.admin).mutation(api.orgs.setSlug, { org_id: f.org.id, slug: 'testbed' })
     expect(await activityFor(t, f.org.id)).toEqual([])
     expect((await orgRow(t, f.org.id))?.slug).toBe('testbed')
@@ -248,7 +248,7 @@ describe('orgs.setSlug — the one narrated org write', () => {
 
   it('taken / reserved / malformed refuse with the conflict taxonomy', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const taken = await expectRefusal(
       as(t, f.admin).mutation(api.orgs.setSlug, { org_id: f.org.id, slug: 'other' }),
       'conflict',
@@ -270,7 +270,7 @@ describe('orgs.setSlug — the one narrated org write', () => {
 
 describe('comments — create/update/remove', () => {
   const setup = async (t: T) => {
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     return { f, issue }
   }
@@ -359,11 +359,17 @@ describe('comments — create/update/remove', () => {
       'forbidden',
     )
     await tick()
-    // admin ranks as lead — may edit another's comment; edited_by pins THEM
-    await as(t, f.admin).mutation(api.comments.update, { org_id: f.org.id, id, body: 'v2' })
+    // the admin holds User by a grant, not lead standing — refused, as
+    // admin status gives no project level
+    await expectRefusal(
+      as(t, f.admin).mutation(api.comments.update, { org_id: f.org.id, id, body: 'x' }),
+      'forbidden',
+    )
+    // the project's lead may edit another's comment; edited_by pins THEM
+    await as(t, f.user).mutation(api.comments.update, { org_id: f.org.id, id, body: 'v2' })
     const edited = await commentById(t, id)
     expect(edited?.body).toBe('v2')
-    expect(edited?.edited_by).toBe(f.admin.id)
+    expect(edited?.edited_by).toBe(f.user.id)
     expect(edited?.edited_at).not.toBeUndefined()
     expect(edited?.author).toBe(f.guest.id) // author immutable
     const stamp = edited?.edited_at
@@ -389,7 +395,8 @@ describe('comments — create/update/remove', () => {
     )
     await as(t, f.user).mutation(api.comments.remove, { org_id: f.org.id, id })
     expect(await commentById(t, id)).toBeNull()
-    // an admin ranks as lead — another author's comment is theirs to delete
+    // the project's lead may delete another author's comment, and an admin
+    // with User by a grant may not
     const other = uuid()
     await as(t, f.guest).mutation(api.comments.create, {
       org_id: f.org.id,
@@ -397,7 +404,11 @@ describe('comments — create/update/remove', () => {
       issue_id: issue.id,
       body: 'also gone',
     })
-    await as(t, f.admin).mutation(api.comments.remove, { org_id: f.org.id, id: other })
+    await expectRefusal(
+      as(t, f.admin).mutation(api.comments.remove, { org_id: f.org.id, id: other }),
+      'forbidden',
+    )
+    await as(t, f.user).mutation(api.comments.remove, { org_id: f.org.id, id: other })
     expect(await commentById(t, other)).toBeNull()
   })
 
@@ -453,7 +464,7 @@ describe('comments — create/update/remove', () => {
 describe('messages — markRead / markUnread / remove', () => {
   it('markRead stamps still-unread own rows and prunes each pair to its newest', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const m1 = await plantMessage(t, {
       org_id: f.org.id,
@@ -486,7 +497,7 @@ describe('messages — markRead / markUnread / remove', () => {
 
   it('markAllRead batches over 500 unread rows, prunes each task, and preserves later arrivals', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue_id = uuid()
     const base = { org_id: f.org.id, recipient_id: f.admin.id, issue_id }
     const ids = Array.from({ length: 600 }, () => uuid())
@@ -546,7 +557,7 @@ describe('messages — markRead / markUnread / remove', () => {
       // this budget. Indexed pruning must stay under it for the whole act.
       transactionLimits: { documentsRead: 1200 },
     })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const tasks = Array.from({ length: 4 }, () => uuid())
     const retained = await t.run(async (ctx) => {
       const base = {
@@ -600,7 +611,7 @@ describe('messages — markRead / markUnread / remove', () => {
 
   it('markAllRead is empty for a read inbox and refuses another organization', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantMessage(t, {
       org_id: f.org.id,
       recipient_id: f.admin.id,
@@ -629,7 +640,7 @@ describe('messages — markRead / markUnread / remove', () => {
 
   it('markUnread clears without pruning; remove deletes own rows only', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const m = await plantMessage(t, {
       org_id: f.org.id,
@@ -654,7 +665,7 @@ describe('messages — markRead / markUnread / remove', () => {
 
   it('read cleanup deletes every own read row and preserves unread and foreign rows', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, recipient_id: f.admin.id }
     const read = await plantMessage(t, { ...base, issue_id: uuid(), read_at: NOW })
     const unread = await plantMessage(t, { ...base, issue_id: read.issue_id })
@@ -677,7 +688,7 @@ describe('messages — markRead / markUnread / remove', () => {
 
   it('read cleanup preserves a message reopened by another device and new unread arrivals', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, recipient_id: f.admin.id }
     const reopened = await plantMessage(t, { ...base, issue_id: uuid(), read_at: NOW })
     const read = await plantMessage(t, { ...base, issue_id: uuid(), read_at: NOW })
@@ -697,7 +708,7 @@ describe('messages — markRead / markUnread / remove', () => {
 
   it('read cleanup drains bounded batches beyond the 500-message display limit', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const readIds = Array.from({ length: 600 }, () => uuid())
     const unreadIds = Array.from({ length: 500 }, () => uuid())
     await t.run(async (ctx) => {
@@ -745,7 +756,7 @@ describe('messages — markRead / markUnread / remove', () => {
 
   it('read cleanup refuses an organization without an active seat', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const message = await plantMessage(t, {
       org_id: f.otherOrg.id,
       recipient_id: f.otherAdmin.id,
@@ -767,7 +778,7 @@ describe('messages — markRead / markUnread / remove', () => {
 describe('labels — vocabulary + toggle', () => {
   it('create narrates against the org; the name is unique case-insensitively', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await as(t, f.admin).mutation(api.labels.create, {
       org_id: f.org.id,
@@ -809,7 +820,7 @@ describe('labels — vocabulary + toggle', () => {
 
   it('update narrates NOTHING and keeps name_lower in step', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const label = await plantLabel(t, f.org.id, 'Bug')
     const other = await plantLabel(t, f.org.id, 'Feature')
     await as(t, f.admin).mutation(api.labels.update, {
@@ -846,7 +857,7 @@ describe('labels — vocabulary + toggle', () => {
 
   it('stores only #rrggbb colors, on create and on update', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const colorOf = (id: string) =>
       t.run(
         async (ctx) =>
@@ -914,7 +925,7 @@ describe('labels — vocabulary + toggle', () => {
 
   it('only org admins rename, recolor or delete; curators still create and apply', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const label = await plantLabel(t, f.org.id, 'Bug')
     const stored = () =>
@@ -973,7 +984,7 @@ describe('labels — vocabulary + toggle', () => {
 
   it('toggle attaches then detaches, narrating against the issue', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const label = await plantLabel(t, f.org.id, 'Bug')
     const pairs = () =>
@@ -1012,7 +1023,7 @@ describe('labels — vocabulary + toggle', () => {
 
   it('toggle with `on` sets the asked-for state, so a resent request changes nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const label = await plantLabel(t, f.org.id, 'Bug')
     const pairs = () =>
@@ -1041,7 +1052,7 @@ describe('labels — vocabulary + toggle', () => {
 
   it('toggle refuses a request without `on` and writes nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const label = await plantLabel(t, f.org.id, 'Bug')
     // an app from before v0.1.26 sent no `on` and had the server flip the pair
@@ -1060,7 +1071,7 @@ describe('labels — vocabulary + toggle', () => {
 
   it('toggle refuses a foreign label with the 0078 sentence, verbatim', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const foreign = await plantLabel(t, f.otherOrg.id, 'Elsewhere')
     const refusal = await expectRefusal(
@@ -1088,7 +1099,7 @@ describe('labels — vocabulary + toggle', () => {
 
   it('toggle refuses a deleted label as it refuses a foreign one, which the app reads as deleted', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const label = await plantLabel(t, f.org.id, 'Bug')
     const foreign = await plantLabel(t, f.otherOrg.id, 'Elsewhere')
@@ -1111,7 +1122,7 @@ describe('labels — vocabulary + toggle', () => {
 
   it('remove cascades issue_labels in its own transaction and narrates the deletion', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const label = await plantLabel(t, f.org.id, 'Bug')
     const archived = { status: 'done', done_at: NOW, archived_at: NOW } as const
     for (const over of [{}, {}, archived]) {
@@ -1150,7 +1161,7 @@ describe('labels — vocabulary + toggle', () => {
 describe('prefs — self-service blob', () => {
   it('save upserts with an updated_at stamp; get is fenced to own seats', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await as(t, f.admin).mutation(api.prefs.save, {
       profile_id: f.admin.id,
       prefs: { roadmapWin: [0, 12] },
@@ -1205,7 +1216,7 @@ describe('tokens — agent keys are the admin’s, MCP tokens are yours', () => 
 
   it('createAgentKey narrates against the AGENT with curly quotes', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const args = mintArgs(f)
     expect(await as(t, f.admin).mutation(api.tokens.createAgentKey, args)).toEqual({
       id: args.id,
@@ -1235,7 +1246,7 @@ describe('tokens — agent keys are the admin’s, MCP tokens are yours', () => 
 
   it('refuses non-admins, person targets, bad hashes and replayed secrets', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await expectRefusal(as(t, f.user).mutation(api.tokens.createAgentKey, mintArgs(f)), 'forbidden')
     await expectRefusal(
       as(t, f.admin).mutation(api.tokens.createAgentKey, mintArgs(f, { agent_id: f.user.id })),
@@ -1261,7 +1272,7 @@ describe('tokens — agent keys are the admin’s, MCP tokens are yours', () => 
 
   it('revoke stamps + narrates; delete removes silently; both fenced per org', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const args = mintArgs(f)
     await as(t, f.admin).mutation(api.tokens.createAgentKey, args)
     await drainActivity(t)
@@ -1293,7 +1304,7 @@ describe('tokens — agent keys are the admin’s, MCP tokens are yours', () => 
 
   it('MCP tokens are strictly self-service and never narrate', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     expect(
       await as(t, f.user).mutation(api.tokens.createMcpToken, {

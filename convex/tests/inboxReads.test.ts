@@ -35,7 +35,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { archiveRaw, at, drift, grant, plantItems, plantLegacy, post } from './inboxItems.setup'
 import { plantNorthstar } from './northstar.setup'
@@ -146,7 +146,7 @@ describe('the unread summary', () => {
 
   it('is exact up to 99, says more than 99 from 100, and reads no task past the cap', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const expectCount = async (count: number, more: boolean) =>
       expect(await summaryOf(t, f.guest)).toEqual({
         seats: [
@@ -175,7 +175,7 @@ describe('the unread summary', () => {
 
   it('counts no item that is read, snoozed, archived, hidden, in Deleted items or another login’s', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const guest = as(t, f.guest)
     const task = (project_id = f.sub.id) => plantIssue(t, { org_id: f.org.id, project_id })
     const shown = await task()
@@ -237,7 +237,7 @@ describe('the unread summary', () => {
 
   it('leaves out a moved task until its re-key says its project, and never counts a hidden one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a sub-project the guest cannot see, as tasks live in sub-projects
     const hidden = await plantHiddenSibling(t, f, f.guest)
     const move = (id: string, project_id: string) =>
@@ -272,7 +272,7 @@ describe('the unread summary', () => {
 
   it('skips a hidden project with one seek, not a task read for each of its items', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantItems(t, f, f.guest, 3, f.sub.id)
     const before = await measured(t, f.guest)
     expect(before.answer.unread_count).toBe(3)
@@ -290,7 +290,7 @@ describe('the unread summary', () => {
 
   it('skips hidden projects on both sides of a counted one, and reads the tasks of items without a project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // fixed ids, so the walk meets a hidden project, the counted one and
     // another hidden one, in that order
     const [low, mid, high] = [
@@ -348,7 +348,7 @@ describe('the unread summary', () => {
 
   it('answers a lower bound with complete false when the budget stops it, never a false zero', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 200 items of tasks archived before their read steps, then 5 it counts
     await archiveRaw(t, await plantItems(t, f, f.guest, 200, f.sub.id))
     await plantItems(t, f, f.guest, 5, f.sub.id)
@@ -374,7 +374,7 @@ describe('the unread summary', () => {
 
   it('stops part way with a count below the true one when the room is lowered', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantItems(t, f, f.guest, 60, f.sub.id)
     expect(await summaryOf(t, f.guest)).toMatchObject({ unread_count: 60, complete: true })
     Object.assign(SUMMARY, { batch: 4, room: 0.01 })
@@ -388,7 +388,7 @@ describe('the unread summary', () => {
 
   it('reads less than half of Convex’s limits for 100 tasks with the largest descriptions', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 20,000 characters of three bytes each, about 60 KB a task, in the
     // task row too, as a rollback to the second release writes them, the
     // heaviest case
@@ -406,7 +406,7 @@ describe('the unread summary', () => {
 
   it('adds up the seats of one login and says which are not ready', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a second seat of the guest's login in the other organization
     const elsewhere = await plantSeat(t, {
       org_id: f.otherOrg.id,
@@ -466,7 +466,7 @@ describe('the unread summary', () => {
 
   it('shares the cap across seats and lists only the seats the budget reached', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const elsewhere = await plantSeat(t, {
       org_id: f.otherOrg.id,
       auth_user_id: f.guest.auth_user_id,
@@ -506,7 +506,7 @@ describe('the unread summary', () => {
 
   it('offers the bulk actions when they would change anything, hidden tasks included', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const guest = as(t, f.guest)
     const flags = async () => {
       const got = await summaryOf(t, f.guest)
@@ -547,7 +547,7 @@ describe('the unread summary', () => {
 describe('one task’s item', () => {
   it('answers counts, the oldest unread message, the newest one and whether a change is unread', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const guest = as(t, f.guest)
     const task = () => plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // three messages, the oldest read and pruned away
@@ -620,7 +620,7 @@ describe('one task’s item', () => {
 
   it('says whether a change is unread from the item’s counts, without walking a large item', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await plantLegacy(t, f, f.guest, task, BUILD.pair_rows, () => 'comment')
     await backfillAll(t)
@@ -653,7 +653,7 @@ describe('one task’s item', () => {
 
   it('counts an unread mention in the description as an unread change, as the app does, and no other mention', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const guest = as(t, f.guest)
     const task = () => plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const changeOf = async (issueId: string) => {
@@ -732,7 +732,7 @@ describe('one task’s item', () => {
 
   it('walks at most BUILD.pair_rows unread messages for the unread change, and says one may be unread past them', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // `n` unread mentions in comments, the `description`th in the
     // description, so the walk reads them in turn, oldest first
     const mentions = async (n: number, description = -1) => {
@@ -774,7 +774,7 @@ describe('one task’s item', () => {
 
   it('is null without an item, for a hidden task and for another person’s item, and building while not ready', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const none = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     expect(await itemFor(t, f, f.guest, none.id)).toEqual({ state: 'ok', item: null })
     expect(await itemFor(t, f, f.guest, uuid())).toEqual({ state: 'ok', item: null })
@@ -804,7 +804,7 @@ describe('one task’s item', () => {
 describe('the item actions', () => {
   it('readItem reads up to the newest message the caller saw, and only the caller’s item', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const guest = as(t, f.guest)
     const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await post(t, f, { to: f.guest, task: a, minute: 1 })
@@ -848,7 +848,7 @@ describe('the item actions', () => {
 
   it('removeItem keeps a message that arrived after the caller’s view as the item’s only one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const guest = as(t, f.guest)
     const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await post(t, f, { to: f.guest, task: a, minute: 1, kind: 'comment' })
@@ -878,7 +878,7 @@ describe('the item actions', () => {
 
   it('a later message keeps the cap’s dropped count after a partial readItem, until it is read', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const guest = as(t, f.guest)
     const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     for (let i = 0; i < ITEM_UNREAD_CAP + 3; i++)
@@ -905,7 +905,7 @@ describe('the item actions', () => {
 
   it('readItem and removeItem leave out a later notice that carries an earlier time or a lower id', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const guest = as(t, f.guest)
     const view = async (task: Doc<'issues'>) => {
       const got = await itemFor(t, f, f.guest, task.id)
@@ -972,7 +972,7 @@ describe('the item actions', () => {
 
   it('unreadItem and snoozeItem refuse an archived task as the id actions do, and skip a hidden one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const guest = as(t, f.guest)
     const until = new Date(START + DAY).toISOString()
     const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -1026,7 +1026,7 @@ describe('the item actions', () => {
 
   it('snoozeItem snoozes the whole item until its wake and refuses a time past or too far ahead', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const guest = as(t, f.guest)
     const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await post(t, f, { to: f.guest, task: a, minute: 1 })
@@ -1088,7 +1088,7 @@ describe('the item actions', () => {
 
   it('reads a legacy item of 1,000 messages the backfill built inside Convex’s limits', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a, b] = [
       await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }),
       await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }),
@@ -1127,7 +1127,7 @@ describe('the item actions', () => {
 describe('a check of the seat access that a bound stops', () => {
   it('leaves the summary incomplete with the count so far and the item out, and one bound up answers as with the default bounds', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the guest's FW, and a team of a member that shares PCB
     const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
     await t.run(async (ctx) => {

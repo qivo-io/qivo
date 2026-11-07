@@ -15,7 +15,7 @@ import {
   plantIssue,
   plantProject,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 beforeEach(() => {
@@ -29,7 +29,7 @@ afterEach(() => {
 
 async function fixture() {
   const t = newT({ transactionLimits: true })
-  const fx = await withOrg(t)
+  const fx = await withReadingAdmin(t)
   const owner = await t.run(async (ctx): Promise<EventOwner> => {
     const id = uuid()
     const row = await ctx.db.insert('mcp_tokens', {

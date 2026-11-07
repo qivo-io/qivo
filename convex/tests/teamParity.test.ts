@@ -41,7 +41,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
 import { teamsJson } from './teamMembers.setup'
@@ -77,7 +77,7 @@ type Fx = OrgFixture & {
  * its name key, as on a deployment (nameKeys.setup.ts keyOrg). */
 async function setup(): Promise<Fx> {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const person = (name: string) =>
     plantSeat(t, {
       org_id: f.org.id,
@@ -593,6 +593,7 @@ describe('removing a member settles their open tasks', () => {
       ],
       kept_as_viewer: [],
       reassigned: [],
+      hidden: { tasks: 0, user_ids: [] },
     })
     expect(await membership(fx.t, fx.team.id, fx.emil.id)).toBeNull()
     expect((await taskRow(fx.t, fx.open.id))?.assignee_id).toBe(fx.emil.id)
@@ -601,6 +602,43 @@ describe('removing a member settles their open tasks', () => {
     ])
     // removing them again changes nothing
     expect(await del(fx, fx.user, undefined)).toMatchObject({ removed: false, stranded: [] })
+  })
+
+  it('counts the tasks a remover cannot see in hidden with their holders, over REST and MCP', async () => {
+    const fx = await setup()
+    // Ada, an admin who takes part in no project, runs the team and reads
+    // none of FW's tasks
+    const ada = await plantSeat(fx.t, {
+      org_id: fx.org.id,
+      name: 'Ada',
+      org_role: 'admin',
+      accepted_at: NOW,
+    })
+    const viaRest = await del(fx, ada, undefined)
+    expect(viaRest).toMatchObject({
+      removed: true,
+      stranded: [],
+      reassigned: [],
+      hidden: { tasks: 2, user_ids: [fx.emil.id] },
+    })
+    await fx.t.run((ctx) =>
+      ctx.db.insert('team_members', {
+        team_id: fx.team.id,
+        profile_id: fx.emil.id,
+        is_leader: false,
+      }),
+    )
+    const viaMcp = JSON.parse(
+      await fx.t.mutation(internal.machine.teams.mcpSetTeamMember, {
+        ...as_(ada),
+        team_id: fx.team.id,
+        user_id: fx.emil.id,
+        member: false,
+      }),
+    ) as Record<string, unknown>
+    expect(viaMcp).toMatchObject({ stranded: [], hidden: { tasks: 2, user_ids: [fx.emil.id] } })
+    for (const out of [viaRest, viaMcp])
+      for (const task of [fx.open, fx.reviewing]) expect(JSON.stringify(out)).not.toContain(task.id)
   })
 
   it('keeps them as a Viewer of the project the team shared', async () => {
@@ -1142,7 +1180,7 @@ describe("deleting a team settles its members' open tasks", () => {
 
   it('reads a legacy owned project once, however long its old description', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run(async (ctx) => {
       await ctx.db.insert('teams', {
         id: uuid(),
@@ -1429,6 +1467,7 @@ describe('team routes over HTTP', () => {
         ],
         kept_as_viewer: [],
         reassigned: [],
+        hidden: { tasks: 0, user_ids: [] },
       },
     })
   })

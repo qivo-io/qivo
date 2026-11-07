@@ -80,6 +80,8 @@ async function load(people = 0) {
       org_role: 'user',
     })
   }
+  // Aisha works on the project, so she can be mentioned there
+  snap.access.push({ project_id: snap.projects[0].id, profile_id: 'aisha', level: 'user' })
   snap.issues.push({
     id: 'task-a',
     org_id: snap.orgs[0].id,

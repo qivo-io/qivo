@@ -451,16 +451,25 @@ describe('the order', { timeout: 60_000 }, () => {
     const next0 = base(false, 'admin')
     const mine = top(next0, 'Mine by grant')
     const led = top(next0, 'Led by me', { lead: true })
-    // a project the admin reaches only by admin status, which the
-    // workspace holds and the store gives Lead on
+    // a project the admin only manages, which a workspace no longer
+    // holds; held here, the store gives it no level, as the server's rule
+    // does, and only the management rule knows it
     const managed = top(next0, 'Managed only', { grant: false })
     await load(next0)
     const visible = vi.spyOn(store.P, 'visibleProjects')
     await render(mine)
     expect(store.P.project(managed)).toBeDefined()
-    expect(store.P.levelOn(managed)).toBe('lead')
+    expect(store.P.levelOn(managed)).toBeNull()
+    expect(store.P.canManageOwnProjectAccess(managed)).toBe(true)
     expect(rowIds()).toEqual([led, mine])
     expect(visible).not.toHaveBeenCalled()
+    // the row menu of a project they see by a grant offers New sub-project…,
+    // as they manage every project
+    await click(find('[aria-label="Project actions"]', row(mine)))
+    const menu = find('[data-slot="popover-content"]')
+    expect([...menu.querySelectorAll('button')].map((b) => b.textContent?.trim())).toContain(
+      'New sub-project…',
+    )
   })
 })
 

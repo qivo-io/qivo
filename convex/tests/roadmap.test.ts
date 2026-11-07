@@ -12,7 +12,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 const schedule = (id: string, start: string, end = start) => ({
@@ -29,7 +29,7 @@ afterEach(() => vi.useRealTimers())
 describe('roadmap visit undo', () => {
   it('undoes one atomic batch or the entire visit, including originally absent dates', async () => {
     const t = newT(),
-      f = await withOrg(t),
+      f = await withReadingAdmin(t),
       user = as(t, f.user),
       session_id = uuid()
     const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -61,7 +61,7 @@ describe('roadmap visit undo', () => {
 
   it('refuses Remaining in a task operation, which takes the ordinary task write', async () => {
     const t = newT(),
-      f = await withOrg(t),
+      f = await withReadingAdmin(t),
       user = as(t, f.user),
       session_id = uuid()
     const a = await plantIssue(t, {
@@ -84,7 +84,7 @@ describe('roadmap visit undo', () => {
 
   it('journals only the dates and keeps independent task edits, Remaining included', async () => {
     const t = newT(),
-      f = await withOrg(t),
+      f = await withReadingAdmin(t),
       user = as(t, f.user),
       session_id = uuid()
     const a = await plantIssue(t, {
@@ -126,7 +126,7 @@ describe('roadmap visit undo', () => {
 
   it('journals and writes only the task an operation names, never its ancestors', async () => {
     const t = newT(),
-      f = await withOrg(t),
+      f = await withReadingAdmin(t),
       guest = as(t, f.guest),
       session_id = uuid()
     // the middle task sits in a project the guest cannot see
@@ -168,7 +168,7 @@ describe('roadmap visit undo', () => {
 
   it('refuses external schedule conflicts and leaves the whole revert-all transaction intact', async () => {
     const t = newT(),
-      f = await withOrg(t),
+      f = await withReadingAdmin(t),
       user = as(t, f.user),
       session_id = uuid()
     const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -200,7 +200,7 @@ describe('roadmap visit undo', () => {
     'refuses to undo a task that has since %s and leaves it as it is',
     async (condition) => {
       const t = newT(),
-        f = await withOrg(t),
+        f = await withReadingAdmin(t),
         user = as(t, f.user),
         session_id = uuid()
       const leaf = await plantIssue(t, {
@@ -240,7 +240,7 @@ describe('roadmap visit undo', () => {
 
   it('expires a receipt written while child edits still widened their ancestors', async () => {
     const t = newT(),
-      f = await withOrg(t),
+      f = await withReadingAdmin(t),
       user = as(t, f.user),
       session_id = uuid()
     const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -266,7 +266,7 @@ describe('roadmap visit undo', () => {
 
   it('expires a receipt an earlier release wrote with Remaining, and restores none of it', async () => {
     const t = newT(),
-      f = await withOrg(t),
+      f = await withReadingAdmin(t),
       user = as(t, f.user),
       session_id = uuid()
     const a = await plantIssue(t, {
@@ -312,7 +312,7 @@ describe('roadmap visit undo', () => {
 
   it('undoes milestone creation, edits and deletion and retains unrelated milestone edits', async () => {
     const t = newT(),
-      f = await withOrg(t),
+      f = await withReadingAdmin(t),
       user = as(t, f.user),
       session_id = uuid(),
       id = uuid()
@@ -358,7 +358,7 @@ describe('roadmap visit undo', () => {
 
   it('stores a milestone created against a sub-project on its top-level project', async () => {
     const t = newT(),
-      f = await withOrg(t),
+      f = await withReadingAdmin(t),
       user = as(t, f.user),
       session_id = uuid(),
       id = uuid()
@@ -375,7 +375,7 @@ describe('roadmap visit undo', () => {
 
   it('refuses milestones without top-level write access or a real calendar day', async () => {
     const t = newT(),
-      f = await withOrg(t),
+      f = await withReadingAdmin(t),
       session_id = uuid()
     const subOnly = await plantSeat(t, {
       org_id: f.org.id,
@@ -454,7 +454,7 @@ describe('roadmap visit undo', () => {
 
   it('reads milestones the caller cannot see as not found on update and remove', async () => {
     const t = newT(),
-      f = await withOrg(t),
+      f = await withReadingAdmin(t),
       session_id = uuid()
     const plant = async (project_id: string) => {
       const id = uuid()
@@ -496,7 +496,7 @@ describe('roadmap visit undo', () => {
 
   it('isolates journal ownership and rechecks current access on undo', async () => {
     const t = newT(),
-      f = await withOrg(t),
+      f = await withReadingAdmin(t),
       user = as(t, f.user),
       session_id = uuid()
     const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -533,7 +533,7 @@ describe('roadmap visit undo', () => {
 
   it('rolls back a batch if any operation lacks permission, including foreign organizations', async () => {
     const t = newT(),
-      f = await withOrg(t),
+      f = await withReadingAdmin(t),
       user = as(t, f.user),
       session_id = uuid()
     const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -551,7 +551,7 @@ describe('roadmap visit undo', () => {
 
   it('supports a visit spanning writable organizations through the caller’s current seats', async () => {
     const t = newT(),
-      f = await withOrg(t),
+      f = await withReadingAdmin(t),
       user = as(t, f.user),
       session_id = uuid()
     await t.run((ctx) => ctx.db.patch(f.otherAdmin._id, { auth_user_id: f.user.auth_user_id }))
@@ -573,7 +573,7 @@ describe('roadmap visit undo', () => {
 
   it('refuses a date operation on a group even when it would change nothing; skips an unchanged leaf', async () => {
     const t = newT(),
-      f = await withOrg(t),
+      f = await withReadingAdmin(t),
       user = as(t, f.user),
       session_id = uuid()
     const group = await plantIssue(t, {
@@ -622,7 +622,7 @@ describe('roadmap visit undo', () => {
   it('refuses expired entries and lets the internal expiry remove only its own visit', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const t = newT(),
-      f = await withOrg(t),
+      f = await withReadingAdmin(t),
       user = as(t, f.user),
       session_id = uuid()
     const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })

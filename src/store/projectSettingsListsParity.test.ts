@@ -4,35 +4,35 @@
  * these lists. Each case boots the real store from the caller's real
  * workspace, as projectNavParity.test.ts does, and compares, as sets over
  * every batch: the projects list with P.visibleProjects() and each row's
- * right to a sub-project with the store's New sub-project rule (P.levelOn
- * is 'lead'); each top-level project's sub-projects with the live
- * children P.canSee keeps; Archived projects with P.archivedProjects less
- * the rows beneath an archived parent, each row's parent and its Restore
- * and Delete with the store's `manage`, in the store's order wherever
- * archive times differ; each entry's chips with the store's archived
- * children and `withParent`; and a search for a word with the store's rows
- * whose name key holds it, through the server's nameKey. The cases are
- * Northstar's Nora (an admin), Leo and Ben, with Northstar projects
- * archived as Nora before the store boots, every access shape of a user, a
- * guest and a Viewer with Firmware archived alone and then Testbed
+ * right to a sub-project with the store's New sub-project rule
+ * (P.canManageOwnProjectAccess); each top-level project's sub-projects with
+ * the live children P.canSee keeps; Archived projects with
+ * P.archivedProjects less the rows beneath an archived parent, each row's
+ * parent and its Restore and Delete with the store's `manage`, in the
+ * store's order wherever archive times differ; each entry's chips with the
+ * store's archived children and `withParent`; and a search for a word with
+ * the store's rows whose name key holds it, through the server's nameKey.
+ * The cases are Northstar's Nora (an admin), Leo and Ben, with Northstar
+ * projects archived as Nora before the store boots, every access shape of a
+ * user, a guest and a Viewer with Firmware archived alone and then Testbed
  * platform archived carrying Board rev, and the fixture's admin without a
- * grant. Every answer is also held to the rule worked out without reach
- * rows (convex/tests/projectSettingsLists.setup.ts), and to the stand-in
- * the jsdom tests and the browser benchmark read
+ * grant. Every answer is also held to the rule worked out without reach rows
+ * (convex/tests/projectSettingsLists.setup.ts), and to the stand-in the
+ * jsdom tests and the browser benchmark read
  * (store/projectSettingsListsStandIn.setup.ts) over the caller's own
  * workspace: the same rows in the same order, Archived projects by archive
  * time where the server ties equal times by fields the workspace does not
- * carry. Two cases hold the stand-in to the real queries at the design
- * size, 200 live top-level projects for Settings › Projects and the New
- * sub-project dialog's parents and 300 archived ones for Archived
- * projects, and one at everyday values the parents of a user who leads 3
- * projects.
+ * carry. Two cases hold the stand-in to the real queries at the design size,
+ * 200 live top-level projects for Settings › Projects and the New
+ * sub-project dialog's parents and 300 archived ones for Archived projects,
+ * and one at everyday values the parents of a user who leads 3 projects.
  *
- * Today the store's admin rule (planner.ts levelOnProject) gives an
- * organization admin every project and Lead on each, which is what
- * management sight answers, so the admins' sets equal the store's too. The
- * admin access split removes that rule from the store and replaces these
- * admin expectations with the server rule's alone. */
+ * An organization admin's lists hold every project they manage, while
+ * their store, judged by ordinary access since the admin access split,
+ * holds only the projects they take part in, so an admin's lists are
+ * compared with the rule worked out without reach rows and with the
+ * stand-in over every project of the organization, and not with the
+ * store's sets. */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'
@@ -142,21 +142,27 @@ const NORTHSTAR_TERMS = ['e', 'launch', 'customer pilot']
  * Compares the four lists for `profile` with the store booted from their
  * workspace and with the rule worked out without reach rows, over every
  * project of their organization, the searches for each of `terms`
- * included. Answers how many rows the lists held.
+ * included. Answers how many rows the lists held. An organization admin's
+ * lists hold every project they manage, which their store, judged by
+ * ordinary access, does not hold, so for an admin the lists are compared
+ * with the rule and with the stand-in over the whole organization alone.
  */
 async function compare(t: T, profile: Doc<'profiles'>, label: string, terms: readonly string[]) {
   const P = await storeOf(t, profile)
   const me = profile
   const org = me.org_id
+  // whether the store shows what Settings lists, as for anyone but an admin
+  const storeLists = me.org_role !== 'admin'
   const projects = await rowsOf((after) => t.run((ctx) => settingsProjectsOf(ctx, me, { after })))
   expect(projects, `${label}: projects by the rule`).toEqual(await expectedProjects(t, me))
   const shown = P.visibleProjects().filter((p) => p.org === org)
-  expect(
-    sorted(projects.map((r) => [r.id, r.can_create_sub_project])),
-    `${label}: projects`,
-  ).toEqual(sorted(shown.map((p) => [p.id, P.levelOn(p.id) === 'lead'])))
+  if (storeLists)
+    expect(
+      sorted(projects.map((r) => [r.id, r.can_create_sub_project])),
+      `${label}: projects`,
+    ).toEqual(sorted(shown.map((p) => [p.id, P.canManageOwnProjectAccess(p.id)])))
   // Settings shows each project's live children P.canSee keeps
-  for (const p of shown) {
+  for (const p of storeLists ? shown : []) {
     const kids = await rowsOf((after) =>
       t.run((ctx) => settingsSubProjectsOf(ctx, me, { project_id: p.id, after })),
     )
@@ -176,15 +182,17 @@ async function compare(t: T, profile: Doc<'profiles'>, label: string, terms: rea
   const archived = await rowsOf((after) => t.run((ctx) => settingsArchivedOf(ctx, me, { after })))
   expect(archived, `${label}: archived by the rule`).toEqual(await expectedArchived(t, me))
   const all = P.archivedProjects.filter((r) => r.org === org)
-  const entries = all.filter((r) => !r.parentArchived)
-  expect(
-    sorted(archived.map((r) => [r.id, r.parent?.id ?? null, r.can_restore, r.can_delete])),
-    `${label}: archived`,
-  ).toEqual(sorted(entries.map((r) => [r.id, r.parent ?? null, r.manage, r.manage])))
-  expect(
-    archived.map((r) => Date.parse(r.archived_at)),
-    `${label}: archived order`,
-  ).toEqual(entries.map((r) => r.archivedAt))
+  const entries = storeLists ? all.filter((r) => !r.parentArchived) : []
+  if (storeLists)
+    expect(
+      sorted(archived.map((r) => [r.id, r.parent?.id ?? null, r.can_restore, r.can_delete])),
+      `${label}: archived`,
+    ).toEqual(sorted(entries.map((r) => [r.id, r.parent ?? null, r.manage, r.manage])))
+  if (storeLists)
+    expect(
+      archived.map((r) => Date.parse(r.archived_at)),
+      `${label}: archived order`,
+    ).toEqual(entries.map((r) => r.archivedAt))
   for (const entry of entries.filter((r) => r.type === 'meta')) {
     const chips = await rowsOf((after) =>
       t.run((ctx) => settingsArchivedChildrenOf(ctx, me, { project_id: entry.id, after })),
@@ -215,20 +223,22 @@ async function compare(t: T, profile: Doc<'profiles'>, label: string, terms: rea
           .map((c) => [c.id, p.id]),
       ),
     ]
-    expect(
-      sorted(found.map((r) => [r.id, r.parent?.id ?? null])),
-      `${label}: search ${term}`,
-    ).toEqual(sorted(store))
+    if (storeLists)
+      expect(
+        sorted(found.map((r) => [r.id, r.parent?.id ?? null])),
+        `${label}: search ${term}`,
+      ).toEqual(sorted(store))
     const foundOld = await rowsOf((after) =>
       t.run((ctx) => settingsArchivedOf(ctx, me, { search: term, after })),
     )
     expect(foundOld, `${label}: archived search ${term} by the rule`).toEqual(
       await expectedArchived(t, me, term),
     )
-    expect(
-      sorted(foundOld.map((r) => [r.id, r.under])),
-      `${label}: archived search ${term}`,
-    ).toEqual(sorted(all.filter(named).map((r) => [r.id, r.parentArchived])))
+    if (storeLists)
+      expect(
+        sorted(foundOld.map((r) => [r.id, r.under])),
+        `${label}: archived search ${term}`,
+      ).toEqual(sorted(all.filter(named).map((r) => [r.id, r.parentArchived])))
     seen += found.length + foundOld.length
   }
   await compareStandIn(t, profile, label, terms)
@@ -236,6 +246,25 @@ async function compare(t: T, profile: Doc<'profiles'>, label: string, terms: rea
 }
 
 /* ------------------------------------------------------------ the stand-in */
+
+/** `profile`'s workspace, and for an organization admin with every project
+ * of their organization added, as the benchmark hands the stand-in the
+ * whole world (scripts/perf/server.mjs `hidden`): an admin's own workspace
+ * holds only the projects they take part in, while their Settings lists
+ * hold every project they manage. */
+async function worldOf(t: T, profile: Doc<'profiles'>): Promise<Snapshot> {
+  const ws = await workspaceOf(as(t, profile))
+  if (ws === null) throw new Error(`no workspace for ${profile.name}`)
+  if (profile.org_role !== 'admin') return ws
+  const held = new Set(ws.projects.map((p) => p.id))
+  const rest = await t.run((ctx) =>
+    ctx.db
+      .query('projects')
+      .withIndex('by_org', (q) => q.eq('org_id', profile.org_id))
+      .collect(),
+  )
+  return { ...ws, projects: [...ws.projects, ...rest.filter((p) => !held.has(p.id))] }
+}
 
 /** Every row of the stand-in's list `name` for `args` over `ws`, from its
  * start, following `next`. */
@@ -268,8 +297,7 @@ async function compareStandIn(
   label: string,
   terms: readonly string[],
 ) {
-  const ws = await workspaceOf(as(t, profile))
-  if (ws === null) throw new Error(`no workspace for ${profile.name}`)
+  const ws = await worldOf(t, profile)
   const me = profile
   const org = { org_id: me.org_id }
   for (const term of ['', ...terms]) {
@@ -345,8 +373,7 @@ describe('the stand-in at the design size', () => {
     // past withOrg's own, so the 500 live sub-projects stay everyday
     await plantMetas(t, f.org.id, names('Live project ', 198))
     await ready(t, f)
-    const ws = await workspaceOf(as(t, f.admin))
-    if (ws === null) throw new Error('no workspace')
+    const ws = await worldOf(t, f.admin)
     const real = await rowsOf((after) =>
       t.run((ctx) => settingsProjectsOf(ctx, f.admin, { after })),
     )
@@ -401,8 +428,7 @@ describe('the stand-in at the design size', () => {
     for (const [i, name] of old.entries())
       await plantMetas(t, f.org.id, [name], { archived_at: new Date(at + i * 1000).toISOString() })
     await ready(t, f)
-    const ws = await workspaceOf(as(t, f.admin))
-    if (ws === null) throw new Error('no workspace')
+    const ws = await worldOf(t, f.admin)
     const real = await rowsOf((after) =>
       t.run((ctx) => settingsArchivedOf(ctx, f.admin, { after })),
     )
@@ -509,7 +535,7 @@ describe('access shapes', () => {
       expect(showing).toBeGreaterThan(SHAPES.length / 3)
     })
 
-  it('lists every project for an admin without a grant, as the store’s admin rule shows them', async () => {
+  it('lists every project for an admin without a grant, as they manage every one', async () => {
     expect(await compareShape(null, 'admin')).toBeGreaterThan(5)
   })
 })

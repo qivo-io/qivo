@@ -426,12 +426,15 @@ async function twoOrganizations({ homeHeld, homeRead }: { homeHeld: boolean; hom
   snap.orgs.push({ ...snap.orgs[0], id: GUEST, slug: 'guest', name: 'Guest Co' })
   snap.profiles.push({ ...me, id: 'me-guest', org_id: GUEST })
   snap.myProfileIds.push('me-guest')
+  // my guest seat leads Guest work, so it edits that organization's task;
+  // like the home seat it is an organization admin, which gives no level
   const guestProject = {
     ...snap.projects[0],
     id: 'guest-work',
     org_id: GUEST,
     name: 'Guest work',
     parent_id: undefined,
+    lead_id: 'me-guest',
   }
   snap.projects.push(guestProject)
   const task = (org: string, project: string, num: number, title: string) => ({

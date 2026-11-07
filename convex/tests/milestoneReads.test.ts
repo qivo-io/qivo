@@ -37,7 +37,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
 import { NORTHSTAR_ANCHOR, plantNorthstar } from './northstar.setup'
@@ -427,7 +427,7 @@ const measured = (
 describe('a section', () => {
   it('starts upcoming at `from`, nearest first, and lists past newest first', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const old = await plant(t, f.meta.id, plus(MONDAY, -10), 'Old')
     const before = await plant(t, f.meta.id, plus(MONDAY, -1), 'Day before')
     const on = await plant(t, f.meta.id, MONDAY, 'On the day')
@@ -445,7 +445,7 @@ describe('a section', () => {
 
   it('sorts milestones of one day by name key and then id, in one project and across two', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const day = plus(MONDAY, 2)
     // two on one day of TBED, stored before the weekly rule, and one of SKNK
     const rows = [
@@ -480,7 +480,7 @@ describe('a section', () => {
     'reads 37 milestones in batches of %i, each once and in order, in one project',
     async (limit) => {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const rows = await plantMany(
         t,
         Array.from({ length: 37 }, (_, i) => ({
@@ -514,7 +514,7 @@ describe('a section', () => {
     'merges 37 milestones of three projects in two organizations in batches of %i',
     async (limit) => {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       await guestElsewhere(t, f)
       // TBED and SKNK share their Wednesdays, the other organization's
       // project alternates between Wednesdays and Fridays
@@ -552,7 +552,7 @@ describe('a section', () => {
 
   it('leaves out a milestone added before the cursor between two batches and returns one added after it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantMany(
       t,
       Array.from({ length: 6 }, (_, i) => ({
@@ -586,7 +586,7 @@ describe('a section', () => {
 
   it('pages past a milestone whose id, made before 2026-10-19, is not a UUID', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plant(t, f.meta.id, MONDAY, 'First')
     await t.run((ctx) =>
       ctx.db.insert('milestones', {
@@ -614,7 +614,7 @@ describe('a section', () => {
 
   it('pages past a legacy name whose name key is longer than a document', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // stored before names had a limit; NFKD turns each U+FDFA into 18
     // characters, so its key passes DOCUMENT_MAX_BYTES characters
     const long = '\ufdfa'.repeat(60_000)
@@ -637,7 +637,7 @@ describe('a section', () => {
 
   it('searches every fragment in any order, ignoring case and accents, across the whole section', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const rows = await plantMany(t, [
       ...Array.from({ length: 30 }, (_, i) => ({
         project: f.meta.id,
@@ -683,7 +683,7 @@ describe('a section', () => {
 
   it('stops a search at the read budget, with every match up to the day it reached, and goes on to find every match', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const rows = await plantMany(
       t,
       Array.from({ length: 60 }, (_, i) => ({
@@ -721,7 +721,7 @@ describe('a section', () => {
 
   it('stays exact at every budget, over a dense and a sparse project that share days', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const shared = [3, 7, 8].map((i) => plus(MONDAY, 7 * i + 2))
     const rows = await plantMany(t, [
       ...Array.from({ length: 24 }, (_, i) => ({
@@ -758,7 +758,7 @@ describe('a section', () => {
 
   it('counts each milestone at its size, so a read looks at the metrics a few times', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantMany(
       t,
       Array.from({ length: 300 }, (_, i) => ({
@@ -781,7 +781,7 @@ describe('a section', () => {
 
   it('says on a first upcoming batch whether a project holds past milestones', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plant(t, f.meta.id, plus(MONDAY, -7), 'Done')
     const user = as(t, f.user)
     const first = (projects: string[]) =>
@@ -802,7 +802,7 @@ describe('a section', () => {
 
   it('folds a sub-project, lists a navigation-only parent and leaves archived projects out', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const row = await plant(t, f.meta.id, MONDAY, 'Launch')
     const base = { from: MONDAY, side: 'upcoming' as const, limit: 10 }
     const listed = (who: Doc<'profiles'>, projects: string[]) =>
@@ -827,7 +827,7 @@ describe('a section', () => {
     'decides navigation as the access layer does, asking up to %i sub-projects one by one',
     async (children) => {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const parent = () => plantProject(t, { org_id: f.org.id })
       const child = (p: Doc<'projects'>, extra: Partial<Doc<'projects'>> = {}) =>
         plantProject(t, { org_id: f.org.id, type: 'project', parent_id: p.id, ...extra })
@@ -907,7 +907,7 @@ describe('a section', () => {
 
   it('lists nothing for projects the caller cannot see and refuses none of them', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plant(t, f.hidden.id, MONDAY, 'Secret')
     await plant(t, f.otherProject.id, MONDAY, 'Elsewhere')
     const lone = await plantProject(t, { org_id: f.org.id })
@@ -941,7 +941,7 @@ describe('a section', () => {
 describe('a section the app grows by Load more', () => {
   it('answers 60 upcoming and 60 past weekly milestones of one project at limits of 100 and 50, each once', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // one a week, the 60 before MONDAY past and the 60 from it upcoming
     const rows = await plantMany(
       t,
@@ -994,7 +994,7 @@ describe('a section the app grows by Load more', () => {
 
   it('answers 100 rows in order with a next over 200 top-level projects, one upcoming milestone each', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // TBED, SKNK and 198 granted projects are the organization's 200
     // top-level projects; TBED's two sub-projects are its only ones
     await grantsOn(t, f, f.user, 198)
@@ -1027,7 +1027,7 @@ describe('a section the app grows by Load more', () => {
 
   it('stops a 100-row read at a lowered budget with every match up to its frontier, and goes on to every milestone once', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const rows = await plantMany(
       t,
       Array.from({ length: 120 }, (_, i) => ({
@@ -1052,7 +1052,7 @@ describe('a section the app grows by Load more', () => {
 describe('a range of days', () => {
   it('answers the milestones shown in [from, to), in upcoming order', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const from = '2026-03-02'
     const to = '2026-03-16'
     // stored before 2026-10-16: 2026-02-31 shows on 3 March, 2026-02-29 on 1 March
@@ -1084,7 +1084,7 @@ describe('a range of days', () => {
 
   it('stops under a lowered budget at a position, and goes on from it to every milestone once', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const rows = await plantMany(t, [
       ...Array.from({ length: 40 }, (_, i) => ({
         project: f.meta.id,
@@ -1114,7 +1114,7 @@ describe('a range of days', () => {
 
   it('stops on 2026-02-31 under a lowered budget and goes on past it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // stored before 2026-10-16, shown on 3 March, sorted before 1 March
     const rows = await plantMany(t, [
       { project: f.meta.id, week: '2026-02-31', name: 'Overflow' },
@@ -1142,7 +1142,7 @@ describe('a range of days', () => {
 
   it('places 2026-02-31 in upcoming from 3 March and in past from 4 March', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantMany(t, [
       { project: f.meta.id, week: '2026-02-31', name: 'Overflow' },
       { project: f.meta.id, week: '2026-03-01', name: 'First' },
@@ -1163,7 +1163,7 @@ describe('a range of days', () => {
 
   it('leaves the access checks before the read out of its budget', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 30 projects shared with the user one by one, so checking them reads
     // more documents than the lowered budget holds
     const projects = await shared(t, f, 30)
@@ -1189,7 +1189,7 @@ describe('a range of days', () => {
 describe('one milestone by id', () => {
   it('answers a milestone the caller can see, and whether they may change it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const row = await plant(t, f.meta.id, MONDAY, 'Launch')
     const project = { id: f.meta.id, name: f.meta.name, key: f.meta.key, org_id: f.org.id }
     const get = (who: Doc<'profiles'>) => as(t, who).query(api.milestones.get, { id: row.id })
@@ -1205,7 +1205,7 @@ describe('one milestone by id', () => {
 
   it("answers a milestone through the caller's seat in another organization until the grant goes", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const seat = await guestElsewhere(t, f)
     const row = await plant(t, f.otherProject.id, MONDAY, 'Elsewhere')
     const user = as(t, f.user)
@@ -1234,7 +1234,7 @@ describe('one milestone by id', () => {
 
   it('answers null for what the caller cannot see or the app does not show', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const elsewhere = await plant(t, f.otherProject.id, MONDAY, 'Elsewhere')
     const hidden = await plant(t, f.hidden.id, MONDAY, 'Secret')
     const onSub = await plant(t, f.sub.id, MONDAY, 'Stored on a sub-project')
@@ -1253,7 +1253,7 @@ describe('one milestone by id', () => {
 describe('Team sync', () => {
   it('reads the next milestone and those of this week and next', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plant(t, f.meta.id, plus(MONDAY, -3), 'Last week')
     const thisWeek = await plant(t, f.hidden.id, plus(MONDAY, 4), 'Friday review')
     const nextWeek = await plant(t, f.meta.id, plus(MONDAY, 8), 'Next Tuesday')
@@ -1313,7 +1313,7 @@ describe('parity with the stored milestones of the projects a person sees', () =
 describe('refusals', () => {
   it('refuses arguments out of shape with bad_request', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const user = as(t, f.user)
     const base: SectionArgs = { projects: [f.meta.id], from: MONDAY, side: 'upcoming', limit: 10 }
     const tooMany = Array.from({ length: 201 }, () => uuid())
@@ -1387,7 +1387,7 @@ describe('refusals', () => {
 
   it('refuses a caller who is not signed in', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { projects: [f.meta.id], from: MONDAY }
     await expectRefusal(
       t.query(api.milestones.section, { ...base, side: 'upcoming', limit: 10 }),
@@ -1420,7 +1420,7 @@ describe('under Convex limits', () => {
   it('reads one milestone of a parent shown only for navigation to its last of 30 sub-projects', async () => {
     MILESTONE_NAV.children = NAV_CHILDREN
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { milestones } = await navigationOnly(t, f, f.viewer, 1, 30)
     const [row] = milestones
     expect(await as(t, f.viewer).query(api.milestones.get, { id: row.id })).toMatchObject({
@@ -1503,7 +1503,7 @@ describe('under Convex limits', () => {
     // were for projects shared with 60 teams each
     MILESTONE_SCOPE.documents = 64
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { ids, milestone } = await sharedWithTeams(t, f, 30, 3)
     const user = as(t, f.user)
     const section = { from: MONDAY, side: 'upcoming' as const, limit: 10 }
@@ -1527,7 +1527,7 @@ describe('under Convex limits', () => {
   it('shows parents of 30 sub-projects through one grant each', async () => {
     MILESTONE_NAV.children = NAV_CHILDREN
     const t = newT({ transactionLimits: { documentsRead: 200 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { ids, milestones } = await navigationOnly(t, f, f.guest, 5, 30)
     const guest = as(t, f.guest)
     // five parents hold 150 sub-projects, past MILESTONE_NAV.children each,
@@ -1551,7 +1551,7 @@ describe('under Convex limits', () => {
     // 197 granted projects, the parent below, TBED and SKNK are the
     // organization's 200 top-level projects
     const t = newT({ transactionLimits: { documentsRead: 150 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await grantsOn(t, f, f.guest, 197)
     const { ids, milestones } = await navigationOnly(t, f, f.guest, 1, 1)
     const guest = as(t, f.guest)
@@ -1574,7 +1574,7 @@ describe('under Convex limits', () => {
     // the read takes about 40 documents, and the team's 50 shares would
     // pass 60
     const t = newT({ transactionLimits: { documentsRead: 60 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a membership left from before guests lost team access; the team's
     // shares can never reach the guest, so the check does not read them
     await teamOn(t, f, f.guest, 50)
@@ -1596,7 +1596,7 @@ describe('under Convex limits', () => {
   it('refuses when a parent of 30 sub-projects meets a person with 200 grants', async () => {
     MILESTONE_NAV.children = NAV_CHILDREN
     const t = newT({ transactionLimits: { documentsRead: 150 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await grantsOn(t, f, f.guest, 200)
     const { ids, milestones } = await navigationOnly(t, f, f.guest, 1, 30)
     const guest = as(t, f.guest)
@@ -1634,7 +1634,7 @@ describe('under Convex limits', () => {
     async ({ per, completes }, { annotate }) => {
       MILESTONE_READ.documents = EIGHTH
       const t = newT({ transactionLimits: true })
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const projects = await shared(t, f, 198)
       const rows = await plantMany(
         t,
@@ -1689,7 +1689,7 @@ describe('under Convex limits', () => {
     async ({ dense, completes }, { annotate }) => {
       MILESTONE_READ.documents = EIGHTH
       const t = newT({ transactionLimits: true })
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const projects = await shared(t, f, 198)
       const rows = await plantMany(
         t,
@@ -1730,7 +1730,7 @@ describe('a check of the caller access that a bound stops', () => {
 
   it('refuses the reads with its own reason beside MILESTONE_READ_TOO_LARGE, and one bound up answers as with the default bounds', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a member of a team sharing FW, who sees TBED's milestones read-only
     const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
     await t.run(async (ctx) => {
@@ -1776,7 +1776,7 @@ describe('a check of the caller access that a bound stops', () => {
 
   it("shows a parent for navigation through a later sub-project where an earlier one's check refuses, and refuses only where none shows", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
     await t.run(async (ctx) => {
       await ctx.db.insert('team_members', {

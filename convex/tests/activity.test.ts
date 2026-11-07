@@ -60,7 +60,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { handlerOf } from './pageOrg.setup'
 import { assertNoDanglingRefs } from './refs.setup'
@@ -227,7 +227,7 @@ describe('per-subject history, kept whole and read a page at a time', () => {
 
   it('keeps every row of a subject past 500, in insertion order', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await write(t, f.org.id, 'task-b', 2)
     await write(t, f.org.id, 'task-a', 600)
     const kept = await stored(t, f.org.id, 'task-a')
@@ -237,7 +237,7 @@ describe('per-subject history, kept whole and read a page at a time', () => {
 
   it('writes to other tasks never remove a task’s rows', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await write(t, f.org.id, 'task-a', 3, START - 3_600_000)
     // 2,000 newer rows over 50 other tasks, 1,000 to a mutation
     for (let m = 0; m < 2; m++)
@@ -252,7 +252,7 @@ describe('per-subject history, kept whole and read a page at a time', () => {
 
   it('a write past 500 rows stores one document, reads none and schedules nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await write(t, f.org.id, 'task-a', 600)
     const metrics = await t.run(async (ctx) => {
       await insertActivity(ctx, entry(f.org.id, 'task-a', at(START + 600)))
@@ -266,7 +266,7 @@ describe('per-subject history, kept whole and read a page at a time', () => {
 
   it('a project purge and profile removal clear every row, within limits', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a task that moved out of sub2 earlier, and one still inside it
     const movedOut = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const inside = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
@@ -340,7 +340,7 @@ describe('per-subject history, kept whole and read a page at a time', () => {
 
   it('pages a task’s whole history, newest first, however many rows other tasks have', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await t.run(async (ctx) => {
@@ -389,7 +389,7 @@ describe('per-subject history, kept whole and read a page at a time', () => {
 
   it('reads one row past the page in its first read, whatever the page size', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await t.run(async (ctx) => {
       for (let i = 0; i < 600; i++)
@@ -409,7 +409,7 @@ describe('per-subject history, kept whole and read a page at a time', () => {
 
   it('reads on past rows a member does not receive, and pages on where it stopped', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // 20 rows the viewer receives, then 600 newer ones naming the hidden project
     await t.run(async (ctx) => {
@@ -436,6 +436,18 @@ describe('per-subject history, kept whole and read a page at a time', () => {
     expect(seen.rows.map((row) => row.ts)).toEqual(
       Array.from({ length: 20 }, (_, i) => at(START - 3_600_000 + i)),
     )
+    // an admin with a grant on TBED alone is judged as a member and gets the
+    // viewer's rows, not the 600 that name Skunkworks
+    const ada = await plantLogin(
+      t,
+      await plantSeat(t, { org_id: f.org.id, name: 'Ada', org_role: 'admin', accepted_at: NOW }),
+    )
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', { project_id: f.meta.id, profile_id: ada.id, level: 'user' }),
+    )
+    const adas = (await t.run((ctx) => taskHistoryPage(ctx, ada, task))).rows
+    expect(adas.map((row) => row.ts)).toEqual(seen.rows.map((row) => row.ts))
+    // the fixture's admin, who reads Skunkworks by a grant, receives them all
     expect((await t.run((ctx) => taskHistoryPage(ctx, f.admin, task))).rows).toHaveLength(500)
     // a read that fills up before it finds a row answers none and where to go on
     const room = HISTORY_ROOM.room
@@ -443,14 +455,17 @@ describe('per-subject history, kept whole and read a page at a time', () => {
     let stopped: Awaited<ReturnType<typeof page>>
     try {
       stopped = await page()
-      // REST and MCP cannot answer an empty page that is not the end
-      const rest = t.query(internal.machine.records.restTaskActivity, {
-        callerId: f.viewer.id,
-        access: 'read',
-        ref: task.id,
-      })
-      const e = await expectRefusal(rest, 'rule')
-      expect(e.data.message).toBe(HISTORY_HIDDEN)
+      // REST and MCP cannot answer an empty page that is not the end, for
+      // the viewer and for the admin alike
+      for (const callerId of [f.viewer.id, ada.id]) {
+        const rest = t.query(internal.machine.records.restTaskActivity, {
+          callerId,
+          access: 'read',
+          ref: task.id,
+        })
+        const e = await expectRefusal(rest, 'rule')
+        expect(e.data.message).toBe(HISTORY_HIDDEN)
+      }
     } finally {
       HISTORY_ROOM.room = room
     }
@@ -464,7 +479,7 @@ describe('per-subject history, kept whole and read a page at a time', () => {
 
   it('ends a page before a row it had no room to check, so the next page checks it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const named = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // plain, a link to a task the viewer may read, plain, newest last
@@ -587,7 +602,7 @@ describe('per-subject history, kept whole and read a page at a time', () => {
 
   it('a Deleted items delete of a task with 100 subtasks and 100 archived ones stays within limits', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const subtasks: string[] = []
     for (let i = 0; i < LIMITS.subtasks.max; i++)
@@ -624,7 +639,7 @@ describe('per-subject history, kept whole and read a page at a time', () => {
 describe('atomicity — a refused write leaves zero rows', () => {
   it('a move to a destination the caller cannot write writes nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await as(t, f.admin).mutation(api.issues.subscribe, { org_id: f.org.id, issue_id: issue.id })
     const hiddenSub = await plantProject(t, {
@@ -651,7 +666,7 @@ describe('atomicity — a refused write leaves zero rows', () => {
 
   it('a refused create rolls the issue counter back with everything else', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await expectRefusal(
       as(t, f.user).mutation(api.issues.create, {
         org_id: f.org.id,
@@ -671,7 +686,7 @@ describe('atomicity — a refused write leaves zero rows', () => {
 
   it('the remaining-time rule refusal: verbatim sentence, zero rows, untouched issue', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: parent.id })
     await as(t, f.admin).mutation(api.issues.subscribe, { org_id: f.org.id, issue_id: parent.id })
@@ -695,7 +710,7 @@ describe('atomicity — a refused write leaves zero rows', () => {
 describe('browser verbs — the feed contract (evIcon substring-matches these)', () => {
   it('one verb per update, first matching patch key wins, details verbatim', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const step = async (patch: Patch, verb: string, detail?: string) => {
       await as(t, f.user).mutation(api.issues.update, { org_id: f.org.id, id: issue.id, patch })
@@ -764,7 +779,7 @@ describe('browser verbs — the feed contract (evIcon substring-matches these)',
 
   it('parent attach/detach narrate under/from the parent key', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const child = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await as(t, f.user).mutation(api.issues.update, {
@@ -801,7 +816,7 @@ describe('browser verbs — the feed contract (evIcon substring-matches these)',
 
   it('stores an empty list on task rows that name no task, whatever their text', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     const user = as(t, f.user)
     await user.mutation(api.issues.create, {
@@ -838,7 +853,7 @@ describe('browser verbs — the feed contract (evIcon substring-matches these)',
 
   it('lifecycle verbs: created, moved (source-keyed), linked, archived, restored, deleted — and history survives its subjects', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
 
     // created
     const id = uuid()
@@ -939,7 +954,7 @@ describe('which task rows a member receives, in the task window and over REST', 
    * The guest holds User on TBED (FW and PCB) and nothing on SKNK. */
   async function setup() {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const visible = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     const hidden = await plantIssue(t, { org_id: f.org.id, project_id: f.hidden.id })
@@ -994,7 +1009,7 @@ describe('which task rows a member receives, in the task window and over REST', 
     expect(await seen(f.admin)).toEqual([namesHidden, namesVisible])
   })
 
-  it('hides a row stored without its list from members only, whatever its text', async () => {
+  it('hides a row stored without its list from every member, an admin included, whatever its text', async () => {
     const { f, visible, seen, plant } = await setup()
     const ids = await plant([
       { detail: `(blocks QN-${visible.num})` },
@@ -1002,7 +1017,7 @@ describe('which task rows a member receives, in the task window and over REST', 
       { verb: 'renamed', detail: 'from “Oldest”', named_task_nums: [] },
     ])
     expect(await seen(f.guest)).toEqual([ids[2]])
-    expect(await seen(f.admin)).toEqual(ids)
+    expect(await seen(f.admin)).toEqual([ids[2]])
   })
 
   it('checks a named task where it is now: hidden, deleted, purged or restored', async () => {
@@ -1071,8 +1086,9 @@ describe('which task rows a member receives, in the task window and over REST', 
         ids: [(await itemOf(restored.id)) ?? ''],
       })
       await t.finishAllScheduledFunctions(vi.runAllTimers)
+      // the purged task's row reaches no member, an admin as anyone
       expect(await seen(f.guest)).toEqual([toMoving, toRestored])
-      expect(await seen(f.admin)).toEqual([toMoving, toRestored, toPurged])
+      expect(await seen(f.admin)).toEqual([toMoving, toRestored])
     } finally {
       vi.useRealTimers()
     }
@@ -1166,12 +1182,12 @@ describe("a member's history, checked against canAccessProject on each project i
       return kept
     })
 
-  it('gives every role and kind of member the rows the oracle keeps, in the window, over REST and MCP and to taskWriters, for every grant shape', async () => {
+  it('gives every role and kind of member, an admin included, the rows the oracle keeps, in the window, over REST and MCP and to taskWriters, for every grant shape', async () => {
     // which rows, by their place, some shape's member receives
     const seen = new Set<string>()
     for (const [name, plant] of SHAPES) {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       let subject = await plantLogin(
         t,
         await plantSeat(t, { org_id: f.org.id, name: 'Subject', accepted_at: NOW }),
@@ -1211,7 +1227,8 @@ describe("a member's history, checked against canAccessProject on each project i
         { project_id: undefined },
       ])
       const anchor = rows[rows.length - 1]
-      for (const org_role of ['user', 'guest', 'viewer'] as const) {
+      // an organization admin receives what the member's rule gives, as anyone
+      for (const org_role of ['user', 'guest', 'viewer', 'admin'] as const) {
         for (const kind of PROFILE_KINDS) {
           const as_ = `${name}: ${org_role} ${kind}`
           subject = await t.run(async (ctx) => {
@@ -1281,7 +1298,7 @@ describe("a member's history, checked against canAccessProject on each project i
 
   it("reads the same for a member's window page whatever projects its rows do not name", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // 50 rows filed under FW naming PCB or TBED, which the viewer reads
     await plantRows(
@@ -1317,7 +1334,7 @@ describe("a member's history, checked against canAccessProject on each project i
 
   it('checks the projects of the first row a page reads whatever the room, and ends before a project it had no room to ask', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // oldest first: PCB, TBED, FW and FW again, each a related project
     const rows = await plantRows(
@@ -1352,7 +1369,7 @@ describe("a member's history, checked against canAccessProject on each project i
 
   it('refuses a page whose project check a bound stopped, never answering its rows as hidden, and taskWriters names nobody for them', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a member of Hardware, which shares a sub-project of TBED with User
     const member = await plantLogin(
       t,
@@ -1505,7 +1522,7 @@ describe("a member's history, checked against canAccessProject on each project i
 
   it("answers a member's REST page of 500 rows as the oracle where the task's sub-project is shared with 5 teams", async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const member = await plantSeat(t, { org_id: f.org.id, name: 'Mira' })
     const sub = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
     await t.run(async (ctx) => {
@@ -1528,7 +1545,7 @@ describe("a member's history, checked against canAccessProject on each project i
 
   it("answers a member's REST page of 500 rows as the oracle for a member in 5 teams", async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const member = await plantSeat(t, { org_id: f.org.id, name: 'Mira' })
     const sub = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
     await t.run(async (ctx) => {
@@ -1555,7 +1572,7 @@ describe('a review whose subtask went', () => {
     vi.useFakeTimers()
     try {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const id = uuid()
       const user = as(t, f.user)
       const row = () =>

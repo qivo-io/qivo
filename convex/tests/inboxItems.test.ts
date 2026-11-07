@@ -41,7 +41,7 @@ import {
   plantProject,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { at, drift, post } from './inboxItems.setup'
 import { plantNorthstar } from './northstar.setup'
@@ -129,7 +129,7 @@ async function tasks(t: T, f: OrgFixture, n = 2): Promise<Doc<'issues'>[]> {
 describe('the item a message makes', () => {
   it('counts each kind, the unread messages and the newest one, and fails when a row is wrong', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [task] = await tasks(t, f, 1)
     expect(await stateOf(t, f.user.id)).toBeNull()
     await post(t, f, { to: f.user, task, minute: 1, kind: 'mention' })
@@ -167,7 +167,7 @@ describe('the item a message makes', () => {
 
   it('posts nothing to a hidden task and keeps no item for it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const hidden = await plantIssue(t, { org_id: f.org.id, project_id: f.hidden.id })
     expect(await post(t, f, { to: f.guest, task: hidden, minute: 1 })).toBeNull()
     expect(await itemOfPair(t, f.guest.id, hidden.id)).toBeNull()
@@ -181,7 +181,7 @@ describe('every message write keeps the items exact', () => {
 
   it('mark read, mark unread and remove, by the app and by the machine inbox', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a, b] = await tasks(t, f)
     const a1 = (await post(t, f, { to: f.user, task: a, minute: 1 }))!
     const a2 = (await post(t, f, { to: f.user, task: a, minute: 2 }))!
@@ -217,7 +217,7 @@ describe('every message write keeps the items exact', () => {
 
   it('the prune keeps the newest row, and a read newest row gives way to an arrival', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a] = await tasks(t, f, 1)
     const first = (await post(t, f, { to: f.user, task: a, minute: 1 }))!
     await as(t, f.user).mutation(api.messages.markRead, { org_id: f.org.id, ids: [first.id] })
@@ -248,7 +248,7 @@ describe('every message write keeps the items exact', () => {
 
   it('snooze, the scheduled wake, an arrival, the early return and the nightly fallback', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a] = await tasks(t, f, 1)
     const one = (await post(t, f, { to: f.user, task: a, minute: 1 }))!
     await post(t, f, { to: f.user, task: a, minute: 2 })
@@ -299,7 +299,7 @@ describe('every message write keeps the items exact', () => {
 
   it('a wake of an archived task keeps only the newest row, read', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a] = await tasks(t, f, 1)
     const one = (await post(t, f, { to: f.user, task: a, minute: 1 }))!
     await post(t, f, { to: f.user, task: a, minute: 2 })
@@ -316,7 +316,7 @@ describe('every message write keeps the items exact', () => {
 
   it('the item cap trims an arrival inline and in the background step, counting what it dropped', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a, b] = await tasks(t, f)
     for (let i = 0; i < ITEM_UNREAD_CAP + 3; i++)
       await post(t, f, { to: f.user, task: a, minute: i })
@@ -355,7 +355,7 @@ describe('every message write keeps the items exact', () => {
 
   it('mark all read keeps its first cutoff across batches, and remove read deletes read rows in batches', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const all = await tasks(t, f, 6)
     // 300 unread rows, two batches
     expect(INBOX_BATCH < 300 && 300 <= 2 * INBOX_BATCH).toBe(true)
@@ -394,7 +394,7 @@ describe('every message write keeps the items exact', () => {
 
   it('the archive read steps, for a task and for a project, step by step', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a, b] = await tasks(t, f)
     for (const to of [f.user, f.guest])
       for (let i = 0; i < 3; i++) {
@@ -434,7 +434,7 @@ describe('every message write keeps the items exact', () => {
 
   it('an archive read step over 450 active tasks of 450 people stays inside the real limits', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // one unread message each, on a task each: a row, a task and an item, a
     // recipient's state and sweep row for every row the step marks. The walk
     // reads the sub-project's active tasks, so they are its 300 open and 150
@@ -501,7 +501,7 @@ describe('every message write keeps the items exact', () => {
   it('a nightly wake leg over hundreds of people stays inside the real limits', async () => {
     // about 2,100 ranges a leg (jobs.ts SWEEP_LIMITS.wakeItems)
     const t = newT({ transactionLimits: { databaseQueries: 2400 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // one snoozed message each, on a task each, archived since, so each
     // wake also notes the row's sweep: the most ranges a woken item costs
     const until = new Date(Date.now() + 3_600_000).toISOString()
@@ -566,7 +566,7 @@ describe('every message write keeps the items exact', () => {
 
   it('an archive read step over a list of 500 tasks stays inside the real limits', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 170 tasks with nothing to mark come first, so the step visits all of
     // them, then 330 with one unread row each for a person of its own
     const empty: string[] = []
@@ -639,7 +639,7 @@ describe('every message write keeps the items exact', () => {
 
   it('the retention sweep deletes read rows, the newest included, and the items follow', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a, b] = await tasks(t, f)
     const old = (await post(t, f, { to: f.user, task: a, minute: 1 }))!
     const keep = (await post(t, f, { to: f.user, task: b, minute: 2 }))!
@@ -666,7 +666,7 @@ describe('every message write keeps the items exact', () => {
 
   it('a move re-keys the items to the new project, the rest in background steps', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a] = await tasks(t, f, 1)
     for (const to of [f.user, f.guest]) await post(t, f, { to, task: a, minute: 1 })
     // nobody follows the task, so the move's notices refresh no item
@@ -697,8 +697,9 @@ describe('every message write keeps the items exact', () => {
 
   it('a move to another top-level project re-keys its carried subtasks, in steps', async () => {
     const t = newT()
-    const f = await withOrg(t)
-    const ops = await plantProject(t, { org_id: f.org.id, name: 'Operations' })
+    const f = await withReadingAdmin(t)
+    // the admin, who moves the task there, leads Operations
+    const ops = await plantProject(t, { org_id: f.org.id, name: 'Operations', lead_id: f.admin.id })
     const dest = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
@@ -752,7 +753,7 @@ describe('a random sequence of every inbox write', () => {
   for (const seed of [1, 7, 42])
     it(`keeps every item exact after each write, seed ${seed}`, async () => {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const list = await tasks(t, f, 3)
       const people = [f.user, f.guest]
       await t.run((ctx) => ctx.db.patch(f.user._id, { message_retention_days: 1 }))
@@ -854,7 +855,7 @@ describe('a random sequence of every inbox write', () => {
 describe('the teardowns delete the items and the build state with the messages', () => {
   it('a task or profile id used again after a purge or a removal starts with no item', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a] = await tasks(t, f, 1)
     for (let i = 0; i < 3; i++) await post(t, f, { to: f.user, task: a, minute: i })
     await deleteTask(t, f, a.id)
@@ -906,10 +907,16 @@ describe('the teardowns delete the items and the build state with the messages',
     const { _id, _creationTime, ...guest } = f.guest
     void _id
     void _creationTime
-    // an admin, who sees the task without the grants the removal deleted
-    await t.run((ctx) =>
-      ctx.db.insert('profiles', { ...guest, name: 'New admin', org_role: 'admin' }),
-    )
+    // a new person, who sees the task through a grant of their own, not
+    // through the ones the removal deleted
+    await t.run(async (ctx) => {
+      await ctx.db.insert('profiles', { ...guest, name: 'New member', org_role: 'user' })
+      await ctx.db.insert('project_access', {
+        project_id: f.meta.id,
+        profile_id: f.guest.id,
+        level: 'user',
+      })
+    })
     expect(await stateOf(t, f.guest.id)).toBeNull()
     await post(t, f, { to: f.guest, task: b, minute: 40 })
     expect(await itemOfPair(t, f.guest.id, b.id)).toMatchObject({ unread_count: 1 })
@@ -919,7 +926,7 @@ describe('the teardowns delete the items and the build state with the messages',
 
   it('a task or project moved to Deleted items takes its items, and a restore brings none back', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a, b] = await tasks(t, f)
     for (const to of [f.user, f.guest]) {
       await post(t, f, { to, task: a, minute: 1 })
@@ -943,7 +950,7 @@ describe('the teardowns delete the items and the build state with the messages',
 
   it('a removed profile loses its items and its build state', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a] = await tasks(t, f, 1)
     await post(t, f, { to: f.user, task: a, minute: 1 })
     await post(t, f, { to: f.guest, task: a, minute: 1 })
@@ -958,7 +965,7 @@ describe('the teardowns delete the items and the build state with the messages',
 
   it('a deep delete takes them at once, and the work wipe in batches keeps the profiles built', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a, b] = await tasks(t, f)
     for (const to of [f.user, f.guest]) {
       await post(t, f, { to, task: a, minute: 1 })
@@ -983,7 +990,7 @@ describe('the teardowns delete the items and the build state with the messages',
 describe('the build gate', () => {
   it('a recipient with messages from before keeps no items until the backfill builds them', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a] = await tasks(t, f, 1)
     await plantMessage(t, { org_id: f.org.id, recipient_id: f.user.id, issue_id: a.id })
     await post(t, f, { to: f.user, task: a, minute: 1 })
@@ -1004,7 +1011,7 @@ describe('the build gate', () => {
 
   it('writes between build steps keep the built tasks and leave the rest to the later steps', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a, b, c] = await tasks(t, f, 3)
     for (const task of [a, b, c])
       await plantMessage(t, { org_id: f.org.id, recipient_id: f.user.id, issue_id: task.id })
@@ -1044,7 +1051,7 @@ describe('the build gate', () => {
 
   it('a half-built profile whose messages all went is due until a step marks it built', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a, b, c] = await tasks(t, f, 3)
     for (const task of [a, b, c])
       await plantMessage(t, { org_id: f.org.id, recipient_id: f.user.id, issue_id: task.id })
@@ -1072,7 +1079,7 @@ describe('the build gate', () => {
 
   it('a step keeps built_through until the rows no message makes are gone, a few a step', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const list = await tasks(t, f, 6)
     for (const task of [list[3], list[5]])
       await plantMessage(t, { org_id: f.org.id, recipient_id: f.user.id, issue_id: task.id })
@@ -1120,7 +1127,7 @@ describe('the build gate', () => {
 
   it('one ItemEdits shared by many messages reads each item once, in its one flush', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a, b] = await tasks(t, f)
     await post(t, f, { to: f.user, task: a, minute: 0 })
     await post(t, f, { to: f.user, task: b, minute: 0 })
@@ -1175,7 +1182,7 @@ describe('the backfill', () => {
 
   it('reports in a dry run without writing, builds in a run, and builds nothing again', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await legacy(t, f)
     const dry = await backfill(t, { dry_run: true })
     expect(dry).toMatchObject({
@@ -1214,7 +1221,7 @@ describe('the backfill', () => {
 
   it('a dry run, a run and a rebuild resume inside a profile past RUN.ms and each finish', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await legacy(t, f)
     const one = await backfill(t, { dry_run: true })
     Object.assign(RUN, { ms: 0, profiles: 1 })
@@ -1265,7 +1272,7 @@ describe('the backfill', () => {
     // a step reads one whole item at least, so an item larger than the
     // limit makes the second profile's step throw
     const t = newT({ transactionLimits: { documentsRead: 50 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const small = `00000000-0000-4000-8000-${'1'.repeat(12)}`
     const big = `00000000-0000-4000-8000-${'2'.repeat(12)}`
     for (const id of [small, big])
@@ -1300,7 +1307,7 @@ describe('the backfill', () => {
 
   it('finds and deletes the rows of profiles that are gone, inside one in steps', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const list = await tasks(t, f, 3)
     // before every live profile, so the steps meet it first
     const gone = `00000000-0000-4000-8000-${'0'.repeat(11)}1`
@@ -1379,7 +1386,7 @@ describe('the backfill', () => {
 
   it('a dry run finds rows an earlier release left behind its messages, and a rebuild mends them', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a, b] = await tasks(t, f)
     await post(t, f, { to: f.user, task: a, minute: 1 })
     await post(t, f, { to: f.guest, task: a, minute: 1 })
@@ -1404,7 +1411,7 @@ describe('the backfill', () => {
 
   it('stops at RUN.ms on pages of profiles it only skips', async () => {
     const t = newT()
-    await withOrg(t)
+    await withReadingAdmin(t)
     const profiles = (await t.run((ctx) => ctx.db.query('profiles').collect())).length
     Object.assign(RUN, { ms: 0, profiles: 1 })
     for (const dry_run of [false, true]) {
@@ -1418,7 +1425,7 @@ describe('the backfill', () => {
 
   it('goes on inside the profile it stopped in when a profile is created before it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
     const person = (profileId: string) =>
       t.run(async (ctx) => {
@@ -1482,7 +1489,7 @@ describe('the backfill', () => {
 
   it('a check counts every row no message makes, however many there are', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const list = await tasks(t, f, 11)
     await post(t, f, { to: f.user, task: list[5], minute: 1 })
     // ten rows with no message, more than one page reads
@@ -1524,7 +1531,7 @@ describe('the backfill', () => {
 
   it('a rebuild resets no profile that is gone', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.mutation(internal.internal.inboxItemsBackfill.reset, { profile_id: uuid() })
     await t.mutation(internal.internal.inboxItemsBackfill.reset, { profile_id: f.user.id })
     expect(
@@ -1534,7 +1541,7 @@ describe('the backfill', () => {
 
   it('trims an item too large for one step toward the cap first, and lists one it cannot shrink', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a, b] = await tasks(t, f)
     BUILD.pair_rows = ITEM_UNREAD_CAP + 10
     BUILD.trims = 1
@@ -1590,7 +1597,7 @@ describe('the backfill', () => {
 
   it('the check lists rows that differ, are missing or have no messages, page by page', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [a, b, c] = await legacy(t, f)
     await backfill(t, { dry_run: false })
     await t.run(async (ctx) => {

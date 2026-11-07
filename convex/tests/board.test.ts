@@ -172,7 +172,8 @@ describe('access', () => {
       [f.guest, projectScope(f.guest, f.otherProject.id)],
       [f.guest, projectScope(f.guest, archived.id)],
       [f.guest, projectScope(f.guest, f.hidden.id)],
-      // the admin sees every project, and still no Board of one that is not a meta
+      // and the admin, who manages every project, gets no Board of one that
+      // is not a meta
       [f.admin, projectScope(f.admin, notMeta.id)],
       [f.guest, { kind: 'project', org_id: f.otherOrg.id, project_id: f.otherProject.id }],
     ]

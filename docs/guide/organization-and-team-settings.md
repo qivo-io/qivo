@@ -15,8 +15,9 @@ A project has at most one milestone in each week, so Qivo refuses a new
 first day that would put two milestones of one project in the same week. It
 checks every project, archived projects and projects in Deleted items
 included, keeps the old day and lists the projects, dates and weeks under
-the setting. Move or delete one milestone of each pair, then choose the day
-again. The milestones of an archived project show only once you restore the
+the setting. Move or delete one milestone of each pair, or ask the
+project's lead to, then choose the day again. An organization admin moves
+only the milestones of projects they can edit. The milestones of an archived project show only once you restore the
 project. For a project in Deleted items, restore it to change its
 milestones, or delete it for good. In an organization too large to check at
 once, the day cannot be changed here and the setting says so. **Week 1 of the year** only numbers the

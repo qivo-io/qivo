@@ -44,7 +44,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from '../../convex/tests/helpers.setup'
 import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
@@ -788,15 +788,15 @@ const SHAPE_ROWS = (f: OrgFixture): Filters[] => [
 ]
 
 /** One access case: `shape` planted for a fresh seat of `role`, or the
- * fixture's admin without a shape, compared over every selection. */
+ * fixture's admin, who reads by grants, without a shape, compared over every selection. */
 async function compareShape(
   shape: (typeof SHAPES)[number] | null,
   role: 'user' | 'guest' | 'viewer' | 'admin',
 ) {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const subject =
-    role === 'admin'
+    role === 'admin' && shape === null
       ? f.admin
       : await plantSeat(t, { org_id: f.org.id, org_role: role, auth_user_id: `auth_${uuid()}` })
   if (shape !== null) await t.run((ctx) => shape[1](ctx, f, subject))
@@ -814,13 +814,14 @@ async function compareShape(
 }
 
 describe('access shapes', () => {
-  it('answers what the store derives for the admin', async () => {
+  it('answers what the store derives for the fixture’s admin, who reads by grants', async () => {
     const found = await compareShape(null, 'admin')
     expect(found.get('no filter')).toBeGreaterThan(0)
   })
 
-  for (const role of ['user', 'guest', 'viewer'] as const)
-    it(`answers what the store derives for a ${role} in every shape`, async () => {
+  // an admin's seat is judged by its own rows, as any member's
+  for (const role of ['admin', 'user', 'guest', 'viewer'] as const)
+    it(`answers what the store derives for ${role === 'admin' ? 'an' : 'a'} ${role} in every shape`, async () => {
       // the shapes that show the subject any task, so the cases compare rows
       let showing = 0
       for (const shape of SHAPES)
@@ -833,7 +834,7 @@ describe('access shapes', () => {
 describe("delays where tasks compete for their owner's hours", () => {
   it('judges the tasks only the answer brings as the workspace does', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run(async (ctx) => {
       const sub = await ctx.db.get(f.sub._id)
       if (sub) await ctx.db.patch(sub._id, { track_delay: true })
@@ -882,7 +883,7 @@ describe('the Reviewer rule', () => {
    * would hold. */
   async function myView(owner: (task: Doc<'issues'>, isGroup: boolean) => string | undefined) {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const subject = await plantLogin(t, f.guest)
     const { tasks } = await plantCase(t, f, subject)
     const answer = await boardFor(t, subject, { kind: 'mine' }, { mine: true })

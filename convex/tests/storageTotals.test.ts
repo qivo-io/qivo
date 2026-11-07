@@ -58,7 +58,7 @@ import {
   plantProject,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import {
   DEFAULT_BUDGET,
@@ -354,7 +354,7 @@ async function attach(
 
 /* withOrg with the agent holding Edit on TBED (FW, PCB), counted. */
 async function setup(t: T = newT()) {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   await t.run((ctx) =>
     ctx.db.insert('project_access', {
       project_id: f.meta.id,
@@ -492,7 +492,7 @@ describe('attaching', () => {
 
   it('counts nothing for an attach that is refused, on a full task or over the cap', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const full = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     for (let i = 0; i < LIMITS.attachments.max; i++) await plantFile(t, full, 2)
@@ -546,7 +546,7 @@ describe('attaching', () => {
 
   it('leaves an organization that is not counted alone', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const file = await attach(t, f, issue, 40)
     expect(await rowsOf(t, f.org.id)).toEqual({ org: null, projects: [], tasks: [] })
@@ -756,7 +756,13 @@ describe('deleting files', () => {
 describe('moving tasks', () => {
   it("moves a task's bytes to its new project, with the subtasks a move to another top-level project carries", async () => {
     const { t, f } = await setup()
-    const cloud = await plantProject(t, { org_id: f.org.id, key: 'CLD', name: 'Cloud' })
+    // led by the admin, who moves tasks there
+    const cloud = await plantProject(t, {
+      org_id: f.org.id,
+      key: 'CLD',
+      name: 'Cloud',
+      lead_id: f.admin.id,
+    })
     const backend = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
@@ -1297,7 +1303,7 @@ describe('the backfill', () => {
 
   it('counts every file once while files are attached, removed and moved between its steps', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const inFw = { org_id: f.org.id, project_id: f.sub.id }
     const tasks: Doc<'issues'>[] = []
     for (let i = 0; i < 6; i++) tasks.push(await plantIssue(t, inFw))
@@ -1365,7 +1371,7 @@ describe('the backfill', () => {
 
   it('reports in a dry run what it would count, the rows that differ and the files whose task is gone, and writes nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     await plantFile(t, issue, 100)
@@ -1504,8 +1510,14 @@ describe('the backfill', () => {
 
   it('counts exactly while a purge, a reap and a carried subtask land between its steps', async () => {
     const t = newT()
-    const f = await withOrg(t)
-    const cloud = await plantProject(t, { org_id: f.org.id, key: 'CLD', name: 'Cloud' })
+    const f = await withReadingAdmin(t)
+    // led by the admin, who moves tasks there
+    const cloud = await plantProject(t, {
+      org_id: f.org.id,
+      key: 'CLD',
+      name: 'Cloud',
+      lead_id: f.admin.id,
+    })
     const backend = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
@@ -1627,7 +1639,7 @@ describe('the backfill', () => {
 
   it('reads each task once a step, the tasks that share the last number included', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const inFw = { org_id: f.org.id, project_id: f.sub.id }
     const a = await plantIssue(t, inFw)
     const b = await plantIssue(t, inFw)
@@ -1657,7 +1669,7 @@ describe('the backfill', () => {
 
   it('goes on from its cursor one step a call, inside a page of organizations and inside a count', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (let i = 0; i < 3; i++)
       await plantFile(t, await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }), 10 + i)
     for (let i = 0; i < 2; i++)
@@ -1693,7 +1705,7 @@ describe('the backfill', () => {
 
   it('answers an error with what it counted before and the cursor to go on from, and records it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // pages hold one organization each, in id order
     const [first, second] = [f.org, f.otherOrg].sort((x, y) => (x.id < y.id ? -1 : 1))
     const project = (org: Doc<'organizations'>) => (org.id === f.org.id ? f.sub : f.otherProject)
@@ -1730,7 +1742,7 @@ describe('the backfill', () => {
 
   it('reads organizations and totals rows in id order, so each counts once in one call or in a call per step', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantFile(t, await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }), 1)
     await plantFile(
       t,
@@ -1811,7 +1823,7 @@ describe('the backfill', () => {
 
   it('lists in a dry run and deletes in a run the totals of an organization that is gone', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await countStorage(t, f.org.id)
     await countStorage(t, f.otherOrg.id)
     const goneId = uuid()
@@ -1885,7 +1897,7 @@ describe('the backfill', () => {
 
   it('starts over a count another run began when it recounts, and goes on with its own', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const tasks: Doc<'issues'>[] = []
     for (let i = 0; i < 4; i++) {
       tasks.push(await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }))
@@ -1918,7 +1930,7 @@ describe('the backfill', () => {
 
   it('reads in bounded pages, a task with many files and many tasks alike', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const heavy = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     for (let i = 0; i < 30; i++) await plantFile(t, heavy, 1)
     for (let i = 0; i < 12; i++)
@@ -2011,7 +2023,7 @@ describe('what never counts', () => {
 
   it('starts a new organization counted at zero, and reads one that is not counted as unknown', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const orgId = uuid()
     await t.run((ctx) =>
       insertOrgRows(ctx, { id: orgId, name: 'Fresh', slug: 'fresh', ...newOrgDefaults(NOW) }),

@@ -13,19 +13,19 @@ export type Grants = Record<string, GrantLevel>
 /**
  * The grant a new top-level project stores for its creator. `own` is the
  * creator's entry in the request and decides when present: a level, or null
- * for none. Without one, a creator who is not an organization admin and
- * names someone else as lead gets User access, so the project does not drop
- * out of their sight. An admin sees every project and a lead leads it, so
- * neither gets a grant by default.
+ * for none. Without one, a creator who names someone else as lead gets User
+ * access, so the project does not drop out of their sight. That holds for
+ * an organization admin too, since admin status gives no access to a
+ * project's work; the admin keeps managing the project without it. A lead
+ * leads the project, so gets no grant by default.
  */
 export function creatorGrant(a: {
-  admin: boolean
   creator: string
   lead: string
   own: GrantLevel | null | undefined
 }): GrantLevel | null {
   if (a.own !== undefined) return a.own
-  return !a.admin && a.lead !== a.creator ? 'user' : null
+  return a.lead !== a.creator ? 'user' : null
 }
 
 /**

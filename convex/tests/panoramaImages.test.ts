@@ -17,7 +17,7 @@ import {
   reap,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { plantTicket } from './uploadTickets.setup'
 
@@ -139,7 +139,7 @@ describe('every public image-library function requires a current platform operat
   for (const [name, spec] of Object.entries(SURFACE)) {
     it(`${name} refuses anonymous, organization-admin and revoked-operator callers`, async () => {
       const t = testContext()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const op = await operator(t)
       await t.run((ctx) => ctx.db.delete(op.row))
       const ref = (api.panoramaImages as unknown as Record<string, unknown>)[name]
@@ -640,7 +640,7 @@ describe('identifiable audit actors', () => {
 describe('storage ownership', () => {
   it('prevents attachment/avatar adoption of a library image and preserves existing bytes', async () => {
     const t = testContext()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const user = as(t, f.admin)
     const p = await pending(t)
@@ -689,7 +689,7 @@ describe('storage ownership', () => {
 
   it('discard after an ambiguous upload response preserves every referenced file and is safe to repeat', async () => {
     const t = testContext()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const p = await pending(t)
     const attached = await storage(t)

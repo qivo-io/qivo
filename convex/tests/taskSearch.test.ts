@@ -25,7 +25,7 @@ import {
   type T,
   TODAY,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { lowered, mcpPage, restPage, restPages } from './taskPages.setup'
 
@@ -158,7 +158,7 @@ async function oldMatches(ctx: MutationCtx, fx: Fx, c: SearchCase): Promise<Doc<
  * Legacy (stored without an organization), ΟΔΟΣ and R&D*2. */
 async function mixed() {
   const t = newT()
-  const fx: Fx = { t, ...(await withOrg(t)) }
+  const fx: Fx = { t, ...(await withReadingAdmin(t)) }
   const task = (title: string, extra: Partial<Doc<'issues'>> = {}) =>
     plantIssue(t, { org_id: fx.org.id, project_id: fx.sub.id, title, ...extra })
   const bracket = await task('Bracket', { assignee_id: fx.user.id, priority: 'high' })
@@ -193,7 +193,7 @@ afterEach(() => {
  * the labels Zephyr and Wire harness. */
 async function labelPages(): Promise<Fx> {
   const t = newT()
-  const fx: Fx = { t, ...(await withOrg(t)) }
+  const fx: Fx = { t, ...(await withReadingAdmin(t)) }
   const zephyr = await plantLabel(t, fx.org.id, 'Zephyr')
   const wire = await plantLabel(t, fx.org.id, 'Wire harness')
   const kinds: { title: string; description?: string; labels?: string[] }[] = [

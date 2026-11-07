@@ -13,7 +13,14 @@ import { components, internal } from '../_generated/api'
 import type { EventOwner } from '../lib/taskEvents'
 import { sha256hex } from '../machine/auth'
 import { notifyIssueUpdate } from '../model/messages'
-import { flushWebhookEvents, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
+import {
+  flushWebhookEvents,
+  newT,
+  plantIssue,
+  type T,
+  uuid,
+  withReadingAdmin,
+} from './helpers.setup'
 
 const AT = Date.parse('2026-10-04T12:00:00.000Z')
 const DAY = 24 * 60 * 60 * 1000
@@ -69,7 +76,7 @@ const mcp = (t: T, secret: string) =>
  * the task projects so its webhook subscription has events to receive. */
 async function fixture() {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   await t.run(async (ctx) => {
     const planId = uuid()
     await ctx.db.insert('billing_plans', {

@@ -1,32 +1,30 @@
-/* Read-only report of what each organization admin keeps and loses once
- * admin status stops giving access to project work (qivo-internal
- * docs/limits-plan.md, "Admin project management and ordinary task
- * access"). Today lib/access.ts levelUnder and levelsFrom, and the app's
- * levelOnProject (src/store/planner.ts), give an admin `lead` on every
- * project of a meta tree of their organization, and every task read,
- * assignment, notification, webhook and REST or MCP call follows that.
- * After the split an admin still manages every project from Settings, but
- * sees and works on only the projects ordinary access reaches: leadership,
- * individual grants, team shares and a parent's grants and shares. Nothing
- * here writes or changes a permission.
+/* Read-only report of what each organization admin's ordinary access does
+ * not reach (qivo-internal docs/limits-plan.md, "Admin project management
+ * and ordinary task access"). Since the admin access split admin status
+ * gives no access to project work: lib/access.ts levelUnder and levelsFrom,
+ * and the app's levelOnProject (src/store/planner.ts), judge an admin by
+ * their own rows, and every task read, assignment, notification, webhook
+ * and REST or MCP call follows that. An admin still manages every project
+ * from Settings, and sees and works on only the projects ordinary access
+ * reaches: leadership, individual grants, team shares and a parent's
+ * grants and shares. So what this reports is what each admin no longer
+ * reaches in their views. Nothing here writes or changes a permission.
  *
- * An admin's ordinary level is the level rule without its admin branch,
- * the level a standard user with the same rows holds (ordinaryOf). For
- * every active admin it finds:
+ * An admin's ordinary level is the level rule's, the level a standard user
+ * with the same rows holds. For every active admin it finds:
  *   leaves      a live project of a meta tree whose top-level project is
- *               live too, which they would no longer see.
- *   read_only   such a project they would see as a Viewer only. On a
- *               sub-project they can no longer change its tasks. On a
- *               top-level project they can no longer change its
- *               milestones, which model/milestones.ts lets only User and
- *               above write.
+ *               live too, which they do not see.
+ *   read_only   such a project they see as a Viewer only. On a sub-project
+ *               they cannot change its tasks. On a top-level project they
+ *               cannot change its milestones, which model/milestones.ts
+ *               lets only User and above write.
  *   navigation_only
- *               a top-level project they would see only because they reach
- *               one of its sub-projects, by a grant, a team share or as its
+ *               a top-level project they see only because they reach one
+ *               of its sub-projects, by a grant, a team share or as its
  *               lead. It stays in their navigation as a Viewer, so it does
- *               not leave, but they can no longer change its milestones.
- *               Its other sub-projects are reported on their own.
- *   unchecked   a top-level project they would see only through one of
+ *               not leave, but they cannot change its milestones. Its
+ *               other sub-projects are reported on their own.
+ *   unchecked   a top-level project they see only through one of
  *               its sub-projects, if at all, when its sub-projects (SUBS)
  *               or the admin's own grants, team memberships and team
  *               shares (OWN) are more than a page reads to tell, and any
@@ -39,9 +37,9 @@
  *               machine phases once each.
  *   held_task   an open task they are the assignee or reviewer of (not
  *               Done, not archived, in a live project under a live
- *               top-level project), in a project they would no longer see
- *               (`sight: 'none'`) or would see as a Viewer only
- *               (`'viewer'`), where they can no longer change it. A task
+ *               top-level project), in a project they do not see
+ *               (`sight: 'none'`) or see as a Viewer only (`'viewer'`),
+ *               where they cannot change it. A task
  *               that older code stored on a top-level project, rather than
  *               on a sub-project, is judged by the admin's level there,
  *               'viewer' when they see that project for navigation only. A
@@ -53,8 +51,7 @@
  *   follow      a follow of an unarchived task in a live project under a
  *               live top-level project, Done tasks included, as their
  *               followers still get their notifications, in a project they
- *               would no longer see. After the split they stop getting
- *               that task's notifications. `sight` is 'none', or
+ *               do not see, whose notifications they do not get. `sight` is 'none', or
  *               'unchecked' as for held_task. A follow of a task restored
  *               from the archive keeps its archive mark (schema.ts
  *               task_archived) until a background step clears it, so the
@@ -62,12 +59,12 @@
  *   webhook     an unexpired webhook subscription they own, disabled ones
  *               included, as registering one again enables it. Events are
  *               filtered by profileCanSeeProject (webhooks.ts,
- *               model/taskEvents.ts), so after the split it stops
- *               delivering the events of the projects that leave, without
- *               a word. A subscription whose owner can never authorize it
- *               again, as its credential was revoked, expired or replaced
- *               or its login or app is gone (model/webhookOwners.ts
- *               ownerStandings), delivers nothing today and is left out.
+ *               model/taskEvents.ts), so it delivers none of the events
+ *               of the projects that leave, without a word. A subscription
+ *               whose owner can never authorize it again, as its credential
+ *               was revoked, expired or replaced or its login or app is
+ *               gone (model/webhookOwners.ts ownerStandings), delivers
+ *               nothing today and is left out.
  *               `standing` is 'suspended' while Qivo refuses its owner for
  *               now, as for a banned login or a disabled app, and on the
  *               demo, which sends no events, else 'live'. `scope` is 'task'
@@ -82,7 +79,7 @@
  *               telling, as for held_task.
  *   credential  the active personal tokens and approved connected apps of
  *               an admin who has any. They act as the admin over REST and
- *               MCP and lose the same projects.
+ *               MCP and reach the same projects.
  * Projects outside a meta tree carry no access for anyone, admins
  * included, so the report leaves them out. A project an admin keeps is only
  * counted (`kept`). An invitation that has not been accepted yet is an
@@ -98,24 +95,23 @@
  * creation order. The `machine` phase walks each organization's webhook
  * subscriptions, then each admin's personal tokens and connected apps.
  *
- * The report ships in a release before the access split. The owner has
- * approved these releases and has said that no deployment holds real user
- * data. Each run needs the owner's approval. Once the release serves a
- * deployment that holds data (staging, the demo, production), run the
- * report there through the private helpers and give the owner the results;
- * the operator records each run's counts in qivo-internal
- * docs/verification.md. `check` is a query, so it cannot write, and a key
- * that may only run internal queries can run it. It reports one page of one
- * phase. Start with `{"phase": "projects"}`, pass the returned `cursor` back
- * until `done` is true, then do the same for "work" and "machine". `run`
- * walks the pages of every phase from its `cursor` and answers the counts
- * and the first FINDINGS_MOST findings. A call stops after RUN.ms, well
- * inside Convex's action time limit, and then answers a `cursor`; call it
- * again with `"cursor"` set to it until the cursor is null. The counts of a
- * call that goes on from a cursor add to those of the call before it. A
- * page that fails ends the call with its counts so far, `failed` set to the
- * error and the cursor of that page, so a call from it with a smaller
- * `page_size` can go on, or the operator can look into what it names. With
+ * The coordinator runs it read-only once, at the closing review of the
+ * limits plan, under the owner's decision of 7 November 2026: on staging
+ * and production through the private helpers under the standing approval,
+ * and on the demo only with the owner's approval of that one command, and
+ * records each run's counts in qivo-internal docs/verification.md. `check`
+ * is a query, so it cannot write, and a key that may only run internal
+ * queries can run it. It reports one page of one phase. Start with
+ * `{"phase": "projects"}`, pass the returned `cursor` back until `done` is
+ * true, then do the same for "work" and "machine". `run` walks the pages of
+ * every phase from its `cursor` and answers the counts and the first
+ * FINDINGS_MOST findings. A call stops after RUN.ms, well inside Convex's
+ * action time limit, and then answers a `cursor`; call it again with
+ * `"cursor"` set to it until the cursor is null. The counts of a call that
+ * goes on from a cursor add to those of the call before it. A page that
+ * fails ends the call with its counts so far, `failed` set to the error and
+ * the cursor of that page, so a call from it with a smaller `page_size` can
+ * go on, or the operator can look into what it names. With
  * the private helper:
  *   H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
  *   "$H" staging npx convex run internal/adminAccessReport:check '{"phase": "projects"}'
@@ -129,8 +125,7 @@
  * deployment:functions:runInternalActions.
  *
  * Each page reads in its own transaction, so a change between two pages
- * can be missed or seen twice. Run the report again right before the
- * release with the split. A page checks its room before each organization,
+ * can be missed or seen twice. A page checks its room before each organization,
  * part of projects (PART), project, admin, task, follow and row, and its
  * cursor names the creation time and document id of the last row it judged
  * (Position). So it can point into an organization's projects, into one
@@ -149,7 +144,6 @@ import {
   isAccessUnchecked,
   OWN_READS,
   type OwnReads,
-  ordinaryOf,
   projectLevelsOf,
   tokenExpired,
 } from '../lib/access'
@@ -237,9 +231,11 @@ export const SHARES = { most: 250 }
  * them. */
 export const PART = { rows: 1_000, bytes: MIB }
 
-/** The most admins of one organization a page reads, each a profile of at
- * most about 1.5 KiB (a name of at most 80 characters and an email of at
- * most 254), so about 1.5 MiB. A page reads an organization's admins once.
+/** The most admins of one organization a page reads. A profile at the
+ * name caps with every optional field set is 3,659 bytes as
+ * getDocumentSize counts it (tests/adminAccessReport.test.ts measures it),
+ * so 1,000 of them are about 3.7 MB, inside the half of a transaction's
+ * limits a page keeps (ROOM). A page reads an organization's admins once.
  * An organization with more is `unchecked`. Tests lower it. */
 export const ADMINS = { most: 1_000 }
 
@@ -425,11 +421,7 @@ function phaseOf(raw: string): Phase {
   return known
 }
 
-/* An admin as a standard user with the same rows (lib/access.ts), which
- * adminAccessReport.test.ts imports from here. */
-export { ordinaryOf }
-
-/* An admin's ordinary levels (ordinaryOf), with the projects they read. */
+/* An admin's ordinary levels, with the projects they read. */
 type Levels = ReturnType<typeof projectLevelsOf>
 
 /** The bounds of each admin's ordinary levels (lib/access.ts
@@ -560,13 +552,13 @@ function projectOf(page: Page, id: string): Promise<Doc<'projects'> | null> {
   return known
 }
 
-/** The ordinary levels of `admin` (ordinaryOf), kept for the page. The
+/** The ordinary levels of `admin`, kept for the page. The
  * projects phase makes its own for each part of projects it reads
  * (PART). */
 function levelsOf(page: Page, admin: Doc<'profiles'>): Levels {
   let known = page.levels.get(admin.id)
   if (known === undefined) {
-    known = projectLevelsOf(page.ctx, ordinaryOf(admin), [], reportReads())
+    known = projectLevelsOf(page.ctx, admin, [], reportReads())
     page.levels.set(admin.id, known)
   }
   return known
@@ -906,9 +898,7 @@ async function projectsPage(page: Page, at: Cursor): Promise<PageResult> {
       more = part.more
       // each admin's levels read neither these projects nor their parents
       const known = [...part.rows, ...part.parents]
-      const levels = admins.map((admin) =>
-        projectLevelsOf(ctx, ordinaryOf(admin), known, reportReads()),
-      )
+      const levels = admins.map((admin) => projectLevelsOf(ctx, admin, known, reportReads()))
       for (const project of part.rows) {
         if (await full(page)) return answer(page, placed({ phase: 'projects', org }, last))
         const root = await treeOf(levels[0], project, org, true)
@@ -961,8 +951,8 @@ function partsFrom(
 }
 
 /** Reports `task`, which `admin` holds as `role`, when it is open in a live
- * project under a live top-level project that they would no longer see or
- * see as a Viewer only. */
+ * project under a live top-level project that they do not see or see as a
+ * Viewer only. */
 async function judgeTask(
   page: Page,
   admin: Doc<'profiles'>,
@@ -991,7 +981,7 @@ async function judgeTask(
 }
 
 /** Reports `follow` of `admin` when its task is unarchived, in a live
- * project under a live top-level project, which they would no longer see. */
+ * project under a live top-level project, which they do not see. */
 async function judgeFollow(
   page: Page,
   admin: Doc<'profiles'>,

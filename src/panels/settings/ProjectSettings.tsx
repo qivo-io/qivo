@@ -545,10 +545,7 @@ function ProjectSettingsFields({
           ) : (
             <InviteForm answer={answer} blocked={blocked} />
           )}
-          <FieldHint>
-            Organization admins retain access. Assigning a new Lead changes the previous Lead to
-            User.
-          </FieldHint>
+          <FieldHint>Assigning a new Lead changes the previous Lead to User.</FieldHint>
         </div>
       </SettingsSection>
 

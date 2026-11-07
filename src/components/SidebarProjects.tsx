@@ -39,9 +39,10 @@
      as the sidebar always has, and for one the workspace does not hold
      yet says so in a toast and moves nothing.
    - New sub-project… in a row's menu, and Add sub-project at a confirmed
-     empty end of the expanded list, show where the person leads the
-     project in the workspace (P.levelOn), which answers nothing for a
-     project the workspace does not hold, so such a row offers neither.
+     empty end of the expanded list, show where the person manages the
+     project in the workspace (P.canManageOwnProjectAccess, its lead or an
+     organization admin), which answers nothing for a project the workspace
+     does not hold, so such a row offers neither.
    - No list says it is empty or ended before the server said so: not
      ready, the access_unchecked refusal, a stopped batch, a failure and
      the bound each show as themselves, the refusal and a failure with
@@ -383,7 +384,7 @@ export function SidebarProjects({
           >
             {(close) => (
               <>
-                {P.levelOn(row.id) === 'lead' && (
+                {P.canManageOwnProjectAccess(row.id) && (
                   <MenuItem
                     onClick={(e) => {
                       const trigger = menuTrigger(e.currentTarget)
@@ -748,7 +749,7 @@ function SidebarChildren({
   useLayoutEffect(() => onCommit.current())
 
   const tags = navTags(list.rows, () => parent)
-  const lead = P.levelOn(parent.id) === 'lead'
+  const manages = P.canManageOwnProjectAccess(parent.id)
   return (
     <>
       <div data-sidebar-children={parent.id}>
@@ -843,16 +844,17 @@ function SidebarChildren({
           pressedMore.current = true
           more()
         }}
-        onAdd={lead ? () => actions.newProject({ parent: parent.id }) : null}
+        onAdd={manages ? () => actions.newProject({ parent: parent.id }) : null}
       />
     </>
   )
 }
 
 /* The line that ends the expanded list, in the directory's words
-   (projectNavRows.tsx CHILDREN_WORDS). At a confirmed empty end a lead
-   gets Add sub-project, and anyone else the sentence that they can open
-   none; Add sub-project never shows while the list loads, is held, failed
+   (projectNavRows.tsx CHILDREN_WORDS). At a confirmed empty end whoever
+   manages the project gets Add sub-project, and anyone else the sentence
+   that they can open none; Add sub-project never shows while the list
+   loads, is held, failed
    or stopped. */
 function ChildrenEnd({
   list,

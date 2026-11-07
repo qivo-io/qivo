@@ -14,13 +14,19 @@
  * ranges and documents, with and without it. A search page reaches its stop
  * at ARCHIVE_PAGE.tasks under a lowered budget, since seeding past the
  * budget would raise a second figure. Each case prints the figures
- * ARCHIVE_PAGE's docstring quotes. */
+ * ARCHIVE_PAGE's docstring quotes. The app's All projects page
+ * (issues.archivedPage) for an organization admin who reads 200 live
+ * sub-projects through grants on them merges them side by side into one
+ * page, and so it does through grants or team shares on their top-level
+ * projects, for an admin and a member alike, each too wide with
+ * ARCHIVED_SCOPE.subProjects lowered below them. */
 /// <reference types="vite/client" />
 
 import { afterEach, describe, expect, it } from 'vitest'
+import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { ARCHIVE_PAGE } from '../lib/archivedTasks'
-import { uuid } from './helpers.setup'
+import { ARCHIVE_PAGE, ARCHIVED_PAGE_ROWS, ARCHIVED_SCOPE } from '../lib/archivedTasks'
+import { as, readableLiveSubProjects, uuid } from './helpers.setup'
 import {
   type PageOrg,
   type PageOrgSizes,
@@ -32,6 +38,13 @@ import {
   TEXT,
   TITLES,
 } from './pageOrg.setup'
+import { withReach } from './projectReach.setup'
+
+/* Archive cursors are sealed with a key derived from BETTER_AUTH_SECRET
+ * (lib/archiveCursorSeal.ts), so the app's page with a next cursor needs
+ * one. */
+const g = globalThis as unknown as { process: { env: Record<string, string | undefined> } }
+g.process.env.BETTER_AUTH_SECRET ??= 'archived-scale-test-secret-not-a-deployment-key'
 
 /* The catalogue of activeTaskPagesScale.test.ts at its design size, 200 and
  * 500 live, 300 and 1,000 archived, with withOrg's four, and a member who
@@ -110,8 +123,9 @@ type Lister = { who: string; caller: Doc<'profiles'>; project: string }
 
 /* An organization of `sizes`, the catalogue by default, with archived tasks
  * in the two families the pages list: the three sub-projects of the first
- * top-level project, which the member and the admin list, and FW and PCB
- * under TBED, which the guest reads alone. */
+ * top-level project, which the member and the admin list, the admin through
+ * a User grant on it, as admin status gives no access to project work, and
+ * FW and PCB under TBED, which the guest reads alone. */
 async function archivedOrg(
   sizes: PageOrgSizes = CATALOGUE,
 ): Promise<{ e: PageOrg; listers: Lister[] }> {
@@ -122,6 +136,13 @@ async function archivedOrg(
   expect(e.readable).toEqual(expect.arrayContaining(family))
   await plantArchive(e, family)
   await plantArchive(e, [e.sub, e.sub2])
+  await e.t.run((ctx) =>
+    ctx.db.insert('project_access', {
+      project_id: first.id,
+      profile_id: e.admin.id,
+      level: 'user',
+    }),
+  )
   const listers = [
     { who: 'a member', caller: e.member, project: first.id },
     { who: 'a guest', caller: e.guest, project: e.meta.id },
@@ -181,8 +202,10 @@ const shape = (page: Read) => ({
 
 describe('archived pages at the design size', () => {
   const page = { ...ARCHIVE_PAGE }
+  const scope = { ...ARCHIVED_SCOPE }
   afterEach(() => {
     Object.assign(ARCHIVE_PAGE, page)
+    Object.assign(ARCHIVED_SCOPE, scope)
   })
 
   it('pages a member, a guest and an admin 200 rows on REST and MCP, alike with a description on every project', async () => {
@@ -276,5 +299,90 @@ describe('archived pages at the design size', () => {
       expect(page.figures.rows).toBe(200)
       expect(page.figures.next).toBe(true)
     }
+  })
+
+  it('gives an admin who reads 200 live sub-projects through grants one All projects page in the app, too wide below that bound', async () => {
+    // 200 live sub-projects one person can read, the one raised figure, here
+    // the admin's through User grants of their own, with the archived tasks
+    // in the first family alone
+    const e = await pageOrg({ tops: 70, subs: 206, memberSubs: 200, tasks: 1000, archived: 0 })
+    expect(e.readable).toHaveLength(200)
+    const first = e.tops[0] as Doc<'projects'>
+    const family = e.subs.filter((sub) => sub.parent_id === first.id)
+    expect(e.readable).toEqual(expect.arrayContaining(family))
+    await plantArchive(e, family)
+    await e.t.run(async (ctx) => {
+      for (const sub of e.readable)
+        await ctx.db.insert('project_access', {
+          project_id: sub.id,
+          profile_id: e.admin.id,
+          level: 'user',
+        })
+    })
+    await withReach(e.t)
+    expect(await readableLiveSubProjects(e.t, e.admin)).toBe(200)
+    const all = () =>
+      as(e.t, e.admin).query(api.issues.archivedPage, {
+        scope: { org_id: e.org.id, all: true },
+      })
+    // the 200 projects merge side by side into one page of the family's
+    // tasks
+    const got = await all()
+    expect(got.too_wide).toBeUndefined()
+    expect(got.rows).toHaveLength(ARCHIVED_PAGE_ROWS)
+    expect(new Set(got.rows.map((row) => row.project_id))).toEqual(
+      new Set(family.map((sub) => sub.id)),
+    )
+    expect(got.next_cursor).not.toBeNull()
+    // one project fewer than the admin reads makes it too wide, a partial
+    // page never
+    ARCHIVED_SCOPE.subProjects = 199
+    expect(await all()).toEqual({ rows: [], next_cursor: null, scanned: 0, too_wide: true })
+  })
+
+  it('gives an admin with grants and a member with team shares on the top-level projects of 200 live sub-projects the same All projects page, too wide below that bound', async () => {
+    // 200 live sub-projects one person can read, the one raised figure,
+    // here through 67 top-level projects of 3 sub-projects but one of 2:
+    // the member's 3 teams share them in turn and the admin holds a User
+    // grant on each, so the 67 are found beside the 200
+    const e = await pageOrg({ tops: 70, subs: 206, memberSubs: 200, tasks: 1000, archived: 0 })
+    expect(e.readable).toHaveLength(200)
+    const tops = e.tops.filter((top) => e.readable.some((sub) => sub.parent_id === top.id))
+    expect(tops).toHaveLength(67)
+    const first = e.tops[0] as Doc<'projects'>
+    const family = e.subs.filter((sub) => sub.parent_id === first.id)
+    await plantArchive(e, family)
+    await e.t.run(async (ctx) => {
+      for (const top of tops)
+        await ctx.db.insert('project_access', {
+          project_id: top.id,
+          profile_id: e.admin.id,
+          level: 'user',
+        })
+    })
+    await withReach(e.t)
+    const all = (me: Doc<'profiles'>) =>
+      as(e.t, me).query(api.issues.archivedPage, { scope: { org_id: e.org.id, all: true } })
+    const pages: Awaited<ReturnType<typeof all>>[] = []
+    for (const [who, me] of [
+      ['the admin', e.admin],
+      ['the member', e.member],
+    ] as const) {
+      expect(await readableLiveSubProjects(e.t, me), who).toBe(200)
+      const got = await all(me)
+      expect(got.too_wide, who).toBeUndefined()
+      expect(got.rows, who).toHaveLength(ARCHIVED_PAGE_ROWS)
+      expect(new Set(got.rows.map((row) => row.project_id)), who).toEqual(
+        new Set(family.map((sub) => sub.id)),
+      )
+      expect(got.next_cursor, who).not.toBeNull()
+      pages.push(got)
+    }
+    expect(pages[0]).toEqual(pages[1])
+    // one sub-project fewer than each reads makes it too wide, a partial
+    // page never
+    ARCHIVED_SCOPE.subProjects = 199
+    for (const me of [e.admin, e.member])
+      expect(await all(me)).toEqual({ rows: [], next_cursor: null, scanned: 0, too_wide: true })
   })
 })

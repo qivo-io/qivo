@@ -4,7 +4,16 @@ import type { Id } from '../_generated/dataModel'
 import type { ActionCtx } from '../_generated/server'
 import http from '../http'
 import { DEMO_STORAGE_BYTES, drainDemoUploads } from '../model/demoUploads'
-import { as, expectRefusal, NOW, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
+import {
+  as,
+  expectRefusal,
+  NOW,
+  newT,
+  plantIssue,
+  type T,
+  uuid,
+  withReadingAdmin,
+} from './helpers.setup'
 
 declare class Request {
   constructor(
@@ -35,7 +44,7 @@ afterEach(() => {
 
 async function setup() {
   const t = newT(),
-    fx = await withOrg(t)
+    fx = await withReadingAdmin(t)
   const issue = await plantIssue(t, { org_id: fx.org.id, project_id: fx.sub.id })
   const receipt = await t.run(async (ctx) => {
     const id = uuid()

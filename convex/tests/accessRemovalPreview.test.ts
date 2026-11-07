@@ -12,10 +12,9 @@
 /// <reference types="vite/client" />
 
 import { ConvexError, getConvexSize } from 'convex/values'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import * as access from '../lib/access'
 import { ACCESS_NEEDS_A_PERSON, NO_USER_MANAGEMENT } from '../lib/access'
 import { byId } from '../lib/db'
 import type { GrantLevel } from '../lib/enums'
@@ -53,7 +52,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { manyHolders } from './holders.setup'
 import { northstarId, plantNorthstar } from './northstar.setup'
@@ -150,7 +149,8 @@ const viewerGrants = (t: T) =>
   )
 
 /* A scenario: who previews and then writes which change, and an
- * organization admin who can take over any task. `gone` is what the
+ * organization admin with User on both top-level projects, who can take
+ * over any task. `gone` is what the
  * preview answers once the write went through, when that is not the usual
  * (afterWrite). */
 type Scenario = {
@@ -237,11 +237,21 @@ async function expectParity<S extends Scenario>(build: () => Promise<S>): Promis
   return { s, p }
 }
 
-/* withOrg with Taker, an organization admin who can take over any task, and
- * helpers that plant people, grants, team shares, memberships and tasks. */
+/* withReadingAdmin with Taker, an organization admin with User grants on
+ * TBED and Skunkworks, who can take over any task, as admin status alone
+ * gives no access to project work, and helpers that plant people, grants,
+ * team shares, memberships and tasks. */
 async function base(t: T = newT()) {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const taker = await plantSeat(t, { org_id: f.org.id, name: 'Taker', org_role: 'admin' })
+  await t.run(async (ctx) => {
+    for (const project of [f.meta, f.hidden])
+      await ctx.db.insert('project_access', {
+        project_id: project.id,
+        profile_id: taker.id,
+        level: 'user',
+      })
+  })
   const person = (name: string, extra: Partial<Doc<'profiles'>> = {}) =>
     plantSeat(t, { org_id: f.org.id, name, accepted_at: NOW, auth_user_id: uuid(), ...extra })
   const grant = (project: Doc<'projects'>, who: Doc<'profiles'>, level: GrantLevel = 'user') =>
@@ -272,7 +282,7 @@ async function base(t: T = newT()) {
     return id
   }
   /* A new top-level project led by the organization admin, with one
-   * sub-project. */
+   * sub-project, where Taker holds User as on the fixture's projects. */
   const elsewhere = async () => {
     const meta = await plantProject(t, { org_id: f.org.id, name: 'Elsewhere', lead_id: f.admin.id })
     const sub = await plantProject(t, {
@@ -281,6 +291,7 @@ async function base(t: T = newT()) {
       parent_id: meta.id,
       name: 'Elsewhere sub',
     })
+    await grant(meta, taker)
     return { meta, sub }
   }
   return { t, f, orgId: f.org.id, taker, person, grant, share, join, task, team, elsewhere }
@@ -463,11 +474,9 @@ describe('the removal preview and the write it previews', () => {
     expect(p.reassign.allowed).toBe(true)
   })
 
-  it('shows an organization admin every title, as every admin sees every project today', async () => {
+  it('shows an organization admin the titles their own grants reach, as anyone', async () => {
     const { p } = await expectParity(() => memberScenario((f) => f.admin))
     expect(titles(p)).toEqual(['Firmware work', 'Board review'])
-    // the admin access split leaves an admin without ordinary access to
-    // TBED only the count: hidden 2 and no items
     expect(p.hidden).toBe(0)
   })
 
@@ -695,7 +704,8 @@ describe('the removal preview on Northstar', () => {
     PREVIEW.items = ITEMS
   })
 
-  /* Northstar with an admin who can take over any task, previewed by Nora. */
+  /* Northstar with an admin who can take over any task, by a User grant on
+   * every top-level project, previewed by Nora. */
   const northstar =
     (change: (id: (key: string) => Promise<string>) => Promise<RemovalChange>) => async () => {
       const t = newT()
@@ -703,6 +713,17 @@ describe('the removal preview on Northstar', () => {
       const nora = profiles.find((p) => p.name === 'Nora Berg')
       if (nora === undefined) throw new Error('Northstar has no Nora')
       const taker = await plantSeat(t, { org_id: org.id, name: 'Taker', org_role: 'admin' })
+      await t.run(async (ctx) => {
+        const tops = ctx.db
+          .query('projects')
+          .withIndex('by_org_parent', (q) => q.eq('org_id', org.id).eq('parent_id', undefined))
+        for await (const top of tops)
+          await ctx.db.insert('project_access', {
+            project_id: top.id,
+            profile_id: taker.id,
+            level: 'user',
+          })
+      })
       return { t, orgId: org.id, caller: nora, taker, change: await change(northstarId) }
     }
 
@@ -714,8 +735,8 @@ describe('the removal preview on Northstar', () => {
         team_id: await id('team:northstar'),
       })),
     )
-    // Leo leads Luma Sensor, Nora is an admin, and Sofia and Atlas keep it
-    // through Cloud & Launch's Viewer share; Aisha and Emil keep only the
+    // Leo leads Luma Sensor, and Nora, Sofia and Atlas keep it through
+    // Cloud & Launch's Viewer share; Aisha and Emil keep only the
     // sub-projects they lead
     expect(names(p)).toEqual(['Aisha Rahman', 'Emil Strand'])
     expect(p.tasks).toBe(5)
@@ -802,10 +823,16 @@ describe('what the removal preview lists', () => {
   })
 
   it('counts the tasks in projects the caller cannot see, without naming them', async () => {
-    // Until the admin access split every caller the writes accept sees
-    // every project the change reaches. This stands in for the split: the
-    // preview reads the admin's own sight as a user's.
+    // an organization admin without a grant of their own manages TBED and
+    // reads none of its tasks
     const b = await base()
+    const ada = await plantSeat(b.t, {
+      org_id: b.f.org.id,
+      name: 'Ada',
+      org_role: 'admin',
+      accepted_at: NOW,
+      auth_user_id: uuid(),
+    })
     // a team the admin is not in
     const second = await b.team('Second')
     await b.share(b.f.meta, second)
@@ -814,27 +841,15 @@ describe('what the removal preview lists', () => {
     await b.task(b.f.sub, { title: 'Firmware work', assignee_id: mia.id })
     await b.task(b.f.sub2, { title: 'Board work', assignee_id: mia.id })
     const change = { kind: 'team_member', team_id: second, user_id: mia.id } as const
-    const real = access.projectLevelsForPeople
-    const spy = vi
-      .spyOn(access, 'projectLevelsForPeople')
-      .mockImplementation((ctx, people, ...rest) =>
-        real(
-          ctx,
-          people.map((p) => (p.id === b.f.admin.id ? { ...p, org_role: 'user' as const } : p)),
-          ...rest,
-        ),
-      )
-    try {
-      const p = await previewOk(b.t, b.f.admin, change)
-      expect(p).toMatchObject({ people: [{ name: 'Mia' }], tasks: 2, items: [], items_total: 0 })
-      expect(p.hidden).toBe(2)
-      // the admin still manages TBED, so may know its name and keep Mia
-      expect(p.keep).toMatchObject({ targets: [b.f.meta.id], allowed: true })
-      expect(p.reassign).toEqual({ allowed: false, refusal: NO_WRITE_ACCESS, permitted: false })
-    } finally {
-      spy.mockRestore()
-    }
-    const left = await write(b.t, b.f.admin, change, 'leave')
+    const p = await previewOk(b.t, ada, change)
+    expect(p).toMatchObject({ people: [{ name: 'Mia' }], tasks: 2, items: [], items_total: 0 })
+    expect(p.hidden).toBe(2)
+    // the admin still manages TBED, so may know its name and keep Mia
+    expect(p.keep).toMatchObject({ targets: [b.f.meta.id], allowed: true })
+    expect(p.reassign).toEqual({ allowed: false, refusal: NO_WRITE_ACCESS, permitted: false })
+    // the fixture's admin, who reads TBED by a grant, sees both titles
+    expect((await previewOk(b.t, b.f.admin, change)).hidden).toBe(0)
+    const left = await write(b.t, ada, change, 'leave')
     if (!('ok' in left) || left.ok === null) throw new Error('the removal did not go through')
     expect(new Set(left.ok.stranded.map((h) => h.task.id)).size).toBe(2)
   })
@@ -1075,7 +1090,7 @@ describe("the removal preview inside Convex's limits", () => {
    * first member. */
   async function crowd(members: number, each: number, holders = members) {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const ids: string[] = []
     for (let from = 0; from < members; from += 100) {
       await t.run(async (ctx) => {
@@ -1230,7 +1245,7 @@ describe("the removal preview inside Convex's limits", () => {
     // own and holds a task in the other. Without a bound, the answer named
     // 31 projects for each of them, 6,200 project rows.
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const wide = uuid()
     const metas = [uuid(), uuid()]
     const firstSubs: string[] = []
@@ -1343,7 +1358,7 @@ describe("the removal preview inside Convex's limits", () => {
   const ROOM_BYTES = 144 * 1024
   async function pastTheRoom() {
     const t = newT({ transactionLimits: { bytesRead: ROOM_BYTES } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const mia = await plantSeat(t, { org_id: f.org.id, name: 'Mia', accepted_at: NOW })
     await t.run(async (ctx) => {
       await ctx.db.insert('teams', {

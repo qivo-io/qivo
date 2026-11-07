@@ -54,7 +54,7 @@ import {
   type T,
   taskWithText,
   uuid,
-  withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
 import { liveAttachmentUsage } from './liveAttachments.setup'
@@ -199,7 +199,7 @@ const commentStored = async (t: T, id: string) =>
 describe('moving a task to Deleted items', () => {
   it('stores the task with every row that travels with it and deletes its messages', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const task = await plantIssue(t, { org_id, project_id: f.sub.id, title: 'Battery level' })
     const to = await plantIssue(t, { org_id, project_id: f.sub2.id })
@@ -275,7 +275,7 @@ describe('moving a task to Deleted items', () => {
 
   it('keeps a chosen subtask under its parent and detaches the children left behind', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     const a = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
@@ -316,7 +316,7 @@ describe('moving a task to Deleted items', () => {
 
   it('refuses a trimmed reason over 500 characters, an emoji counting two, and stores a blank one as none', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     for (const reason of ['é'.repeat(501), `${'😀'.repeat(250)}a`, ` ${'a'.repeat(501)} `]) {
       const e = await expectRefusal(deleteTask(t, f, task.id, { reason }), 'rule')
@@ -333,7 +333,7 @@ describe('moving a task to Deleted items', () => {
   it('deletes a row too large to store instead, and counts it', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const task = await plantIssue(t, { org_id, project_id: f.sub.id })
     // the wrapped comment adds a few hundred bytes to its body
@@ -391,7 +391,7 @@ describe('moving a task to Deleted items', () => {
     // may delete, as a thread past 4,096 is on a backend.
     const t = newT({ transactionLimits: { documentsWritten: 400 } })
     TRASH_BUDGET.rows = 100
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const huge = await plantIssue(t, {
       org_id,
@@ -442,7 +442,7 @@ describe('moving a task to Deleted items', () => {
     // its delete reads it again
     const t = newT({ transactionLimits: { bytesRead: 700 * 1024 } })
     TRASH_BUDGET.bytes = 300 * 1024
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // 100 subtasks of about 2 KB pass the bytes the delete's own call reads
     const description = 'Spec line. '.repeat(180)
@@ -471,7 +471,7 @@ describe('moving a task to Deleted items', () => {
 
   it('deletes the history a job of the release before still names in purge_history', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // a task that release deleted for good, whose history its job kept
     const gone = await plantIssue(t, { org_id, project_id: f.sub.id })
@@ -500,7 +500,7 @@ describe('moving a task to Deleted items', () => {
   it('stores a task too large to store cut to the caps when its project is deleted', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const huge = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub2.id,
@@ -517,7 +517,7 @@ describe('moving a task to Deleted items', () => {
   it('counts and lists a subtask too large to store, which goes in cut to the caps', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     const huge = await plantIssue(t, {
@@ -542,7 +542,7 @@ describe('moving a task to Deleted items', () => {
   it("checks a task item's stored tasks before it is ready within the step budget", async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT({ transactionLimits: { databaseQueries: 400 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     const subtasks: string[] = []
@@ -570,7 +570,7 @@ describe('moving a task to Deleted items', () => {
 describe("the Deleted items page's fields on each stored task", () => {
   it("stores each task's search text and assignee with its item's fields, for every task of a task item", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // under another top-level project, for a subtask from before the
     // subtask rule (model/issues.ts sameTopLevel)
@@ -627,7 +627,7 @@ describe("the Deleted items page's fields on each stored task", () => {
 
   it("stores a project item's tasks, moved in steps, with their text from the description rows", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     for (let i = 0; i < 4; i++)
       await plantIssue(t, {
@@ -663,7 +663,7 @@ describe("the Deleted items page's fields on each stored task", () => {
   it('keeps the search text of a task cut to the caps within them', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const huge = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -794,7 +794,7 @@ describe('a task delete at the caps', () => {
 
   it('deletes a parent at LIMITS.subtasks.max with every follower holding a full item, in the app', async () => {
     const t = newT({ transactionLimits: TX_LIMITS })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { root, kids } = await plantFamily(t, f, await plantPeople(t, f, 2))
     const doomed = [root, ...kids].map((task) => task.id)
     expect(await messagesAbout(t, doomed)).toBe(101 * 2 * (ITEM_UNREAD_CAP + 1))
@@ -819,7 +819,7 @@ describe('a task delete at the caps', () => {
     'deletes a parent at LIMITS.subtasks.max alone over %s, and the detached subtasks tell their followers from steps',
     async (surface) => {
       const t = newT({ transactionLimits: TX_LIMITS })
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       // the guest alone follows each task, because this case reads only the
       // guest's rows, and a second follower's full items made it slow
       const { root, kids } = await plantFamily(t, f, await plantPeople(t, f, 1))
@@ -856,7 +856,7 @@ describe('a task delete at the caps', () => {
 
   it('deletes a single task whose LIMITS.followers.max followers each hold a full item, in steps', async () => {
     const t = newT({ transactionLimits: TX_LIMITS })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await plantInbox(t, f, [task], await plantPeople(t, f, LIMITS.followers.max))
     expect(await messagesAbout(t, [task.id])).toBe(LIMITS.followers.max * (ITEM_UNREAD_CAP + 1))
@@ -872,7 +872,7 @@ describe('a task delete at the caps', () => {
   it("goes back to the drain when the finish check finds a task item's message left", async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     const subtasks: string[] = []
@@ -936,7 +936,7 @@ describe('webhook events', () => {
 
   it('sends task.deleted for the tasks of a task item and none for those of a project item', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     await subscribe(t, f)
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
@@ -962,7 +962,7 @@ describe('webhook events', () => {
 describe('moving a project to Deleted items', () => {
   it('holds the reason to the cap a task delete has', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const e = await expectRefusal(
       deleteProject(t, f, f.sub2.id, { reason: `${'😀'.repeat(250)}a` }),
       'rule',
@@ -976,7 +976,7 @@ describe('moving a project to Deleted items', () => {
   it('hides the projects at once, moves the tasks people see first, and finishes in bounded steps', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT({ transactionLimits: { databaseQueries: 150 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const hiddenSub = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
     await t.run(async (ctx) => {
@@ -1094,7 +1094,11 @@ describe('moving a project to Deleted items', () => {
     expect(await stillLive(all)).toBe(0)
     await t.run(async (ctx) => {
       expect(await ctx.db.query('milestones').collect()).toEqual([])
-      expect(await ctx.db.query('project_access').collect()).toEqual([])
+      // the admin's grant on Skunkworks, outside the item, stays
+      const tree = new Set([f.meta.id, f.sub.id, f.sub2.id])
+      expect(
+        (await ctx.db.query('project_access').collect()).filter((g) => tree.has(g.project_id)),
+      ).toEqual([])
     })
     // the hierarchy inside is kept, and so is a parent outside
     expect((await storedIssue(t, member.id))?.parent_id).toBe(group.id)
@@ -1115,7 +1119,7 @@ describe('moving a project to Deleted items', () => {
   it('stops a step on its range budget, which every read it makes spends', async () => {
     // each bare task costs one row but about eight index ranges to move
     const t = newT({ transactionLimits: { databaseQueries: 150 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (let i = 0; i < 40; i++) await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     Object.assign(TRASH_BUDGET, { rows: 300, tasks: 100, ranges: 60 })
     await deleteProject(t, f, f.sub2.id)
@@ -1139,7 +1143,7 @@ describe('moving a project to Deleted items', () => {
     // none of these tasks has a parent or a child outside, so the first phase
     // reads each of them and moves none
     const t = newT({ transactionLimits: { bytesRead: 600_000 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const description = 'Spec line. '.repeat(1_500) // about 16 KB
     for (let i = 0; i < 60; i++)
       await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, description })
@@ -1163,7 +1167,7 @@ describe('moving a project to Deleted items', () => {
     // move finds that child without reading the children inside.
     const t = newT({ transactionLimits: true })
     chargeFilteredReads()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
     const description = 'Check the sensor reading against the bench value and note any drift.'
@@ -1187,7 +1191,7 @@ describe('moving a project to Deleted items', () => {
     // transaction may read, before it found the one outside
     const t = newT({ transactionLimits: { bytesRead: 600_000 } })
     chargeFilteredReads()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
     await plantChildren(t, parent, f.sub2.id, 60, 'Spec line. '.repeat(1_500))
@@ -1218,7 +1222,7 @@ describe('moving a project to Deleted items', () => {
 
   it('refuses a move, archive or restore that would change a task it still holds until it is done, for an admin too', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // PCB holds subtasks of a Firmware task, and the archived parent of another
     const parent = await plantIssue(t, { org_id, project_id: f.sub.id })
@@ -1272,7 +1276,7 @@ describe('moving a project to Deleted items', () => {
 
   it('detaches without an actor once the deleter is gone', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     for (let i = 0; i < 3; i++) await plantIssue(t, { org_id, project_id: f.sub2.id })
     const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
@@ -1303,7 +1307,7 @@ describe('moving a project to Deleted items', () => {
 describe('reservations while items are in Deleted items', () => {
   it('keeps the uuids of stored rows taken, with the sentences of a live duplicate', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     const caller = as(t, f.user)
     await caller.mutation(api.issues.create, {
@@ -1352,7 +1356,7 @@ describe('reservations while items are in Deleted items', () => {
 
   it('keeps a deleted project key and uuid reserved until the project is purged', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await deleteProject(t, f, f.sub2.id)
     const create = (key: string, id = uuid()) =>
       as(t, f.admin).mutation(api.projects.create, {
@@ -1401,7 +1405,7 @@ describe('reservations while items are in Deleted items', () => {
 
   it('never hands out the numbers of trashed work again', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // one task, numbered by the fixture's counters
     const first = await plantIssue(t, { org_id, project_id: f.sub.id, num: 1 })
@@ -1445,7 +1449,7 @@ describe('reservations while items are in Deleted items', () => {
 describe('bytes in Deleted items', () => {
   it('fences trashed bytes from the orphan sweep and keeps live attachment rows only in live projects', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const live = await plantIssue(t, { org_id, project_id: f.sub.id })
     await attach(t, live, 5)
@@ -1485,7 +1489,7 @@ describe('bytes in Deleted items', () => {
 describe('purging', () => {
   it('deletes every stored row with its bytes and the history in bounded steps, then the item', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const task = await plantIssue(t, { org_id, project_id: f.sub.id })
     const to = await plantIssue(t, { org_id, project_id: f.sub2.id })
@@ -1529,7 +1533,7 @@ describe('purging', () => {
 
   it("keeps a purged task's uuid taken until its history is gone", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await plantHistory(t, task, { listed: 2, unlisted: 1 })
     await deleteTask(t, f, task.id)
@@ -1573,7 +1577,7 @@ describe('purging', () => {
 
   it('purges a project item with the items that need it to come back, and clears its activity', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const early = await plantIssue(t, { org_id, project_id: f.sub.id })
     await deleteTask(t, f, early.id)
@@ -1632,7 +1636,7 @@ describe('purging', () => {
 
   it('clears the project from every row filed under it, past 500, over several steps', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // three tasks with 400 rows each stored without a list, filed under
     // Firmware, that moved to Skunkworks since
@@ -1679,7 +1683,7 @@ describe('purging', () => {
     // 32,000
     const t = newT({ transactionLimits: { documentsRead: 800 } })
     chargeFilteredReads()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const early = await plantIssue(t, { org_id, project_id: f.sub.id })
     await deleteTask(t, f, early.id)
@@ -1713,7 +1717,7 @@ describe('purging', () => {
 
   it('expires ready items after 30 days in bounded batches that chain', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const old = [
       await plantIssue(t, { org_id, project_id: f.sub.id }),
@@ -1747,7 +1751,7 @@ describe('purging', () => {
 
   it('purges a stuck project item with the tasks it left in the live tables', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const stranded = await plantIssue(t, { org_id, project_id: f.sub2.id })
     const strandedFile = await attach(t, stranded)
@@ -1796,7 +1800,7 @@ describe('purging', () => {
 
   it('purges a stuck task item with the messages its move left', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     for (let i = 0; i < 5; i++)
       await plantMessage(t, { org_id: f.org.id, recipient_id: f.guest.id, issue_id: task.id })
@@ -1824,7 +1828,7 @@ describe('purging', () => {
 
   it('drains the history of a purge that the release before left at purge_rows', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const task = await plantIssue(t, { org_id, project_id: f.sub.id })
     await plantHistory(t, task, { listed: 3, unlisted: 2 })
@@ -1853,7 +1857,7 @@ describe('purging', () => {
 
   it("keeps a new task's history when the release before already freed its id", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const task = await plantIssue(t, { org_id, project_id: f.sub.id })
     await plantHistory(t, task, { listed: 2 })
@@ -1897,7 +1901,7 @@ describe('purging', () => {
 
   it('keeps the history of a new task with a freed id that sits in Deleted items itself', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const task = await plantIssue(t, { org_id, project_id: f.sub.id })
     await plantHistory(t, task, { listed: 2 })
@@ -1942,7 +1946,7 @@ describe('recovery', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (let i = 0; i < 3; i++) await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
     await deleteProject(t, f, f.sub2.id)
@@ -1987,7 +1991,7 @@ describe('recovery', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const t = newT({ transactionLimits: { documentsWritten: 80 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const tasks: Doc<'issues'>[] = []
     for (let i = 0; i < 40; i++)
       tasks.push(await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id }))
@@ -2017,7 +2021,7 @@ describe('recovery', () => {
 
   it('does nothing for an item that is gone, and leaves a deleting demo organization alone', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (let i = 0; i < 3; i++) await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
     await deleteProject(t, f, f.sub2.id)
@@ -2071,7 +2075,7 @@ describe('references and liveness', () => {
 
   it('tells live, trashed and gone tasks apart', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const live = await plantIssue(t, { org_id, project_id: f.sub.id })
     const deleted = await plantIssue(t, { org_id, project_id: f.sub.id })
@@ -2165,7 +2169,7 @@ const trashOf = (t: T, orgId: string) =>
 describe('organization teardown', () => {
   it('deleteOrgDeep deletes every item, stored row, leftover live row and byte of the organization', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { files, elsewhere } = await trashInFlight(t, f)
 
     await t.run(async (ctx) => deleteOrgDeep(ctx, (await ctx.db.get(f.org._id))!))
@@ -2188,7 +2192,7 @@ describe('organization teardown', () => {
     vi.stubEnv('QIVO_ENVIRONMENT', 'staging')
     vi.stubEnv('SITE_URL', 'https://preview.qivo.io')
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { files, elsewhere } = await trashInFlight(t, f)
     const live = await t.run((ctx) =>
       ctx.db
@@ -2246,7 +2250,7 @@ describe('organization teardown', () => {
     const t = newT({ transactionLimits: { bytesRead: 256 * 1024 } })
     Object.assign(PURGE_ORG, { bytes: 64 * 1024 })
     Object.assign(TRASH_BUDGET, { bytes: 64 * 1024 })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // 24 comments of about 14 KB, more than the limit together: a batch of
     // 256 rows would read them all
@@ -2275,7 +2279,7 @@ describe('organization teardown', () => {
     vi.stubEnv('QIVO_ENVIRONMENT', 'development')
     vi.stubEnv('SITE_URL', 'https://dev.qivo.test')
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const temporary = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const file = await attach(t, temporary)
     const kept = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -2324,7 +2328,7 @@ const removalOf = (t: T, orgId: string) =>
 describe("an organization's deletion", () => {
   it('empties Deleted items in bounded steps, with no Deleted items step running, and keeps bytes another row names', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { files, elsewhere, items, draining } = await trashInFlight(t, f)
     const [readyFile, ...trashOnly] = files
     // a live attachment in the other organization names the ready item's
@@ -2405,7 +2409,7 @@ describe("an organization's deletion", () => {
 
   it('leaves the items and jobs of an organization being deleted to the deletion, and expires the others', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const due = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await deleteTask(t, f, due.id)
     const dueItem = await itemFor(t, due.id)
@@ -2457,7 +2461,7 @@ describe("an organization's deletion", () => {
   it('keeps moving and expiring items while the organization is read-only before its deletion, and refuses restores then', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const file = await attach(t, task)
     await deleteTask(t, f, task.id)

@@ -53,7 +53,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from '../../convex/tests/helpers.setup'
 import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
@@ -654,15 +654,15 @@ async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
 }
 
 /** One access case: `shape` planted for a fresh seat of `role`, or the
- * fixture's admin without a shape, compared over every scope. */
+ * fixture's admin, who reads by grants, without a shape, compared over every scope. */
 async function compareShape(
   shape: (typeof SHAPES)[number] | null,
   role: 'user' | 'guest' | 'viewer' | 'admin',
 ): Promise<number> {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const subject =
-    role === 'admin'
+    role === 'admin' && shape === null
       ? f.admin
       : await plantSeat(t, { org_id: f.org.id, org_role: role, auth_user_id: `auth_${uuid()}` })
   if (shape !== null) await t.run((ctx) => shape[1](ctx, f, subject))
@@ -688,12 +688,13 @@ async function compareShape(
 }
 
 describe('access shapes', () => {
-  it('answers what the store derives for the admin', async () => {
+  it('answers what the store derives for the fixture’s admin, who reads by grants', async () => {
     expect(await compareShape(null, 'admin')).toBeGreaterThan(0)
   })
 
-  for (const role of ['user', 'guest', 'viewer'] as const)
-    it(`answers what the store derives for a ${role} in every shape`, async () => {
+  // an admin's seat is judged by its own rows, as any member's
+  for (const role of ['admin', 'user', 'guest', 'viewer'] as const)
+    it(`answers what the store derives for ${role === 'admin' ? 'an' : 'a'} ${role} in every shape`, async () => {
       let showing = 0
       for (const shape of SHAPES) if ((await compareShape(shape, role)) > 0) showing++
       // a guest takes no team shares, so fewer shapes show them anything
@@ -707,7 +708,7 @@ describe('rules a drift would break', () => {
   /** The admin's store and answers over TBED, which they see whole. */
   async function adminCase() {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantCase(t, f, f.admin)
     const P = await storeOf(t, f.admin, NOW_CASE)
     const info = P.scopeInfo(f.meta.id)
@@ -754,7 +755,7 @@ describe('rules a drift would break', () => {
 
   it("differs from a My view Left added up in hours a sub-project, and from names in localeCompare's order", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const mine = { assignee_id: f.admin.id }
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, remaining_hours: 0.1, ...mine })
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, remaining_hours: 0.2, ...mine })
@@ -803,7 +804,7 @@ describe('rules a drift would break', () => {
 
   it('places an instant in the last hour of a fall-back week in that week', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run((ctx) => ctx.db.patch(f.sub._id, { track_delay: true }))
     const owner = await plantSeat(t, {
       org_id: f.org.id,
@@ -862,7 +863,7 @@ describe('fixed ends', () => {
    * with its own positions. */
   async function fixedCase({ groups = false } = {}) {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const planted: Doc<'issues'>[] = []
     for (let i = 0; i < 25; i++)
       planted.push(

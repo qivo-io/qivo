@@ -27,8 +27,9 @@
      (convex/lib/searchTerms.ts, whole words, the last also as a prefix,
      accents exact) apply before the page is cut, which `limit` sets;
    - `missing: 'matches'` on every search page of a seat whose role does
-     not read every task, `legacy` on its scoped search and assignee pages,
-     and an admin's while the fixture holds older rows;
+     not read every task, `legacy` on the scoped search and assignee pages
+     of a seat that is not an admin's, and an admin's while the fixture
+     holds older rows;
    - the refusals of an argument the page does not take, as bad_request,
      and of a search past LIMITS.search, as the rule.
    Its cursors are plain JSON of the arguments and the position, refused
@@ -103,8 +104,9 @@ export type DeletedFixtureItem = {
   purge?: PurgeSummary | null
 }
 
-/** One seat of the login. `reads_all` says its role reads every task, an
-    admin's until the admin access split. */
+/** One seat of the login. `reads_all` says its role reads every task,
+    which no role does since the admin access split, so the fixtures answer
+    false for every seat, an admin's included. */
 export type DeletedSeat = {
   org_id: string
   org_name: string
@@ -354,7 +356,9 @@ export function deletedPageOf(
     (scope !== undefined &&
       tasks &&
       (terms.length > 0 || args.assignee !== undefined) &&
-      seats.some((s) => !s.reads_all || fx.older === true))
+      // anyone but an admin always, an admin while the organization holds
+      // older rows (convex/model/deletedItemsPage.ts olderRows)
+      seats.some((s) => s.role !== 'admin' || fx.older === true))
   if (legacy) page.legacy = true
   return page
 }
@@ -645,7 +649,7 @@ export function deletedFixtureOf(
     const lead = ws.projects.some((p) => p.org_id === org.id && p.lead_id === me.id)
     const role: DeletedRole['role'] = admin ? 'admin' : lead ? 'lead' : 'user'
     return [
-      { org_id: org.id, org_name: org.name, me: me.id, role, can_purge: admin, reads_all: admin },
+      { org_id: org.id, org_name: org.name, me: me.id, role, can_purge: admin, reads_all: false },
     ]
   })
   const seatOf = (org: string) => seats.find((s) => s.org_id === org)

@@ -15,7 +15,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { ACCESS_UNCHECKED, accessOf, OWN_READS, ordinaryOf } from '../lib/access'
+import { ACCESS_UNCHECKED, accessOf, OWN_READS } from '../lib/access'
 import { newWindowKey } from '../lib/db'
 import type { Refusal } from '../lib/functions'
 import { LIMITS, LIST_BATCH } from '../lib/limits'
@@ -299,7 +299,9 @@ async function compareShape(
   const t = newT()
   const f = await withOrg(t)
   const subject =
-    role === 'admin' ? f.admin : await person(t, f.org.id, 'Subject', { org_role: role })
+    role === 'admin' && shape === null
+      ? f.admin
+      : await person(t, f.org.id, 'Subject', { org_role: role })
   if (shape !== null) await t.run((ctx) => shape[1](ctx, f, subject))
   await ready(t, f)
   await plantStar(t, subject, await now(t, f.meta.id))
@@ -318,7 +320,7 @@ async function compareShape(
 }
 
 describe('access', () => {
-  for (const role of ['user', 'guest', 'viewer'] as const)
+  for (const role of ['user', 'guest', 'viewer', 'admin'] as const)
     it(`finds by the rule for a ${role} in every access shape`, async () => {
       let showing = 0
       for (const shape of SHAPES) if ((await compareShape(shape, role)) > 0) showing++
@@ -326,7 +328,7 @@ describe('access', () => {
       expect(showing).toBeGreaterThan(SHAPES.length / 3)
     })
 
-  it('finds nothing for an admin without grants, whom the admin rule gives every project', async () => {
+  it('finds nothing for an admin without grants, whose levels hold nothing either', async () => {
     expect(await compareShape(null, 'admin')).toBe(0)
     const t = newT()
     const f = await withOrg(t)
@@ -416,7 +418,7 @@ describe('access', () => {
     await t.run((ctx) => ctx.db.patch(f.sub._id, { archived_at: NOW }))
     await ready(t, f)
     await plantStar(t, pia, f.meta)
-    expect(await t.run((ctx) => accessOf(ctx, ordinaryOf(pia)).visible(f.meta.id))).toBe(true)
+    expect(await t.run((ctx) => accessOf(ctx, pia).visible(f.meta.id))).toBe(true)
     expect(await found(t, [pia], 'r')).toEqual([])
     // a live sub-project of their own shows the parent again
     await as(t, f.user).mutation(api.projects.setAccess, {
@@ -455,7 +457,7 @@ describe('access', () => {
       Object.assign(NAMED_READ, DEFAULT_READ)
       const matches = allWordsMatcher('mine')
       const standIn = await measured(t, async (ctx) => {
-        const access = accessOf(ctx, ordinaryOf(vic))
+        const access = accessOf(ctx, vic)
         // the first two streams are the sub-projects of the two parents
         const [ofParent, ofLed] = restCandidates(
           ctx,
@@ -612,7 +614,7 @@ describe('favorites', () => {
       Object.assign(NAMED_READ, { ranges: short ?? whole.read.ranges - 6 })
       const low = await read()
       Object.assign(NAMED_READ, DEFAULT_READ)
-      const check = await measured(t, (ctx) => accessOf(ctx, ordinaryOf(pia)).visible(lost.id))
+      const check = await measured(t, (ctx) => accessOf(ctx, pia).visible(lost.id))
       const shape = (answer: typeof whole) => {
         const batch = ok(answer.out)
         return {

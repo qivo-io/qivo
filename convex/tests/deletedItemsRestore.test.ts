@@ -51,7 +51,7 @@ import {
   plantSubscription,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { liveAttachmentUsage } from './liveAttachments.setup'
 import { assertNoDanglingRefs } from './refs.setup'
@@ -355,7 +355,7 @@ function byTable(planted: Tagged[]) {
 describe('restoring a task item', () => {
   it('brings the task back with every row, the same uuids and number, and its bytes', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const task = await plantIssue(t, {
       org_id,
@@ -399,7 +399,7 @@ describe('restoring a task item', () => {
 
   it('keeps or clears each parent by the parent table', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const plant = (extra: Partial<Doc<'issues'>> = {}) =>
       plantIssue(t, { org_id, project_id: f.sub.id, ...extra })
@@ -453,7 +453,7 @@ describe('restoring a task item', () => {
 
   it('brings a subtask deleted alone back under its live parent, which loses its own hours', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
     await plantSubscription(t, { issue_id: parent.id, profile_id: f.admin.id })
@@ -473,7 +473,7 @@ describe('restoring a task item', () => {
 
   it('brings an archived sub-project back under a live parent, which keeps its own hours', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const parent = await plantIssue(t, { org_id, project_id: f.sub.id })
     const child = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: parent.id })
@@ -490,7 +490,7 @@ describe('restoring a task item', () => {
 
   it('brings a subtask back top-level when the restorer cannot edit its parent', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // the guest edits Firmware through a grant of its own, and cannot see
     // the sibling sub-project where the parent is
@@ -529,7 +529,7 @@ describe('restoring a task item', () => {
 
   it('brings a subtask deleted alone back top-level when its parent moved to another top-level project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
     const child = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
@@ -566,7 +566,7 @@ describe('restoring a task item', () => {
 
   it('keeps a parent that moved to another sub-project of the same top-level project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const parent = await plantIssue(t, { org_id, project_id: f.sub.id })
     const child = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
@@ -582,7 +582,7 @@ describe('restoring a task item', () => {
 
   it('keeps a parent only while it is a top-level task, as a reparent requires', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const parent = await plantIssue(t, { org_id, project_id: f.sub.id })
     const task = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
@@ -613,7 +613,7 @@ describe('restoring a task item', () => {
 
   it(`keeps a parent with ${LIMITS.subtasks.max - 1} active subtasks and none with ${LIMITS.subtasks.max}, archived ones aside`, async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const parent = await plantIssue(t, { org_id, project_id: f.sub.id })
     const [first, second] = [
@@ -668,7 +668,7 @@ describe('restoring a task item', () => {
   it('reads no more for a count of subtasks than COUNT_READ allows, and leaves that task without the parent', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const parent = await plantIssue(t, { org_id, project_id: f.sub.id })
     const task = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
@@ -697,7 +697,7 @@ describe('restoring a task item', () => {
 
   it('keeps a parent only while its assignee can still see it, as a reparent requires', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // the guest edits Board rev through a grant of its own, and sees the
     // parent's sibling sub-project through another
@@ -748,11 +748,11 @@ describe('restoring a task item', () => {
 
   it('keeps no parent that someone working on a subtask that comes back with it cannot see', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const hiddenSub = await plantHiddenSibling(t, f, f.guest)
     const parent = await plantIssue(t, { org_id, project_id: hiddenSub.id })
-    // the admin, who sees every project, works on the task; the guest, who
+    // the admin, who reads TBED by a grant, works on the task; the guest, who
     // cannot see the parent's sub-project, works on its subtask
     const task = await plantIssue(t, {
       org_id,
@@ -780,7 +780,7 @@ describe('restoring a task item', () => {
     // own whose sight the reveal checks
     const t = newT({ transactionLimits: true })
     chargeFilteredReads()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
     const root = await plantIssue(t, { org_id, project_id: f.sub2.id })
@@ -818,7 +818,7 @@ describe('restoring a task item', () => {
     // leaves them to steps; here the rows a step may delete are lowered so a
     // family of ordinary text needs several of them
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const description = 'Check the fixture alignment first. Record the readings in the notebook.'
     const root = await plantIssue(t, { org_id, project_id: f.sub.id, description })
@@ -877,7 +877,7 @@ describe('restoring a task item', () => {
     // they see costs more than the reveal's estimate for one task
     // (REVEAL_RANGES_PER_TASK), about 120 ranges each
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
     const [assignee, reviewer] = await plantPeople(t, f, 2, await plantTeams(t, f, 60))
@@ -918,7 +918,7 @@ describe('restoring a task item', () => {
 
   it('drops references whose uuid now names something created after the delete', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const person = await t.run(async (ctx) => {
       const _id = await ctx.db.insert('profiles', {
@@ -1036,7 +1036,7 @@ describe('restoring a task item', () => {
     const t = newT({ transactionLimits: { bytesRead: SCALED.bytesRead } })
     TRASH_BUDGET.bytes = SCALED.step
     chargeFilteredReads()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // descriptions at the cap, as 950 KiB from before the cap were to the
     // real limits
@@ -1067,7 +1067,7 @@ describe('restoring a task item', () => {
 
   it('moves a link to the item that holds its other end, and drops one whose end is gone', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const [a, b, c] = [
       await plantIssue(t, { org_id, project_id: f.sub.id }),
@@ -1125,7 +1125,7 @@ describe('restoring a task item', () => {
    * come back, with `a`'s. */
   async function linkedItems() {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const a = await plantIssue(t, { org_id, project_id: f.sub.id })
     const b = await plantIssue(t, { org_id, project_id: f.sub2.id })
@@ -1209,7 +1209,7 @@ describe('restoring a task item', () => {
 
   it('moves a subtask whose project was deleted to that project item, or deletes it when that is gone', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     const sub = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
@@ -1277,7 +1277,7 @@ describe('restoring a task item', () => {
 
   it('drops the archive marks, schedules them once, and restarts the done clock', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const other = await plantIssue(t, { org_id, project_id: f.sub2.id })
     const archived = await plantIssue(t, {
@@ -1375,7 +1375,7 @@ describe('copies stored before window keys', () => {
 
   it('gives a task item and its rows one new key, in steps', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const task = await plantIssue(t, { org_id, project_id: f.sub.id, window_key: undefined })
     const to = await plantIssue(t, { org_id, project_id: f.sub2.id })
@@ -1438,7 +1438,7 @@ describe('copies stored before window keys', () => {
     ['every step before the task', Number.POSITIVE_INFINITY],
   ])('keys the rows a restore wrote back without one in %s', async (_, oldSteps) => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const task = await plantIssue(t, { org_id, project_id: f.sub.id, window_key: undefined })
     const to = await plantIssue(t, { org_id, project_id: f.sub2.id })
@@ -1466,7 +1466,7 @@ describe('copies stored before window keys', () => {
 
   it('gives a project item, its tasks and their rows keys', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     for (const p of [f.meta, f.sub, f.sub2])
       await patch(t, 'projects', p.id, { window_key: undefined })
@@ -1510,7 +1510,7 @@ describe('copies stored before window keys', () => {
 describe('project copies', () => {
   it('brings a project item back with every field each project had', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const projects = [f.meta, f.sub, f.sub2]
     // the name keys and archive states a reveal writes, so every other
     // field comes back as it was
@@ -1572,7 +1572,7 @@ describe('notices, activity and events', () => {
 
   it("keeps a task's whole history while other tasks write past 500 rows, and trims nothing", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     await plantHistory(t, root, { listed: 3 })
@@ -1601,7 +1601,7 @@ describe('notices, activity and events', () => {
 
   it('sends the Restored notice only for a task item restored alone, and one activity row per call', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const followed = async (project_id: string) => {
       const task = await plantIssue(t, { org_id, project_id })
@@ -1671,7 +1671,7 @@ describe('notices, activity and events', () => {
 
   it('sends no Restored notice for a call of a bulk restore that holds one task item', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const task = await plantIssue(t, { org_id, project_id: f.sub.id })
     await plantSubscription(t, { issue_id: task.id, profile_id: f.guest.id })
@@ -1700,7 +1700,7 @@ describe('notices, activity and events', () => {
 
   it('sends task.restored for the tasks of a task item and none for those of a project item', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     await subscribe(t, f)
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
@@ -1721,7 +1721,7 @@ describe('notices, activity and events', () => {
 describe('a project item while it moves', () => {
   it('shows the projects a live grant still reaches to the people it reached before', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [lead] = await plantPeople(t, f, 1)
     const third = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
     // the person leads Firmware and reaches Board rev only through a grant
@@ -1770,7 +1770,7 @@ describe('a project item while it moves', () => {
 describe('a project item read over grants stored before grantees', () => {
   it('counts them up to LEGACY_READ for an item deleted before GRANTEE_SINCE, and only then', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [lead] = await plantPeople(t, f, 1)
     // the person leads Firmware and reaches Board rev only through a grant
     await t.run(async (ctx) => {
@@ -1834,7 +1834,7 @@ describe('restoring a project item', () => {
 
   it('shows the projects to the people and teams they are shared with as it shows them to their lead', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [team] = await plantTeams(t, f, 1)
     const [person, member] = await plantPeople(t, f, 2)
     // the member's access comes only from a team share on one sub-project
@@ -1891,7 +1891,7 @@ describe('restoring a project item', () => {
   it('keeps the people of deferred items restored as soon as the project shows again', async () => {
     // eight grants, more than one step writes back at three rows a step
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const people = await plantPeople(t, f, 8)
     const third = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
     const inThird = await plantIssue(t, {
@@ -1928,7 +1928,7 @@ describe('restoring a project item', () => {
 
   it('writes no grant under a project deleted again before its stored grants are gone', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const people = await plantPeople(t, f, 8)
     await deleteProject(t, f, f.meta.id)
     await runSteps(t)
@@ -1968,7 +1968,7 @@ describe('restoring a project item', () => {
 
   it('writes back only the grants and shares whose people and teams pass the restore rules', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [team, gone] = await plantTeams(t, f, 2)
     const [kept, demoted, removed] = await plantPeople(t, f, 3)
     await t.run(async (ctx) => {
@@ -2016,7 +2016,7 @@ describe('restoring a project item', () => {
 
   it('keeps a grant or share removed between the reveal and the end of its stored grants removed', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [team] = await plantTeams(t, f, 1)
     const people = await plantPeople(t, f, 8)
     await t.run((ctx) =>
@@ -2052,7 +2052,7 @@ describe('restoring a project item', () => {
 
   it('sets the grantee of more stored grants than one read takes before it checks the people', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [worker] = await plantPeople(t, f, 4)
     const task = await plantIssue(t, {
       org_id: f.org.id,
@@ -2076,7 +2076,7 @@ describe('restoring a project item', () => {
 
   it('writes back the grants of a restore the release before left at its reveal or after it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [person] = await plantPeople(t, f, 1)
     const grantOf = () =>
       t.run((ctx) =>
@@ -2132,7 +2132,7 @@ describe('restoring a project item', () => {
 
   it('refuses a restore whose reveal in the call finds a live project holding its key', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await deleteProject(t, f, f.sub2.id)
     await runSteps(t)
     const item = await itemFor(t, f.sub2.id)
@@ -2150,7 +2150,7 @@ describe('restoring a project item', () => {
 
   it('stores a grant once when a restore that wrote it back goes back to moving', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [person] = await plantPeople(t, f, 1)
     await deleteProject(t, f, f.meta.id)
     await runSteps(t)
@@ -2191,7 +2191,7 @@ describe('restoring a project item', () => {
 
   it('brings the project back with its key, number, lead, grants, milestones and tasks', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     await patch(t, 'projects', f.sub2.id, { lead_id: f.admin.id })
     const sub2 = (await liveProject(t, f.sub2.id)) as Doc<'projects'>
@@ -2275,7 +2275,7 @@ describe('restoring a project item', () => {
 
   it('keeps the hierarchy across steps and reveals the projects only at the end', async () => {
     const t = newT({ transactionLimits: { databaseQueries: 200 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const hiddenSub = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
     const tasks: Doc<'issues'>[] = []
@@ -2372,7 +2372,7 @@ describe('restoring a project item', () => {
 
   it('places the links before the tasks, so the mark steps of an archived task find them', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const shelved = await plantIssue(t, { org_id, project_id: f.sub2.id, archived_at: NOW })
     for (let i = 0; i < 3; i++) await plantIssue(t, { org_id, project_id: f.sub2.id })
@@ -2402,7 +2402,7 @@ describe('restoring a project item', () => {
   it('sends the item back to moving when its parent was archived before the reveal', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const tasks: Doc<'issues'>[] = []
     for (let i = 0; i < 6; i++) {
@@ -2470,7 +2470,7 @@ describe('restoring a project item', () => {
     // a transaction writes or attaches many tasks under a parent outside,
     // so it must not read a dozen ranges for each
     const t = newT({ transactionLimits: { databaseQueries: 150 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
     await plantSubscription(t, { issue_id: epic.id, profile_id: f.admin.id })
@@ -2501,7 +2501,7 @@ describe('restoring a project item', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const tasks: Doc<'issues'>[] = []
     for (let i = 0; i < 3; i++) {
       const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
@@ -2635,7 +2635,7 @@ describe('parents outside a restored project', () => {
     // as many as the design size puts in one sub-project
     const t = newT({ transactionLimits: { bytesRead: QUARTER.bytesRead } })
     TRASH_BUDGET.bytes = QUARTER.step
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const epics: Doc<'issues'>[] = []
     for (let i = 0; i < 3; i++) {
@@ -2711,7 +2711,7 @@ describe('parents outside a restored project', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT({ transactionLimits: { bytesRead: QUARTER.bytesRead } })
     TRASH_BUDGET.bytes = QUARTER.step
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
     const tasks = await plantUnder(t, f, [epic, epic, epic])
@@ -2745,7 +2745,7 @@ describe('parents outside a restored project', () => {
     // pass what one transaction can read
     const t = newT({ transactionLimits: { bytesRead: SCALED.bytesRead } })
     TRASH_BUDGET.bytes = SCALED.step
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const epic = await plantIssue(t, {
       org_id,
@@ -2775,7 +2775,7 @@ describe('parents outside a restored project', () => {
 
   it('comes back whole in one transaction when its attaches fit there', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { epic, tasks, item } = await underEpic(t, f, 2)
     // the full budget of the call holds the fill, the reveal and the attach
     await restore(t, f.user, [item.id])
@@ -2799,7 +2799,7 @@ describe('parents outside a restored project', () => {
 
   it('attaches them in steps after the reveal, each parent losing its hours once', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const sibling = await plantProject(t, { org_id, type: 'project', parent_id: f.meta.id })
     const epics = [
@@ -2851,7 +2851,7 @@ describe('parents outside a restored project', () => {
 
   it('leaves a task without its parent when that parent fails the table before its turn', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // the user may change each parent, in Firmware and in a sibling
     // sub-project, as the lead of Testbed platform
@@ -2908,7 +2908,7 @@ describe('parents outside a restored project', () => {
 
   it('leaves a task that someone changed since the reveal as they left it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
     const {
@@ -2930,7 +2930,7 @@ describe('parents outside a restored project', () => {
 
   it('keeps the parent of a task that waits for it when its project goes to Deleted items again', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const epic = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const { tasks, item } = await oneUnderEach(t, f, [epic, epic, epic])
     const [, early, late] = tasks
@@ -2961,7 +2961,7 @@ describe('parents outside a restored project', () => {
 
   it('keeps the parent of a task that waits for it when the task goes to Deleted items alone', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const epic = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const {
       tasks: [first, waiting, moved],
@@ -2985,7 +2985,7 @@ describe('parents outside a restored project', () => {
 
   it('keeps the parent a task got after the reveal when its project goes and comes back again', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
     const { tasks, item } = await oneUnderEach(t, f, [epic, epic, epic])
@@ -3016,7 +3016,7 @@ describe('parents outside a restored project', () => {
 
   it('keeps no parent that needs the restorer once they are gone', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { epic, tasks, item } = await underEpic(t, f, 3)
     TRASH_BUDGET.tasks = 1
     await untilAttach(t, f, item.id)
@@ -3030,7 +3030,7 @@ describe('parents outside a restored project', () => {
 
   it('attaches a task only when everyone working under it can see the parent, as a reparent requires', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // the guest edits Board rev through a grant of its own and cannot see
     // the sibling sub-project where the epic is
@@ -3040,7 +3040,7 @@ describe('parents outside a restored project', () => {
     })
     const plant = (extra: Partial<Doc<'issues'>>) =>
       plantIssue(t, { org_id, project_id: f.sub2.id, ...extra })
-    // the admin, who sees every project, works on this one
+    // the admin, who reads TBED by a grant, works on this one
     const kept = await plant({ parent_id: epic.id, assignee_id: f.admin.id })
     // the guest reviews this one
     const lost = await plant({
@@ -3070,7 +3070,7 @@ describe('parents outside a restored project', () => {
 
   it('counts what the subtask check reads against the step budget', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
     const heavy = await plantIssue(t, {
@@ -3122,7 +3122,7 @@ describe('parents outside a restored project', () => {
     // in Deleted items, so a step that read every story would pass a read
     // limit of 60,000 bytes
     const t = newT({ transactionLimits: { bytesRead: 60_000 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const stories: Doc<'issues'>[] = []
     for (let i = 0; i < 6; i++) stories.push(await plantIssue(t, { org_id, project_id: f.sub.id }))
@@ -3149,7 +3149,7 @@ describe('parents outside a restored project', () => {
 
   it(`counts the subtasks of each parent after the attaches before it in its step, up to ${LIMITS.subtasks.max}`, async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // the epic has 97 subtasks in Firmware, and a fifth task waits for it
     const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
@@ -3178,7 +3178,7 @@ describe('parents outside a restored project', () => {
     // and the attach gave up on the parents
     const t = newT({ transactionLimits: true })
     chargeFilteredReads()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const epics = await oneInEach(t, f, 10)
     const tasks: Doc<'issues'>[] = []
@@ -3215,7 +3215,7 @@ describe('parents outside a restored project', () => {
   it('reads no more for who sees a parent than SIGHT_READ allows, and leaves that task without it', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const epic = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const tasks = await plantUnder(t, f, [epic, epic])
     const [one, two] = tasks
@@ -3256,7 +3256,7 @@ describe('parents outside a restored project', () => {
     const t = newT({ transactionLimits: { bytesRead: SCALED.bytesRead } })
     TRASH_BUDGET.bytes = SCALED.step
     chargeFilteredReads()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const low = await chainOf(t, f, 19, LEGACY_TEXT)
     // a task of Firmware deleted alone, and one of Board rev deleted with it
     const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: low.id })
@@ -3285,7 +3285,7 @@ describe('parents outside a restored project', () => {
 
   it('checks a task again in the next step when its step runs out of reads during the check', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const epic = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const tasks = await plantUnder(t, f, [epic, epic, epic])
     const [, , busy] = tasks
@@ -3323,7 +3323,7 @@ describe('parents outside a restored project', () => {
 
   it('checks a task again in the next step when its step runs out of reads before it counts the subtasks of its parent', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const epic = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // a story of 14 KB, on its description row and its task row
     const story = await chainOf(t, f, 1, HEAVY)
@@ -3351,7 +3351,7 @@ describe('parents outside a restored project', () => {
 
   it('brings back under its parent a subtask that another restore moved into it after its fill', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     // no rows of its own, which would send the reveal back to restore_rows
@@ -3381,7 +3381,7 @@ describe('parents outside a restored project', () => {
 
   it('finishes a restore whose item lists a stored task that is gone', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { epic, tasks, item } = await underEpic(t, f, 2)
     await t.run((ctx) =>
       ctx.db.insert('deleted_tasks', {
@@ -3405,7 +3405,7 @@ describe('parents outside a restored project', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { epic, tasks, item } = await underEpic(t, f, 4)
     TRASH_BUDGET.tasks = 1
     await untilAttach(t, f, item.id)
@@ -3464,7 +3464,7 @@ describe('parents outside a restored project', () => {
 
   it('deletes the parents its tasks wait for with the item when the organization goes', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { item } = await underEpic(t, f, 3)
     TRASH_BUDGET.tasks = 1
     await untilAttach(t, f, item.id)
@@ -3482,7 +3482,7 @@ describe('restore calls', () => {
     // 200 comments: read four at a time from the start, each direction
     // took 50 reads of a range that still held every comment moved before
     const t = newT({ transactionLimits: { databaseQueries: 60 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await t.run(async (ctx) => {
       for (let i = 0; i < 200; i++)
@@ -3513,7 +3513,7 @@ describe('restore calls', () => {
     // leaves conflicts to the reveal and spends a quarter, inside a limit
     // lowered from 1,000 by the same ratio
     const t = newT({ transactionLimits: { databaseQueries: 750 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const metas: Doc<'projects'>[] = []
     for (let i = 0; i < 6; i++) {
       const meta = await plantProject(t, { org_id: f.org.id, lead_id: f.user.id })
@@ -3534,7 +3534,7 @@ describe('restore calls', () => {
 
   it('answers per item, defers a task item whose project item comes back in the same call', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // the guest edits both sub-projects through the top-level grant
     const viewOnly = await plantIssue(t, { org_id, project_id: f.sub.id })
@@ -3592,7 +3592,7 @@ describe('restore calls', () => {
 
   it('refuses a subtask in a project the restorer cannot edit', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const rita = await t.run(async (ctx) => {
       const _id = await ctx.db.insert('profiles', {
@@ -3633,7 +3633,7 @@ describe('restore calls', () => {
 
   it('shares one budget across the items of a call and finishes the rest in steps', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const tasks: Doc<'issues'>[] = []
     for (let i = 0; i < 3; i++) {
@@ -3671,7 +3671,7 @@ describe('restore calls', () => {
 
   it("reads no page of a task item's stored tasks once the call's budget is spent, however many items it restores", async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // three task items of a task and 70 subtasks each, more than a page
     const items: Doc<'deleted_items'>[] = []
@@ -3707,7 +3707,7 @@ describe('restore calls', () => {
 
   it('reveals a task item too large for what the call has left in a step of its own', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     const subtasks: Doc<'issues'>[] = []
@@ -3735,7 +3735,7 @@ describe('restore calls', () => {
 
   it('splits off a subtask whose project was deleted after the split, at the reveal', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     for (let i = 0; i < 3; i++) await comment(t, root)
@@ -3767,7 +3767,7 @@ describe('restore calls', () => {
    * to the split. */
   async function lateSplit() {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     const sub = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
@@ -3862,7 +3862,7 @@ describe('restore calls', () => {
 
   it("rewrites a split subtask's item fields for the item that holds it, and keeps a row from before them as it was", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const root = await plantIssue(t, { org_id, project_id: f.sub.id, title: 'Harness' })
     const sub = await plantIssue(t, {
@@ -3932,7 +3932,7 @@ describe('restore calls', () => {
 
   it('defers what waits for a project item of the same call, whatever the order of the ids', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await deleteTask(t, f, task.id)
     await deleteProject(t, f, f.sub.id)
@@ -3985,7 +3985,7 @@ describe('where live attachment rows land', () => {
 
   it("puts a task's attachment rows back under its project once it comes back", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const task = await plantIssue(t, { org_id, project_id: f.sub.id })
     for (const size of [11, 13, 17]) await attach(t, task, size)
@@ -4006,7 +4006,7 @@ describe('where live attachment rows land', () => {
 
   it("counts a project's attachment rows nowhere until its reveal, then under each task's project", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const inSub = await plantIssue(t, { org_id, project_id: f.sub.id })
     await attach(t, inSub, 11)
@@ -4049,7 +4049,7 @@ describe('where live attachment rows land', () => {
 
   it('counts the attachment rows of a subtask a split hands over after the fill under its project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     const sub = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
@@ -4150,7 +4150,7 @@ const treeRows = (t: T, meta: string, table: 'milestones' | 'project_access') =>
 describe('a project item and the sub-project cap', () => {
   it('refuses to delete a project with more sub-projects than LIMITS.projectDeleteSubProjects, here lowered to 1', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the fixture's project has two sub-projects, one past the lowered cap
     const cap = LIMITS.projectDeleteSubProjects.max
     Object.assign(LIMITS.projectDeleteSubProjects, { max: 1 })
@@ -4173,11 +4173,11 @@ describe('a project item and the sub-project cap', () => {
   it('deletes and restores a project of 30 live and 40 archived sub-projects with their milestones and grants within the limits', async () => {
     // convex-test counts no range for a write, which reads its row first,
     // so the writes stand in for those ranges; 700, where the tree's 71
-    // projects and their 340 milestones and 347 grants pass it, as the
+    // projects and their 340 milestones and 348 grants pass it, as the
     // largest tree the cap allows passed 4,096 (the delete's steps need
     // more than 600)
     const t = newT({ transactionLimits: { documentsWritten: 700 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const people = await plantPeople(t, f, 5)
     // beside FW and PCB, 28 live and 40 archived, each with 5 milestones and
     // a grant for each of the 5 people
@@ -4185,7 +4185,8 @@ describe('a project item and the sub-project cap', () => {
     const milestones = await treeRows(t, f.meta.id, 'milestones')
     const grants = await treeRows(t, f.meta.id, 'project_access')
     expect(milestones).toEqual({ projects: 71, rows: 340 })
-    expect(grants.rows).toBe(340 + 5 + 2)
+    // and withReadingAdmin's guest, viewer and admin grants on TBED
+    expect(grants.rows).toBe(340 + 5 + 3)
 
     // storing every project, milestone and grant at once passed the limit
     await deleteProject(t, f, f.meta.id)
@@ -4208,7 +4209,7 @@ describe('a project item and the sub-project cap', () => {
     // items, read for each of the 10 items would pass a limit of 1,600
     // documents, as 4,000 grants passed the real 32,000
     const t = newT({ transactionLimits: { documentsRead: 1_600 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run(async (ctx) => {
       for (let i = 0; i < 200; i++)
         await ctx.db.insert('project_access', {
@@ -4246,7 +4247,7 @@ describe('a project item and the sub-project cap', () => {
     // standing in for 200 x 200 against 32,000
     const t = newT({ transactionLimits: { documentsRead: 1000 } })
     TRASH_BUDGET.rows = DEFAULT_BUDGET.rows / 3
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const people = await plantPeople(t, f, 40)
     await plantSubProjects(t, f, f.meta.id, 28)
     // counted a project at a time, since all of them pass the read limit
@@ -4306,7 +4307,7 @@ describe('a project item and the sub-project cap', () => {
     ['stored before grantees, without the backfill', true],
   ])('keeps the people of grants and shares %s', async (_, legacy) => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [team] = await plantTeams(t, f, 1)
     // the assignee reaches Firmware through a grant, the reviewer only
     // through their team's share
@@ -4345,7 +4346,7 @@ describe('a project item and the sub-project cap', () => {
 
   it('keeps an assignee whose grant was stored before grantees, once the backfill ran', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [worker] = await plantPeople(t, f, 1)
     const task = await plantIssue(t, {
       org_id: f.org.id,
@@ -4369,14 +4370,14 @@ describe('a project item and the sub-project cap', () => {
     })
     const backfill = (dry_run: boolean) =>
       t.action(internal.internal.storedGrantees.backfill, { dry_run, page_size: 2 })
-    // the grants of the worker, the guest and the viewer on Testbed platform,
-    // and the team's share on Firmware
+    // the grants of the worker, the guest, the viewer and the admin on
+    // Testbed platform, and the team's share on Firmware
     expect(await backfill(true)).toEqual({
-      project_access: { missing: 3, set: 0 },
+      project_access: { missing: 4, set: 0 },
       project_team_access: { missing: 1, set: 0 },
     })
     expect(await backfill(false)).toEqual({
-      project_access: { missing: 3, set: 3 },
+      project_access: { missing: 4, set: 4 },
       project_team_access: { missing: 1, set: 1 },
     })
     expect((await backfill(true)).project_access.missing).toBe(0)
@@ -4389,7 +4390,7 @@ describe('a project item and the sub-project cap', () => {
     // trees of 30 sub-projects, the design size under one project, whose
     // single reveals need about 100 documents written
     const t = newT({ transactionLimits: { documentsWritten: 120 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const metas: string[] = []
     for (let i = 0; i < 2; i++) {
       const meta = await plantProject(t, {

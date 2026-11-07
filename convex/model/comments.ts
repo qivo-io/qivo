@@ -127,7 +127,8 @@ export async function assertArchiveReasonRoom(ctx: MutationCtx, a: ArchiveReason
 /**
  * Refuses `me` unless it wrote `comment` or leads the project of `issue`,
  * the task the comment is on. A lead's standing comes from hasProjectLevel,
- * so an organization admin passes too.
+ * the ordinary level rule, so an organization admin passes only as the
+ * project's lead, since admin status gives no access to project work.
  */
 export async function assertCommentEditor(
   ctx: QueryCtx,

@@ -102,6 +102,23 @@ export { LABEL_ASSIGNMENT_BYTES } from './viewFilters'
  * - A search over a project's 800 open tasks, the design size: 45, 1,629
  *   and 0.91.
  *
+ * Timed on 7 November 2026 on a local backend (8 vCPU, one call at a time),
+ * in one quiet session and one beside 8 busy loops, an organization admin's
+ * Board read cost the same as a standard user's with the same rows. Both
+ * read the same ranges, documents and bytes, counted for the whole call
+ * with its sign-in, and their JavaScript times differ only by run-to-run
+ * noise. An everyday project of 90 open tasks reached through a team share
+ * read 108, 116 and 0.07 in 15 to 32 ms of JavaScript quiet and at most
+ * 102 ms busy, and a project of 800 open tasks over 3 sub-projects 818, 982
+ * and 0.65 in 39 to 65 ms quiet and at most 129 ms busy. The largest My
+ * view above (1,000 subtasks under 1,000 parents, 21 sub-projects shared
+ * with 3 teams) read 3,087, 3,110 and 1.84 in 118 to 165 ms quiet, once
+ * 870 ms in a further quiet session that had storage stalls. In the busy
+ * session above and a further busy one its JavaScript passed 0.5 s, the
+ * admin's in both and the standard user's in the second, and Convex stopped
+ * two of the admin's calls at the 1 s it gives a query's own code. A third
+ * busy session kept it under 0.44 s.
+ *
  * Each task the filters keep costs about one range, its group check, and a
  * group one more for its subtasks. The subtasks of a shown group that the
  * filters drop cost nothing more where the group or the subtask was created

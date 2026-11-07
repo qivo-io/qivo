@@ -63,6 +63,16 @@ export type Line =
 /** The item a line acts on. */
 export const lineItem = (line: Line): DeletedRow => (line.kind === 'item' ? line.row : line.item)
 
+/** Whether `row`, waiting for the deleted project it was in, goes in the
+    same restore as that project item. A task item the restorer cannot
+    read now, an admin's row without its title, does only when the server
+    says that project item gives them Edit on the task's project once it is
+    back (`blocked.with_project`), as the project item's right says nothing
+    of the task's. Without it the task stays in Deleted items until they
+    can edit its project. */
+export const restoresWithProject = (row: DeletedRow): boolean =>
+  row.kind !== 'task' || row.hidden !== true || row.blocked?.with_project === true
+
 /** The key of a line, which also names it for focus. */
 export const lineKey = (line: Line): string =>
   line.kind === 'item' ? line.row.id : `${line.item.id}:${line.hit.key}`
@@ -287,14 +297,14 @@ export function blockedText(blocked: BlockDetail, holder?: string): string | nul
     case 'view_only':
       return blocked.lead
         ? `You can only view ${project} now. Ask its lead, ${blocked.lead}, to restore it.`
-        : `You can only view ${project} now. Ask an organization admin to restore it.`
+        : `You can only view ${project} now. Ask someone who can edit it to restore it.`
     case 'not_lead':
       // the server names no lead when none passes today's lead rule
       return blocked.lead
         ? `${blocked.project ?? 'This project'} has its own lead, ${blocked.lead}. Ask them or an organization admin to restore it.`
         : `${blocked.project ?? 'This project'} has no lead now. Ask an organization admin to restore it.`
     case 'subtask_project':
-      return "A subtask is in a project you can't edit. Ask an organization admin to restore it."
+      return "A subtask is in a project you can't edit. Ask someone who can edit it to restore it."
     case 'project_archived':
     case 'parent_archived':
       return `Restore ${project} from Archived projects first.`
@@ -322,7 +332,7 @@ export function refusalText(reason: RestoreRefusal | PurgeRefusal | 'not_found')
     case 'not_lead':
       return "Only the project's lead or an organization admin can restore it."
     case 'subtask_project':
-      return "A subtask is in a project you can't edit. Ask an organization admin to restore it."
+      return "A subtask is in a project you can't edit. Ask someone who can edit it to restore it."
     case 'project_archived':
       return 'Restore its project from Archived projects first.'
     case 'parent_archived':

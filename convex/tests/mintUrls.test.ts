@@ -33,7 +33,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 /* fileTokens reads process.env lazily; guarantee the vars exist in this VM
@@ -168,7 +168,7 @@ const shareWith = (ctx: MutationCtx, projectId: string, teamId: string) =>
  * turn, and the other teams share about 20 projects each. */
 async function sharedOrg(o: { tops: number; subs: (top: number) => number; shares: number }) {
   const t = newT({ transactionLimits: true })
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const caller = await plantSeat(t, { org_id: f.org.id, name: 'Member', accepted_at: NOW })
   const tops: Doc<'projects'>[] = []
   const subs: Doc<'projects'>[] = []
@@ -233,7 +233,7 @@ async function spread(t: T, projects: Doc<'projects'>[], n: number, sid: Id<'_st
 describe('files.mintUrls caps', () => {
   it('refuses more than 100 attachment ids or 1,000 profile ids whole, naming the array, before the handler reads anything', async () => {
     const t = newT({ transactionLimits: true })
-    const fx = await withOrg(t)
+    const fx = await withReadingAdmin(t)
     const tooMany = { attachment_ids: Array.from({ length: 101 }, uuid) }
     await expect(
       as(t, fx.user).query(api.files.mintUrls, { org_id: fx.org.id, ...tooMany }),
@@ -270,7 +270,7 @@ describe('files.mintUrls caps', () => {
 
   it('answers absent and empty arrays empty, and both kinds at their caps in one call', async () => {
     const t = newT()
-    const fx = await withOrg(t)
+    const fx = await withReadingAdmin(t)
     const sid = await storeBlob(t)
     const issue = await plantIssue(t, { org_id: fx.org.id, project_id: fx.sub.id })
     const atts = await attach(t, issue, sid, 3)
@@ -307,7 +307,7 @@ describe('files.mintUrls reads shared within a call', () => {
     const seen = new Set<string>()
     for (const [name, plant] of SHAPES) {
       const t = newT()
-      const f: OrgFixture = await withOrg(t)
+      const f: OrgFixture = await withReadingAdmin(t)
       const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
       await t.run((ctx) => plant(ctx, f, subject))
       const sid = await storeBlob(t)
@@ -353,13 +353,16 @@ describe('files.mintUrls reads shared within a call', () => {
     }
     // the shapes reach callers who see nothing, some and everything
     expect([...seen].some((s) => s.endsWith(':0'))).toBe(true)
-    expect(seen.has('admin:8')).toBe(true)
+    // and an admin sees what a user with the same rows sees, no more
+    const of = (role: string) =>
+      [...seen].filter((s) => s.startsWith(`${role}:`)).map((s) => s.split(':')[1])
+    expect(of('admin').sort()).toEqual(of('user').sort())
     expect([...seen].some((s) => /:(2|4|6)$/.test(s))).toBe(true)
   })
 
   it('answers each caller their own files when two ask in turn', async () => {
     const t = newT()
-    const fx = await withOrg(t)
+    const fx = await withReadingAdmin(t)
     const sid = await storeBlob(t)
     const shown = await attach(
       t,
@@ -389,7 +392,7 @@ describe('files.mintUrls reads shared within a call', () => {
 
   it('omits a broken project’s files and answers the visible ones beside them', async () => {
     const t = newT()
-    const fx = await withOrg(t)
+    const fx = await withReadingAdmin(t)
     const sid = await storeBlob(t)
     const broken = await plantProject(t, { org_id: fx.org.id, type: 'project', parent_id: uuid() })
     const lost = await attach(
@@ -413,7 +416,7 @@ describe('files.mintUrls reads shared within a call', () => {
 
   it('omits an attachment of another organization before it reads its task', async () => {
     const t = newT({ transactionLimits: true })
-    const fx = await withOrg(t)
+    const fx = await withReadingAdmin(t)
     const sid = await storeBlob(t)
     const issue = await plantIssue(t, { org_id: fx.org.id, project_id: fx.sub.id })
     // a row that names this organization's task under another organization
@@ -426,7 +429,7 @@ describe('files.mintUrls reads shared within a call', () => {
 
   it('answers pictures of its own row, its organization and the login’s other organizations, and omits the rest', async () => {
     const t = newT()
-    const fx = await withOrg(t)
+    const fx = await withReadingAdmin(t)
     const sid = await storeBlob(t)
     // the guest's login also holds a seat in the other organization
     const elsewhere = await plantSeat(t, {
@@ -455,7 +458,7 @@ describe('files.mintUrls reads shared within a call', () => {
 describe('files.mintUrls reads at the design size', () => {
   it('reads 1,000 profile ids of an organization of 1,000 people, each with a picture, the older app’s call', async () => {
     const t = newT({ transactionLimits: true })
-    const fx = await withOrg(t)
+    const fx = await withReadingAdmin(t)
     const sid = await storeBlob(t)
     const fixture = [fx.admin, fx.user, fx.viewer, fx.guest, fx.agent]
     const ids = await t.run(async (ctx) => {
@@ -488,7 +491,7 @@ describe('files.mintUrls reads at the design size', () => {
     expect(chunk.answered).toBe(100)
   })
 
-  it('reads 100 images of one task once for its task and project, as a user with a team grant and as an admin', async () => {
+  it('reads 100 images of one task once for its task and project, as a user and as an admin with a team grant', async () => {
     const e = await sharedOrg({ tops: 20, subs: () => 3, shares: 1 })
     const sid = await storeBlob(e.t)
     const issue = await plantIssue(e.t, {
@@ -498,7 +501,10 @@ describe('files.mintUrls reads at the design size', () => {
     const ids = await attach(e.t, issue, sid, 100)
     for (const [who, me] of [
       ['a user with a team grant', e.caller],
-      ['an organization admin', e.f.admin],
+      [
+        'an organization admin with the same team grant',
+        { ...e.caller, org_role: 'admin' as const },
+      ],
     ] as const) {
       const all = await measure(e.t, me, { attachment_ids: ids })
       record(`100 images of one task, ${who}`, all)
@@ -541,7 +547,7 @@ describe('files.mintUrls reads at the design size', () => {
 
   it('walks a legacy top-level task’s navigation once a call for its 100 images', async () => {
     const t = newT({ transactionLimits: true })
-    const fx = await withOrg(t)
+    const fx = await withReadingAdmin(t)
     const sid = await storeBlob(t)
     const caller = await plantSeat(t, { org_id: fx.org.id, name: 'Member', accepted_at: NOW })
     // a top-level project of everyday sub-projects, the caller seeing it

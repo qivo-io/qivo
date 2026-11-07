@@ -48,7 +48,7 @@ import {
   type T,
   tick,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 const DEFAULT_FANOUT = { ...FOLLOWER_FANOUT }
@@ -69,7 +69,7 @@ const update = (t: T, actor: Doc<'profiles'>, id: string, patch: Patch) =>
 describe('fan-out: one message per subscriber, minus the actor', () => {
   it('every follower except the actor gets exactly one change message', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     for (const who of [f.admin, f.guest, f.viewer, f.user]) await subscribe(t, who, issue.id)
 
@@ -91,7 +91,7 @@ describe('fan-out: one message per subscriber, minus the actor', () => {
 
   it('zero subscribers: the cheap exit posts nothing at all', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await update(t, f.user, issue.id, { status: 'done' })
     expect(await allMessages(t)).toHaveLength(0)
@@ -101,7 +101,7 @@ describe('fan-out: one message per subscriber, minus the actor', () => {
 describe('recipient-relative narration', () => {
   it('assignment reads Assigned-to-you for the assignee, Assigned-to-<name> for everyone else', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await subscribe(t, f.admin, issue.id)
 
@@ -127,7 +127,7 @@ describe('recipient-relative narration', () => {
 
   it('a fresh mention supersedes the change echo: the mentioned reads the mention, not Description updated', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await subscribe(t, f.guest, issue.id)
 
@@ -169,7 +169,7 @@ describe('recipient-relative narration', () => {
 
   it('a mentioned assignee on a wider edit keeps the documented double message (mention + change without the description line)', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await subscribe(t, f.guest, issue.id)
 
@@ -192,7 +192,7 @@ describe('recipient-relative narration', () => {
 
   it('ATTACH_SLOT resolves per recipient: the key for those who may see, the fixed fallback for those who may not', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const hiddenSub = await plantHiddenSibling(t, f, f.guest)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: hiddenSub.id })
     const child = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -211,7 +211,7 @@ describe('recipient-relative narration', () => {
 
   it('the attach slot is dropped outright when the parent row vanished', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await subscribe(t, f.admin, issue.id)
     await t.run(async (ctx) => {
@@ -226,7 +226,7 @@ describe('recipient-relative narration', () => {
 describe('side-effect writes notify and touch', () => {
   it('clear-remaining-on-attach messages the parent (Remaining cleared) and clears the stamp pair', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const parent = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -252,7 +252,7 @@ describe('side-effect writes notify and touch', () => {
 describe('archive cascade + the shared instant', () => {
   it('one archive click is one message; the reason comment and every message share the mutation now (spine >= holds as equality)', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await subscribe(t, f.guest, issue.id)
 
@@ -309,7 +309,7 @@ describe('archive cascade + the shared instant', () => {
 
   it('descendant/ancestor cascade echoes are suppressed; the root row itself narrates', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const child = await plantIssue(t, {
       org_id: f.org.id,
@@ -339,7 +339,7 @@ describe('archive cascade + the shared instant', () => {
 describe('notifyIssueInsert via issues.create', () => {
   it('the assignee subscribes and reads Assigned to you; nobody else hears about a fresh row', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await as(t, f.user).mutation(api.issues.create, {
       org_id: f.org.id,
@@ -364,7 +364,7 @@ describe('notifyIssueInsert via issues.create', () => {
 
   it('a mentioned assignee gets the mention only, and subscribes once', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await as(t, f.user).mutation(api.issues.create, {
       org_id: f.org.id,
@@ -389,7 +389,7 @@ describe('notifyIssueInsert via issues.create', () => {
 
   it('self-assignment subscribes silently', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await as(t, f.user).mutation(api.issues.create, {
       org_id: f.org.id,
@@ -428,7 +428,7 @@ describe('reviewer notifications', () => {
 
   it('entering Review hands the task to its reviewer: they start following and read Ready for your review first', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -455,7 +455,7 @@ describe('reviewer notifications', () => {
 
   it('a reviewer set in Review is handed the task once: a re-send posts nothing, later edits read plain', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -482,7 +482,7 @@ describe('reviewer notifications', () => {
 
   it('changing the reviewer in Review hands over: the new one is told, the old one reads who took it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -500,7 +500,7 @@ describe('reviewer notifications', () => {
 
   it('clearing the reviewer in Review hands the task back: a muted assignee follows again', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the assignee turned their eye off: no subscription row
     const issue = await plantIssue(t, {
       org_id: f.org.id,
@@ -521,7 +521,7 @@ describe('reviewer notifications', () => {
 
   it('a group never changes hands: clearing its dormant reviewer, by a write or a move, leaves a muted assignee muted', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // groups that kept status Review and a reviewer from their leaf days;
     // the assignee (admin) turned their eye off, the reviewer (guest) follows
     const plantGroup = async () => {
@@ -561,7 +561,7 @@ describe('reviewer notifications', () => {
 
   it('the task passes back and forth: leaving Review re-subscribes the assignee, re-entering re-subscribes the reviewer', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -594,7 +594,7 @@ describe('reviewer notifications', () => {
 
   it('a reviewer who moves the task into Review follows it without messaging themselves', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -615,7 +615,7 @@ describe('reviewer notifications', () => {
 
   it('outside Review a reviewer is only a field: not subscribed, told nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await subscribe(t, f.guest, issue.id)
 
@@ -628,7 +628,7 @@ describe('reviewer notifications', () => {
 
   it('a reviewer already following reads Reviewer set to you outside Review', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await subscribe(t, f.admin, issue.id)
 
@@ -639,7 +639,7 @@ describe('reviewer notifications', () => {
 
   it('a task created In Review belongs to its reviewer: they follow it and read Ready for your review, with no assignee', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await create(t, f.user, {
       id,
@@ -656,7 +656,7 @@ describe('reviewer notifications', () => {
 
   it('a task created with the assignee as its own reviewer sends one line: Assigned to you', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await create(t, f.user, {
       id,
@@ -674,7 +674,7 @@ describe('reviewer notifications', () => {
 
   it('a task created in any other status leaves its reviewer out', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const id = uuid()
     await create(t, f.user, {
       id,
@@ -694,7 +694,7 @@ describe('reviewer notifications', () => {
 describe('postMessage fence', () => {
   it('invisible and foreign-org recipients are dropped silently — no row, no error', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // planted RAW past the subscribe fence: the agent cannot see sub, the
     // other admin is not in this org at all
@@ -716,7 +716,7 @@ describe('agents without an inbox', () => {
    * so nothing would ever clear what it was sent (lib/access.ts keepsInbox). */
   it('a Viewer or Inactive agent is neither messaged nor made a follower; a Standard user agent is', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const agent = (name: string, over: Partial<Doc<'profiles'>>) =>
       plantSeat(t, { org_id: f.org.id, name, kind: 'agent', plannable_hours: undefined, ...over })
@@ -769,7 +769,7 @@ describe('agents without an inbox', () => {
 describe('pruneReadMessages — the 0109 pair invariant', () => {
   it('an arrival retires the read messages it supersedes (the postMessage call site)', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await subscribe(t, f.guest, issue.id)
 
@@ -796,7 +796,7 @@ describe('pruneReadMessages — the 0109 pair invariant', () => {
 
   it('the markRead call site: read rows die except the pair newest (kept read or not); unread always stay', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const READ = '2026-01-02T00:00:00.000Z'
     const base = { org_id: f.org.id, recipient_id: f.guest.id }
 
@@ -908,7 +908,7 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
 
   it('60 arrivals leave 50: the oldest unread and the newest of each kind stay, other items are untouched', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     expect(ITEM_UNREAD_CAP).toBe(50)
@@ -934,7 +934,7 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
 
   it('keeps the dropped count when an earlier-stamped notice becomes the first row', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await arrive(t, f, { recipient: f.guest, issue }, SIXTY)
     // a background step's notice stamped before the item's first row: the
@@ -950,7 +950,7 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
 
   it('moves a count held past the rows a trim reads to the arrival', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // 150 unread rows from before the cap; the newest holds a count of 50
     await t.run(async (ctx) => {
@@ -977,7 +977,7 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
 
   it('keeps the newest row of a kind, not the oldest one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // two mentions, the older one neither the item's oldest row nor among
     // the newest 50
@@ -998,7 +998,7 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
     const t = newT({
       transactionLimits: { documentsWritten: 300 },
     })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await plantSubscription(t, { issue_id: issue.id, profile_id: f.admin.id })
     // 400 unread rows, the second one the only mention, in two transactions
@@ -1047,7 +1047,7 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
 
   it('an item at the cap keeps every message', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await arrive(t, f, { recipient: f.guest, issue }, Array(ITEM_UNREAD_CAP).fill('change'))
     expect(await details(t, f.guest, issue)).toEqual(arrivals(0, ITEM_UNREAD_CAP - 1))
@@ -1055,7 +1055,7 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
 
   it('a capped item still reads down to one row, snoozes whole and wakes on news, then trims', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const guest = as(t, f.guest)
     const ids = async () => (await messagesFor(t, f.guest.id, issue.id)).map((m) => m.id)
@@ -1095,7 +1095,7 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
 describe('notifyCommentInsert (model — composed by phase 5 comments.create)', () => {
   it('mentions hear the mention, other followers hear New comment, the author subscribes silently — all at one instant', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await subscribe(t, f.guest, issue.id)
     await subscribe(t, f.viewer, issue.id)
@@ -1140,7 +1140,7 @@ describe('notifyCommentInsert (model — composed by phase 5 comments.create)', 
     // with the same code (FOLLOWER_FANOUT), with room for all of them
     Object.assign(FOLLOWER_FANOUT, { inline: 1000, inlineRoom: 10_000 })
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // 240 followers who see the task through one of 8 teams sharing its
     // sub-project, and one whose only team shares a project they cannot
@@ -1211,7 +1211,7 @@ describe('notifyCommentInsert (model — composed by phase 5 comments.create)', 
 
   it("a follower's sight reads at most SIGHT_READ rows, however large a sharing team is", async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // an all-staff team of 1,500 that shares the task's sub-project, one of
     // whom follows the task
@@ -1269,7 +1269,7 @@ describe('notifyCommentInsert (model — composed by phase 5 comments.create)', 
 
   it('asks about a few followers alone, without reading a sharing team in full', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // a team of 600 shares the task's sub-project; two of them follow it
     const people = await t.run(async (ctx) => {
@@ -1328,7 +1328,7 @@ describe('notifyCommentInsert (model — composed by phase 5 comments.create)', 
 
   it("a seed's visibility memo answers repeat checks; without a preload each check is live", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await subscribe(t, f.guest, issue.id)
     const visibility: RecipientSight = new Map()
@@ -1419,7 +1419,7 @@ describe('extractMentions (0075, not 0074)', () => {
 describe('template bytes', () => {
   it('every narration template, byte for byte', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await subscribe(t, f.guest, issue.id)
     const step = async (patch: Patch, expected: string) => {
@@ -1471,7 +1471,7 @@ describe('template bytes', () => {
 
   it('multi-part messages join as separate sentences', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await subscribe(t, f.guest, issue.id)
     await update(t, f.user, issue.id, { status: 'progress', priority: 'high' })

@@ -222,7 +222,11 @@
 //   role (user)          the signed-in person's organization role, user,
 //                        viewer or admin; a Viewer's Overview reads one
 //                        owner's load a query, as a guest's does, and only
-//                        an admin opens Settings › Labels
+//                        an admin opens Settings › Labels. An admin's
+//                        workspace and views hold the programs the
+//                        person's own grants reach, as anyone's, and
+//                        Settings' project lists and project pages reach
+//                        the hidden program by management
 //   unheld (0)           leaves the N highest-numbered visible tasks without
 //                        a parent or subtasks out of the workspace's parts
 //                        and snapshot:forMe, with their labels, files,
@@ -261,7 +265,10 @@
 //                        capped (both choices refused past
 //                        LIMITS.removalHolders.max), too_large, refused,
 //                        leave_only, unsettled (a caller who may make
-//                        neither choice, for the notice), slow (both reads
+//                        neither choice, for the notice), keep-only (a
+//                        caller who may keep the people as Viewers but not
+//                        reassign the tasks, as an admin who manages a
+//                        project without Edit on it), slow (both reads
 //                        answer after two seconds), and for the Reassign
 //                        picker choices-stopped, choices-not-ready and
 //                        choices-error; several joined by commas. With the
@@ -2911,12 +2918,11 @@ async function mutate(name, args) {
       )
       // the creator's own grant on a top-level project, as the server gives
       // it (convex/model/projects.ts createProjectCore): User for a creator
-      // who is not an admin and names someone else as lead, unless the
+      // who names someone else as lead, an admin as anyone, unless the
       // request names their own entry, a level or null for none
       if (row.type === 'meta') {
         const own = args.access?.[me.id]
         const mine = creatorGrant({
-          admin: me.org_role === 'admin',
           creator: me.id,
           lead: row.lead_id,
           own: own === 'lead' ? undefined : own,

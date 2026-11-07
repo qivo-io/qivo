@@ -1,9 +1,9 @@
-/* The read-only admin transition report (internal/adminAccessReport.ts):
- * what each organization admin keeps and loses once admin status stops
- * giving access to project work. The ordinary level it judges by must be
- * the level a standard user with the same rows holds, so these tests
- * compare it with lib/access.ts projectLevel for such a user, over every
- * access shape and the Northstar seed. */
+/* The read-only admin access report (internal/adminAccessReport.ts):
+ * what each organization admin's ordinary access does not reach, now that
+ * admin status gives no access to project work. The ordinary level it
+ * judges by must be the level a standard user with the same rows holds, so
+ * these tests compare it with lib/access.ts projectLevel for such a user,
+ * over every access shape and the Northstar seed. */
 /// <reference types="vite/client" />
 
 import type { GenericDocument } from 'convex/server'
@@ -15,7 +15,6 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
   ADMINS,
   OWN,
-  ordinaryOf,
   PART,
   ROOM,
   RUN,
@@ -35,7 +34,8 @@ import {
 } from '../lib/access'
 import { byId, newWindowKey } from '../lib/db'
 import { ACCESS_LEVELS, type AccessLevel } from '../lib/enums'
-import { LIMITS } from '../lib/limits'
+import { LIMITS, NAME_MAX } from '../lib/limits'
+import { nameKey } from '../lib/nameKey'
 import { insertTask } from '../model/descriptions'
 import schema from '../schema'
 import { newTeam, SHAPES } from './accessShapes.setup'
@@ -251,7 +251,7 @@ async function compareWithUser(t: T, admin: Doc<'profiles'>, orgIds: readonly st
         ),
       )
     ).flat()
-    const ordinary = projectLevelsOf(ctx, ordinaryOf(admin))
+    const ordinary = projectLevelsOf(ctx, admin)
     const levels = async (
       level: (p: Doc<'projects'>, nav: boolean) => Promise<AccessLevel | null>,
     ) =>
@@ -271,11 +271,12 @@ describe('the projects phase', () => {
   it('reports every in-tree live project as leaving an admin with no grant, share or lead', async () => {
     const t = newT()
     const f = await withOrg(t)
-    // the fixture's admin is a plain member of a team that shares nothing
+    // the fixture's admin is a plain member of a team that shares nothing;
+    // the other organization's admin leads its project, which they keep
     const findings = await findingsOf(t, 'projects')
     expect(lines(findings)).toEqual(
-      lines([
-        ...[f.meta, f.sub, f.sub2, f.hidden].map((p) => ({
+      lines(
+        [f.meta, f.sub, f.sub2, f.hidden].map((p) => ({
           kind: 'leaves' as const,
           org_id: f.org.id,
           profile_id: f.admin.id,
@@ -283,19 +284,11 @@ describe('the projects phase', () => {
           key: p.key,
           top_level_id: p.parent_id ?? p.id,
         })),
-        {
-          kind: 'leaves',
-          org_id: f.otherOrg.id,
-          profile_id: f.otherAdmin.id,
-          project_id: f.otherProject.id,
-          key: f.otherProject.key,
-          top_level_id: f.otherProject.id,
-        },
-      ]),
+      ),
     )
     const pages = await pagesOf(t, 'projects')
     expect(pages.reduce((n, page) => n + page.checked, 0)).toBe(5)
-    expect(pages.reduce((n, page) => n + page.kept, 0)).toBe(0)
+    expect(pages.reduce((n, page) => n + page.kept, 0)).toBe(1)
   })
 
   it('keeps what leadership, grants, team shares and navigation reach', async () => {
@@ -332,7 +325,8 @@ describe('the projects phase', () => {
     const pages = await pagesOf(t, 'projects')
     // five admins of the organization on four projects, and the other's one
     expect(pages.reduce((n, page) => n + page.checked, 0)).toBe(5 * 4 + 1)
-    expect(pages.reduce((n, page) => n + page.kept, 0)).toBe(3 + 1 + 1)
+    // and the other organization's admin keeps the project they lead
+    expect(pages.reduce((n, page) => n + page.kept, 0)).toBe(3 + 1 + 1 + 1)
   })
 
   it('leaves out inactive admins, other roles, projects outside a meta tree and archived projects', async () => {
@@ -366,17 +360,15 @@ describe('the projects phase', () => {
     await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: archived.id })
 
     const findings = await findingsOf(t, 'projects')
-    expect(new Set(findings.map((finding) => finding.profile_id))).toEqual(
-      new Set([f.admin.id, f.otherAdmin.id]),
-    )
+    // the other organization's admin leads its project, so only the
+    // fixture's admin has findings
+    expect(new Set(findings.map((finding) => finding.profile_id))).toEqual(new Set([f.admin.id]))
     expect(await projectKinds(t, f.admin.id)).toEqual(
       Object.fromEntries([f.meta, f.sub, f.sub2, f.hidden].map((p) => [p.id, 'leaves'])),
     )
-    expect(findings).toHaveLength(5)
+    expect(findings).toHaveLength(4)
     const all = await t.action(report.run, {})
-    expect(all.findings.filter((finding) => finding.profile_id !== f.admin.id)).toEqual([
-      expect.objectContaining({ kind: 'leaves', profile_id: f.otherAdmin.id }),
-    ])
+    expect(all.findings.filter((finding) => finding.profile_id !== f.admin.id)).toEqual([])
   })
 
   it('leaves a top-level project with more sub-projects than a page reads unchecked', async () => {
@@ -462,12 +454,13 @@ describe("an admin's ordinary level", () => {
     // each role
     const t = newT()
     const f = await withOrg(t)
+    const twin = { ...f.admin, org_role: 'user' as const }
     expect(receivesTeamAccess(f.admin)).toBe(true)
-    expect(receivesTeamAccess(ordinaryOf(f.admin))).toBe(true)
+    expect(receivesTeamAccess(twin)).toBe(true)
     await shareThroughTeam(t, f, f.meta, f.admin, 'user')
     const shares = await t.run(async (ctx) => ({
       admin: (await accessRowsOf(ctx, f.admin)).shares.length,
-      user: (await accessRowsOf(ctx, ordinaryOf(f.admin))).shares.length,
+      user: (await accessRowsOf(ctx, twin)).shares.length,
     }))
     expect(shares).toEqual({ admin: 1, user: 1 })
   })
@@ -905,7 +898,7 @@ describe('paging', () => {
       expect(pages).toHaveLength(1)
       whole.set(phase, pages[0].findings)
     }
-    expect(lines(whole.get('projects') ?? [])).toHaveLength(9)
+    expect(lines(whole.get('projects') ?? [])).toHaveLength(8)
     expect(lines(whole.get('work') ?? [])).toHaveLength(22)
     expect(lines(whole.get('machine') ?? [])).toHaveLength(8)
     const cursors: string[] = []
@@ -977,10 +970,10 @@ describe('paging', () => {
           const findings = await findingsOf(t, phase, size)
           expect(findings.filter((found) => found.org_id === f.org.id)).toEqual([orgFinding])
         }
-        // the other organization's admin is still judged
-        expect(await findingsOf(t, 'projects', size)).toContainEqual(
-          expect.objectContaining({ kind: 'leaves', profile_id: f.otherAdmin.id }),
-        )
+        // the other organization's admin is still judged, and keeps the
+        // project they lead
+        const pages = await pagesOf(t, 'projects', size)
+        expect(pages.reduce((n, page) => n + page.kept, 0)).toBe(1)
       }
     } finally {
       ADMINS.most = 1_000
@@ -1028,10 +1021,11 @@ describe('paging', () => {
     const result = await t.action(report.run, { page_size: 1 })
     expect(result.failed).toEqual(expect.any(String))
     // what the pages before it found is kept: the admin keeps none of the
-    // four projects before it, and the other organization's admin theirs
+    // four projects before it, and the other organization's admin keeps the
+    // one they lead, a page of its own
     expect(result.checked).toBeGreaterThanOrEqual(4)
-    expect(result.counts.kept).toBe(0)
-    expect(result.findings).toHaveLength(result.checked)
+    expect(result.counts.kept).toBeLessThanOrEqual(1)
+    expect(result.findings).toHaveLength(result.checked - result.counts.kept)
     const at = JSON.parse(result.cursor ?? 'null')
     expect(at).toMatchObject({ phase: 'projects', org: f.org.id })
     // the page it names fails again, and the one before it did not
@@ -1412,6 +1406,43 @@ async function measuredPages(t: T, phase: Phase, size: number): Promise<Measured
 }
 
 describe('within Convex limits', () => {
+  it("reads an organization's ADMINS.most admins at the name caps within the half of a page's limits", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the widest name a person may have: NAME_MAX characters whose name key
+    // NFKD expands, as U+FDFA's to 18 characters, beside the longest email
+    const name = '\uFDFA'.repeat(NAME_MAX)
+    const size = await t.run(async (ctx) => {
+      const _id = await ctx.db.insert('profiles', {
+        id: uuid(),
+        auth_user_id: uuid(),
+        org_id: f.org.id,
+        email: `${'e'.repeat(LIMITS.email.max - '@testbed.test'.length)}@testbed.test`,
+        name,
+        initials: 'ﷺﷺﷺ',
+        color: '#7a7ad0',
+        org_role: 'admin',
+        active: true,
+        kind: 'person',
+        plannable_hours: LIMITS.plannableHours.max,
+        message_retention_days: LIMITS.messageRetention.max,
+        avatar_storage_id: await ctx.storage.store(new Blob([]) as never),
+        sample_avatar: 'daniel',
+        accepted_at: NOW,
+        can_create_projects: true,
+        created_at: NOW,
+        name_key: nameKey(name),
+      })
+      return getDocumentSize((await ctx.db.get(_id)) as Doc<'profiles'>)
+    })
+    console.info('admin access report: a profile at the name caps', { bytes: size })
+    // ADMINS' docstring states the figure
+    expect(size).toBeGreaterThan(3500)
+    expect(size).toBeLessThan(3700)
+    // a page's half of Convex's 16 MiB holds an organization's admins whole
+    expect(size * ADMINS.most).toBeLessThan(16 * 1024 * 1024 * ROOM.share)
+  })
+
   it('finishes a run past a project shared with more teams than a page reads, which the admin is in', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)

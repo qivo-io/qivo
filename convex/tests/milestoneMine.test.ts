@@ -479,7 +479,9 @@ describe('which projects a mine read lists', () => {
     const reach = await program(t, org, 'Reach only')
     await grant(t, reach.sub, me)
     await plantIssue(t, { org_id: org, project_id: reach.sub.id, assignee_id: me.id })
-    // a second seat of the same login, in another organization
+    // a second seat of the same login, in another organization, where it
+    // is an organization admin; admin status gives no level, so the seat
+    // reaches Elsewhere's work through a User grant, as anyone would
     const seat = await plantSeat(t, {
       org_id: f.otherOrg.id,
       name: 'user',
@@ -487,6 +489,7 @@ describe('which projects a mine read lists', () => {
       org_role: 'admin',
       accepted_at: NOW,
     })
+    await grant(t, f.otherProject, seat)
     const otherSub = await plantProject(t, {
       org_id: f.otherOrg.id,
       type: 'project',
@@ -626,6 +629,21 @@ describe('which projects a mine read lists', () => {
     await withReach(t)
     const after = await caller.query(api.milestones.section, mineAsk())
     expect(after.projects).toEqual(want.filter((id) => id !== reach.top.id))
+
+    // and once the second seat no longer holds its grant, Elsewhere goes
+    // too, although that seat is the organization's admin
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('project_access')
+        .withIndex('by_profile', (q) => q.eq('profile_id', seat.id))
+        .unique()
+      if (row) await ctx.db.delete(row._id)
+    })
+    await withReach(t)
+    const unheld = await caller.query(api.milestones.section, mineAsk())
+    expect(unheld.projects).toEqual(
+      want.filter((id) => id !== reach.top.id && id !== f.otherProject.id),
+    )
   })
 
   it("lists for every Northstar person the projects of My view's health table and the Roadmap's tracks", async () => {

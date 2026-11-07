@@ -22,7 +22,7 @@ import {
   reap,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { plantTicket } from './uploadTickets.setup'
 
@@ -121,7 +121,7 @@ async function setup() {
   t.registerComponent('betterAuth', authSchema, import.meta.glob('../betterAuth/**/*.*s'))
   const owner = await account(t, 'owner')
   const other = await account(t, 'other')
-  const org = await withOrg(t)
+  const org = await withReadingAdmin(t)
   await t.run(async (ctx) => {
     await ctx.db.patch(org.user._id, { auth_user_id: owner.id })
     await ctx.db.patch(org.admin._id, { auth_user_id: other.id })

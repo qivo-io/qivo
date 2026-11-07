@@ -47,7 +47,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
 import { fenceWorkload } from './orgLoad.setup'
@@ -83,7 +83,7 @@ type Fx = OrgFixture & {
  * sub-project of SKNK and a second staff user who sees only TBED, every
  * profile keyed as on a deployment (nameKeys.setup.ts keyOrg). */
 async function setup(t: T = newT()): Promise<Fx> {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   await t.run((ctx) =>
     ctx.db.insert('project_access', {
       project_id: f.meta.id,

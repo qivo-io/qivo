@@ -11,24 +11,24 @@
  * top-level project by the navigation rule (projectNav.setup.ts navSees);
  * a live sub-project, with a search, when they hold a level on it; an
  * archived top-level meta when they hold a level on it for a reason of
- * their own (projectLevel without navigation of ordinaryOf(seat)) or on an
+ * their own (projectLevel without navigation) or on an
  * archived sub-project beneath it; an archived sub-project when they hold
- * a level on it. A right is Lead access by the writes' level rule
- * (projectLevel of the seat as it is, 'lead'), which an admin holds on
- * every project today; the admin access split replaces that branch, and
- * these rights with it, by the management predicate. */
+ * a level on it. A right is management, which the writes ask
+ * (model/projects.ts assertManages): an active organization admin, on any
+ * project of a meta tree of their organization, or a seat whose level by
+ * projectLevel is Lead, which only a project's effective lead holds. An
+ * admin's level is their ordinary one, as anyone's. */
 
 import { compareValues } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { ordinaryOf, projectLevel } from '../lib/access'
+import { projectLevel } from '../lib/access'
 import { byId } from '../lib/db'
 import { nameKey } from '../lib/nameKey'
 import type { T } from './helpers.setup'
 import { navSees } from './projectNav.setup'
 
-/* projectLevel of `seat` as ordinary access judges it, null where it
- * throws for a broken tree. */
+/* projectLevel of `seat`, null where it throws for a broken tree. */
 async function levelOf(
   ctx: QueryCtx,
   seat: Doc<'profiles'>,
@@ -36,24 +36,27 @@ async function levelOf(
   navigation = true,
 ): Promise<string | null> {
   try {
-    return await projectLevel(ctx, ordinaryOf(seat), p, navigation)
+    return await projectLevel(ctx, seat, p, navigation)
   } catch {
     return null
   }
 }
 
-/** Whether `seat` holds Lead access on `p` by the writes' rule
- * (hasProjectLevel 'lead': projectLevel of the seat as it is). */
+/** Whether `seat` manages `p` by the writes' rule: Lead by projectLevel,
+ * or an active organization admin of `p`'s organization with `p` in a
+ * meta tree (a top-level meta, or a sub-project of one). */
 export async function leads(
   ctx: QueryCtx,
   seat: Doc<'profiles'>,
   p: Doc<'projects'>,
 ): Promise<boolean> {
   try {
-    return (await projectLevel(ctx, seat, p, false)) === 'lead'
+    if ((await projectLevel(ctx, seat, p, false)) === 'lead') return true
   } catch {
     return false
   }
+  if (!admin(seat) || p.org_id !== seat.org_id) return false
+  return topMeta(p) || (await parentOf(ctx, p)) !== null
 }
 
 /* Whether `seat` is an active organization admin. */

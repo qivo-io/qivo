@@ -37,7 +37,7 @@ let container: HTMLDivElement
 let root: Root
 
 const CONFLICT =
-  'workdays cannot start on Sunday, because a project can have at most 1 milestone a week, and then Testbed platform (TBED) would have “Alpha” on 2026-05-10 and “Beta” on 2026-05-11 in the week of 2026-05-10 (W19). Move or delete milestones so that no project has two in one week, then change the first day again.'
+  "workdays cannot start on Sunday, because a project can have at most 1 milestone a week, and then Testbed platform (TBED) would have “Alpha” on 2026-05-10 and “Beta” on 2026-05-11 in the week of 2026-05-10 (W19). Move or delete milestones so that no project has two in one week, or ask the project's lead to, then change the first day again."
 
 beforeEach(async () => {
   vi.resetModules()

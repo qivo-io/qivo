@@ -1906,12 +1906,23 @@ function App() {
   // refused create must not leave the user inside a project that then
   // disappears. `shown` is the organization New sub-project's parent check
   // named, which the create goes to (P.addProject); under a parent the
-  // workspace does not hold nothing paints, and App moves into the new
+  // workspace does not hold nothing paints. App moves into a new
   // sub-project, and makes its starter task, only once the workspace holds
-  // it.
+  // it and the server's navigation read confirms that the creator sees it
+  // (P.resolveProject), since the paint under a held parent shows it
+  // either way and an organization admin manages parents they cannot see.
+  // `sees` false, the dialog's own knowledge that they will not, skips the
+  // read and says so. The starter task also needs the workspace's level
+  // rule to give the creator Edit there (P.canWrite), as the server's task
+  // create does, so a Viewer of the parent, who sees the sub-project, gets
+  // the plain toast and no task, also where the dialog offered one.
   const createProject = (
     p: NewProjectInput,
-    { withStarter, shown }: { withStarter: boolean; shown?: ProjectShown },
+    {
+      withStarter,
+      shown,
+      sees,
+    }: { withStarter: boolean; shown?: ProjectShown; sees?: boolean | null },
   ) => {
     // while edits are paused the dialog stays open with what was typed
     if (P.refusePausedEdit()) return
@@ -1931,36 +1942,55 @@ function App() {
         // once the live transport has delivered what the create made
         // visible, or while a paint under a held parent stays
         const held = !!id && !!P.project(id)
-        if (withStarter && held) {
-          P.addIssue({
-            title: p.name,
-            project: id,
-            status: 'backlog',
-            priority: 'medium',
-            assignee: p.lead || null,
-            parent: null,
+        /* What follows once whether the creator sees the project is known:
+           true, false or null for unknown. */
+        const follow = (seen: boolean | null) => {
+          if (withStarter && held && seen === true && P.canWrite(id)) {
+            P.addIssue({
+              title: p.name,
+              project: id,
+              status: 'backlog',
+              priority: 'medium',
+              assignee: p.lead || null,
+              parent: null,
+            })
+          }
+          // A top-level project's visibility comes from the draft by the
+          // rule the dialog's warning used, not from the rows, which hold
+          // the project only until the delivery that holds it arrives when
+          // the creator cannot see it. A sub-project opens once the
+          // workspace holds it and the creator is confirmed to see it.
+          const saved = afterProjectSaved({
+            type: p.type,
+            name: p.name,
+            visible: p.type === 'meta' ? P.seesNewProject(p) : held,
+            sees: seen,
           })
+          window.showToast?.(saved.message)
+          // stay put when the creator cannot see it, or moved elsewhere
+          // while it saved; otherwise follow the new project
+          if (!saved.open || placeRef.current !== placeAtCreate) return
+          setScope(id)
+          setProjectsOpen(false)
+          setSync(null)
+          focusAfterMove.current = () => projectTarget(id)
+          // the tree's row may come a commit later than the move
+          askFocusRow(id, id)
         }
-        // A top-level project's visibility comes from the draft by the rule
-        // the dialog's warning used, not from the rows, which hold the
-        // project only until the delivery that holds it arrives when the
-        // creator cannot see it. A sub-project opens once the workspace
-        // holds it.
-        const saved = afterProjectSaved({
-          type: p.type,
-          name: p.name,
-          visible: p.type === 'meta' ? P.seesNewProject(p) : held,
-        })
-        window.showToast?.(saved.message)
-        // stay put when the creator cannot see it, or moved elsewhere while it
-        // saved; otherwise follow the new project
-        if (!saved.open || placeRef.current !== placeAtCreate) return
-        setScope(id)
-        setProjectsOpen(false)
-        setSync(null)
-        focusAfterMove.current = () => projectTarget(id)
-        // the tree's row may come a commit later than the move
-        askFocusRow(id, id)
+        if (p.type === 'meta' || !id) follow(true)
+        else if (sees === false) follow(false)
+        else
+          void P.resolveProject(id).then((answer) =>
+            follow(
+              answer === null
+                ? null
+                : answer.state === 'ok'
+                  ? true
+                  : answer.reason === undefined
+                    ? false
+                    : null,
+            ),
+          )
       },
       () => {
         answered(false)

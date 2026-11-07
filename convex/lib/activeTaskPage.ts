@@ -9,9 +9,9 @@
  * included, reads only those projects, each one's active tasks in the
  * documented order (issues by_project_archived_created, created_at and then
  * number), merged side by side. So where a page stops and whether more
- * follows never depend on a task of a project the caller cannot read. Until
- * the admin access split lands an admin reads every project; after it the
- * same merge follows the split's rule through `readable`.
+ * follows never depend on a task of a project the caller cannot read.
+ * Since the admin access split an admin's readable projects are those
+ * their own leads, grants and team shares reach, as anyone's.
  *
  * The reads that follow hidden data are those lib/machineSubtree.ts names:
  * how many active subtasks a row has in projects the caller cannot read,
@@ -71,24 +71,27 @@ import { ownerSettled, ROW_BYTES } from './viewReads'
  *
  * Measured on 2 November 2026 in convex/tests/activeTaskPagesScale.test.ts
  * under convex-test's transaction limits, at the design size with ordinary
- * text, one figure raised a case. Before the page, a member reads 11
- * ranges, 2,027 documents and 0.91 MiB of a catalogue of 2,000 projects
- * and sub-projects, live and archived. An organization admin's page of 200
- * rows over its 700 live projects reads 2,099 ranges, 3,743 documents and
- * 2.02 MiB in all, and a search that matches none ends at the budget with
- * no rows and a cursor (2,910 ranges, 6,958 documents, 3.82 MiB). A
- * member's page of 200 rows reads 1,556 ranges over 60 sub-projects in that
- * catalogue and 1,779 over 200 sub-projects, a page of a family of 30
- * sub-projects 1,364, an admin's page in an organization of 1,000 people
- * 1,360, and a member's page 1,495 in 5 teams, 1,491 where each project is
- * shared with 5 teams and 1,512 where a team shares 50 live and 150
- * archived projects. A staff page whose 200 rows have 25 owners of about
- * 100 open tasks in four sub-projects each judges 53 rows' delays within
- * the delays' share and answers 91 unavailable; an owner past the owner
- * reader's bounds answers unavailable at once. That a row of a person with
- * very much open work says unavailable on every page, while the task's own
- * read judges it, is the agreed rule for figures that depend on people's
- * workloads (limits plan, "Design size", owner, 2026-11-01). */
+ * text, one figure raised a case, and on 7 November 2026 for the cases the
+ * admin access split changed. Before the page, a member reads 11 ranges,
+ * 2,027 documents and 0.91 MiB of a catalogue of 2,000 projects and
+ * sub-projects, live and archived. A member's page of 200 rows over 60
+ * sub-projects in that catalogue reads 1,556 ranges, 3,383 documents and
+ * 1.74 MiB in all, an organization admin in the member's teams the same
+ * page in 1,559 ranges, and the admin's search that matches none reads the
+ * 60 sub-projects to their end with no rows (481 ranges, 2,856 documents,
+ * 1.36 MiB). A member's page of 200 rows reads 1,779 ranges over 200
+ * sub-projects, where a search that matches none ends in 1,346, a page of
+ * a family of 30 sub-projects 1,364, the page of the lead of 20
+ * sub-projects in an organization of 1,000 people 1,360, and a member's
+ * page 1,495 in 5 teams, 1,491 where each project is shared with 5 teams
+ * and 1,512 where a team shares 50 live and 150 archived projects. A staff
+ * page whose 200 rows have 25 owners of about 100 open tasks in four
+ * sub-projects each judges 53 rows' delays within the delays' share and
+ * answers 91 unavailable; an owner past the owner reader's bounds answers
+ * unavailable at once. That a row of a person with very much open work says
+ * unavailable on every page, while the task's own read judges it, is the
+ * agreed rule for figures that depend on people's workloads (limits plan,
+ * "Design size", owner, 2026-11-01). */
 export const ACTIVE_PAGE = {
   ranges: 3800,
   documents: 20_000,

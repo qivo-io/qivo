@@ -15,21 +15,21 @@
  * (orderedListAsk) and answers such a check with the access_unchecked
  * refusal instead, as the navigation reads do.
  *
- * One gate (settingsGate) decides who reads a project: whoever sees it
- * (lib/access.ts projectLevel, navigation included, the rule behind
- * canSeeProject) or manages it (canManageOwnProjectAccess). Today every
- * manager also sees the project; the admin access split takes an admin's
- * ordinary access away from projects they only manage, and the gate keeps
- * them in, as the Settings project lists list every project of an admin's
- * organization by management (model/projectSettingsLists.ts). An unknown
- * id, a project of another organization, one in Deleted
- * items, one outside a meta tree and one the caller neither sees nor
- * manages all answer `unavailable`, so an answer tells nothing about a
- * project the caller cannot reach.
+ * One gate (settingsGate) decides who reads a project: whoever manages it
+ * (canManageOwnProjectAccess) or sees it (lib/access.ts projectLevel,
+ * navigation included, the rule behind canSeeProject). An organization
+ * admin manages every project of their organization and sees only the
+ * projects their own leads, grants and team shares reach, so the gate lets
+ * them in by management, as the Settings project lists list every project
+ * of an admin's organization by management (model/projectSettingsLists.ts).
+ * An unknown id, a project of another organization, one in Deleted items,
+ * one outside a meta tree and one the caller neither manages nor sees all
+ * answer `unavailable`, so an answer tells nothing about a project the
+ * caller cannot reach.
  *
  * Rights come from the writes' own rules (settingsRights), computed with
- * canManageOwnProjectAccess, the predicate the admin access split moves
- * those writes onto, never from the caller's level. The lists are explicit
+ * canManageOwnProjectAccess, the predicate those writes ask, never from the
+ * caller's level. The lists are explicit
  * grants, never effective access, and a list or picker never becomes a
  * permission map: the writes stay projects.setAccess, removeAccess, update
  * and inviteGuest with their own checks.
@@ -49,9 +49,9 @@ import {
   accessOf,
   canChangeAccess,
   canLeadProjects,
-  canManageOwnProjectAccess,
   inMetaTree,
   isAccessUnchecked,
+  managesIn,
   NO_USER_MANAGEMENT,
 } from '../lib/access'
 import type { ReadCeiling } from '../lib/archivedTasks'
@@ -173,6 +173,7 @@ export type SettingsGate =
       parent: Doc<'projects'> | null
       root: Doc<'projects'>
       level: AccessLevel | null
+      accessible: boolean | null
       manages: boolean
     }
 
@@ -194,27 +195,49 @@ async function treeOf(
 
 /**
  * The one gate of a project's settings, lists and pickers for `me`: whoever
- * sees `project` (lib/access.ts projectLevel, navigation included) or
- * manages it (canManageOwnProjectAccess) reads it. Answers `unavailable`
- * for no project, one of another organization or outside a meta tree, and
- * one `me` neither sees nor manages; `archived` for an archived project `me`
- * sees or manages; else `ok`. Each predicate runs once.
+ * manages `project` (canManageOwnProjectAccess) or sees it (lib/access.ts
+ * projectLevel, navigation included) reads it. Answers `unavailable` for no
+ * project, one of another organization or outside a meta tree, and one
+ * `me` neither manages nor sees; `archived` for an archived project `me`
+ * manages or sees; else `ok`. Each predicate runs once.
  *
- * The level comes from lib/access.ts accessOf, which answers projectLevel's
- * level within bounded reads (OWN_READS): whether a top-level project shows
- * to `me` for navigation comes from the reach rows of `me`'s seat and teams
- * under it, a few rows, once the organization's are complete, or else from
- * its sub-projects (one range) and `me`'s own grants, memberships and team
- * shares, where projectLevel's walk reads each sub-project's grant and team
- * shares and, for each share, its team and `me`'s membership, past Convex's
- * 4,096 index ranges under a large shared project. A check those bounds
- * stopped (accessUnchecked) answers `unavailable`, as for a project `me`
- * cannot reach; a caller who manages the project gets `lead` before any of
- * those reads (levelUnder), so only one who does not can meet it.
- * canManageOwnProjectAccess reads the root again, one range for a
- * sub-project. After the admin access split an admin reaches a project they
- * only manage through `manages`, which every row the Settings project lists
- * give an admin passes (model/projectSettingsLists.ts).
+ * Management is asked first, with lib/access.ts managesIn on the tree the
+ * gate already read, so it reads nothing more and never depends on
+ * ordinary access. The level then comes from lib/access.ts accessOf, which
+ * answers projectLevel's level within bounded reads (OWN_READS): whether a
+ * top-level project shows to `me` for navigation comes from the reach rows
+ * of `me`'s seat and teams under it, a few rows, once the organization's
+ * are complete, or else from its sub-projects (one range) and `me`'s own
+ * grants, memberships and team shares, where projectLevel's walk reads
+ * each sub-project's grant and team shares and, for each share, its team
+ * and `me`'s membership, past Convex's 4,096 index ranges under a large
+ * shared project. A check those bounds stopped (accessUnchecked) answers
+ * `unavailable` to a caller who does not manage the project, as for a
+ * project `me` cannot reach, and `level` and `accessible` null, unknown, to
+ * one who does, whose page decides nothing by them. `accessible` is
+ * accessOf's accessible, from the same reads, which asks nothing more of a
+ * top-level project than its level did.
+ *
+ * A timing of projectSettings.get and projects.create on 7 November 2026 on
+ * a local backend (8 vCPU, one call at a time), in one quiet session and
+ * one beside 8 busy loops, with the organization's reach rows complete,
+ * gave these figures for the whole call with its sign-in. On a top-level
+ * project of 30 live and 40 archived sub-projects that an organization
+ * admin reaches in none, projectSettings.get reads 13 ranges, 27 documents
+ * and 0.01 MiB in 9 to 17 ms of JavaScript in both sessions and answers ok
+ * by management with level null. A standard user with the same rows reads
+ * 12 and 26 and gets unavailable, and the project's lead reads 5 and 3. The
+ * gate reads the same for the admin and the standard user, and the admin's
+ * one more range and document is the lead's profile that an ok answer
+ * reads. On an everyday project the admin's read costs the same as the
+ * standard user's, 9 ranges and 6 documents each (level user).
+ * projects.create of a sub-project under the first project reads 18 ranges,
+ * 83 documents and 0.03 MiB for the admin, who manages the parent and reads
+ * no level, and 17 and 84 for the lead. The standard user, who neither
+ * manages nor sees the parent, is refused after projectLevel's walk, in a
+ * call of 149 ranges and 73 documents. Every call stayed at or under 60 ms
+ * of JavaScript in the busy session, except one of the lead's creates at
+ * 178 ms.
  */
 export async function settingsGate(
   ctx: QueryCtx,
@@ -224,18 +247,23 @@ export async function settingsGate(
   if (project === null || project.org_id !== me.org_id) return { state: 'unavailable' }
   const tree = await treeOf(ctx, project)
   if (tree === null) return { state: 'unavailable' }
+  const manages = managesIn(me, project, tree.root)
   const read = tree.parent === null ? [project] : [project, tree.parent]
-  let level: AccessLevel | null
+  const access = accessOf(ctx, me, read)
+  let level: AccessLevel | null = null
+  let accessible: boolean | null = null
   try {
-    level = await accessOf(ctx, me, read).level(project.id)
+    level = await access.level(project.id)
+    accessible = await access.accessible(project.id)
   } catch (e) {
     if (!isAccessUnchecked(e)) throw e
-    return { state: 'unavailable' }
+    if (!manages) return { state: 'unavailable' }
+    level = null
+    accessible = null
   }
-  const manages = await canManageOwnProjectAccess(ctx, me, project)
   if (level === null && !manages) return { state: 'unavailable' }
   if (project.archived_at !== undefined) return { state: 'archived', project, parent: tree.parent }
-  return { state: 'ok', project, ...tree, level, manages }
+  return { state: 'ok', project, ...tree, level, accessible, manages }
 }
 
 /** settingsGate for the project with id `id`. */
@@ -253,10 +281,10 @@ export const settingsProject = async (
  * a pending deletion is billing.status's. */
 export type SettingsRights = {
   /** projects.update of the name, key, description, review time and delay
-   * tracking (model/projects.ts updateProjectCore, assertLead) */
+   * tracking (model/projects.ts updateProjectCore, assertManages) */
   can_edit: boolean
   /** projects.update of lead_id: a person, and canManageProjectUsers for a
-   * top-level project, assertLead for a sub-project */
+   * top-level project, assertManages for a sub-project */
   can_change_lead: boolean
   /** projects.setAccess and removeAccess for a person
    * (model/projectAccess.ts assertManagesAccess) */
@@ -265,12 +293,12 @@ export type SettingsRights = {
   can_manage_teams: boolean
   /** projects.inviteGuest: not in the demo, and canManageProjectUsers */
   can_invite: boolean
-  /** projects.archive (model/projects.ts archiveProjectCore, assertLead) */
+  /** projects.archive (model/projects.ts archiveProjectCore, assertManages) */
   can_archive: boolean
-  /** projects.deleteDeep and removalSummary: Lead access */
+  /** projects.deleteDeep and removalSummary: canManageOwnProjectAccess */
   can_delete: boolean
   /** projects.create of a sub-project under this one (model/projects.ts
-   * subProjectParent): Lead access to a top-level meta that is not
+   * subProjectParent): management of a top-level meta that is not
    * archived. The write checks only that the parent is a meta, so it would
    * also take a legacy meta row with a parent, which nobody could then
    * reach; this flag is stricter and asks for a top-level one. */
@@ -279,11 +307,12 @@ export type SettingsRights = {
 
 /**
  * `me`'s rights on the project of `gate` (SettingsRights). Every management
- * right is canManageOwnProjectAccess, which equals Lead access
- * (hasProjectLevel 'lead') for an active seat today, as lib/access.ts
- * levelUnder answers 'lead' only for an organization admin or the project's
- * lead and grants hold at most User. The admin access split moves the
- * writes onto that predicate, so these answers do not change with it.
+ * right is canManageOwnProjectAccess (`gate.manages`), and every write these
+ * rights offer asks that predicate too (model/projects.ts assertManages and
+ * subProjectParent, projects.deleteDeep and removalSummary, and
+ * model/projectAccess.ts for access changes), so an organization admin who
+ * takes part in no project of the organization is offered exactly the
+ * writes that go through. The caller's level decides none of them.
  */
 export function settingsRights(
   me: Doc<'profiles'>,
@@ -345,9 +374,17 @@ export type ProjectSettings =
        * gone or in another organization */
       lead: LeadRow | null
       /** the caller's level (lib/access.ts projectLevel), never used for a
-       * right. Today every organization admin has 'lead'; after the admin
-       * access split it is their ordinary level. */
+       * right, null where they hold none or, for a caller who manages the
+       * project, where a bound stopped the check. An organization admin's
+       * level is their ordinary one, as anyone's. */
       level: AccessLevel | null
+      /** whether the caller sees the project for a reason other than
+       * navigation to one of its sub-projects (lib/access.ts
+       * canAccessProject), which every sub-project of a top-level project
+       * inherits: the New sub-project dialog says from it whether the
+       * creator will see the new sub-project. Null, unknown, where a bound
+       * stopped the check of a caller who manages the project. */
+      accessible: boolean | null
     } & SettingsRights)
 
 /** The profile `id` names in organization `orgId`, or null. */
@@ -407,6 +444,7 @@ export async function projectSettingsOf(
         : resolveReviewHours(undefined, gate.parent.review_hours),
     lead: lead === null ? null : { ...personRow(lead), inherited: p.lead_id === undefined },
     level: gate.level,
+    accessible: gate.accessible,
     ...settingsRights(me, gate),
   }
 }

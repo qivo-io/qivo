@@ -42,7 +42,7 @@ import {
   type T,
   TODAY,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { countOrg } from './overviewCounts.setup'
 import { lowered, mcpPage, mcpPages, restPage, restPages } from './taskPages.setup'
@@ -62,7 +62,7 @@ const grant = (t: T, project_id: string, profile_id: string) =>
 
 /* withOrg, with the agent holding Edit on TBED (FW and PCB). */
 async function setup(t: T = newT()): Promise<Fx> {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   await grant(t, f.meta.id, f.agent.id)
   return { t, ...f }
 }
@@ -696,27 +696,33 @@ describe('archived task lists page one project with a cursor', () => {
       row('z9', 'P', 'U', 10),
       row('b0', 'Q', 'S', 900),
     ])
-    // read through each project, and through the organization's archive
-    for (const projects of [true, false]) {
-      const seen: string[] = []
-      let cursor: ArchiveCursor | null = null
-      for (let page = 0; page < 20; page++) {
-        // a wide scope, an admin's, may read the organization's archive
-        const stream = await archivedTasksAfter(
-          ctx,
-          { orgId: 'org', projectIds: ['P', 'Q'], wide: true },
-          cursor,
-          async () => projects,
-        )
-        if (stream === null) throw new Error('a wide scope always opens')
-        const task = await stream.next()
-        await stream.close()
-        if (task === null) break
-        seen.push(task._id)
-        cursor = cursorAfter(task)
-      }
-      expect(seen, String(projects)).toEqual(['z9', 'k5', 'k4', 'k3', 'k2', 'k1', 'a0', 'b0'])
+    // read through each project, the only read of every scope
+    const seen: string[] = []
+    let cursor: ArchiveCursor | null = null
+    for (let page = 0; page < 20; page++) {
+      const stream = await archivedTasksAfter(
+        ctx,
+        { orgId: 'org', projectIds: ['P', 'Q'] },
+        cursor,
+        async () => true,
+      )
+      if (stream === null) throw new Error('two projects open side by side')
+      const task = await stream.next()
+      await stream.close()
+      if (task === null) break
+      seen.push(task._id)
+      cursor = cursorAfter(task)
     }
+    expect(seen).toEqual(['z9', 'k5', 'k4', 'k3', 'k2', 'k1', 'a0', 'b0'])
+    // projects that do not open side by side answer no stream
+    expect(
+      await archivedTasksAfter(
+        ctx,
+        { orgId: 'org', projectIds: ['P', 'Q'] },
+        null,
+        async () => false,
+      ),
+    ).toBeNull()
   })
 
   it('refuses archived lists without a project, offsets and foreign cursors', async () => {
@@ -901,7 +907,7 @@ describe('archived task lists page one project with a cursor', () => {
     expect(all.restPages).toBe(5)
   })
 
-  it('never shows an out-of-scope task in an admin’s cursor over the whole archive, and refuses others', async () => {
+  it('refuses a scope that does not open side by side within its budget, for an admin as for anyone', async () => {
     const fx = await setup()
     // a top-level project outside TBED, archived most recently
     const secret = await plantProject(fx.t, { org_id: fx.org.id, type: 'meta', key: 'SEC' })
@@ -915,45 +921,27 @@ describe('archived task lists page one project with a cursor', () => {
       await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, archived_at: day(d) })
       await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub2.id, archived_at: day(d) })
     }
-    // no share for opening projects one by one, so an admin's TBED pages read
-    // the organization's archive, and a budget of one document ends each page
-    // after its first task, here one outside TBED
-    ARCHIVE_PAGE.opening = 0
-    ARCHIVE_PAGE.documents = 1
-    const leaks = (cursor: string | null) =>
-      hidden.flatMap((task) =>
-        [task._id, String(Math.trunc(task._creationTime)), task.archived_at ?? ''].filter((part) =>
-          (cursor ?? '').includes(part),
-        ),
-      )
-    const rest = await restArchivedPage(fx.t, {
-      callerId: fx.admin.id,
-      access: 'read',
-      project: 'TBED',
-    })
-    expect(rest.tasks).toEqual([])
-    expect(rest.next_cursor).toMatch(/^2~[0-9a-f]+$/)
-    expect(leaks(rest.next_cursor)).toEqual([])
-    const mcp = await mcpList<McpPage>(fx, fx.admin.id, { project: 'TBED', archived: true })
-    expect(mcp.tasks).toEqual([])
-    expect(leaks(mcp.next_cursor)).toEqual([])
-    // the pages still move past those tasks and list TBED's once each
-    const all = await everyPage(fx, fx.admin.id, { project: 'TBED' })
+    // within the budget TBED's pages list its own tasks, never the hidden ones
+    const all = await everyPage(fx, fx.agent.id, { project: 'TBED' })
     const expected = await archiveOrder(fx, [fx.sub.id, fx.sub2.id])
     expect(all.rest).toEqual(expected)
-    expect(all.mcp).toEqual(expected)
-    // the agent's page reads only TBED's projects, which do not fit that
-    // budget side by side, so it is refused
-    await refused(
-      restArchivedPage(fx.t, { callerId: fx.agent.id, access: 'read', project: 'TBED' }),
-      'bad_request',
-      ARCHIVED_TOO_WIDE,
-    )
-    await refused(
-      mcpList(fx, fx.agent.id, { project: 'TBED', archived: true }),
-      'bad_request',
-      ARCHIVED_TOO_WIDE,
-    )
+    expect(all.rest.some((id) => hidden.some((task) => task.id === id))).toBe(false)
+    // a budget of one document fits no two of TBED's projects side by
+    // side, so every page is refused, as none reads the organization's
+    // archive: the agent's, who reads TBED, and the admin's alike
+    ARCHIVE_PAGE.documents = 1
+    for (const callerId of [fx.agent.id, fx.admin.id]) {
+      await refused(
+        restArchivedPage(fx.t, { callerId, access: 'read', project: 'TBED' }),
+        'bad_request',
+        ARCHIVED_TOO_WIDE,
+      )
+      await refused(
+        mcpList(fx, callerId, { project: 'TBED', archived: true }),
+        'bad_request',
+        ARCHIVED_TOO_WIDE,
+      )
+    }
     // a sub-project alone always fits
     expect((await everyPage(fx, fx.agent.id, { project: 'FW' })).rest).toEqual(
       await archiveOrder(fx, [fx.sub.id]),
@@ -1149,7 +1137,7 @@ describe('archived task lists page one project with a cursor', () => {
     expect(all.mcp).toEqual(all.rest)
   })
 
-  it('refuses a scope too wide to open project by project, which only an admin reads whole', async () => {
+  it('refuses a scope too wide to open project by project, for an admin as for anyone', async () => {
     const fx = await setup(newT({ transactionLimits: { bytesRead: 100 << 10 } }))
     ARCHIVE_RESERVE.bytes = 16 << 10
     const subs = [fx.sub.id, fx.sub2.id]
@@ -1175,29 +1163,23 @@ describe('archived task lists page one project with a cursor', () => {
         }),
       )
     }
-    // tasks of another project sit between them, which only the admin reads
-    for (let i = 0; i < 3; i++) {
-      await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.hidden.id, archived_at: day(11) })
-    }
     // the whole page fits seven of the 10 KB tasks side by side, not twelve,
-    // so the agent, who may not read the organization's archive, is refused
-    for (const surface of ['rest', 'mcp'] as const)
-      await refused(
-        surface === 'rest'
-          ? restArchivedPage(fx.t, { callerId: fx.agent.id, access: 'read', project: 'TBED' })
-          : mcpList(fx, fx.agent.id, { project: 'TBED', archived: true }),
-        'bad_request',
-        ARCHIVED_TOO_WIDE,
-      )
-    // an admin reads it through the organization's archive
-    const expected = tasks.map((t) => t.id).reverse()
-    const pages = await everyPage(fx, fx.admin.id, { project: 'TBED' })
-    expect(pages.rest).toEqual(expected)
-    expect(pages.mcp).toEqual(expected)
-    expect(pages.restPages).toBeGreaterThan(1)
+    // so the agent and the admin, who both read TBED and neither the
+    // organization's archive, are refused
+    for (const callerId of [fx.agent.id, fx.admin.id])
+      for (const surface of ['rest', 'mcp'] as const)
+        await refused(
+          surface === 'rest'
+            ? restArchivedPage(fx.t, { callerId, access: 'read', project: 'TBED' })
+            : mcpList(fx, callerId, { project: 'TBED', archived: true }),
+          'bad_request',
+          ARCHIVED_TOO_WIDE,
+        )
+    // a sub-project alone fits
+    expect((await everyPage(fx, fx.admin.id, { project: 'FW' })).rest).toEqual([tasks[0].id])
   })
 
-  it('refuses a scope of more projects than one page merges for anyone but an admin', async () => {
+  it('refuses a scope of more projects than one page merges for anyone, an admin included', async () => {
     const fx = await setup()
     const fw = await plantIssue(fx.t, {
       org_id: fx.org.id,
@@ -1215,7 +1197,12 @@ describe('archived task lists page one project with a cursor', () => {
         ARCHIVED_TOO_WIDE,
       )
     expect((await everyPage(fx, fx.agent.id, { project: 'FW' })).rest).toEqual([fw.id])
-    expect((await everyPage(fx, fx.admin.id, { project: 'TBED' })).rest).toEqual([fw.id])
+    await refused(
+      restArchivedPage(fx.t, { callerId: fx.admin.id, access: 'read', project: 'TBED' }),
+      'bad_request',
+      ARCHIVED_TOO_WIDE,
+    )
+    expect((await everyPage(fx, fx.admin.id, { project: 'FW' })).rest).toEqual([fw.id])
   })
 
   it('leaves out a task stored under another organization', async () => {
@@ -1263,9 +1250,15 @@ describe('archived task lists page one project with a cursor', () => {
   it('finds every archived task through the active and archived project lists', async () => {
     const fx = await setup()
     const { subs } = await archive(fx)
-    // an archived top-level project, and a reader who holds only FW and its
-    // archived sub-project, so both top-level projects are navigation-only
-    const oldMeta = await plantProject(fx.t, { org_id: fx.org.id, key: 'OLDM', archived_at: NOW })
+    // an archived top-level project, which the admin leads, and a reader who
+    // holds only FW and its archived sub-project, so both top-level
+    // projects are navigation-only
+    const oldMeta = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      key: 'OLDM',
+      archived_at: NOW,
+      lead_id: fx.admin.id,
+    })
     const oldSub = await plantProject(fx.t, {
       org_id: fx.org.id,
       type: 'project',

@@ -4,7 +4,7 @@ import { api, internal } from '../_generated/api'
 import { BILLING_READ_ONLY, subscriptionFor } from '../lib/billingAccess'
 import { billingDetailsOf, enrollOrganization } from '../model/billing'
 import { deleteOrgDeep, removeProfile } from '../model/cascade'
-import { as, expectRefusal, newT, plantIssue, uuid, withOrg } from './helpers.setup'
+import { as, expectRefusal, newT, plantIssue, uuid, withReadingAdmin } from './helpers.setup'
 
 const NOW = '2026-09-20T12:00:00.000Z'
 const EXPIRED = '2026-09-20T11:59:59.000Z'
@@ -41,7 +41,7 @@ afterEach(() => {
 
 async function fixture() {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const operatorId = 'recovery-operator'
   const { sub, newerPlanId } = await t.run(async (ctx) => {
     await ctx.db.insert('platform_admins', {

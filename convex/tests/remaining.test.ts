@@ -19,7 +19,7 @@ import {
   plantIssue,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 const issueRow = (t: T, id: string): Promise<Doc<'issues'>> =>
@@ -54,7 +54,7 @@ const updateAs = (t: T, f: OrgFixture, id: string, patch: IssuePatch) =>
 describe('remaining time', () => {
   it('the server owns remaining_set_at: stamped on change, kept on a same-value write, cleared with the value', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
 
     const created = await as(t, f.admin).mutation(api.issues.create, {
@@ -89,7 +89,7 @@ describe('remaining time', () => {
 
   it('a client-sent remaining_set_at never sticks: no wire slot carries it, on update or create', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const row = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await expect(
       as(t, f.admin).mutation(api.issues.update, {
@@ -117,7 +117,7 @@ describe('remaining time', () => {
 
   it('the sub-issues guard raises BEFORE any stamp: the refused parent row is untouched', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const parent = await plantIssue(t, { ...base })
     await plantIssue(t, { ...base, parent_id: parent.id })
@@ -140,7 +140,7 @@ describe('remaining time', () => {
 
   it('a parent gaining a subtask loses its own hours AND its subscribers hear it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const parent = await plantIssue(t, { ...base, remaining_hours: 6.5, remaining_set_at: NOW })
     const orphan = await plantIssue(t, { ...base })
@@ -173,7 +173,7 @@ describe('remaining time', () => {
 
   it('the two per-surface sentences stay distinct, and a negative value is refused', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const parent = await plantIssue(t, { ...base })
     await plantIssue(t, { ...base, parent_id: parent.id })
@@ -194,7 +194,7 @@ describe('remaining time', () => {
 
   it('done stamp (0071): set on entering done, kept on unrelated edits, never invented, cleared on leaving', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
 
     const born = await as(t, f.admin).mutation(api.issues.create, {
@@ -225,7 +225,7 @@ describe('remaining time', () => {
 
   it('restore-while-done restarts the archive clock; archiving alone never restamps', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
 
     const buried = await plantIssue(t, { ...base, status: 'done', done_at: NOW, archived_at: NOW })

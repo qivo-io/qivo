@@ -55,9 +55,9 @@
  * (storedLevels), each with the seat in the item's organization. An
  * organization admin keeps every item that is not purging, with its
  * metadata and Delete now, and reads its tasks as their role reads them
- * (roleReadsEveryTask), every task until the admin access split and after
- * it only those their ordinary access reaches, so no title, hit or count
- * comes from a project they cannot read. A Memo keeps the reads they
+ * (roleReadsEveryTask), which since the admin access split is only those
+ * their ordinary access reaches, so no title, hit or count comes from a
+ * project they cannot read. A Memo keeps the reads they
  * repeat; a list read seeds one per seat (sightOf).
  *
  * The step machine. Each step spends one budget, TRASH_BUDGET scaled by the
@@ -715,8 +715,8 @@ export type Memo = {
   legacyGrants: Map<string, Promise<Doc<'deleted_rows'>[]>>
   /** whether the organization is read-only, by organization (orgReadOnly) */
   readOnly: Map<string, Promise<boolean>>
-  /** the item holding a stored project, by project */
-  heldBy: Map<string, Promise<string | undefined>>
+  /** the item holding a stored project, by project (holdingItem) */
+  heldBy: Map<string, Promise<Item | null>>
   /** a project item's hierarchy, by item */
   hierarchy: Map<string, Promise<Hierarchy>>
   /** a person's levels inside a project item, keyed `item:profile` */
@@ -2008,9 +2008,8 @@ async function taskItemBlock(s: Scope, me: Doc<'profiles'>): Promise<RestoreBloc
  * suffices. A person whose level on the root is only for navigation to a
  * sub-project they lead or can access reads not_lead, as the root has a
  * lead of its own. A sub-project item needs its parent live and not
- * archived. An admin needs no stored row read here, though after the admin
- * access split their view of a project item reads the stored rows as
- * anyone else's does (viewOf). */
+ * archived. An admin needs no stored row read here, though their view of a
+ * project item reads the stored rows as anyone else's does (viewOf). */
 async function projectItemBlock(s: Scope, me: Doc<'profiles'>): Promise<RestoreBlock | null> {
   const parentId = s.item.parent_project_id
   const parent = parentId === undefined ? null : await namedProject(s, parentId, 'meta')
@@ -2078,15 +2077,12 @@ export type ItemView = {
 }
 
 /** Whether `me`'s role alone gives a level on every project of their
- * organization, as an organization admin's does until the admin access
- * split removes levelsFrom's admin branch (lib/access.ts). Asked of
- * levelsFrom itself, with no grant on a top-level project without a lead,
- * so the split turns it false with no change here. It reads nothing. Only
- * levelsFrom's branch is asked. A split that removed levelUnder's alone
- * would leave this true and every Deleted items read whole for an admin,
- * and one that removed levelsFrom's alone would let liveLevel's
- * projectLevel give an admin every restore, so the split removes both, and
- * the cases of tests/deletedItemsAdminView.test.ts fail if it does not. */
+ * organization. Asked of levelsFrom itself, with no grant on a top-level
+ * project without a lead, and it reads nothing. Since the admin access
+ * split no role does, so it is false for every seat and adminView's
+ * read-everything branch never runs; t3/limits-project-old-paths removes
+ * it with that branch. tests/adminSplit.test.ts and
+ * tests/deletedItemsAdminView.test.ts fail if it answers true again. */
 export function roleReadsEveryTask(me: Doc<'profiles'>): boolean {
   const probe = { id: '', org_id: me.org_id, type: 'meta' as const }
   return levelsFrom(me, [probe], [], []).levelOf(probe) !== null
@@ -2272,17 +2268,26 @@ export async function sightOf(ctx: QueryCtx, me: Doc<'profiles'>): Promise<Sight
 /** The names a blocked row's sentence needs (design 5.3): the project it
  * speaks of and, for view_only and not_lead, that project's effective lead
  * when it has one. For project_deleted and parent_deleted (admins only),
- * the item holding the deleted project, which must be restored first. */
+ * the item holding the deleted project, which must be restored first, and
+ * for a task item waiting for its project, `with_project` when that
+ * project item gives the viewer Edit on the task's project once it is back
+ * (editsOnceBack), so the task can follow it in the same restore. Without
+ * it the task's restore would be refused after the project's, so the app
+ * restores the project alone (src/lib/deletedItems.ts
+ * restoresWithProject). */
 export type BlockDetail = {
   reason: RestoreBlock
   project?: string
   lead?: string
   item_id?: string
+  with_project?: true
 }
 
+/** The names `me`'s blocked row of `item` shows for `reason` (BlockDetail). */
 export async function blockDetail(
   ctx: QueryCtx,
   memo: Memo,
+  me: Doc<'profiles'>,
   item: Item,
   reason: RestoreBlock,
 ): Promise<BlockDetail> {
@@ -2294,7 +2299,13 @@ export async function blockDetail(
   }
   if (reason === 'project_deleted' || reason === 'parent_deleted') {
     const id = reason === 'project_deleted' ? item.project_id : item.parent_project_id
-    return { reason, item_id: id === undefined ? undefined : await holderOf(s, id) }
+    const holder = id === undefined ? null : await holdingItem(s, id)
+    const follows =
+      item.kind === 'task' &&
+      reason === 'project_deleted' &&
+      holder !== null &&
+      (await editsOnceBack(s, me, holder, item.project_id))
+    return { reason, item_id: holder?.id, ...(follows ? { with_project: true as const } : {}) }
   }
   if (item.kind === 'task') {
     const project = await namedProject(s, item.project_id, 'project')
@@ -2314,10 +2325,10 @@ export async function blockDetail(
   return { reason, project: item.name, lead: await named(h.root?.lead_id ?? h.parent?.lead_id) }
 }
 
-/** The id of the item that holds stored project `projectId`, unless it is
- * purging. Many task items can wait for one deleted project, so it is read
- * once per list. */
-const holderOf = (s: Scope, projectId: string) =>
+/** The item that holds stored project `projectId`, unless it is purging.
+ * Many task items can wait for one deleted project, so it is read once per
+ * list. */
+const holdingItem = (s: Scope, projectId: string) =>
   memoRead(s.memo.heldBy, projectId, async () => {
     const row = await s.ctx.db
       .query('deleted_rows')
@@ -2325,9 +2336,24 @@ const holderOf = (s: Scope, projectId: string) =>
       .first()
     const holder = row === null ? null : await byId(s.ctx, 'deleted_items', row.item_id)
     return holder !== null && holder.org_id === s.item.org_id && holder.state !== 'purging'
-      ? holder.id
-      : undefined
+      ? holder
+      : null
   })
+
+/** The id of the item that holds stored project `projectId` (holdingItem). */
+const holderOf = async (s: Scope, projectId: string) => (await holdingItem(s, projectId))?.id
+
+/** Whether project item `holder` gives `me` Edit on its project `projectId`
+ * once it is back: their level there by the item's stored rows
+ * (storedLevels), which its restore writes back, is User or Lead. A task
+ * item's restore needs that Edit (taskItemBlock), so only then can one
+ * waiting for `holder` follow it; its other checks, such as a subtask's
+ * project, run when it is sent. It reads what an admin's view of the
+ * project item reads (adminView), once per list for each item and person. */
+async function editsOnceBack(s: Scope, me: Doc<'profiles'>, holder: Item, projectId: string) {
+  const levels = await storedLevels({ ...s, item: holder }, me)
+  return levelRank(levels.levelOf({ id: projectId, org_id: holder.org_id })) >= LEVEL_RANK.user
+}
 
 /** The tally of what `item` stores now, which a restore subtracts from. */
 const tallyFromItem = (item: Item): Tally => ({
@@ -4959,8 +4985,8 @@ function cutToCaps(task: Doc<'issues'>): Doc<'issues'> {
 
 /**
  * Moves `project` with its sub-projects, archived ones included, and every
- * task in them to Deleted items as one project item. The caller checks Lead
- * and writes the 'deleted' activity row. A project with more than
+ * task in them to Deleted items as one project item. The caller checks
+ * management (projects.deleteDeep) and writes the 'deleted' activity row. A project with more than
  * LIMITS.projectDeleteSubProjects.max sub-projects is refused. This transaction stores
  * the project rows, which hides the projects and so every task, milestone,
  * grant and team grant in them; those then move within the same budget and

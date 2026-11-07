@@ -41,7 +41,7 @@ import {
   type T,
   TODAY,
   uuid,
-  withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
 
@@ -61,7 +61,7 @@ type Fx = OrgFixture & {
 /* withOrg, with the agent holding Edit on TBED (FW and PCB) and no access to
  * SKNK. */
 async function setup(t: T = newT()): Promise<Fx> {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   await t.run((ctx) =>
     ctx.db.insert('project_access', {
       project_id: f.meta.id,

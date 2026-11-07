@@ -29,7 +29,7 @@ import {
   type T,
   TODAY,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { lowered, mcpPage, mcpPages, restPage, restPages } from './taskPages.setup'
 
@@ -37,7 +37,7 @@ type Fx = OrgFixture & { t: T }
 
 /* withOrg, with the agent holding User access on TBED (FW and PCB). */
 async function setup(t: T = newT()): Promise<Fx> {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   await t.run(async (ctx) => {
     await ctx.db.insert('project_access', {
       project_id: f.meta.id,

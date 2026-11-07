@@ -9,7 +9,7 @@ import {
   newT,
   plantSeat,
   uuid,
-  withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
 import { orgProjectView } from './orgProjectView.setup'
@@ -17,7 +17,7 @@ import { assertNoDanglingRefs } from './refs.setup'
 
 async function fixture() {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const person = await plantSeat(t, { org_id: f.org.id, auth_user_id: uuid(), name: 'Teammate' })
   const sharedTeamId = uuid()
   await as(t, f.admin).mutation(api.teams.create, {

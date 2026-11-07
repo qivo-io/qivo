@@ -502,11 +502,11 @@ The response never contains a secret, a hash or a display identifier.
 ```
 GET   /v1/projects                → readable ACTIVE projects, with access flags
 GET   /v1/projects?archived=true  → the archived ones instead (0106)
-GET   /v1/projects/{id|num|KEY}   → one project (uuid, per-org number, or
-                                    key) with its lead, settings,
-                                    completion, milestones and grants; an
-                                    explicit ref resolves an archived
-                                    project too
+GET   /v1/projects/{id|num|KEY}   → one project you read or manage
+                                    (uuid, per-org number, or key) with
+                                    its lead, settings, completion,
+                                    milestones and grants; an explicit
+                                    ref resolves an archived project too
 GET   /v1/projects/{ref}/users    → users with access to that project, for
                                     reporter, assignee and reviewer
                                     selection
@@ -569,7 +569,10 @@ A row of the list:
   "done": null, "total": null, "percent": null}` instead. Neither ever
   fails the read or a `PATCH`.
   `completion` is `null` for an archived project. A new project answers `ok`
-  with zeros, because it holds no tasks. `status` arrived in November 2026,
+  with zeros, because it holds no tasks, unless you manage it without
+  reading it, such as a sub-project an organization admin creates under a
+  project they only manage with someone else as its lead, which answers
+  `unavailable` as described below. `status` arrived in November 2026,
   and `counting` later that month, so treat a `status` you do not know as
   no completion.
 - `milestones` are the milestones of the top-level project, ordered by date.
@@ -578,7 +581,20 @@ A row of the list:
 - `grants` are the project's own individual and team grants, as its
   **Project access** list shows them, ordered by name. A sub-project also
   inherits its parent's grants, which the parent's own read lists. Anyone who
-  can read the project sees its grants, as in the app.
+  can read or manage the project sees its grants, as in the app.
+
+An organization admin manages every project of the organization, also one
+they take no part in. Admin status gives no access to a project's work, so
+`GET /v1/projects` leaves such a project out, while `GET` and `PATCH
+/v1/projects/{ref}`, the [project access](#project-access) routes and a
+create's `parent` find it. The single-project read then answers its row
+with `access.read` `false`, its lead, settings and grants, `completion` as
+`{"status": "unavailable", "done": null, "total": null, "percent": null}`
+(`null` once it is archived) and `milestones` as `null`, because
+completion and milestones are planning data. The
+[milestone](#milestones) routes and `GET /v1/projects/{ref}/users` need to
+read the project. A project you neither read nor manage answers `404`,
+exactly like an unknown one.
 
 The writes below, and the [project access](#project-access) and
 [milestone](#milestones) routes, answer `403` with the read-only sentence for
@@ -608,7 +624,7 @@ this route when mapping identities for an import instead of guessing from the
 organization-wide roster.
 
 On a parent project the rows are the people with access to the parent
-itself: organization admins, its lead and its individual or team grants. These
+itself: its lead and its individual or team grants. These
 are the people its **Project access** list shows in the app. Someone who
 reaches the parent only through one of its sub-projects is listed under that
 sub-project, not under the parent. A caller that sees the parent only through
@@ -642,9 +658,11 @@ read, `access` flags included.
   create projects`. A Standard user agent counts as a standard user for this
   setting, including the **Can create projects** box under `selected`. A
   Viewer agent never creates projects.
-- A sub-project needs Lead access on its parent, whatever the setting, and the
-  parent must be an active top-level project. A parent the caller cannot read
-  answers `400` with `parent project not found`, exactly like an unknown one.
+- A sub-project needs managing its parent, as its lead or an organization
+  admin, whatever the setting (`requires lead access to this project` for
+  someone who only reads it), and the parent must be an active top-level
+  project. A parent the caller neither reads nor manages answers `400` with
+  `parent project not found`, exactly like an unknown one.
 - `lead_id` defaults to the caller. A lead must be an active admin, standard
   user or guest of the organization; a Viewer is refused with `a viewer cannot
   lead a project, so make them a standard user first`. Only a person may name
@@ -653,9 +671,10 @@ read, `access` flags included.
   agent that leads projects cannot be made a Viewer until an organization
   admin hands them over, so setting it to Inactive is the way to stop it at
   once.
-- A creator who is not an organization admin and names someone else as the
-  lead of a top-level project gets User access to it, as in the app, so the
-  project stays in their sight.
+- A creator who names someone else as the lead of a top-level project gets
+  User access to it, as in the app, so the project stays in their sight.
+  That includes an organization admin, since admin status gives no access
+  to a project's work.
 - `name` is trimmed, may not be blank (`a project name cannot be blank`) and
   holds at most 80 characters (`a project name must be at most 80
   characters. Shorten it.`), counted as in [Limits](#limits), so most emoji
@@ -678,8 +697,8 @@ PATCH /v1/projects/{ref}  {"name": "…", "description": "…", "review_hours": 
 ```
 
 Every field is optional, and the answer is the single-project read. Changing a
-project needs Lead access (`requires lead access to this project`), which
-organization admins have. A lead handover alone on a top-level project
+project needs managing it, as its lead or an organization admin (`requires
+lead access to this project` for someone who only reads it). A lead handover alone on a top-level project
 follows the rule for managing its users instead, so someone who is neither an
 organization admin nor its lead gets `no permission to manage users on this
 project`.
@@ -691,7 +710,7 @@ project`.
 - `archived: true` archives the project, and a top-level project's active
   sub-projects with it; `archived: false` restores it, with the sub-projects
   archived along with it, and a sub-project's archived parent too (which
-  needs Lead on the parent). Qivo archives or restores before it changes the
+  needs managing the parent). Qivo archives or restores before it changes the
   other fields, so one request may restore and rename, or archive and hand
   over the lead. The archive or restore and a rename share one budget of
   2,000 sub-projects and access entries (see [Limits](#limits)) and of the
@@ -771,7 +790,8 @@ cannot after. `DELETE` takes an optional JSON body whose `on_held_tasks` decides
 what happens to them:
 
 - `"leave"` (the default, also for an empty body) removes the access and
-  lists those tasks as `stranded`. They keep their assignee and reviewer.
+  lists those tasks as `stranded`, or counts them in `hidden` when you
+  cannot see them. They keep their assignee and reviewer.
 - `"keep_as_viewer"` gives each of those people a Viewer grant on the
   project, so they keep the tasks and can read the project. They can change
   only what another grant of their own still allows, such as a sub-project
@@ -810,9 +830,14 @@ people and tasks are too many to check in one request is a `400` with
 remove fewer people at once, such as some of a team's members, or reassign
 some of the tasks first`. Nothing changes after either refusal. The answer is
 `{"project_id", "user" | "team", "removed", "stranded", "kept_as_viewer",
-"reassigned"}`, where `stranded` and `reassigned` list `{"id", "key",
-"title", "user_id", "role"}`, and `kept_as_viewer` the user uuids given a
-Viewer grant. Removing access that is not there answers `removed: false`.
+"reassigned", "hidden"}`, where `stranded` and `reassigned` list `{"id",
+"key", "title", "user_id", "role"}` for the tasks you can see once the
+access is gone, `hidden` is `{"tasks", "user_ids"}`, the number of the
+other tasks and the uuids of the people who held them, with no task id,
+key or title, and `kept_as_viewer` the user uuids given a Viewer grant. An
+organization admin who manages a project without reading it, or anyone who
+removes their own access, gets those tasks in `hidden`. Removing access
+that is not there answers `removed: false`.
 Every change writes one `changed access on` activity row.
 
 ```sh
@@ -988,7 +1013,8 @@ projects the team shares, and in those projects' sub-projects, that they can
 no longer see afterwards are settled by `on_held_tasks`, as for [project
 access](#project-access):
 
-- `"leave"` (the default, also for an empty body) lists them as `stranded`.
+- `"leave"` (the default, also for an empty body) lists them as `stranded`,
+  or counts them in `hidden` when you cannot see them.
 - `"keep_as_viewer"` gives the person a Viewer grant on the project the team
   shared that showed each task, which is the task's own sub-project when the
   team shares it and otherwise its top-level project. This needs the right to manage that
@@ -1010,7 +1036,8 @@ larger handover, or Viewer grants too many for one request, is a `400` and
 nothing changes.
 The answer is
 `{"team_id", "user", "removed", "stranded", "kept_as_viewer",
-"reassigned"}`, shaped as for project access; removing someone who is not a
+"reassigned", "hidden"}`, shaped as for project access, so the tasks in
+projects you cannot see count in `hidden`; removing someone who is not a
 member answers `removed: false`. Each change writes the app's activity row
 (`added`, `removed`, `made` a leader, `demoted`), signed as described under
 [Side effects and audit trail](#side-effects-and-audit-trail), and a Viewer
@@ -1212,7 +1239,7 @@ agent has no plannable week, because its capacity is unbounded`. The change writ
 no activity row, as in the app.
 
 In practice this route needs a person's token. An agent is **never an
-organization admin**, because an admin reaches every project without a
+organization admin**, because an admin manages every project without a
 grant, the one thing a key must not be able to do if it leaks. The profile
 shape refuses it (0100, widened by 0102 to admit `viewer` and nothing else).
 It never leads a team either, because only people lead teams. A leaked agent
@@ -1404,11 +1431,9 @@ sub-projects you can read, even when you can read only some of them. To read
 one sub-project's archive alone, name that sub-project.
 
 A page reads only the projects it lists, side by side, and never tasks of
-projects you cannot read. Unless you are an organization admin, a project
-with more than 200 projects to list, itself and its sub-projects you can
-read, is refused. Name its sub-projects one at a time instead. An
-organization admin's request can read the organization's whole archive for
-such a project.
+projects you cannot read. A project with more than 200 projects to list,
+itself and its sub-projects you can read, is refused, for an organization
+admin as for anyone. Name its sub-projects one at a time instead.
 
 These requests are a `400`:
 
@@ -1554,7 +1579,7 @@ sub-project of another top-level project also moves every subtask,
 archived ones included, that is not already in that top-level
 project. The caller needs Edit access on each of their projects (otherwise
 `400`, `moving this task would move a subtask in a project you cannot edit;
-an organization admin can move it`). A subtask in a project that is being
+someone who can edit that project can move it`). A subtask in a project that is being
 moved to Deleted items refuses the move for everyone, admins included, with
 `400` `a subtask of this task is being moved to Deleted items; try again
 when that finishes`. The assignee and the reviewer of
@@ -1722,10 +1747,10 @@ orthogonal to `status`). Archiving a task archives its subtasks with it;
 restoring one also restores its parent chain (both server-side cascades).
 Both reach subtasks and parents in other projects, so the caller needs User
 access on every project the cascade changes. Otherwise the PATCH is a `400`
-with `archiving this task would change a subtask in a project you cannot edit; an
-organization admin can archive it` or `restoring this task would change a
-parent task in a project you cannot edit; an organization admin can restore
-it`, and nothing changes. A subtask or parent in a project that is being
+with `archiving this task would change a subtask in a project you cannot edit;
+someone who can edit that project can archive it` or `restoring this task
+would change a parent task in a project you cannot edit; someone who can
+edit that project can restore it`, and nothing changes. A subtask or parent in a project that is being
 moved to Deleted items refuses the PATCH for everyone, admins included, with
 `a subtask of this task is being moved to Deleted items; try again when that
 finishes` or `a parent of this task is being moved to Deleted items; try
@@ -2186,7 +2211,7 @@ limits](#request-limits-and-billing)).
 `DELETE /v1/comments/{id}` answers `{ "deleted": true, "id": "…", "task_id":
 "…" }`. `{id}` is the comment's `id` from the thread. As in the app, the
 comment's author may edit or delete it, and so may a lead of the task's
-project (an organization admin leads every project); anyone else gets `403`
+project, an organization admin only as its lead; anyone else gets `403`
 (`only the author or a project lead can edit this comment`, or `delete`). A
 comment on a task the caller cannot read answers `404` (`comment not found`),
 like an unknown id. The body is trimmed and may not be blank (`400` `a comment
@@ -2637,9 +2662,8 @@ GET /v1/tasks/{ref}/activity   the task's newest history, oldest first (read)
 These are the rows the task window's **All** filter shows beside the
 comments, which `GET /v1/tasks/{ref}/comments` lists instead. `actor_id` and
 `actor_name` are `null` once the user who made the change has been removed
-from the organization. Organization admins receive
-every row. Other users do not receive a row that names a project they cannot
-access, such as the project the task was in before a move, or one that names
+from the organization. Every user, an organization admin as anyone, does
+not receive a row that names a project they cannot access, such as the project the task was in before a move, or one that names
 another task they cannot read, such as the other end of a link. An
 archived task's history is answered too, by the same rule, as the app's
 read-only window on an archived task shows it under **All**. A task keeps
@@ -2651,7 +2675,7 @@ an empty array means there is no earlier history. A `before` that is not the
 row in this task's history`). The request reads on past rows you do not
 receive. When it cannot find one row you receive before it has read as much
 as one request may, it is a `400` (`too many of this task's changes are
-hidden from you to read them at once; an organization admin can read them`).
+hidden from you to read them at once`).
 When Qivo cannot finish checking which projects you can see for the
 projects a page's rows name, the request is a `400` (`Qivo could not finish
 checking which projects you can see in one request. Contact support@qivo.io
@@ -3160,7 +3184,7 @@ authenticated request.
   `team_members`. These are the same grants used for every person, read through
   `canSeeProject` and `hasProjectLevel`
   (`convex/lib/access.ts`), the predicates every surface calls, which apply
-  the whole access model (org admin, project and sub-project leads, direct or
+  the whole access model (project and sub-project leads, direct or
   explicit team grant) under the organization-role ceiling. They are asked *as the
   caller's user*, inside the request's own transaction, so the answer this API gives, the
   answer MCP gives and the answer the app gives are one computation rather

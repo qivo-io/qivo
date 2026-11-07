@@ -6,9 +6,14 @@
    organization, a top-level project standing for its sub-projects, or,
    only when chosen, All projects of one organization. The page opens on
    the project it was opened for once the server resolves it for this
-   person (P.resolveProject), and otherwise on no choice, saying it
-   couldn't open on that project, as for an admin who reaches it only as
-   an admin, whose lists hold the projects they take part in. Then one
+   person (P.resolveProject), and otherwise on no choice, telling the three
+   outcomes apart: a project the person cannot open, as for an admin who
+   only manages it, whose lists hold the projects they take part in, says
+   so in words that hold whatever the reason, as the answer carries none
+   (unknown, in Deleted items, archived or under an archived parent); a
+   check the server could not finish shows its own sentence with Retry;
+   and a read that failed says it couldn't check that project, with
+   Retry. Then one
    page of 25 tasks at a time (P.fetchArchivedPage, server
    issues.archivedPage), which Previous and Next replace, so the page
    holds one page of rows however far it goes. A chosen project that is
@@ -140,9 +145,15 @@ export function ArchivedTasksPage({
   // waits for the server, while nothing is read
   const [pick, setPick] = useState<ProjectPick | null>(null)
   const [resolving, setResolving] = useState(!!initialProject)
-  // whether the project the page opened for did not resolve, which the
-  // page says until the person chooses
-  const [missed, setMissed] = useState(false)
+  // what became of the project the page opened for when it did not
+  // resolve, which the page says until the person chooses: a project the
+  // person cannot open, a check the server could not finish, with its
+  // sentence, or a read that failed
+  const [missed, setMissed] = useState<
+    { kind: 'unavailable' } | { kind: 'unchecked'; message: string } | { kind: 'failed' } | null
+  >(null)
+  // a new resolve of the project the page opened for, after Retry
+  const [resolveAttempt, setResolveAttempt] = useState(0)
   // whether the person chose in the picker, which the resolved project
   // never replaces
   const chose = useRef(false)
@@ -151,7 +162,7 @@ export function ArchivedTasksPage({
   const choose = (next: ProjectPick | null) => {
     chose.current = true
     setResolving(false)
-    setMissed(false)
+    setMissed(null)
     setPick(next)
   }
   useEffect(() => {
@@ -160,20 +171,29 @@ export function ArchivedTasksPage({
     void P.resolveProject(initialProject).then((answer) => {
       if (!live) return
       // a project the person cannot open, a check the server could not
-      // finish and a failed read all leave no choice, and a choice the
-      // person made meanwhile stands
+      // finish and a failed read all leave no choice, each said apart, and
+      // a choice the person made meanwhile stands
       if (!chose.current) {
-        if (answer?.state === 'ok') {
+        if (answer === null) setMissed({ kind: 'failed' })
+        else if (answer.state === 'ok') {
           const { id, org_id, name, num, parent } = answer.project
           setPick({ kind: 'projects', org_id, projects: [{ id, org_id, name, num, parent }] })
-        } else setMissed(true)
+        } else if (answer.reason !== undefined)
+          setMissed({ kind: 'unchecked', message: answer.message ?? UNCHECKED_FALLBACK })
+        else setMissed({ kind: 'unavailable' })
       }
       setResolving(false)
     })
     return () => {
       live = false
     }
-  }, [])
+  }, [resolveAttempt])
+  /* Retry of a resolve that failed or that the server could not finish. */
+  const retryResolve = () => {
+    setMissed(null)
+    setResolving(true)
+    setResolveAttempt((n) => n + 1)
+  }
   const scope: ArchivedScope | null = (pick && archivedScopeOf(pick)) ?? null
   const scopeKey = JSON.stringify(scope)
   const [search, setSearch] = useState('')
@@ -484,11 +504,15 @@ export function ArchivedTasksPage({
   const several = picked.length > 1
   let body: ReactNode = null
   if (resolving) body = <ListNote>Loading archived tasks…</ListNote>
+  else if (!list.scope && missed?.kind === 'failed')
+    body = <Failed onRetry={retryResolve}>Couldn't check that project.</Failed>
+  else if (!list.scope && missed?.kind === 'unchecked')
+    body = <Failed onRetry={retryResolve}>{missed.message}</Failed>
   else if (!list.scope)
     body = (
       <ListNote>
-        {missed
-          ? "Couldn't open this page on that project. The project list shows the projects you take part in."
+        {missed?.kind === 'unavailable'
+          ? UNAVAILABLE_NOTE
           : 'Choose a project to see its archived tasks.'}
       </ListNote>
     )
@@ -780,6 +804,18 @@ function FoldLine({ children }: { children: ReactNode }) {
     </div>
   )
 }
+
+/** What the page says when the project it was opened for does not open
+    for this person. The answer carries no cause, so the words hold for an
+    unknown project, one in Deleted items, an archived one and one the
+    person cannot read, as an admin who only manages it. */
+const UNAVAILABLE_NOTE =
+  "This page can't show the tasks of the project it was opened for. The project list shows the projects you take part in."
+
+/* The sentence of a check the server could not finish, should its answer
+   carry none (convex/lib/access.ts accessUnchecked). */
+const UNCHECKED_FALLBACK =
+  'Qivo could not finish checking which projects you can see in one request. Contact support@qivo.io so we can help.'
 
 /* A read that failed, with a way to try it again, and `after` it what else
    the person can do, such as the other move. */

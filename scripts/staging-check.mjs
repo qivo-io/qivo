@@ -112,17 +112,28 @@
  * sub-project there, led by the Standard agent and shared with its team,
  * and on that sub-project's Settings page, from the deployment's reads
  * (projectSettings.get, users, teams and candidates), sets the team's
- * level to Viewer, adds Nora, an admin who is not its lead, through the
+ * level to Viewer, adds Nora, who is not its lead, through the
  * Add team or user picker's search, and sets its Review time, each checked
  * over REST (ui/project-settings). In the New project dialog, from the
  * deployment's pickers (projectSettings.leadCandidates and candidates
  * without a project), it makes a project of its own led by the Standard
- * agent, shared with its team as Viewer and with Nora as User, and in New
+ * agent, shared with its team as Viewer and with Nora as User by the
+ * automatic entry the dialog adds for a creator who names someone else as
+ * lead, which she leaves as it is, and in New
  * sub-project opened from its first project's sidebar menu, after that
  * parent's check (projectSettings.get), a sub-project under the new
  * project, picked from the deployment's sub_project_parents list, led by
  * the Standard agent and without a starter task, each checked over REST
- * (ui/project-dialogs). It makes a sub-project of its own under its
+ * (ui/project-dialogs). Over REST it makes `<tag> Managed` led by the
+ * Standard agent, takes Nora's automatic User grant away, and with the
+ * agent's key adds a sub-project and a task there, then checks that Nora,
+ * an admin who manages the project without taking part in it, reads its
+ * row with read false, completion unavailable and no milestones, cannot
+ * read the task, and changes its description, and in the app that
+ * Settings › Projects lists it, that its Archived tasks says it can't show
+ * the project's tasks and that Search finds a control task of the run and
+ * not the managed one; the step deletes the project itself
+ * (ui/admin-management). It makes a sub-project of its own under its
  * project with one task, uploads a file there over REST and opens Billing,
  * whose current storage must show a figure rather than Being counted
  * (billing.usageFigures) and whose Storage by project, searched for its run
@@ -1901,20 +1912,44 @@ async function deleteConnectionInUi(clientName) {
   }
 }
 
-/** Archives a project of the run over REST and deletes it with the app's
- *  own store, which takes its sub-projects, tasks, comments, files, grants
- *  and milestones, then waits until REST no longer finds it. */
-async function deleteProjectInApp(cred, project) {
+/** How deleteProjectInApp deletes a project of the run, from `current`,
+ *  the server's answer to GET /v1/projects/{id}. One the caller reads
+ *  ('archive') is archived over REST first and deleted once the store
+ *  lists it archived, which it does for a project the caller reads. Any
+ *  other ('direct'), one Nora only manages, which the store does not hold
+ *  since the admin access split, is deleted as it is, live or archived. The
+ *  store's own copy never decides, as it can still hold a project whose
+ *  access was just taken away. */
+export const projectDeleteRoute = (current) =>
+  current?.json?.access?.read === true ? 'archive' : 'direct'
+
+/** Deletes a project of the run with the app's own store, which takes its
+ *  sub-projects, tasks, comments, files, grants and milestones, then waits
+ *  until REST no longer finds it. It goes the way projectDeleteRoute
+ *  answers, by the organization `shown` names (P.removeProject's third
+ *  argument), Nora's home one unless it says another. A direct delete that
+ *  fails leaves the project as it was, live or archived, where the
+ *  sweep's managed projects and managed archived projects find it; REST's
+ *  lists leave it out. */
+async function deleteProjectInApp(cred, project, shown) {
   const current = await rest(cred, 'GET', `/projects/${project.id}`)
   if (current.status === 404) return
-  if (!current.json?.archived)
-    await restOk(cred, 'PATCH', `/projects/${project.id}`, { archived: true })
-  await app.waitForFunction(
-    (id) => window.PLANNER.archivedProjects?.some((x) => x.id === id),
-    project.id,
-    { timeout: 30_000 },
+  if (projectDeleteRoute(current) === 'archive') {
+    if (!current.json?.archived)
+      await restOk(cred, 'PATCH', `/projects/${project.id}`, { archived: true })
+    await app.waitForFunction(
+      (id) => window.PLANNER.archivedProjects?.some((x) => x.id === id),
+      project.id,
+      { timeout: 30_000 },
+    )
+  }
+  const removed = await evaluate(
+    app,
+    ([id, orgId]) =>
+      window.PLANNER.removeProject(id, undefined, { orgId: orgId ?? window.PLANNER.homeOrg }),
+    [project.id, shown?.orgId ?? null],
   )
-  await evaluate(app, (id) => window.PLANNER.removeProject(id), project.id)
+  expect(removed, `the app could not delete ${project.name}`)
   await settled()
   expect(
     await until(async () => (await rest(cred, 'GET', `/projects/${project.id}`)).status === 404),
@@ -1986,12 +2021,14 @@ export async function appBatches(what, read) {
  *  1. OAuth connections, personal tokens and agent keys, which need only
  *     the signed-in app, so no credential of a run outlives a REST outage;
  *  2. with a temporary token for REST reads, projects (with their tasks,
- *     comments, files, grants and milestones), tasks elsewhere and teams;
- *     then, with or without that token, labels, which only the app
- *     deletes;
+ *     comments, files, grants and milestones), those REST lists and those
+ *     Nora only manages, live and archived, from Settings' lists, tasks
+ *     elsewhere and teams; then, with or without that token, labels,
+ *     which only the app deletes;
  *  3. the agents, each confirmed gone;
- *  4. the temporary token, then a fresh read of every list to prove that
- *     nothing with the tag is left.
+ *  4. the temporary token, then a fresh read of every list, Settings'
+ *     project lists included, to prove that nothing with the tag is
+ *     left.
  *
  *  OAuth client registrations cannot be deleted and stay. Answers how many
  *  records it removed and the problems it met, each one line that is safe
@@ -2018,6 +2055,36 @@ async function sweep(tag, label) {
    *  (appBatches); a failed read is a failure. */
   const appList = (what, call) =>
     appBatches(what, (cursor) => evaluate(app, call, [searchOf(tag), cursor]))
+  /** The live top-level projects with the tag that Nora manages, from
+   *  Settings' list of the parents she manages (projectSettings.projects
+   *  with sub_project_parents), which also holds those she only manages; a
+   *  failed read is a failure. */
+  const managedLive = async () =>
+    (
+      await appBatches('managed projects', (cursor) =>
+        evaluate(
+          app,
+          ([search, after]) =>
+            window.PLANNER.subProjectParents(window.PLANNER.homeOrg, search, after),
+          [searchOf(tag), cursor],
+        ),
+      )
+    ).filter((p) => matches(p.name))
+  /** The archived projects with the tag that Nora manages, from Settings ›
+   *  Archived projects (projectSettings.archived), its entries alone, as a
+   *  row beneath an archived parent goes with that parent; a failed read
+   *  is a failure. */
+  const managedArchived = async () =>
+    (
+      await appBatches('managed archived projects', (cursor) =>
+        evaluate(
+          app,
+          ([search, after]) =>
+            window.PLANNER.settingsArchivedProjects(window.PLANNER.homeOrg, search, after),
+          [searchOf(tag), cursor],
+        ),
+      )
+    ).filter((p) => !p.under && matches(p.name))
   const taggedAgents = async () =>
     (
       await evaluate(app, () =>
@@ -2124,6 +2191,27 @@ async function sweep(tag, label) {
         // the app deletes a top-level project with its sub-projects
         for (const p of projects.filter((p) => !projects.some((q) => q.id === p.parent_id)))
           await step(`project ${p.name}`, async () => {
+            await deleteProjectInApp(cleaner, p)
+            note(`project ${p.name}`)
+          })
+      })
+      // a live top-level project Nora only manages, such as
+      // ui/admin-management's, which REST's lists leave out since the admin
+      // access split, from Settings' list of the parents she manages
+      // (projectSettings.projects with sub_project_parents)
+      await step('managed projects', async () => {
+        for (const p of await managedLive())
+          await step(`managed project ${p.name}`, async () => {
+            await deleteProjectInApp(cleaner, p)
+            note(`project ${p.name}`)
+          })
+      })
+      // an archived project Nora only manages, such as one a cleanup left
+      // archived after her access went, which REST's archived list and the
+      // store leave out, from Settings › Archived projects
+      await step('managed archived projects', async () => {
+        for (const p of await managedArchived())
+          await step(`managed archived project ${p.name}`, async () => {
             await deleteProjectInApp(cleaner, p)
             note(`project ${p.name}`)
           })
@@ -2258,11 +2346,14 @@ async function sweep(tag, label) {
     ).filter((c) => matches(c.clientName))
     const agents = await taggedAgents()
     const keys = (await agentKeysOf(agents)).filter((k) => agentIds.has(k.agentId))
+    // the projects Nora only manages, which no REST list holds
+    const managed = [...(await managedLive()), ...(await managedArchived())]
     const left = [
       [tokens.length, 'personal token'],
       [connections.length, 'OAuth connection'],
       [agents.length, 'agent'],
       [keys.length, 'agent key'],
+      [managed.length, 'managed project'],
     ].filter(([n]) => n > 0)
     expect(!left.length, `still there: ${left.map(([n, what]) => `${n} ${what}(s)`).join(', ')}`)
   })
@@ -7268,11 +7359,13 @@ export const PROJECT_DIALOGS_EXPECTED = { team: 'viewer', nora: 'user' }
  *  projects with sub_project_parents) and its create, which the app sends
  *  without a sort_order. In the app as Nora it opens New project from the
  *  sidebar's header, names it `<tag> Dialogs`, picks the Standard agent as
- *  lead through the Lead popover's search, and in Project access checks the
- *  run's team, found by search, as Viewer and Nora, an organization admin
- *  the server offers since she is not the lead, as User, then presses
- *  Create project. Over REST the project's lead must be the agent, the
- *  team's share Viewer and Nora's grant User. Then it opens New
+ *  lead through the Lead popover's search, and in Project access first
+ *  checks, while the search is empty and Selected shows, that Nora holds
+ *  the automatic User entry the dialog adds for a creator who names
+ *  someone else as lead, an organization admin as anyone, without
+ *  clicking her option, then checks the run's team, found by search, as
+ *  Viewer and presses Create project. Over REST the project's lead must be
+ *  the agent, the team's share Viewer and Nora's grant User. Then it opens New
  *  sub-project from the sidebar menu of the run's project M, waits for
  *  M's parent check, names it `<tag> Dialogs sub`, picks the new project
  *  from the Project popover's search of the run's tag, waits until the
@@ -7299,21 +7392,26 @@ async function projectDialogsCheck() {
     await dialog.locator('[data-project-lead-picker]').click()
     await app.locator('[data-lead-picker-search]').fill(std.name)
     await app.locator(`[data-lead-choice="${std.id}"]`).click({ timeout: 30_000 })
-    // Project access, from the server's teams and people
+    // Project access, from the server's teams and people. Opening it
+    // clears its search, so Selected shows Nora's own entry, which the
+    // dialog added at User once someone else leads, as for any creator; a
+    // click on her option would take it away. Selected hides while the
+    // search holds text.
     await dialog.locator('[data-new-project-access]').click()
+    const mine = app.locator(`[data-project-access-selected-option="user:${run.nora.id}"]`)
+    await mine.waitFor({ timeout: 30_000 })
+    eq(await mine.getAttribute('data-state'), 'checked', "Nora's automatic entry")
+    eq(
+      await app.locator(`[data-project-access-selected-role="user:${run.nora.id}"]`).inputValue(),
+      PROJECT_DIALOGS_EXPECTED.nora,
+      "Nora's automatic level",
+    )
     const search = app.locator('[data-project-access-search]')
     await search.fill(team.name)
     await app.locator(`[data-project-access-team-option="${team.id}"]`).click({ timeout: 30_000 })
     await app
       .locator(`[data-project-team-role="${team.id}"]`)
       .selectOption(PROJECT_DIALOGS_EXPECTED.team)
-    await search.fill(run.nora.name)
-    await app
-      .locator(`[data-project-access-user-option="${run.nora.id}"]`)
-      .click({ timeout: 30_000 })
-    await app
-      .locator(`[data-project-role="${run.nora.id}"]`)
-      .selectOption(PROJECT_DIALOGS_EXPECTED.nora)
     // Escape clears the search, then closes the popover alone
     await search.press('Escape')
     await search.press('Escape')
@@ -7389,6 +7487,156 @@ async function projectDialogsCheck() {
     eq(madeSub.lead_id, std.id, "the sub-project's lead")
     return `created ${name} led by ${std.name}, shared with ${team.name} as Viewer and ${run.nora.name} as User, and ${subName} under it led by ${std.name}, each from the server's pickers`
   })
+}
+
+/** The step that checks an admin's management of a project she takes no
+ *  part in (adminManagementCheck). */
+export const ADMIN_MANAGEMENT_STEP = 'ui/admin-management'
+
+/** The step's own cleanup, reported apart from the step, so a delete that
+ *  fails never takes the place of the step's own failure. */
+export const ADMIN_MANAGEMENT_CLEANUP = 'cleanup/admin-management'
+
+/** The marks and sentence the step waits for: Settings › Projects' search,
+ *  its list and its project and sub-project rows
+ *  (src/panels/settings/ProjectLists.tsx), Archived tasks' page and
+ *  its note for a project the person cannot read
+ *  (src/panels/settings/ArchivedTasks.tsx), and the Search palette's
+ *  results (src/panels/Palette.tsx). */
+export const ADMIN_MANAGEMENT_MARKS = {
+  search: 'data-settings-projects-search',
+  list: 'data-settings-projects',
+  row: 'data-project-row',
+  subRow: 'data-subproject-row',
+  archived: 'data-archived-tasks',
+  unavailable:
+    "This page can't show the tasks of the project it was opened for. The project list shows the projects you take part in.",
+}
+
+/** An organization admin's management of a project she takes no part in,
+ *  on the deployment's answers. Over REST with Nora's write token it makes
+ *  `<tag> Managed` led by the Standard agent and removes Nora's automatic
+ *  User grant (DELETE with on_held_tasks leave), so she holds no lead,
+ *  grant or share there, and with the agent's key adds `<tag> Managed sub`
+ *  and a task in it. It makes `<tag> Managed control` under the run's
+ *  project M with a task of Nora's own, the control row. Over REST as Nora
+ *  GET /v1/projects/{id} must answer read false, completion unavailable and
+ *  milestones null, GET /v1/tasks/{key} of the managed task 404, and a
+ *  PATCH of the description must save. In the app as Nora, Settings ›
+ *  Projects searched for the run's tag lists the project, its row's
+ *  Archived tasks says the page can't show its tasks, and Search for the
+ *  tasks' common words, once it has answered, holds the control task and
+ *  not the managed one. The project is deleted, still live, through the
+ *  app's store by the organization after the step, also after a failure
+ *  (deleteProjectInApp), under ADMIN_MANAGEMENT_CLEANUP, and the sweep
+ *  finds a project left behind through Settings' lists of the projects
+ *  Nora manages, live and archived. It needs a backend from this release
+ *  on; against an older one Nora reads the project and the step fails, as
+ *  it should. */
+async function adminManagementCheck() {
+  const w = run.creds.writeToken
+  const k = run.creds.stdKey
+  const std = run.agents.std
+  const { M } = run.projects
+  const m = ADMIN_MANAGEMENT_MARKS
+  let project = null
+  await check(ADMIN_MANAGEMENT_STEP, async () => {
+    const name = `${run.tag} Managed`
+    project = await restOk(w, 'POST', '/projects', { name, lead_id: std.id })
+    await restOk(w, 'DELETE', `/projects/${project.id}/access/users/${run.nora.id}`, {
+      on_held_tasks: 'leave',
+    })
+    const sub = await restOk(k, 'POST', '/projects', { name: `${name} sub`, parent: project.id })
+    const managed = await restOk(k, 'POST', '/tasks', {
+      project: sub.id,
+      title: `${run.tag} managed work item`,
+      status: 'todo',
+    })
+    const controlSub = await restOk(w, 'POST', '/projects', {
+      name: `${name} control`,
+      parent: M.id,
+    })
+    const control = await restOk(w, 'POST', '/tasks', {
+      project: controlSub.id,
+      title: `${run.tag} managed work control`,
+      status: 'todo',
+    })
+    // management data, and no planning data or task
+    const read = await restOk(w, 'GET', `/projects/${project.id}`)
+    eq(read.access?.read, false, "Nora's read of the managed project")
+    eq(read.completion?.status, 'unavailable', "the managed project's completion")
+    eq(read.milestones, null, "the managed project's milestones")
+    eq((await rest(w, 'GET', `/tasks/${managed.key}`)).status, 404, 'the managed task')
+    await restOk(w, 'PATCH', `/projects/${project.id}`, { description: `${run.tag} managed` })
+    eq(
+      (await restOk(w, 'GET', `/projects/${project.id}`)).description,
+      `${run.tag} managed`,
+      "the managed project's description",
+    )
+    // Settings › Projects lists it, and its Archived tasks says it can't
+    // show the project's tasks
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/projects`, {
+      waitUntil: 'domcontentloaded',
+    })
+    await app.locator(`[${m.search}]`).fill(run.tag)
+    // the search's own rows, every one with the tag, not the list before
+    // it, whose row goes with a menu opened on it once the search answers
+    const listed = app.locator(`[${m.list}] [${m.row}], [${m.list}] [${m.subRow}]`)
+    expect(
+      await until(async () => {
+        const names = await listed.allTextContents()
+        return names.length > 0 && names.every((name) => name.includes(run.tag))
+      }, 60_000),
+      'Settings › Projects did not answer the search for the run tag',
+    )
+    const row = app.locator(`[${m.list}] [${m.row}="${project.id}"]`)
+    await row.waitFor({ timeout: 60_000 })
+    await row.hover()
+    await row.getByRole('button', { name: 'Project actions', exact: true }).click()
+    // the row menu's entry, not the Settings navigation's item of the
+    // same name beside it
+    await app
+      .locator('[data-slot="popover-content"]')
+      .getByRole('button', { name: 'Archived tasks', exact: true })
+      .click()
+    expect(
+      await until(
+        async () =>
+          ((await app.locator(`[${m.archived}]`).textContent()) ?? '').includes(m.unavailable),
+        30_000,
+      ),
+      'Archived tasks does not say it cannot show the managed project',
+    )
+    // Search has answered once it holds the control task, and then must
+    // not hold the managed one
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/all`, {
+      waitUntil: 'domcontentloaded',
+    })
+    const open = app.locator('button[data-sidebar-search]')
+    await open.waitFor({ timeout: 60_000 })
+    await open.click()
+    const palette = app.getByRole('dialog', { name: 'Search tasks and projects', exact: true })
+    const input = palette.getByRole('combobox', { name: 'Search tasks and projects' })
+    await input.waitFor()
+    await input.fill(`${run.tag} managed work`)
+    const item = (key) => palette.locator(`[cmdk-item][data-value="issue-${key}"]`)
+    expect(
+      await until(
+        async () =>
+          (await palette.locator('[cmdk-list]').getAttribute('aria-busy')) === null &&
+          (await item(control.key).count()) === 1,
+        30_000,
+      ),
+      `Search did not find the control task ${control.key}`,
+    )
+    eq(await item(managed.key).count(), 0, 'the managed task in Search')
+    await input.press('Escape')
+    return `${run.nora.name} read ${name} with read false, completion unavailable and no milestones, could not read ${managed.key}, saved its description, found it in Settings › Projects, where its Archived tasks said it cannot show its tasks, and Search found the control ${control.key} and not ${managed.key}`
+  })
+  // the step's own cleanup, which the run's cleanup does not reach, also
+  // after a failure, under its own id, so a failed delete never takes the
+  // place of the step's own failure in the report
+  if (project) await check(ADMIN_MANAGEMENT_CLEANUP, () => deleteProjectInApp(w, project))
 }
 
 /** The step that checks Billing's storage figures (billingStorageCheck). */
@@ -8486,7 +8734,7 @@ const archivedNotes = () => `${run.tag} notes kept with the archived task`
  *  read-only (data-task-archived) with its description and, under All, its
  *  history, from the deployment's taskWindow.task and threadHistory. It
  *  searches each task's title, whose run tag no other run's task holds, as
- *  Nora, whose admin seat is searched whole, and only reads. It must run
+ *  Nora, and only reads. It must run
  *  before the run archives its project, as Search leaves out the tasks of
  *  archived projects. With the toggle off, the search filters archived
  *  tasks out in the search index (convex/lib/mainSearch.ts
@@ -9936,6 +10184,9 @@ async function main() {
   // the New project and New sub-project dialogs on the server's pickers, on
   // a project of its own
   await projectDialogsCheck()
+  // an admin's management of a project she takes no part in, which it
+  // deletes itself, while M is active
+  await adminManagementCheck()
   // Billing's current storage and Storage by project, with a file of its own
   await billingStorageCheck()
   // Billing's API calls by account and Who counts toward your bill, with

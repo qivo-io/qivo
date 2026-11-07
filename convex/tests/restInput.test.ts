@@ -14,7 +14,7 @@ import type { Doc } from '../_generated/dataModel'
 import { eventParamsJson } from '../lib/taskEvents'
 import { sha256hex } from '../machine/auth'
 import { ROUTES } from '../machine/rest'
-import { NOW, newT, type T, uuid, withOrg } from './helpers.setup'
+import { NOW, newT, type T, uuid, withReadingAdmin } from './helpers.setup'
 
 /* edge-runtime provides TextEncoder; convex/tsconfig's ESNext-only lib lacks
  * it. */
@@ -65,7 +65,7 @@ async function call(
  * behind every path parameter of every route. */
 async function fixture() {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const token = `qvt_${uuid().replace(/-/g, '')}${'0'.repeat(16)}`
   const token_hash = await sha256hex(token)
   await t.run((ctx) =>

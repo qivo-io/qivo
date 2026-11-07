@@ -53,7 +53,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { manyHolders } from './holders.setup'
 import { keyOrg } from './nameKeys.setup'
@@ -230,7 +230,7 @@ async function expectAgainstWrite(
  * and tasks. `keyed` keys every name and stamps the organization ready, as
  * the backfill leaves it; call it once everything is planted. */
 async function base(t: T = newT()) {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const person = (name: string, extra: Partial<Doc<'profiles'>> = {}) =>
     plantSeat(t, { org_id: f.org.id, name, accepted_at: NOW, auth_user_id: uuid(), ...extra })
   const grant = (project: Doc<'projects'>, who: Doc<'profiles'>, level: GrantLevel = 'user') =>
@@ -322,8 +322,8 @@ describe('the Reassign picker against the write', () => {
       caller: b.f.admin,
       change: { kind: 'user_grant', project_id: b.f.meta.id, user_id: pia.id },
     })
-    // an admin while levelsFrom gives Lead, TBED's lead, a guest with Edit
-    // and an agent; never the organization's viewer or Pia herself
+    // the admin by their grant on TBED, TBED's lead, a guest with Edit and
+    // an agent; never the organization's viewer or Pia herself
     expect(sorted(listed)).toEqual(['Quinn', 'Relay', 'admin', 'guest', 'user'])
     expect(outcomes.get('Sam')).toBe(ASSIGNEE_RULE)
     expect(outcomes.get('Pia')).toBe(ASSIGNEE_RULE)
@@ -537,8 +537,8 @@ describe("the Reassign picker's gate", () => {
       permitted: false,
       holder_eligible: false,
     })
-    // and the write refuses the admin, whom an organization admin's removal
-    // would let take them
+    // and the write refuses the admin, whom admin status never lets take
+    // them
     expect(await handover(b.t, b.f.user, change, b.f.admin.id)).toBe(NO_WRITE_ACCESS)
   })
 
@@ -764,7 +764,7 @@ describe("the Reassign picker's states", () => {
     // Hardware, which shares TBED, holds one of Firmware's 300 open tasks
     // under a lowered limit on the bytes one transaction reads
     const t = newT({ transactionLimits: { bytesRead: 144 * 1024 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const mia = await plantSeat(t, { org_id: f.org.id, name: 'Mia', accepted_at: NOW })
     await t.run(async (ctx) => {
       await ctx.db.insert('project_team_access', {
@@ -1075,9 +1075,15 @@ describe("the Reassign picker inside Convex's limits", () => {
   }
 
   /* A top-level project of the organization with `subs` sub-projects,
-   * keyed, and `archived` more archived ones. */
+   * keyed, and `archived` more archived ones, led by the admin, who removes
+   * the access and can take its tasks. */
   async function projectWith(t: T, f: OrgFixture, name: string, subs: number, archived = 0) {
-    const meta = await plantProject(t, { org_id: f.org.id, name, name_key: nameKey(name) })
+    const meta = await plantProject(t, {
+      org_id: f.org.id,
+      name,
+      name_key: nameKey(name),
+      lead_id: f.admin.id,
+    })
     const live: Doc<'projects'>[] = []
     for (let i = 0; i < subs + archived; i++) {
       const sub = await plantProject(t, {
@@ -1136,7 +1142,7 @@ describe("the Reassign picker inside Convex's limits", () => {
    * Firmware's instead, Emil two. */
   async function thousand(level: GrantLevel, holders = 0) {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sub3 = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
@@ -1175,7 +1181,7 @@ describe("the Reassign picker inside Convex's limits", () => {
 
   it('reads a member leaving where three people keep Edit through their own grants, in an organization of 1,000 people', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const atlas = await projectWith(t, f, 'Atlas', 3)
     const platform = await keyedTeam(t, f, 'Platform')
     const ops = await keyedTeam(t, f, 'Ops')
@@ -1238,7 +1244,7 @@ describe("the Reassign picker inside Convex's limits", () => {
 
   it('reads a member leaving a team shared with 50 sub-projects and 150 archived ones, holding a task in each live one', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const wide = await keyedTeam(t, f, 'Wide')
     const platform = await keyedTeam(t, f, 'Platform')
     // 17 projects of 3 sub-projects, 50 of them shared, and 150 archived
@@ -1287,7 +1293,7 @@ describe("the Reassign picker inside Convex's limits", () => {
 
   it("reads a person's grant removed from a sub-project shared with five teams", async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const teams: string[] = []
     for (let i = 0; i < 5; i++) teams.push(await keyedTeam(t, f, `Crew ${i}`))
     await t.run(async (ctx) => {
@@ -1334,7 +1340,7 @@ describe("the Reassign picker inside Convex's limits", () => {
 
   it("reads a person's grant removed from a project with 800 open and 200 Done tasks, 100 of them theirs", async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const atlas = await projectWith(t, f, 'Atlas', 3)
     await keyOrg(t, f.org.id)
     const [pia, ...keepers] = await people(t, f, [
@@ -1383,7 +1389,7 @@ describe("the Reassign picker inside Convex's limits", () => {
 
   it("reads a person's grant removed from a project of 30 live and 40 archived sub-projects, holding a task in each live one", async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const atlas = await projectWith(t, f, 'Atlas', 30, 40)
     await keyOrg(t, f.org.id)
     const [pia, keeper] = await people(t, f, ['Pia', 'Keeper'])
@@ -1417,7 +1423,7 @@ describe("the Reassign picker inside Convex's limits", () => {
 
   it("reads a person's grant removed in an organization of 2,000 projects, live and archived", async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // withOrg's TBED and Skunkworks and TBED's two sub-projects, then 198
     // more live projects and 498 live sub-projects, 300 archived projects
     // and 1,000 archived sub-projects

@@ -13,7 +13,7 @@ import {
   reap,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { plantTicket } from './uploadTickets.setup'
 
@@ -163,7 +163,7 @@ describe('preview identity, storage ownership and cleanup', () => {
 
   it('protects both library and private derivatives from attachment/avatar adoption and orphan cleanup', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const library = await libraryImage(t)
     const libraryPreview = await file(t)

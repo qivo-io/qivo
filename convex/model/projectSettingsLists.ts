@@ -16,9 +16,8 @@
  * (projects by_org_parent_state_name, by_org_state_name and
  * by_org_state_archived). It never asks ordinary access (accessOf,
  * projectLevelsOf, seatSight), so an admin with no lead, grant or share
- * lists every project, and the admin access split, which removes the admin
- * branches of ordinary access, changes nothing here; the split must not
- * route these reads through accessOf or ordinaryOf. Every other seat lists
+ * lists every project, and these reads must not go through accessOf, which
+ * gives an admin only their own rows. Every other seat lists
  * by ordinary sight, what it sees today, navigation included, judged by
  * the navigation reads' rules (model/projectNavReads.ts: seatSight,
  * rootShows, ownRoots, restCandidates, childRowShows, inheritedShows and
@@ -41,10 +40,9 @@
  * beneath an archived parent, which only a search lists, carries its
  * parent's `can_restore`, the action a search hit takes (restoring the
  * parent brings it back when `with_parent`), and no right of its own
- * (coordinator, 5 November 2026). Before the admin access split these
- * equal the writes' level rule (hasProjectLevel 'lead'), as only an admin
- * or the effective lead holds 'lead'; the split moves the writes onto
- * managesIn, so they stay the writes' rule after it.
+ * (coordinator, 5 November 2026). They are the writes' own rule, since
+ * the writes ask this predicate (model/projects.ts assertManages and
+ * subProjectParent, projects.deleteDeep and removalSummary).
  *
  * Orders and cursors. Settings › Projects and its search are in name key
  * byte order (lib/namedPages.ts compareNamed), tied by the project id and

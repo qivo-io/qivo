@@ -39,9 +39,11 @@ import {
   plantIssue,
   plantProject,
   plantSeat,
+  readableLiveSubProjects,
   type T,
   uuid,
   withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { plantPeople } from './overview.setup'
 import { countOrg } from './overviewCounts.setup'
@@ -109,7 +111,7 @@ const ALL: AgendaScope = { kind: 'all' }
 describe('arguments', () => {
   it('refuses a malformed clock and a scope the validator does not know, and answers a whole one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const scope = projectScope(f.meta)
     const ask = (clock: AgendaClock, s: AgendaScope = scope) =>
       as(t, f.user).query(api.teamSync.agenda, { org_id: f.org.id, scope: s, ...clock })
@@ -151,7 +153,7 @@ describe('arguments', () => {
 describe('access', () => {
   it('answers unavailable alike for every scope it cannot honour, and never falls back to All projects', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const archived = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
@@ -190,7 +192,7 @@ describe('access', () => {
 
   it("answers unavailable with access_unchecked where a bound of the caller's own reads stopped a check, never ok", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await seatOf(t, f)
     await grant(t, f.sub, me)
     const team = await plantTeam(t, f.org.id, 'Builders', [me], [f.sub2])
@@ -209,7 +211,7 @@ describe('access', () => {
 
   it('adds no row, ask, Done task, sub-project or top-level project of a hidden or an archived sub-project, in any scope', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sibling = await plantHiddenSibling(t, f, f.viewer)
     const archived = await plantProject(t, {
       org_id: f.org.id,
@@ -262,7 +264,7 @@ describe('access', () => {
 
   it('gives an admin what lib/access.ts accessOf gives them, and no more', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const hiddenSub = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
@@ -288,7 +290,7 @@ describe('access', () => {
 describe('scope', () => {
   it("reads a project's visible sub-projects, a sub-project itself and a navigation-only project's visible ones", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await seatOf(t, f)
     await grant(t, f.sub, me)
     await withReach(t)
@@ -309,7 +311,7 @@ describe('scope', () => {
 
   it("reads a team's shares each once, a top-level share reaching its sub-projects, and skips a share the reader cannot see", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the viewer is not in the team and cannot see SKNK
     const skunkSub = await plantProject(t, {
       org_id: f.org.id,
@@ -335,7 +337,7 @@ describe('scope', () => {
 
   it('names no top-level project the reader sees only to navigate to an archived sub-project, as the page does not show it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await seatOf(t, f)
     const archived = await plantProject(t, {
       org_id: f.org.id,
@@ -357,7 +359,7 @@ describe('scope', () => {
 
   it("reads All projects only once the organization's reach rows are complete", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await task(t, f.sub, { assignee_id: f.user.id })
     expect(await agendaFor(t, f.user, ALL)).toEqual({ state: 'unavailable' })
     expect((await agendaFor(t, f.user, projectScope(f.meta))).state).toBe('ok')
@@ -367,13 +369,14 @@ describe('scope', () => {
 
   it('pages All projects across top-level projects of one name, each read once', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 130 top-level projects of one name beside the fixture's TBED and
     // SKNK, more than two of the read's steps of 64 rows hold, so two steps
     // end inside the name and the read goes on by id within it, the second
     // time from a step that read only that name; each holds a sub-project
     // of one open task
-    const tied = await plantSharedTops(t, f, f.admin, { tops: 130, subs: 1, teams: false })
+    // the user leads them all and reads them whole
+    const tied = await plantSharedTops(t, f, f.user, { tops: 130, subs: 1, teams: false })
     await t.run(async (ctx) => {
       for (const p of tied.tops)
         await ctx.db.patch(p._id, { name: 'Programme', name_key: 'programme' })
@@ -381,7 +384,7 @@ describe('scope', () => {
     for (const [i, sub] of tied.subs.entries())
       await task(t, sub, { num: 100 + i, status: 'todo', assignee_id: f.user.id })
     await withReach(t)
-    const ok = okOf(await agendaFor(t, f.admin, ALL))
+    const ok = okOf(await agendaFor(t, f.user, ALL))
     const subs = [...tied.subs.map((p) => p.id), f.sub.id, f.sub2.id]
     expect(ok.sub_projects).toEqual(sorted(subs))
     expect(ok.rows).toHaveLength(130)
@@ -412,7 +415,7 @@ describe('scope', () => {
 describe('rows', () => {
   it("holds every open task without subtasks of the scope, whoever owns it, a subtask under another sub-project's group included", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const team = await plantTeam(t, f.org.id, 'Platform', [f.user], [f.meta])
     for (const status of ['todo', 'progress', 'review'] as const)
       await task(t, f.sub, { title: `Leaf ${status}`, status, assignee_id: f.admin.id })
@@ -445,7 +448,7 @@ describe('rows', () => {
 describe('people', () => {
   it("walks the rows' owners, an inactive one and an agent kept, in a team only its members, and no profile of another organization", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const gone = await plantSeat(t, { org_id: f.org.id, active: false, name: 'Gone' })
     await task(t, f.sub, { assignee_id: f.user.id })
     await task(t, f.sub, { status: 'review', assignee_id: f.viewer.id, reviewer_id: f.admin.id })
@@ -480,7 +483,7 @@ describe('people', () => {
 describe('asks', () => {
   it('holds the unassigned Backlog tasks due within 14 days or overdue, never a group or an assigned one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const backlog = { status: 'backlog' as const }
     await task(t, f.sub, { ...backlog, title: 'Due in 14 days', due_date: '2026-01-15' })
     await task(t, f.sub, { ...backlog, title: 'Due in 15 days', due_date: '2026-01-16' })
@@ -515,7 +518,7 @@ describe('asks', () => {
 describe('Done since', () => {
   it("holds each walker's Done tasks from their reading floor by the page's rule, a reviewer's only with a hand-off", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the walkers, by a row each
     for (const p of [f.user, f.admin, f.agent]) await task(t, f.sub, { assignee_id: p.id })
     // the user has no stamp, so reads from Wednesday's midnight; the admin's
@@ -587,7 +590,7 @@ describe('Done since', () => {
 
   it("reads the organization's week start: Monday reads from Thursday where the week starts on Sunday", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run((ctx) => ctx.db.patch(f.org._id, { week_start: 0 }))
     await task(t, f.sub, { assignee_id: f.user.id })
     const done = (title: string, done_at: string) =>
@@ -621,7 +624,7 @@ describe('Done since', () => {
 describe('blockers', () => {
   it("names a row's open blockers the reader is shown, by link order, never a done, hidden, archived or foreign one or a relates link", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sibling = await plantHiddenSibling(t, f, f.viewer)
     const row = await task(t, f.sub, { title: 'Blocked', assignee_id: f.user.id })
     const open = await task(t, f.sub2, { title: 'Open blocker', status: 'backlog' })
@@ -687,7 +690,7 @@ describe('delays and the week', () => {
    * row in FW. */
   async function delayed() {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run((ctx) => ctx.db.patch(f.sub._id, { track_delay: true }))
     const sub = { ...f.sub, track_delay: true }
     const late = await task(t, sub, {
@@ -834,7 +837,7 @@ describe('the ceiling', () => {
 
   it('counts rows, asks and Done tasks once each: ten fit a ceiling of 10, one more does not', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     AGENDA.ceiling = 10
     await plantTasks(t, f.sub, 6, (i) => ({ ...ordinary(i), assignee_id: f.user.id }))
     await plantTasks(t, f.sub2, 2, (i) => ({
@@ -862,7 +865,7 @@ describe('the ceiling', () => {
 
   it('claims over_ceiling for Done tasks only from their walker’s latest reading point, and answers over_budget for those the floor alone loads', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     AGENDA.ceiling = 10
     await plantTasks(t, f.sub, 8, (i) => ({ ...ordinary(i), assignee_id: f.agent.id }))
     // the agent's sitting runs into the day from the 20th, and ends at 06:30
@@ -889,7 +892,7 @@ describe('the ceiling', () => {
 
   it('stops reading Done tasks at the step whose certain ones establish the ceiling', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     AGENDA.ceiling = 10
     await plantTasks(t, f.sub, 1, (i) => ({ ...ordinary(i), assignee_id: f.user.id }))
     // a sub-project's Done tasks not yet archived at their design size, each
@@ -916,7 +919,7 @@ describe('the ceiling', () => {
 
   it('answers over_ceiling from a team’s counts with no task read, falls back to the read while counting, and reads no count row for a project', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     AGENDA.ceiling = 10
     const team = await plantTeam(t, f.org.id, 'Platform', [f.user], [f.meta])
     await plantTasks(t, f.sub, 6, (i) => ({ ...ordinary(i), assignee_id: f.user.id }))
@@ -949,7 +952,7 @@ describe('the ceiling', () => {
     // the walker's load is read last and may stop on the guard, which
     // leaves the answer ok with every task and the week unavailable
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const parents = await plantTasks(t, f.sub2, 5, ordinary)
     await plantTasks(t, f.sub, 40, (i) => ({
       ...ordinary(i),
@@ -985,7 +988,7 @@ describe('the ceiling', () => {
  * a hidden subtask of a parent. Every task has the same number in both. */
 async function hiddenOrg(wide: boolean) {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const sibling = await plantHiddenSibling(t, f, f.viewer)
   const text = (i: number) => (wide ? ordinary(i) : { title: 'h', text: '' })
   const [parent] = await plantTasks(t, sibling, 1, () => ({
@@ -1053,7 +1056,7 @@ describe('hidden data', () => {
     const least: number[] = []
     for (const wide of [false, true]) {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const text = (i: number) =>
         wide
           ? { name: ordinary(i).title.slice(0, NAME_MAX), description: ordinary(i).text }
@@ -1145,7 +1148,7 @@ const record = (name: string, answer: AgendaAnswer, read: ReadFigures) =>
  * in turn, tracking delay. */
 async function sharedCase(o: { tops: number; subs: number | ((top: number) => number) }) {
   const t = newT({ transactionLimits: true })
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const me = await seatOf(t, f)
   const owners = [me, ...(await plantPeople(t, f.org.id, 9))]
   const planted = await plantSharedTops(t, f, me, { ...o, members: owners })
@@ -1374,7 +1377,7 @@ describe('real limits', () => {
 
   it('answers over_ceiling from the counts for a team that shares 50 live and 150 archived projects, and from the read while counting', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await seatOf(t, f)
     const owners = [me, ...(await plantPeople(t, f.org.id, 9))]
     // the archived shares first, as the read takes the team's shares in
@@ -1408,17 +1411,6 @@ describe('real limits', () => {
     expect(counting.answer).toEqual({ state: 'over_ceiling', ceiling: TEAM_SYNC_TASKS })
   })
 
-  it('answers over_ceiling for All projects over 200 top-level projects for an admin, from the counts and while counting', async () => {
-    // the first 25 projects by name hold open tasks, 30 in each of the
-    // member's sub-projects and 18 in each other, 1,458 in all, more than
-    // the ceiling's worth the counts bound and the read pass first; while
-    // counting the group checks wait past the first ceiling's worth, so the
-    // read goes on through every top-level project before it establishes
-    // the ceiling
-    const c = await allProjectsOrg((top, mine) => (top >= 25 ? 0 : mine ? 30 : 18))
-    await allProjectsReads(c, c.f.admin, 'an admin')
-  })
-
   it('answers over_ceiling for All projects over 200 top-level projects for a member in 3 teams, from the counts and while counting', async () => {
     // the member's sub-projects hold 30 open tasks each, the first 48 of
     // their 54 by name, 1,440 in all, more than the ceiling's worth
@@ -1426,9 +1418,65 @@ describe('real limits', () => {
     await allProjectsReads(c, c.me, 'a member in 3 teams')
   })
 
-  it('answers an everyday project whose 90 tasks 90 people of a roster of 1,000 own', async () => {
+  it("answers over_ceiling for All projects over 200 top-level projects for an admin in a member's 3 teams as for the member, from the counts", async () => {
+    // the same organization, the admin in the member's teams; one read
+    // each, from the counts, so the case stays well inside the timeout on
+    // CI's runners (the member's read while counting is the case above)
+    const c = await allProjectsOrg((top, mine) => (mine && top < 150 ? 30 : 0), true)
+    // admin status adds no sub-project to the 54 the member's teams share
+    expect(await readableLiveSubProjects(c.t, c.me)).toBe(54)
+    expect(await readableLiveSubProjects(c.t, c.f.admin)).toBe(54)
+    const member = await agendaRead(c.t, c.me, ALL)
+    record('All projects for a member in 3 teams, the counts bound', member.answer, member.read)
+    expect(member.answer).toEqual({ state: 'over_ceiling', ceiling: TEAM_SYNC_TASKS })
+    const admin = await agendaRead(c.t, c.f.admin, ALL)
+    record(
+      "All projects for an admin in the member's teams, the counts bound",
+      admin.answer,
+      admin.read,
+    )
+    expect(admin.answer).toEqual({ state: 'over_ceiling', ceiling: TEAM_SYNC_TASKS })
+    // the same read, two ranges more for the admin's own seat: an admin
+    // branch back in the level rule reads every project instead, about
+    // 2,100 ranges
+    const more = admin.read.ranges - member.read.ranges
+    expect(more).toBeGreaterThanOrEqual(0)
+    expect(more).toBeLessThanOrEqual(5)
+  })
+
+  it('answers over_ceiling for All projects for an admin who reads 200 live sub-projects through grants on their top-level projects, from the counts and while counting', async () => {
+    // 200 live sub-projects one person reads, the one raised figure, under
+    // 67 top-level projects of 3 but one of 2 on which the admin holds User,
+    // beside 3 they do not read; 30 open tasks in each sub-project of the
+    // first 16 by name, 1,410 in all, more than the ceiling's worth
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
+    const owners = await plantPeople(t, f.org.id, 10)
+    const all = await plantSharedTops(t, f, f.admin, {
+      tops: 70,
+      subs: (i) => (i === 0 ? 2 : 3),
+      teams: false,
+    })
+    const read = all.tops.slice(0, 67)
+    await t.run(async (ctx) => {
+      for (const p of read)
+        await ctx.db.insert('project_access', {
+          project_id: p.id,
+          profile_id: f.admin.id,
+          level: 'user',
+        })
+    })
+    for (const [i, p] of read.slice(0, 16).entries())
+      for (const sub of all.subsOf.get(p.id) ?? []) await plantOpen(t, sub, 30, owners, 100 * i)
+    await withReach(t)
+    await countOrg(t, f.org.id)
+    expect(await readableLiveSubProjects(t, f.admin)).toBe(200)
+    await allProjectsReads({ t, f, me: f.admin }, f.admin, 'an admin who reads 200 sub-projects')
+  })
+
+  it('answers an everyday project whose 90 tasks 90 people of a roster of 1,000 own', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withReadingAdmin(t)
     const me = await seatOf(t, f)
     const roster = await plantRoster(t, f.org.id, 994)
     const shared = await plantSharedTops(t, f, me, { tops: 1, subs: 3 })
@@ -1447,7 +1495,7 @@ describe('real limits', () => {
 
   it('answers an everyday team whose 600 rows 200 of its members own, in a roster of 1,000', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await seatOf(t, f)
     const owners = (await plantRoster(t, f.org.id, 994)).slice(0, 200)
     // each of the reader's three teams shares 7 projects of 3 sub-projects
@@ -1514,11 +1562,13 @@ const peopleOf = (t: T, orgId: string): Promise<number> =>
  * under the first 102 planted and two under the other 96, and 1,000
  * archived ones, six under each of the first 10 and five under the rest. A
  * member in 3 teams, `me`, whose teams share 21 projects spread over the
- * names, three of every 29, 54 sub-projects, 18 a team. Each live
- * sub-project of the planted top-level project at place `top` holds
- * `tasks(top, mine)` open tasks, `mine` where the member's teams share it,
- * so a case plants only the tasks its read reaches before the ceiling. */
-async function allProjectsOrg(tasks: (top: number, mine: boolean) => number) {
+ * names, three of every 29, 54 sub-projects, 18 a team, and with
+ * `adminInTeams` the fixture's admin, who holds no row of their own, in
+ * those teams too. Each live sub-project of the planted top-level project
+ * at place `top` holds `tasks(top, mine)` open tasks, `mine` where the
+ * member's teams share it, so a case plants only the tasks its read
+ * reaches before the ceiling. */
+async function allProjectsOrg(tasks: (top: number, mine: boolean) => number, adminInTeams = false) {
   const t = newT({ transactionLimits: true })
   const f = await withOrg(t)
   const me = await seatOf(t, f)
@@ -1529,6 +1579,7 @@ async function allProjectsOrg(tasks: (top: number, mine: boolean) => number) {
     subs: (i) => (i < 102 ? 3 : 2),
     archived: (i) => (i < 10 ? 6 : 5),
     shared: theirs,
+    ...(adminInTeams ? { members: [me, f.admin] } : {}),
   })
   expect(await projectsOf(t, f.org.id)).toEqual({ tops: 200, subs: 500, archivedSubs: 1000 })
   const mine = all.tops.filter((_, i) => theirs(i)).flatMap((p) => all.subsOf.get(p.id) ?? [])
@@ -1545,25 +1596,23 @@ async function allProjectsOrg(tasks: (top: number, mine: boolean) => number) {
 
 /* All projects for `who` in the organization of allProjectsOrg, from the
  * counts and then while the counts are not whole, each over_ceiling, the
- * counts in fewer ranges. */
+ * counts in fewer ranges. Answers both reads, for a case that compares two
+ * callers. */
 async function allProjectsReads(
   c: Awaited<ReturnType<typeof allProjectsOrg>>,
   who: Doc<'profiles'>,
   label: string,
-): Promise<void> {
+) {
   const bound = await agendaRead(c.t, who, ALL)
-  record(`All projects over 200 projects for ${label}, the counts bound`, bound.answer, bound.read)
+  record(`All projects for ${label}, the counts bound`, bound.answer, bound.read)
   expect(bound.answer).toEqual({ state: 'over_ceiling', ceiling: TEAM_SYNC_TASKS })
   await c.t.run((ctx) => unstampOverview(ctx.db, c.f.org.id))
   const counting = await agendaRead(c.t, who, ALL)
-  record(
-    `All projects over 200 projects for ${label}, while counting`,
-    counting.answer,
-    counting.read,
-  )
+  record(`All projects for ${label}, while counting`, counting.answer, counting.read)
   expect(counting.answer).toEqual({ state: 'over_ceiling', ceiling: TEAM_SYNC_TASKS })
   // the counts establish the ceiling before the read gets as far
   expect(bound.read.ranges).toBeLessThan(counting.read.ranges)
+  return { bound, counting }
 }
 
 /* An everyday open task `i`, scheduled in NOW's week with remaining hours,

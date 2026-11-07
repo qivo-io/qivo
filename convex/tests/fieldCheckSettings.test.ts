@@ -21,7 +21,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 /* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
@@ -34,7 +34,7 @@ type Fx = OrgFixture & { t: T }
 
 async function setup(): Promise<Fx> {
   const t = newT()
-  return { t, ...(await withOrg(t)) }
+  return { t, ...(await withReadingAdmin(t)) }
 }
 
 /** Expects a field_changed refusal and answers its data. */
@@ -472,7 +472,7 @@ describe('deletes', () => {
     })
     const comment = () => fx.t.run((ctx) => byId(ctx, 'comments', id))
     const app = (seen: string) =>
-      as(fx.t, fx.admin).mutation(api.comments.remove, {
+      as(fx.t, fx.user).mutation(api.comments.remove, {
         org_id: fx.org.id,
         id,
         expected: { body: printOf(trimmedForm(seen)) },
@@ -480,7 +480,7 @@ describe('deletes', () => {
     await fieldChanged(app('First'))
     await fieldChanged(
       fx.t.mutation(internal.machine.discussion.restDeleteComment, {
-        callerId: fx.admin.id,
+        callerId: fx.user.id,
         access: 'write',
         ref: id,
         body: JSON.stringify({ expected: { body: 'First' } }),

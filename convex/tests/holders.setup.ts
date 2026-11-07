@@ -5,21 +5,22 @@
  * (see helpers.setup.ts). */
 
 import { byId } from '../lib/db'
-import { NOW, newT, plantProject, uuid, withOrg } from './helpers.setup'
+import { NOW, newT, plantProject, uuid, withReadingAdmin } from './helpers.setup'
 
 /** The most open tasks manyHolders puts in one sub-project, the design
  * size's open tasks per sub-project. */
 const TASKS_PER_SUB = 300
 
-/** withOrg with `n` more members of Hardware, which shares TBED at User,
- * each assigned to one open task, beside a second team, Platform. The
- * tasks fill Firmware with TASKS_PER_SUB and then further sub-projects of
- * TBED. Under `limits` the deployment's limits apply. `admin` is the
- * organization admin as REST and MCP calls name a caller, and `state` reads
+/** withReadingAdmin with `n` more members of Hardware, which shares TBED
+ * at User, each assigned to one open task, beside a second team, Platform.
+ * The tasks fill Firmware with TASKS_PER_SUB and then further sub-projects
+ * of TBED. Under `limits` the deployment's limits apply. `admin` is the
+ * organization admin as REST and MCP calls name a caller, who keeps Edit on
+ * TBED by their own grant once Hardware's share goes, and `state` reads
  * Hardware's share on TBED, the Viewer grants on TBED and Hardware itself. */
 export async function manyHolders(n: number, limits: Parameters<typeof newT>[0] = {}) {
   const t = newT({ transactionLimits: true, ...limits })
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const subs = [f.sub]
   while (subs.length * TASKS_PER_SUB < n)
     subs.push(await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id }))

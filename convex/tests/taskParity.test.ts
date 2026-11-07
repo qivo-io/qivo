@@ -57,7 +57,7 @@ import {
   type T,
   TODAY,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { cursorsShown, wholeDetails } from './taskRelated.setup'
 
@@ -91,7 +91,7 @@ type Fx = OrgFixture & {
  * sub-project ARC), View on RO, and no access to SKNK. */
 async function setup(): Promise<Fx> {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   await grant(t, f.meta.id, f.agent.id, 'user')
   const roMeta = await plantProject(t, { org_id: f.org.id, key: 'RO', name: 'Read only' })
   const roSub = await plantProject(t, {
@@ -1503,7 +1503,7 @@ describe('applyTaskUpdate, the write order of REST PATCH and MCP update_task', (
 describe('the shared cores the app runs too', () => {
   it('the app link: the same link again is a no-op, another kind is refused', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const b = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const link = (id: string, type: 'blocks' | 'relates') =>
@@ -1523,7 +1523,7 @@ describe('the shared cores the app runs too', () => {
 
   it('the app link: an id another link already has is refused', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const b = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const c = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })

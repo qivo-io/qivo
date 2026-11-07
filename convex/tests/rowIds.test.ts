@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import { ROW_ID_SHAPE } from '../lib/db'
-import { as, expectRefusal, newT, plantIssue, uuid, withOrg } from './helpers.setup'
+import { as, expectRefusal, newT, plantIssue, uuid, withReadingAdmin } from './helpers.setup'
 import { plantTicket } from './uploadTickets.setup'
 
 declare class Blob {
@@ -18,7 +18,7 @@ const HEX64 = 'cd'.repeat(32)
 /* The admin's and user's creates, each given the id to send. */
 async function fixture() {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const admin = as(t, f.admin)
   const user = as(t, f.user)
   const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })

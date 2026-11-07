@@ -9,7 +9,16 @@ import authSchema from '../betterAuth/schema'
 import { LIMITS } from '../lib/limits'
 import { PANORAMA_MAX_BYTES } from '../lib/panorama'
 import { sha256hex } from '../machine/auth'
-import { as, expectRefusal, NOW, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
+import {
+  as,
+  expectRefusal,
+  NOW,
+  newT,
+  plantIssue,
+  type T,
+  uuid,
+  withReadingAdmin,
+} from './helpers.setup'
 import { plantTicket } from './uploadTickets.setup'
 
 declare class Blob {
@@ -156,7 +165,7 @@ async function attach(op: Caller, submission_id: string, storage_id: Id<'_storag
 describe('platform-only curation credential management', () => {
   it('refuses anonymous and organization-admin callers on every public operation', async () => {
     const { t, key } = await setup()
-    const org = await withOrg(t)
+    const org = await withReadingAdmin(t)
     const sid = await storage(t)
     for (const caller of [t, as(t, org.admin)]) {
       const checks = [
@@ -860,7 +869,7 @@ describe('licensed files and final human decisions', () => {
 
   it('refuses attachment, avatar and background storage IDs without harming existing files', async () => {
     const { t, op, key } = await setup()
-    const org = await withOrg(t)
+    const org = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: org.org.id, project_id: org.sub.id })
     const link = await submit(t, key.id)
     const attached = await storage(t, jpeg(1))

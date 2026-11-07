@@ -50,7 +50,7 @@ import {
   type T,
   taskWithText,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { countOrg } from './overviewCounts.setup'
 import { deleteTask, itemFor } from './trash.setup'
@@ -71,7 +71,7 @@ type Fx = OrgFixture & { t: T }
 
 /* withOrg, with the agent holding Edit on TBED for REST and MCP. */
 async function setup(t: T = newT()): Promise<Fx> {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   await t.run((ctx) =>
     ctx.db.insert('project_access', {
       project_id: f.meta.id,
@@ -497,7 +497,12 @@ describe('a move that carries archived subtasks', () => {
     const fx = await setup()
     const parent = await task(fx, { title: 'Long history' })
     await plantSubtasks(fx, parent, LIMITS.moveSubtree.max + 1, { archived_at: NOW })
-    const other = await plantProject(fx.t, { org_id: fx.org.id, type: 'meta' })
+    // led by the admin, who moves the task there
+    const other = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      type: 'meta',
+      lead_id: fx.admin.id,
+    })
     const dest = await plantProject(fx.t, {
       org_id: fx.org.id,
       type: 'project',
@@ -514,9 +519,14 @@ describe('a move that carries archived subtasks', () => {
     )
   })
 
-  /* A sub-project in another top-level project, where the agent has Edit. */
+  /* A sub-project in another top-level project, where the agent has Edit,
+   * led by the admin. */
   const elsewhere = async (fx: Fx) => {
-    const other = await plantProject(fx.t, { org_id: fx.org.id, type: 'meta' })
+    const other = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      type: 'meta',
+      lead_id: fx.admin.id,
+    })
     await fx.t.run((ctx) =>
       ctx.db.insert('project_access', {
         project_id: other.id,

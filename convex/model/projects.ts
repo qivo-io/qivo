@@ -21,8 +21,8 @@ import {
   canChangeAccess,
   canManageOwnProjectAccess,
   canManageProjectUsers,
-  hasProjectLevel,
   levelRank,
+  managesIn,
   NO_USER_MANAGEMENT,
   projectLevel,
   rootMetaOf,
@@ -188,14 +188,25 @@ async function allocateKey(
 
 /* --------------------------------------------------------------- guards */
 
-/** The refusal of a settings edit, an archive or a new sub-project by a
- * caller without Lead access to the project (assertLead). */
+/** The refusal of a settings edit, an archive, a restore or a new
+ * sub-project by a caller who does not manage the project (assertManages,
+ * subProjectParent). */
 export const LEAD_ACCESS_NEEDED = 'requires lead access to this project'
 
-/* projects_update is lead level (0106 left it as the rule — no RPC), so the
- * plain surfaces refuse as the silent 0-row did. */
-async function assertLead(ctx: QueryCtx, me: Doc<'profiles'>, projectId: string): Promise<void> {
-  if (!(await hasProjectLevel(ctx, me, projectId, 'lead'))) {
+/** Refuses with LEAD_ACCESS_NEEDED unless `me` manages `project`
+ * (lib/access.ts canManageOwnProjectAccess): an active seat of the
+ * project's organization, the project in a meta tree, and an organization
+ * admin or the project's effective lead. These are the writes a project's
+ * Settings page and Settings › Projects offer from that predicate
+ * (model/projectSettings.ts settingsRights), so an organization admin
+ * manages a project they take no part in. Ordinary access decides nothing
+ * here. A broken chain of parents throws not found, as rootMetaOf does. */
+export async function assertManages(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  project: Doc<'projects'>,
+): Promise<void> {
+  if (!(await canManageOwnProjectAccess(ctx, me, project))) {
     throw forbidden(LEAD_ACCESS_NEEDED)
   }
 }
@@ -299,19 +310,27 @@ export type ParentCheck =
 
 /**
  * The checks createProjectCore makes of the row a new sub-project names as
- * its parent, in its order: one `me` cannot see reads as missing, then a
- * parent that is not a meta, an archived parent and a parent `me` holds no
- * Lead access to are refused with the create's own sentences
- * (projects_hierarchy_guard 0078:341-349, archive-parent guard 0106:68). The
+ * its parent, in its order. Creating a sub-project is project management,
+ * so a top-level meta `me` manages (lib/access.ts managesIn with the parent
+ * as its own root, which reads nothing and never throws) skips the level
+ * check, and a manager's check reads no ordinary level. Any other parent
+ * goes the level path. No parent, a parent of another organization and one
+ * `me` neither manages nor sees read as missing; then a parent that is not
+ * a meta, an archived parent and a parent `me` sees without managing are
+ * refused with the create's own sentences (projects_hierarchy_guard
+ * 0078:341-349, archive-parent guard 0106:68). A sub-project named as the
+ * parent counts as managed by its real root (managesSubProject), so an
+ * organization admin who manages it without seeing it, as REST, MCP and
+ * Settings find it, is told it is not top level rather than not found. The
  * lead picker of a new sub-project (model/projectSettings.ts
  * leadCandidatesOf) asks the same, so both say the same.
  *
- * `levelOf` answers `me`'s level on the parent, navigation included, which
- * decides both whether they see it (canSeeProject) and whether they have
- * Lead access to it (hasProjectLevel). The create reads it with
- * lib/access.ts projectLevel, which throws not_found for a parent whose own
- * chain of parents is broken; a read passes accessOf's level, which answers
- * the same within bounded reads.
+ * `levelOf` answers `me`'s level on a parent they do not manage, navigation
+ * included, which decides whether they see it (canSeeProject), and for a
+ * parent that is not a top-level meta whether it passes as Lead access.
+ * The create reads it with lib/access.ts projectLevel, which throws
+ * not_found for a parent whose own chain of parents is broken; a read
+ * passes accessOf's level, which answers the same within bounded reads.
  */
 export async function subProjectParent(
   ctx: QueryCtx,
@@ -320,13 +339,32 @@ export async function subProjectParent(
   levelOf: (parent: Doc<'projects'>) => Promise<AccessLevel | null> = (p) =>
     projectLevel(ctx, me, p),
 ): Promise<ParentCheck> {
-  const level = parent === null ? null : await levelOf(parent)
-  if (parent === null || level === null) return { state: 'missing' }
+  if (parent === null || parent.org_id !== me.org_id) return { state: 'missing' }
+  const manages = managesIn(me, parent, parent)
+  const level = manages ? null : await levelOf(parent)
+  if (!manages && level === null && !(await managesSubProject(ctx, me, parent)))
+    return { state: 'missing' }
   if (parent.type !== 'meta') return { state: 'refused', refusal: rule(PARENT_NOT_TOP_LEVEL) }
   if (parent.archived_at !== undefined) return { state: 'refused', refusal: rule(PARENT_ARCHIVED) }
-  if (levelRank(level) < levelRank('lead'))
+  if (!manages && levelRank(level) < levelRank('lead'))
     return { state: 'refused', refusal: forbidden(LEAD_ACCESS_NEEDED) }
   return { state: 'ok', parent }
+}
+
+/* Whether `me` manages `project`, a sub-project, through the top-level
+ * project above it (lib/access.ts managesIn on its real root), with one
+ * read of that root. A top-level project, a legacy meta row stored with a
+ * parent, which keeps the level path, a missing root and one that is not
+ * a top-level meta answer false, so it never throws where rootMetaOf
+ * would. */
+async function managesSubProject(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  project: Doc<'projects'>,
+): Promise<boolean> {
+  if (project.parent_id === undefined || project.type !== 'project') return false
+  const root = await byId(ctx, 'projects', project.parent_id)
+  return root !== null && managesIn(me, project, root)
 }
 
 /** A new project as a caller asks for it. The core checks the parent, the
@@ -391,11 +429,12 @@ async function nextSiblingPlace(
 /**
  * Creates a project or, with `parent_id`, a sub-project, and narrates it. A
  * top-level project follows the organization's project_creators setting
- * (lib/projectCreators.ts), and a sub-project needs Lead access on its
- * parent, which must be a top-level project that is not archived. Naming
- * another lead or any grant takes a person. A creator who is not an org admin
- * and names someone else as lead of a top-level project gets User access
- * unless the request names their own (lib/projectGrants.ts creatorGrant).
+ * (lib/projectCreators.ts), and a sub-project needs management of its
+ * parent (subProjectParent), which must be a top-level project that is not
+ * archived. Naming another lead or any grant takes a person. A creator who
+ * names someone else as lead of a top-level project, an organization admin
+ * as anyone, gets User access unless the request names their own
+ * (lib/projectGrants.ts creatorGrant).
  * The org's counter gives the number; the key comes from the name. A
  * sort_order that is not a finite number is refused, as Convex's number
  * validator lets NaN and the infinities through.
@@ -479,13 +518,16 @@ export async function createProjectCore(
   // Grant rows ride along on either project level. Root grants are inherited
   // by children by the access helpers; child grants can further narrow a
   // workstream without introducing an owning team. A sub-project's creator
-  // leads its parent, which keeps them User access, so only a top-level
+  // manages its parent (subProjectParent). As the parent's lead they keep
+  // the User level the new sub-project inherits from it, though they do not
+  // manage a sub-project someone else leads, and an organization admin
+  // manages it whoever leads it and sees it only by their own access (the
+  // New sub-project dialog says when they will not). So only a top-level
   // project applies creatorGrant.
   const grants = new Map(grantEntries(p.access))
   if (p.type === 'meta') {
     const own = p.access?.[me.id]
     const mine = creatorGrant({
-      admin: me.org_role === 'admin',
       creator: me.id,
       lead: lead_id,
       own: own === 'lead' ? undefined : own,
@@ -601,9 +643,10 @@ export const vProjectExpected = v.object({
  * lead's own grant (lib/projectGrants.ts grantsAfterHandover), the only
  * grants this writes; projects.setAccess and projects.removeAccess change
  * the others (model/projectAccess.ts). Changing the lead takes a person.
- * Every patch needs Lead access except a top-level project's lead alone,
- * which needs an organization admin or the project's lead. Returns the
- * project as stored.
+ * Every patch needs management of the project (assertManages), and a
+ * top-level project's lead alone needs canManageProjectUsers, the same
+ * rule: an organization admin or the project's lead. Returns the project
+ * as stored.
  */
 export async function updateProjectCore(
   ctx: MutationCtx,
@@ -635,7 +678,7 @@ export async function updateProjectCore(
   // Evaluate all capabilities against the pre-write state. A caller may
   // not attach a settings change to a lead change, or make themselves lead
   // first and use that standing for the rest of this same mutation.
-  if (editsSettings || !managesUsers) await assertLead(ctx, me, id)
+  if (editsSettings || !managesUsers) await assertManages(ctx, me, project)
   if (managesUsers && !(await canManageProjectUsers(ctx, me, project))) {
     throw forbidden(NO_USER_MANAGEMENT)
   }
@@ -777,8 +820,8 @@ type TreeChange = {
 }
 
 /**
- * Archives a project, Lead access required (0106). Subtree-atomic
- * (0106:86-91): a meta stamps its active subs with the parent's OWN instant,
+ * Archives a project, management required (assertManages, 0106).
+ * Subtree-atomic (0106:86-91): a meta stamps its active subs with the parent's OWN instant,
  * which is the only record of "these came along" and what restoring reads.
  * Every sub-project then sits under an archived parent (archive_state
  * 'under'), and the reach rows of the projects it archives, and the
@@ -795,7 +838,7 @@ type TreeChange = {
  */
 export async function archiveProjectCore(ctx: MutationCtx, a: TreeChange): Promise<boolean> {
   const { me, project, now } = a
-  await assertLead(ctx, me, project.id)
+  await assertManages(ctx, me, project)
   if (project.archived_at !== undefined) return false
   const budget = a.budget ?? treeBudget()
   const subs = project.type === 'meta' ? await treeSubProjects(ctx, project.id, budget) : []
@@ -852,13 +895,13 @@ export async function archiveProjectCore(ctx: MutationCtx, a: TreeChange): Promi
 }
 
 /**
- * Restores an archived project, Lead access required. Restore semantics
- * 0106:92-107: restoring a sub surfaces its parent (and nothing else — the
- * parent's other subs stay archived); restoring a meta directly also
- * restores exactly the subs carrying the meta's own archive stamp. Surfacing
- * an archived parent is a restore of that parent, so it needs lead on the
- * parent as well; a sub-project's own lead cannot bring back a project its
- * lead archived. The sub-projects that stay archived then sit under a live
+ * Restores an archived project, management required (assertManages).
+ * Restore semantics 0106:92-107: restoring a sub surfaces its parent (and
+ * nothing else — the parent's other subs stay archived); restoring a meta
+ * directly also restores exactly the subs carrying the meta's own archive
+ * stamp. Surfacing an archived parent is a restore of that parent, so it
+ * needs management of the parent as well; a sub-project's own lead cannot
+ * bring back a project its lead archived. The sub-projects that stay archived then sit under a live
  * parent (archive_state 'listed'), and the reach rows of the projects it
  * restores, and the favorites rows of the top-level one, say they are live
  * again (model/projectNav.ts). A tree whose sub-projects and those rows
@@ -872,14 +915,14 @@ export async function archiveProjectCore(ctx: MutationCtx, a: TreeChange): Promi
  */
 export async function unarchiveProjectCore(ctx: MutationCtx, a: TreeChange): Promise<boolean> {
   const { me, project, now } = a
-  await assertLead(ctx, me, project.id)
+  await assertManages(ctx, me, project)
   if (project.archived_at === undefined) return false
   const stamp = project.archived_at
   // an active project never sits under an archived one
   const parent =
     project.parent_id === undefined ? null : await byId(ctx, 'projects', project.parent_id)
   const parentArchived = parent !== null && parent.archived_at !== undefined
-  if (parentArchived && !(await hasProjectLevel(ctx, me, parent.id, 'lead'))) {
+  if (parentArchived && !(await canManageOwnProjectAccess(ctx, me, parent))) {
     throw forbidden('requires lead access to the archived parent project')
   }
   // the projects whose tasks come back. Tasks live in sub-projects, but a

@@ -14,9 +14,8 @@
  * navChildrenOf, with cursors of their own and no favorites group.
  *
  * Who sees what. Every candidate is judged by ordinary access, lib/access.ts
- * accessOf of ordinaryOf(seat), so an organization admin's lists hold only
- * the projects their own leads, grants and team shares reach (coordinator,
- * 4 November 2026; the admin access split changes nothing here). A
+ * accessOf of the seat, so an organization admin's lists hold only the
+ * projects their own leads, grants and team shares reach, as anyone's. A
  * top-level project shows when the seat sees it for a reason of its own
  * (accessible: its lead, a grant or a team share on it), or when a live
  * child reach row of the seat or of one of its teams under it names a live
@@ -105,7 +104,6 @@ import {
   accessUnchecked,
   inMetaTree,
   isAccessUnchecked,
-  ordinaryOf,
   receivesTeamAccess,
 } from '../lib/access'
 import { byId } from '../lib/db'
@@ -648,7 +646,7 @@ class Unproven extends ConvexError<Refusal> {}
  * (model/projectFavorites.ts FavoriteSight) it holds the seat's access and
  * its grantees. */
 export type SeatSight = FavoriteSight & {
-  /** lib/access.ts accessOf of ordinaryOf(seat), for every check */
+  /** lib/access.ts accessOf of the seat, for every check */
   access: Access
   /** the seat and, when its role receives team access, its teams
    * (team_members by_profile), the seat first, read once; rejects with
@@ -691,7 +689,7 @@ export function seatSight(
   reach: boolean,
   read: readonly Doc<'projects'>[] = [],
 ): SeatSight {
-  const access = accessOf(ctx, ordinaryOf(seat), read)
+  const access = accessOf(ctx, seat, read)
   const mine = new Map<string, Promise<readonly Grantee[]>>()
   const grantees = () =>
     once(mine, seat.id, async () => {

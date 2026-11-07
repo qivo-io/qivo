@@ -432,7 +432,13 @@ export const uuid = () => crypto.randomUUID()
  *   second teamless meta, also led by `user`, that guest/viewer hold no
  *   grant on (the control every containment test reads against)
  * - grants: guest→meta 'user', viewer→meta 'user' (the ceiling test's input)
- * - a second org ("other") with one admin + one project for cross-org fences
+ * - a second org ("other") with one admin + one project for cross-org
+ *   fences; the admin leads that project, since admin status gives no
+ *   access to project work (lib/access.ts levelUnder), so the cross-org
+ *   cases keep a caller who works in it
+ * - the admin of this org holds no lead, grant or team share, so it reads
+ *   and writes no project work, only management (the admin access split);
+ *   a case that needs a caller who works on every project uses `user`
  * - every person has a real Better Auth user with the profile's name and
  *   email, and its id is the profile's auth_user_id. A second withOrg on the
  *   same instance plants a second set of users with the same emails. */
@@ -587,7 +593,7 @@ export async function withOrg(t: T) {
     const otherAdmin = await load('profiles', person('otherAdmin', 'OA', 'admin', otherOrg.id))
     const otherProject = await load(
       'projects',
-      project(1, 'OTH', 'Elsewhere', { org_id: otherOrg.id }),
+      project(1, 'OTH', 'Elsewhere', { org_id: otherOrg.id, lead_id: otherAdmin.id }),
     )
 
     return {
@@ -610,6 +616,27 @@ export async function withOrg(t: T) {
 }
 
 export type OrgFixture = Awaited<ReturnType<typeof withOrg>>
+
+/** withOrg, with the admin given User grants on TBED and Skunkworks, the
+ * fixture's two top-level projects, so they see and edit every project of
+ * the organization through ordinary access. Admin status gives no level
+ * since the admin access split (lib/access.ts levelUnder), so the cases
+ * written while it gave admins Lead everywhere, where the admin is a second
+ * person beside the user who must see the work (a follower, a recipient, a
+ * reviewer, a reader of every project), take this fixture and keep their
+ * meaning. Cases about admins without rows take withOrg. */
+export async function withReadingAdmin(t: T): Promise<OrgFixture> {
+  const f = await withOrg(t)
+  await t.run(async (ctx) => {
+    for (const project of [f.meta, f.hidden])
+      await ctx.db.insert('project_access', {
+        project_id: project.id,
+        profile_id: f.admin.id,
+        level: 'user',
+      })
+  })
+  return f
+}
 
 /* How many live sub-projects of its organization `profile` reads, by the
  * access model's own levels (lib/access.ts projectLevelsForOrg), grants on

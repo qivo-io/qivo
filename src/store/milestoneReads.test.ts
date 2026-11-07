@@ -106,6 +106,8 @@ async function boot() {
       sort_order: id === 'plan' ? 1 : 2,
       track_delay: false,
       created_at: AT,
+      // the fixture's person leads both, so they write their milestones
+      lead_id: snapshot.profiles[0].id,
     })
   snapshot.projects.push({
     ...snapshot.projects[0],

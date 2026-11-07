@@ -94,32 +94,6 @@ const higherLevel = (a: AccessLevel | null, b: AccessLevel | null): AccessLevel 
 export const receivesTeamAccess = (me: Doc<'profiles'>): boolean =>
   isOrgStaff(me) || me.org_role === 'viewer'
 
-/** `me` as ordinary access judges them: an organization admin as a standard
- * user with the same rows, anyone else as they are. The level rule treats
- * the two roles alike but for its admin branches, in levelUnder, in
- * projectLevelsOf's sees (a copy of levelUnder's checks) and in levelsFrom,
- * which this turns off. canLeadProjects and isOrgStaff accept both, both
- * receive team access, and cappedLevel caps only viewers. So
- * projectLevelsOf and accessOf of it give the level an admin holds once
- * those branches are gone, the ordinary level. The management predicates
- * (canManageOwnProjectAccess, managesIn, managesEveryProject,
- * canWriteOrgLabels, canManageOrgLabels) keep their own admin branches and
- * are not asked with it.
- * A guest or a viewer stays as they are, because as a user a guest would
- * receive the shares of a team it still holds an old membership of, and a
- * viewer would lead a project whose lead_id still names it. The admin
- * access report (internal/adminAccessReport.ts), a project favorite
- * (model/projectFavorites.ts) and the project navigation reads, which
- * judge every caller by ordinary access (model/projectNavReads.ts), and
- * the Settings project lists for every seat but an admin's
- * (model/projectSettingsLists.ts, through those reads), ask with it.
- * tests/adminAccessReport.test.ts
- * fails when those helpers start telling admins and users apart. Once the
- * admin access split removes all three branches, this changes nothing and
- * can go. */
-export const ordinaryOf = (me: Doc<'profiles'>): Doc<'profiles'> =>
-  me.org_role === 'admin' ? { ...me, org_role: 'user' } : me
-
 async function teamGrantOn(ctx: QueryCtx, me: Doc<'profiles'>, root: Doc<'projects'>) {
   if (!receivesTeamAccess(me)) return null
   let level: AccessLevel | null = null
@@ -198,11 +172,13 @@ async function directLevel(ctx: QueryCtx, me: Doc<'profiles'>, project: Doc<'pro
  * nothing as complete (agent decision, 5 November 2026, closing
  * t3/limits-reach-access-checks). The figure is per call, so a request that
  * asks about one parent twice walks it twice, as a REST or MCP sub-project
- * create does (machine/projects.ts readableProject, then model/projects.ts
- * subProjectParent). canSeeProject, profileCanSeeProject and
- * subProjectParent's default level ask with navigation; canAccessProject
- * and hasProjectLevel ask without it, since navigation only ever gives
- * 'viewer'. The walk never runs for a sub-project, so a task in a
+ * create does for a caller who does not manage the parent
+ * (machine/projects.ts managedProject, then model/projects.ts
+ * subProjectParent); a manager's create walks it neither time.
+ * canSeeProject, profileCanSeeProject and subProjectParent's default level
+ * ask with navigation; canAccessProject and hasProjectLevel ask without
+ * it, since navigation only ever gives 'viewer'. The walk never runs for a
+ * sub-project, so a task in a
  * sub-project never walks; a legacy task stored on a top-level project does
  * (snapshot.ts threadTask, lib/core.ts findIssue). */
 export async function projectLevel(
@@ -248,7 +224,7 @@ async function levelUnder(
 ): Promise<AccessLevel | null> {
   if (project.org_id !== me.org_id || root.org_id !== me.org_id) return null
   if (!inMetaTree(project, root)) return null
-  if (me.org_role === 'admin' || isProjectLead(me, project, root)) return 'lead'
+  if (isProjectLead(me, project, root)) return 'lead'
   let level = await direct(project)
   if (project.id !== root.id) {
     const inherited = isProjectLead(me, root, root) ? 'user' : await direct(root)
@@ -1006,7 +982,7 @@ export function projectLevelsOf(
         return (await level(id, includeNavigation)) !== null
       // levelUnder's checks before the direct levels
       if (p.org_id !== me.org_id || root.org_id !== me.org_id || !inMetaTree(p, root)) return false
-      if (me.org_role === 'admin' || isProjectLead(me, p, root)) return true
+      if (isProjectLead(me, p, root)) return true
       const both = await Promise.allSettled([
         directOf(p),
         isProjectLead(me, root, root) ? 'user' : directOf(root),
@@ -1117,9 +1093,9 @@ export function accessOf(
     visible,
     /** Whether the caller can see the project with this id for a reason
      * other than navigation to one of its sub-projects (canAccessProject):
-     * as its lead, through a grant or a team share on it or above it, or as
-     * an organization admin, settled as `visible` is. It never reads a
-     * top-level project's sub-projects. */
+     * as its lead or through a grant or a team share on it or above it,
+     * settled as `visible` is. An organization admin is judged the same way.
+     * It never reads a top-level project's sub-projects. */
     accessible: (id: string) => levels.sees(id, false),
     /** The caller's level on the project with this id (projectLevel), null
      * where they cannot see it. */
@@ -1161,10 +1137,11 @@ export async function canSeeProject(
 }
 
 /* Access for a reason other than read-only navigation, the per-profile
- * counterpart of accessOf's accessible. On a parent it means organization
- * admin, its lead, or an individual or team grant on the parent itself. On a
- * sub-project it equals canSeeProject. The project user list answers it for
- * every profile at once through projectLevelsForProfiles. */
+ * counterpart of accessOf's accessible. On a parent it means its lead, or
+ * an individual or team grant on the parent itself, for an organization
+ * admin as for anyone. On a sub-project it equals canSeeProject. The
+ * project user list answers it for every profile at once through
+ * projectLevelsForProfiles. */
 export async function canAccessProject(
   ctx: QueryCtx,
   profile: Doc<'profiles'>,
@@ -1270,11 +1247,10 @@ export async function isTeamLeader(
  * ask it to choose management sight, which reads the organization's own
  * indexes and never asks ordinary access (accessOf, projectLevelsOf), so an
  * admin lists every project of their organization whether or not they take
- * part in it. The admin access split removes the admin branches of
- * levelUnder, projectLevelsOf's sees and levelsFrom (ordinaryOf), and must
- * leave this one and managesIn's alone, so those lists answer an admin the
- * same before and after it. A management predicate, like
- * canManageOwnProjectAccess, so ordinaryOf is never asked with it. */
+ * part in it. The level rule (levelUnder, projectLevelsOf's sees and
+ * levelsFrom) gives an admin no level of their own, so this, managesIn and
+ * the organization's label and administration checks are the only places
+ * the role reaches projects. */
 export const managesEveryProject = (me: Pick<Doc<'profiles'>, 'active' | 'org_role'>): boolean =>
   me.active && me.org_role === 'admin'
 
@@ -1287,8 +1263,11 @@ export const managesEveryProject = (me: Pick<Doc<'profiles'>, 'active' | 'org_ro
  * a top-level meta, or a top-level project that is not a meta, answers
  * false where rootMetaOf would throw or the tree check fail. The Settings
  * project lists' rights (can_create_sub_project, can_restore, can_delete)
- * are this predicate, before the admin access split, which moves the
- * writes onto it, and after. */
+ * and a project's Settings page (model/projectSettings.ts settingsRights)
+ * are this predicate, and so are the writes they offer: model/projects.ts
+ * assertManages for settings, a sub-project's lead, archive and restore,
+ * subProjectParent for a new sub-project, projects.deleteDeep and
+ * removalSummary, and the access changes (canManageProjectUsers). */
 export function managesIn(
   me: Doc<'profiles'>,
   project: Pick<Doc<'projects'>, 'id' | 'org_id' | 'type' | 'parent_id' | 'lead_id'>,
@@ -1586,7 +1565,7 @@ export function levelsFrom(
     const root = project.parent_id === undefined ? project : byUuid.get(project.parent_id)
     if (!root || !inMetaTree(project, root)) continue
     let level = levels.get(project.id) ?? null
-    if (me.org_role === 'admin' || isProjectLead(me, project, root)) level = 'lead'
+    if (isProjectLead(me, project, root)) level = 'lead'
     else if (project.id !== root.id) {
       level = higherLevel(
         level,
@@ -1736,7 +1715,8 @@ export async function projectLevelsForProfiles(
  * rule the task writes ask one person at a time (model/issues.ts
  * assertAssigneeRule), and REST and MCP project users compute `assignable`
  * the same way (lib/core.ts listProjectUsersCore). Levels come only from
- * levelsFrom, so an organization admin passes while it gives admins Lead. */
+ * levelsFrom, so an organization admin passes only with a level of their
+ * own, like anyone else. */
 export async function canBeAssignedFor(
   ctx: QueryCtx,
   project: Doc<'projects'>,

@@ -416,7 +416,8 @@ export async function assertWeekStartFits(
   const named: string[] = []
   const memo = newMemo()
   // a deleted project's milestones by name only where its item's view reads
-  // that project, which after the admin access split an admin's need not
+  // that project, which an admin's view need not now that admin status gives
+  // no access to project work
   const readsRoot = async (item: Doc<'deleted_items'>) =>
     (await viewOf(ctx, memo, me, item))?.readable.some((p) => p.id === item.target_id) === true
   for (const clash of clashes.slice(0, NAMED_CLASHES)) {
@@ -442,7 +443,7 @@ export async function assertWeekStartFits(
   // items only once it is back
   const shown = clashes.slice(0, NAMED_CLASHES)
   const steps = [
-    'Move or delete milestones so that no project has two in one week, then change the first day again.',
+    "Move or delete milestones so that no project has two in one week, or ask the project's lead to, then change the first day again.",
     ...(shown.some((c) => c.live?.archived_at !== undefined)
       ? ['Restore an archived project first to change its milestones.']
       : []),

@@ -38,7 +38,7 @@ import {
   plantProject,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { orgProjectView } from './orgProjectView.setup'
 
@@ -104,7 +104,7 @@ describe('the write gate inside the task cores', () => {
 
   it.each(writes)('%s refuses an actor without Edit and writes nothing', async (name, write) => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -121,7 +121,7 @@ describe('the write gate inside the task cores', () => {
 
   it('a move needs Edit on both ends, checked before the destination is described', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const away = await hiddenSub(t, f)
     const here = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const there = await plantIssue(t, { org_id: f.org.id, project_id: away.id })
@@ -138,7 +138,7 @@ describe('the write gate inside the task cores', () => {
 
   it('lets an actor with Edit create, change, archive, restore, comment and delete', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const created = await t.run((ctx) =>
       createIssueCore(ctx, {
         me: f.guest,
@@ -195,7 +195,7 @@ describe('the write gate inside the task cores', () => {
 describe('postComment', () => {
   it('keeps the app id, makes one for machine callers and notifies like the app', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const id = uuid()
     const [mine, made] = await t.run(async (ctx) => [
@@ -258,7 +258,7 @@ describe('the working-set rules', () => {
 
   it('the working set holds the active tasks of visible, active projects', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const r = await tree(t, f)
     const archived = await plantIssue(t, {
       org_id: f.org.id,
@@ -281,7 +281,7 @@ describe('the working-set rules', () => {
 
   it('flags hidden subtasks and parents, and sends neither id', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const r = await tree(t, f)
     const { rows, links } = await t.run(async (ctx) => {
       const active = await ctx.db.query('issues').collect()
@@ -330,7 +330,7 @@ describe('the working-set rules', () => {
 
   it('a group total counts only the shown, unfinished leaves under it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = (extra: Partial<Doc<'issues'>>) =>
       plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, ...extra })
     const group = await task({ title: 'Group' })

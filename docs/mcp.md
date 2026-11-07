@@ -1351,22 +1351,22 @@ as `a task title must be at most 255 characters. Shorten it.`
 | `list_team_members` | One page of the members of `team_id`, as `{next_cursor, team, members}`, each member `{id, name, leader}`, in name order, with `search`, `limit` (50 by default, at most 200) and `cursor`. `team` is the team as `list_teams` lists it, its `member_count` the whole team's whatever the search. See [Teams](#teams) |
 | `list_projects` | Projects (meta + sub) you can see, each with its durable `num`; both types have a lead and a nullable legacy `team_id` that is `null` for new rows, while team sharing remains explicit access; ACTIVE ones by default — `archived: true` lists the ones that have been put away instead (0106). Each row has `archived` and your `access` (`read`, `write`) on that project, as REST's rows do. See [Projects, access and milestones](#projects-access-and-milestones) |
 | `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `cursor`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Every result also has `progress` (for a group, the done and total tasks without subtasks under it that you can see), `delay` (the app's projected delay when the task's project tracks it, `unavailable` when Qivo did not read the owner's other work) and `last_comment_at`. Answers `{next_cursor, tasks}`; pass `next_cursor` back as `cursor` until it is `null`, even after a short or empty page. `offset` is refused unless `0`. Active tasks only by default, oldest first by creation. `archived: true` lists archived tasks instead (0070), one `project` at a time with all its sub-projects you can read (see [Task results](#task-results)). Tasks in an ARCHIVED PROJECT are left out of active lists unless `project` names that project (0106). That is a different axis, and the one without a flag |
-| `get_project` | One readable `project` (number/key/uuid), as the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, `completion` (the Overview's done and total tasks, `status: "counting"` for a moment after any project is archived or restored, or `status: "unavailable"` in a project with very many sub-projects), the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
+| `get_project` | One `project` (number/key/uuid) you read or manage, as the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, `completion` (the Overview's done and total tasks, `status: "counting"` for a moment after any project is archived or restored, or `status: "unavailable"` in a project with very many sub-projects or one you manage without reading), the top-level project's `milestones` (`null` for a project you manage without reading) and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
 | `create_project` | Create a top-level project from `name` (at most 80 characters), or with `parent` (number/key/uuid) a sub-project; optional `lead_id` (you by default) and `description`. Answers like `get_project` |
-| `update_project` | Change a project you lead: `name` (at most 80 characters), `description`, `review_hours`, `track_delay`, `archived: true/false` to archive or restore it, and `lead_id` to hand over the lead (people only). An archive or restore and a rename in one call share one budget of 2,000 sub-projects and access entries (see [Limits](#limits)) and of the data one change can read; a project tree past that data is refused with `this project, or the top-level project above it, has sub-projects that hold more data than one change can read, so it cannot be archived or restored at once. Shorten the longest project names or descriptions there, or delete some of those sub-projects first.` and nothing changes. When a call that archives or restores and renames is refused on that budget, make the archive or restore and the rename two calls, which each get the whole budget. A top-level project that more people have among their favorites than one change can update is refused with `more people have this project among their favorites than one change can update, so it cannot be archived, restored or renamed at once. Contact support@qivo.io so we can help.` and nothing changes; one call that archives or restores and renames it updates each favorite once, so two calls would meet the same refusal. Answers like `get_project`. It takes no `archive_reason`, which only tasks take. `expected` holds what you last read of the fields it changes, `lead_id` as `get_project` shows it. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
-| `set_project_access` | Give one `user_id` or `team_id` `level` `user` or `viewer` on a `project`, or with `level: null` remove it, settling the open tasks it hides by `on_held_tasks`. People only, with Lead access. With a level, `expected` holds the `level` you last read in `get_project`'s `grants`, `null` for none; with `level: null` it is refused. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
+| `update_project` | Change a project you manage, as its lead or an organization admin: `name` (at most 80 characters), `description`, `review_hours`, `track_delay`, `archived: true/false` to archive or restore it, and `lead_id` to hand over the lead (people only). An archive or restore and a rename in one call share one budget of 2,000 sub-projects and access entries (see [Limits](#limits)) and of the data one change can read; a project tree past that data is refused with `this project, or the top-level project above it, has sub-projects that hold more data than one change can read, so it cannot be archived or restored at once. Shorten the longest project names or descriptions there, or delete some of those sub-projects first.` and nothing changes. When a call that archives or restores and renames is refused on that budget, make the archive or restore and the rename two calls, which each get the whole budget. A top-level project that more people have among their favorites than one change can update is refused with `more people have this project among their favorites than one change can update, so it cannot be archived, restored or renamed at once. Contact support@qivo.io so we can help.` and nothing changes; one call that archives or restores and renames it updates each favorite once, so two calls would meet the same refusal. Answers like `get_project`. It takes no `archive_reason`, which only tasks take. `expected` holds what you last read of the fields it changes, `lead_id` as `get_project` shows it. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
+| `set_project_access` | Give one `user_id` or `team_id` `level` `user` or `viewer` on a `project`, or with `level: null` remove it, settling the open tasks it hides by `on_held_tasks`. People only, as the project's lead or an organization admin. With a level, `expected` holds the `level` you last read in `get_project`'s `grants`, `null` for none; with `level: null` it is refused. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `set_milestone` | Add a milestone (`name` of at most 80 characters, `date`) to a `project`'s top-level project, or with `milestone` rename or move one; then `expected` holds the `name` and `date` you last read of the fields it changes. A top-level project holds at most one milestone a week. See [Projects, access and milestones](#projects-access-and-milestones) and [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `delete_milestone` | Delete a `milestone` of a `project`. `expected` holds the `name` and `date` you last read, either or both. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `set_team` | Without `team_id`, create a team called `name` (at most 80 characters, organization admins only); with `team_id`, rename it (an organization admin or a leader of the team), and then `expected` holds the `name` you last read. Answers the team as `list_teams` lists it, `{id, name, member_count}`, with `created`. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `set_team_member` | Add (`member: true`) or remove (`member: false`) one `user_id` in a team, and with `member: true` make or unmake them a leader (`leader`). People only, as an organization admin or a leader of the team. A removal settles the user's open tasks by `on_held_tasks` |
 | `list_users` | One page of the Qivo users in the organization, for general roster discovery, as `{next_cursor, users}` in name order, with `search`, `limit` (50 by default, at most 200) and `cursor` (see [Lists of users, labels and teams](#lists-of-users-labels-and-teams)). The row is `id`, `name`, `org_role`, `kind`, `active` and `plannable_hours`, with no email address and no profile picture. Presence here does **not** prove access to a destination project; use `list_project_users` before writing `reporter_id`, `assignee_id` or `reviewer_id`. `plannable_hours` is the **whole** hours a week that user has for **planned project work** (the work week minus meetings and other overhead). It is what the planner divides by, so plan someone at most that many hours in a week, shared across every project they work on (0092). It is **`null` for an agent** (0103), whose capacity is unbounded, never zero. A user missing from the pages you have read is not gone until `next_cursor` is `null` |
-| `list_project_users` | Users with access to `project` (number/key/uuid), and therefore valid non-null `reporter_id` values. On a parent project these are the people with access to the parent itself (organization admins, its lead and its individual or team grants); someone who reaches the parent only through one of its sub-projects is listed under that sub-project. It returns the `list_users` shape plus `assignable`: only active users with effective project Edit (`user`) or Lead access have `assignable: true` and are valid new `assignee_id` or `reviewer_id` selections. Inactive users and users with only View access remain valid reporters when they can see the project, because reporter is attribution rather than work or permission |
+| `list_project_users` | Users with access to `project` (number/key/uuid), and therefore valid non-null `reporter_id` values. On a parent project these are the people with access to the parent itself (its lead and the people its individual or team grants reach, an organization admin only through these); someone who reaches the parent only through one of its sub-projects is listed under that sub-project. It returns the `list_users` shape plus `assignable`: only active users with effective project Edit (`user`) or Lead access have `assignable: true` and are valid new `assignee_id` or `reviewer_id` selections. Inactive users and users with only View access remain valid reporters when they can see the project, because reporter is attribution rather than work or permission |
 | `get_task` | One task with full description and reporter, assignee and reviewer, `progress` for a group, `delay` and `last_comment_at`, plus its `labels`, whether you follow it (`following`), the first 50 of each of its `subtasks`, `links`, `followers` and `attachments` (with download links), each with its cursor before it (`subtasks_next_cursor` and so on, `null` when the list ends there, and `has_more_subtasks` when the subtasks go on), and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
 | `list_task_related` | One page of one of a task's lists, `list` being `subtasks`, `links`, `followers` or `attachments`, as `{next_cursor, <list>}` with the rows of `get_task`'s same list, in its order, `limit` of them (50 by default, at most 200). Pass `get_task`'s `<list>_next_cursor`, or the page's `next_cursor`, as `cursor` with the same `ref` and `list` until it is `null`. An archived group's subtask page can hold fewer rows than `limit`, or none, while `next_cursor` is set. `offset` is refused unless `0`. Download links are minted for the page's files alone. See [Task results](#task-results) |
 | `list_comments` | The task's newest comments, oldest first, with author and edit attribution. `limit` (50 by default, at most 50) caps how many, and `before`, a comment's `id`, reads the comments posted before it. See [Comments, inbox and following](#comments-inbox-and-following) |
 | `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body of at most 20,000 characters; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row, because the comment is its own feed entry. A task holds at most 1,000 comments, and you post at most 10 on one task in any 60 seconds (see [Comments, inbox and following](#comments-inbox-and-following)) |
 | `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs. Another project's sub-project is a hard error; move a task later with `update_task`. `parent` (a task ref) makes it a subtask; you need Edit access on the parent's project, because the parent becomes a group, and the parent must be in the same top-level project, in any of its sub-projects. `start_week` and `end_week` plan it (week starts, both or neither), and `paused` holds it. Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` holds at most 255 characters and `description` 20,000 (see [Limits](#limits)). Returns `id` and `key` |
-| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain, and a subtask whose parent already has 100 active subtasks comes back without it) and `archive_reason`, posted as your comment when the call archives the task, which the comment limits can refuse, archiving nothing. It also moves the task (`project`, `sub_project`; to another top-level project its subtasks move along, and a subtask must leave its parent in the same call), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. A subtask or parent in a project being moved to Deleted items refuses the toggle for everyone, admins included, with `a subtask of this task is being moved to Deleted items; try again when that finishes` or `a parent of this task is being moved to Deleted items; try again when that finishes`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` holds at most 255 characters, `description` 20,000 and `archive_reason` 500 (see [Limits](#limits)). The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time. `expected` holds what you last read of the fields the call changes, keyed as `get_task` reads them, with `parent_id` and `has_hidden_parent` for `parent` and `project_id` for a move. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
+| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain, and a subtask whose parent already has 100 active subtasks comes back without it) and `archive_reason`, posted as your comment when the call archives the task, which the comment limits can refuse, archiving nothing. It also moves the task (`project`, `sub_project`; to another top-level project its subtasks move along, and a subtask must leave its parent in the same call), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; someone who can edit that project can archive it` or `restoring this task would change a parent task in a project you cannot edit; someone who can edit that project can restore it`. A subtask or parent in a project being moved to Deleted items refuses the toggle for everyone, admins included, with `a subtask of this task is being moved to Deleted items; try again when that finishes` or `a parent of this task is being moved to Deleted items; try again when that finishes`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` holds at most 255 characters, `description` 20,000 and `archive_reason` 500 (see [Limits](#limits)). The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time. `expected` holds what you last read of the fields the call changes, keyed as `get_task` reads them, with `parent_id` and `has_hidden_parent` for `parent` and `project_id` for a move. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `delete_task` | Move a task to Deleted items with its comments, attachments, links, labels and follows; its subtasks become top-level tasks, the active ones at once and the archived ones a moment later, and their followers hear of it moments later; its inbox messages are deleted. A person can restore it in the app for 30 days, and no tool restores. Answers `{deleted: true, key}` |
 | `set_task_link` | Add (`linked: true`) or remove (`linked: false`) the link between `ref` and `other`, with `kind` `blocks`, `blocked_by` or `relates` as seen from `ref`. Two tasks share at most one link. It needs read access to both tasks and Edit access on either, the app's rule. Adding the link that exists, or removing one that does not, changes nothing; `changed` in the result says whether the call did. A different link between the same tasks is refused with `these tasks are already linked`. A task is an end of at most 100 links, and a new link to a full task is refused naming it, such as `QN-9 already has 100 links, the most a task can have. Remove one of its links first.`. `get_task` lists the first links, and `list_task_related` the rest |
 | `list_labels` | One page of the organization's labels as `{next_cursor, labels}`, each `id`, `name` and `color`, by name in any case, with `search`, `limit` (50 by default, at most 200) and `cursor` (see [Lists of users, labels and teams](#lists-of-users-labels-and-teams)) |
@@ -1605,12 +1605,14 @@ A `list_projects` row:
 ```
 
 - `access` is what you hold on the project, by the same rule as REST's
-  project rows. `read` is `true` on every row these tools return. `write` is
-  `true` when you may create, edit and delete tasks in the project and
-  comment on them. It needs Edit (`user`) or Lead access there and a
-  credential that can make changes, so a read-only credential and a Viewer
-  get `false` on every project. Changing the project's settings or its
-  access needs Lead access, which `access` does not show.
+  project rows. `read` is `true` on every row `list_projects` returns, and
+  `false` on a project `get_project` answers that you manage without reading
+  it. `write` is `true` when you may create, edit and delete tasks in the
+  project and comment on them. It needs Edit (`user`) or Lead access there
+  and a credential that can make changes, so a read-only credential and a
+  Viewer get `false` on every project. Changing the project's settings or
+  its access needs managing it, as its lead or an organization admin, which
+  `access` does not show.
 - `write` does not look at archiving or billing, so an archived project
   still takes no new tasks and a billing pause still refuses changes.
 - `archived` is `true` when `archived_at` is set, the instant the project
@@ -1655,15 +1657,28 @@ so many sub-projects that the call has no room left to read their counts,
 it is `{"status": "unavailable", "done": null, "total": null, "percent":
 null}` instead. Neither ever fails the read or `update_project`.
 `completion` is `null` for an archived project, and `create_project` answers
-`ok` with zeros, because a new project holds no tasks. `status` arrived in
+`ok` with zeros, because a new project holds no tasks, unless you manage it
+without reading it, such as a sub-project an organization admin creates
+under a project they only manage with someone else as its lead, which
+answers `unavailable` as described below. `status` arrived in
 November 2026, and `counting` later that month, so treat a `status` you do
 not know as no completion.
 `milestones` belong to the top-level
 project, so a sub-project shows its parent's, ordered by date. `grants` are
 the project's own individual and team grants, as its **Project access** list
-shows them; a sub-project also inherits its parent's. A project you cannot
-read answers `project "<ref>" not found (or not visible to you)`, exactly
-like an unknown one.
+shows them; a sub-project also inherits its parent's.
+
+An organization admin manages every project of the organization, also one
+they take no part in. Admin status gives no access to a project's work, so
+`list_projects` leaves such a project out, while `get_project`,
+`update_project`, `set_project_access` and `create_project`'s `parent` find
+it. `get_project` then answers its row with `access.read` `false`, its
+lead, settings and grants, `completion` as `unavailable` (`null` once it is
+archived) and `milestones` as `null`, because completion and milestones are
+planning data. `set_milestone`, `delete_milestone` and `list_project_users`
+need to read the project. A project you neither read nor manage answers
+`project "<ref>" not found (or not visible to you)`, exactly like an unknown
+one.
 
 **Names.** Project and milestone names are trimmed, may not be blank and hold
 at most 80 characters, counted as in [Limits](#limits), so most emoji count
@@ -1676,20 +1691,23 @@ which follows the organization's **Who can create new projects?** setting
 (`get_me` reports it as `can_create_projects`). A Standard user agent counts
 as a standard user for it, including the **Can create projects** box under
 `selected`, and a Viewer agent never creates projects. With `parent` it makes
-a sub-project, which needs Lead access on that parent; a parent you cannot
-read answers `parent project "<ref>" not found (or not visible to you)`. Qivo
+a sub-project, which needs managing that parent, as its lead or an
+organization admin (`requires lead access to this project` for someone who
+only reads it); a parent you neither read nor manage answers `parent project
+"<ref>" not found (or not visible to you)`. Qivo
 picks the number, the key (from the name) and the position. `lead_id`
 defaults to you, and only a person may name someone else. An agent always
 leads what it creates, and naming another lead gets `only people can change
 who has access, not agents`. An agent that leads projects cannot be made a
 Viewer until an organization admin hands them over, so setting it to
-Inactive is the way to stop it at once. A creator who is not an
-organization admin and names someone else as lead of a top-level project
-gets User access to it, as in the app. The tool takes no grants; add them
-with `set_project_access`.
+Inactive is the way to stop it at once. A creator who names someone else
+as lead of a top-level project gets User access to it, as in the app, an
+organization admin too, since admin status gives no access to a project's
+work. The tool takes no grants; add them with `set_project_access`.
 
-**Changing.** `update_project` needs Lead access (`requires lead access to
-this project`). A lead handover alone on a top-level project follows the rule
+**Changing.** `update_project` needs managing the project, as its lead or
+an organization admin (`requires lead access to this project` for someone
+who only reads it). A lead handover alone on a top-level project follows the rule
 for managing its users instead, so someone who is neither an organization
 admin nor its lead gets `no permission to manage users on this project`. In
 one call it restores (`archived: false`) or archives (`archived: true`) first,
@@ -1715,7 +1733,8 @@ sub-projects that someone works on (as assignee, or reviewer of a task
 without subtasks) and can no longer see afterwards are settled by
 `on_held_tasks`:
 
-- `"leave"`, the default, removes the access and lists them as `stranded`;
+- `"leave"`, the default, removes the access and lists them as `stranded`,
+  or counts them in `hidden` when you cannot see them;
 - `"keep_as_viewer"` gives those people a Viewer grant on the project, which
   is refused for a person whose removed grant was already Viewer;
 - `{"reassign_to": "<user uuid>"}` hands each one over in the same role, and
@@ -1735,9 +1754,13 @@ Any removal whose people and tasks are too many to check in one call is
 refused with `a removal can check only as many people and tasks as fit in one request, so
 remove fewer people at once, such as some of a team's members, or reassign
 some of the tasks first`. The
-result adds `stranded`,
-`kept_as_viewer` and `reassigned`; `stranded` and `reassigned` list `{id, key,
-title, user_id, role}`. `changed` is `false` when there was no grant to
+result adds `stranded`, `kept_as_viewer`, `reassigned` and `hidden`;
+`stranded` and `reassigned` list `{id, key, title, user_id, role}` for the
+tasks you can see once the access is gone, and `hidden` is `{tasks,
+user_ids}`, the number of the other tasks and the ids of the people who
+held them, with no task id, key or title. An organization admin who
+manages a project without reading it, or anyone who removes their own
+access, gets those tasks in `hidden`. `changed` is `false` when there was no grant to
 remove. `on_held_tasks` with a level is refused, and so is a misspelled
 `on_held_tasks`, like any argument the schema does not know.
 
@@ -1901,6 +1924,7 @@ person who is an organization admin or a leader of the team; an agent gets
   the projects the team shares, and in those projects' sub-projects, that
   they can no longer see afterwards are settled by `on_held_tasks`, as for
   `set_project_access`. `"leave"` (the default) lists them as `stranded`,
+  or counts them in `hidden` when you cannot see them,
   `"keep_as_viewer"` gives the user a Viewer grant on the project the team
   shared that showed each task (the task's own sub-project when the team
   shares it, else its top-level project), and `{"reassign_to": user id or
@@ -1913,8 +1937,8 @@ person who is an organization admin or a leader of the team; an agent gets
   larger handover, or Viewer grants too many for one call, is refused and
   nothing changes. The result is `{team,
   user, member: false, leader: false, changed}` plus `stranded`,
-  `kept_as_viewer` and `reassigned`; `changed` is `false` when the user was
-  not a member.
+  `kept_as_viewer`, `reassigned` and `hidden`, as for `set_project_access`;
+  `changed` is `false` when the user was not a member.
 
 `leader` with `member: false`, and `on_held_tasks` with `member: true`, are
 refused. Every membership change writes the app's activity row, signed `via
@@ -2196,11 +2220,9 @@ its sub-projects you can read, even when you can read only some of them. To
 read one sub-project's archive alone, name that sub-project.
 
 A page reads only the projects it lists, side by side, and never tasks of
-projects you cannot read. Unless you are an organization admin, a project
-with more than 200 projects to list, itself and its sub-projects you can
-read, is refused. Name its sub-projects one at a time instead. An
-organization admin's call can read the organization's whole archive for such
-a project.
+projects you cannot read. A project with more than 200 projects to list,
+itself and its sub-projects you can read, is refused, for an organization
+admin as for anyone. Name its sub-projects one at a time instead.
 
 These calls are refused: `archived: true` without `project` (`archived:
 true needs project, because archived tasks are listed one project at a
@@ -2230,10 +2252,11 @@ A move within the task's top-level project moves only the task. A move to a
 sub-project of another top-level project also moves every subtask,
 archived ones included, that is not already in that top-level
 project. You need Edit access on each of their projects (otherwise `moving
-this task would move a subtask in a project you cannot edit; an organization
-admin can move it`). A subtask in a project that is being moved to Deleted
-items refuses the move for everyone, admins included, with `a subtask of
-this task is being moved to Deleted items; try again when that finishes`.
+this task would move a subtask in a project you cannot edit; someone who can
+edit that project can move it`). A subtask in a project that is being moved
+to Deleted items refuses the move for everyone, admins included, with `a
+subtask of this task is being moved to Deleted items; try again when that
+finishes`.
 The assignee and the reviewer of each active subtask must be able to work
 in the destination (otherwise `someone assigned to or reviewing a subtask of
 this task cannot edit that sub-project; give them Edit access there, or
@@ -2470,8 +2493,8 @@ rows the task window's **All** filter shows beside the comments
 ]
 ```
 
-You receive the rows the task window's **All** filter shows you. Organization
-admins receive every row. Other users do not receive a row that names a
+You receive the rows the task window's **All** filter shows you. Every
+user, an organization admin as anyone, does not receive a row that names a
 project they cannot access, such as where the task was before a move, or
 another task they cannot read, such as the other end of a link. An
 archived task's history is answered too, by the same rule. `actor_id` and
@@ -2484,7 +2507,7 @@ task's history is refused with `before must be the id of a row in this task's
 history`. The call reads on past rows you do not receive, and when it cannot
 find one you receive before it has read as much as one call may, it is
 refused with `too many of this task's changes are hidden from you to read them
-at once; an organization admin can read them`. When Qivo cannot finish
+at once`. When Qivo cannot finish
 checking which projects you can see for the projects a page's rows name, the
 call is refused with `Qivo could not finish checking which projects you can
 see in one request. Contact support@qivo.io so we can help.` rather than
@@ -2590,8 +2613,8 @@ this task with `before must be the id of a comment on this task`.
 
 `update_comment` and `delete_comment` take the comment's `id` from
 `list_comments`. As in the app, the comment's author may edit or delete it,
-and so may a lead of the task's project (an organization admin leads every
-project); anyone else is refused with `only the author or a project lead can
+and so may a lead of the task's project, an organization admin only as its
+lead; anyone else is refused with `only the author or a project lead can
 edit this comment` (or `delete`). A comment on a task you cannot read reads
 `comment "<id>" not found (or not visible to you)`, like an unknown one. The
 new body is trimmed and may not be blank. Sending the text the comment

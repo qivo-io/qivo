@@ -9,12 +9,12 @@ import {
   plantSeat,
   plantSubscription,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 
 async function fixture() {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
   const ordinary = await plantSeat(t, {
     org_id: f.org.id,

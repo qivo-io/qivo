@@ -14,10 +14,9 @@
  * (authedQuery), as Archived projects does, and show each item only as the
  * seat in its own organization may see it (model/deletedItems.ts viewOf);
  * page reads one organization's seat when its scope names one. An
- * organization admin keeps every item that is not purging and reads its
- * tasks as their role reads them, every task until the admin access split
- * and after it only the tasks their ordinary access reaches, with a hidden
- * row for a task item whose root they cannot read. roles answers each
+ * organization admin keeps every item that is not purging and reads only
+ * the tasks their ordinary access reaches, with a hidden row for a task
+ * item whose root they cannot read. roles answers each
  * seat's role, people the people of one organization a batch at a time for
  * Deleted by and the assignee filter, and purgeSummary what Delete now
  * deletes with a project item, so the page needs no roster or loaded list

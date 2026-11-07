@@ -36,7 +36,7 @@ import {
   plantSubscription,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import {
   attach,
@@ -322,7 +322,7 @@ function expectWellInside(metrics: Awaited<ReturnType<typeof listMetrics>>) {
 describe('who sees an item (design 6.1)', () => {
   it('shows an admin every item, and everyone else their own deletes', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const mine = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'Mine' })
     const theirs = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'Theirs' })
     await deleteTask(t, f.guest, mine.id, { reason: '  wrong board  ' })
@@ -370,7 +370,7 @@ describe('who sees an item (design 6.1)', () => {
 
   it('shows the deletes in a project to its lead and to the lead of its top-level project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sam = await person(t, f.org.id, 'Sam')
     // Firmware has a lead of its own; the user still leads its top-level project
     await patch(t, 'projects', f.sub.id, { lead_id: sam.id })
@@ -393,7 +393,7 @@ describe('who sees an item (design 6.1)', () => {
 
   it('shows a project item to the lead its stored rows name, who can restore it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const lena = await person(t, f.org.id, 'Lena')
     const { top, subs } = await tree(t, f, 'Field trial', lena, [{ name: 'Site' }])
     await plantIssue(t, { org_id: f.org.id, project_id: subs[0].id })
@@ -421,7 +421,7 @@ describe('who sees an item (design 6.1)', () => {
 
   it('limits a sub-project lead to their sub-project inside a deleted top-level project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const lena = await person(t, f.org.id, 'Lena')
     const sam = await person(t, f.org.id, 'Sam')
     const tia = await person(t, f.org.id, 'Tia')
@@ -467,7 +467,7 @@ describe('who sees an item (design 6.1)', () => {
 
   it('keeps a delete visible without Restore once its deleter can only view the project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await deleteTask(t, f.guest, task.id)
     const item = await itemFor(t, task.id)
@@ -491,7 +491,7 @@ describe('who sees an item (design 6.1)', () => {
 
   it('hides a delete from its deleter once they lost all access to its project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await deleteTask(t, f.guest, task.id)
     const item = await itemFor(t, task.id)
@@ -506,7 +506,7 @@ describe('who sees an item (design 6.1)', () => {
 
   it('redacts a task item for the lead of a subtask project who cannot see the root', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const omar = await person(t, f.org.id, 'Omar')
     const dana = await person(t, f.org.id, 'Dana')
     const ops = await tree(t, f, 'Operations', omar, [{ name: 'Infra' }])
@@ -556,7 +556,7 @@ describe('who sees an item (design 6.1)', () => {
 
   it('shows items whose project is in Deleted items, and stuck items, to admins only', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const omar = await person(t, f.org.id, 'Omar')
     const ops = await tree(t, f, 'Operations', omar, [{ name: 'Infra' }])
     await grant(t, ops.top.id, f.guest.id, 'user')
@@ -573,10 +573,12 @@ describe('who sees an item (design 6.1)', () => {
     await deleteProject(t, f.user, f.meta.id)
     const projectItem = await itemFor(t, f.meta.id)
 
-    // Restore opens the project item first
+    // Restore opens the project item first, and the task follows it, as
+    // the admin's User grant on TBED comes back with TBED
     expect((await rowOf(t, f.admin, taskItem.id))?.blocked).toEqual({
       reason: 'project_deleted',
       item_id: projectItem.id,
+      with_project: true,
     })
     // not even to the lead of the subtask's project, which is still live
     expect(await idsOf(t, f.guest)).toEqual([])
@@ -594,7 +596,7 @@ describe('who sees an item (design 6.1)', () => {
 
   it('lists a guest-only login its own deletes in the organization it is a guest of', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const pilot = await plantProject(t, {
       org_id: f.otherOrg.id,
       type: 'project',
@@ -616,7 +618,7 @@ describe('who sees an item (design 6.1)', () => {
 
   it('judges each organization by the seat there, not the home seat', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the admin of Testbed is a guest in Other
     const pilot = await plantProject(t, {
       org_id: f.otherOrg.id,
@@ -653,7 +655,7 @@ describe('who sees an item (design 6.1)', () => {
 
   it('shows a moving item with its state and no Restore', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (let i = 0; i < 4; i++) await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     Object.assign(TRASH_BUDGET, { rows: 2 })
     await deleteProject(t, f.user, f.sub.id)
@@ -671,7 +673,7 @@ describe('who sees an item (design 6.1)', () => {
 describe('who deleted it (design 1.6)', () => {
   it('names personal tokens and apps to admins and their owner only, agent keys to all', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const items: Doc<'deleted_items'>[] = []
     for (let i = 0; i < 4; i++) {
       const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -708,7 +710,7 @@ describe('who deleted it (design 1.6)', () => {
 
   it('names a deleter only while their profile is the one that deleted', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await deleteTask(t, f.guest, task.id)
     const item = await itemFor(t, task.id)
@@ -743,7 +745,7 @@ describe('who deleted it (design 1.6)', () => {
 describe('the list (design 6.2)', () => {
   it('lists the newest items up to the cap, and one person past it with deleted_by', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     LIST.cap = 3
     const deleteOne = async (who: Doc<'profiles'>) => {
       const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -773,7 +775,7 @@ describe('the list (design 6.2)', () => {
 
   it('reads the projects a lead led newest first, one item however many of its projects they led', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     LIST.cap = 2
     const lena = await person(t, f.org.id, 'Lena')
     // an admin deletes them, so only Lena's stored leads find them for her
@@ -816,10 +818,13 @@ describe('the list (design 6.2)', () => {
 
   it('reads the subtasks in a led project newest first, one item however many of them it holds', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     LIST.cap = 1
     const omar = await person(t, f.org.id, 'Omar')
-    const infra = (await tree(t, f, 'Operations', omar, [{ name: 'Infra' }])).subs[0]
+    const ops = await tree(t, f, 'Operations', omar, [{ name: 'Infra' }])
+    const infra = ops.subs[0]
+    // the admin, who deletes the families, edits Operations through a grant
+    await grant(t, ops.top.id, f.admin.id, 'user')
     const deleteWith = async (subtasks: number) => {
       const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
       const subtask_ids: string[] = []
@@ -847,7 +852,7 @@ describe('the list (design 6.2)', () => {
 
   it('tells a member nothing through capped about deletes a filter cannot show them', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     LIST.cap = 1
     const secret = await hiddenSub(t, f)
     for (let i = 0; i < 2; i++) {
@@ -865,12 +870,14 @@ describe('the list (design 6.2)', () => {
 
   it('spends one budget to find items across every range and seat of a call, and says when it ran out', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const omar = await person(t, f.org.id, 'Omar')
-    const { subs } = await tree(t, f, 'Operations', undefined, [
+    const { top, subs } = await tree(t, f, 'Operations', undefined, [
       { name: 'Infra', lead: omar },
       { name: 'Lab', lead: omar },
     ])
+    // the admin, who deletes the tasks, edits Operations through a grant
+    await grant(t, top.id, f.admin.id, 'user')
     const deleteIn = async (who: Doc<'profiles'>, project: Doc<'projects'>) => {
       const task = await plantIssue(t, { org_id: project.org_id, project_id: project.id })
       later()
@@ -916,7 +923,7 @@ describe('the list (design 6.2)', () => {
   it('stops before the document limit when the subtasks in led projects name few items', async () => {
     const t = newT({ transactionLimits: EIGHTH })
     listAtAnEighth()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const omar = await person(t, f.org.id, 'Omar')
     const sites = Array.from({ length: 8 }, (_, i) => ({ name: `Site ${i}`, lead: omar }))
     const { top, subs } = await tree(t, f, 'Operations', undefined, sites)
@@ -960,7 +967,7 @@ describe('the list (design 6.2)', () => {
   it('stops before the byte limit when the projects a lead leads hold many long delete reasons', async () => {
     const t = newT({ transactionLimits: EIGHTH })
     listAtAnEighth()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const omar = await person(t, f.org.id, 'Omar')
     const sites = Array.from({ length: 7 }, (_, i) => ({ name: `Site ${i}`, lead: omar }))
     const { top, subs } = await tree(t, f, 'Operations', undefined, sites)
@@ -997,7 +1004,7 @@ describe('the list (design 6.2)', () => {
     const t = newT({ transactionLimits: EIGHTH })
     chargeFilteredReads()
     listAtAnEighth()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const lena = await person(t, f.org.id, 'Lena')
     // 175 projects Lena led and deleted herself. Finding them reads two
     // ranges, but her row for each reads its stored projects and her
@@ -1015,7 +1022,7 @@ describe('the list (design 6.2)', () => {
 
   it('builds rows newest first while the call lasts, and says when it ran out', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const lena = await person(t, f.org.id, 'Lena')
     const ids = await plantLedProjects(t, lena, 6)
     expect(await list(t, lena)).toEqual({
@@ -1043,7 +1050,7 @@ describe('the list (design 6.2)', () => {
 
   it('reads a fixed number of ranges, however many items a lead or an admin sees', async () => {
     const t = newT({ transactionLimits: { databaseQueries: 40 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // planted, so the setup stays within the low limit: a sub-project item,
     // 60 task items deleted from that sub-project before it, all waiting for
     // it, and 60 task items in Firmware, which the user leads
@@ -1081,7 +1088,7 @@ describe('the list (design 6.2)', () => {
 
   it('refuses a caller without a login', async () => {
     const t = newT()
-    await withOrg(t)
+    await withReadingAdmin(t)
     await expectRefusal(t.query(api.deletedItems.list, {}), 'forbidden', /^not signed in$/)
     await expectRefusal(t.query(api.deletedItems.matches, { text: 'x' }), 'forbidden')
     await expectRefusal(t.query(api.deletedItems.item, { id: uuid() }), 'forbidden')
@@ -1089,7 +1096,7 @@ describe('the list (design 6.2)', () => {
 
   it('answers one item as its row, for a blocked row whose project item no list holds', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const foreign = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id })
     await deleteTask(t, f.guest, task.id)
@@ -1113,7 +1120,7 @@ describe('the list (design 6.2)', () => {
 describe('searching for deleted tasks', () => {
   it('finds tasks of visible items by key or title with the kind of their item, and nothing else', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const kept = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub2.id,
@@ -1173,7 +1180,7 @@ describe('searching for deleted tasks', () => {
 
   it('finds an older task item a capped list leaves out, by key and by title, to restore as a row', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     LIST.cap = 1
     const older = await plantIssue(t, {
       org_id: f.org.id,
@@ -1219,7 +1226,7 @@ describe('searching for deleted tasks', () => {
 
   it('finds a task item only for those who see it, without Restore once its deleter can only view it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -1253,7 +1260,7 @@ describe('searching for deleted tasks', () => {
 
   it('finds only the tasks a redacted task item shows, never its root', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const omar = await person(t, f.org.id, 'Omar')
     const dana = await person(t, f.org.id, 'Dana')
     const ops = await tree(t, f, 'Operations', omar, [{ name: 'Infra' }])
@@ -1322,7 +1329,7 @@ describe('searching for deleted tasks', () => {
 
   it('names the root of a task item for a hit on its subtask, unless the hit is redacted', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const omar = await person(t, f.org.id, 'Omar')
     const dana = await person(t, f.org.id, 'Dana')
     const ops = await tree(t, f, 'Operations', omar, [{ name: 'Infra' }])
@@ -1383,7 +1390,7 @@ describe('searching for deleted tasks', () => {
     const t = newT({ transactionLimits: EIGHTH })
     chargeFilteredReads()
     listAtAnEighth()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const lena = await person(t, f.org.id, 'Lena')
     // Lena has a seat in five organizations. In each, MATCHES.scan (32)
     // small project items deleted by someone else, which she cannot see,
@@ -1426,7 +1433,7 @@ describe('searching for deleted tasks', () => {
 
   it('answers the matches it judged before the call spent its budget', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const lena = await person(t, f.org.id, 'Lena')
     await plantLedProjects(t, lena, 4, 'Survey the north gate')
     const all = await search(t, lena, 'survey')
@@ -1442,7 +1449,7 @@ describe('searching for deleted tasks', () => {
     expect(few.capped).toBe(false)
   })
 
-  it('reads its hits one at a time, so a budget their search text spends answers what it read, and says so to an admin', async () => {
+  it('reads its hits one at a time, so a budget their search text spends answers what it read, and says nothing of the stop', async () => {
     const description =
       'Check the fixture alignment first. Record the readings in the lab notebook.'
     // 30 hits of `who`'s own deletes, each hit's row with its task's search
@@ -1461,7 +1468,7 @@ describe('searching for deleted tasks', () => {
       })
     }
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const bytes = await plantWithText(t, f.admin)
     const all = await search(t, f.admin, 'survey')
     expect(all).toMatchObject({ capped: false })
@@ -1473,11 +1480,12 @@ describe('searching for deleted tasks', () => {
     expect(admin.matches.length).toBeGreaterThan(0)
     expect(admin.matches.length).toBeLessThan(30)
     expect(admin.matches).toEqual(all.matches.slice(0, admin.matches.length))
-    // an admin sees every task the search reads, so the stop is said
-    expect(admin.capped).toBe(true)
-    // anyone else's stop is not, since hidden tasks spend the budget too
+    // no role reads every task, an admin's included, so the stop is not
+    // said, since hidden tasks spend the budget too
+    expect(admin.capped).toBe(false)
+    // and a member's alike
     const u = newT()
-    const g = await withOrg(u)
+    const g = await withReadingAdmin(u)
     const lena = await person(u, g.org.id, 'Lena')
     LIST.call = { ...DEFAULT_LIST.call, bytes: await plantWithText(u, lena) }
     const hers = await search(u, lena, 'survey')
@@ -1488,7 +1496,7 @@ describe('searching for deleted tasks', () => {
 
   it('leaves capped false when hidden matches lie past the visible ones at the cap', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const lena = await person(t, f.org.id, 'Lena')
     await plantLedProjects(t, lena, 2, 'Survey the north gate')
     // matching deleted tasks Lena cannot see
@@ -1505,7 +1513,7 @@ describe('searching for deleted tasks', () => {
 
   it(`says when more match than the ${MATCHES.max} it answers`, async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const lena = await person(t, f.org.id, 'Lena')
     await plantLedProjects(t, lena, 3, 'Survey the north gate')
     const max = MATCHES.max
@@ -1524,7 +1532,7 @@ describe('searching for deleted tasks', () => {
 describe('restore and purge calls', () => {
   it('restores per item and answers not_found for unknown, foreign and hidden ids alike', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const mine = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const hidden = await plantIssue(t, { org_id: f.org.id, project_id: (await hiddenSub(t, f)).id })
     const foreign = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id })
@@ -1556,7 +1564,7 @@ describe('restore and purge calls', () => {
 
   it('lets an organization admin delete ready and stuck items for good', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const ready = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const stuck = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const attachment = await attach(t, ready)
@@ -1593,7 +1601,7 @@ describe('restore and purge calls', () => {
 
   it('offers Delete now only while billing lets an admin write', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const ready = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const stuck = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     for (const task of [ready, stuck]) await deleteTask(t, f.user, task.id)
@@ -1615,7 +1623,7 @@ describe('restore and purge calls', () => {
 describe('projects.removalSummary', () => {
   it('counts the tree for its lead, archived work included, and says when it stopped', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await patch(t, 'projects', f.sub2.id, { archived_at: NOW })
     for (let i = 0; i < 2; i++) await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: NOW })
@@ -1657,7 +1665,7 @@ describe('projects.removalSummary', () => {
     // a 32nd: 256 KiB and 512 KiB
     const t = newT({ transactionLimits: { bytesRead: 512 * 1024 } })
     REMOVAL_COUNT.bytes = DEFAULT_REMOVAL.bytes / 32
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 30 tasks at the 20,000-character description cap pass 512 KiB,
     // their text in the task rows too, as a rollback to the second release
     // writes it
@@ -1683,7 +1691,7 @@ describe('projects.removalSummary', () => {
 describe('archiving a task and keeping its subtasks (design 9)', () => {
   it('detaches the open subtasks as a delete does and archives the task alone', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const parent = await plantIssue(t, { org_id, project_id: f.sub.id, title: 'Parent' })
     const open = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
@@ -1723,7 +1731,7 @@ describe('archiving a task and keeping its subtasks (design 9)', () => {
 
   it('archives the open subtasks with it otherwise, in the app and over REST', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     await grant(t, f.meta.id, f.agent.id, 'user')
     const app = await plantIssue(t, { org_id, project_id: f.sub.id })
@@ -1751,7 +1759,7 @@ describe('a project item while it moves', () => {
     // the lead is in 3 teams that each share the same 50 other projects,
     // 150 shares the list's sight reads, and their own project is moving
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run(async (ctx) => {
       const projects: string[] = []
       for (let i = 0; i < 50; i++) {

@@ -8448,6 +8448,11 @@ const grantOnProject = (p: ProjectGrants, user: UserVM): string | null => {
   }
   return level
 }
+/* The level of `uid` (me by default) on `p` by ordinary access, the rule of
+   convex/lib/access.ts levelUnder: the lead role, the person's own grant and
+   their teams' shares on the project and its parent. An organization admin
+   is judged by their own rows like anyone; only the management rule
+   (P.canManageOwnProjectAccess) knows the role. */
 const levelOnProject = (
   p: ProjectGrants | null | undefined,
   uid?: string,
@@ -8456,7 +8461,6 @@ const levelOnProject = (
   if (!p) return null
   const user = actorIn(p.org, uid)
   if (!user?.active) return null
-  if (user.orgRole === 'admin') return 'lead'
   const parent = p.parent ? projectById(p.parent) : null
   let level = grantOnProject(p, user)
   if (parent?.org === p.org) {
@@ -9208,6 +9212,8 @@ export type LeadChoices = FunctionReturnType<typeof api.projectSettings.leadCand
 /** One answer of the New sub-project dialog's Project list
     (projectSettings.projects with sub_project_parents). */
 export type SubProjectParents = FunctionReturnType<typeof api.projectSettings.projects>
+/** One batch of Settings › Archived projects (projectSettings.archived). */
+export type ArchivedProjectEntries = FunctionReturnType<typeof api.projectSettings.archived>
 /** The invite form's lookup of an address (projectSettings.inviteTarget). */
 export type InviteLookup = FunctionReturnType<typeof api.projectSettings.inviteTarget>
 /** One answer of Settings › Teams (teams.settingsPage). */
@@ -9312,14 +9318,19 @@ function readablePreview(answer: RemovalPreview, checked: boolean): RemovalPrevi
   }
 }
 
-/* Whether the caller can carry out both choices of the removal window, so
-   it asks: reassign every lost task, and keep the people as Viewers unless
-   Keep as Viewer is no choice for this removal (a removed Viewer grant).
-   Otherwise the removal goes at once with a notice (design-spec row 330).
-   The `permitted` fields answer the caller's authority whatever size or
+/* Whether the removal window asks. It asks when Keep as Viewer is offered
+   and the caller may keep the people, as an organization admin who manages
+   a project without Edit on its tasks may; the window then shows Reassign
+   disabled with the preview's refusal sentence where the caller may not
+   reassign. Where Keep as Viewer is no choice (a removed Viewer grant), it
+   asks when the caller may reassign every lost task. Otherwise the removal
+   goes at once with a notice (design-spec row 330). The rule is one-sided:
+   a caller who may reassign but not keep, such as a team leader with Edit
+   who cannot manage the project's users, still gets the notice. The
+   `permitted` fields answer the caller's authority whatever size or
    read-only sentence the `refusal` fields name first. */
 const settlesRemoval = (answer: RemovalAnswer): boolean =>
-  answer.reassign.permitted && (answer.keep.permitted || !answer.keep.offered)
+  answer.keep.offered ? answer.keep.permitted : answer.reassign.permitted
 
 /** What the press or the removal window says when a removal could not be
     checked on the server: the read failed, or the backend is older than the
@@ -9526,7 +9537,6 @@ function newProjectGrants(
   if (p.type === 'meta' && creator) {
     const own = p.access?.[creator]
     const mine = creatorGrant({
-      admin: PLANNER.isAdmin(creator),
       creator,
       lead,
       own: own === 'lead' ? undefined : own,
@@ -11832,8 +11842,9 @@ export const PLANNER = {
      home organization with this lead and access? The New project dialog asks
      before saving. The draft goes through the same level rules P.canSee
      applies once addProject has painted the project, so the dialog's warning
-     and the outcome agree: org admins, the lead, an individual grant at any
-     level or a share with one of the user's teams can see it. */
+     and the outcome agree: the lead, an individual grant at any level or a
+     share with one of the user's teams can see it, for an org admin as for
+     anyone. */
   seesNewProject: (
     draft: Pick<NewProjectInput, 'lead' | 'access' | 'teamAccess'>,
     uid?: string,
@@ -11860,11 +11871,20 @@ export const PLANNER = {
     const meta = PLANNER.metaOf(pid)
     return !!meta && PLANNER.canWrite(meta.id, uid)
   },
-  /** Project leads and organization admins control project permissions. */
+  /** Whether `uid` (me by default) manages project `pid`, the server's
+      management rule (convex/lib/access.ts managesIn): an active seat of
+      the project's organization, the project a top-level meta or a
+      sub-project of one, and an organization admin or the project's
+      effective lead. Settings, the access editors and every New
+      sub-project opener ask it; it gives no level. */
   canManageOwnProjectAccess: (pid: string, uid?: string): boolean => {
     const p = PLANNER.project(pid)
-    const u = p ? actorIn(p.org, uid) : null
-    return !!(u?.active && levelOnProject(p, uid) === 'lead')
+    if (!p) return false
+    const root = p.parent ? PLANNER.project(p.parent) : p
+    if (!root || root.org !== p.org || root.parent || root.type !== 'meta') return false
+    const u = actorIn(p.org, uid)
+    if (!u?.active) return false
+    return u.orgRole === 'admin' || levelOnProject(p, uid) === 'lead'
   },
   /* Every top-level project this user can see in the workspace, in one
      list (0078 retired the per-workspace silo and its switcher), blended
@@ -12291,6 +12311,31 @@ export const PLANNER = {
     }
   },
 
+  /** One batch of Settings › Archived projects (projectSettings.archived)
+      in organization `orgId`, its archived projects for an organization
+      admin and else the ones I see, newest archived first, matching
+      `search`, after `after` or from the start. The page reads its own live
+      batches; this one-shot read is the staging check's, whose sweep finds
+      there an archived project its signed-in admin only manages, which no
+      REST list and no store list holds. Never subscribed to; null when the
+      read failed. */
+  settingsArchivedProjects: async (
+    orgId: string,
+    search: string,
+    after: string | null,
+  ): Promise<ArchivedProjectEntries | null> => {
+    try {
+      return await convex.query(api.projectSettings.archived, {
+        org_id: orgId,
+        ...(search === '' ? {} : { search }),
+        ...(after === null ? {} : { after }),
+      })
+    } catch (e) {
+      console.error('[qivo] archived projects failed:', e)
+      return null
+    }
+  },
+
   /** The seat `email` names in organization `orgId` and its grant on
       project `projectId` (projectSettings.inviteTarget), which the invite
       form sends as its `expected`. Read once, at the press. A rule the
@@ -12427,16 +12472,17 @@ export const PLANNER = {
 
   /** Starts removing `change` from a Settings page. It asks the server's
       preview (P.previewRemoval) and answers it when the removal window
-      should ask: someone loses sight of open tasks and the caller can carry
-      out both choices. Otherwise it answers null, having done what the
-      preview calls for:
+      should ask: someone loses sight of open tasks and the caller may keep
+      them as Viewers where that is offered, or may reassign the tasks where
+      it is not (settlesRemoval). Otherwise it answers null, having done
+      what the preview calls for:
       - a failed or unreadable preview, or one from an older backend: says
         so (REMOVAL_UNCHECKED) and removes nothing;
       - nothing left to remove (`unavailable`, or `pending` false): says the
         access is already gone and changes nothing;
       - `refused` or `too_large`: the server's sentence, and removes nothing;
       - no task taken out of sight: the plain removal;
-      - a caller who cannot carry out both choices, or an organization admin
+      - a caller the window cannot offer a choice, or an organization admin
         while the organization is read-only (`leave_only`): the removal at
         once, leaving the tasks, with a notice once the server accepts it
         (P.removeLeavingTasks).

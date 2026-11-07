@@ -515,8 +515,8 @@ const firstSubtask = (ctx: QueryCtx, task: Doc<'issues'>): Promise<Doc<'issues'>
     .first()
 
 /** The refusal of an archived list whose scope has more projects than one
- * page merges side by side for a caller who is no organization admin
- * (listArchivedIssuesCore). A sub-project alone always fits. */
+ * page merges side by side, for every caller (listArchivedIssuesCore). A
+ * sub-project alone always fits. */
 export const ARCHIVED_TOO_WIDE =
   'this project has too many sub-projects to list their archived tasks together; name one of its sub-projects'
 
@@ -543,9 +543,9 @@ export type ArchivedPage<Row> = { rows: Row[]; next: ArchiveCursor | null }
  * comment and its text, from its description row unless a search read it
  * already, are one more read each, which ARCHIVE_RESERVE leaves room for.
  *
- * A caller who is no organization admin reads only the scope's projects,
- * merged side by side, never the organization's archive, whose read would
- * pass tasks of projects they cannot see (lib/archivedTasks.ts
+ * Every caller, an organization admin included, reads only the scope's
+ * projects, merged side by side, never the organization's archive, whose
+ * read would pass tasks of projects they cannot see (lib/archivedTasks.ts
  * ArchiveScope). A scope of more than ARCHIVED_SCOPE.subProjects projects,
  * or one whose projects one page cannot open, is refused with
  * ARCHIVED_TOO_WIDE, before anything else is read in the first case.
@@ -569,8 +569,7 @@ export async function listArchivedIssuesCore(
   view: ListView,
 ): Promise<ArchivedPage<RestIssueJson | McpIssueOut>> {
   if (o.search !== undefined) limitedText(LIMITS.search, o.search)
-  const admin = me.org_role === 'admin'
-  if (!admin && o.scope.length > ARCHIVED_SCOPE.subProjects) throw badRequest(ARCHIVED_TOO_WIDE)
+  if (o.scope.length > ARCHIVED_SCOPE.subProjects) throw badRequest(ARCHIVED_TOO_WIDE)
   const { cat, readable } = view
   const names = await rosterNames(ctx, me.org_id)
   const orgSlug = (await byId(ctx, 'organizations', me.org_id))?.slug
@@ -584,7 +583,7 @@ export async function listArchivedIssuesCore(
         nameOf: async (id) => names.get(id),
       })
     : null
-  const scope = projectsScope(me.org_id, o.scope, admin)
+  const scope = projectsScope(me.org_id, o.scope)
   const page = await archivedTasksPage(ctx, scope, o.cursor, o.limit, {
     /* Whether the filters keep `task`. An archived task is a group while it
      * has any subtask, which is read only when a filter still needs it after
@@ -2670,7 +2669,9 @@ export const projectJson = (
  * `total` tasks and `percent` rounded, 0 without tasks; `counting` with all
  * three null while the stored counts are not whole, which clears on its own;
  * `unavailable` with all three null where the request has no room left to
- * read them (projectCompletion); never a partial count. */
+ * read them (projectCompletion), or for a project the caller manages
+ * without reading its tasks (machine/projects.ts projectDetailJson); never a
+ * partial count. */
 export type CompletionJson =
   | { status: 'ok'; done: number; total: number; percent: number }
   | { status: 'counting'; done: null; total: null; percent: null }
@@ -2688,7 +2689,7 @@ export const COUNTING_COMPLETION: CompletionJson = {
 }
 
 /** The completion of a project whose counts the request has no room left
- * to read. */
+ * to read, or whose tasks the caller cannot read though they manage it. */
 export const UNAVAILABLE_COMPLETION: CompletionJson = {
   status: 'unavailable',
   done: null,

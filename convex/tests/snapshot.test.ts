@@ -3,11 +3,14 @@
  * that snapshot.threadHistory answers beside a task's comments.
  *
  * Extra scenery beside withOrg's mini-Testbed:
+ * - the admin holds User grants on TBED and Skunkworks, so they see every
+ *   project of the organization through ordinary access, as admin status
+ *   gives no level (lib/access.ts levelUnder)
  * - hiddenSub: a sub under f.hidden (lead: user) — invisible to guest/viewer,
- *   visible to admin (org admin) and user (lead)
+ *   visible to admin (by their grant) and user (lead)
  * - hidden2 / hidden2Sub: a second hidden family led by ADMIN — the project
  *   plain staff `user` cannot see, which is what the staff-anonymization
- *   assertions need (admin sees everything, so f.hidden can't test it)
+ *   assertions need (the admin sees everything, so f.hidden can't test it)
  * - issueVis: scheduled+estimated work in f.sub, the identified control row */
 
 /// <reference types="vite/client" />
@@ -35,6 +38,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
 
@@ -55,6 +59,14 @@ beforeEach(async () => {
   t = newT()
   f = await withOrg(t)
   hiddenSub = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.hidden.id })
+  await t.run(async (ctx) => {
+    for (const project of [f.meta, f.hidden])
+      await ctx.db.insert('project_access', {
+        project_id: project.id,
+        profile_id: f.admin.id,
+        level: 'user',
+      })
+  })
   hidden2 = await plantProject(t, { org_id: f.org.id, lead_id: f.admin.id })
   hidden2Sub = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: hidden2.id })
   issueVis = await plantIssue(t, {
@@ -113,7 +125,10 @@ describe('workspace scoping', () => {
     const projectIds = snap.projects.map((p) => p.id)
     expect(projectIds.sort()).toEqual([f.meta.id, f.sub.id, f.sub2.id].sort())
     expect(snap.access.every((a) => a.project_id === f.meta.id)).toBe(true)
-    expect(snap.access.map((a) => a.profile_id).sort()).toEqual([f.guest.id, f.viewer.id].sort())
+    // with the admin's own grant
+    expect(snap.access.map((a) => a.profile_id).sort()).toEqual(
+      [f.guest.id, f.viewer.id, f.admin.id].sort(),
+    )
     expect(snap.issues.map((i) => i.id)).toContain(issueVis.id)
     expect(snap.issues.map((i) => i.id)).not.toContain(issueHid.id)
     expect(snap.auth_user_id).toBe(f.guest.auth_user_id)
@@ -1168,8 +1183,9 @@ describe('task history visibility', () => {
     expect(await taskRows(destinationOnly)).toEqual([])
 
     await as(t, f.user).mutation(api.projects.deleteDeep, { org_id: f.org.id, id: f.sub2.id })
-    for (const p of [destinationOnly, f.guest, f.user]) expect(await taskRows(p)).toEqual([])
-    expect(await taskRows(f.admin)).toEqual(['created', 'moved'])
+    // an admin is a member here like any other
+    for (const p of [destinationOnly, f.guest, f.user, f.admin])
+      expect(await taskRows(p)).toEqual([])
     await t.run(async (ctx) => {
       const item = await ctx.db
         .query('deleted_items')
@@ -1178,7 +1194,7 @@ describe('task history visibility', () => {
       if (item === null) throw new Error('the project did not move to Deleted items')
       await startPurge(ctx, item, { inline: true })
     })
-    for (const p of [destinationOnly, f.guest, f.user]) {
+    for (const p of [destinationOnly, f.guest, f.user, f.admin]) {
       expect(await taskRows(p)).toEqual(['created', 'moved'])
     }
   })
@@ -1256,10 +1272,11 @@ describe('task history visibility', () => {
       project_id: f.sub.id,
     })
     expect(await seenRows(subOnly)).toEqual(['A', 'E', 'F'])
-    // a deleted named task, or wording no writer produces, reaches admins only
+    // a deleted named task, or wording no writer produces, reaches no
+    // client, an admin's included
     await writer.mutation(api.issues.deleteDeep, { org_id: f.org.id, id: sameParent.id })
     expect(await seenRows(bothSubs)).toEqual(['E', 'F'])
-    expect(await seenRows(f.admin)).toEqual(all)
+    for (const p of [f.admin, f.user]) expect(await seenRows(p)).toEqual(['C', 'D', 'E', 'F', 'G'])
   })
 
   it('a relation row reaches the people who can read every task its list names', async () => {
@@ -1855,7 +1872,7 @@ describe('threadHistory events', () => {
     }
   })
 
-  it("drops only an archive row's legacy subtask count, singular or plural, for members", async () => {
+  it("drops only an archive row's legacy subtask count, singular or plural, for every member", async () => {
     const counted = { named_task_nums: [] as number[] }
     const ids = await plantRows([
       ev({ ...counted, verb: 'archived', detail: 'with 1 subtask' }),
@@ -1865,19 +1882,16 @@ describe('threadHistory events', () => {
     ])
     const details = async (p: Doc<'profiles'>) =>
       (await thread(p, issueVis.id)).events.map((e) => [e.id, e.detail])
-    expect(await details(f.admin)).toEqual([
-      [ids[0], 'with 1 subtask'],
-      [ids[1], 'with 2 subtasks'],
-      [ids[2], 'with 3 subtasks'],
-    ])
-    expect(await details(f.guest)).toEqual([
-      [ids[0], undefined],
-      [ids[1], undefined],
-      [ids[2], 'with 3 subtasks'],
-    ])
+    // an admin as a guest
+    for (const p of [f.admin, f.guest])
+      expect(await details(p), p.name).toEqual([
+        [ids[0], undefined],
+        [ids[1], undefined],
+        [ids[2], 'with 3 subtasks'],
+      ])
   })
 
-  it('gives admins every row and members the rows the rule allows, without legacy counts', async () => {
+  it('gives every member, an admin included, the rows the rule allows, without legacy counts', async () => {
     const ids = await plantRows([
       ev({ verb: 'created' }),
       ev({ verb: 'moved', detail: 'to the Firmware sub-project (from Secret)' }),
@@ -1893,9 +1907,12 @@ describe('threadHistory events', () => {
         detail: 'to the Firmware sub-project',
       }),
     ])
+    // the admin, who reads TBED and Skunkworks by grants, receives what a
+    // member with those grants receives: not the move nobody can check, and
+    // the archive row without its count
     const admin = (await thread(f.admin, issueVis.id)).events
-    expect(admin.map((e) => e.id)).toEqual(ids)
-    expect(admin[2].detail).toBe('with 3 subtasks')
+    expect(admin.map((e) => e.id)).toEqual([ids[0], ids[2], ids[3], ids[4], ids[5]])
+    expect(admin[1]).not.toHaveProperty('detail')
     const guest = (await thread(f.guest, issueVis.id)).events
     expect(guest.map((e) => e.id)).toEqual([ids[0], ids[2], ids[3], ids[4]])
     expect(guest[1]).not.toHaveProperty('detail')
@@ -2199,7 +2216,7 @@ describe('the task window history near the read limits', () => {
     // a limit of 256 KiB on the bytes a transaction reads, which 40 tasks of
     // about 8 KB pass as 40 tasks of 500 KB passed the real 16 MiB
     const big = newT({ transactionLimits: { bytesRead: 256 * 1024 } })
-    const g = await withOrg(big)
+    const g = await withReadingAdmin(big)
     const task = await plantIssue(big, { org_id: g.org.id, project_id: g.sub.id })
     const description = 'Notes from the review of the board layout and the open questions. '.repeat(
       120,
@@ -2315,13 +2332,15 @@ describe('the task window history near the read limits', () => {
       read = [...older.map((row) => row.id), ...read]
     }
     expect(read).toEqual(all)
-    // admins look up no named task, so they receive every row
+    // an admin looks up the named tasks as any member does, so their first
+    // page holds what the guest's holds
     const admin = await big.query(internal.machine.records.restTaskActivity, {
       callerId: g.admin.id,
       access: 'read',
       ref: task.id,
     })
-    expect(admin.map((row) => row.id)).toEqual(rows.map((row) => row.id))
+    expect(admin.map((row) => row.id)).toEqual(overRest.map((row) => row.id))
+    expect(admin.length).toBeLessThan(rows.length)
   })
 })
 

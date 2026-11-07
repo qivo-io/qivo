@@ -30,7 +30,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
 
@@ -119,7 +119,7 @@ async function plantKey(t: T, agent: Doc<'profiles'>): Promise<string> {
  * deployment, which the workload's name order needs. */
 async function fixture() {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const viewerAgent = await plantSeat(t, {
     org_id: f.org.id,
     name: 'Ledger',
@@ -150,16 +150,18 @@ async function fixture() {
       created_at: NOW,
     }),
   )
-  // comments by someone else on that task: one to edit, and one for each
-  // credential's delete request
+  // comments by the admin on that task: one to edit, and one for each
+  // credential's delete request. The admin's tokens act as their author,
+  // as admin status gives no lead standing to edit another's comment, and
+  // every other credential is someone else
   const comment = async () => {
     const id = uuid()
     await t.run((ctx) =>
       ctx.db.insert('comments', {
         id,
         issue_id: other.id,
-        author: f.user.id,
-        body: 'Written by someone else',
+        author: f.admin.id,
+        body: 'Written by the admin',
         created_at: NOW,
       }),
     )

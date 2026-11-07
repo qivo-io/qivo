@@ -57,7 +57,8 @@ import {
   reap,
   type T,
   uuid,
-  withOrg,
+  type withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { plantNorthstar } from './northstar.setup'
 
@@ -218,7 +219,7 @@ async function failsOnReads(work: () => Promise<unknown>): Promise<boolean> {
 describe('archiveDoneIssues — the 0106 predicate', () => {
   it('archives Done tasks in a teamless project from the standard threshold on; younger and unstamped ones stay', async () => {
     const t = newT()
-    const f = await withOrg(t) // f.sub and its root f.meta have no team
+    const f = await withReadingAdmin(t) // f.sub and its root f.meta have no team
     // The run's clock is pinned to NOW, so the boundary holds to the millisecond.
     const cutoff = Date.parse(NOW) - DEFAULT_ARCHIVE_DAYS * DAY
     const due = await plantIssue(t, {
@@ -256,7 +257,7 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
 
   it('a Done task moved to another sub-project waits the full threshold from the move', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const done = () =>
       plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, status: 'done', done_at: ago(40) })
     const stayed = await done()
@@ -279,7 +280,7 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
 
   it('single snapshot: a done parent whose done child is archived this run waits until the next', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const parent = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -310,7 +311,7 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
     'a due parent and its due child in two live projects, %s: the child goes this run and the parent the next',
     async (_, parentIn, childIn) => {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const due = { org_id: f.org.id, status: 'done' as const, done_at: ago(40) }
       const parent = await plantIssue(t, { ...due, project_id: f[parentIn].id })
       const child = await plantIssue(t, { ...due, project_id: f[childIn].id, parent_id: parent.id })
@@ -326,7 +327,7 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
 
   it('an archived project is left alone — its done tasks stay as the restore left them', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const archivedSub = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
@@ -346,7 +347,7 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
 
   it('a done parent waits for an active child in any project, an archived one included', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const archivedSub = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
@@ -382,7 +383,7 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
 
   it('a task archived before keeps its own stamp', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const earlier = ago(5)
     const shelved = await plantIssue(t, {
       org_id: f.org.id,
@@ -398,7 +399,7 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
 
   it('each run writes one audit row with the chains it scheduled, and each chain logs its own counts', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -461,7 +462,7 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
 describe('archiveDoneIssues keeps every leg bounded', () => {
   it('reads only the due Done tasks, however many open tasks the organization holds', async () => {
     const t = limitedT({ documentsRead: 200 })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const due = {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -485,7 +486,7 @@ describe('archiveDoneIssues keeps every leg bounded', () => {
     // One leg reads about 400 KB, its candidates and the rows it patches.
     // The 40 tasks together are about 800 KB.
     const t = limitedT({ bytesRead: 600_000 })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantTasks(t, 40, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -501,7 +502,7 @@ describe('archiveDoneIssues keeps every leg bounded', () => {
   it('drains a backlog over several legs of one run, and a parent whose child went in an earlier leg still waits', async () => {
     ARCHIVE_LIMITS.tasks = 5
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const due = {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -528,7 +529,7 @@ describe('archiveDoneIssues keeps every leg bounded', () => {
 
   it('the leaf guard reads at most two children, however many the parent has archived', async () => {
     const t = limitedT({ documentsRead: 100 })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const parent = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -552,7 +553,7 @@ describe('archiveDoneIssues keeps every leg bounded', () => {
     ARCHIVE_LIMITS.bytes = 100_000
     // The active children are about 400 KB together, more than one leg may read.
     const t = limitedT({ bytesRead: 300_000 })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const done = {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -585,7 +586,7 @@ describe('archiveDoneIssues keeps every leg bounded', () => {
   it('repairs flagged active tasks in pages of ARCHIVE_LIMITS.marked, each once per run', async () => {
     ARCHIVE_LIMITS.marked = 2
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const flagged: Doc<'issues'>[] = []
     for (let n = 0; n < 5; n++) {
       flagged.push(
@@ -650,7 +651,7 @@ describe('archiveDoneIssues keeps every leg bounded', () => {
 
   it('an organization deleted after the dispatch ends its chain without an error', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const done = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -785,7 +786,7 @@ describe('archiveDoneIssues budgets the events of a leg', () => {
    * two sub-projects, Firmware's done first. */
   async function scene() {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantSubscribers(t, f.org.id, [f.sub.id, f.sub2.id], 2)
     const tasks: string[] = []
     const projects = [f.sub.id, f.sub.id, f.sub.id, f.sub2.id, f.sub2.id, f.sub2.id]
@@ -837,7 +838,7 @@ describe('archiveDoneIssues budgets the events of a leg', () => {
 describe('archiveDoneIssues and organization deletion', () => {
   it('ends the chain of an organization whose deletion has begun, and archives during the read-only period', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const deleting = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -868,7 +869,7 @@ describe('archiveDoneIssues and organization deletion', () => {
 
   it('logs what a chain archived before the deletion began', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run(async (ctx) => {
       await ctx.db.insert('org_removals', {
         org_id: f.org.id,
@@ -904,7 +905,7 @@ describe('archiveDoneIssues and organization deletion', () => {
 describe('archiveDoneIssues runs one chain per organization', () => {
   it("hands an organization's due projects to one chain, which archives them one after another", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const third = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
     const tasks: string[] = []
     for (const project of [f.sub, f.sub2, third]) {
@@ -928,7 +929,7 @@ describe('archiveDoneIssues runs one chain per organization', () => {
   it('gives an organization one chain per ARCHIVE_LIMITS.projects due projects', async () => {
     ARCHIVE_LIMITS.projects = 2
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const third = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
     const tasks: string[] = []
     for (const project of [f.sub, f.sub2, third]) {
@@ -953,7 +954,7 @@ describe('archiveDoneIssues runs one chain per organization', () => {
     'skips a project %s after the dispatch and archives the next',
     async (change) => {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const done = { org_id: f.org.id, status: 'done' as const, done_at: ago(40) }
       const skipped = await plantIssue(t, { ...done, project_id: f.sub.id })
       const kept = await plantIssue(t, { ...done, project_id: f.sub2.id })
@@ -1146,7 +1147,7 @@ describe('archiveDoneIssues reads only what is due', () => {
 
   it('a step or leg the release before queued starts the run again or does nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const due = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -1374,7 +1375,7 @@ describe('archiveDoneIssues reads only the window since its last run', () => {
   it('a Done task in an archived project inside the window stays, and the night after its restore archives it', async () => {
     for (const via of ['app', 'REST', 'MCP'] as const) {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const shelf = await plantProject(t, {
         org_id: f.org.id,
         type: 'project',
@@ -1424,7 +1425,7 @@ describe('archiveDoneIssues checks the projects that writers marked', () => {
    * for the child, and no later window reaches it. */
   async function waitingParent() {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const parent = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -1562,7 +1563,7 @@ describe('archiveDoneIssues checks the projects that writers marked', () => {
 
   it('a Done parent goes the night after a stuck sub-project item is purged with its parent item', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // A parent in another top-level project, which only data from before
     // the subtask rule holds, so that it stays live when the child's
     // top-level project goes.
@@ -1612,7 +1613,7 @@ describe('archiveDoneIssues checks the projects that writers marked', () => {
 
   it('outside a public demo, a writer adds its row without reading, a row a restore', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (let round = 0; round < 2; round++) {
       await as(t, f.user).mutation(api.projects.archive, { org_id: f.org.id, id: f.sub.id })
       await as(t, f.user).mutation(api.projects.unarchive, { org_id: f.org.id, id: f.sub.id })
@@ -1633,7 +1634,7 @@ describe('archiveDoneIssues checks the projects that writers marked', () => {
 
   it('single snapshot over two nights: the full pass archives the child, and the leg marks the parent for the next window', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const due = { org_id: f.org.id, status: 'done' as const, done_at: night(-40) }
     const parent = await plantIssue(t, { ...due, project_id: f.sub.id })
     const child = await plantIssue(t, { ...due, project_id: f.sub2.id, parent_id: parent.id })
@@ -1726,7 +1727,7 @@ describe('archiveDoneIssues and the Northstar seed', () => {
 describe('archiveDoneIssues makes a full pass every few weeks', () => {
   it('without archive_runs, once the last full pass is 27.5 days old, and after the row is deleted', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const parent = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -1772,7 +1773,7 @@ describe('archiveDoneIssues makes a full pass every few weeks', () => {
 
   it('an incremental run whose row was deleted while it ran leaves it deleted, so the next run is full', async () => {
     const t = newT()
-    await withOrg(t)
+    await withReadingAdmin(t)
     await runArchive(t, night(0))
     await nightByHand(t, night(1), async (name, args) => {
       if (name === 'jobs:archiveDoneIssues' && args.phase === 'hand')
@@ -1808,7 +1809,7 @@ describe('archiveDoneIssues keeps a row for every project it did not finish', ()
     // still paging when the child's leg marks the parent's project
     ARCHIVE_LIMITS.projects = 1
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the child's project sorts before the parent's, and a third after both
     const [first, second, third] = [uuid(), uuid(), uuid()].sort()
     const sub = (id: string) =>
@@ -1845,7 +1846,7 @@ describe('archiveDoneIssues keeps a row for every project it did not finish', ()
 
   it('a row a person writes before the hand phase reads its range is handed, and its project is checked after the write', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const shelf = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
     await as(t, f.user).mutation(api.projects.archive, { org_id: f.org.id, id: shelf.id })
     const done = await plantIssue(t, {
@@ -1869,7 +1870,7 @@ describe('archiveDoneIssues keeps a row for every project it did not finish', ()
     // The second project's due page passes this read budget on every
     // attempt; the first fits.
     const t = limitedT({ documentsRead: 100 })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [first, second] = [uuid(), uuid()].sort()
     const sub = (id: string) =>
       plantProject(t, { id, org_id: f.org.id, type: 'project', parent_id: f.meta.id })
@@ -1918,7 +1919,7 @@ describe('archiveDoneIssues keeps a row for every project it did not finish', ()
   it('hands one chain a project however many rows name it, across hand steps too', async () => {
     ARCHIVE_LIMITS.projects = 2
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await runArchive(t, night(0))
     const [a, b] = [f.sub, f.sub2].sort((x, y) => (x.id < y.id ? -1 : 1))
     const tasks: string[] = []
@@ -1950,7 +1951,7 @@ describe('archiveDoneIssues keeps a row for every project it did not finish', ()
 
   it('a chain drops the row of a project that is gone or in Deleted items without an error', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await runArchive(t, night(0))
     await as(t, f.admin).mutation(api.projects.deleteDeep, { org_id: f.org.id, id: f.sub2.id })
     await t.run(async (ctx) => {
@@ -2014,7 +2015,7 @@ describe('archiveDoneIssues and two runs that overlap', () => {
   async function overlapScene() {
     ARCHIVE_LIMITS.projects = 1
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const ids = [uuid(), uuid(), uuid(), uuid()].sort()
     const subs: Doc<'projects'>[] = []
     for (const id of ids)
@@ -2104,7 +2105,7 @@ describe('archiveDoneIssues and two runs that overlap', () => {
     // a leg reads one task, so a chain can fail partway through a project
     ARCHIVE_LIMITS.tasks = 1
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await runArchive(t, night(0))
     const pastCutoff = (n: number) =>
       new Date(Date.parse(cutoffAt(night(n))) + DAY / 2).toISOString()
@@ -2255,7 +2256,7 @@ describe('archiveDoneIssues and two runs that overlap', () => {
 
   it("a newer run keeps the writer's row of a restore between its find and hand phases, while an older chain holds a leg's row", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const shelf = await plantProject(t, { org_id, type: 'project', parent_id: f.meta.id })
     await as(t, f.user).mutation(api.projects.archive, { org_id, id: shelf.id })
@@ -2325,7 +2326,7 @@ describe('archiveDoneIssues and two runs that overlap', () => {
         for (const writer of writers) {
           const label = `${order.join(', ')}; B's chain ${outcome}; writer ${writer ?? 'never'}`
           const t = newT()
-          const f = await withOrg(t)
+          const f = await withReadingAdmin(t)
           const org_id = f.org.id
           const pastCutoff = (n: number) =>
             new Date(Date.parse(cutoffAt(night(n))) + DAY / 2).toISOString()
@@ -2391,7 +2392,7 @@ describe('archiveDoneIssues and two runs that overlap', () => {
 describe('archiveDoneIssues runs what the release before queued', () => {
   it('a projects step with due projects it had not handed, and a leg without rows', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const due = { org_id: f.org.id, status: 'done' as const, done_at: night(-40) }
     const first = await plantIssue(t, { ...due, project_id: f.sub.id })
     const second = await plantIssue(t, { ...due, project_id: f.sub2.id })
@@ -2626,7 +2627,7 @@ async function runSweep(t: T): Promise<{ deleted: number; woken: number }> {
 describe('sweepReadMessages — retention follows the person', () => {
   it('sweeps rows read longer ago than the period; unread and fresh-read stay; absent = Never', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run(async (ctx) => {
       await ctx.db.patch(f.admin._id, { message_retention_days: 7 })
     })
@@ -2669,7 +2670,7 @@ describe('sweepReadMessages — retention follows the person', () => {
 
   it('an agent without a period keeps read messages for the default; its own period wins', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // f.agent has no message_retention_days, like every agent created
     // before the default and every seeded one
     const base = { org_id: f.org.id, recipient_id: f.agent.id }
@@ -2740,7 +2741,7 @@ describe('sweepReadMessages — retention follows the person', () => {
 
   it('writes one audit row with the pages it scheduled as actor system', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run(async (ctx) => {
       await ctx.db.patch(f.viewer._id, { message_retention_days: 30 })
     })
@@ -2762,7 +2763,7 @@ describe('sweepReadMessages — retention follows the person', () => {
 
   it('a snoozed row is never swept, and one whose instant has passed is woken instead', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run(async (ctx) => {
       await ctx.db.patch(f.admin._id, { message_retention_days: 7 })
     })
@@ -2806,7 +2807,7 @@ describe('sweepReadMessages — retention follows the person', () => {
   it('runs in bounded legs: a backlog larger than one leg finishes in one run with one audit row', async () => {
     // One leg's writes fit this budget; the whole backlog in one transaction would not.
     const t = limitedT({ documentsWritten: SWEEP_LIMITS.rows + 10 })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const read = {
       org_id: f.org.id,
       recipient_id: f.agent.id,
@@ -2854,7 +2855,7 @@ describe('sweepReadMessages — retention follows the person', () => {
   it('schedules one chain per page of SWEEP_LIMITS.profiles due profiles and still reaches every one', async () => {
     SWEEP_LIMITS.profiles = 4
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // one read time, so the rows fall due together and page in uuid order
     const read_at = ago(30)
     for (let n = 0; n < 5; n++) {
@@ -2961,7 +2962,7 @@ describe('sweepReadMessages — retention follows the person', () => {
 
   it('a wake answers how many rows it wrote, each written once, for a live or an archived task', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const live = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -3025,7 +3026,7 @@ describe('sweepReadMessages — retention follows the person', () => {
     // a leg's budget; waking every item that one leg's sample of overdue
     // rows touches would write far more
     const t = limitedT({ documentsWritten: SWEEP_LIMITS.rows })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const agent = (id: string, name: string) =>
       plantSeat(t, {
         org_id: f.org.id,
@@ -3129,7 +3130,7 @@ describe('sweepReadMessages reads only what is due', () => {
   it('after the seed, a run visits only the profiles with a read message due and the overdue snoozes', async () => {
     SWEEP_LIMITS.profiles = 10
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const start = Date.now()
     const at = (days: number) => new Date(start + days * DAY).toISOString()
     const agent = (name: string, over: Partial<WithoutSystemFields<Doc<'profiles'>>> = {}) =>
@@ -3175,7 +3176,7 @@ describe('sweepReadMessages reads only what is due', () => {
 
   it('a message read in the app or by an archive, or a shorter period, makes its profile due', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the viewer keeps read messages for seven days; the user keeps them
     // until choosing a period, and one was read two days ago
     await t.run((ctx) => ctx.db.patch(f.viewer._id, { message_retention_days: 7 }))
@@ -3274,7 +3275,7 @@ describe('sweepReadMessages reads only what is due', () => {
 
   it('a step or leg the release before queued starts the run again or does nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const stale = await plantMessage(t, {
       org_id: f.org.id,
       recipient_id: f.agent.id,
@@ -3315,7 +3316,7 @@ describe('sweepReadMessages reads only what is due', () => {
 describe('sweepReadMessages keeps a sweep row for every read message', () => {
   it('a full pass every 28th night finds a read message whose row is missing or late, and changes only those rows', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const start = Date.now()
     const at = (days: number) => new Date(start + days * DAY).toISOString()
     const agent = (name: string, over: Partial<WithoutSystemFields<Doc<'profiles'>>> = {}) =>
@@ -3520,7 +3521,7 @@ describe('sweepReadMessages keeps a sweep row for every read message', () => {
 
   it.each(writes)('%s makes its profile due', async (_, write) => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await t.run((ctx) => ctx.db.patch(f.admin._id, { message_retention_days: 7 }))
     await runSweep(t)
     const unread = await write(t, f)
@@ -3704,7 +3705,7 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
 
   it('runs in bounded legs that keep every referenced and fresh file and audit once', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     Object.assign(REAP_PAGES, { tickets: 2, accounts: 1, files: 2 })
     vi.useFakeTimers({ toFake: ['Date'] })
 
@@ -3762,7 +3763,7 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
 
   it('keeps a file attached between legs', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     Object.assign(REAP_PAGES, { files: 1 })
     vi.useFakeTimers()
@@ -3854,7 +3855,7 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
 
   it("stays inside Convex's transaction limits with many orphans", async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     vi.useFakeTimers({ toFake: ['Date'] })
     // 800 orphans cost 6 index ranges each, over the 4,096 one leg may read
@@ -3899,7 +3900,7 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
 
   it('an incremental run reads only the files stored since the last run', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     Object.assign(REAP_PAGES, { files: 2 })
     vi.useFakeTimers({ toFake: ['Date'] })
@@ -3939,7 +3940,7 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
 
   it('a full run every fourth week catches a file dropped without its bytes', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     vi.useFakeTimers({ toFake: ['Date'] })
     const file = await storeBlob(t)
@@ -4123,7 +4124,7 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
 
   it('a leg queued before incremental runs, with no lower bound, finishes a full run', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     vi.useFakeTimers({ toFake: ['Date'] })
     const file = await storeBlob(t)
@@ -4165,7 +4166,7 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
 
   it('a failed leg leaves the cutoff, so the next run reads the files it did not', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     vi.useFakeTimers()
     const old = await storeBlob(t)

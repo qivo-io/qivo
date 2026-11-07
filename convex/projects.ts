@@ -40,12 +40,7 @@ import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
-import {
-  canManageOwnProjectAccess,
-  canManageProjectUsers,
-  hasProjectLevel,
-  NO_USER_MANAGEMENT,
-} from './lib/access'
+import { canManageOwnProjectAccess, canManageProjectUsers, NO_USER_MANAGEMENT } from './lib/access'
 import { markBillingMembershipChanged } from './lib/billableUsers'
 import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
@@ -312,7 +307,7 @@ export const deleteDeep = orgMutation({
   handler: async (ctx, { id, reason }) => {
     const now = new Date().toISOString()
     const project = await myProject(ctx, id)
-    if (!(await hasProjectLevel(ctx, ctx.me, id, 'lead'))) {
+    if (!(await canManageOwnProjectAccess(ctx, ctx.me, project))) {
       throw rule('requires the project lead')
     }
     await moveProjectToTrash(ctx, { actor: ctx.me, project, now, reason: cleanReason(reason) })
@@ -336,14 +331,17 @@ export const deleteDeep = orgMutation({
  * archived ones included, and how many tasks the tree holds, archived ones
  * included (model/projects.ts removalSummaryOf, which stops counting past
  * 5,000 tasks or 8 MiB of them and says so). The same gate as deleteDeep,
- * because it names sub-projects and counts work a member who only navigates
- * to the project cannot see; a top-level project's lead can see every
- * sub-project. */
+ * management of the project (canManageOwnProjectAccess), because it names
+ * sub-projects and counts work a member who only navigates to the project
+ * cannot see; whoever manages a top-level project sees or manages every
+ * sub-project of it, since its lead holds at least User on each and an
+ * organization admin manages each, which the Settings project lists show
+ * them too. */
 export const removalSummary = orgQuery({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
     const project = await myProject(ctx, id)
-    if (!(await hasProjectLevel(ctx, ctx.me, id, 'lead'))) {
+    if (!(await canManageOwnProjectAccess(ctx, ctx.me, project))) {
       throw rule('requires the project lead')
     }
     return await removalSummaryOf(ctx, project)

@@ -59,7 +59,7 @@ import {
   type T,
   TODAY,
   uuid,
-  withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
 import { plantNorthstar } from './northstar.setup'
@@ -92,7 +92,7 @@ type Fx = OrgFixture & {
  * an archived sub-project of TBED, a sub-project of SKNK and a second staff
  * user who sees only TBED. */
 async function setup(t: T = newT()): Promise<Fx> {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const sib = await plantHiddenSibling(t, f, f.guest)
   await plantHiddenSibling(t, f, f.viewer)
   const shelf = await plantProject(t, {

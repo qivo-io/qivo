@@ -50,6 +50,7 @@ import {
   type T,
   uuid,
   withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { northstarId, plantNorthstar } from './northstar.setup'
 import { withReach } from './projectReach.setup'
@@ -320,7 +321,7 @@ async function secondSeat(t: T, f: OrgFixture) {
 describe('what main Search matches', () => {
   it('finds a task reference by its number and by a whole word of its digits', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const twelve = await task(t, f, f.sub, 'Calibrate the rig', { num: 12 })
     const titled = await task(t, f, f.sub2, 'Rev 12 board')
     const described = await task(t, f, f.sub, 'Planted', { description: 'see step 12 first' })
@@ -343,7 +344,7 @@ describe('what main Search matches', () => {
 
   it('finds a task by its number, a title word, a description word and both', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const torque = await task(t, f, f.sub, 'Calibrate the torque sensor', {
       description: 'Use the bench rig in lab B.',
     })
@@ -364,7 +365,7 @@ describe('what main Search matches', () => {
 
   it('matches the text a description shows, not its hidden parts', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the hidden parts stand apart, so convex-test returns these rows for
     // their words and the server's own check must leave them out
     const mention = await task(t, f, f.sub, 'Mention', {
@@ -389,7 +390,7 @@ describe('what main Search matches', () => {
 
   it("leaves out a code fence's language and a numbered list's numbers", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // no link, so only the fence and the list mark these as hiding words
     const fenced = await task(t, f, f.sub, 'Planted', {
       description: 'fun main\n```kotlin\nx\n```',
@@ -403,7 +404,7 @@ describe('what main Search matches', () => {
 
   it('leaves out archived tasks until the toggle is on, and always those of archived projects or Deleted items', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const active = await task(t, f, f.sub, 'Gearbox teardown')
     const archived = await task(t, f, f.sub, 'Gearbox rebuild', { archived_at: NOW })
     const shelf = await subOf(t, f, f.meta, { archived_at: NOW })
@@ -425,7 +426,7 @@ describe('what main Search matches', () => {
 describe('who main Search shows a task to', () => {
   it('shows a guest only the matches in the projects shared with them', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sibling = await plantHiddenSibling(t, f, f.guest)
     const shared = await task(t, f, f.sub, 'Gearbox teardown')
     await task(t, f, sibling, 'Gearbox rebuild')
@@ -445,20 +446,28 @@ describe('who main Search shows a task to', () => {
     expect(await search(t, member, { text: 'gearbox' })).toEqual(EMPTY)
   })
 
-  it('gives an organization admin what projectLevel gives', async () => {
+  it('gives an organization admin what their own rows give, and nothing for the role', async () => {
     const t = newT()
     const f = await withOrg(t)
     const elsewhere = await subOf(t, f, f.hidden)
     const unshared = await task(t, f, elsewhere, 'Gearbox spares')
-    // today an admin leads every project (lib/access.ts levelUnder); the
-    // admin access split leaves this task out
-    expect(ids(await search(t, f.admin, { text: 'gearbox' }))).toEqual([unshared.id])
+    // the admin holds no lead, grant or share, so the search finds nothing
+    expect(ids(await search(t, f.admin, { text: 'gearbox' }))).toEqual([])
     expect(ids(await search(t, f.guest, { text: 'gearbox' }))).toEqual([])
+    // a grant of their own on Skunkworks finds it, as anyone's
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: f.hidden.id,
+        profile_id: f.admin.id,
+        level: 'user',
+      }),
+    )
+    expect(ids(await search(t, f.admin, { text: 'gearbox' }))).toEqual([unshared.id])
   })
 
   it("adds a second seat's matches, each organization answering its own task numbers", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { seat, sub } = await secondSeat(t, f)
     const home = await task(t, f, f.sub, 'Gearbox teardown', { num: 7 })
     // titles of one length, so only the seat orders them
@@ -585,7 +594,7 @@ describe('seats', () => {
 
   it('counts only the seats whose search began when task numbers spend the budget', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await secondSeat(t, f)
     // home tasks large enough to spend the home seat's allowance in its
     // number lookups, and an allowance only one seat gets
@@ -605,7 +614,7 @@ describe('seats', () => {
 
   it("reads every seat's task numbers before any source", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { sub } = await secondSeat(t, f)
     // home tasks large enough to spend the budget in the home seat's titles
     for (let i = 0; i < 10; i++)
@@ -623,7 +632,7 @@ describe('seats', () => {
 
   it('keeps two searches for each seat after the one it plans', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { sub } = await secondSeat(t, f)
     const home = await task(t, f, f.sub, 'Gearbox teardown')
     const away = await plantIssue(t, {
@@ -866,7 +875,7 @@ describe('main Search across seats', () => {
 describe('the scope of main Search', () => {
   it('narrows to a sub-project, a top-level project and an organization', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { sub: away } = await secondSeat(t, f)
     const a = await task(t, f, f.sub, 'Gearbox teardown')
     const b = await task(t, f, f.sub2, 'Gearbox rebuild')
@@ -888,7 +897,7 @@ describe('the scope of main Search', () => {
 
   it('answers the same empty, complete page for a scope the caller cannot use', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await task(t, f, f.sub, 'Gearbox teardown')
     const shelf = await subOf(t, f, f.meta, { archived_at: NOW })
     const elsewhere = await subOf(t, f, f.hidden)
@@ -907,7 +916,7 @@ describe('the scope of main Search', () => {
 describe('searching project by project', () => {
   it('finds all of a guest’s matches among many hidden ones with a few search queries', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const elsewhere = await subOf(t, f, f.hidden)
     await plantMany(t, 300, (i) => ({
       org_id: f.org.id,
@@ -927,16 +936,17 @@ describe('searching project by project', () => {
     expect(guest.page.coverage).toEqual(COMPLETE)
     // two projects, a title and a description query each, and no name query
     expect(guest.searches).toBe(4)
-    // the organization's search reads the hidden tasks and stops at the
-    // cap, after one query of its project names
+    // the admin, who reads Skunkworks too by a grant, is searched project
+    // by project like anyone, its three sub-projects, and stops at the cap
+    // in the one whose 300 tasks they read
     const admin = await searchRun(t, [f.admin], { text: 'gearbox' })
-    expect(admin.searches).toBe(3)
+    expect(admin.searches).toBe(6)
     expect(admin.page.coverage).toEqual(stopped('candidates'))
   })
 
   it('searches a top-level project only while it holds a task', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const mine = await task(t, f, f.sub, 'Gearbox teardown')
     // the guest's grant is on the top-level project, which holds no task
     expect((await searchRun(t, [f.guest], { text: 'gearbox' })).searches).toBe(4)
@@ -959,7 +969,7 @@ describe('searching project by project', () => {
 
   it("lists a person's projects through team shares, never another organization's team", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const a = await task(t, f, f.sub, 'Gearbox teardown')
     const b = await task(t, f, f.sub2, 'Gearbox rebuild')
     const member = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
@@ -1008,7 +1018,7 @@ describe('searching project by project', () => {
 
   it("lists a viewer seat's projects", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const a = await task(t, f, f.sub, 'Gearbox teardown')
     const run = await searchRun(t, [f.viewer], { text: 'gearbox' })
     expect(ids(run.page)).toEqual([a.id])
@@ -1018,7 +1028,7 @@ describe('searching project by project', () => {
 
   it('reports no coverage that depends on tasks the person cannot see', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const elsewhere = await subOf(t, f, f.hidden)
     await withReach(t)
     // the guest sees two sub-projects, more than one by one allows here, so
@@ -1033,9 +1043,10 @@ describe('searching project by project', () => {
     expect(withHidden.page).toEqual(without.page)
     expect(without.page.coverage).toEqual(stopped('projects'))
     expect(without.page.rows).toHaveLength(3)
-    // an admin, who sees every project, gets coverage from the cap
+    // an admin searched whole is told the same, as no role sees every
+    // project by itself
     expect((await searchRun(t, [f.admin], { text: 'zebra' })).page.coverage).toEqual(
-      stopped('candidates'),
+      stopped('projects'),
     )
     // the guest's search project by project reads no hidden task and is
     // exact
@@ -1045,7 +1056,7 @@ describe('searching project by project', () => {
 
   it('stops with reads, inside the limits, while it lists projects with large rows', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // projects the guest leads, each row near Convex's 1 MiB, as a
     // description stored before the caps can make it
     for (let i = 0; i < 20; i++)
@@ -1061,7 +1072,7 @@ describe('searching project by project', () => {
 
   it('searches the organization for a person who sees more sub-projects', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const mine = await task(t, f, f.sub, 'Gearbox teardown')
     expect((await searchRun(t, [f.guest], { text: 'gearbox' })).searches).toBe(4)
     MAIN_SEARCH.projects = 1
@@ -1078,7 +1089,7 @@ describe('searching project by project', () => {
 describe('the order of main Search', () => {
   it('ranks the reference, an equal title, a phrase, the title, a split, then the description', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const description = await task(t, f, f.sub, 'Calibration', {
       description: 'the torque sensor drifts',
     })
@@ -1100,7 +1111,7 @@ describe('the order of main Search', () => {
 
   it('orders equal scores by seat, then newest number, then id', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { sub: away } = await secondSeat(t, f)
     const older = await task(t, f, f.sub, 'Gearbox', { num: 10 })
     const newer = await task(t, f, f.sub2, 'Gearbox', { num: 11 })
@@ -1125,7 +1136,7 @@ describe('the order of main Search', () => {
 describe('paging through main Search', () => {
   it('returns each match once, in the order of one large page', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (const [i, title] of [
       'Gearbox',
       'Gearbox teardown',
@@ -1157,7 +1168,7 @@ describe('paging through main Search', () => {
 
   it('refuses a cursor from another search, a changed one and a malformed one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (const title of ['Gearbox', 'Gearbox teardown', 'Gearbox rebuild'])
       await task(t, f, f.sub, title)
     MAIN_SEARCH.rows = 1
@@ -1189,7 +1200,7 @@ describe('paging through main Search', () => {
 describe("description rows' copies", () => {
   it('never shows a task whose copies say active and visible while it is not', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const elsewhere = await subOf(t, f, f.hidden)
     const shelved = await task(t, f, f.sub, 'Planted', { description: 'flux capacitor' })
     const moved = await task(t, f, f.sub, 'Planted', { description: 'flux capacitor' })
@@ -1208,7 +1219,7 @@ describe("description rows' copies", () => {
 
   it('never shows a task for the text of a second description row', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const shown = await task(t, f, f.sub, 'Planted', { description: 'plain notes' })
     // repeated rollbacks can leave a second row with the copies and other text
     await t.run((ctx) =>
@@ -1226,7 +1237,7 @@ describe("description rows' copies", () => {
 
   it('reads the task of a description match when Convex did not take every term', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const words = Array.from({ length: 16 }, (_, i) => `w${i}`)
     // the title holds only the 17th term, which no search query takes
     const found = await task(t, f, f.sub, 'Zeta', { description: words.join(' ') })
@@ -1235,7 +1246,7 @@ describe("description rows' copies", () => {
 
   it('judges a row without copies from its task', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const archived = await task(t, f, f.sub, 'Planted', {
       description: 'flux capacitor',
       archived_at: NOW,
@@ -1251,6 +1262,9 @@ describe("description rows' copies", () => {
           await ctx.db.patch(row._id, { project_id: undefined, archived_at: undefined })
       }
     })
+    // the admin's seat searched whole, whose candidates come from the whole
+    // organization's index
+    MAIN_SEARCH.projects = 0
     expect(ids(await search(t, f.admin, { text: 'capacitor' }))).toEqual([active.id])
     expect(
       ids(await search(t, f.admin, { text: 'capacitor', include_archived: true })).sort(),
@@ -1261,7 +1275,7 @@ describe("description rows' copies", () => {
 describe('the coverage of main Search', () => {
   it('says which stop kept it from covering everything', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await secondSeat(t, f)
     for (let i = 0; i < 5; i++) await task(t, f, f.sub, `Gearbox ${i}`)
     expect((await search(t, f.user, { text: 'gearbox' })).coverage).toEqual(COMPLETE)
@@ -1299,7 +1313,7 @@ describe('the coverage of main Search', () => {
 
   it('stops with reads once it has parsed MAIN_SEARCH.parse characters', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (let i = 0; i < 3; i++)
       await task(t, f, f.sub, 'Planted', {
         description: `flywheel notes in the [ guide ]( example.com/${i} )`,
@@ -1315,7 +1329,7 @@ describe('the coverage of main Search', () => {
 
   it('shows the description matches the gathering parsed, with a parse allowance of its own', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const description = (i: number) => `flywheel notes in the [ guide ]( example.com/${i} )`
     const found: string[] = []
     for (let i = 0; i < 3; i++)
@@ -1343,7 +1357,7 @@ describe('the coverage of main Search', () => {
 
   it('pays for leaving archived tasks out after the query when the index cannot', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await withReach(t)
     for (let i = 0; i < 3; i++) await task(t, f, f.sub, `Gearbox ${i}`, { archived_at: NOW })
     const active = [await task(t, f, f.sub, 'Gearbox a'), await task(t, f, f.sub, 'Gearbox b')]
@@ -1359,7 +1373,7 @@ describe('the coverage of main Search', () => {
 
   it('reads nothing for a blank text or one of punctuation only', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await task(t, f, f.sub, 'Gearbox')
     for (const text of ['', '   ', '-- !! ...']) {
       const run = await searchRun(t, [f.user], { text })
@@ -1371,7 +1385,7 @@ describe('the coverage of main Search', () => {
 
   it('refuses a text past the search limit with its sentence', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const refusal = await expectRefusal(
       search(t, f.user, { text: 'x'.repeat(LIMITS.search.max + 1) }),
       'rule',
@@ -1384,7 +1398,7 @@ describe('the coverage of main Search', () => {
 describe('main Search at Convex’s limits', () => {
   it('answers a full page inside the limits among the 300 open tasks of a sub-project, and stops with reads among them under a lowered budget', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await withReach(t)
     // the open tasks of FW, half matching by title and half by description
     const notes = prose(400)
@@ -1422,7 +1436,7 @@ describe('main Search at Convex’s limits', () => {
 
   it('ends a page early, inside the limits, among rows near the document size limit', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await withReach(t)
     // rows over the caps, as older data can hold, near Convex's 1 MiB
     const huge = 'x'.repeat(900_000)
@@ -1582,7 +1596,7 @@ async function bothPaths(t: T, who: Doc<'profiles'>[], a: Args) {
 describe('the project results of main Search', () => {
   it('matches a project by the words of its own name only', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await task(t, f, f.sub, 'Calibrate the rig')
     await task(t, f, f.sub2, 'Gearbox teardown')
     const rev = await subOf(t, f, f.meta, { name: 'Rev 12 harness', key: 'REVH' })
@@ -1618,7 +1632,7 @@ describe('the project results of main Search', () => {
 
   it('names a sub-project’s top-level project and nothing else', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await withReach(t)
     for (const who of [f.user, f.admin]) {
       expect((await search(t, who, { text: 'firmware' })).rows).toEqual([
@@ -1644,7 +1658,7 @@ describe('the project results of main Search', () => {
 
   it('shows live projects only, with the archived toggle off or on', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await subOf(t, f, f.meta, { name: 'Gearbox shelf', archived_at: NOW })
     const shelved = await plantProject(t, {
       org_id: f.org.id,
@@ -1672,7 +1686,7 @@ describe('the project results of main Search', () => {
 
   it('shows each person the projects ordinary access lets them see', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sibling = await plantHiddenSibling(t, f, f.guest)
     const { sub: away } = await secondSeat(t, f)
     const member = await plantMember(t, f)
@@ -1706,13 +1720,12 @@ describe('the project results of main Search', () => {
     expect(await sees(user)).toEqual(
       Array(2).fill(sorted(f.meta, f.sub, f.sub2, sibling, f.hidden, f.otherProject, away)),
     )
-    // today an admin leads every project of a meta's tree (lib/access.ts
-    // levelUnder); the admin access split leaves out what they hold nothing on
+    // the admin sees what their grants on TBED and Skunkworks reach
     const adminSees = sorted(f.meta, f.sub, f.sub2, sibling, f.hidden)
     expect(await sees([f.admin])).toEqual([adminSees, adminSees])
   })
 
-  it('shows exactly the live projects canSeeProject shows, for every access shape, on both paths', async () => {
+  it('shows exactly the live projects canSeeProject shows, for every access shape and role, an admin included, on both paths', async () => {
     const extra: Shape[] = [
       [
         'user team share on an archived sub-project',
@@ -1736,12 +1749,14 @@ describe('the project results of main Search', () => {
     const missing = new Set<string>()
     for (const [name, plant] of [...SHAPES, ...extra]) {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
       await t.run((ctx) => plant(ctx, f, subject))
       await nameAll(t, 'zephyr')
       await withReach(t)
-      for (const org_role of ['user', 'viewer', 'guest'] as const) {
+      // an admin is searched by the root rows of their seat and teams like
+      // a member, so the same shapes show and the same miss past the bounds
+      for (const org_role of ['admin', 'user', 'viewer', 'guest'] as const) {
         const me = { ...subject, org_role }
         const expected = await t.run(async (ctx) => {
           const out: string[] = []
@@ -1812,14 +1827,14 @@ describe('the project results of main Search', () => {
         ...GRANT_LEVELS.map((level) => `${level} team share on a sub-project`),
         'user team share on an archived sub-project',
       ]
-        .flatMap((shape) => [`${shape} as user`, `${shape} as viewer`])
+        .flatMap((shape) => [`${shape} as admin`, `${shape} as user`, `${shape} as viewer`])
         .sort(),
     )
   })
 
   it('narrows project results as it narrows tasks', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sibling = await plantHiddenSibling(t, f, f.guest)
     const { sub: away } = await secondSeat(t, f)
     await nameAll(t, 'zephyr')
@@ -1859,7 +1874,7 @@ describe('the project results of main Search', () => {
 
   it('lets no hidden project name change a search of projects one by one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const rig = await subOf(t, f, f.meta, { name: 'Zephyr rig' })
     await task(t, f, f.sub, 'Zephyr teardown')
     await withReach(t)
@@ -1917,7 +1932,7 @@ describe('the project results of main Search', () => {
 
   it('judges a top-level project without walking its sub-projects', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const member = await plantMember(t, f)
     // under each top-level project the 30 live and 40 archived sub-projects
     // of one project at the design size, the granted one among the seen
@@ -1950,7 +1965,7 @@ describe('the project results of main Search', () => {
 
   it('counts a reach row only for a sub-project of the project it judges', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const member = await plantMember(t, f)
     await grant(t, f.sub, member)
     const hiddenTop = await plantProject(t, { org_id: f.org.id, name: 'Zephyr hidden' })
@@ -1996,7 +2011,7 @@ describe('the project results of main Search', () => {
 
   it('misses a parent whose first child rows all fail, never shows one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const member = await plantMember(t, f)
     await grant(t, f.sub, member)
     await withReach(t)
@@ -2029,26 +2044,39 @@ describe('the project results of main Search', () => {
     expect(projectIds(await found())).toEqual([f.meta.id])
   })
 
-  it("reads each of an admin's name candidates once", async () => {
+  it("reads each of an admin's name candidates once, beside their own root rows", async () => {
     const t = newT()
-    const f = await withOrg(t)
-    await plantProjects(t, f.org.id, 10, (i) => ({ type: 'meta', name: `Zephyr ${i}` }))
+    const f = await withReadingAdmin(t)
+    // the admin leads them, as admin status alone shows no project
+    await plantProjects(t, f.org.id, 10, (i) => ({
+      type: 'meta',
+      name: `Zephyr ${i}`,
+      lead_id: f.admin.id,
+    }))
     await withReach(t)
+    // the admin's seat searched whole, with a name query
+    MAIN_SEARCH.projects = 0
     const none = await searchRun(t, [f.admin], { text: 'quokka' })
     const ten = await searchRun(t, [f.admin], { text: 'zephyr' })
     expect(projectIds(ten.page)).toHaveLength(10)
     expect(ten.searches).toBe(none.searches)
     // one document each and no read of its row by id, which would add a
     // range and a document; convex-test counts no range for a search result,
-    // where Convex counts one
-    expect(ten.read.documents - none.read.documents).toBe(10)
-    expect(ten.read.ranges - none.read.ranges).toBe(0)
+    // where Convex counts one. Beside them the admin's sight reads, once,
+    // their own root rows (projectSight), as any member's does: their
+    // membership of Hardware, then the twelve root rows of their seat (the
+    // grants on TBED and Skunkworks and the ten projects they lead) and
+    // none of Hardware's, in three ranges
+    expect(ten.read.documents - none.read.documents).toBe(10 + 1 + 12)
+    expect(ten.read.ranges - none.read.ranges).toBe(3)
   })
 
   it('leaves the names of an organization without nav_at out of a search of it whole', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const torque = await task(t, f, f.sub, 'Firmware torque')
+    // the admin's seat searched whole
+    MAIN_SEARCH.projects = 0
     const unready = await searchRun(t, [f.admin], { text: 'firmware' })
     expect(unready.page.rows.map((row) => row.kind)).toEqual(['task'])
     expect(taskIds(unready.page)).toEqual([torque.id])
@@ -2056,13 +2084,15 @@ describe('the project results of main Search', () => {
     expect(unready.searches).toBe(2)
     // a seat searched project by project needs no readiness
     // the project's name equals the text and ranks first
+    MAIN_SEARCH.projects = DEFAULT_SEARCH.projects
     const guest = await searchRun(t, [f.guest], { text: 'firmware' })
     expect(ids(guest.page)).toEqual([f.sub.id, torque.id])
     expect(guest.page.coverage).toEqual(COMPLETE)
     await withReach(t)
+    MAIN_SEARCH.projects = 0
     const ready = await searchRun(t, [f.admin], { text: 'firmware' })
     expect(ids(ready.page)).toEqual([f.sub.id, torque.id])
-    expect(ready.page.coverage).toEqual(COMPLETE)
+    expect(ready.page.coverage).toEqual(stopped('projects'))
     expect(ready.searches).toBe(3)
     // and once nav_at is gone again, as no organization's is
     await stampNav(t, f.org.id, null)
@@ -2071,7 +2101,7 @@ describe('the project results of main Search', () => {
 
   it('ranks project and task matches together on one scale', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { sub: away } = await secondSeat(t, f)
     const rev = await subOf(t, f, f.meta, { name: 'Rev 12' })
     const reference = await task(t, f, f.sub, 'Planted', { num: 12 })
@@ -2109,7 +2139,7 @@ describe('the project results of main Search', () => {
   it('pages through tasks and projects together, each once, in the order of one large page', async () => {
     for (const admin of [false, true]) {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const who = admin ? f.admin : f.user
       for (const [i, name] of [
         'Gearbox',
@@ -2147,19 +2177,22 @@ describe('the project results of main Search', () => {
 
   it("reports the name source's stops", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plantProjects(t, f.org.id, 5, (i) => ({ parent_id: f.meta.id, name: `Zephyr ${i}` }))
     await withReach(t)
-    expect((await search(t, f.admin, { text: 'zephyr' })).coverage).toEqual(COMPLETE)
+    // the admin's seat searched whole, which says it may miss matches
+    // whatever its name source did, so its stops show in what it found
+    MAIN_SEARCH.projects = 0
+    const whole = await search(t, f.admin, { text: 'zephyr' })
+    expect(whole.coverage).toEqual(stopped('projects'))
+    expect(projectIds(whole)).toHaveLength(5)
     MAIN_SEARCH.names = 2
     const capped = await search(t, f.admin, { text: 'zephyr' })
-    expect(capped.coverage).toEqual(stopped('candidates'))
+    expect(capped.coverage).toEqual(stopped('projects'))
     expect(projectIds(capped)).toHaveLength(2)
     MAIN_SEARCH.names = DEFAULT_SEARCH.names
-    // a seat searched whole that does not see every project
-    MAIN_SEARCH.projects = 0
+    // the user's seat searched whole alike
     expect((await search(t, f.user, { text: 'zephyr' })).coverage).toEqual(stopped('projects'))
-    MAIN_SEARCH.projects = DEFAULT_SEARCH.projects
     // project rows near Convex's 1 MiB, more than the seat's whole
     // allowance holds, spend the names' quarter of it, and the seat's task
     // sources still read with the rest
@@ -2171,8 +2204,9 @@ describe('the project results of main Search', () => {
     await withReach(t)
     const titled = await task(t, f, f.sub, 'Zephyr')
     const large = await searchRun(t, [f.admin], { text: 'zephyr' })
-    expect(large.page.coverage).toEqual(stopped('reads'))
+    expect(large.page.coverage).toEqual(stopped('projects'))
     expect(projectIds(large.page).length).toBeGreaterThan(0)
+    expect(projectIds(large.page).length).toBeLessThan(17)
     expect(taskIds(large.page)).toEqual([titled.id])
     // a quarter of the seat's 8 MiB, passed by the one row that crosses it
     expect(large.read.bytes).toBeLessThan(4 << 20)
@@ -2224,27 +2258,34 @@ describe('the project results of main Search', () => {
 
   it("reads names only within what the seat's number lookups left of its allowance", async () => {
     const t = newT()
-    const f = await withOrg(t)
-    await plantProjects(t, f.org.id, 40, (i) => ({ type: 'meta', name: `Zephyr 901 902 ${i}` }))
+    const f = await withReadingAdmin(t)
+    // sub-projects of TBED, which the admin reads by a grant, so their
+    // sight reads two root rows and not one a project
+    await plantProjects(t, f.org.id, 40, (i) => ({
+      parent_id: f.meta.id,
+      name: `Zephyr 901 902 ${i}`,
+    }))
     await withReach(t)
     // an admin's seat, searched whole and planned with no read, gets the
     // whole allowance, and its two number lookups, which find no task,
     // count as LOOKUP each, leaving less than the names' quarter of it
+    MAIN_SEARCH.projects = 0
     MAIN_SEARCH.documents = 140
     const left = MAIN_SEARCH.documents - 2 * LOOKUP.documents
     expect(left).toBeLessThan(MAIN_SEARCH.documents / 4)
     const run = await searchRun(t, [f.admin], { text: 'QN-901 QN-902 zephyr' })
-    // the lookups read nothing and the top-level projects' rows need no
-    // other read, so every document read is one the seat had left
+    // the lookups read nothing, and the names and their checks read within
+    // what the seat had left
     expect(run.read.documents).toBeLessThanOrEqual(left)
     expect(projectIds(run.page).length).toBeGreaterThan(0)
     expect(projectIds(run.page).length).toBeLessThan(left)
-    expect(run.page.coverage).toEqual(stopped('reads'))
+    // a seat searched whole says it may miss matches, whatever stopped it
+    expect(run.page.coverage).toEqual(stopped('projects'))
   })
 
   it('keeps the task sources of a member past the root row bound', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const member = await plantMember(t, f)
     // five teams, the first sharing a top-level project with 30
     // sub-projects, and a grant on TBED, more projects than a lowered
@@ -2298,7 +2339,7 @@ describe('the project results of main Search', () => {
 
   it('runs one name query for each ready seat searched whole and none for one searched project by project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const { sub } = await secondSeat(t, f)
     await task(t, f, f.sub, 'Gearbox teardown')
     await plantIssue(t, { org_id: f.otherOrg.id, project_id: sub.id, title: 'Gearbox rebuilds' })
@@ -2321,7 +2362,7 @@ describe('the project results of main Search', () => {
 describe('project results at Convex’s limits', () => {
   it('answers inside the limits among 598 projects named the text, some near 1 MiB', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const member = await plantMember(t, f)
     // 100 top-level projects and 498 sub-projects, about five under each,
     // which with withOrg's FW and PCB make the 500 of the design size
@@ -2372,17 +2413,14 @@ describe('project results at Convex’s limits', () => {
       expect(run.read.bytes).toBeLessThan(16 << 20)
       expect(run.read.documents).toBeLessThan(32_000)
       expect(run.read.ranges).toBeLessThan(4_096)
-      if (who === f.admin)
-        expect(['reads', 'candidates']).toContain(
-          (run.page.coverage as { stopped: string }).stopped,
-        )
-      else expect(run.page.coverage).toEqual(stopped('projects'))
+      // both seats searched whole, an admin's as a member's
+      expect(run.page.coverage).toEqual(stopped('projects'))
     }
   })
 
   it('searches a guest, a wide member and an admin of a few hundred projects within the limits', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a guest with one sub-project
     const guest = await plantLogin(
       t,
@@ -2417,11 +2455,12 @@ describe('project results at Convex’s limits', () => {
       await task(t, f, f.sub, `Zephyr task ${i}`, { description: 'zephyr notes' })
     await withReach(t)
     // the guest is searched project by project, with no name query; the
-    // member and the admin are searched whole, each with one
+    // member and the admin, who are in the team, are searched whole, each
+    // with one, and say they may miss matches
     for (const [who, searches, coverage] of [
       [guest, 2, COMPLETE],
       [member, 3, stopped('projects')],
-      [f.admin, 3, stopped('candidates')],
+      [f.admin, 3, stopped('projects')],
     ] as const) {
       const run = await searchRun(t, [who], { text: 'zephyr' })
       expect(run.searches).toBe(searches)
@@ -2435,7 +2474,7 @@ describe('project results at Convex’s limits', () => {
 describe('the search_title index', () => {
   it('filters by organization, project and archived state', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const plant = (project_id: string, archived_at?: string, org_id = f.org.id) =>
       plantIssue(t, { org_id, project_id, archived_at, title: 'Calibrate the torque sensor' }).then(
         (row) => row.id,
@@ -2472,7 +2511,7 @@ describe('the search_title index', () => {
 describe('the search_name index', () => {
   it('filters by organization and archive state', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const plant = (org_id: string, archive_state?: 'live' | 'listed') =>
       plantProject(t, { org_id, name: 'Torque bench', archive_state }).then((p) => p.id)
     const live = await plant(f.org.id, 'live')
@@ -2504,7 +2543,7 @@ describe('the search_name index', () => {
 describe('a check of the caller access that a bound stops', () => {
   it('reports coverage reads where a project-by-project seat was exact, keeps a whole seat incomplete, and one bound up answers as with the default bounds', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a member of a team sharing FW, with a task there
     const member = await plantMember(t, f)
     await t.run(async (ctx) => {
@@ -2545,7 +2584,7 @@ describe('a check of the caller access that a bound stops', () => {
 
   it('reports coverage reads where a later row of the page meets a check a bound stops', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const member = await plantMember(t, f)
     await t.run(async (ctx) => {
       await ctx.db.insert('team_members', {
@@ -2593,7 +2632,7 @@ describe('a check of the caller access that a bound stops', () => {
   it("checks a person's results in as many teams as searchReads reads, searched whole, and leaves out what it cannot check past them", async () => {
     for (const many of [4, 5]) {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const member = await plantMember(t, f)
       await t.run(async (ctx) => {
         for (let i = 0; i < many; i++) {

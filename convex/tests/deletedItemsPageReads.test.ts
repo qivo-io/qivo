@@ -24,7 +24,7 @@ import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { LIMITS } from '../lib/limits'
 import { DELETED_PAGE, type PageArgs, type PageSpend, pageFor } from '../model/deletedItemsPage'
-import { as, NOW, newT, type OrgFixture, type T, uuid, withOrg } from './helpers.setup'
+import { as, NOW, newT, type OrgFixture, type T, uuid, withReadingAdmin } from './helpers.setup'
 import { installTrashTimers, START } from './trash.setup'
 
 installTrashTimers()
@@ -303,9 +303,9 @@ async function catalogue(
 }
 
 describe('the page at the design size', () => {
-  it('reads a project item of 30 live and 40 archived sub-projects and 800 open tasks, for an admin and for its lead', async () => {
+  it('reads a project item of 30 live and 40 archived sub-projects and 800 open tasks, for an admin who reads none of it and for its lead', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const lead = (await t.run((ctx) => ctx.db.get(f.user._id))) as Profile
     const root = projectRow(f, { type: 'meta', lead_id: lead.id })
     const subs = [
@@ -319,19 +319,21 @@ describe('the page at the design size', () => {
     const browse = await readPage(t, f.admin, { scope })
     record('a project item of 70 sub-projects and 800 tasks, an admin browsing', browse.figures)
     expect(browse.figures.entries).toBe(1)
+    // the admin reads none of its tasks, as admin status gives no level, so
+    // their search through its stored rows finds none
     const admin = await readPage(t, f.admin, { scope, search: 'calibrate' })
-    record('the same, an admin searching a word every task holds', admin.figures)
-    expect(admin.figures).toMatchObject({ entries: 25, next: true, missing: 'matches' })
-    const second = await readPage(t, f.admin, {
+    record('the same, an admin who reads none of it searching', admin.figures)
+    expect(admin.figures).toMatchObject({ entries: 0, missing: 'matches' })
+    const led = await readPage(t, lead, { scope, search: 'calibrate' })
+    record('the same, its lead searching a word every task holds', led.figures)
+    expect(led.figures).toMatchObject({ entries: 25, next: true, missing: 'matches' })
+    const second = await readPage(t, lead, {
       scope,
       search: 'calibrate',
-      cursor: admin.page.next_cursor ?? '',
+      cursor: led.page.next_cursor ?? '',
     })
     record('the same, its second page', second.figures)
     expect(second.figures.entries).toBe(25)
-    const led = await readPage(t, lead, { scope, search: 'calibrate' })
-    record('the same, its lead searching', led.figures)
-    expect(led.figures).toMatchObject({ entries: 25, next: true, missing: 'matches' })
     const leadBrowse = await readPage(t, lead, { scope })
     record('the same, its lead browsing', leadBrowse.figures)
     expect(leadBrowse.figures.entries).toBe(1)
@@ -339,7 +341,7 @@ describe('the page at the design size', () => {
 
   it("reads a sub-project item of 300 open tasks, browsing, searching and an admin's assignee filter", async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const sam = (await t.run((ctx) => ctx.db.get(f.viewer._id))) as Profile
     const root = projectRow(f, { type: 'project', parent_id: f.meta.id })
     await plantProjectItem(t, f, {
@@ -369,7 +371,7 @@ describe('the page at the design size', () => {
 
   it('reads for a lead of 234 top-level projects with 200 live and 500 archived sub-projects, three a project, with a task item in each live one', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const lead = await member(t, f)
     const { tops, live, subs } = await catalogue(t, f, {
       count: 234,
@@ -400,7 +402,7 @@ describe('the page at the design size', () => {
 
   it('reads for a member who leads 200 live and 500 archived sub-projects one by one, three a project, with an assigned task item in each live one', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const lead = await member(t, f)
     // the same catalogue, each top-level project led by the admin and each
     // sub-project by the member, so each sub-project is a range of its own
@@ -446,7 +448,7 @@ describe('the page at the design size', () => {
 
   it('reads for a person in 5 teams that share 20 sub-projects each, with 30 of their own deletes', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await member(t, f)
     const subs: ProjectRow[] = []
     const rows: ProjectRow[] = []
@@ -492,7 +494,7 @@ describe('the page at the design size', () => {
 
   it('reads for a person in a team that shares 50 live and 150 archived projects, three a project', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await member(t, f)
     // the shared sub-projects three a top-level project in their own state,
     // two under the last live one: 17 live and 50 archived top-level
@@ -539,7 +541,7 @@ describe('the page at the design size', () => {
 
   it('reads beside the catalogue of 2,000 projects, live and archived, with one item', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const rows: ProjectRow[] = []
     // with withOrg's two top-level projects and two sub-projects
     const live = Array.from({ length: 198 }, () => projectRow(f, { type: 'meta' }))
@@ -571,7 +573,7 @@ describe('the page at the design size', () => {
 
   it('reads beside 1,000 people with one item', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (let from = 0; from < 995; from += 500)
       await t.run(async (ctx) => {
         for (let i = from; i < Math.min(995, from + 500); i++)
@@ -655,7 +657,7 @@ describe('the largest task family', () => {
     // each task's text goes into its stored copy and into its search text
     // (deleted_tasks.search_text), so the delete writes it twice
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const ids = await plantFamily(t, f, DESCRIPTION)
     await deleteFamily(t, f, ids)
     const rows = await t.run((ctx) => ctx.db.query('deleted_tasks').collect())
@@ -667,7 +669,7 @@ describe('the largest task family', () => {
     // other writes pass
     const copies = 2 * ids.reduce((n, _, i) => n + title(i).length + DESCRIPTION.length, 0)
     const lowered = newT({ transactionLimits: { bytesWritten: copies } })
-    const g = await withOrg(lowered)
+    const g = await withReadingAdmin(lowered)
     const kept = await plantFamily(lowered, g, DESCRIPTION, 10)
     await expect(deleteFamily(lowered, g, kept)).rejects.toThrow(/too much data/)
     const after = await lowered.run(async (ctx) => ({

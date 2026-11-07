@@ -28,7 +28,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { plantNorthstar } from './northstar.setup'
 
@@ -368,7 +368,7 @@ async function plantWorld(t: T, f: OrgFixture) {
 describe('parity with the tasks part', () => {
   it('answers what the tasks part says of every task, for guest, viewer, member, admin and FW-only seats', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const w = await plantWorld(t, f)
     // a seat with User on FW alone, which sees TBED only to reach it
     const fwOnly = await plantSeat(t, {
@@ -427,7 +427,7 @@ describe('parity with the tasks part', () => {
 
   it('tells a hidden subtask by has_hidden_subtasks, and a subtask in an archived project not at all', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const w = await plantWorld(t, f)
     const ask = (person: Doc<'profiles'>) =>
       as(t, person).query(api.taskWindow.task, { org_id: f.org.id, ref: w.parent.id })
@@ -454,7 +454,7 @@ describe('parity with the tasks part', () => {
 describe('refusals', () => {
   it('answers one unavailable for every task the caller may not open', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const w = await plantWorld(t, f)
     const foreign = await plantIssue(t, {
       org_id: f.otherOrg.id,
@@ -477,12 +477,19 @@ describe('refusals', () => {
     for (const task of [deleted, deletedArchived])
       await as(t, f.admin).mutation(api.issues.deleteDeep, { org_id: f.org.id, id: task.id })
     // the admin's login also holds a seat in the other organization, where
-    // this task is archived
-    await plantSeat(t, {
+    // this task is archived, and a grant there on its project
+    const otherSeat = await plantSeat(t, {
       org_id: f.otherOrg.id,
       org_role: 'admin',
       auth_user_id: f.admin.auth_user_id,
     })
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: f.otherProject.id,
+        profile_id: otherSeat.id,
+        level: 'user',
+      }),
+    )
     const foreignArchived = await plantIssue(t, {
       org_id: f.otherOrg.id,
       project_id: f.otherProject.id,
@@ -521,7 +528,7 @@ describe('refusals', () => {
 
   it('answers unavailable, not an error, for a task in a project whose tree is broken', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a sub-project whose parent row is gone, and two that are each other's parent
     const orphaned = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: uuid() })
     const a = await plantProject(t, { org_id: f.org.id, type: 'project' })
@@ -539,7 +546,7 @@ describe('refusals', () => {
 
   it('resolves a number both organizations hold to the pinned organization only', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the other organization's task is stored first, so a lookup by number
     // without the organization would find it
     await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id, num: 7777 })
@@ -552,7 +559,7 @@ describe('refusals', () => {
 
   it('answers archived with the Archived tasks row of an archived task the caller sees', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const w = await plantWorld(t, f)
     const page = await as(t, f.guest).query(api.issues.archivedPage, {
       scope: { org_id: f.org.id, project_ids: [f.sub.id] },
@@ -577,7 +584,7 @@ describe('refusals', () => {
 
   it("answers an archived task's text, labels and the caller's level, so the window shows it read-only", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -597,7 +604,8 @@ describe('refusals', () => {
     // the text is in its description row alone, as the third release left it
     expect(task.description).toBeUndefined()
     for (const [who, level] of [
-      [f.admin, 'lead'],
+      [f.user, 'lead'],
+      [f.admin, 'user'],
       [f.guest, 'user'],
       [f.viewer, 'viewer'],
     ] as const) {
@@ -639,7 +647,7 @@ describe('refusals', () => {
 
   it('answers an archived task in an archived project as archived', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub2.id,
@@ -656,7 +664,7 @@ describe('refusals', () => {
 describe('refs', () => {
   it('resolves QN-12, 12 and an uppercase uuid to the same task, and nothing else', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, num: 12 })
     const ask = (ref: string) =>
       as(t, f.guest).query(api.taskWindow.task, { org_id: f.org.id, ref })
@@ -670,7 +678,7 @@ describe('refs', () => {
 describe('what a read reveals', () => {
   it('leaves out every link whose other end the caller is not shown, with both ids', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const w = await plantWorld(t, f)
     const answer = await as(t, f.guest).query(api.taskWindow.links, {
       org_id: f.org.id,
@@ -706,7 +714,7 @@ describe('what a read reveals', () => {
 
   it('names a parent only when the caller is shown it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const w = await plantWorld(t, f)
     const guest = await as(t, f.guest).query(api.taskWindow.task, {
       org_id: f.org.id,
@@ -724,13 +732,13 @@ describe('what a read reveals', () => {
     expect(admin).toMatchObject({
       state: 'ok',
       task: { parent_id: w.hiddenParent.id, has_hidden_parent: false },
-      parent: { id: w.hiddenParent.id, has_subtasks: true, level: 'lead' },
+      parent: { id: w.hiddenParent.id, has_subtasks: true, level: 'user' },
     })
   })
 
   it('tells a subtask stored as a group before the rule of one level', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const w = await plantWorld(t, f)
     const answer = await as(t, f.guest).query(api.taskWindow.task, {
       org_id: f.org.id,
@@ -746,7 +754,7 @@ describe('what a read reveals', () => {
 describe('the text', () => {
   it('comes from the description row, and from the task row only for a task without one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const task = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -782,7 +790,7 @@ describe('the text', () => {
 describe('attachments', () => {
   it('lists files and description images, those taken out within the day too, and counts the rest', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const w = await plantWorld(t, f)
     const answer = await as(t, f.guest).query(api.taskWindow.attachments, {
       org_id: f.org.id,
@@ -806,7 +814,7 @@ describe('attachments', () => {
 
   it('stops at TASK_WINDOW.attachments rows and says so', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const w = await plantWorld(t, f)
     TASK_WINDOW.attachments = 2
     const answer = await as(t, f.guest).query(api.taskWindow.attachments, {
@@ -950,7 +958,7 @@ const readableProjects = (t: T, f: OrgFixture, n: number) =>
 describe('real limits', () => {
   it('reads an archived task at the description cap with its labels within TASK_WINDOW', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [task] = await plantMany(t, f, 1, () => ({ description: LARGEST, archived_at: NOW }), {
       each: 1,
       rows: true,
@@ -976,7 +984,7 @@ describe('real limits', () => {
 
   it('reads 100 subtasks, the most a task holds, complete and within TASK_WINDOW.bytes', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [grandparent] = await plantMany(t, f, 1, ordinary, { each: 1, rows: true })
     const [task] = await plantMany(
       t,
@@ -1001,7 +1009,7 @@ describe('real limits', () => {
 
   it('reads 100 links to leaves, the most a task holds, complete and within TASK_WINDOW.linkBytes', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [task] = await plantMany(t, f, 1, ordinary, { each: 1, rows: true })
     const leaves = await plantMany(t, f, LIMITS.links.max, ordinary, { each: 100, rows: true })
     await linkAll(t, f, task, leaves)
@@ -1015,7 +1023,7 @@ describe('real limits', () => {
 
   it('reads 100 links to groups, each with a subtask, complete and within TASK_WINDOW.linkBytes', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [task] = await plantMany(t, f, 1, ordinary, { each: 1, rows: true })
     const groups = await plantMany(t, f, LIMITS.links.max, ordinary, { each: 100, rows: true })
     await plantMany(t, f, groups.length, (i) => ({ ...ordinary(i), parent_id: groups[i].id }), {
@@ -1033,7 +1041,7 @@ describe('real limits', () => {
 
   it('reads 100 links to groups whose subtasks are each in a sub-project of their own, complete and within TASK_WINDOW.linkBytes', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const projects = await readableProjects(t, f, LIMITS.links.max)
     const [task] = await plantMany(t, f, 1, ordinary, { each: 1, rows: true })
     const groups = await plantMany(t, f, projects.length, ordinary, { each: 100, rows: true })
@@ -1055,7 +1063,7 @@ describe('real limits', () => {
 
   it('reads 100 subtasks, each in a sub-project of their own, complete and within TASK_WINDOW.bytes', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const projects = await readableProjects(t, f, LIMITS.subtasks.max)
     const [task] = await plantMany(t, f, 1, ordinary, { each: 1, rows: true })
     await plantMany(
@@ -1075,7 +1083,7 @@ describe('real limits', () => {
 
   it("reads at most OWN_READS.projectShares and one more of the team shares on each link end's sub-project", async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // three sub-projects of TBED, which the viewer sees through its grant
     // there, each shared with five teams of its own, the viewer a member of
     // the first team of each. Before lib/access.ts OWN_READS bounded them,
@@ -1152,7 +1160,7 @@ describe('real limits', () => {
 
   it('stops at older link ends near 900 KB with complete false, the links read, and no error', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [task] = await plantMany(t, f, 1, () => ({}), { each: 1, rows: true })
     const legacy = 'o'.repeat(900 * 1024)
     const ends = await plantMany(t, f, 5, () => ({ description: legacy }), {
@@ -1174,7 +1182,7 @@ describe('real limits', () => {
 
   it('answers n subtasks and n links complete at TASK_WINDOW.rows = n, and n + 1 incomplete', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     TASK_WINDOW.rows = 3
     const [task] = await plantMany(t, f, 1, () => ({}), { each: 1, rows: true })
     const kids = await plantMany(t, f, 3, () => ({ parent_id: task.id }), { each: 4, rows: true })
@@ -1202,7 +1210,7 @@ describe('real limits', () => {
 
   it('leaves out a link end whose group fact the budget leaves unread, and says so', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [task] = await plantMany(t, f, 1, () => ({}), { each: 1, rows: true })
     const groups = await plantMany(t, f, 3, () => ({}), { each: 3, rows: true })
     // each group's subtask is an older row near 900 KB, so the first two
@@ -1231,7 +1239,7 @@ describe('real limits', () => {
     // under that parent, about 150, which the window's own check stays far
     // inside
     const t = newT({ transactionLimits: { databaseQueries: 100 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the viewer sees this top-level project only for navigation, through a
     // grant on its last sub-project; canSeeProject's walk would ask the
     // viewer's grant and team shares on each sub-project first, two ranges
@@ -1272,7 +1280,7 @@ describe('real limits', () => {
 
   it('stops the group checks of an end whose subtasks are in 40 archived sub-projects before the index ranges run out', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [task, end] = await plantMany(t, f, 2, () => ({}), { each: 2, rows: true })
     await linkAll(t, f, task, [end])
     // each subtask in an archived sub-project of its own, the most one
@@ -1328,7 +1336,7 @@ describe('real limits', () => {
 
   it('answers complete for exactly the subtasks the budget holds, and incomplete for one more', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [task] = await plantMany(t, f, 1, () => ({}), { each: 1, rows: true })
     const legacy = 'o'.repeat(900 * 1024)
     await plantMany(t, f, 3, () => ({ description: legacy, parent_id: task.id }), {
@@ -1357,7 +1365,7 @@ describe('real limits', () => {
 
   it('stops the subtask read at TASK_WINDOW.documents', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const [task] = await plantMany(t, f, 1, () => ({}), { each: 1, rows: true })
     await plantMany(t, f, 100, () => ({ parent_id: task.id }), { each: 50, rows: true })
     TASK_WINDOW.documents = 60
@@ -1379,7 +1387,7 @@ describe('a check of the caller access that a bound stops', () => {
 
   it('answers unavailable for the task or its parent, ends a subtask or link list there as incomplete, and one bound up answers as with the default bounds', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a user grant on FW, which no team shares, and a team that shares PCB
     const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
     await t.run(async (ctx) => {

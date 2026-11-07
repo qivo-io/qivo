@@ -13,7 +13,7 @@ import { compareValues } from 'convex/values'
 import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { ACCESS_UNCHECKED, accessOf, OWN_READS, ordinaryOf, projectLevel } from '../lib/access'
+import { ACCESS_UNCHECKED, accessOf, OWN_READS, projectLevel } from '../lib/access'
 import { newWindowKey } from '../lib/db'
 import { LIST_BATCH } from '../lib/limits'
 import {
@@ -160,7 +160,9 @@ async function compareShape(
   const t = newT()
   const f = await withOrg(t)
   const subject =
-    role === 'admin' ? f.admin : await person(t, f.org.id, 'Subject', { org_role: role })
+    role === 'admin' && shape === null
+      ? f.admin
+      : await person(t, f.org.id, 'Subject', { org_role: role })
   if (shape !== null) await t.run((ctx) => shape[1](ctx, f, subject))
   await ready(t, f)
   await plantStar(t, subject, await now(t, f.meta.id))
@@ -205,7 +207,7 @@ async function compareShape(
 }
 
 describe('access', () => {
-  for (const role of ['user', 'guest', 'viewer'] as const)
+  for (const role of ['user', 'guest', 'viewer', 'admin'] as const)
     it(`answers by the rule for a ${role} in every access shape`, async () => {
       let showing = 0
       for (const shape of SHAPES) if ((await compareShape(shape, role)) > 0) showing++
@@ -213,12 +215,12 @@ describe('access', () => {
       expect(showing).toBeGreaterThan(SHAPES.length / 3)
     })
 
-  it('lists and resolves nothing for an admin without grants, whom the admin rule gives every project', async () => {
+  it('lists and resolves nothing for an admin without grants, whose levels hold nothing either', async () => {
     expect(await compareShape(null, 'admin')).toBe(0)
     const t = newT()
     const f = await withOrg(t)
     await ready(t, f)
-    expect(await t.run((ctx) => projectLevel(ctx, f.admin, f.meta))).toBe('lead')
+    expect(await t.run((ctx) => projectLevel(ctx, f.admin, f.meta))).toBeNull()
     expect(ok(await page(t, [f.admin])).rows).toEqual([])
     expect(await kids(t, [f.admin], f.meta.id)).toEqual({ state: 'unavailable' })
     expect(await resolved(t, [f.admin], { project_id: f.sub.id })).toEqual({ state: 'unavailable' })
@@ -253,7 +255,7 @@ describe('access', () => {
     await t.run((ctx) => ctx.db.patch(f.sub._id, { archived_at: NOW }))
     await ready(t, f)
     await plantStar(t, pia, f.meta)
-    expect(await t.run((ctx) => accessOf(ctx, ordinaryOf(pia)).visible(f.meta.id))).toBe(true)
+    expect(await t.run((ctx) => accessOf(ctx, pia).visible(f.meta.id))).toBe(true)
     expect(ok(await page(t, [pia])).rows).toEqual([])
     expect(await kids(t, [pia], f.meta.id)).toEqual({ state: 'unavailable' })
     expect(await resolved(t, [pia], { project_id: f.meta.id })).toEqual({ state: 'unavailable' })
@@ -353,7 +355,7 @@ describe('projects a person cannot open', () => {
       const low = await read()
       Object.assign(NAMED_READ, DEFAULT_READ)
       const standIn = await measured(t, async (ctx) => {
-        const access = accessOf(ctx, ordinaryOf(pia))
+        const access = accessOf(ctx, pia)
         return await readBatch(ctx, {
           stream: indexAfter(subProjectIndex(ctx, parent), null),
           keep: async (p: Doc<'projects'>) => ((await access.visible(p.id)) ? p.name : null),
@@ -406,7 +408,7 @@ describe('projects a person cannot open', () => {
       Object.assign(NAMED_READ, { ranges: short ?? whole.read.ranges - 6 })
       const low = await read()
       Object.assign(NAMED_READ, DEFAULT_READ)
-      const check = await measured(t, (ctx) => accessOf(ctx, ordinaryOf(pia)).visible(lost.id))
+      const check = await measured(t, (ctx) => accessOf(ctx, pia).visible(lost.id))
       const shape = (answer: typeof whole) => {
         const batch = ok(answer.out)
         return {

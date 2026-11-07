@@ -48,6 +48,8 @@ export function plannerFixture(): Snapshot {
         type: 'project',
         key: 'TEST',
         num: 1,
+        // the profile leads it, so they work on it whatever their role
+        lead_id: profile,
         name: 'Task creation fixture',
         description: '',
         sort_order: 0,

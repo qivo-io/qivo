@@ -31,7 +31,7 @@ import {
   plantProject,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { NORTHSTAR_ANCHOR, plantNorthstar } from './northstar.setup'
 import { deleteProject, installTrashTimers, itemFor, runSteps } from './trash.setup'
@@ -130,7 +130,7 @@ describe('one milestone a week in the app', () => {
     'refuses a second milestone in a week that starts on weekday %i, and allows the weeks around it',
     async (start) => {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       await t.run((ctx) => ctx.db.patch(f.org._id, { week_start: start }))
       const org = await orgOf(t, f)
       const first = firstOn('2026-06-01', start)
@@ -152,7 +152,7 @@ describe('one milestone a week in the app', () => {
 
   it('lets different top-level projects each have a milestone in one week', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await add(t, f, f.user, f.meta.id, 'Platform beta', '2026-06-01')
     await add(t, f, f.user, f.hidden.id, 'Skunkworks demo', '2026-06-03')
     expect(await milestonesOf(t, f.meta.id)).toHaveLength(1)
@@ -161,7 +161,7 @@ describe('one milestone a week in the app', () => {
 
   it('counts a milestone named on a sub-project against its top-level project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org = await orgOf(t, f)
     await add(t, f, f.user, f.sub.id, 'Firmware frozen', '2026-06-02')
     expect((await milestonesOf(t, f.meta.id)).map((m) => m.name)).toEqual(['Firmware frozen'])
@@ -174,7 +174,7 @@ describe('one milestone a week in the app', () => {
 
   it('refuses a move into an occupied week and keeps both milestones as they were', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org = await orgOf(t, f)
     await add(t, f, f.user, f.meta.id, 'Alpha', '2026-06-01')
     const beta = await add(t, f, f.user, f.meta.id, 'Beta', '2026-06-08')
@@ -199,7 +199,7 @@ describe('one milestone a week in the app', () => {
 
   it('allows a move within its own week, a rename and a delete', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await add(t, f, f.user, f.meta.id, 'Alpha', '2026-06-01')
     const beta = await add(t, f, f.user, f.meta.id, 'Beta', '2026-06-08')
     const update = (patch: { name?: string; week?: string }) =>
@@ -216,7 +216,7 @@ describe('one milestone a week in the app', () => {
 
   it('makes no exception for two milestones stored in one week before the rule', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org = await orgOf(t, f)
     const first = await plant(t, f.meta.id, '2026-06-01', 'Old one')
     const second = await plant(t, f.meta.id, '2026-06-03', 'Old two')
@@ -251,7 +251,7 @@ describe('one milestone a week in the app', () => {
 
   it('counts a stored day that does not exist in the week the app shows it in', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org = await orgOf(t, f)
     // 2026-02-31 is shown on Tuesday 3 March; text order puts it in February
     await plant(t, f.meta.id, '2026-02-31', 'Impossible')
@@ -287,7 +287,7 @@ describe('Roadmap saves and undo', () => {
 
   it('accepts a save that swaps the weeks of two milestones', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const alpha = await add(t, f, f.user, f.meta.id, 'Alpha', '2026-06-01')
     const beta = await add(t, f, f.user, f.meta.id, 'Beta', '2026-06-08')
     await as(t, f.user).mutation(api.roadmap.change, {
@@ -302,7 +302,7 @@ describe('Roadmap saves and undo', () => {
 
   it('refuses a whole save that leaves two milestones in one week', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org = await orgOf(t, f)
     const session_id = uuid()
     const [a, b] = [uuid(), uuid()]
@@ -334,7 +334,7 @@ describe('Roadmap saves and undo', () => {
 
   it('refuses an undo into a week another milestone took since as an edit made elsewhere', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org = await orgOf(t, f)
     const user = as(t, f.user)
     const session_id = uuid()
@@ -355,7 +355,7 @@ describe('Roadmap saves and undo', () => {
 
   it('does not lead round in a circle when the week is freed on the Roadmap', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org = await orgOf(t, f)
     const user = as(t, f.user)
     const session_id = uuid()
@@ -388,7 +388,7 @@ describe('Roadmap saves and undo', () => {
 
   it('checks an undo of the whole visit where it ends', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const user = as(t, f.user)
     const session_id = uuid()
     const alpha = uuid()
@@ -409,7 +409,7 @@ describe('Roadmap saves and undo', () => {
 
   it('refuses an undo of a delete into a week another milestone took since', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org = await orgOf(t, f)
     const user = as(t, f.user)
     const session_id = uuid()
@@ -466,7 +466,7 @@ async function rest(t: T, token: string, method: string, path: string, body: unk
 describe('one milestone a week over REST and MCP', () => {
   it('answers a REST create or move into an occupied week with a 400 and the sentence', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org = await orgOf(t, f)
     const token = await restToken(t, f)
     const first = await rest(t, token, 'POST', '/v1/projects/FW/milestones', {
@@ -499,7 +499,7 @@ describe('one milestone a week over REST and MCP', () => {
 
   it('refuses an MCP set_milestone into an occupied week', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org = await orgOf(t, f)
     const set = (a: { milestone?: string; name?: string; date?: string }) =>
       t.mutation(internal.machine.projects.mcpSetMilestone, {
@@ -528,7 +528,7 @@ const under = (org: Doc<'organizations'>, week_start: number) => ({ ...org, week
 describe('changing the first day of the week', () => {
   it('refuses a start that puts two milestones of one project in one week, naming them', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org = await orgOf(t, f)
     // a Sunday and the Monday after it are two weeks while weeks start on Monday
     await add(t, f, f.user, f.meta.id, 'Alpha', '2026-05-10')
@@ -539,7 +539,7 @@ describe('changing the first day of the week', () => {
       'workdays cannot start on Sunday, because a project can have at most 1 milestone a week, ' +
         'and then Testbed platform (TBED) would have “Alpha” on 2026-05-10 and “Beta” on ' +
         `2026-05-11 in ${weekPhrase('2026-05-10', under(org, 0))}. ` +
-        'Move or delete milestones so that no project has two in one week, then change the first day again.',
+        "Move or delete milestones so that no project has two in one week, or ask the project's lead to, then change the first day again.",
     )
     // every start but Monday puts them together
     for (const start of [2, 3, 4, 5, 6])
@@ -558,7 +558,7 @@ describe('changing the first day of the week', () => {
 
   it('accepts every start when no two milestones of a project are within a week', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (const week of ['2026-05-11', '2026-05-18', '2026-05-25'])
       await add(t, f, f.user, f.meta.id, `Gate ${week}`, week)
     // different projects may share any week
@@ -571,12 +571,13 @@ describe('changing the first day of the week', () => {
 
   it('checks archived projects and leaves the week numbering rule unchecked', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const archived = await plantProject(t, {
       org_id: f.org.id,
       key: 'OLD',
       name: 'Old line',
-      lead_id: f.user.id,
+      // the admin, who changes the week start, leads it and reads its names
+      lead_id: f.admin.id,
       archived_at: '2026-02-01T00:00:00.000Z',
     })
     await plant(t, archived.id, '2026-03-01', 'Old Sunday')
@@ -595,7 +596,7 @@ describe('changing the first day of the week', () => {
 
   it('names five weeks and counts the rest', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     for (let i = 0; i < 7; i++) {
       const p = await plantProject(t, { org_id: f.org.id, key: `CL${i}`, name: `Clash ${i}` })
       const sunday = plus('2026-05-10', 7 * i)
@@ -611,7 +612,7 @@ describe('changing the first day of the week', () => {
   it('refuses as unchecked when it runs out of room, and names what it found before', async () => {
     // half of 200 documents is the check's room
     const t = newT({ transactionLimits: { documentsRead: 200 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org = await orgOf(t, f)
     for (let i = 0; i < 120; i++)
       await plantProject(t, { org_id: f.org.id, key: `P${i}`, name: `Project ${i}` })
@@ -642,7 +643,7 @@ describe('changing the first day of the week with projects in Deleted items', ()
 
   it('checks a deleted project while it moves and once it is stored, but not a stuck one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await add(t, f, f.user, f.meta.id, 'Alpha', '2026-05-10')
     await add(t, f, f.user, f.meta.id, 'Beta', '2026-05-11')
     // the delete itself moves at most one row, so one milestone stays live
@@ -667,7 +668,7 @@ describe('changing the first day of the week with projects in Deleted items', ()
 
   it('reads a project a restore has revealed once, as a live one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await add(t, f, f.user, f.meta.id, 'Alpha', '2026-05-10')
     await add(t, f, f.user, f.meta.id, 'Beta', '2026-05-11')
     await deleteProject(t, f, f.meta.id)
@@ -676,13 +677,16 @@ describe('changing the first day of the week with projects in Deleted items', ()
     const e = await expectRefusal(setWeekStart(t, f, 0), 'rule')
     const message = (e.data as Refusal).message
     expect(message.match(/would have/g)).toHaveLength(1)
-    expect(message).toContain('Testbed platform (TBED) would have “Alpha”')
+    // the admin reads TBED only through a grant the item still holds, so
+    // its milestones show by date alone
+    expect(message).toContain('Testbed platform (TBED) would have milestones on')
+    expect(message).not.toMatch(/Alpha|Beta/)
     expect(message).not.toContain('Deleted items')
   })
 
   it('names the step that works for an archived project and a deleted one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const archived = await plantProject(t, {
       org_id: f.org.id,
       key: 'OLD',
@@ -733,7 +737,7 @@ describe('the activation audit', () => {
 
   it('reports duplicate weeks, impossible days, sub-project rows and orphans, and writes nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 2026-02-31 is shown on Tuesday 3 March, in the week of Monday 2 March
     const monday = await plant(t, f.meta.id, '2026-03-02')
     const impossible = await plant(t, f.meta.id, '2026-02-31')
@@ -816,7 +820,7 @@ describe('the activation audit', () => {
 
   it('reports the copies of a deleted project, and leaves a stuck one out', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const a = await plant(t, f.meta.id, '2026-05-10')
     const b = await plant(t, f.meta.id, '2026-05-04')
     const onSub = await plant(t, f.sub2.id, '2026-05-04')
@@ -854,7 +858,7 @@ describe('the activation audit', () => {
 
   it('counts each row of a project that is moving to Deleted items once', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plant(t, f.meta.id, '2026-05-04')
     await plant(t, f.meta.id, '2026-05-06')
     Object.assign(TRASH_BUDGET, { rows: 1 })
@@ -869,7 +873,7 @@ describe('the activation audit', () => {
 
   it('leaves a project a restore has revealed to the live phase', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plant(t, f.meta.id, '2026-05-04')
     await plant(t, f.meta.id, '2026-05-06')
     await deleteProject(t, f, f.meta.id)
@@ -885,7 +889,7 @@ describe('the activation audit', () => {
 
   it('pages the deleted phase between items and within one, and finds the same', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await plant(t, f.meta.id, '2026-05-04')
     await plant(t, f.meta.id, '2026-05-06')
     await plant(t, f.sub.id, '2026-05-04')
@@ -937,7 +941,7 @@ describe('the activation audit', () => {
 
   it('reports nothing for milestones the rule allows', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await add(t, f, f.user, f.meta.id, 'Alpha', '2026-05-04')
     await add(t, f, f.user, f.meta.id, 'Beta', '2026-05-11')
     await add(t, f, f.user, f.hidden.id, 'Gamma', '2026-05-05')
@@ -947,7 +951,7 @@ describe('the activation audit', () => {
 
   it('reports a project with more milestones than a page reads, and goes on after it', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const crowded = await plantProject(t, {
       org_id: f.org.id,
       id: '00000000-0000-4000-8000-000000000000',

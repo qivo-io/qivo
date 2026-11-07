@@ -104,14 +104,14 @@ function mondayIn(weeks: number) {
 }
 
 /** Plan, a top-level project with sub-project Work, milestones Alpha and
-    Beta, and `edit`'s changes. I am the organization's admin unless `edit`
-    says otherwise. `inWorkspace` false leaves the milestones out of the
+    Beta, and `edit`'s changes. I am the organization's admin and lead Plan
+    unless `edit` says otherwise. `inWorkspace` false leaves the milestones out of the
     projects part, so only the window's read holds them. */
 function fixture(edit: (s: Snapshot) => void = () => {}, inWorkspace = true) {
   snap = plannerFixture()
-  const base = snap.projects[0]
+  const { lead_id: _lead, ...base } = snap.projects[0]
   snap.projects = [
-    { ...base, id: 'plan', type: 'meta', key: 'PLAN', name: 'Plan' },
+    { ...base, id: 'plan', type: 'meta', key: 'PLAN', name: 'Plan', lead_id: snap.profiles[0].id },
     { ...base, id: 'work', key: 'WORK', num: 2, name: 'Work', parent_id: 'plan' },
   ]
   snap.milestones.push(
@@ -268,6 +268,7 @@ describe('the rights the answer gives', () => {
       'a person who sees Plan only to reach Work',
       (s: Snapshot) => {
         s.profiles[0].org_role = 'user'
+        delete s.projects[0].lead_id
         s.access.push({ project_id: 'work', profile_id: s.profiles[0].id, level: 'user' })
       },
     ],
@@ -283,7 +284,7 @@ describe('the rights the answer gives', () => {
   })
 
   it('must fail: opens no editor where the answer says no, whatever the store says', async () => {
-    // the store's level says I may write, as the organization's admin
+    // the store's level says I may write, as Plan's lead
     fixture()
     force = { canWrite: false }
     await start()

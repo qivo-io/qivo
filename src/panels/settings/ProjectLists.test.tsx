@@ -97,7 +97,13 @@ function fixture(): Snapshot {
   person('mira', 'Mira Holm', 'user')
   person('leo', 'Leo Berg', 'user')
   person('vic', 'Vic Viewer', 'viewer')
-  const base = { ...snap.projects[0], org_id: home, created_at: NOW }
+  // the fixture's lead stays with its own project, which this replaces
+  const base = {
+    ...snap.projects[0],
+    org_id: home,
+    created_at: NOW,
+    lead_id: undefined as string | undefined,
+  }
   const meta = (id: string, num: number, name: string, extra: Partial<typeof base> = {}) => ({
     ...base,
     id,

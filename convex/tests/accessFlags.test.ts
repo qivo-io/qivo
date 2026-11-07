@@ -55,7 +55,7 @@ import {
   type T,
   TODAY,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { handlerOf } from './pageOrg.setup'
 import { withReach } from './projectReach.setup'
@@ -183,7 +183,7 @@ describe('accessFlags', () => {
     const seen = new Set<string>()
     for (const [name, plant] of SHAPES) {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
       await t.run((ctx) => plant(ctx, f, subject))
       await t.run(async (ctx) => {
@@ -223,7 +223,7 @@ describe('accessFlags', () => {
   it('answers many people together as projectLevelsForOrg answers each alone, for every role, kind and grant shape', async () => {
     for (const [name, plant] of SHAPES) {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
       await t.run((ctx) => plant(ctx, f, subject))
       await t.run(async (ctx) => {
@@ -272,7 +272,7 @@ describe('accessFlags', () => {
     const seen = new Set<string>()
     for (const [name, plant] of SHAPES) {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
       await t.run((ctx) => plant(ctx, f, subject))
       if (reach) await withReach(t)
@@ -366,7 +366,7 @@ describe('accessFlags', () => {
     const seen = new Set<string>()
     for (const [name, plant] of SHAPES) {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
       await t.run((ctx) => plant(ctx, f, subject))
       if (reach) await withReach(t)
@@ -443,7 +443,7 @@ describe('accessFlags', () => {
 
   it('answers null for a missing parent or a cycle where projectLevel refuses, and reads only the projects asked about', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const dangling = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: uuid() })
     const [one, two] = [uuid(), uuid()]
     await plantProject(t, { org_id: f.org.id, type: 'project', id: one, parent_id: two })
@@ -490,7 +490,7 @@ describe('accessFlags', () => {
 
   it("stops reading the organization's teams at OWN_READS.bytes and answers from the person's own teams", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
     // eight teams of the person, one of them shares the meta's sub-project,
     // after 24 other teams, as many rows as the organization's teams
@@ -546,7 +546,7 @@ describe('accessFlags', () => {
 
   it("stops reading the organization's teams past OWN_READS.orgTeams rows a team asked about and answers team by team", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
     Object.assign(OWN_READS, { manyTeams: 2, orgTeams: 1 })
     // ten small teams first, then the person's two, one sharing the
@@ -576,7 +576,7 @@ describe('accessFlags', () => {
 
   it("answers every project from navigation's read of the person's team shares, and reads the organization's teams only for teams it must ask about", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
     const subs = await t.run(async (ctx) => {
       await ctx.db.insert('team_members', {
@@ -646,7 +646,7 @@ describe('accessFlags', () => {
   it('refuses as projectLevel does where a team id names two rows, under navigation, with no rejection left unhandled', async () => {
     for (const many of [false, true]) {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const me = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
       await t.run(async (ctx) => {
         // the person's teams, enough to read the organization's teams or not,
@@ -689,7 +689,7 @@ describe('accessFlags', () => {
   it("counts each read of the person's own grants and memberships in shared, whichever of navigation's and a step's read answers first", async () => {
     for (const org_role of ['guest', 'user'] as const) {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const me = await plantSeat(t, { org_id: f.org.id, name: 'Subject', org_role })
       await t.run(async (ctx) => {
         for (const p of [f.sub, f.sub2])
@@ -736,7 +736,7 @@ describe('accessFlags', () => {
 
   it('hides a project outside a top-level meta from everyone, in lists and single reads and writes', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const dangling = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: uuid() })
     const loose = await plantProject(t, { org_id: f.org.id, type: 'project' })
     const underLoose = await plantProject(t, {
@@ -829,7 +829,7 @@ describe('accessFlags', () => {
 
   it("stays within Convex's 4,096 index ranges for a writer among 1,643 projects, where the per-project walk did not", async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // 149 parents with ten sub-projects each, 992 of them archived, which
     // with withOrg's projects make 151 top-level projects and 500 live and
     // 992 archived sub-projects, within the design size's catalogue of
@@ -978,7 +978,7 @@ async function insertAll<
 describe('the access reads at the design size', () => {
   it('walks 70 sub-projects of a parent seen only for navigation within the limits, and hasProjectLevel and canAccessProject read none', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const member = await plantSeat(t, { org_id: f.org.id, name: 'Member' })
     const top = await plantProject(t, { org_id: f.org.id })
     // 40 archived and then 30 live sub-projects, the most one project holds
@@ -1047,7 +1047,7 @@ describe('the access reads at the design size', () => {
 
   it("reads the catalogue of 2,000 projects with a person's 700 grants and 5 teams of 200 shares inside the limits, beside 1,000 people", async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const member = await plantSeat(t, { org_id: f.org.id, name: 'Member' })
     // with withOrg's two live top-level projects and two live sub-projects,
     // 200 and 300 top-level projects and 500 and 1,000 sub-projects, live

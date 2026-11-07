@@ -46,7 +46,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { NORTHSTAR, northstarId, plantNorthstar } from './northstar.setup'
 import {
@@ -100,7 +100,7 @@ function writers(t: T, f: OrgFixture) {
 describe('overview counts', () => {
   it('every writer keeps the rows equal to a recount, by sub-project and by owner', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     await stamp(t, org_id)
     const w = writers(t, f)
@@ -275,7 +275,7 @@ describe('overview counts', () => {
 
   it("an access removal's handover moves many tasks' owners in one transaction", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     await stamp(t, org_id)
     const w = writers(t, f)
@@ -312,7 +312,7 @@ describe('overview counts', () => {
 
   it('a project archive, restore and move reconcile in background steps, whatever lands first', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     await stamp(t, org_id)
     const w = writers(t, f)
@@ -370,7 +370,7 @@ describe('overview counts', () => {
 
   it('readers answer counting, never zero, and a row that goes negative says so', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const w = writers(t, f)
     const read = () => t.run((ctx) => subProjectCounts(ctx.db, f.sub))
@@ -415,7 +415,7 @@ describe('overview counts', () => {
 
   it("a person's leaves split over the shards, and an edit writes only its own shard's rows", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     await stamp(t, org_id)
     const w = writers(t, f)
@@ -447,7 +447,7 @@ describe('overview counts', () => {
 
   it('a row of an earlier sub-project or task with the same id counts for nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     await stamp(t, org_id)
     const w = writers(t, f)
@@ -485,7 +485,7 @@ describe('overview counts', () => {
 
   it('counts an organization exactly while tasks change between its steps', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const w = writers(t, f)
     Object.assign(COUNT_PAGE, { tasks: 2, rows: 1 })
@@ -545,7 +545,7 @@ describe('overview counts', () => {
 
   it('a dry run writes nothing; a run counts what it lists, a recount mends a drift, orphans go', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const w = writers(t, f)
     const a = await w.create({ status: 'progress', assignee_id: f.user.id, remaining_hours: 2 })
@@ -596,7 +596,7 @@ describe('overview counts', () => {
 
   it('a call past its time answers a cursor, and the calls from it count every organization once', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const w = writers(t, f)
     for (let n = 0; n < 4; n++) await w.create({ status: 'todo', remaining_hours: n })
     Object.assign(COUNT_PAGE, { tasks: 1 })
@@ -665,7 +665,7 @@ describe('overview counts', () => {
 
   it("an organization's deletion in steps takes every overview row with it", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     await stamp(t, org_id)
     const w = writers(t, f)
@@ -710,7 +710,7 @@ describe('overview counts', () => {
 
   it('a parent whose only subtask leaves with its project is read again, whatever lands first', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     await stamp(t, org_id)
     const w = writers(t, f)
@@ -749,7 +749,7 @@ describe('overview counts', () => {
 
   it('a regroup that a project change starts while the backfill counts goes on after the count', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const w = writers(t, f)
     // written while the organization is not counted
@@ -781,7 +781,7 @@ describe('overview counts', () => {
 
   it('a count page whose subtasks fill their project in 7 archived sub-projects stays inside the limits', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // 100 parents created together, each with a subtask in each of 7
     // archived sibling sub-projects: the project's 800 open tasks
@@ -818,7 +818,7 @@ describe('overview counts', () => {
 
   it('a project changed again while its regroup is partway through it is read again whole', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     await stamp(t, org_id)
     const w = writers(t, f)
@@ -845,7 +845,7 @@ describe('overview counts', () => {
 
   it('a replayed continuation and one a recount overtook count the organization from its start', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const w = writers(t, f)
     for (let n = 0; n < 4; n++) await w.create({ status: 'todo', remaining_hours: n })
@@ -884,7 +884,7 @@ describe('overview counts', () => {
 
   it('recovery restarts a regroup whose step stopped', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     await stamp(t, org_id)
     const w = writers(t, f)
@@ -908,7 +908,7 @@ describe('overview counts', () => {
 
   it('a regroup deletes every empty row of a project gone to Deleted items, a page a step', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     await stamp(t, org_id)
     const w = writers(t, f)
@@ -932,7 +932,7 @@ describe('overview counts', () => {
 
   it('a move of a dead project generation does not touch the current row', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     await stamp(t, org_id)
     const w = writers(t, f)
@@ -956,7 +956,7 @@ describe('overview counts', () => {
 
   it('a call stopped before an organization comes to it fresh, not inside its run', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const w = writers(t, f)
     await w.create({ status: 'todo' })
     await calls(t, { dry_run: false })

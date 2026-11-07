@@ -55,7 +55,7 @@ import {
   plantSubscription,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { manyHolders } from './holders.setup'
 import { countOrg } from './overviewCounts.setup'
@@ -82,7 +82,7 @@ async function crowded(
   n: number,
   { followers = 3, t = newT({ transactionLimits: true }) }: { followers?: number; t?: T } = {},
 ): Promise<Crowd> {
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   const { emil, leo, crowd } = await t.run(async (ctx) => {
     const platform = uuid()
     await ctx.db.insert('teams', {
@@ -296,7 +296,7 @@ describe('reassigning the tasks of an access removal', () => {
     // the deletion and four after, 4,800 in all. Each holds one open task,
     // 300 in each of TBED's two sub-projects.
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const members: string[] = []
     for (let from = 0; from < 600; from += 100) {
       await t.run(async (ctx) => {
@@ -372,7 +372,7 @@ describe('reassigning the tasks of an access removal', () => {
     // 3,000 grants of other people on 30 other projects: the holders' sight
     // reads only their own grants, one index range each
     const t = newT({ transactionLimits: { documentsRead: 2500 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const others: Doc<'projects'>[] = []
     for (let i = 0; i < 30; i++) others.push(await plantProject(t, { org_id: f.org.id }))
     const profile = (name: string) => ({
@@ -906,7 +906,7 @@ describe('a removal of many people', () => {
 describe('working out sight for a removal', () => {
   it("checks the room every LEVELS_READ.guardRows rows of one person's grants, not only before them", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // a Viewer grant on each of 12 sub-projects, 3 under each of 4 new
     // top-level projects, the everyday count, read 5 rows between two
     // checks instead of 500

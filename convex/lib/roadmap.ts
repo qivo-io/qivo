@@ -133,6 +133,23 @@ import {
  *   sub-projects, 30 open tasks a sub-project: 2,785, 3,181 and 1.84. One
  *   more answers over_ceiling from the counts in 163 ranges.
  *
+ * Timed on 7 November 2026 on a local backend (8 vCPU, one call at a time),
+ * in one quiet session and one beside 8 busy loops, an organization admin's
+ * Roadmap read cost the same as a standard user's with the same rows. Both
+ * read the same ranges, documents and bytes, counted for the whole call
+ * with its sign-in, and their JavaScript times differ only by run-to-run
+ * noise. An everyday project read 114, 129 and 0.08 in 16 to 33 ms of
+ * JavaScript quiet and at most 83 ms busy. A project of 800 open tasks over
+ * 3 sub-projects read 824, 995 and 0.65 in the default window (731 rows),
+ * in 37 to 71 ms quiet and at most 143 ms busy, once 572 ms in a further
+ * busy session. The Board's largest My view (lib/board.ts BOARD, 1,000
+ * subtasks under 1,000 parents over 21 sub-projects shared with 3 teams)
+ * read 3,091, 3,196 and 1.87 in 98 to 166 ms quiet, once 769 ms in a
+ * further quiet session that had storage stalls. Busy it took 203 to 323 ms
+ * in one session and up to 552 ms in another, where Convex stopped one of
+ * the standard user's calls at the 1 s it gives a query's own code, and
+ * stayed under 0.44 s in a third.
+ *
  * Each task the filters keep costs about one range, its group check, and a
  * group one more for its subtasks, as on the Board, and a group's facts
  * read nothing more. A search reads as the Board's does. The counts add 3

@@ -112,6 +112,42 @@ async function same(
   return walked
 }
 
+/** `ws` with every project of organization `orgId` and their grants
+    added, as the benchmark hands the stand-in the whole world
+    (scripts/perf/server.mjs `hidden`): an admin's workspace holds only the
+    projects they take part in, while Settings › Users names a guest's
+    projects across the organization. */
+async function wholeOrg(
+  t: T,
+  ws: PeopleSettingsWorkspace,
+  orgId: string,
+): Promise<PeopleSettingsWorkspace> {
+  const found = await t.run(async (ctx) => {
+    const projects = await ctx.db
+      .query('projects')
+      .withIndex('by_org', (q) => q.eq('org_id', orgId))
+      .collect()
+    const access: { project_id: string; profile_id: string; level: 'user' | 'viewer' }[] = []
+    for (const p of projects)
+      for (const row of await ctx.db
+        .query('project_access')
+        .withIndex('by_project', (q) => q.eq('project_id', p.id))
+        .collect())
+        access.push({ project_id: row.project_id, profile_id: row.profile_id, level: row.level })
+    return { projects, access }
+  })
+  const held = new Set(ws.projects.map((p) => p.id))
+  const known = new Set(ws.access.map((a) => `${a.project_id} ${a.profile_id}`))
+  return {
+    ...ws,
+    projects: [...ws.projects, ...found.projects.filter((p) => !held.has(p.id))],
+    access: [
+      ...ws.access,
+      ...found.access.filter((a) => !known.has(`${a.project_id} ${a.profile_id}`)),
+    ],
+  }
+}
+
 /** Northstar with the planted people, a guest, and more people up to
     `people`, keyed, with Nora, its admin, and her workspace. */
 async function northstar(o: { people?: number } = {}) {
@@ -243,8 +279,9 @@ describe("the Users page's stand-in", () => {
     // alone
     expect(await readableLiveSubProjects(t, guest)).toBe(200)
     await keyOrg(t, org.id)
-    const ws = await workspaceOf(as(t, nora))
-    if (!ws) throw new Error('no workspace')
+    const own = await workspaceOf(as(t, nora))
+    if (!own) throw new Error('no workspace')
+    const ws = await wholeOrg(t, own, org.id)
     const walk = await same(t, nora, ws, 'people:settingsPage', { org_id: org.id }, true)
     const row = rowsOf(walk.server).find((r) => r.id === guest.id) as unknown as {
       guest: { projects: unknown[]; more: boolean }

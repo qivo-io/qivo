@@ -28,7 +28,7 @@ import {
   plantSeat,
   type T,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { installTrashTimers, itemFor, runSteps, START } from './trash.setup'
 
@@ -248,7 +248,7 @@ async function expectScopedAsListed(t: T, seat: Doc<'profiles'>, listed: Deleted
 describe('arguments', () => {
   it('refuses a limit, a scope, a search or a filter the page does not take', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     for (const limit of [0, 26, 1.5])
       await expectRefusal(
@@ -280,7 +280,7 @@ describe('arguments', () => {
 
   it('refuses a cursor of other arguments, a changed one and one of another list', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     await plantItems(t, f, 3)
     const args: PageArgs = { scope: { org_id, all: true }, limit: 1 }
@@ -325,7 +325,7 @@ describe('arguments', () => {
 describe('who sees what', () => {
   it('gives each caller exactly the items the list gives them, each once, with the same rows', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const sam = await person(t, org_id, 'Sam')
     const lena = await person(t, org_id, 'Lena')
@@ -434,7 +434,7 @@ describe('who sees what', () => {
 
   it("keeps the list's answer for view-only deleters, lost access, deleted projects, stuck and moving items", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const omar = await person(t, org_id, 'Omar')
     const ops = await tree(t, f, 'Operations', omar, [{ name: 'Infra' }])
@@ -476,7 +476,7 @@ describe('who sees what', () => {
 
   it("holds a task item in a scope only through a project of it the person sees, after its deleter lost access to its root's project", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const omar = await person(t, org_id, 'Omar')
     const trial = await tree(t, f, 'Field trial', omar, [{ name: 'Lab' }, { name: 'Site' }])
@@ -529,7 +529,7 @@ describe('who sees what', () => {
 
   it('holds a family from before the subtask rule in the scope of a project the person only uses, through the one they lead under another top-level project', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // Sam leads Lab, under Field trial, which Sam does not lead, and is a
     // member of Firmware, under Testbed platform
@@ -537,6 +537,8 @@ describe('who sees what', () => {
     const trial = await tree(t, f, 'Field trial', undefined, [{ name: 'Lab', lead: sam }])
     const lab = trial.subs[0]
     await grant(t, f.sub.id, sam.id, 'user')
+    // the admin, who deleted the families, edits Field trial through a grant
+    await grant(t, trial.top.id, f.admin.id, 'user')
     // two families from before the subtask rule, which the admin deleted:
     // the root in Lab with a subtask in Firmware, and the root in Firmware
     // with a subtask in Lab
@@ -582,7 +584,7 @@ describe('who sees what', () => {
 
   it('answers unknown, foreign, hidden and deleted project ids alike, and an organization without a seat', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const gone = await plantProject(t, { org_id, type: 'project', parent_id: f.meta.id })
     const task = await plantIssue(t, { org_id, project_id: gone.id })
@@ -610,7 +612,7 @@ describe('who sees what', () => {
 describe('order and continuation', () => {
   it('pages 60 items at 25 a page, newest first, and ends with no cursor', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const ids = await plantItems(t, f, 60)
     const walked = await walk(t, f.admin, { scope: { org_id: f.org.id, all: true } })
     expect(walked.pages.map((p) => p.entries.length)).toEqual([25, 25, 10])
@@ -620,7 +622,7 @@ describe('order and continuation', () => {
 
   it('keeps the index order of items deleted at the same moment, whatever their ids', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // uuids in the opposite order of their creation, then another order
     const ids = [
       'ffffffff-0000-4000-8000-000000000000',
@@ -640,7 +642,7 @@ describe('order and continuation', () => {
 
   it('lands an item deleted between pages before the cursor, and skips nothing that leaves between pages', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const args = { scope: { org_id: f.org.id, all: true as const }, limit: 2 }
     const ids = await plantItems(t, f, 5)
     const first = await page(t, f.admin, args)
@@ -660,7 +662,7 @@ describe('order and continuation', () => {
 
   it("opens each of a member's sources as one range on a later page, as on the first", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const ids = await plantItems(t, f, 3)
     // the user's own deletes, Testbed platform and Skunkworks, and the
     // cross-project rows of Firmware and Board rev: five ranges a page
@@ -678,7 +680,7 @@ describe('order and continuation', () => {
 describe('parts and scopes', () => {
   it('lists only project entries without a scope, and says task entries need one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const task = await plantIssue(t, { org_id, project_id: f.sub.id })
     await deleteTask(t, f.user, task.id)
@@ -710,7 +712,7 @@ describe('parts and scopes', () => {
 
   it("holds a top-level project's deleted sub-projects, then the task items of its sub-projects of any state and its cross-project items", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const away = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
     const archived = await plantProject(t, {
@@ -780,7 +782,7 @@ describe('parts and scopes', () => {
 describe('search', () => {
   it('matches every word in a title or description, the last also as a prefix, with accents exact', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const tasks = [
       { title: 'Calibrate the torque sensor', description: 'Use the blue fixture' },
@@ -820,7 +822,7 @@ describe('search', () => {
 
   it('finds a task by its key in every seat without a scope, where every other word must match it too', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const relay = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -862,7 +864,7 @@ describe('search', () => {
 
   it('finds a project entry by its names and keys, and the tasks inside it only with a scope', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const trial = await tree(
       t,
@@ -890,7 +892,7 @@ describe('search', () => {
 
   it('counts a task item once with its first matching subtask, and each task of a project item once with one row', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const root = await plantIssue(t, { org_id, project_id: f.sub.id, title: 'Overhaul' })
     const subs: Doc<'issues'>[] = []
@@ -947,7 +949,7 @@ describe('search', () => {
 
   it("never names a redacted item's root in a hit", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const omar = await person(t, org_id, 'Omar')
     const dana = await person(t, org_id, 'Dana')
@@ -1000,7 +1002,7 @@ describe('search', () => {
 describe('stops', () => {
   it("finds a member's own match beside more of other people's matches than the lowered candidates, and always says matches may be missing", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // other people's deletes in the same projects, each with the word twice
     for (let i = 0; i < 5; i++) {
@@ -1026,9 +1028,9 @@ describe('stops', () => {
     expect(lead.missing).toBe('matches')
   })
 
-  it("says an admin's search may miss matches when a source read its allowance, or reads when its room ran out", async () => {
+  it("says an admin's search may miss matches, as anyone's, since no role reads every task", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     for (let i = 0; i < 3; i++) {
       const task = await plantIssue(t, { org_id, project_id: f.sub.id, title: `Relay ${i}` })
@@ -1038,7 +1040,7 @@ describe('stops', () => {
     const args = { scope: { org_id, all: true as const }, search: 'relay' }
     const whole = await page(t, f.admin, args)
     expect(whole.entries).toHaveLength(3)
-    expect(whole.missing).toBeUndefined()
+    expect(whole.missing).toBe('matches')
     Object.assign(DELETED_PAGE, { candidates: 2 })
     const capped = await page(t, f.admin, args)
     expect(capped.missing).toBe('matches')
@@ -1048,7 +1050,7 @@ describe('stops', () => {
     Object.assign(DELETED_PAGE, { candidates: 256, results: 4 })
     const shared = await page(t, f.admin, args)
     expect(shared.entries).toHaveLength(3)
-    expect(shared.missing).toBeUndefined()
+    expect(shared.missing).toBe('matches')
     Object.assign(DELETED_PAGE, { results: DEFAULT_PAGE.results })
 
     // a task item whose root and two subtasks hold the word: the query's
@@ -1065,16 +1067,18 @@ describe('stops', () => {
     Object.assign(DELETED_PAGE, { gather: { ...DEFAULT_PAGE.gather, ranges: 8 } })
     const roomy = await page(t, f.admin, solenoid)
     expect(roomy.entries.map((e) => e.item_id)).toEqual([item])
-    expect(roomy.missing).toBeUndefined()
+    expect(roomy.missing).toBe('matches')
+    // a cut gathering says so no differently, as matches may be missing
+    // anyway
     Object.assign(DELETED_PAGE, { gather: { ...DEFAULT_PAGE.gather, ranges: 4 } })
     const cut = await page(t, f.admin, solenoid)
     expect(cut.entries.map((e) => e.item_id)).toEqual([item])
-    expect(cut.missing).toBe('reads')
+    expect(cut.missing).toBe('matches')
   })
 
   it('ends a browse page early on a lowered budget, and pages on to the end with no entry twice', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const ids = await plantItems(t, f, 12)
     const args = { scope: { org_id: f.org.id, all: true as const } }
     // the reads that find items may read four documents: the first page
@@ -1102,7 +1106,7 @@ describe('stops', () => {
 
   it("ends a page before the first entry whose redacted row runs out of the rows' budget, and goes past one that alone needs more", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const omar = await person(t, org_id, 'Omar')
     const ops = await tree(t, f, 'Operations', omar, [{ name: 'Infra' }])
@@ -1199,7 +1203,7 @@ describe('stops', () => {
 
   it('ends a page that went on inside a project item after its tasks when its sources then do not open, without saying reads', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const sam = await person(t, org_id, 'Sam')
     const older = await plantIssue(t, { org_id, project_id: f.sub.id, assignee_id: sam.id })
@@ -1234,14 +1238,16 @@ describe('stops', () => {
 
   it('answers too_wide past the lowered sources for anyone but an admin, whose page past the lowered adminSources reads the organization instead', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const inHidden = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
-    // outside the scope below, under a top-level project nobody leads
+    // outside the scope below, under a top-level project nobody leads,
+    // which the admin, who deletes there, edits through a grant
     const away = await tree(t, f, 'Elsewhere', undefined, [
       { name: 'Over there' },
       { name: 'Gone' },
     ])
+    await grant(t, away.top.id, f.admin.id, 'user')
     const a = await plantIssue(t, { org_id, project_id: f.sub.id, title: 'Spring' })
     const b = await plantIssue(t, { org_id, project_id: inHidden.id, title: 'Spring' })
     // in the scope, and hidden from the guest, who neither leads nor deleted it
@@ -1309,7 +1315,7 @@ describe('stops', () => {
 
   it('counts each sub-project a member leads without its top-level project toward the lowered sources', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     // Sam leads both sub-projects of a top-level project the user leads
     const sam = await person(t, org_id, 'Sam')
@@ -1348,7 +1354,7 @@ describe('stops', () => {
 
   it("merges each of a member's sources once in the assignee scan, so it answers wherever the browse does", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const sam = await person(t, org_id, 'Sam')
     // the user leads Testbed platform and Skunkworks, and deletes a task
@@ -1436,7 +1442,7 @@ describe('the assignee filter', () => {
 
   it("gives the same entries on an admin's index and a lead's scan, a task item once and each task of a project item", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const a = await assigned(t, f)
     const id = async (target: string) => (await itemFor(t, target)).id
     const args = { scope: { org_id: f.org.id, all: true as const }, assignee: a.sam.id }
@@ -1461,7 +1467,7 @@ describe('the assignee filter', () => {
 
   it("pages an admin's assignee filter over a project item's tasks, which share its deleted_at, reading only the rows after each cursor", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const sam = await person(t, org_id, 'Sam')
     const leaving = await plantProject(t, { org_id, type: 'project', parent_id: f.meta.id })
@@ -1490,7 +1496,7 @@ describe('the assignee filter', () => {
 
   it("shows a task item once on the admin's index however its assigned tasks fall across pages", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const sam = await person(t, org_id, 'Sam')
     const root = await plantIssue(t, { org_id, project_id: f.sub.id, assignee_id: sam.id })
@@ -1514,7 +1520,7 @@ describe('the assignee filter', () => {
 
   it("leaves out a task in a project hidden from the lead, and a seat that reuses a removed person's id", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const sam = await person(t, org_id, 'Sam')
     const ana = await person(t, org_id, 'Ana')
@@ -1561,7 +1567,7 @@ describe('the assignee filter', () => {
 describe('deleted by', () => {
   it("reaches a person's older deletes for an admin, filters anyone else's own ranges, and matches via by its kind or as the caller may know the credential", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const token = { table: 'mcp_tokens' as const, id: uuid(), name: 'Laptop' }
     const key = { table: 'agent_keys' as const, id: uuid(), name: 'Relay key' }
@@ -1620,7 +1626,7 @@ describe('deleted by', () => {
 describe('rows stored before the page', () => {
   it('finds them by key and title, not by description or assignee, and says so while they last', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const org_id = f.org.id
     const task = await plantIssue(t, {
       org_id,

@@ -6,7 +6,7 @@ import type { Doc, TableNames } from '../_generated/dataModel'
 import { createAuth, createAuthOptions } from '../auth'
 import authSchema from '../betterAuth/schema'
 import { MARKETING_DEMO, MARKETING_DEMO_VERSION } from '../internal/marketingDemoData'
-import { accessOf, ordinaryOf } from '../lib/access'
+import { accessOf } from '../lib/access'
 import { byId } from '../lib/db'
 import {
   DEMO_INSERTS_TOTAL,
@@ -709,7 +709,7 @@ describe('demo lifetime and capabilities', () => {
           .withIndex('by_org', (q) => q.eq('org_id', org_id))
           .collect()
       ).filter((p) => p.parent_id === undefined && p.archived_at === undefined)
-      const access = accessOf(ctx, ordinaryOf(a.profile), tops)
+      const access = accessOf(ctx, a.profile, tops)
       const seen = await Promise.all(tops.map((p) => access.visible(p.id)))
       const starred = await Promise.all(
         tops.map(

@@ -12,14 +12,15 @@
  *   3. Access one user or team at a time, and what a removal does with the
  *      open tasks it hides (leave, keep_as_viewer, reassign_to), all at once.
  *   4. Milestones folded to the top-level project, with real dates.
- *   5. Reading one project, and the refusals that reveal nothing. */
+ *   5. Reading one project, and the refusals that reveal nothing, and a
+ *      project an admin manages without reading it. */
 /// <reference types="vite/client" />
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
-import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
+import { ACCESS_NEEDS_A_PERSON, OWN_READS } from '../lib/access'
 import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
@@ -48,6 +49,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { keyOrg } from './nameKeys.setup'
 import { countOrg } from './overviewCounts.setup'
 
 const VIA_REST = 'via the REST API (drive)'
@@ -393,11 +395,12 @@ describe('creating projects and sub-projects', () => {
       'this agent has been deactivated',
     )
     expect((await projectRow(fx.t, out.id as string))?.lead_id).toBe(fx.agent.id)
-    // once a person hands the project over, the agent can become a Viewer
-    await fx.t.mutation(internal.machine.projects.mcpUpdateProject, {
-      ...as_(fx.admin),
-      project: out.key as string,
-      lead_id: fx.user.id,
+    // once a person hands the project over, the agent can become a Viewer;
+    // the admin, who manages the project without reading it, does in the app
+    await as(fx.t, fx.admin).mutation(api.projects.update, {
+      org_id: fx.org.id,
+      id: out.id as string,
+      patch: { lead_id: fx.user.id },
     })
     await as(fx.t, fx.admin).mutation(api.profiles.update, {
       org_id: fx.org.id,
@@ -450,7 +453,53 @@ describe('creating projects and sub-projects', () => {
     }
   })
 
-  it('a creator naming another lead keeps User access, unless an admin', async () => {
+  it('tells an admin who manages a sub-project without reading it that it takes no sub-project, over REST, MCP and the lead picker, as a reader is told', async () => {
+    const fx = await setup()
+    // Sam, a standard user who neither reads nor manages FW
+    const sam = await plantSeat(fx.t, {
+      org_id: fx.org.id,
+      name: 'Sam',
+      email: 'sam@testbed.test',
+      auth_user_id: `auth_sam_${fx.org.id}`,
+      accepted_at: NOW,
+    })
+    await keyOrg(fx.t, fx.org.id)
+    const NOT_TOP = 'sub-projects live directly under a project, never under another sub-project'
+    const mcpSub = (p: Doc<'profiles'>) =>
+      fx.t.mutation(internal.machine.projects.mcpCreateProject, {
+        ...as_(p),
+        name: 'Optics',
+        parent: 'FW',
+      })
+    const restSub = (p: Doc<'profiles'>) =>
+      fx.t.mutation(internal.machine.projects.restCreateProject, {
+        ...rest(p),
+        body: JSON.stringify({ name: 'Optics', parent: 'FW' }),
+      })
+    const leads = (p: Doc<'profiles'>) =>
+      as(fx.t, p).query(api.projectSettings.leadCandidates, {
+        org_id: fx.org.id,
+        parent_id: fx.sub.id,
+      })
+    // the admin takes part in nothing of TBED, and FW is its sub-project
+    await refused(mcpSub(fx.admin), 'rule', NOT_TOP)
+    await refused(restSub(fx.admin), 'rule', NOT_TOP)
+    expect(await leads(fx.admin)).toEqual({ state: 'refused', message: NOT_TOP })
+    // Pia, who reads FW, is told the same
+    await refused(mcpSub(fx.pia), 'rule', NOT_TOP)
+    expect(await leads(fx.pia)).toEqual({ state: 'refused', message: NOT_TOP })
+    // Sam finds it nowhere
+    await refused(mcpSub(sam), 'not_found', 'parent project "FW" not found (or not visible to you)')
+    await refused(restSub(sam), 'bad_request', 'parent project not found')
+    expect(await leads(sam)).toEqual({ state: 'unavailable' })
+    // nothing was created
+    const made = await fx.t.run(async (ctx) =>
+      (await ctx.db.query('projects').collect()).filter((p) => p.name === 'Optics'),
+    )
+    expect(made).toEqual([])
+  })
+
+  it('a creator naming another lead keeps User access, an admin as anyone', async () => {
     const fx = await setup()
     const byUser = await parsed(
       fx.t.mutation(internal.machine.projects.mcpCreateProject, {
@@ -461,6 +510,9 @@ describe('creating projects and sub-projects', () => {
     )
     expect(byUser.lead_id).toBe(fx.pia.id)
     expect(await grants(fx.t, byUser.id as string)).toEqual({ [fx.user.id]: 'user' })
+    // admin status gives no access to the project's work, so the admin
+    // keeps it in sight by the same default grant, and leading their own
+    // project gives them none
     const byAdmin = await parsed(
       fx.t.mutation(internal.machine.projects.mcpCreateProject, {
         ...as_(fx.admin),
@@ -468,7 +520,26 @@ describe('creating projects and sub-projects', () => {
         lead_id: fx.pia.id,
       }),
     )
-    expect(await grants(fx.t, byAdmin.id as string)).toEqual({})
+    expect(await grants(fx.t, byAdmin.id as string)).toEqual({ [fx.admin.id]: 'user' })
+    expect(byAdmin.access).toEqual({ read: true, write: true })
+    const ownAdmin = await parsed(
+      fx.t.mutation(internal.machine.projects.mcpCreateProject, {
+        ...as_(fx.admin),
+        name: 'Kept',
+      }),
+    )
+    expect(await grants(fx.t, ownAdmin.id as string)).toEqual({})
+    // and the app's create stores the same
+    const inApp = await as(fx.t, fx.admin).mutation(api.projects.create, {
+      org_id: fx.org.id,
+      id: uuid(),
+      type: 'meta',
+      key: 'APPG',
+      name: 'App given',
+      sort_order: 9,
+      lead_id: fx.pia.id,
+    })
+    expect(await grants(fx.t, inApp.id)).toEqual({ [fx.admin.id]: 'user' })
     // a lead must be someone who can lead
     await refused(
       fx.t.mutation(internal.machine.projects.mcpCreateProject, {
@@ -762,19 +833,101 @@ describe('creating projects and sub-projects', () => {
     expect(withSubs.reads - withTops.reads).toBe(1)
   })
 
-  it('creatorGrant: an own entry decides, else User for a non-admin naming another lead', () => {
+  it('creatorGrant: an own entry decides, else User for a creator naming another lead', () => {
     const base = { creator: 'me', lead: 'leo', own: undefined }
-    expect(creatorGrant({ ...base, admin: false })).toBe('user')
-    expect(creatorGrant({ ...base, admin: true })).toBeNull()
-    expect(creatorGrant({ ...base, admin: false, lead: 'me' })).toBeNull()
-    expect(creatorGrant({ ...base, admin: false, own: null })).toBeNull()
-    expect(creatorGrant({ ...base, admin: true, own: 'viewer' })).toBe('viewer')
+    expect(creatorGrant(base)).toBe('user')
+    expect(creatorGrant({ ...base, lead: 'me' })).toBeNull()
+    expect(creatorGrant({ ...base, own: null })).toBeNull()
+    expect(creatorGrant({ ...base, own: 'viewer' })).toBe('viewer')
+    expect(creatorGrant({ ...base, lead: 'me', own: 'user' })).toBe('user')
   })
 })
 
 /* ----------------------------------------------------- 2. changing projects */
 
 describe('changing a project', () => {
+  /* The writes a project's Settings page and Settings › Projects offer from
+   * management (model/projectSettings.ts settingsRights), through the app's
+   * own functions: the fixture's admin holds no lead, grant or team share
+   * in the organization, so only management lets them through; Pia sees FW
+   * through a grant and TBED for navigation without leading either, and
+   * Sam sees nothing. */
+  it('an admin who takes part in no project manages it through every write the Settings pages offer', async () => {
+    const fx = await setup()
+    const sam = await plantSeat(fx.t, {
+      org_id: fx.org.id,
+      name: 'Sam',
+      email: 'sam@testbed.test',
+      auth_user_id: `auth_sam_${fx.org.id}`,
+      accepted_at: NOW,
+    })
+    // the lead picker answers once the organization's rows hold name keys
+    await keyOrg(fx.t, fx.org.id)
+    const app = (p: Doc<'profiles'>) => as(fx.t, p)
+    const org_id = fx.org.id
+    const update = (p: Doc<'profiles'>, id: string, patch: Json) =>
+      app(p).mutation(api.projects.update, { org_id, id, patch })
+    const archive = (p: Doc<'profiles'>, id: string) =>
+      app(p).mutation(api.projects.archive, { org_id, id })
+    const unarchive = (p: Doc<'profiles'>, id: string) =>
+      app(p).mutation(api.projects.unarchive, { org_id, id })
+    const summary = (p: Doc<'profiles'>, id: string) =>
+      app(p).query(api.projects.removalSummary, { org_id, id })
+    const remove = (p: Doc<'profiles'>, id: string) =>
+      app(p).mutation(api.projects.deleteDeep, { org_id, id })
+    const createSub = (p: Doc<'profiles'>, parent_id: string, key: string) =>
+      app(p).mutation(api.projects.create, {
+        org_id,
+        id: uuid(),
+        type: 'project',
+        parent_id,
+        key,
+        name: key,
+        lead_id: fx.user.id,
+      })
+    const leads = (p: Doc<'profiles'>, parent_id: string) =>
+      app(p).query(api.projectSettings.leadCandidates, { org_id, parent_id })
+    const LEAD = 'requires lead access to this project'
+
+    // a member who sees the project without leading it is refused each,
+    // with the sentences these writes have always had
+    await refused(update(fx.pia, fx.sub.id, { review_hours: 2 }), 'forbidden', LEAD)
+    await refused(update(fx.pia, fx.sub.id, { lead_id: fx.pia.id }), 'forbidden', LEAD)
+    await refused(archive(fx.pia, fx.sub.id), 'forbidden', LEAD)
+    await refused(summary(fx.pia, fx.sub.id), 'rule', 'requires the project lead')
+    await refused(remove(fx.pia, fx.sub.id), 'rule', 'requires the project lead')
+    await refused(createSub(fx.pia, fx.meta.id, 'PIA'), 'forbidden', LEAD)
+    expect(await leads(fx.pia, fx.meta.id)).toEqual({ state: 'refused', message: LEAD })
+    // one who sees nothing reads the parent as missing, as before
+    await refused(createSub(sam, fx.hidden.id, 'SAM'), 'rule', 'parent project not found')
+    expect(await leads(sam, fx.hidden.id)).toEqual({ state: 'unavailable' })
+    await refused(update(sam, fx.hidden.id, { review_hours: 2 }), 'forbidden', LEAD)
+
+    // the admin's every write goes through
+    await update(fx.admin, fx.hidden.id, { review_hours: 2 })
+    expect((await projectRow(fx.t, fx.hidden.id))?.review_hours).toBe(2)
+    await update(fx.admin, fx.sub.id, { lead_id: fx.pia.id })
+    expect((await projectRow(fx.t, fx.sub.id))?.lead_id).toBe(fx.pia.id)
+    expect((await leads(fx.admin, fx.hidden.id)).state).toBe('ready')
+    const made = await createSub(fx.admin, fx.hidden.id, 'OPT')
+    expect(await projectRow(fx.t, made.id)).toMatchObject({
+      parent_id: fx.hidden.id,
+      lead_id: fx.user.id,
+    })
+    // archive the sub-project, then its parent, and restore the
+    // sub-project under the archived parent, which restores that too
+    await archive(fx.admin, fx.sub2.id)
+    await archive(fx.admin, fx.meta.id)
+    await unarchive(fx.admin, fx.sub2.id)
+    expect((await projectRow(fx.t, fx.sub2.id))?.archived_at).toBeUndefined()
+    expect((await projectRow(fx.t, fx.meta.id))?.archived_at).toBeUndefined()
+    expect(await summary(fx.admin, fx.hidden.id)).toMatchObject({
+      sub_projects: [{ id: made.id, key: 'OPT' }],
+    })
+    await remove(fx.admin, fx.hidden.id)
+    expect(await projectRow(fx.t, fx.hidden.id)).toBeNull()
+  })
+
   it('changes settings with Lead access only, signed via the REST API', async () => {
     const fx = await setup()
     const patch = (p: Doc<'profiles'>, body: unknown) =>
@@ -1039,6 +1192,10 @@ describe('changing a project', () => {
 /* ------------------------------------------------------------- 3. access */
 
 describe('project access, one user or team at a time', () => {
+  const ownReads = structuredClone(OWN_READS)
+  afterEach(() => {
+    Object.assign(OWN_READS, structuredClone(ownReads))
+  })
   const setAccess = (fx: Fx, p: Doc<'profiles'>, args: Json) =>
     parsed(
       fx.t.mutation(internal.machine.projects.mcpSetProjectAccess, {
@@ -1139,11 +1296,115 @@ describe('project access, one user or team at a time', () => {
     expect((await grants(fx.t, fx.sub.id))[fx.pia.id]).toBeUndefined()
     expect((await taskRow(fx.t, open.id))?.assignee_id).toBe(fx.pia.id)
     expect((await taskRow(fx.t, done.id))?.assignee_id).toBe(fx.pia.id)
+    expect(out.hidden).toEqual({ tasks: 0, user_ids: [] })
     // nothing left to remove changes nothing
     expect(await setAccess(fx, fx.user, { user_id: fx.pia.id })).toMatchObject({
       changed: false,
       stranded: [],
     })
+  })
+
+  it('counts the tasks a remover cannot see in hidden with their holders, never naming them', async () => {
+    const fx = await setup()
+    const { open, reviewing } = await held(fx)
+    // the admin, who takes part in no project, manages FW and sees none of
+    // its tasks, over MCP and over REST
+    const viaMcp = await setAccess(fx, fx.admin, { user_id: fx.pia.id })
+    expect(viaMcp).toMatchObject({ changed: true, stranded: [], reassigned: [] })
+    expect(viaMcp.hidden).toEqual({ tasks: 2, user_ids: [fx.pia.id] })
+    await grant(fx.t, fx.sub.id, fx.pia.id, 'user')
+    const viaRest = await fx.t.mutation(internal.machine.projects.restRemoveUserAccess, {
+      ...rest(fx.admin),
+      ref: 'FW',
+      subject: fx.pia.id,
+      body: '',
+    })
+    expect(viaRest).toMatchObject({
+      removed: true,
+      stranded: [],
+      reassigned: [],
+      hidden: { tasks: 2, user_ids: [fx.pia.id] },
+    })
+    for (const out of [viaMcp, viaRest])
+      for (const task of [open, reviewing]) {
+        expect(JSON.stringify(out)).not.toContain(task.id)
+        expect(JSON.stringify(out)).not.toContain(`QN-${task.num}`)
+      }
+    // the lead, who reads FW, sees them listed and nothing hidden
+    await grant(fx.t, fx.sub.id, fx.pia.id, 'user')
+    const byLead = await setAccess(fx, fx.user, { user_id: fx.pia.id })
+    expect((byLead.stranded as Json[]).map((h) => h.id)).toEqual([open.id, reviewing.id])
+    expect(byLead.hidden).toEqual({ tasks: 0, user_ids: [] })
+  })
+
+  it('counts a task as hidden when the check of whether the remover sees its project stops, never naming it', async () => {
+    const fx = await setup()
+    const { open, reviewing } = await held(fx)
+    // the admin reads FW by a grant of their own, and FW is shared with
+    // Firmware, a team without members, whose membership the check asks
+    await grant(fx.t, fx.sub.id, fx.admin.id, 'user')
+    await fx.t.run(async (ctx) => {
+      const firmware = uuid()
+      await ctx.db.insert('teams', {
+        id: firmware,
+        org_id: fx.org.id,
+        name: 'Firmware',
+        track_delay_default: false,
+        created_at: fx.team.created_at,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: fx.sub.id,
+        team_id: firmware,
+        level: 'viewer',
+      })
+    })
+    // with the check finished they see FW's tasks listed
+    const listed = await setAccess(fx, fx.admin, { user_id: fx.pia.id })
+    expect((listed.stranded as Json[]).map((h) => h.id)).toEqual([open.id, reviewing.id])
+    expect(listed.hidden).toEqual({ tasks: 0, user_ids: [] })
+    // a membership bound stops the check of FW, which then counts its tasks
+    // as hidden over MCP and over REST
+    Object.assign(OWN_READS, { lookups: -1, members: -1 })
+    await grant(fx.t, fx.sub.id, fx.pia.id, 'user')
+    const viaMcp = await setAccess(fx, fx.admin, { user_id: fx.pia.id, on_held_tasks: 'leave' })
+    expect(viaMcp).toMatchObject({ changed: true, stranded: [], reassigned: [] })
+    expect(viaMcp.hidden).toEqual({ tasks: 2, user_ids: [fx.pia.id] })
+    await grant(fx.t, fx.sub.id, fx.pia.id, 'user')
+    const viaRest = await fx.t.mutation(internal.machine.projects.restRemoveUserAccess, {
+      ...rest(fx.admin),
+      ref: 'FW',
+      subject: fx.pia.id,
+      body: JSON.stringify({ on_held_tasks: 'leave' }),
+    })
+    expect(viaRest).toMatchObject({
+      removed: true,
+      stranded: [],
+      reassigned: [],
+      hidden: { tasks: 2, user_ids: [fx.pia.id] },
+    })
+    for (const out of [viaMcp, viaRest])
+      for (const task of [open, reviewing]) {
+        expect(JSON.stringify(out)).not.toContain(task.id)
+        expect(JSON.stringify(out)).not.toContain(`QN-${task.num}`)
+      }
+    // the removals went through, and left the tasks with Pia
+    expect((await grants(fx.t, fx.sub.id))[fx.pia.id]).toBeUndefined()
+    expect((await taskRow(fx.t, open.id))?.assignee_id).toBe(fx.pia.id)
+  })
+
+  it('judges sight after the write, so a caller removing their own access counts what they no longer see', async () => {
+    const fx = await setup()
+    // the admin reads FW by a grant, holds a task there and removes the grant
+    await grant(fx.t, fx.sub.id, fx.admin.id, 'user')
+    const mine = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      assignee_id: fx.admin.id,
+    })
+    const out = await setAccess(fx, fx.admin, { user_id: fx.admin.id })
+    expect(out).toMatchObject({ changed: true, stranded: [] })
+    expect(out.hidden).toEqual({ tasks: 1, user_ids: [fx.admin.id] })
+    expect(JSON.stringify(out)).not.toContain(mine.id)
   })
 
   /* `ctx` with every task document its queries return pushed to `seen`. */
@@ -1655,6 +1916,168 @@ describe('reading one project', () => {
       lead_id: fx.user.id,
       grants: out.grants,
     })
+  })
+
+  it('an admin who takes part in no project reads its management data without its planning data, and manages it', async () => {
+    const fx = await setup()
+    await fx.t.run(async (ctx) => {
+      await ctx.db.patch(fx.meta._id, { review_hours: 4 })
+      await ctx.db.insert('milestones', {
+        id: uuid(),
+        project_id: fx.meta.id,
+        name: 'Launch',
+        week: '2026-06-01',
+        created_at: NOW,
+      })
+    })
+    await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    await countOrg(fx.t, fx.org.id)
+    const mcpGet = (p: Doc<'profiles'>, project: string) =>
+      parsed(fx.t.query(internal.machine.projects.mcpGetProject, { ...as_(p), project }))
+    const restGet = (p: Doc<'profiles'>, ref: string) =>
+      fx.t.query(internal.machine.rest.getProject, { ...as_(p), ref })
+    // the agent, who reads TBED, gets its planning data
+    expect(await mcpGet(fx.agent, 'FW')).toMatchObject({
+      access: { read: true, write: true },
+      completion: { status: 'ok', done: 0, total: 1, percent: 0 },
+      milestones: [{ name: 'Launch', date: '2026-06-01' }],
+    })
+    // the admin, who reads neither, gets each project's row, lead, settings
+    // and grants, with completion unavailable and no milestones, never 0 of 0
+    for (const ref of ['TBED', 'FW']) {
+      const out = await mcpGet(fx.admin, ref)
+      expect(out, ref).toMatchObject({
+        key: ref,
+        access: { read: false, write: false },
+        lead_id: fx.user.id,
+        effective_review_hours: 4,
+        completion: { status: 'unavailable', done: null, total: null, percent: null },
+        milestones: null,
+      })
+      expect(await restGet(fx.admin, ref)).toEqual(out)
+    }
+    expect((await mcpGet(fx.admin, 'FW')).grants).toEqual({
+      users: [{ id: fx.pia.id, name: 'Pia', level: 'user' }],
+      teams: [],
+    })
+    // the admin changes its settings over MCP and REST
+    const renamed = await parsed(
+      fx.t.mutation(internal.machine.projects.mcpUpdateProject, {
+        ...as_(fx.admin),
+        project: 'FW',
+        name: 'Firmware two',
+      }),
+    )
+    expect(renamed).toMatchObject({ name: 'Firmware two', milestones: null })
+    await fx.t.mutation(internal.machine.projects.restUpdateProject, {
+      ...rest(fx.admin),
+      ref: 'FW',
+      body: '{"description":"Managed"}',
+    })
+    expect((await projectRow(fx.t, fx.sub.id))?.description).toBe('Managed')
+    // archives and restores it; an archived project has no completion for anyone
+    const archived = await fx.t.mutation(internal.machine.projects.restUpdateProject, {
+      ...rest(fx.admin),
+      ref: 'FW',
+      body: '{"archived":true}',
+    })
+    expect(archived).toMatchObject({ archived: true, completion: null, milestones: null })
+    expect(await restGet(fx.admin, 'FW')).toMatchObject({ completion: null })
+    await fx.t.mutation(internal.machine.projects.mcpUpdateProject, {
+      ...as_(fx.admin),
+      project: 'FW',
+      archived: false,
+    })
+    expect((await projectRow(fx.t, fx.sub.id))?.archived_at).toBeUndefined()
+    // changes its access over MCP and REST
+    await fx.t.mutation(internal.machine.projects.mcpSetProjectAccess, {
+      ...as_(fx.admin),
+      project: 'FW',
+      user_id: fx.pia.id,
+      level: 'viewer',
+    })
+    await fx.t.mutation(internal.machine.projects.restSetUserAccess, {
+      ...rest(fx.admin),
+      ref: 'PCB',
+      subject: fx.pia.id,
+      body: '{"level":"user"}',
+    })
+    expect(await grants(fx.t, fx.sub.id)).toEqual({ [fx.pia.id]: 'viewer' })
+    expect(await grants(fx.t, fx.sub2.id)).toEqual({ [fx.pia.id]: 'user' })
+    await fx.t.mutation(internal.machine.projects.restRemoveUserAccess, {
+      ...rest(fx.admin),
+      ref: 'PCB',
+      subject: fx.pia.id,
+      body: '',
+    })
+    expect(await grants(fx.t, fx.sub2.id)).toEqual({})
+    // a milestone, planning data, answers like an unknown project for them
+    await refused(
+      fx.t.mutation(internal.machine.projects.restAddMilestone, {
+        ...rest(fx.admin),
+        ref: 'TBED',
+        body: '{"name":"Beta","date":"2026-07-01"}',
+      }),
+      'not_found',
+      'project not found',
+    )
+    await refused(
+      fx.t.mutation(internal.machine.projects.mcpSetMilestone, {
+        ...as_(fx.admin),
+        project: 'TBED',
+        name: 'Beta',
+        date: '2026-07-01',
+      }),
+      'not_found',
+      'project "TBED" not found (or not visible to you)',
+    )
+    // and creates a sub-project under it, which they lead and so read, and
+    // which shows them TBED for navigation from then on
+    const made = await parsed(
+      fx.t.mutation(internal.machine.projects.mcpCreateProject, {
+        ...as_(fx.admin),
+        name: 'Managed child',
+        parent: 'TBED',
+      }),
+    )
+    expect(made).toMatchObject({ parent_id: fx.meta.id, access: { read: true } })
+    const viaRest = await fx.t.mutation(internal.machine.projects.restCreateProject, {
+      ...rest(fx.admin),
+      body: JSON.stringify({ name: 'Managed REST child', parent: 'TBED' }),
+    })
+    expect(viaRest).toMatchObject({ parent_id: fx.meta.id })
+    // Pia, who reads FW and manages nothing, finds SKNK nowhere
+    await refused(
+      mcpGet(fx.pia, 'SKNK'),
+      'not_found',
+      'project "SKNK" not found (or not visible to you)',
+    )
+    await refused(restGet(fx.pia, 'SKNK'), 'not_found', 'project not found')
+    await refused(
+      fx.t.mutation(internal.machine.projects.mcpSetProjectAccess, {
+        ...as_(fx.pia),
+        project: 'SKNK',
+        user_id: fx.viewer.id,
+        level: 'viewer',
+      }),
+      'not_found',
+      'project "SKNK" not found (or not visible to you)',
+    )
+    await refused(
+      fx.t.mutation(internal.machine.projects.restCreateProject, {
+        ...rest(fx.pia),
+        body: JSON.stringify({ name: 'Under SKNK', parent: 'SKNK' }),
+      }),
+      'bad_request',
+      'parent project not found',
+    )
+    // the other organization's admin finds TBED nowhere
+    await refused(restGet(fx.otherAdmin, 'TBED'), 'not_found', 'project not found')
+    await refused(
+      mcpGet(fx.otherAdmin, fx.meta.id),
+      'not_found',
+      `project "${fx.meta.id}" not found (or not visible to you)`,
+    )
   })
 
   it('a project the caller cannot read answers like an unknown one', async () => {

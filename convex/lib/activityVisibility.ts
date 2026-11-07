@@ -2,12 +2,14 @@
  * of one task's history it reads them in. The task window (snapshot.ts
  * threadHistory and historyBefore), REST and MCP read the same pages
  * (taskHistoryPage below), the window WINDOW_HISTORY_PAGE rows a page and
- * REST and MCP HISTORY_PAGE_MAX. Organization admins receive every task row;
- * memberSeesActivity decides for everyone else, asking the member's access
+ * REST and MCP HISTORY_PAGE_MAX. memberSeesActivity decides for every
+ * member, an organization admin included, asking the member's access
  * (lib/access.ts accessOf) about each project the page's rows name, so a
  * page reads and reruns only on those projects and the member's rows on
- * them, never on every project of the organization. Rows about anything but
- * a task reach no client; admins read them in the organization export. */
+ * them, never on every project of the organization, and no client receives
+ * a row a member could not. Rows about anything but a task reach no
+ * client. An organization's admins read every row only in the organization
+ * export. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
@@ -19,13 +21,13 @@ import type { Shown } from './workingSet'
 /* A project move written before related_project_id existed names a
  * destination that cannot be checked (model/issues.ts moveIssueCore writes
  * "to the <name> sub-project"; status and parent moves say "from" and
- * "under"), so only admins receive it. */
+ * "under"), so no client receives it. */
 const isUnrecordedProjectMove = (ev: Doc<'activity_events'>): boolean =>
   ev.verb === 'moved' && ev.related_project_id === undefined && !!ev.detail?.startsWith('to the ')
 
 /* Task archive rows used to say 'with N subtasks', counting subtasks in
  * projects a reader may not access (model/issues.ts archiveIssueCore no
- * longer writes it). Members other than admins get such rows without it. */
+ * longer writes it). Every member gets such rows without it. */
 const LEGACY_SUBTASK_COUNT = /^with \d+ subtasks?$/
 function withoutLegacySubtaskCount(ev: Doc<'activity_events'>): Doc<'activity_events'> {
   if (ev.target_type !== 'issue' || ev.verb !== 'archived') return ev
@@ -34,8 +36,8 @@ function withoutLegacySubtaskCount(ev: Doc<'activity_events'>): Doc<'activity_ev
   return rest
 }
 
-/* Members other than organization admins receive a task row only if the
- * task is in their working set, which keeps out the history of a task that
+/* A member, an organization admin as anyone, receives a task row only if
+ * the task is in their working set, which keeps out the history of a task that
  * was deleted, archived or moved to a project the member cannot access, and
  * they can access every project the row names: the project it was filed
  * under and its related project, such as a move's destination. The history
@@ -47,7 +49,7 @@ function withoutLegacySubtaskCount(ev: Doc<'activity_events'>): Doc<'activity_ev
  * Deleting a project clears project_id on its rows (model/deletedItems.ts
  * purgeActivity), so a task that moved out first keeps those rows. A row
  * that names another task (a parent change or a link) also needs access to
- * that task where it is now; one naming a deleted task reaches admins only.
+ * that task where it is now; one naming a deleted task reaches no client.
  * Task rows list the tasks they name in named_task_nums, and one without
  * the list fails closed. Rows about anything but a task never reach a
  * member. The checks that read nothing come first, so a row they refuse
@@ -151,8 +153,8 @@ export const HISTORY_ROOM = { room: 0.7 }
 
 /* The fewest rows a later read of a page asks for, so a page a few rows
  * short of its size reads on past rows it leaves out in batches. The first
- * read asks for one row past the page alone, which is all an admin's page or
- * a member's that leaves nothing out needs. */
+ * read asks for one row past the page alone, which is all a page that
+ * leaves nothing out needs. */
 const HISTORY_BATCH_MIN = 100
 
 /** The refusal of a REST or MCP page that ended before it found a row the
@@ -160,7 +162,7 @@ const HISTORY_BATCH_MIN = 100
  * Only thousands of rows in a row that name projects or tasks the caller
  * cannot see lead to it. The app pages on with the page's `next` instead. */
 export const HISTORY_HIDDEN =
-  "too many of this task's changes are hidden from you to read them at once; an organization admin can read them"
+  "too many of this task's changes are hidden from you to read them at once"
 
 /** The refusal for a `before` that names no row of the task's history. */
 export const BEFORE_NOT_A_CHANGE = "before must be the id of a row in this task's history"
@@ -267,9 +269,9 @@ export type HistoryPage = {
  * (historyAnchor), oldest first in insertion order, which follows time. The
  * caller has already resolved a task `me` can read (lib/core.ts findIssue),
  * which counts as the task being shown, as every machine read counts the
- * tasks it can read, archived ones included. Organization admins receive
- * every row; other members get the rows memberSeesActivity allows, without
- * legacy subtask counts. For members it also reads one task for each
+ * tasks it can read, archived ones included. Every member, an
+ * organization admin included, gets the rows memberSeesActivity allows,
+ * without legacy subtask counts. It also reads one task for each
  * distinct number the rows name and asks the member's access about each
  * distinct project the rows and those tasks name (memberSight), until the
  * read passes NAMED_TASK_ROOM. The page ends before a row naming a task or
@@ -291,7 +293,6 @@ export async function taskHistoryPage(
   size = HISTORY_PAGE_MAX,
 ): Promise<HistoryPage> {
   const read = await olderRows(ctx, issue, before)
-  const admin = me.org_role === 'admin'
   let sees: ((ev: Doc<'activity_events'>, anyRoom: boolean) => Promise<Sight>) | undefined
   const newest: Doc<'activity_events'>[] = []
   // the oldest row read so far, received or not
@@ -308,23 +309,23 @@ export async function taskHistoryPage(
     const rows = await read(n)
     for (const ev of rows) {
       if (newest.length === size) return page(true)
-      sees ??= admin ? async () => 'yes' : memberSight(ctx, me, issue)
+      sees ??= memberSight(ctx, me, issue)
       // The first row is checked whatever the room, so every page moves on.
       // A later one the read has no room to check ends the page, and the
       // next page checks it with room of its own.
       const sight = await sees(ev, passed === undefined)
       if (sight === 'unchecked') return page(true)
       passed = ev
-      if (sight === 'yes') newest.push(admin ? ev : withoutLegacySubtaskCount(ev))
+      if (sight === 'yes') newest.push(withoutLegacySubtaskCount(ev))
     }
     if (rows.length < n) return page(false)
-    if (!admin && (await usedMoreThan(ctx, HISTORY_ROOM.room))) return page(true)
+    if (await usedMoreThan(ctx, HISTORY_ROOM.room)) return page(true)
   }
 }
 
 /** Which of `rows`, rows of the history of `issue`, `me` receives, in their
- * order: all of them for an organization admin, else those
- * memberSeesActivity allows (memberSight). A row it had no room to check,
+ * order: those memberSeesActivity allows (memberSight), for an organization
+ * admin as for anyone. A row it had no room to check,
  * or whose check a bound of lib/access.ts OWN_READS stopped, is left out,
  * so model/issues.ts taskWriters names nobody for it and the refused edit
  * keeps its conflict sentence. */
@@ -334,7 +335,7 @@ export async function receivedRows(
   issue: Doc<'issues'>,
   rows: Doc<'activity_events'>[],
 ): Promise<Doc<'activity_events'>[]> {
-  if (me.org_role === 'admin' || rows.length === 0) return rows
+  if (rows.length === 0) return rows
   const sees = memberSight(ctx, me, issue)
   const out: Doc<'activity_events'>[] = []
   for (const ev of rows) {

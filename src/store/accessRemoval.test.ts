@@ -357,18 +357,45 @@ describe('removing access through the server preview', () => {
       expect(P.levelOn(work, 'leo')).toBeNull()
     })
 
+    it('opens the window with Keep as Viewer alone for a caller who may keep the people but not reassign', async () => {
+      await load()
+      // an organization admin who manages Work without Edit on its tasks
+      const keepOnly = answer({
+        ...leoAnswer(),
+        reassign: { allowed: false, refusal: 'no write access to this project', permitted: false },
+      })
+      preview = async () => keepOnly
+      expect(await P.startRemoval(user('leo'), shown)).toEqual(keepOnly)
+      expect(requests).toEqual([])
+      // a removed Viewer grant offers no Keep, so such a caller gets the notice
+      preview = async () =>
+        answer({
+          ...leoAnswer(),
+          keep: { offered: false, permitted: true },
+          reassign: { allowed: false, permitted: false },
+        })
+      expect(await P.startRemoval(user('leo'), shown)).toBeNull()
+      await vi.waitFor(() => expect(requests.map((r) => r.args.on_held_tasks)).toEqual(['leave']))
+    })
+
     it('removes at once with a notice for a caller who cannot carry out both choices, counting tasks the caller cannot see', async () => {
       await load()
       const notice = (n: string) =>
         `Ann Person can no longer see ${n} they are assigned to or reviewing. A project lead can reassign ${n === 'a task' ? 'it' : 'them'}.`
-      // a team leader without Edit on one of the projects once the access is gone
+      // a team leader who may make neither choice once the access is gone
       preview = async () =>
-        answer({ ...annAnswer(), reassign: { allowed: false, permitted: false } })
+        answer({
+          ...annAnswer(),
+          keep: { allowed: false, permitted: false },
+          reassign: { allowed: false, permitted: false },
+        })
       expect(await P.startRemoval(leaving('ann'), shown)).toBeNull()
       await vi.waitFor(() =>
         expect(window.showToast).toHaveBeenLastCalledWith(notice('a task'), 'info'),
       )
-      // or without managing the users of a Keep target, with two tasks out of sight
+      // or a team leader with Edit who does not manage the users of a Keep
+      // target, with two tasks out of sight: the rule is one-sided, so a
+      // caller who may reassign but not keep gets the notice
       await load()
       preview = async () =>
         answer({ ...annAnswer(), tasks: 3, hidden: 2, keep: { allowed: false, permitted: false } })
@@ -383,7 +410,11 @@ describe('removing access through the server preview', () => {
       await load()
       refused.add('ann')
       preview = async () =>
-        answer({ ...annAnswer(), reassign: { allowed: false, permitted: false } })
+        answer({
+          ...annAnswer(),
+          keep: { allowed: false, permitted: false },
+          reassign: { allowed: false, permitted: false },
+        })
       ;(window.showToast as ReturnType<typeof vi.fn>).mockClear()
       expect(await P.startRemoval(leaving('ann'), shown)).toBeNull()
       await vi.waitFor(() => expect(requests).toHaveLength(1))

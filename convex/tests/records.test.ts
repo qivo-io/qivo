@@ -64,7 +64,7 @@ import {
   type T,
   TODAY,
   uuid,
-  withOrg,
+  withReadingAdmin,
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
 import { plantTicket } from './uploadTickets.setup'
@@ -109,7 +109,7 @@ type Fx = OrgFixture & {
  * deployment, since the workload lists people in name order. */
 async function setup(): Promise<Fx> {
   const t = newT()
-  const f = await withOrg(t)
+  const f = await withReadingAdmin(t)
   await t.run((ctx) =>
     ctx.db.insert('project_access', {
       project_id: f.meta.id,
@@ -1846,7 +1846,7 @@ describe('task activity', () => {
     })
   }
 
-  it("gives a member the app's rows, oldest first, and an admin every row", async () => {
+  it("gives a member the app's rows, oldest first, and an admin the rows their own access allows", async () => {
     const fx = await setup()
     const issue = await task(fx)
     const elsewhere = await task(fx, { project_id: fx.hiddenSub.id })
@@ -1892,6 +1892,9 @@ describe('task activity', () => {
         ref: issue.id,
       }),
     ) as { verb: string; detail: string | null }[]
+    // the admin reads the hidden sub-project by a grant, so the rows that
+    // name it reach them, and the archive row without its count, as any
+    // member's
     expect(admin.map((r) => r.verb)).toEqual([
       'created',
       'moved',
@@ -1900,7 +1903,7 @@ describe('task activity', () => {
       'archived',
       'restored',
     ])
-    expect(admin[4].detail).toBe('with 2 subtasks')
+    expect(admin[4].detail).toBeNull()
   })
 
   it('answers null for an actor whose profile is gone, even before the removal clears the row', async () => {

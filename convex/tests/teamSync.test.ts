@@ -31,7 +31,7 @@ import {
   type T,
   tick,
   uuid,
-  withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
 import { orgProjectView } from './orgProjectView.setup'
@@ -224,7 +224,7 @@ const setStamp = (t: T, profile: Doc<'profiles'>, at: string, since?: string) =>
 describe('teamSync.stamp', () => {
   it('staff stamp a colleague, themselves and an agent, with no activity row', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const before = Date.now()
     await stamp(t, f, f.admin, f.user.id)
     await stamp(t, f, f.user, f.user.id)
@@ -240,7 +240,7 @@ describe('teamSync.stamp', () => {
 
   it('a viewer and a guest are refused and change nothing', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await expectRefusal(stamp(t, f, f.viewer, f.user.id), 'forbidden')
     await expectRefusal(stamp(t, f, f.guest, f.guest.id), 'forbidden')
     expect(await profileRow(t, f.user.id)).toEqual(f.user)
@@ -251,7 +251,7 @@ describe('teamSync.stamp', () => {
 
   it('a foreign-org or unknown profile reads not found', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await expectRefusal(stamp(t, f, f.admin, f.otherAdmin.id), 'not_found', /profile not found/)
     await expectRefusal(stamp(t, f, f.admin, uuid()), 'not_found', /profile not found/)
     expect(await profileRow(t, f.otherAdmin.id)).toEqual(f.otherAdmin)
@@ -259,7 +259,7 @@ describe('teamSync.stamp', () => {
 
   it('keeps since through a sitting and rolls the last sync into it after one', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const earlier = '2025-12-30T09:00:00.000Z'
 
     await stamp(t, f, f.admin, f.user.id)
@@ -285,7 +285,7 @@ describe('teamSync.stamp', () => {
 
   it("a person's first stamp keeps the caller's valid reading day, and only the first", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const today = new Date()
     const back = (days: number) =>
       new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - days))
@@ -311,7 +311,7 @@ describe('teamSync.stamp', () => {
 
   it("the stamp rides every member's snapshot profile row", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     await stamp(t, f, f.admin, f.user.id)
     await setStamp(t, f.user, (await stampOf(t, f.user.id)).sync_at!, NOW)
     const row = await stampOf(t, f.user.id)
@@ -352,7 +352,7 @@ describe('teamSync.lastComments', () => {
 
   it('answers each open, active task the asked owners hold that the caller can see', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const mine = { org_id: f.org.id, project_id: f.sub.id, assignee_id: f.user.id }
     const hiddenSub = await plantProject(t, {
       org_id: f.org.id,
@@ -422,7 +422,7 @@ describe('teamSync.lastComments', () => {
 
   it('gives a task In Review with a reviewer to the reviewer, and any other to its assignee', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id, assignee_id: f.user.id }
     const reviewing = await plantIssue(t, { ...base, status: 'review', reviewer_id: f.admin.id })
     const unreviewed = await plantIssue(t, { ...base, status: 'review' })
@@ -438,7 +438,7 @@ describe('teamSync.lastComments', () => {
   it('answers at most LAST_COMMENTS.tasks tasks and says the answer is cut short', async () => {
     LAST_COMMENTS.tasks = 2
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id, assignee_id: f.user.id }
     await plantIssue(t, { ...base, status: 'todo' })
     await plantIssue(t, { ...base, status: 'progress' })
@@ -460,7 +460,7 @@ describe('teamSync.lastComments', () => {
   it('stops reading comments past LAST_COMMENTS.bytes and leaves the rest out', async () => {
     LAST_COMMENTS.bytes = 50_000
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id, assignee_id: f.user.id }
     for (let n = 0; n < 5; n++) {
       const task = await plantIssue(t, { ...base, status: 'todo' })
@@ -488,7 +488,7 @@ describe('teamSync.lastComments', () => {
 
   it("reads only the asked owners' open tasks, however many others exist", async () => {
     const t = newT({ transactionLimits: { databaseQueries: 100, documentsRead: 300 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const others = { org_id: f.org.id, project_id: f.sub.id, assignee_id: f.admin.id }
     // 5,000 open tasks someone else holds, and 2,000 the owner closed or
     // has not started. An organization-wide or a status-blind owner read
@@ -522,7 +522,7 @@ describe('teamSync.lastComments', () => {
   it('counts every task it reads toward LAST_COMMENTS.taskBytes, kept or not', async () => {
     LAST_COMMENTS.taskBytes = 50_000
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const hiddenSub = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
@@ -553,7 +553,7 @@ describe('teamSync.lastComments', () => {
 
   it("stays under Convex's read limit with long tasks and comments, cut short", async () => {
     const t = newT({ transactionLimits: { bytesRead: 16 * 2 ** 20 } })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id, assignee_id: f.user.id }
     // 430 open tasks with 20,000 characters each in their description and
     // their latest comment, about 17 MB together
@@ -618,7 +618,7 @@ describe('teamSync.lastComments', () => {
    * sub-project, led by the admin. */
   async function namedOrg(extra: number) {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, assignee_id: f.user.id }
     for (let n = 0; n < 6; n++)
       await plantIssue(t, { ...base, project_id: n % 2 ? f.sub.id : f.sub2.id, num: 100 + n })
@@ -655,7 +655,7 @@ describe('teamSync.lastComments', () => {
     const answers: unknown[] = []
     for (const copied of [false, true]) {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const hiddenSub = await plantProject(t, {
         org_id: f.org.id,
         type: 'project',
@@ -701,7 +701,7 @@ describe('teamSync.lastComments', () => {
 
   it("cuts the answer short where a bound of the caller's own access reads stops a check, never a row for its project", async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const me = await plantSeat(t, {
       org_id: f.org.id,
       org_role: 'user',
@@ -733,7 +733,7 @@ describe('teamSync.lastComments', () => {
 
   it('cuts the answer short where the guard stops a step, the owners decided before it keeping their rows', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     // the first owner's tasks in one status of one sub-project, the
     // second's in another sub-project, which needs its own access question
     const first: Doc<'issues'>[] = []
@@ -777,7 +777,7 @@ describe('teamSync.lastComments', () => {
 
   it('reads 50 owners whose 1,000 open tasks span 200 sub-projects, with open tasks in archived ones, under real limits', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const owners: Doc<'profiles'>[] = []
     for (let n = 0; n < 50; n++)
       owners.push(await plantSeat(t, { org_id: f.org.id, name: `Owner ${n}`, accepted_at: NOW }))
@@ -838,7 +838,7 @@ describe('teamSync.lastComments', () => {
 
   it(`refuses more than ${SYNC_OWNERS_MAX} people at a time`, async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const many = Array.from({ length: SYNC_OWNERS_MAX + 1 }, () => uuid())
     await expectRefusal(
       lastComments(t, f.admin, f.org.id, many),

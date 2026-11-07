@@ -38,6 +38,9 @@ import type { RemovalPreview } from './planner'
     - `too_large` and `refused`, those answers;
     - `leave_only`, an admin's removal while the organization is read-only;
     - `unsettled`, a caller who may make neither choice, for the notice;
+    - `keep-only`, a caller who may keep the people as Viewers but not
+      reassign the tasks, as an organization admin who manages a project
+      without Edit on its tasks, Reassign refused with NO_WRITE_ACCESS;
     - `slow`, both reads answer after two seconds (the perf server waits);
     - for the picker `choices-stopped` (each batch stops after half a
       batch), `choices-not-ready` and `choices-error` (every batch fails). */
@@ -141,6 +144,7 @@ export function removalPreviewStandIn(
   const capped = force.has('capped')
   const leaveOnly = force.has('leave_only')
   const unsettled = force.has('unsettled')
+  const keepOnly = force.has('keep-only')
   const keepRefusal = leaveOnly
     ? READ_ONLY
     : capped
@@ -154,7 +158,7 @@ export function removalPreviewStandIn(
       ? LIMITS.removalHolders.refusal
       : tooMany
         ? LIMITS.reassign.refusal
-        : unsettled
+        : unsettled || keepOnly
           ? NO_WRITE_ACCESS
           : null
   const taker = snapshot.profiles.find((p) => p.id === reassignTo)
@@ -188,7 +192,7 @@ export function removalPreviewStandIn(
     reassign: {
       allowed: reassignRefusal === null,
       refusal: reassignRefusal,
-      permitted: !unsettled,
+      permitted: !unsettled && !keepOnly,
       ...(reassignTo === undefined
         ? {}
         : {

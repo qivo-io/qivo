@@ -12,7 +12,7 @@ import {
   restTasks,
   TODAY,
   uuid,
-  withOrg,
+  withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
 
@@ -21,7 +21,7 @@ describe('parent task status', () => {
     'preserves dormant status while grouped and restores it after last-child %s',
     async (remove) => {
       const t = newT()
-      const f = await withOrg(t)
+      const f = await withReadingAdmin(t)
       const client = as(t, f.admin)
       const parent = await plantIssue(t, {
         org_id: f.org.id,
@@ -82,7 +82,7 @@ describe('parent task status', () => {
 
   it('status filters and writes use leaves across nested groups on REST and MCP', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = { org_id: f.org.id, project_id: f.sub.id, status: 'review' as const }
     const root = await plantIssue(t, base)
     const middle = await plantIssue(t, { ...base, parent_id: root.id })
@@ -140,7 +140,7 @@ describe('parent task status', () => {
 
   it('hidden children preserve grouping without revealing child identities; archived-project ones do not', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, status: 'done' })
     const hiddenProject = await plantProject(t, {
       org_id: f.org.id,
@@ -227,7 +227,7 @@ describe('parent task status', () => {
 
   it('groups contribute no independent planning load regardless of stored status', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const base = {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -250,7 +250,7 @@ describe('parent task status', () => {
 
   it('archived groups retain grouping metadata and refuse status changes', async () => {
     const t = newT()
-    const f = await withOrg(t)
+    const f = await withReadingAdmin(t)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: parent.id })
     await as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: parent.id })

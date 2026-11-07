@@ -148,9 +148,9 @@ page, newest first, with **Previous** and **Next** and a search that also
 finds sub-projects. With seats in several organizations, you choose the
 organization at the top. **Restore** returns a project to active views;
 **Delete** moves it to [Deleted items](#deleted-items). Archiving, restoring
-and deleting require Lead access, which organization admins and project
-leads have; organization admins can restore and delete every archived
-project of their organization.
+and deleting need the project's lead or an organization admin; organization
+admins can restore and delete every archived project of their organization,
+also one they take no part in.
 
 Sub-projects archived with a project return with it. A sub-project archived
 separately stays archived when its project returns and then has its own row
@@ -223,7 +223,8 @@ deleted tasks show once you choose projects.
 
 Who sees an item:
 
-- **Organization admins** see everything deleted in the organization.
+- **Organization admins** see everything deleted in the organization. A
+  task item whose project they cannot read shows without its title.
 - **Project leads** see what they deleted, and everything deleted in projects
   they lead, including the sub-projects of a project they lead.
 - **Everyone else** sees what they deleted.
@@ -295,8 +296,9 @@ subtasks are too large to count during the restore, it returns as a
 top-level task and keeps its people and its subtasks, as a subtask restored
 from the archive under a full parent does. Work that was archived when it was
 deleted returns archived. A restored Done task restarts its auto-archive
-clock. A restored project shows to its leads, organization admins and the
-people and teams it is shared with at the same moment. A task restored on its own sends its followers a **Restored** update.
+clock. A restored project shows to its leads and the people and teams it is
+shared with at the same moment, and to organization admins in Settings ›
+Projects. A task restored on its own sends its followers a **Restored** update.
 Restoring several items at once, or a project, sends none, and inbox
 messages removed by the delete do not come back
 ([Your inbox](./working-together.md#your-inbox)).
@@ -312,7 +314,10 @@ You can restore what you see when you can still edit where it goes back:
   that project. Only organization admins see it, and its **Restore**, also
   on a task that search finds inside it, brings the project back first.
   Qivo then restores the task once the project is back, also when you have
-  left the page, and when edits are paused just then, once they resume.
+  left the page, and when edits are paused just then, once they resume. If
+  you will not have edit access to the task's project once it is back,
+  **Restore** brings back only the project, and the task stays in Deleted
+  items.
 - While the organization is read-only, restoring is paused.
 
 **Delete now…** in a row's menu deletes an item for good at once, with its
