@@ -1228,6 +1228,50 @@ describe('an open or a check that waits, and the person’s next move', { timeou
     expect(sentProjects()).toEqual([])
   })
 
+  it('drops an address’s check once Back or Forward reaches the front door, where the startup rule decides', async () => {
+    const { snap, held, late } = lateWorld()
+    // the server's ok for Late programme, number 15, with the delivery
+    // that brings it
+    resolveWith = (args) => {
+      deliver(held)
+      return queryProjectNav(held, 'projectNav:resolve', args)
+    }
+    const release = holdResolve()
+    await app(snap, '/app/testbed/overview/p/15', {}, () => {
+      server = held
+    })
+    await chooser('checking')
+    expect(line()).toBe('Opening that project…')
+    expect(asks.map((a) => a.args)).toEqual([{ org_id: ORG, num: 15 }])
+    // the front door's entry, with no scope on either side and no
+    // remembered project
+    await go('/app/testbed')
+    await settle()
+    await chooser('choose')
+    expect(line()).not.toBe('Opening that project…')
+    await release()
+    // the check's answer brought the project and opened nothing
+    expect(store.P.project(late)).toBeDefined()
+    expect(chooserState()).toBe('choose')
+    expect(shown()).toBeUndefined()
+    expect(viewReads()).toEqual([])
+    expect(sentProjects()).toEqual([])
+    expect(location.pathname).toBe('/app/testbed')
+    await leave()
+    // a check that could not finish leaves its Retry behind there too
+    resolveWith = () => {
+      throw new Error('the read failed')
+    }
+    await app(structuredClone(snap), '/app/testbed/overview/p/15')
+    await chooser('retry')
+    await go('/app/testbed')
+    await settle()
+    await chooser('choose')
+    expect(q('[data-project-chooser-retry]')).toBeNull()
+    expect(asks).toHaveLength(1)
+    expect(location.pathname).toBe('/app/testbed')
+  })
+
   it('drops a sidebar open once the person picks another Team sync scope, so its answer leaves Team sync shown', async () => {
     const { snap, held, late } = lateWorld()
     resolveWith = (args) => {

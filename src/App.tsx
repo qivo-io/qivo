@@ -1403,13 +1403,20 @@ function App() {
       // can land on a legacy entry from earlier in this session's history
       const parsed = parsePath(location.pathname) || parseHash(location.hash)
       const was = hereRef.current
+      const page = pageKey(was)
       /* The front door names no page. A move onto it from another page
          shows no scope and the startup rule, as a boot there does, with the
          Inbox on a phone, so the chooser's entry that Back left for the
-         Inbox shows the chooser again on Forward. A move that stays on the
-         front door's page, as a phone layer's Back over the chooser does,
-         changes nothing, and neither does a path outside the app. */
-      const door = !parsed && isFrontDoor(location.pathname) && !!parsePath(buildPath(was))
+         Inbox shows the chooser again on Forward. A page whose opening
+         checks a project address the workspace does not hold, or offers
+         Retry for it, shows no scope either, but it is that address's page,
+         not the front door's. A move that stays on the front door's page,
+         as a phone layer's Back over the chooser does, changes nothing, and
+         neither does a path outside the app. */
+      const door =
+        !parsed &&
+        isFrontDoor(location.pathname) &&
+        (!!parsePath(buildPath(was)) || checkedOn(openingRef.current, page) !== null)
       if (!parsed && !door) return
       const r: Route = parsed ?? {}
       /* Issue URLs carry no scope: keep the current scope when the issue is
@@ -1494,12 +1501,12 @@ function App() {
       if (holdLayers(event)) return
       refusal.accepted()
       /* A move to another page or task drops every open that waits and
-         startup's check (navMoved), and so does one to another project
-         address the workspace does not hold on the same page, as from the
-         chooser to an earlier project's address in the same view. One
-         that stays on its page and the address it checks, as a phone
-         layer's Back does, moves nothing. */
-      const page = pageKey(was)
+         startup's check (navMoved), and so does one on the same page that
+         changes which project address the workspace does not hold it
+         checks, as from the chooser to an earlier project's address in the
+         same view, or from that address to the front door. One that stays
+         on its page and the address it checks, as a phone layer's Back
+         does, moves nothing. */
       const target = unheld ? JSON.stringify(r.unheld ?? null) : null
       if (
         pageKey(next) !== page ||
