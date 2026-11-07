@@ -16,8 +16,10 @@
  * budget would raise a second figure. Each case prints the figures
  * ARCHIVE_PAGE's docstring quotes. The app's All projects page
  * (issues.archivedPage) for an organization admin who reads 200 live
- * sub-projects through grants merges them side by side into one page, and
- * is too wide with ARCHIVED_SCOPE.subProjects lowered below them. */
+ * sub-projects through grants on them merges them side by side into one
+ * page, and so it does through grants or team shares on their top-level
+ * projects, for an admin and a member alike, each too wide with
+ * ARCHIVED_SCOPE.subProjects lowered below them. */
 /// <reference types="vite/client" />
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -336,5 +338,51 @@ describe('archived pages at the design size', () => {
     // page never
     ARCHIVED_SCOPE.subProjects = 199
     expect(await all()).toEqual({ rows: [], next_cursor: null, scanned: 0, too_wide: true })
+  })
+
+  it('gives an admin with grants and a member with team shares on the top-level projects of 200 live sub-projects the same All projects page, too wide below that bound', async () => {
+    // 200 live sub-projects one person can read, the one raised figure,
+    // here through 67 top-level projects of 3 sub-projects but one of 2:
+    // the member's 3 teams share them in turn and the admin holds a User
+    // grant on each, so the 67 are found beside the 200
+    const e = await pageOrg({ tops: 70, subs: 206, memberSubs: 200, tasks: 1000, archived: 0 })
+    expect(e.readable).toHaveLength(200)
+    const tops = e.tops.filter((top) => e.readable.some((sub) => sub.parent_id === top.id))
+    expect(tops).toHaveLength(67)
+    const first = e.tops[0] as Doc<'projects'>
+    const family = e.subs.filter((sub) => sub.parent_id === first.id)
+    await plantArchive(e, family)
+    await e.t.run(async (ctx) => {
+      for (const top of tops)
+        await ctx.db.insert('project_access', {
+          project_id: top.id,
+          profile_id: e.admin.id,
+          level: 'user',
+        })
+    })
+    await withReach(e.t)
+    const all = (me: Doc<'profiles'>) =>
+      as(e.t, me).query(api.issues.archivedPage, { scope: { org_id: e.org.id, all: true } })
+    const pages: Awaited<ReturnType<typeof all>>[] = []
+    for (const [who, me] of [
+      ['the admin', e.admin],
+      ['the member', e.member],
+    ] as const) {
+      expect(await readableLiveSubProjects(e.t, me), who).toBe(200)
+      const got = await all(me)
+      expect(got.too_wide, who).toBeUndefined()
+      expect(got.rows, who).toHaveLength(ARCHIVED_PAGE_ROWS)
+      expect(new Set(got.rows.map((row) => row.project_id)), who).toEqual(
+        new Set(family.map((sub) => sub.id)),
+      )
+      expect(got.next_cursor, who).not.toBeNull()
+      pages.push(got)
+    }
+    expect(pages[0]).toEqual(pages[1])
+    // one sub-project fewer than each reads makes it too wide, a partial
+    // page never
+    ARCHIVED_SCOPE.subProjects = 199
+    for (const me of [e.admin, e.member])
+      expect(await all(me)).toEqual({ rows: [], next_cursor: null, scanned: 0, too_wide: true })
   })
 })

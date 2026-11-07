@@ -827,9 +827,10 @@ export const ARCHIVED_PAGE_ROWS = 25
 
 /** How far a page expands its scope before its read budget starts: at
  * most `ids` distinct project ids (issues.archivedPage refuses more), and at
- * most `subProjects` projects merged side by side, the sub-projects of named
- * top-level projects and, for All projects, the projects the caller
- * reaches, each checked for the caller once. To find them it reads the
+ * most `subProjects` sub-projects merged side by side, those of named
+ * top-level projects and, for All projects, those the caller reaches,
+ * each checked for the caller once, beside the top-level projects above
+ * them, which count toward no bound but `rows`. To find them it reads the
  * project_reach rows of the caller's seat and of at most `teams` of their
  * teams, and at most `rows` such rows and sub-project rows in all, skipped
  * and repeated ones included. A family has no cap on sub-projects (limits
@@ -838,9 +839,12 @@ export const ARCHIVED_PAGE_ROWS = 25
  * REST and MCP archived lists of more than `subProjects` projects answer
  * the same. At the design size `subProjects` is the 200 live sub-projects
  * one person can read, so such a person's All projects merges side by
- * side, one page. A task
+ * side, one page, whether their grants and team shares are on those
+ * sub-projects or on the top-level projects above them. A task
  * row without its text is at most lib/limits.ts TASK_ROW_MAX_BYTES, so 200
- * heads read about 400 KB of a page's bytes (ARCHIVE_PAGE.bytes). With the
+ * heads read about 400 KB of a page's bytes (ARCHIVE_PAGE.bytes), and the
+ * 267 of 200 sub-projects found through their 67 top-level projects about
+ * 530 KB. With the
  * copy of its text a rollback to the second release writes, at the
  * description cap in a three-byte script, a row is about 61 KB, and the
  * heads of about 130 such projects fill those bytes
@@ -964,14 +968,19 @@ async function granteesOf(ctx: QueryCtx, me: Doc<'profiles'>): Promise<Grantee[]
 /* The live projects of the caller's organization that `grantees` reach
  * (granteesOf), for All projects: each top-level project on which one holds
  * a source of its own, with all its live sub-projects, which that source
- * reaches, and each live sub-project on which one holds one. Null when they
- * are more than `most`, or when the rows it reads, root rows for navigation
- * only, repeats and the sub-project rows included, pass `room`. A row finds
- * a candidate and grants nothing: the caller checks each (shownIn), and a
- * role that turns no source into access, such as a viewer's lead, drops out
- * there. A project several rows find, such as a sub-project of the caller's
- * own beside its parent's team share, counts once toward `most`. `read`
- * holds the projects read on the way. */
+ * reaches, and each live sub-project on which one holds one. Null when the
+ * sub-projects among them are more than `most`, or when the rows it reads,
+ * root rows for navigation only, repeats and the sub-project rows included,
+ * pass `room`. The top-level projects stay in `ids` for the caller's check
+ * and the page, which reads their own archived tasks too, and count toward
+ * no bound but `room`, as the sub-projects are what one person reads at
+ * the design size: one who reads 200 through grants or team shares on
+ * their top-level projects is found whole, as one with grants on the 200
+ * themselves. A row finds a candidate and grants nothing: the caller checks
+ * each (shownIn), and a role that turns no source into access, such as a
+ * viewer's lead, drops out there. A sub-project several rows find, such as
+ * one of the caller's own beside its parent's team share, counts once
+ * toward `most`. `read` holds the projects read on the way. */
 async function reachedProjects(
   ctx: QueryCtx,
   orgId: string,
@@ -980,6 +989,8 @@ async function reachedProjects(
   room: RowRoom,
 ): Promise<{ ids: string[]; read: Doc<'projects'>[] } | null> {
   const ids = new Set<string>()
+  // the distinct sub-projects found, which `most` bounds
+  const subs = new Set<string>()
   const read: Doc<'projects'>[] = []
   const reach = (g: Grantee, kind: 'root' | 'child') =>
     ctx.db
@@ -997,22 +1008,23 @@ async function reachedProjects(
       // a root row for navigation only reaches the sub-projects of its child rows
       if (!row.on_root || row.org_id !== orgId || ids.has(row.project_id)) continue
       ids.add(row.project_id)
-      if (ids.size > most) return null
       const kids = await liveSubProjects(
         ctx,
         { id: row.project_id, org_id: orgId },
-        ids,
+        subs,
         most,
         room,
       )
       if (kids === null) return null
+      for (const kid of kids) ids.add(kid.id)
       read.push(...kids)
     }
     for await (const row of reach(g, 'child')) {
       if (!counted(room)) return null
       if (row.org_id !== orgId) continue
       ids.add(row.project_id)
-      if (ids.size > most) return null
+      subs.add(row.project_id)
+      if (subs.size > most) return null
     }
   }
   return { ids: [...ids], read }
@@ -1077,8 +1089,9 @@ async function mergedScope(
  * - `all` merges the live projects `me` sees side by side, found through
  *   the project_reach rows of their seat and teams (reachedProjects) and
  *   each checked (shownIn), so one who sees none reads nothing. It is too
- *   wide when they reach more than ARCHIVED_SCOPE.subProjects projects, are
- *   in more than ARCHIVED_SCOPE.teams teams, need more than
+ *   wide when they reach more than ARCHIVED_SCOPE.subProjects sub-projects,
+ *   the top-level projects above them aside, are in more than
+ *   ARCHIVED_SCOPE.teams teams, need more than
  *   ARCHIVED_SCOPE.rows rows to find their projects, or their organization's
  *   reach rows are not complete. A sub-project archived on its own under an
  *   active parent stays out, as do archived projects, until they are
