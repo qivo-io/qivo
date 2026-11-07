@@ -1519,9 +1519,9 @@ export async function readMilestones(
  * with User access there (assertMilestoneWriter). A milestone of a
  * sub-project, stored there before 2026-10-14, answers null, as the app and
  * REST (machine/projects.ts milestoneOn) leave it out. So does one of an
- * archived project, as in the app, whose workspace projects part sends the
- * milestones of active projects only (lib/workspaceParts.ts readProjects),
- * though REST still lists an archived project's milestones. An unknown
+ * archived project, as the app's section and range reads list the
+ * milestones of active projects only (milestoneProjects), though REST
+ * still lists an archived project's milestones. An unknown
  * milestone and one of a project the caller cannot see answer null alike.
  * Whether a project the caller holds no level on shows to them for
  * navigation is checked within MILESTONE_SCOPE (navigationOf), and a check

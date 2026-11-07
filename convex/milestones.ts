@@ -1,18 +1,18 @@
 /* The app's milestone reads, bounded on the server (model/milestones.ts
  * readMilestones, visibleMilestone). They are meant for Overview, the
  * Milestones window, the Roadmap and Team sync, to read their milestones a
- * batch or a range of days at a time instead of every milestone of every
- * project the workspace's projects part sends. The app holds them in its
- * store (src/store/planner.ts P.watchMilestones): the Milestones window
- * opened on a milestone reads it with `get`, the window lists a project's
+ * batch or a range of days at a time. They are the only way the app reads
+ * milestones, since the workspace's projects part sends none
+ * (lib/workspaceParts.ts readProjects). The app holds them in its store
+ * (src/store/planner.ts P.watchMilestones): the Milestones window opened
+ * on a milestone reads it with `get`, the window lists a project's
  * upcoming milestones and, once Past is expanded, its past ones with
  * `section`, the Overview lists its scope's Upcoming and, once expanded, a
  * collapsed Past with `section`, My view's with `mine`, the phone's
  * Roadmap agenda lists the same sections, Team sync's opening reads its
  * next milestone with `section` and those of this week and next with
  * `between`, and the Roadmap reads its flags for the weeks on screen with
- * `between`. The projects part still sends every milestone. The writes are
- * in projects.ts.
+ * `between`. The writes are in projects.ts.
  *
  * Each read names projects of any of the caller's organizations and judges
  * each with the caller's seat in its own organization, or, for a section
@@ -49,7 +49,8 @@ import {
 import { shiftDay } from './model/orgs'
 import { calendarDay, dateShaped } from './model/taskValues'
 
-/** A milestone as the app holds it, as the projects part sends it. */
+/** A milestone as the app holds it, the stored row without its document
+    fields. */
 type MilestoneRow = Omit<Doc<'milestones'>, '_id' | '_creationTime'>
 
 /* A position a batch answers as `next`, to pass back as `after`. */

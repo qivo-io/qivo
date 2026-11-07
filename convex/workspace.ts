@@ -17,8 +17,9 @@
  *   memberships. Two ranges, and one per person for their memberships.
  * - projects (per window of its projects' window keys, which the server
  *   picks at random, lib/db.ts newWindowKey): the projects the caller can
- *   see, with grants, team grants and the active ones' milestones. Up to
- *   three ranges per project, beside the caller's levels on it.
+ *   see, with grants and team grants. Two ranges per project, beside the
+ *   caller's levels on it. It sends no milestone; the app reads them
+ *   through milestones.ts.
  * - tasks (per window of its tasks' window keys): the caller's working set,
  *   with links, labels, attachments and follows, and the anonymized load of
  *   the window's tasks the caller is not shown. Five ranges for the window

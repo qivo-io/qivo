@@ -92,7 +92,6 @@ export function joinParts(root: RootSeats, orgs: readonly OrgParts[], deliveredA
   const projects: ProjectsPart['projects'] = []
   const access: ProjectsPart['access'] = []
   const teamAccess: ProjectsPart['teamAccess'] = []
-  const milestones: ProjectsPart['milestones'] = []
   const issues: TasksPart['issues'] = []
   const links: TasksPart['links'] = []
   const issueLabels: TasksPart['issueLabels'] = []
@@ -114,7 +113,6 @@ export function joinParts(root: RootSeats, orgs: readonly OrgParts[], deliveredA
       projects.push(...part.projects)
       for (const g of part.access) if (people.has(g.profile_id)) access.push(g)
       teamAccess.push(...part.teamAccess)
-      milestones.push(...part.milestones)
     }
     for (const part of org.tasks) {
       issues.push(...part.issues)
@@ -148,7 +146,6 @@ export function joinParts(root: RootSeats, orgs: readonly OrgParts[], deliveredA
     issueLabels,
     issueSubs,
     attachments,
-    milestones,
     orgLoad,
     messages: inbox.messages,
     readMessageCount: inbox.readMessageCount,
@@ -217,7 +214,6 @@ export function splitWorkspace(
           projects: ps,
           access: workspace.access.filter((g) => ids.has(g.project_id)),
           teamAccess: workspace.teamAccess.filter((g) => ids.has(g.project_id)),
-          milestones: workspace.milestones.filter((m) => ids.has(m.project_id)),
         }
       }),
       tasks: taskWindows.map((ts, i) => {
