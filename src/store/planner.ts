@@ -1558,7 +1558,9 @@ const tookCreates = new Map<string, string>()
 /** What a create of the person's own keeps while it is on its way
     (P.addIssue, P.createParent, P.createLinked), by the new task's uuid:
     its organization, its row as the create sends it, by the server's
-    rules, the create's answer once it came (`created`), the person's
+    rules, numbered with the preview until the create answers, moved past
+    a number another task took meanwhile (renumberPending), the create's
+    answer once it came (`created`), the person's
     level on its project, the short rows of its parent (a subtask) and of
     its one subtask (a new parent), and whether the server took it. A
     window on the task the workspace does not hold shows it from the
@@ -1598,6 +1600,83 @@ const refusedCreates = new Set<string>()
 /* The creating answers the section answers held, so the store tells one
    from an answer the server sent (creatingShown). */
 const creatingAnswers = new WeakSet<object>()
+
+/* The references of the person's new tasks that moved since the store last
+   told P.watchHandles' listeners, by uuid, from the one a caller holds to
+   the one it opens by now (movePendingRef, tellPendingMoves). */
+const pendingMoves = new Map<string, { from: string; to: string }>()
+
+/** Records that the reference of the person's new task `uuid` moved from
+    `from` to `to`, joined to a move not told yet, so a caller holding the
+    first follows to the last. */
+function movePendingRef(uuid: string, from: string, to: string) {
+  if (from === to) return
+  const was = pendingMoves.get(uuid)
+  pendingMoves.set(uuid, { from: was?.from ?? from, to })
+}
+
+/** Tells P.watchHandles' listeners the moves of the person's new tasks'
+    references not told yet (movePendingRef), once the screen shows them. */
+function tellPendingMoves() {
+  if (pendingMoves.size === 0) return
+  const moved = new Map([...pendingMoves.values()].map(({ from, to }) => [from, to]))
+  pendingMoves.clear()
+  moveHandles(moved)
+}
+
+/** Moves the number of each create of the person's own on its way past a
+    number another task holds, as another person's create that a view's
+    answer brings before this create answers. The new number is the next
+    one that no task the views' answers or the workspace hold in its
+    organization has, nor a create of the person's own sent before it,
+    and is past the organization's counter as the server last sent it, as
+    newTaskPaint numbers a new task in a store that asked. The creates go in the order
+    sent, as the server numbers them. The number is the sent row's
+    (`row.num`), which the create's paints, its creating answer and the
+    reference a caller holds all read, so no two of the views' models
+    share a handle (store/viewRows.ts) and a card opened or dropped acts on
+    its own task; a caller holding the reference follows it
+    (movePendingRef). A create the server answered keeps the server's
+    number, and one the server took or the workspace holds stays as it
+    is. Runs as a view takes an answer and as a create is sent, before
+    the views repaint. */
+function renumberPending() {
+  const numbered = new Map<string, Map<number, string>>()
+  const sent = new Set<string>()
+  let moved = false
+  for (const [uuid, pending] of pendingCreates) {
+    const { row, created } = pending
+    const org = row.org_id
+    const held = (num: number) => {
+      if (sent.has(`${org}:${num}`)) return true
+      let views = numbered.get(org)
+      if (!views) {
+        views = viewRows.numbered(org)
+        numbered.set(org, views)
+      }
+      const other = views.get(num) ?? keyByOrg.get(org)?.get(`${ISSUE_PREFIX}-${num}`)
+      return other !== undefined && other !== uuid
+    }
+    if (created.num === null && !pending.taken && !holdsIn(uuid, org) && held(row.num)) {
+      const counter = base.map('orgs').get(org)?.next_issue_num || 0
+      let num = Math.max(row.num + 1, counter + 1)
+      while (held(num)) num++
+      movePendingRef(uuid, taskRef({ org, num: row.num, uuid }), taskRef({ org, num, uuid }))
+      row.num = num
+      // a window on it shows the new number from its creating answer
+      pending.answer = null
+      moved = true
+    }
+    sent.add(`${org}:${created.num ?? row.num}`)
+  }
+  // the organization's counter, the views' rows, the creating answer and
+  // a parent's Subtasks list in the window show the new number
+  if (moved) {
+    owe('workspace')
+    owe('view')
+    owe('sections')
+  }
+}
 
 /** The row of pending create `pending` as the window shows it: the row it
     sent with what the create's answer gave over it (answeredRow), and the
@@ -3933,7 +4012,9 @@ const anchor = <T>(value: T): T => (STRICT_LAYERS ? deepFreeze(structuredClone(v
 
 /** Rebuilds the rows of `parts` from their anchors and every live layer
     (paintRows), and shows them. A workspace repaint also tells new tasks'
-    callers their final handle and ends trouble a recovering delivery held. */
+    callers their final handle and ends trouble a recovering delivery held,
+    and every repaint tells the callers of the person's new tasks on their
+    way the reference a moved number gave them (renumberPending). */
 function repaint(parts: {
   workspace?: boolean
   thread?: boolean
@@ -4010,6 +4091,8 @@ function repaint(parts: {
     familyNews = false
     emit('comments')
   }
+  // a new task's reference follows the number the screen shows now
+  tellPendingMoves()
 }
 
 /* The parts asked to repaint while together() runs its step, whether
@@ -4493,6 +4576,8 @@ function takeViewResult(slot: ViewSlot, read: ViewRead, key: string, token: stri
     } else if (take && rows !== KEEP_ROWS) {
       if (rows) viewRows.take(slot, rows)
       else viewRows.release(slot)
+      // another person's task may hold a new task's preview number now
+      if (rows) renumberPending()
       read.fitted = rows ? { key, value: next.value, until: null } : null
       read.judged = rows ? (read.query.judged?.(next.value) ?? null) : null
       read.delivered = ++viewDeliveries
@@ -5461,6 +5546,11 @@ function reshapeViews(): boolean {
       extra: (uuid) =>
         JSON.stringify(delays.get(uuid) ?? null) + (createOnItsWay(uuid) ? ' creating' : ''),
       grid: PLANNER.gridEpoch,
+      // a handle two models share names the person's new task on its way
+      wins: (uuid) => {
+        const pending = pendingCreates.get(uuid)
+        return !!pending && !holdsIn(uuid, pending.org)
+      },
     })
     if (changed) boardLookup = null
     return changed
@@ -9558,8 +9648,10 @@ const VIEW_WRITES = new Set([
     (recordRoadmapChange), and goes out as an ordinary write where no visit
     records it. A group's dates come from its subtasks, so a date patch for
     one drops, as the held path drops it. Resolves false for any other
-    field. A write on the task a window shows from a current answer goes
-    through updateAnswerTask instead (P.updateIssue). */
+    field. A handle two view rows share names the person's new task on its
+    way (store/viewRows.ts byHandle), never another person's task. A write
+    on the task a window shows from a current answer goes through
+    updateAnswerTask instead (P.updateIssue). */
 function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
   const it = viewRows.byHandle(id)
   const row = it && viewRows.peek(it.uuid)
@@ -10667,6 +10759,11 @@ function pendingCreate(
     taken: false,
     answer: null,
   })
+  // a number a view's answer or an earlier create of the person's own
+  // holds already moves before the first paint; no caller holds its
+  // preview yet
+  renumberPending()
+  pendingMoves.delete(uuid)
   return {
     take(answer: { num: number; row?: Partial<Row<'issues'>> }) {
       created.num = answer.num
@@ -13334,7 +13431,9 @@ export const PLANNER = {
   /** What opening task handle `id` passes on (lib/taskReference.ts): the
       handle when the workspace holds the task, else a reference with the
       organization, number and uuid of the view row that brings it, as a
-      Board card's, a phone row's or an Overview row's, else `id`. */
+      Board card's, a phone row's or an Overview row's, the person's new
+      task on its way where two rows share the handle
+      (store/viewRows.ts byHandle), else `id`. */
   openTarget: (id: string): string => {
     if (PLANNER.issueById[id]) return id
     const it = viewRows.byHandle(id)
@@ -13572,10 +13671,12 @@ export const PLANNER = {
       a store that asked for every task does, else a reference that names
       its organization, preview number and uuid. Nothing asks for every
       task. The preview number is exact unless someone else creates first
-      (0050's organization-wide counter), and the server's answer fixes
-      it: a held handle moves with the rows, and the reference moves to
-      one with the server's number (P.watchHandles), so a caller that
-      keeps either follows it. The new task shows at once in the Board's
+      (0050's organization-wide counter). Once a view's answer brings
+      another task with that number, the new task moves to the next free
+      one (renumberPending), and the server's answer fixes it. A held
+      handle moves with the rows, and the reference moves with the number
+      (P.watchHandles), so a caller that keeps either follows it. The new
+      task shows at once in the Board's
       and the Roadmap's rows (newTaskParts) and in a window opened on it,
       from its creating answer (creatingAnswerOf), until the server took
       the create and the views' and the window's own reads answer.
@@ -13685,8 +13786,6 @@ export const PLANNER = {
         }
       : undefined
     const withDetail = (view: View): View => (detail ? { ...view, detail } : view)
-    // what opening it passes on, moved to the server's number once known
-    let shown = PLANNER.openTask(uuid, row.org_id, previewNum)
     void send(
       api.issues.create,
       {
@@ -13719,27 +13818,26 @@ export const PLANNER = {
           // its window reads its thread and lists from now on, also before
           // a delivery holds it
           tookCreate(uuid, row.org_id)
-          // the reference a caller keeps names the preview number
-          const next = PLANNER.openTask(uuid, row.org_id, created.num ?? previewNum)
-          if (isTaskRef(next) && isTaskRef(shown) && next !== shown) {
-            const from = shown
-            shown = next
-            moveHandles(new Map([[from, next]]))
-          }
+          // the reference a caller keeps names the number shown while the
+          // create waited (renumberPending), and moves to the server's
+          const from = PLANNER.openTask(uuid, row.org_id, row.num)
+          const next = PLANNER.openTask(uuid, row.org_id, created.num ?? row.num)
+          if (isTaskRef(next) && isTaskRef(from)) movePendingRef(uuid, from, next)
+          tellPendingMoves()
         },
         ...(shownParent ? { about: { task: uuid, answer: true as const } } : {}),
         onError: (error) => {
           pending.refused()
           toastWriteError(error)
           // the handle on screen, which a delivery may have moved, or the
-          // reference
-          onRefused?.(uuidToKey.get(uuid) ?? shown)
+          // reference to the number shown
+          onRefused?.(PLANNER.openTask(uuid, row.org_id, row.num))
         },
       },
     )
-    // the handle once the workspace holds the task, else the reference
-    shown = PLANNER.openTask(uuid, row.org_id, previewNum)
-    return shown
+    // the handle once the workspace holds the task, else the reference to
+    // the number it shows, the preview unless another task holds that
+    return PLANNER.openTask(uuid, row.org_id, row.num)
   },
 
   /* Paints the change at once and sends it. Resolves true when the server

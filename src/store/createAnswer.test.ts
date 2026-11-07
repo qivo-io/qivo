@@ -669,6 +669,47 @@ describe('a create in a store that never asked for every task', () => {
     expect(P().viewTask(BOARD, uuid)?.key).toBe('QN-6')
   })
 
+  it("moves a new task past the number another person's create took first, so its card opens and drops its own task", async () => {
+    await boot()
+    const board = await openBoard()
+    const moves: [string, string][] = []
+    P().watchHandles((moved) => moves.push(...moved))
+    const { open: made, uuid } = create()
+    expect(refParts(made)?.num).toBe(4)
+    // Pat's create took number 4 first, and the Board's answer brings it
+    // before this create answers
+    const theirs = () => P().viewTask(BOARD, 'task-pat')
+    board.deliver(boardOf([...THREE(), viewRow('task-pat', 4, { title: "Pat's bench check" })]))
+    await settle()
+    const card = P().viewTask(BOARD, uuid)
+    expect(card?.key).toBe('QN-5')
+    expect(theirs()?.key).toBe('QN-4')
+    // the reference a caller holds moved with it
+    expect(moves).toEqual([[made, P().openTask(uuid, ORG, 5)]])
+    // opening the card opens its own task, and a drop moves its own task
+    expect(refParts(P().openTarget(card?.id ?? ''))?.uuid).toBe(uuid)
+    void P().updateIssue(card?.id ?? '', { status: 'progress' })
+    await settle()
+    expect(waiting('issues:update').map((s) => s.args.id)).toEqual([uuid])
+    expect(P().viewTask(BOARD, uuid)?.status).toBe('progress')
+    expect(theirs()).toMatchObject({ key: 'QN-4', status: 'todo', title: "Pat's bench check" })
+    // the server gave it 6, as a third create took 5. The answer that
+    // holds it arrives, then the create answers, and the reference follows
+    const request = take('issues:create')
+    const row = { ...stored(request.args, 6), status: 'progress' as const }
+    board.deliver(
+      boardOf([...THREE(), viewRow('task-pat', 4, { title: "Pat's bench check" }), asView(row)]),
+    )
+    await settle()
+    request.resolve(answerOf(stored(request.args, 6)))
+    await settle()
+    expect(P().viewTask(BOARD, uuid)?.key).toBe('QN-6')
+    expect(moves).toEqual([
+      [made, P().openTask(uuid, ORG, 5)],
+      [P().openTask(uuid, ORG, 5), P().openTask(uuid, ORG, 6)],
+    ])
+  })
+
   it('files a new subtask under its parent on the Board, the parent as a group, from a window shown from its answer', async () => {
     await boot()
     await openBoard([

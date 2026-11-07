@@ -29,7 +29,10 @@
      (insert), from what its create sends, until the create answers, or
      until a read that is behind a reconnect delivers again
      (store/planner.ts newTaskViewPaint, slotsBehind). An insert is the one
-     paint that adds a row no answer brought.
+     paint that adds a row no answer brought. Its number is the create's
+     preview, moved past a number another task took in a view's answer
+     meanwhile (store/planner.ts renumberPending), so no two models share a
+     handle.
    - A model keeps its object while its row, its own and its parent's
      handles, its delay and the week grid hold the same data, so an answer
      that arrives again renders no card again (views/kanbanCards.tsx
@@ -63,6 +66,12 @@ export type ViewShapeCtx = {
   handleNow: (uuid: string, orgId: string, num: number) => string
   extra?: (uuid: string) => string
   grid?: number
+  /** Whether task `uuid`'s model names its handle over another model of
+      the same handle, as the person's own new task on its way does, whose
+      preview number another task can hold until the store moves it
+      (store/planner.ts renumberPending). A card opened or dropped by that
+      handle then acts on the person's own task, never on someone else's. */
+  wins?: (uuid: string) => boolean
 }
 
 type Shaped = {
@@ -267,6 +276,14 @@ export function createViewRows(
       rows.set(uuid, copy)
       return copy
     },
+    /** The tasks of organization `org` that the views' last answers
+        brought, by number, each with its uuid. */
+    numbered(org: string): Map<number, string> {
+      const out = new Map<number, string>()
+      for (const rows of anchors.values())
+        for (const row of rows.values()) if (row.org_id === org) out.set(row.num, row.id)
+      return out
+    },
     /** Whether view `slot`'s last answer brought task `uuid`, so its row
         there is no insert. */
     answered: (slot: ViewSlot, uuid: string): boolean => !!anchors.get(slot)?.has(uuid),
@@ -313,7 +330,8 @@ export function createViewRows(
           const now = shape(row, rows, kidsOf.get(uuid) ?? [], ctx, was)
           if (now.it !== was?.it) changed = true
           after.set(uuid, now)
-          if (!handles.has(now.it.id)) handles.set(now.it.id, now.it)
+          const named = handles.get(now.it.id)
+          if (!named || (ctx.wins?.(uuid) && !ctx.wins(named.uuid))) handles.set(now.it.id, now.it)
         }
         if (after.size !== before.size) changed = true
         shaped.set(slot, after)
@@ -333,7 +351,8 @@ export function createViewRows(
         hold it. */
     model: (slot: ViewSlot, uuid: string): IssueVM | undefined => shaped.get(slot)?.get(uuid)?.it,
     /** The model a handle names, in any view, a live one first, when the
-        workspace does not hold its task. */
+        workspace does not hold its task, and the person's new task on its
+        way first where two share it (ViewShapeCtx wins). */
     byHandle: (handle: string): IssueVM | undefined => byHandle.get(handle),
     /** Every model the views hold, by handle. */
     handles: (): ReadonlyMap<string, IssueVM> => byHandle,
