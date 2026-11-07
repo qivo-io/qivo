@@ -26,6 +26,12 @@
  *   8. costReport sums a range, names no organization, cursor or run, also
  *      of a run under way, and refuses a malformed or longer one.
  *   9. The reads of one step at the batch size, logged for SAMPLE_PAGE.
+ *  10. A daily period's days and its average (model/storageSamples.ts
+ *      periodDays and periodAverage), pure: the dates of a period, the
+ *      allowance once and one ceiling, a missing day from the next reading,
+ *      a 0 reading measured, a trailing gap unresolved before the cutoff
+ *      and at it from the next period, the last measured day or an earlier
+ *      period, every day or none.
  *
  * Totals are written only through their writers: the app's attach for a
  * small file, startOrgTotals, addToProject and addToOrg for the rest, and
@@ -38,12 +44,15 @@ import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import { attach as attachFn, removeAttachment as removeFn } from '../files'
 import { COUNT_PAGE } from '../internal/storageTotalsBackfill'
+import { addCalendarMonths } from '../lib/billingAccess'
 import { deleteOrgDeep } from '../model/cascade'
 import { wipeWorkStep } from '../model/orgDeletion'
 import { DAY_MS } from '../model/orgRetention'
 import { newOrgDefaults } from '../model/orgs'
 import {
   latestSample,
+  periodAverage,
+  periodDays,
   runOf,
   SAMPLE_EXPIRY,
   SAMPLE_PAGE,
@@ -886,5 +895,215 @@ describe('reads at the batch size', () => {
     // a sample of the day found ends the organization's reads, before its
     // sample of the latest day
     expect(retry).toMatchObject({ documents: 3 * n + 2, ranges: 3 * n + 2, written: 1 })
+  })
+})
+
+/* ------------------------------------------- a daily period's average */
+
+const GB = 1_000_000_000
+/* The blocks billingSync.ts finishStorageSample charges for `bytes` over a
+ * 5 GB allowance, with its arithmetic. */
+const blocksOf = (bytes: number | null) => Math.ceil(Math.max(0, (bytes ?? 0) - 5 * GB) / GB)
+/* `bytes(i)` for each of `days`, as readings by day. */
+const bytesEach = (days: readonly string[], bytes: (i: number) => number) =>
+  new Map(days.map((day, i) => [day, bytes(i)]))
+
+describe("a daily period's days and its average (model/storageSamples.ts)", () => {
+  it('takes the UTC dates from the start date to the day before the end date, each in one period', () => {
+    const september = periodDays('2026-09-01T12:00:00.000Z', '2026-10-01T12:00:00.000Z')
+    expect(september).toHaveLength(30)
+    expect([september[0], september[29]]).toEqual(['2026-09-01', '2026-09-30'])
+    // midnight to midnight gives the same dates, and so does an end a
+    // millisecond after midnight
+    expect(periodDays('2026-09-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z')).toEqual(september)
+    expect(periodDays('2026-09-01T23:59:59.999Z', '2026-10-01T00:00:00.001Z')).toEqual(september)
+    // twelve consecutive monthly periods from 31 January share no date and
+    // skip none
+    const first = '2026-01-31T12:00:00.000Z'
+    const all: string[] = []
+    for (let i = 0; i < 12; i++)
+      all.push(...periodDays(addCalendarMonths(first, i), addCalendarMonths(first, i + 1)))
+    expect(new Set(all).size).toBe(all.length)
+    expect(all[0]).toBe('2026-01-31')
+    for (let i = 1; i < all.length; i++)
+      expect(Date.parse(all[i]) - Date.parse(all[i - 1])).toBe(DAY_MS)
+    expect(Date.parse(addCalendarMonths(first, 12)) - Date.parse(all[all.length - 1])).toBeLessThan(
+      2 * DAY_MS,
+    )
+    // a period of an hour gives its one date, across midnight or inside a day
+    expect(periodDays('2026-09-30T23:30:00.000Z', '2026-10-01T00:30:00.000Z')).toEqual([
+      '2026-09-30',
+    ])
+    expect(periodDays('2026-09-30T10:00:00.000Z', '2026-09-30T11:00:00.000Z')).toEqual([
+      '2026-09-30',
+    ])
+    // February of a leap year
+    const february = periodDays('2028-02-01T12:00:00.000Z', '2028-03-01T12:00:00.000Z')
+    expect(february).toHaveLength(29)
+    expect(february[28]).toBe('2028-02-29')
+  })
+
+  it("averages every measured day with the allowance applied once: the owner's example and the edges of one ceiling", () => {
+    const days = periodDays('2026-09-01T12:00:00.000Z', '2026-10-01T12:00:00.000Z')
+    const final = { final: true }
+    // half the days 4 GB and half 6 GB average exactly the 5 GB included
+    const example = periodAverage(
+      days,
+      bytesEach(days, (i) => (i < 15 ? 4 : 6) * GB),
+      final,
+    )
+    expect(example).toMatchObject({ bytes: 5 * GB, measured: 30, estimated: 0, unresolved: 0 })
+    expect(blocksOf(example.bytes)).toBe(0)
+    // an average excess of 1.2 GB is 2 blocks, exactly 1 GB is 1
+    expect(
+      blocksOf(
+        periodAverage(
+          days,
+          bytesEach(days, () => 6.2 * GB),
+          final,
+        ).bytes,
+      ),
+    ).toBe(2)
+    expect(
+      blocksOf(
+        periodAverage(
+          days,
+          bytesEach(days, () => 6 * GB),
+          final,
+        ).bytes,
+      ),
+    ).toBe(1)
+    // a sum of exactly days × A is A, and one byte more is A + 1, rounded
+    // up once, which Math.round and a float floor both get wrong
+    expect(
+      periodAverage(
+        days,
+        bytesEach(days, () => 5 * GB),
+        final,
+      ).bytes,
+    ).toBe(5 * GB)
+    const over = periodAverage(
+      days,
+      bytesEach(days, (i) => 5 * GB + (i === 0 ? 1 : 0)),
+      final,
+    )
+    expect(over.bytes).toBe(5 * GB + 1)
+    // one byte over the allowance summed across the period costs a block
+    expect(blocksOf(over.bytes)).toBe(1)
+    // no day is rounded on its own: 29 days at 0 and one at 29 bytes
+    // average 1 byte, not 0 or 29
+    expect(
+      periodAverage(
+        days,
+        bytesEach(days, (i) => (i === 0 ? 29 : 0)),
+        final,
+      ).bytes,
+    ).toBe(1)
+    // a sum past 2^53 still divides exactly
+    const huge = periodAverage(
+      days,
+      bytesEach(days, (i) => Number.MAX_SAFE_INTEGER - (i % 2)),
+      final,
+    )
+    expect(huge.bytes).toBe(Number.MAX_SAFE_INTEGER)
+  })
+
+  it('fills missing days from the next measured day, each counted once and every day in the average', () => {
+    // Monday and Tuesday missing, Wednesday 6 GB
+    const days = ['2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17']
+    const readings = new Map([
+      ['2026-09-16', 6 * GB],
+      ['2026-09-17', 2 * GB],
+    ])
+    const average = periodAverage(days, readings, { final: false })
+    expect(average.days).toEqual([
+      { day: '2026-09-14', bytes: 6 * GB, from: '2026-09-16' },
+      { day: '2026-09-15', bytes: 6 * GB, from: '2026-09-16' },
+      { day: '2026-09-16', bytes: 6 * GB },
+      { day: '2026-09-17', bytes: 2 * GB },
+    ])
+    expect(average).toMatchObject({ measured: 2, estimated: 2, estimated_earlier: 0 })
+    // (6 + 6 + 6 + 2) / 4, never (6 + 2) / 2 from the measured days only
+    expect(average.bytes).toBe(5 * GB)
+  })
+
+  it('counts a reading of 0 bytes as measured, not missing', () => {
+    const days = ['2026-09-14', '2026-09-15']
+    const average = periodAverage(days, new Map([['2026-09-14', 0]]), {
+      later: { day: '2026-09-20', bytes: 8 },
+      final: true,
+    })
+    expect(average.days[0]).toEqual({ day: '2026-09-14', bytes: 0 })
+    expect(average).toMatchObject({ measured: 1, estimated: 1, bytes: 4 })
+  })
+
+  it('leaves a trailing gap unresolved before the cutoff, never 0 and never the earlier reading', () => {
+    const days = ['2026-09-14', '2026-09-15', '2026-09-16']
+    const average = periodAverage(days, new Map([['2026-09-14', 9]]), {
+      earlier: { day: '2026-08-30', bytes: 1 },
+      final: false,
+    })
+    expect(average.days).toEqual([
+      { day: '2026-09-14', bytes: 9 },
+      { day: '2026-09-15' },
+      { day: '2026-09-16' },
+    ])
+    expect(average).toMatchObject({ measured: 1, estimated: 0, unresolved: 2, bytes: 9 })
+    // with no reading at all, nothing resolves and there is no average
+    expect(periodAverage(days, new Map(), { final: false })).toMatchObject({
+      unresolved: 3,
+      bytes: null,
+    })
+  })
+
+  it('at the cutoff fills a trailing gap from the next reading after the period, else the last measured day, else an earlier period, never from an estimate', () => {
+    const days = ['2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17']
+    const readings = new Map([['2026-09-15', 4]])
+    const later = { day: '2026-09-18', bytes: 12 }
+    const earlier = { day: '2026-08-30', bytes: 100 }
+    // the next period's first day first
+    expect(periodAverage(days, readings, { later, earlier, final: true }).days).toEqual([
+      { day: '2026-09-14', bytes: 4, from: '2026-09-15' },
+      { day: '2026-09-15', bytes: 4 },
+      { day: '2026-09-16', bytes: 12, from: '2026-09-18' },
+      { day: '2026-09-17', bytes: 12, from: '2026-09-18' },
+    ])
+    // else the last measured day, the source of an actual reading, never
+    // the estimate the day before took
+    const last = periodAverage(days, readings, { earlier, final: true })
+    expect(last.days.slice(2)).toEqual([
+      { day: '2026-09-16', bytes: 4, from: '2026-09-15' },
+      { day: '2026-09-17', bytes: 4, from: '2026-09-15' },
+    ])
+    expect(last).toMatchObject({ measured: 1, estimated: 3, estimated_earlier: 2, bytes: 4 })
+    // else an earlier period's reading for every day
+    const before = periodAverage(days, new Map(), { earlier, final: true })
+    expect(before.days.every((d) => d.bytes === 100 && d.from === '2026-08-30')).toBe(true)
+    expect(before).toMatchObject({ estimated: 4, estimated_earlier: 4, bytes: 100 })
+    // with no reading at all every day stays unresolved and there is no
+    // average, never 0
+    const none = periodAverage(days, new Map(), { final: true })
+    expect(none.days).toEqual(days.map((day) => ({ day })))
+    expect(none).toMatchObject({ unresolved: 4, bytes: null })
+  })
+
+  it('at the cutoff resolves every day or none, whatever the gaps, each estimate an actual reading', () => {
+    const days = ['2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18']
+    for (let mask = 0; mask < 2 ** days.length; mask++)
+      for (const later of [null, { day: '2026-09-19', bytes: 7 }])
+        for (const earlier of [null, { day: '2026-09-01', bytes: 3 }]) {
+          const readings = new Map(
+            days.flatMap((day, i) => (mask & (1 << i) ? [[day, i * 10] as const] : [])),
+          )
+          const average = periodAverage(days, readings, { later, earlier, final: true })
+          const any = readings.size > 0 || later !== null || earlier !== null
+          expect(average.unresolved).toBe(any ? 0 : days.length)
+          for (const entry of average.days.filter((d) => d.from !== undefined)) {
+            const source =
+              readings.get(entry.from ?? '') ??
+              [later, earlier].find((r) => r?.day === entry.from)?.bytes
+            expect(entry.bytes).toBe(source)
+          }
+        }
   })
 })
