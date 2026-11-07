@@ -5622,11 +5622,17 @@ async function inboxListCheck() {
     app.on('websocket', record)
     try {
       await app.goto(`${cfg.appOrigin}/app/~/inbox`, { waitUntil: 'domcontentloaded' })
-      const org = await evaluate(app, () => window.PLANNER?.homeOrg ?? null)
-      expect(typeof org === 'string', 'the store names no home organization')
+      await app.locator(`[${m.row}="${t0.id}"]`).first().waitFor({ timeout: 60_000 })
+      // the row names its group by the organization of Nora's seat, her home
+      // organization once the store has loaded
+      const org = await app.locator(`[${m.row}="${t0.id}"]`).first().getAttribute(m.rowOrg)
+      eq(org, await evaluate(app, () => window.PLANNER?.homeOrg ?? null), "t0's row's organization")
       const row = app.locator(`[${m.row}="${t0.id}"][${m.rowOrg}="${org}"]`)
-      await row.waitFor({ timeout: 60_000 })
-      eq(await row.locator(`[${m.crumb}]`).allTextContents(), [M.name, A.name], "t0's row's crumb")
+      same(
+        await row.locator(`[${m.crumb}]`).allTextContents(),
+        [M.name, A.name],
+        "t0's row's crumb",
+      )
       const pages = () => sent.flatMap((f) => addedArgs(f, INBOX_PAGE_QUERY))
       const windows = () => sent.filter((f) => addsQuery(f, TASK_WINDOWS_QUERY)).length
       expect(pages().length >= 1, 'the load did not subscribe the Inbox page')
