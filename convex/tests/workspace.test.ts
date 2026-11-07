@@ -1442,13 +1442,14 @@ describe('the projects and people parts', () => {
 
   /* `tops` live top-level projects of `f`'s organization with `subs`
    * sub-projects each, the person `member` holding a User grant on each
-   * top-level project and the fixture's team sharing each with Viewer
-   * access, and the ids of the top-level projects. */
+   * top-level project and the fixture's team sharing the first `shared`
+   * (every one by default) with Viewer access, and the ids of the
+   * top-level projects. */
   async function plantPortfolio(
     t: T,
     f: OrgFixture,
     member: Doc<'profiles'>,
-    o: { tops: number; subs: number },
+    o: { tops: number; subs: number; shared?: number },
   ) {
     return await t.run(async (ctx) => {
       const tops: string[] = []
@@ -1480,11 +1481,12 @@ describe('the projects and people parts', () => {
           profile_id: member.id,
           level: 'user',
         })
-        await ctx.db.insert('project_team_access', {
-          project_id: top,
-          team_id: f.team.id,
-          level: 'viewer',
-        })
+        if (n < (o.shared ?? o.tops))
+          await ctx.db.insert('project_team_access', {
+            project_id: top,
+            team_id: f.team.id,
+            level: 'viewer',
+          })
         for (let k = 0; k < o.subs; k++) await project({ parent_id: top })
       }
       return tops
@@ -1553,18 +1555,24 @@ describe('the projects and people parts', () => {
     // the live top-level projects of an organization and the sub-projects
     // one person can read, each at its design size of 200, read in one
     // window at their sum, 400, by a person holding a User grant on each
-    // top-level project, which holds 4 milestones
+    // top-level project, which holds 4 milestones. The fixture's team
+    // shares 20 of the top-level projects, which gives it the everyday 20
+    // sub-projects a team, so the case raises no other figure, such as the
+    // 50 projects shared with one team, and the person sees every project
+    // through the User grants.
     await t.run(async (ctx) => {
       for (const p of await ctx.db.query('projects').collect())
         if (p.org_id === f.org.id) await ctx.db.delete(p._id)
     })
     const member = await plantSeat(t, { org_id: f.org.id, org_role: 'user' })
-    const tops = await plantPortfolio(t, f, member, { tops: 200, subs: 1 })
+    const tops = await plantPortfolio(t, f, member, { tops: 200, subs: 1, shared: 20 })
     const before = await projectsWindow(t, member)
     await plantMilestones(t, tops, 4)
     const after = await projectsWindow(t, member)
     if (after.answer.state !== 'ok') throw new Error(after.answer.state)
     expect(after.answer.projects).toHaveLength(400)
+    expect(after.answer.access).toHaveLength(200)
+    expect(after.answer.teamAccess).toHaveLength(20)
     expect(after.answer).not.toHaveProperty('milestones')
     expect(after.answer).not.toHaveProperty('split')
     expect(after).toEqual(before)
@@ -1580,7 +1588,9 @@ describe('the projects and people parts', () => {
         await Promise.all(rows.slice(at, at + PAGE.batch).map((p) => caller.visible(p.id)))
       return (await ctx.meta.getTransactionMetrics()).databaseQueries.used
     })
-    // and a grant range and a team grant range for each shown project
+    // and a grant range and a team grant range for each shown project,
+    // shared or not: 1,235 ranges in all, 435 for the window and the checks
+    // and 800 for the 400 projects
     expect(after.ranges).toBe(checks + 2 * 400)
   }, 60_000)
 
