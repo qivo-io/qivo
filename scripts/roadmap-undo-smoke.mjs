@@ -8,8 +8,10 @@
  * (src/store/roadmapWrites.test.ts, src/views/roadmapView.test.tsx). The
  * workspace holds no milestone, so it picks its project, checks what the
  * backend saved and cleans up through the server's milestone reads
- * (milestones.between), and writes its milestone through the Roadmap's
- * range read, once that read shows its flag. */
+ * (milestones.between, and milestones.get by id for its first milestone
+ * when the evaluation that created it never answered), and writes its
+ * milestone through the Roadmap's range read, once that read shows its
+ * flag. */
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
@@ -48,7 +50,8 @@ const flag = (id) => page.locator(`[data-workspace-view] [data-msflag="${id}"]`)
 const bar = (id) => page.locator(`[data-workspace-view] [data-bar="${id}"]`)
 let initialUI
 /* The run's project, Northstar's top-level project it adds its milestones
-   to, and the weeks they lie in, once chosen. */
+   to, and the weeks they lie in, once the evaluation that chose them and
+   created the run's first milestone answered. */
 let fixture
 let passed = false
 
@@ -121,6 +124,15 @@ async function runMilestones(client, project, weeks) {
     after = batch.next
   }
   throw new Error('The milestone range did not end within 20 batches')
+}
+
+/* The run's first milestone, read through `client` by the id the run gave
+   it (milestones.get), as a list of none or one in runMilestones' shape. */
+async function firstMilestone(client) {
+  const found = await client.query(makeFunctionReference('milestones:get'), { id: milestone.id })
+  if (found === null || !found.row.name.startsWith(prefix)) return []
+  const { id, name, week, project_id } = found.row
+  return [{ id, name, week, project_id }]
 }
 
 async function persisted() {
@@ -198,10 +210,13 @@ async function cleanup() {
     const cleanupPage = await context.newPage()
     await signInDemo(cleanupPage, demo)
     // the run's milestones, which lie on its project in this week and the
-    // next two; without a project the run made none
+    // next two. Without the fixture, the evaluation that creates the first
+    // one did not answer, perhaps after the create, and the run made no
+    // other, so its id finds it if it was made.
+    const client = await clientOf(cleanupPage)
     const made = fixture
-      ? await runMilestones(await clientOf(cleanupPage), fixture.project, fixture.weeks)
-      : []
+      ? await runMilestones(client, fixture.project, fixture.weeks)
+      : await firstMilestone(client)
     await cleanupPage.evaluate(
       async ({ ids, milestones, orgSlug, initialUI }) => {
         const P = window.PLANNER
@@ -291,6 +306,8 @@ try {
         target_id: tasks[0].id,
         type: 'blocks',
       })
+      // the run's last write here, so the fixture answers as soon as it
+      // does; cleanup finds the milestone by its id if it never answers
       await convex.mutation('projects:addMilestone', {
         org_id: P.org.id,
         id: milestone.id,
