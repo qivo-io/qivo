@@ -746,6 +746,28 @@ describe('pictures only for what the open views name', () => {
     expect(f.fetcher).toHaveBeenCalledTimes(5)
   })
 
+  it('keeps the held pictures nothing names while a large named batch downloads within the budget', async () => {
+    // room for the 50 pictures of 20 KiB below with six downloads on their
+    // way at 256 KiB each, not for 30 downloads at 256 KiB
+    AVATAR_SOURCES.keptBytes = 12 * 256 * KIB
+    const f = fixture({}, false)
+    f.fetcher.mockImplementation(async () => new Response(face(20 * KIB)))
+    const earlier = keys(20)
+    const page = Array.from({ length: 30 }, (_, i) => `avatar:page-${i}:v1`)
+    f.cache.sync([...earlier, ...page])
+    f.cache.named(earlier)
+    for (const key of earlier) expect(await f.cache.prepare(key, LEASE)).toBe(true)
+    // the earlier page closes, and the next names 30 others at once: six
+    // download, and the rest wait for a slot, each counted at 256 KiB
+    f.cache.named(page)
+    await Promise.all(page.map((key) => f.cache.prepare(key, LEASE)))
+    await vi.waitFor(() => expect(page.every((key) => f.cache.url(key) !== null)).toBe(true))
+    // 50 pictures of 20 KiB fit the budget: none of the earlier ones went
+    expect(earlier.every((key) => f.cache.url(key) !== null)).toBe(true)
+    expect(f.cache.keptBytes()).toBe(50 * 20 * KIB)
+    expect(f.fetcher).toHaveBeenCalledTimes(50)
+  })
+
   it('waits in the named order and starts the first named once room frees', async () => {
     AVATAR_SOURCES.keptBytes = 2 * 256 * KIB
     const changed = vi.fn()

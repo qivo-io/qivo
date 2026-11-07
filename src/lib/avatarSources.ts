@@ -22,7 +22,10 @@ const LOAD_TIMEOUT = 15_000
       size's 1,000 pictures of 10 to 30 KB fit. Past it, a picture an open
       view names takes the room of the held picture shown least recently
       that no view names, and waits as the person's initials, in the named
-      order, only while every held picture is named. A waiting picture
+      order, only while every held picture is named. Each download counts
+      at pictureBytes until its size is known, and a picture past the
+      budget only because of the downloads still waiting for a slot waits
+      for them rather than take any held picture's room. A waiting picture
       keeps the lease it was minted with and starts by itself once room
       frees.
     The store asks only for the caller's own pictures and those its open
@@ -172,16 +175,26 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
      for a slot may hold, each download counted at pictureBytes. */
   const held = () => kept + (downloading + slotQueue.length) * AVATAR_SOURCES.pictureBytes
   const roomFor = (bytes: number) => held() + bytes <= AVATAR_SOURCES.keptBytes
+  /* Whether `bytes` more pass the budget beside the kept pictures and the
+     downloads on their way, leaving out the ones waiting for a slot: each
+     of those is counted at pictureBytes until it runs, while a picture
+     normally holds 10 to 30 KB. */
+  const short = (bytes: number) =>
+    kept + downloading * AVATAR_SOURCES.pictureBytes + bytes > AVATAR_SOURCES.keptBytes
   /* Frees room for `bytes` by releasing the held pictures no view names,
      the one shown least recently first, and answers whether it fits now.
-     A named picture is never released for room. */
+     Only a real need releases one: a picture that does not fit only
+     because of the downloads waiting for a slot waits for them, and
+     starts once their real sizes leave room (admit). A named picture is
+     never released for room. */
   const makeRoom = (bytes: number) => {
     if (roomFor(bytes)) return true
+    if (!short(bytes)) return false
     const spare = [...entries]
       .filter(([key, entry]) => entry.bytes > 0 && !entry.pending && !namedKeys.has(key))
       .sort(([a], [b]) => (shownAt.get(a) ?? 0) - (shownAt.get(b) ?? 0))
     for (const [, entry] of spare) {
-      if (roomFor(bytes)) break
+      if (!short(bytes)) break
       release(entry)
     }
     return roomFor(bytes)
