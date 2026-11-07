@@ -6488,8 +6488,17 @@ async function roadmapMilestonesCheck() {
       const banded = app.locator(`[data-workspace-view] [data-msband] ${flag}`)
       await banded.waitFor({ timeout: 60_000 })
       // a flag's move through the store, from the range read's row and the
-      // store's project's organization, as a drag sends it
-      const left = async () => (await banded.boundingBox())?.x ?? Number.NaN
+      // store's project's organization, as a drag sends it. The flag's
+      // diamond sits at the start of its box, or at its end where the name
+      // runs to the left (data-msflag-side), so its place on the timeline
+      // is that edge, whichever side the name takes in the new week.
+      const left = async () => {
+        const box = await banded.boundingBox()
+        if (!box) return Number.NaN
+        return (await banded.getAttribute('data-msflag-side')) === 'left'
+          ? box.x + box.width
+          : box.x
+      }
       const before = await left()
       await evaluate(
         app,

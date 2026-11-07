@@ -275,7 +275,8 @@ describe('staging check REST contract', () => {
       new URL('../src/views/roadmap/TimelineMarks.tsx', import.meta.url),
       'utf8',
     )
-    for (const mark of ['data-msband', 'data-msflag={m.id}']) expect(marks).toContain(mark)
+    for (const mark of ['data-msband', 'data-msflag={m.id}', 'data-msflag-side={place.side}'])
+      expect(marks).toContain(mark)
     const row = readFileSync(
       new URL('../src/views/roadmap/TimelineRow.tsx', import.meta.url),
       'utf8',
