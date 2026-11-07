@@ -1931,27 +1931,19 @@ Returning the app alone to an earlier release is safe. The staging check's
 step `ui/sidebar-projects` checks the tree on the deployment's reads, so it
 needs a backend from v0.1.118 on.
 
-From the release after v0.1.158, `milestones.section` takes `mine: true` in
-place of named projects. The server then reads the milestones of the
-top-level projects above the caller's own tasks by the Reviewer rule across
-every seat of the login, the projects of My view's health table, judges each
-with the caller's seat as it judges a named top-level project, answers their
-ids as `projects`, and refuses past 200 such projects with the limit's
-sentence (`milestone_too_many`) and past its own read budget
-(`MILESTONE_MINE`) with the read-too-large refusal. The Overview's
-Milestones section and the phone Roadmap's agenda read Upcoming, 10 at first
-and 10 more for each Load more, and a collapsed Past, 25 at a time with a
-search, from it instead of the workspace's copy, My view with `mine` and All
-projects not at all. An app from this release against an older backend shows
-My view's milestones as failed with Retry, also in a tab that was open when
-the backend went back, until the backend rolls forward; a project's sections
-need the 100-row cap of v0.1.142, which the floors above hold. So this
-release is the backend's newest rollback floor. From it on, never return the
-backend to a commit before it; roll forward instead. Returning the app alone
-to an earlier release is safe, because that app reads the workspace's
-milestones, which the projects part still sends, and never sends `mine`. The
-release removes no function, changes no table, field or index, and has no
-backfill and no release step.
+From the release after v0.1.158, `milestones.section` takes `mine: true`,
+which reads My view's milestones from the top-level projects that hold the
+caller's own tasks, and the Overview's Milestones section and the phone
+Roadmap's agenda read their sections from `milestones.section` with their
+sizes as arguments, My view with `mine`. This app's My view milestones need
+this backend, so the release is the backend's newest rollback floor. From
+it on, never return the backend to a commit before it; roll forward
+instead. Returning the app alone to an earlier release is safe, because that
+app reads the workspace's milestones, which the projects part still sends.
+The staging check's `ui/overview-milestones` step checks on staging that a
+project's Overview and My view's read their milestones from
+`milestones.section`, My view with `mine`. The release changes no table,
+field or index and has no backfill.
 
 ## Node.js version
 
