@@ -15382,9 +15382,9 @@ export const PLANNER = {
       this read's cutoff, or sends nothing when the item holds no unread
       message. Later news on the task is read on open again, as the
       person's newest choice is read. A Mark as unread or snooze that went
-      out after it is newer and still holds while it waits or once
-      accepted, and frees nothing more once refused or failed. The read on
-      open never frees it. */
+      out after it is newer and holds while it waits or once accepted, and
+      holds nothing once refused or failed. The read on open never frees
+      it. */
   readItem: (
     target: { org: string; task: string; through: number; latestAt: string },
     { quiet = false } = {},
