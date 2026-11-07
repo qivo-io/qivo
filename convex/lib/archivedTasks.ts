@@ -972,7 +972,7 @@ async function granteesOf(ctx: QueryCtx, me: Doc<'profiles'>): Promise<Grantee[]
  * pass `room`. The top-level projects stay in `ids` for the caller's check
  * and the page, which reads their own archived tasks too, and count toward
  * no bound but `room`, as the sub-projects are what one person reads at
- * the design size: one who reads 200 through grants or team shares on
+ * the design size. So one who reads 200 through grants or team shares on
  * their top-level projects is found whole, as one with grants on the 200
  * themselves. A row finds a candidate and grants nothing: the caller checks
  * each (shownIn), and a role that turns no source into access, such as a

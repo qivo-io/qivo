@@ -694,9 +694,9 @@ export async function pageOrg(o: PageOrgSizes): Promise<PageOrg> {
 }
 
 /** Puts `profile` in every team `e.member` is in, so it reads what the
- * member reads through those teams' shares: an organization admin given
- * the member's everyday access, whom a case measures beside the member,
- * as admin status adds no project. */
+ * member reads through those teams' shares. A case measures an
+ * organization admin given the member's everyday access this way beside
+ * the member, as admin status adds no project. */
 export async function joinMemberTeams(e: PageOrg, profile: Doc<'profiles'>): Promise<void> {
   await e.t.run(async (ctx) => {
     const teams = await ctx.db

@@ -1409,8 +1409,8 @@ function comesBack(holder: DeletedRow): string {
     comes back only after that project item, and so does a hit whose item
     was, so Restore brings that project back first, in the same call, and
     the store sends the item again once the project is back. A task item the
-    person cannot read (restoresWithProject) is not sent: Restore brings the
-    project back alone and the window says the task stays in Deleted items
+    person cannot read (restoresWithProject) is not sent. Restore brings the
+    project back alone, and the window says the task stays in Deleted items
     until they can open its project. The project
     item the line's item waits for is the page's when it holds it, and is
     read from deletedItems.item while the window shows otherwise, Restore

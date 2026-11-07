@@ -749,7 +749,7 @@ function parentNote(read: ProjectSettingsRead, picked: ParentPick, opener: boole
    a check that stopped, warns of nothing. A starter task is offered only
    under a parent the workspace holds, as P.addIssue creates tasks only in
    a project it holds, and only to a creator who will be able to add a
-   task there: its lead, or one whose level on the parent, which the
+   task there, its lead or one whose level on the parent, which the
    sub-project inherits, is User or Lead (a team share counts at its
    level). Seeing it is not enough, as a Viewer on the parent sees the
    sub-project and may add no task, and an unknown level offers none. Of the
@@ -820,10 +820,10 @@ function NewSubProjectModal({
       : answer && parent && answer.project.id === parent.id
         ? answer.accessible
         : null
-  // whether the creator will be able to add a task to it, as the server's
-  // task create asks for User or Lead (model/issues.ts assertCanEdit): as
-  // its lead, or by User or Lead on the parent, which it inherits; false
-  // while the parent's level is unknown
+  // whether the creator will be able to add a task to it, which the
+  // server's task create allows User and Lead (model/issues.ts
+  // assertCanEdit), as its lead or by User or Lead on the parent, which it
+  // inherits, and false while the parent's level is unknown
   const edits =
     (!!seat && lead.id === seat) ||
     (!!answer &&
