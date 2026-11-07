@@ -469,8 +469,9 @@ Martins, with a task in it, picks the task's assignee (the run's Standard
 agent), its reviewer (Nora) and **No reviewer** in the task's window and
 Nora as its owner on its Team sync card, each from the deployment's people
 pickers and each checked over REST; then the card's Mention window picks
-Leo, the sub-project's lead goes back to Nora over REST until
-`GET /v1/projects/{ref}/users` stops listing Leo, and **Send** must post
+Leo, the sub-project's lead goes back to Nora over REST and the User grant
+the handover leaves Leo is removed, until `GET /v1/projects/{ref}/users`
+stops listing him, and **Send** must post
 nothing and say Leo can no longer be mentioned (`ui/owner-pickers`). It
 notifies nobody. Against a backend from before v0.1.147 that step fails.
 Before the archive, it

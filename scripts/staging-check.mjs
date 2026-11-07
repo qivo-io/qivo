@@ -208,9 +208,9 @@
  * picks the task's assignee, reviewer and No reviewer in its window and its
  * owner on its Team sync card from the deployment's people pickers, each
  * checked over REST; then the card's Mention window picks Leo, the lead
- * goes back to Nora over REST until GET /projects/{ref}/users drops Leo,
- * and Send must post nothing and say Leo can no longer be mentioned
- * (ui/owner-pickers).
+ * goes back to Nora over REST and the User grant the handover left Leo
+ * goes, until GET /projects/{ref}/users drops Leo, and Send must post
+ * nothing and say Leo can no longer be mentioned (ui/owner-pickers).
  * It checks the top bar's Inbox badge against the deployment's unread
  * summary (inbox.summary), has the Standard agent mention Nora in a comment
  * on t0 over REST, which the badge must count, opens t0 at its address,
@@ -5663,8 +5663,9 @@ export const MENTION_GONE = 'can no longer be mentioned on this task'
  *  its owner list, which finds and picks Nora, also checked over REST. On
  *  the card, now on Nora's line, the Mention window searches "Leo", picks
  *  him from the deployment's recipients and takes a note. The sub-project's
- *  lead then goes back to Nora over REST, and GET /projects/{ref}/users
- *  must stop listing Leo, so he can no longer see the task. Send must then
+ *  lead then goes back to Nora over REST, and so does the User grant a
+ *  handover leaves the outgoing lead, and GET /projects/{ref}/users must
+ *  stop listing Leo, so he can no longer see the task. Send must then
  *  show that Leo can no longer be mentioned, keep the note and post
  *  nothing (GET /tasks/{ref}/comments unchanged), and Cancel closes the
  *  window. It assigns only the run's own agent and Nora, who does the
@@ -5749,7 +5750,8 @@ async function ownerPickersCheck() {
     // the Mention window on the card, now on Nora's line
     await page.locator(`[data-sync-rail] [data-sync-jump="${nora.id}"]`).click()
     await card.waitFor({ timeout: 60_000 })
-    const comments = async () => (await restRows(w, `/tasks/${t.key}/comments`, 'comments')).length
+    // the task's newest 50 comments, which hold all of its few
+    const comments = async () => (await restOk(w, 'GET', `/tasks/${t.key}/comments`)).length
     const before = await comments()
     await card.locator(`[data-sync-mention="${t.key}"]`).click()
     const mention = app.locator(`[data-sync-mention-window="${t.key}"]`)
@@ -5761,10 +5763,13 @@ async function ownerPickersCheck() {
     eq(await person.getAttribute('aria-pressed'), 'true', 'Leo is not chosen')
     const note = `${run.tag} never sent`
     await mention.locator('textarea[aria-label="Note"]').fill(note)
-    // Leo loses sight of the task before Send
+    // Leo loses sight of the task before Send: the lead goes back to Nora,
+    // and then the User grant a handover leaves the outgoing lead
     await restOk(w, 'PATCH', `/projects/${sub.id}`, { lead_id: nora.id })
+    await restOk(w, 'DELETE', `/projects/${sub.id}/access/users/${leo.id}`)
+    // the people who can read the sub-project, one array with no paging
     const reaches = async () =>
-      (await restRows(w, `/projects/${sub.id}/users`, 'users')).some((u) => u.id === leo.id)
+      (await restOk(w, 'GET', `/projects/${sub.id}/users`)).some((u) => u.id === leo.id)
     expect(
       await until(async () => !(await reaches())),
       `GET /projects/${sub.key}/users still lists ${leo.name}`,
