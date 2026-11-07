@@ -2659,12 +2659,14 @@ function UnusedReason({
    milestone no section shows reads it with milestones.get under
    milestone:kept, which gives it its stored values, its organization and
    its right, and says when it is gone. Until that read first answers, its
-   Save and Delete wait, so they always start from the values that read
-   gave, and it says it is loading while the read loads. That read's
-   failure says so above the sections with Retry, and its refusal gives
-   the server's sentence; before any answer a refusal also locks the
-   editor with its draft, and after one, a failure or refusal keeps that
-   answer and its right. */
+   Save and Delete wait, so a write finds its row and organization in that
+   read's answer and the editor takes its right from it, and it says it is
+   loading while the read loads. A save still sends the values the editor
+   showed when it opened as what the person saw. That read's failure says
+   so above the sections with Retry, and its refusal gives the server's
+   sentence; before any answer a refusal also locks the editor with its
+   draft, and after one, a failure or refusal keeps that answer and its
+   right. */
 
 /* The store's slots of the window's reads: the milestone it opened on, the
    milestone of an editor no section shows, and its two sections' asks. */
@@ -3007,8 +3009,8 @@ function MilestoneModal({
      as the server could not confirm it. Until that read first answers,
      loading or failed, a kept editor waits with its Save and Delete off,
      also while another read still holds its milestone, such as a hidden
-     page's stopped one, so a save always sends the values its own read
-     gave. */
+     page's stopped one, so a save or delete takes its row and organization
+     from that read's answer, not from the stopped read. */
   const editorOf = (m: MilestoneVM) => {
     const own = m.id === init.id
     lastEdited.current = m
