@@ -729,6 +729,50 @@ describe('Settings › Labels', () => {
       args: { id: 'new', expected: { name: 'New from elsewhere', color: '#0891B2' } },
     })
   })
+
+  it('shows a newer change by someone else over what it saved for a label the store does not hold, once the answer catches up', async () => {
+    await load((snap) => labelRow(snap, 'fw', 'Firmware'))
+    // another admin's label reaches the answer before the catalogue
+    labelRow(server.snap, 'new', 'New from elsewhere', '#0891B2')
+    await render()
+    const label = () => {
+      const row = server.snap.labels.find((l) => l.id === 'new')
+      if (!row) throw new Error('no label new')
+      return row
+    }
+    // two renames here, both accepted, while the answer still holds the
+    // label's first name
+    await rename('new', 'Second name')
+    await answer('labels:update', 'accept')
+    await rename('new', 'Third name')
+    expect(requests.at(-1)).toMatchObject({
+      args: { patch: { name: 'Third name' }, expected: { name: 'Second name' } },
+    })
+    await answer('labels:update', 'accept')
+    expect(nameField('new').value).toBe('Third name')
+    // the answer reaches the first of them, and the row keeps the second
+    Object.assign(label(), { name: 'Second name', name_lower: 'second name' })
+    await rerun()
+    expect(nameField('new').value).toBe('Third name')
+    // another admin renames it before the answer shows this page's name
+    Object.assign(label(), { name: 'Renamed elsewhere', name_lower: 'renamed elsewhere' })
+    await rerun()
+    expect(nameField('new').value).toBe('Renamed elsewhere')
+    // a recolor here, accepted, then another admin's before the answer
+    // shows this page's
+    await click(find('[aria-label="Change color for Renamed elsewhere"]'))
+    await click(find('[aria-label="Label colors"] [aria-label="Red"]'))
+    await answer('labels:update', 'accept')
+    label().color = '#22C55E'
+    await rerun()
+    // Delete sends what the row shows, the newer name and color
+    await click(find<HTMLButtonElement>('[data-delete-label="new"]'))
+    await click(button('Delete', find('[data-modal-shell]')))
+    expect(requests.at(-1)).toMatchObject({
+      name: 'labels:remove',
+      args: { id: 'new', expected: { name: 'Renamed elsewhere', color: '#22C55E' } },
+    })
+  })
 })
 
 describe('a label name on the draft model', () => {

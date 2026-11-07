@@ -109,6 +109,29 @@ export const NAME_TAKEN = 'A label with that name already exists'
     on and the server decides. */
 type NameCheck = { name: string; state: 'checking' | 'free' | 'taken' | 'failed' }
 
+/** A name or color the server accepted from the page over a label the
+    store does not hold, with the values the page showed before its writes
+    (`under`), which an answer that has not caught up with them still
+    holds. */
+type SavedOver = { value: string; under: readonly string[] }
+
+/** `value`, accepted over what the page showed before the write
+    (`before`), on top of what it had saved over the label's field. */
+const savedOver = (was: SavedOver | undefined, value: string, before: string): SavedOver => ({
+  value,
+  under: [...(was?.under ?? []), before],
+})
+
+/** Whether the answer's `now` has caught up with what the page saved
+    over the field, as when it shows the saved value or a value the page
+    did not show before its writes, such as a newer change by someone
+    else. */
+const caughtUp = (over: SavedOver, now: string, same: (a: string, b: string) => boolean) =>
+  same(now, over.value) || !over.under.some((was) => same(now, was))
+
+const sameName = (a: string, b: string) => a === b
+const sameColor = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
+
 /** The name input of row `id`, for focus. */
 const nameOf = (id: string) =>
   document.querySelector<HTMLElement>(`[data-label-row="${id}"] [data-label-name]`)
@@ -140,11 +163,12 @@ function LabelRow({
   kept: 'Added' | 'Not in this list' | null
   canEdit: boolean
   onUnsaved: (id: string, unsaved: boolean) => void
-  /** a rename the page sent, with the name and the write's answer,
-      whether the server accepted it */
-  onRenamed: (id: string, name: string, accepted: Promise<boolean>) => void
-  /** a recolor the page sent, with the color and the write's answer */
-  onRecolored: (id: string, color: string, accepted: Promise<boolean>) => void
+  /** a rename the page sent, with the name, the name the row showed
+      before it and the write's answer, whether the server accepted it */
+  onRenamed: (id: string, name: string, before: string, accepted: Promise<boolean>) => void
+  /** a recolor the page sent, with the color, the color the row showed
+      before it and the write's answer */
+  onRecolored: (id: string, color: string, before: string, accepted: Promise<boolean>) => void
   onDelete: (id: string, name: string, color: string) => void
 }) {
   const ready = canEdit
@@ -166,7 +190,7 @@ function LabelRow({
     if (draft.conflict || P.refusePausedEdit()) return
     const save = draft.save(next)
     const sent = P.updateLabel(id, { name: next }, save.as('name'), shown)
-    if (sent) onRenamed(id, next, sent)
+    if (sent) onRenamed(id, next, name, sent)
     else save.keepUnsaved()
   }
   return (
@@ -213,7 +237,7 @@ function LabelRow({
                     const sent =
                       option.toLowerCase() !== color.toLowerCase() &&
                       P.updateLabel(id, { color: option }, {}, shown)
-                    if (sent) onRecolored(id, option, sent)
+                    if (sent) onRecolored(id, option, color, sent)
                     close()
                   }}
                 >
@@ -393,14 +417,15 @@ export function OrgLabelsPage() {
   // the name and color the page last showed for each label, from its
   // answers or as it created the label, and what the server accepted from
   // the page over them since, which a kept row shows and a loaded row shows
-  // until the answer holds it. A rename or recolor counts as saved only
-  // once the server accepts it, so a refused one never shows as the
-  // label's name or color, or goes out later as `expected`.
+  // until the answer has caught up with it (caughtUp), by showing it or a
+  // newer change. A rename or recolor counts as saved only once the server
+  // accepts it, so a refused one never shows as the label's name or color,
+  // or goes out later as `expected`.
   const known = useRef(new Map<string, { name: string; color: string }>())
   // the labels of the kept rows the store's catalogue held during this
   // visit. One it no longer holds was deleted, here or by someone else
   const heldHere = useRef(new Set<string>())
-  const [saved, setSaved] = useState<ReadonlyMap<string, { name?: string; color?: string }>>(
+  const [saved, setSaved] = useState<ReadonlyMap<string, { name?: SavedOver; color?: SavedOver }>>(
     () => new Map(),
   )
   // the names on their way, by label, which a renamed label's kept row
@@ -409,7 +434,7 @@ export function OrgLabelsPage() {
   const onUnsaved = useCallback((id: string, unsaved: boolean) => {
     setDrafts((s) => (unsaved === s.has(id) ? s : toggled(s, id, unsaved)))
   }, [])
-  const onRenamed = (id: string, name: string, accepted: Promise<boolean>) => {
+  const onRenamed = (id: string, name: string, before: string, accepted: Promise<boolean>) => {
     setRenamed((s) => toggled(s, id, true))
     setSending((m) => new Map(m).set(id, name))
     void accepted.then((ok) => {
@@ -419,40 +444,49 @@ export function OrgLabelsPage() {
         next.delete(id)
         return next
       })
-      if (ok) setSaved((m) => new Map(m).set(id, { ...m.get(id), name }))
+      if (!ok) return
+      setSaved((m) => {
+        const was = m.get(id)
+        return new Map(m).set(id, { ...was, name: savedOver(was?.name, name, before) })
+      })
     })
   }
-  const onRecolored = (id: string, color: string, accepted: Promise<boolean>) => {
+  const onRecolored = (id: string, color: string, before: string, accepted: Promise<boolean>) => {
     void accepted.then((ok) => {
-      if (ok) setSaved((m) => new Map(m).set(id, { ...m.get(id), color }))
+      if (!ok) return
+      setSaved((m) => {
+        const was = m.get(id)
+        return new Map(m).set(id, { ...was, color: savedOver(was?.color, color, before) })
+      })
     })
   }
   const loaded = new Map(list.rows.map((row) => [row.id, row]))
   for (const row of list.rows) known.current.set(row.id, { name: row.name, color: row.color })
   // a created or renamed label goes from the kept rows once a loaded batch
-  // holds it under the name the page sent or saved; what the page saved
-  // goes once the answer shows it
+  // holds it under the name the page sent or saved; each field the page
+  // saved goes once the answer has caught up with it
   useEffect(() => {
     const settled = (id: string) => {
       const row = loaded.get(id)
       return (
         !!row &&
-        row.name === (sending.get(id) ?? saved.get(id)?.name ?? known.current.get(id)?.name)
+        row.name === (sending.get(id) ?? saved.get(id)?.name?.value ?? known.current.get(id)?.name)
       )
     }
     setMade((s) => without(s, settled))
     setRenamed((s) => without(s, settled))
     setSaved((m) => {
-      let next: Map<string, { name?: string; color?: string }> | null = null
+      let next: Map<string, { name?: SavedOver; color?: SavedOver }> | null = null
       for (const [id, over] of m) {
         const row = loaded.get(id)
         if (!row) continue
-        const nameShown = over.name === undefined || row.name === over.name
-        const colorShown =
-          over.color === undefined || row.color.toLowerCase() === over.color.toLowerCase()
-        if (!nameShown || !colorShown) continue
+        const name = over.name && !caughtUp(over.name, row.name, sameName) ? over.name : undefined
+        const color =
+          over.color && !caughtUp(over.color, row.color, sameColor) ? over.color : undefined
+        if (name === over.name && color === over.color) continue
         next ??= new Map(m)
-        next.delete(id)
+        if (name || color) next.set(id, { name, color })
+        else next.delete(id)
       }
       return next ?? m
     })
@@ -481,8 +515,8 @@ export function OrgLabelsPage() {
     const base = answer ?? known.current.get(id)
     const over = saved.get(id)
     return {
-      name: over?.name ?? base?.name ?? '',
-      color: over?.color ?? base?.color ?? 'var(--border-strong)',
+      name: over?.name?.value ?? base?.name ?? '',
+      color: over?.color?.value ?? base?.color ?? 'var(--border-strong)',
     }
   }
 
