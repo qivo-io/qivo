@@ -42,7 +42,8 @@
      holds at once, and one it does not hold yet through
      projectNav.resolve, saying "Opening <name>…" in the status line until
      it opens, or why it cannot. A page move or a new search drops the
-     wait, and so does the page hiding.
+     wait, and so do the page hiding and any navigation the person makes
+     (navMoved).
    - No list says it found nothing or ended before the server said so: not
      ready, the access_unchecked refusal, a stopped page or batch and a
      failure each show as themselves, the refusal and a failure with Retry.

@@ -8,7 +8,8 @@
    organizations' names, the home organization, whether the person is an
    organization admin and whether the workspace holds a project and is
    current, and they open a project the workspace does not hold through
-   projectNav.resolve (openResolved, useNavOpen). */
+   projectNav.resolve (openResolved, useNavOpen), which every navigation
+   the person makes drops (navMoved). */
 
 import { type ReactNode, useCallback, useEffect, useRef } from 'react'
 import type {
@@ -243,6 +244,29 @@ export function navOpenText(opening: NavOpening, name: string): string | null {
   }
 }
 
+/* Who hears the person's navigations (navMoved): each open that waits
+   (useNavOpen) and startup's check (App.tsx). */
+const navMoves = new Set<() => void>()
+
+/** Tells every open that waits, and startup's check, that the person moved
+    elsewhere, so each drops its wait with its "Opening" line and its
+    answer changes nothing. App calls it for each move and each Back or
+    Forward it accepts, and an open that starts to wait calls it first, so
+    another list's open gives way to it. */
+export function navMoved() {
+  // one heard removes at most itself, which a walk of a Set allows
+  for (const heard of navMoves) heard()
+}
+
+/** Calls `heard` on each navMoved until the function it answers is
+    called. */
+export function onNavMove(heard: () => void): () => void {
+  navMoves.add(heard)
+  return () => {
+    navMoves.delete(heard)
+  }
+}
+
 /**
  * The open rule of the lists on the navigation reads. `open(row)` opens a
  * project the workspace holds at once with `go(id)`, reading nothing. One
@@ -250,12 +274,15 @@ export function navOpenText(opening: NavOpening, name: string): string | null {
  * openResolved: `go(id)` once the workspace holds it, with `say(null)`,
  * which ends the line, else the outcome's sentence (navOpenText). A
  * second press of the row it waits for does nothing, and a press on
- * another row replaces the wait. `cancel()` drops it, as a caller does on
- * a page move or a new search, and so does the caller hiding (React's
- * Activity runs this hook's cleanup) or going, so nothing opens later in
- * a place the person left. Hiding or going while it waits also ends its
- * "Opening <name>…" line with `say(null)`, so a page shown again does not
- * say it opens what nothing waits for.
+ * another row replaces the wait. `cancel()` drops it and says nothing, as
+ * a caller does on a page move or a new search, which ends its own line.
+ * The caller hiding (React's Activity runs this hook's cleanup) or going
+ * drops it too, and so does every navigation the person makes (navMoved):
+ * another view, page or project, Back or Forward, or an open that starts
+ * to wait in another list. So nothing opens later in a place the person
+ * left, and only one open waits at a time. These also end the
+ * "Opening <name>…" line with `say(null)`, so no list says it opens what
+ * nothing waits for.
  */
 export function useNavOpen(go: (id: string) => void, say: (line: string | null) => void) {
   const wait = useRef<{ id: string; stop: () => void } | null>(null)
@@ -265,13 +292,12 @@ export function useNavOpen(go: (id: string) => void, say: (line: string | null) 
     wait.current?.stop()
     wait.current = null
   }, [])
-  useEffect(
-    () => () => {
-      if (wait.current) sayNow(null)
-      cancel()
-    },
-    [cancel, sayNow],
-  )
+  // drops a wait with its line
+  const drop = useCallback(() => {
+    if (wait.current) sayNow(null)
+    cancel()
+  }, [cancel, sayNow])
+  useEffect(() => drop, [drop])
   const open = (row: { id: string; name: string }) => {
     if (P.project(row.id)) {
       cancel()
@@ -279,17 +305,22 @@ export function useNavOpen(go: (id: string) => void, say: (line: string | null) 
     }
     if (wait.current?.id === row.id) return
     cancel()
+    // another list's open that waits, and startup's check, give way
+    navMoved()
     sayNow(`Opening ${row.name}…`)
-    const at = {
-      id: row.id,
-      stop: openResolved(row.id, (opening) => {
-        if (wait.current !== at) return
-        wait.current = null
-        if (opening.state === 'open') {
-          sayNow(null)
-          goNow(opening.id)
-        } else sayNow(navOpenText(opening, row.name))
-      }),
+    const at = { id: row.id, stop: () => {} }
+    const stopOpen = openResolved(row.id, (opening) => {
+      if (wait.current !== at) return
+      cancel()
+      if (opening.state === 'open') {
+        sayNow(null)
+        goNow(opening.id)
+      } else sayNow(navOpenText(opening, row.name))
+    })
+    const off = onNavMove(drop)
+    at.stop = () => {
+      stopOpen()
+      off()
     }
     wait.current = at
   }

@@ -353,6 +353,46 @@ describe('the open rule', { timeout: 30_000 }, () => {
     await settle()
     expect(go).not.toHaveBeenCalled()
   })
+
+  it("drops the wait and its line on the person's navigation and on another list's open, so its answer opens nothing", async () => {
+    const next = base()
+    await load(next)
+    const after = later(next)
+    const a = top(after, 'Alpha')
+    const b = top(after, 'Beta')
+    // two lists, as the sidebar's tree beside the directory or Search
+    await act(async () =>
+      root.render(
+        <>
+          <Opener list={[{ id: a, name: 'Alpha' }]} />
+          <Opener list={[{ id: b, name: 'Beta' }]} />
+        </>,
+      ),
+    )
+    await settle()
+    const lines = () =>
+      [...document.querySelectorAll('[data-line]')].map((el) => el.textContent ?? '')
+    await press(a)
+    expect(lines()).toEqual(['Opening Alpha…', ''])
+    // an open that starts to wait in another list takes the first one's place
+    await press(b)
+    expect(lines()).toEqual(['', 'Opening Beta…'])
+    await act(async () => {
+      publish(after)
+      asks[0].ok(a)
+    })
+    await settle()
+    expect(go).not.toHaveBeenCalled()
+    expect(lines()).toEqual(['', 'Opening Beta…'])
+    // a navigation the person makes, as App reports each one
+    await act(async () => rows.navMoved())
+    expect(lines()).toEqual(['', ''])
+    await act(async () => asks[1].ok(b))
+    await settle()
+    expect(go).not.toHaveBeenCalled()
+    expect(lines()).toEqual(['', ''])
+    expect(asks).toHaveLength(2)
+  })
 })
 
 describe('the wait for the workspace, in the order Convex delivers', { timeout: 30_000 }, () => {

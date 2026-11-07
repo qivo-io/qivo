@@ -38,8 +38,10 @@
      names among the rows shown, and the open rule (useNavOpen), which
      opens a project the workspace holds as the sidebar always has, and
      one it does not hold yet through projectNav.resolve, saying "Opening
-     <name>…" in a toast until it opens, or why it cannot. The tree
-     hiding under Settings drops the wait.
+     <name>…" in a toast until it opens, or why it cannot. The tree stays
+     over every page but Settings, so any navigation the person makes
+     meanwhile drops the wait with its toast (navMoved), and so does the
+     tree hiding under Settings.
    - New sub-project… in a row's menu, and Add sub-project at a confirmed
      empty end of the expanded list, show where the person manages the
      project in the workspace (P.canManageOwnProjectAccess, its lead or an

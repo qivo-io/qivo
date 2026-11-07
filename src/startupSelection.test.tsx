@@ -1062,3 +1062,112 @@ describe('a task address the workspace does not hold', { timeout: 60_000 }, () =
     }
   })
 })
+
+describe('an open or a check that waits, and the person’s next move', { timeout: 60_000 }, () => {
+  /** `snap` and a copy whose Late programme the server lists and opens
+      while the workspace's delivery has not brought it, with the copy's
+      delivery a moment later. */
+  function lateWorld() {
+    const snap = world()
+    const held = structuredClone(snap)
+    const late = meta(held, 'Late programme')
+    return { snap, held, late }
+  }
+  let hour = 9
+  /** Delivers `value` to the workspace, newer than the delivery before. */
+  const deliver = (value: Snapshot) =>
+    publish({
+      ...structuredClone(value),
+      delivered_at: `2026-09-15T${String(hour++ % 24).padStart(2, '0')}:00:00.000Z`,
+    })
+  const viewPill = (name: string) =>
+    [...document.querySelectorAll('[data-view-switch] button')].find(
+      (b) => b.textContent?.trim() === name,
+    )
+  const toast = () => q('.planner-toast-host')?.textContent ?? ''
+  const crumb = () => q('[data-scope-crumb] h1')?.textContent
+
+  it('drops a sidebar open once the person moves elsewhere, with its toast, so its answer opens nothing', async () => {
+    const { snap, held, late } = lateWorld()
+    // the server's ok, with the delivery that brings the project
+    resolveWith = (args) => {
+      deliver(held)
+      return queryProjectNav(held, 'projectNav:resolve', args)
+    }
+    await app(snap, '/app/testbed/overview/p/10', {}, () => {
+      server = held
+    })
+    // Back follows the view pill, so it reaches the Board's entry
+    const moves: [string, () => Promise<unknown>][] = [
+      ['My view', () => click(q('aside [data-mine-nav]'))],
+      ['the Inbox', () => click(q('[data-view-switch] [aria-label^="Inbox"]'))],
+      ['All projects', () => click(q('aside [data-all-nav]'))],
+      ['Team sync', () => click(q('aside [data-sync-nav]'))],
+      ['a view pill', () => click(viewPill('Board'))],
+      ['Back', () => act(async () => history.back())],
+    ]
+    for (const [what, moveOn] of moves) {
+      // on Luma Sensor's Overview, with a workspace that lacks the project
+      await go('/app/testbed/overview/p/10')
+      await until(() => shown() === 'overview' && crumb() === 'Luma Sensor', `${what}: Luma Sensor`)
+      deliver(snap)
+      server = held
+      await settle()
+      expect(store.P.project(late)).toBeUndefined()
+      const release = holdResolve()
+      await until(() => q(`aside [data-project-row="${late}"] button`), `${what}: the row`)
+      await click(q(`aside [data-project-row="${late}"] button`))
+      expect(toast()).toContain('Opening Late programme…')
+      const from = location.pathname
+      await moveOn()
+      await settle()
+      const there = location.pathname
+      expect(there, what).not.toBe(from)
+      expect(toast(), what).not.toContain('Opening Late programme…')
+      await release()
+      // the answer brought the project, and opened nothing
+      expect(store.P.project(late), what).toBeDefined()
+      expect(location.pathname, what).toBe(there)
+      expect(toast(), what).not.toContain('Late programme')
+    }
+    expect(sentProjects()).not.toContain(late)
+  })
+
+  it('drops startup’s check for a view pill and for an open that starts to wait in a list, so its answer opens nothing', async () => {
+    const { snap, held, late } = lateWorld()
+    let release = holdResolve()
+    await app(structuredClone(snap), '/app/testbed', remembering(PORTAL, PARTNER))
+    await chooser('checking')
+    await click(viewPill('Board'))
+    // the chooser takes the check's place, on the view the person chose
+    await chooser('choose')
+    expect(q('[data-project-chooser]')?.textContent).toContain(
+      'The project you choose opens on the Board.',
+    )
+    await release()
+    expect(chooserState()).toBe('choose')
+    expect(shown()).toBeUndefined()
+    expect(viewReads()).toEqual([])
+    expect(location.pathname).toBe('/app/testbed')
+    await leave()
+    // a sidebar row the workspace does not hold, whose answer lands second
+    resolveWith = (args) => {
+      if ((args as { project_id?: string }).project_id === late) deliver(held)
+      return queryProjectNav(held, 'projectNav:resolve', args)
+    }
+    release = holdResolve()
+    await app(structuredClone(snap), '/app/testbed', remembering(PORTAL, PARTNER), () => {
+      server = held
+    })
+    await chooser('checking')
+    await until(() => q(`aside [data-project-row="${late}"] button`), 'the row')
+    await click(q(`aside [data-project-row="${late}"] button`))
+    await chooser('choose')
+    await release()
+    await until(() => shown() === 'overview', "Late programme's Overview")
+    expect(crumb()).toBe('Late programme')
+    expect(asks.map((a) => a.args)).toEqual([{ project_id: PORTAL }, { project_id: late }])
+    await until(() => lastSent() === late, 'the pick remembered')
+    expect(sentProjects()).toEqual([late])
+  })
+})

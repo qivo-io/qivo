@@ -29,7 +29,7 @@ import { MobileHeader, MobileNavigation, MobileTaskList } from './components/Mob
 import { navRow } from './components/navRow'
 import { type ChooserShows, ProjectChooser } from './components/ProjectChooser'
 import { ProjectDirectory } from './components/ProjectDirectory'
-import { openResolved } from './components/projectNavRows'
+import { navMoved, onNavMove, openResolved } from './components/projectNavRows'
 import { Icon, MenuItem, Popover, Seg } from './components/qivo'
 import { type FocusRow, SidebarProjects } from './components/SidebarProjects'
 import { TasksLoadingBar } from './components/TasksLoading'
@@ -1057,7 +1057,9 @@ function App() {
       : scopes
   /** Runs `go`, a user's move to the place `next` patches in, once the
       windows it closes hold no unsent text, or after the person chose
-      Discard. Raw setters remain for moves the person did not ask for. */
+      Discard. Raw setters remain for moves the person did not ask for.
+      The accepted move drops every open that waits and startup's check
+      (navMoved). */
   const move = (next: UiState, go: () => void) => {
     const to = { ...hereRef.current, ...next }
     closeOrAsk(withSettingsTask(hereRef.current, to, closedBy(hereRef.current, to, unsent)), () => {
@@ -1067,6 +1069,7 @@ function App() {
         taskScope.current = null
         setPicks((n) => n + 1)
       }
+      navMoved()
       go()
     })
   }
@@ -1478,6 +1481,10 @@ function App() {
          marker unheard (lib/pageHistory holdLayers). */
       if (holdLayers(event)) return
       refusal.accepted()
+      // a move to another page drops every open that waits and startup's
+      // check (navMoved); one that stays on its page, as a phone layer's
+      // Back does, moves nothing
+      if (pageKey(next) !== pageKey(was) || next.openIssue !== was.openIssue) navMoved()
       /* An address that is not the page's own, such as one to a project
          that is gone, gives way to the page's in place, as on a boot: the
          url-sync effect would leave it when the page stays the same. A task
@@ -1566,18 +1573,33 @@ function App() {
      view would show it, so no view mounts and nothing of the project is
      read before the server said the person may open it. Under a page that
      covers the views, as the phone's Inbox at a bare address, it waits
-     until a view shows, as no tab there leads to the scope beneath. Its
-     answer counts only while the scope is still empty and no newer
-     opening started, so a press in the sidebar meanwhile wins: ok opens
-     the project once the workspace holds it (openResolved); unavailable
-     shows the chooser with its note; the access_unchecked refusal and a
-     failed read show their sentence with Retry, never the chooser, another
-     project, My view or All projects. */
+     until a view shows, as no tab there leads to the scope beneath. Every
+     navigation the person makes while it is on its way drops it
+     (navMoved), a view pill, another page or project, Back or Forward and
+     an open that starts to wait in a list, so its answer changes nothing
+     and the chooser takes its line's place, unless Back or Forward reached
+     an address that names its own opening. Otherwise its answer counts
+     only while the scope is still empty and no newer opening started: ok
+     opens the project once the workspace holds it (openResolved);
+     unavailable shows the chooser with its note; the access_unchecked
+     refusal and a failed read show their sentence with Retry, never the
+     chooser, another project, My view or All projects. */
   const askedCheck = useRef(-1)
   const stopCheck = useRef<(() => void) | null>(null)
   const openingRef = useRef(opening)
   openingRef.current = opening
   useEffect(() => () => stopCheck.current?.(), [])
+  useEffect(
+    () =>
+      onNavMove(() => {
+        const stop = stopCheck.current
+        if (!stop) return
+        stopCheck.current = null
+        stop()
+        showOpening((n) => ({ kind: 'choose', n, note: null, lost: null }))
+      }),
+    [],
+  )
   useEffect(() => {
     if (opening.kind !== 'checking' || scope !== undefined || !viewShown) return
     if (askedCheck.current === opening.n) return

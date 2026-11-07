@@ -26,7 +26,8 @@ a time, the one you are in. When you open a project from elsewhere, such as
 project and brings its row into view. A project Qivo has not loaded yet
 opens once the server confirms that you can open it, with a note that
 says **Opening** and its name meanwhile, or that you can no longer open
-it. The tree loads no tasks.
+it. If you switch views, go elsewhere or open another project first, Qivo
+stops opening it. The tree loads no tasks.
 
 The tree says so when its list is not ready yet, when Qivo could not finish
 checking which projects you can see, with **Retry**, and when it checked
@@ -192,10 +193,12 @@ can no longer open the project you opened last, it says that the project
 is no longer available to you. It never opens
 another project, **My view** or all projects by itself. **My view**, **All
 projects** and Team sync do not change the project Qivo remembers, and
-neither does a task you open from the Inbox or by its link. If Qivo could
-not finish the check, it says so with **Retry**, which checks again. The top
-bar stays meanwhile, so the Inbox and the view you will open are one click
-away. On a phone, Qivo opens the Inbox.
+neither does a task you open from the Inbox or by its link. If you switch
+views or go elsewhere before the check answers, Qivo does not open that
+project afterwards. If Qivo could not finish the check, it says so with
+**Retry**, which checks again. The top bar stays meanwhile, so the Inbox
+and the view you will open are one click away. On a phone, Qivo opens the
+Inbox.
 
 ## Pages stay as you left them
 
