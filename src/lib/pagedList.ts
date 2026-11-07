@@ -278,15 +278,18 @@ export function useSettledSearch(
 /** What both engines show, before the hook adds its two calls. */
 type ListState<A, Row> = Omit<PagedList<A, Row>, 'more' | 'retry'>
 
-/** One engine under usePagedList: `open` starts it for a key, `show`
-    follows the tab's visibility, and `keep` follows the page's own
-    effects, which React stops while a kept page hides and when the page
-    goes. A live engine keeps its answers while kept and reads the same
-    batches again once shown (`keeps`); the `once` engine drops every read
-    and answer, so the page opens it again. */
+/** One engine under usePagedList: `open` starts it for a key (again after
+    `stop`), `show` follows the tab's visibility, `stop` drops every read
+    and answer, as a caller outside React does when it leaves its list
+    (onceList), and `keep` follows the page's own effects, which React
+    stops while a kept page hides and when the page goes. A live engine
+    keeps its answers while kept and reads the same batches again once
+    shown (`keeps`); the `once` engine drops every read and answer, so the
+    page opens it again. */
 type Engine<A, Row> = {
   open(key: string | null): void
   show(visible: boolean): void
+  stop(): void
   keep(kept: boolean): void
   /** whether `keep` keeps the answers, so a page shown again opens nothing */
   keeps: boolean
@@ -401,13 +404,15 @@ function onceEngine<A, Row>(
       start()
     },
     show() {},
-    keep(kept) {
-      if (!kept) return
+    stop() {
       sequence++
       reads = []
       held = null
       failure = null
       reading = false
+    },
+    keep(kept) {
+      if (kept) this.stop()
     },
     keeps: false,
     view() {
@@ -834,6 +839,10 @@ function liveEngine<A, Row>(
       const was = reading()
       visible = next
       rewatch(was)
+    },
+    stop() {
+      stopAll()
+      failed = false
     },
     keep(next) {
       if (next === kept) return
