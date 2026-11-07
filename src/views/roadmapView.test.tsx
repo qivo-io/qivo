@@ -921,6 +921,61 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
     },
   )
 
+  it.each(['error', 'gone'] as const)(
+    "spends an unscheduled task's first fit once its owner's read answers %s, so their hours arriving later leave the dropped dates",
+    async (answer) => {
+      // Gina, whom the workspace's people part does not hold, owns one-1,
+      // and her read fails or leaves her out, so the panel says auto-fit
+      // is off
+      const board = await loadBoard(
+        network,
+        (snap) => {
+          plan(snap)
+          snap.profiles.push({
+            ...snap.profiles[0],
+            id: 'gina',
+            auth_user_id: 'account-gina',
+            name: 'Gina Ghost',
+            initials: 'GG',
+            org_role: 'user',
+            plannable_hours: 25,
+          })
+          const one = snap.issues[0]
+          Reflect.deleteProperty(one, 'start_week')
+          Reflect.deleteProperty(one, 'end_week')
+          one.remaining_hours = 100
+          one.assignee_id = 'gina'
+        },
+        { scope: 'plan' },
+      )
+      board.server.people.unheld = new Set(['gina'])
+      board.server.people.force = answer
+      await board.deliver()
+      board.P.roadmapContext(true, false)
+      network.mutation.mockClear()
+      const { start: _start, end: _end, ...unscheduled } = planOne(board)
+      await renderRoadmap(board, { focusPlan: unscheduled })
+      await flush()
+      await settle()
+      await flush()
+      const starter = { start_week: week(0), end_week: week(1) }
+      expect(board.P.person('gina')?.state).toBe(answer === 'error' ? 'failed' : 'gone')
+      expect(planCard()?.textContent).toContain('Capacity unknown, so auto-fit is off')
+      // the drop keeps the dates the person chose, with no hours to fit
+      await dragBar('QN-1', 1)
+      const dropped = { start_week: week(1), end_week: week(2) }
+      expect(datesSent('one-1')).toEqual([starter, dropped])
+      // her details arrive with her 25-hour weeks, and the dates stay
+      board.server.people.force = null
+      await board.answer()
+      await settle()
+      await flush()
+      expect(board.P.person('gina')?.state).toBe('ok')
+      expect(planCard()?.textContent).not.toContain('Capacity unknown')
+      expect(datesSent('one-1')).toEqual([starter, dropped])
+    },
+  )
+
   it('places no task that left the roadmap as its first load arrives, and ends the session', async () => {
     // One's Roadmap, and the workspace holds every task, as after Team
     // sync loaded them, so one-1 is still found once its answer drops it

@@ -1023,7 +1023,9 @@ function Roadmap({
   // the task and, while auto-fit can place it, for the owner's weekly
   // hours, which arrive with their details (capacityFor). A bar the
   // person moves before then gets its first fit from where they dropped
-  // it. Later answers leave the user's chosen dates alone.
+  // it. Once the owner's read failed or left them out, the panel says
+  // auto-fit is off, so the first fit is spent then and a later answer
+  // with their hours leaves the dates alone, as every later answer does.
   useEffectR(() => {
     const s = sessionRef.current
     const load = planLoad?.items
@@ -1032,7 +1034,8 @@ function Roadmap({
     if (!it) return
     const fits = s.autoFit && !!it.owner && !P.isGroup(it) && it.remaining > 0 && it.start != null
     const cap = capacityFor(it)
-    if (fits && cap === null) return
+    const ownerState = it.owner ? P.person(it.owner, it.org)?.state : undefined
+    if (fits && cap === null && ownerState !== 'failed' && ownerState !== 'gone') return
     const placed = { ...s, fitOnLoad: false }
     sessionRef.current = placed
     setSession(placed)
