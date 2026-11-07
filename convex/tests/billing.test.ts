@@ -3008,11 +3008,26 @@ describe('storage charged on the daily average', () => {
           await t.mutation(apply, { payload: remote(f.org.id) })
         }
         if (i === 14) {
-          // half way, a finalize waits for the last day and writes nothing
+          // half way, an operator's finalize waits for the last day, writes
+          // nothing to the period and says so in its audit row
           const open = await periodAt(t, START)
           if (open === null) throw new Error('no period')
-          expect(await t.mutation(finalizeRef, { period: open._id })).toBe('waiting')
+          expect(await t.mutation(finalizeRef, { period: open._id, operator: true })).toBe(
+            'waiting',
+          )
           expect(await periodAt(t, START)).toEqual(open)
+          expect(await auditsOf(t, 'billing.storage_finalize_requested')).toMatchObject([
+            {
+              actor_email: 'cli',
+              target_org_id: f.org.id,
+              detail: {
+                period: open._id,
+                subscription_id: providerId,
+                period_start: START,
+                outcome: 'waiting',
+              },
+            },
+          ])
         }
         // no run before the period's last day lists it
         if (i === 28) expect(await scheduledOf(t, 'billingSync:finalizeDue')).toEqual([])
@@ -3036,6 +3051,8 @@ describe('storage charged on the daily average', () => {
       ])
       expect(Date.parse(END) - at('2026-09-30')).toBeGreaterThan(STORAGE_FINALIZE_LEAD_MS)
       expect(await t.mutation(eventReady, { id: events[0].id })).toBe(true)
+      // the trigger's call that recorded it wrote no audit row of its own
+      expect(await auditsOf(t, 'billing.storage_finalize_requested')).toHaveLength(1)
     })
 
     it('records a period whose last day has no sample at the first tick within two hours of its end, from the last measured day', async () => {
@@ -3438,10 +3455,19 @@ describe('storage charged on the daily average', () => {
       const period = await periodAt(t, start)
       expect(period).toMatchObject({ storage_bytes: 6 * GB, storage_blocks: 1 })
       expect(await storageEvents(t)).toHaveLength(1)
-      expect(await t.mutation(finalizeRef, { period: open._id })).toBeNull()
+      expect(await auditsOf(t, 'billing.storage_finalize_requested')).toEqual([])
+      expect(await t.mutation(finalizeRef, { period: open._id, operator: true })).toBeNull()
       expect(await t.mutation(finalizeRef, { period: open._id })).toBeNull()
       expect(await periodAt(t, start)).toEqual(period)
       expect(await storageEvents(t)).toHaveLength(1)
+      // only the operator's call writes an audit row, naming what it found
+      expect(await auditsOf(t, 'billing.storage_finalize_requested')).toMatchObject([
+        {
+          actor_email: 'cli',
+          target_org_id: f.org.id,
+          detail: { period: open._id, period_start: start, outcome: null },
+        },
+      ])
     })
 
     it('finalizes every due period a page at a time, and one whose finalize throws fails alone and is tried again', async () => {
@@ -3587,11 +3613,24 @@ describe('storage charged on the daily average', () => {
       const work = await t.mutation(claim, { org_id: f.org.id })
       await t.mutation(release, { org_id: f.org.id, token: work!.token, seats: 5 })
       expect(await stored(t, f.org.id)).toMatchObject({ sync_safety: true })
-      // and an operator records it
-      expect(await t.mutation(finalizeRef, { period: open._id })).toBe('recorded')
+      // and an operator records it, with an audit row naming the period
+      expect(await auditsOf(t, 'billing.storage_finalize_requested')).toEqual([])
+      expect(await t.mutation(finalizeRef, { period: open._id, operator: true })).toBe('recorded')
       const period = await periodAt(t, S)
       expect(period).toMatchObject({ storage_bytes: 6 * GB, storage_blocks: 1 })
       expect(period).not.toHaveProperty('storage_failed_at')
+      expect(await auditsOf(t, 'billing.storage_finalize_requested')).toMatchObject([
+        {
+          actor_email: 'cli',
+          target_org_id: f.org.id,
+          detail: {
+            period: open._id,
+            subscription_id: providerId,
+            period_start: S,
+            outcome: 'recorded',
+          },
+        },
+      ])
     })
 
     it('reads the period, its days and a few documents more in its largest call, for an organization of 1,000 people', async () => {

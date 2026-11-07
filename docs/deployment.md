@@ -1823,8 +1823,10 @@ of the end records it, a day still without a sample taking the most recent
 one, an earlier period's included. Every later run and call tries a period
 that is still open, for up to 3 days after its end, then stops with an
 error log and a `billing.storage_finalize_stopped` audit row, and
-`billingSync:finalizeStorage` with the period records it by the same rules,
-as that function's docstring shows. The average, rounded up to a whole
+`billingSync:finalizeStorage` with the period and `"operator":true`
+records it by the same rules and writes a
+`billing.storage_finalize_requested` audit row, as that function's
+docstring shows. The average, rounded up to a whole
 byte, goes through the same allowance, blocks and single charge as a
 sample. With no sample of the organization at all the period records no
 storage charge and a `billing.storage_unavailable` audit row, never 0. A

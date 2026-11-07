@@ -15,6 +15,7 @@ export const AUDIT_ACTION_LABELS = {
     'Recorded no storage charge for a daily period without any storage measurement',
   'billing.storage_finalize_stopped':
     'Stopped trying to record the storage of a daily period that was not recorded in time',
+  'billing.storage_finalize_requested': 'Asked to record the storage of a daily period',
   'billing.webhook_failed': 'Stopped processing a Polar subscription event',
   'billing.create_plan': 'Created billing plan',
   'billing.connect_plan': 'Connected billing plan to Polar',

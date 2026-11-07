@@ -739,8 +739,9 @@ async function retryStoppedSample(ctx: MutationCtx, period: Doc<'billing_periods
  * (eventReady), so a restart after that records the bytes but charges
  * nothing. A daily period is left alone too, answering false, since it
  * takes no sample and the daily samples' run and tick finalize it. An
- * operator who must record one at once runs finalizeStorage with it,
- * which follows the same rules. */
+ * operator who must record one at once runs finalizeStorage with it and
+ * `"operator":true`, as that function's docstring shows, which follows the
+ * same rules and writes an audit row. */
 export const restartStorage = internalMutation({
   args: { period: v.id('billing_periods') },
   handler: async (ctx, { period }): Promise<boolean> => {
@@ -1039,10 +1040,13 @@ async function dayClosed(ctx: MutationCtx, day: string, now: number): Promise<bo
  * runs the other again, which then finds it recorded, and the event's id
  * guards a second charge too. A period gone with its organization, not
  * daily or already recorded is left alone. An operator who must record a
- * period at once runs this with its id, which applies the same rules,
- * also for a period the triggers stopped trying:
+ * period at once runs this with its id and `operator` set, which applies
+ * the same rules, also for a period the triggers stopped trying, and also
+ * writes a billing.storage_finalize_requested audit row with actor cli,
+ * naming the period and the outcome (recorded, unavailable, waiting or
+ * null), which the triggers' calls never write:
  *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
- *     TARGET npx convex run billingSync:finalizeStorage '{"period":"…"}'
+ *     TARGET npx convex run billingSync:finalizeStorage '{"period":"…","operator":true}'
  *
  * It reads the period, the samples of its days, at most 31, the
  * organization's first sample after its last day and, before the deadline,
@@ -1056,60 +1060,82 @@ async function dayClosed(ctx: MutationCtx, day: string, now: number): Promise<bo
  * charge, about 39 KB, in convex/tests/billing.test.ts ("reads the period,
  * its days and a few documents more"). */
 export const finalizeStorage = internalMutation({
-  args: { period: v.id('billing_periods') },
-  handler: async (ctx, { period: periodId }): Promise<FinalizeOutcome> => {
+  args: { period: v.id('billing_periods'), operator: v.optional(v.boolean()) },
+  handler: async (ctx, { period: periodId, operator }): Promise<FinalizeOutcome> => {
     const period = await ctx.db.get(periodId)
-    if (period?.storage_basis !== 'daily' || period.storage_finalized_at !== undefined) return null
-    const orgId = period.org_id
-    const days = periodDays(period.period_start, period.period_end)
-    const first = days[0]
-    const last = days[days.length - 1]
-    const readings = await samplesOfDays(ctx, orgId, first, last)
-    const now = Date.now()
-    const deadline = now >= Date.parse(period.period_end) - STORAGE_FINALIZE_LEAD_MS
-    let later: DayReading | null = null
-    let earlier: DayReading | null = null
-    if (!readings.has(last)) {
-      later = readingOf(await sampleAfter(ctx, orgId, last))
-      if (!deadline && (later === null || !(await dayClosed(ctx, last, now)))) return 'waiting'
-      if (later === null && readings.size === 0)
-        earlier = readingOf(await sampleBefore(ctx, orgId, first))
-    }
-    const average = periodAverage(days, readings, { later, earlier, final: true })
-    const finalized = isoNow()
-    if (average.bytes !== null) {
-      await finishStorageSample(ctx, period, average.bytes, {
-        storage_days: average.days,
-        storage_finalized_at: finalized,
+    const outcome = await finalizePeriod(ctx, period)
+    if (operator)
+      await audit(ctx, {
+        actor_email: 'cli',
+        action: 'billing.storage_finalize_requested',
+        target_org_id: period?.org_id,
+        detail: {
+          period: periodId,
+          subscription_id: period?.subscription_id ?? null,
+          period_start: period?.period_start ?? null,
+          outcome,
+        },
       })
-      return 'recorded'
-    }
-    console.warn(
-      `billing: no storage sample of organization ${orgId} for daily period ${period._id}; it is recorded with no storage charge`,
-    )
-    await ctx.db.patch(period._id, {
-      storage_days: average.days,
-      storage_unavailable: true,
-      storage_finalized_at: finalized,
-      storage_run: undefined,
-      storage_run_at: undefined,
-      storage_attempts: undefined,
-      storage_failed_at: undefined,
-    })
-    await audit(ctx, {
-      actor_email: 'system',
-      action: 'billing.storage_unavailable',
-      target_org_id: orgId,
-      detail: {
-        period: period._id,
-        subscription_id: period.subscription_id,
-        period_start: period.period_start,
-        days: days.length,
-      },
-    })
-    return 'unavailable'
+    return outcome
   },
 })
+
+/* The work of finalizeStorage for `period`, as read by its id, by the
+ * rules its docstring gives. */
+async function finalizePeriod(
+  ctx: MutationCtx,
+  period: Doc<'billing_periods'> | null,
+): Promise<FinalizeOutcome> {
+  if (period?.storage_basis !== 'daily' || period.storage_finalized_at !== undefined) return null
+  const orgId = period.org_id
+  const days = periodDays(period.period_start, period.period_end)
+  const first = days[0]
+  const last = days[days.length - 1]
+  const readings = await samplesOfDays(ctx, orgId, first, last)
+  const now = Date.now()
+  const deadline = now >= Date.parse(period.period_end) - STORAGE_FINALIZE_LEAD_MS
+  let later: DayReading | null = null
+  let earlier: DayReading | null = null
+  if (!readings.has(last)) {
+    later = readingOf(await sampleAfter(ctx, orgId, last))
+    if (!deadline && (later === null || !(await dayClosed(ctx, last, now)))) return 'waiting'
+    if (later === null && readings.size === 0)
+      earlier = readingOf(await sampleBefore(ctx, orgId, first))
+  }
+  const average = periodAverage(days, readings, { later, earlier, final: true })
+  const finalized = isoNow()
+  if (average.bytes !== null) {
+    await finishStorageSample(ctx, period, average.bytes, {
+      storage_days: average.days,
+      storage_finalized_at: finalized,
+    })
+    return 'recorded'
+  }
+  console.warn(
+    `billing: no storage sample of organization ${orgId} for daily period ${period._id}; it is recorded with no storage charge`,
+  )
+  await ctx.db.patch(period._id, {
+    storage_days: average.days,
+    storage_unavailable: true,
+    storage_finalized_at: finalized,
+    storage_run: undefined,
+    storage_run_at: undefined,
+    storage_attempts: undefined,
+    storage_failed_at: undefined,
+  })
+  await audit(ctx, {
+    actor_email: 'system',
+    action: 'billing.storage_unavailable',
+    target_org_id: orgId,
+    detail: {
+      period: period._id,
+      subscription_id: period.subscription_id,
+      period_start: period.period_start,
+      days: days.length,
+    },
+  })
+  return 'unavailable'
+}
 
 export const reconcile = internalAction({
   args: { org_id: v.string() },
