@@ -803,10 +803,10 @@ The app before the release after v0.1.158 lists **MCP access** through
 `oauthConnections.list` and `tokens.listMcpTokens`, and the app before
 v0.1.147 reads an agent's keys on **Settings → Users** through
 `tokens.listAgentKeys`. The release after v0.1.158 removed all three, so
-after such a rollback MCP access cannot list connected apps or tokens, and
-every agent's key line reads "no key, cannot sign in" and its key panel says
-it has no keys, though the keys still work; **Organization → API access**
-lists them.
+after a rollback to either app, MCP access cannot list connected apps or
+tokens, and after a rollback to the app before v0.1.147 every agent's key
+line also reads "no key, cannot sign in" and its key panel says it has no
+keys, though the keys still work; **Organization → API access** lists them.
 
 The app before v0.1.18 reads an activity list that the snapshot no longer
 sends, so it cannot load at all. Never return the app or the demo to a
