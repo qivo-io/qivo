@@ -779,8 +779,13 @@ describe('pictures only for what the open views name', () => {
     expect(f.cache.url(KEY)).toBeNull()
     expect(f.cache.keptBytes()).toBeGreaterThan(0)
     expect(f.revokeUrl).not.toHaveBeenCalled()
-    // named again, one renewal shows it with no download
+    // named again, one renewal shows it with no download. A render and a
+    // sweep before the renewal answers, as the store makes once a view
+    // names the person, keep its bytes.
     f.cache.named([KEY])
+    expect(f.cache.url(KEY)).toBeNull()
+    expect(f.cache.expire()).toBe(false)
+    expect(f.cache.keptBytes()).toBeGreaterThan(0)
     expect(f.cache.needsRefresh(KEY)).toBe(true)
     expect(await f.cache.prepare(KEY, { url: 'https://files.test/portrait?r=2', exp: 1800 })).toBe(
       true,
@@ -792,14 +797,40 @@ describe('pictures only for what the open views name', () => {
     expect(f.cache.url(KEY)).toBeNull()
   })
 
-  it('releases a named picture past its grace, as before', async () => {
+  it('keeps a named picture past its grace while its renewal is on its way, and releases it once the renewal fails', async () => {
     const f = fixture({}, false)
     f.cache.sync([KEY])
     f.cache.named([KEY])
     await f.cache.prepare(KEY, LEASE)
     f.time(1_200_000)
-    expect(f.cache.expire()).toBe(true)
+    expect(f.cache.url(KEY)).toBeNull()
+    expect(f.cache.expire()).toBe(false)
+    expect(f.cache.keptBytes()).toBeGreaterThan(0)
+    expect(f.cache.failure(KEY, false)).toBe(true)
     expect(f.cache.keptBytes()).toBe(0)
+  })
+
+  it('renews a picture named again past its grace once, though an older renewal of it failed', async () => {
+    const f = fixture({}, false)
+    f.cache.sync([KEY])
+    f.cache.named([KEY])
+    await f.cache.prepare(KEY, LEASE)
+    const shown = f.cache.url(KEY)
+    // a renewal near the lease's end fails, then the page closes
+    f.time(500_000)
+    expect(f.cache.failure(KEY, false)).toBe(false)
+    f.cache.named([])
+    f.time(2_000_000)
+    // named again, its old failure neither delays its renewal nor lets a
+    // sweep release it first
+    f.cache.named([KEY])
+    expect(f.cache.needsRefresh(KEY)).toBe(true)
+    expect(f.cache.expire()).toBe(false)
+    expect(await f.cache.prepare(KEY, { url: 'https://files.test/portrait?r=2', exp: 2600 })).toBe(
+      true,
+    )
+    expect(f.cache.url(KEY)).toBe(shown)
+    expect(f.fetcher).toHaveBeenCalledOnce()
   })
 
   it('restores the persisted picture of a key that becomes known after the boot', async () => {

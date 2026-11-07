@@ -545,12 +545,21 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
         store mints, renews and downloads. Each named key counts as shown
         now; a key keeps the moment its last view let it go. A key no view
         names any more leaves the waiting pictures, and its prepare still
-        waiting for a download slot is dropped. */
+        waiting for a download slot is dropped. A held picture past its
+        grace that a view names again is due for its renewal at once, and
+        an older failed renewal no longer counts against it, so expire()
+        keeps it until the new renewal answers. */
     named(keys: readonly string[]) {
       const next = new Set(keys)
       shownTick++
       for (const key of namedKeys) if (!next.has(key)) shownAt.set(key, shownTick)
-      for (const key of next) shownAt.delete(key)
+      for (const key of next) {
+        shownAt.delete(key)
+        const entry = entries.get(key)
+        if (namedKeys.has(key) || !entry?.source || entry.restored || !expired(entry)) continue
+        entry.refreshFailed = false
+        entry.retryAt = 0
+      }
       namedKeys = next
       // the waiting pictures follow the named order
       const waiting = new Map<string, Entry>()
@@ -605,24 +614,27 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
       )
     },
     /** The source to show for `key`, or null. A held picture past its
-        lease and STALE_GRACE shows no more: released when a view names it,
-        kept for a later renewal when none does. */
+        lease and STALE_GRACE shows no more, and keeps its bytes: named
+        again, its renewal shows it with no download. Only expire() and a
+        failed renewal release it, never a render, which runs as soon as a
+        view names the key, before its renewal can answer. */
     url(key: string) {
       const entry = entries.get(key)
       if (!entry) return null
-      if (!paused && !entry.restored && expired(entry)) {
-        if (!namedKeys.has(key)) return null
-        release(entry)
-      }
+      if (!paused && !entry.restored && expired(entry)) return null
       return entry.source
     },
-    /** Releases the named pictures past their grace, answering whether any
-        went. One no view names keeps its bytes (url). */
+    /** Releases the named pictures past their grace whose renewal failed,
+        answering whether any went. One no view names keeps its bytes, and
+        so does a named one whose renewal has not answered yet, as when a
+        view names a held picture again: its renewal shows it, and a failed
+        renewal releases it (failure). */
     expire() {
       if (paused) return false
       let changed = false
       for (const [key, entry] of entries) {
-        if (!entry.source || !expired(entry) || !namedKeys.has(key)) continue
+        if (!entry.source || !expired(entry) || !namedKeys.has(key) || !entry.refreshFailed)
+          continue
         release(entry)
         changed = true
       }
