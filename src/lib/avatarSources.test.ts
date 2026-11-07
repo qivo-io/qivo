@@ -897,6 +897,36 @@ describe('pictures only for what the open views name', () => {
     expect(f.cache.needsRefresh(KEY)).toBe(true)
   })
 
+  it('leaves a picture to its download when a restore lands while it downloads, and renews it by its lease', async () => {
+    const stored = persistentFixture(face(20 * KIB))
+    const f = fixture({}, false)
+    f.cache.sync([])
+    f.cache.setPersistent(stored.cache)
+    await f.cache.restore()
+    // a face arrives with the key the device holds: its restore reads, and
+    // its decode is still on its way when the picture's mint answers
+    const restoring = deferred<unknown>()
+    f.decode.mockImplementationOnce(() => restoring.promise)
+    f.cache.sync([KEY])
+    await vi.waitFor(() => expect(f.decode).toHaveBeenCalledOnce())
+    f.cache.named([KEY])
+    const download = deferred<Response>()
+    f.fetcher.mockImplementationOnce(() => download.promise)
+    const loading = f.cache.prepare(KEY, LEASE)
+    restoring.resolve(undefined)
+    await vi.waitFor(() => expect(f.revokeUrl).toHaveBeenCalledOnce())
+    // the restore gave way to the download
+    expect(f.cache.url(KEY)).toBeNull()
+    download.resolve(new Response(face(20 * KIB)))
+    expect(await loading).toBe(true)
+    expect(f.cache.url(KEY)).not.toBeNull()
+    // the lease ends at 600 s, so it renews from 480 s on
+    f.time(479_000)
+    expect(f.cache.needsRefresh(KEY)).toBe(false)
+    f.time(480_000)
+    expect(f.cache.needsRefresh(KEY)).toBe(true)
+  })
+
   it('hands the persistent cache the known keys and the profiles known without a picture', () => {
     const stored = persistentFixture()
     const f = fixture({}, false)

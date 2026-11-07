@@ -378,6 +378,8 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
       const publish = (source: string, owned: boolean, bytes: number) => {
         if (!current(key, ticket) || ticket.pending !== pending) return false
         setSource(ticket, source, owned, bytes)
+        // the lease this download used decides when the picture renews
+        ticket.expiresAt = lease.exp * 1000
         ticket.restored = false
         ticket.refreshFailed = false
         if (owned) pending.source = undefined
@@ -468,14 +470,16 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
   }
 
   /* Restores the persistent cache's pictures of `keys` that hold no
-     source yet, answering whether any shows now. */
+     source and are not downloading yet, answering whether any shows now.
+     A download that starts while a restore reads wins: its lease decides
+     when the picture renews. */
   const restoreKeys = async (keys: readonly string[]): Promise<boolean> => {
     const cache = persistent
     if (!cache) return false
     const generation = restoreGeneration
     const work = keys.map(async (key) => {
       const entry = entries.get(key)
-      if (!entry) return false
+      if (!entry || entry.pending) return false
       let blob: Blob | null
       try {
         blob = await cache.read(key)
@@ -513,6 +517,7 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
         generation !== restoreGeneration ||
         entries.get(key) !== entry ||
         entry.source ||
+        entry.pending ||
         !roomFor(blob.size)
       ) {
         deps.revokeUrl(source)
