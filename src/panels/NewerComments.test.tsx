@@ -516,4 +516,38 @@ describe('newer comments in the task window', { timeout: 20_000 }, () => {
     )
     expect(place.mock.calls.at(-1)?.[1]).toBeNull()
   })
+
+  it('watches the rows All puts in the middle of the thread while its first and last rows stay', async () => {
+    await load()
+    const see = watchRows()
+    const place = vi.spyOn(P, 'threadPlace')
+    // the store holds #200 to #299, under its 120
+    await walkBack(1)
+    // the reader edits #200, which shows whatever All's start hides
+    const edit = document.querySelector<HTMLButtonElement>(
+      `[data-comment="${comment(200).id}"] [aria-label="Edit comment"]`,
+    )
+    await act(async () => edit?.click())
+    await editorOf('Edit comment')
+    // another window holds the history, its newest page from minute 209 on
+    await act(async () => P.showHistory({}, true))
+    const history = Array.from({ length: 9 }, (_, i) => change(209 + 10 * i))
+    await deliverHistory({ events: history, earlier: true, next: history[0].id })
+    const before = thread()
+    await showAll()
+    // All starts at the oldest change, so #201 to #209 go and the nine
+    // changes come in, with the first row, the last row and the count kept
+    const after = thread()
+    expect(after.filter((row) => row === 'event')).toHaveLength(9)
+    expect(after).not.toContain('#205')
+    expect([before[1], before.at(-1), before.length]).toEqual(['#200', '#299', 101])
+    expect([after[1], after.at(-1), after.length]).toEqual(['#200', '#299', 101])
+    // the reader sees the change at minute 219 and #220 under it
+    await see(
+      (el) =>
+        el.getAttribute('data-event') === 'event-219' ||
+        el.getAttribute('data-comment') === comment(220).id,
+    )
+    expect(place.mock.calls.at(-1)?.[1]).toBe('event-219')
+  })
 })

@@ -2714,10 +2714,13 @@ function IssueDetail({
   // the reader sees and a comment that arrives past the budget lets go of
   // rows away from them. An IntersectionObserver rooted at the viewport
   // sees the rows of the floating window's spine, the phone's feed and the
-  // Inbox pane alike.
+  // Inbox pane alike. It watches the row elements shown when it starts, so
+  // it starts again whenever any shown row changes, also in the middle of
+  // the thread, as when All replaces older comments with changes while the
+  // first and last rows stay.
   const placeOwner = useRefID({})
   const placeRow = useRefID<Element | null>(null)
-  const spineKey = `${shown.length}:${shown[0]?.id ?? ''}:${shown.at(-1)?.id ?? ''}:${newer}`
+  const spineKey = `${shown.map((row) => row.id).join(' ')}:${newer}`
   useEffectID(() => {
     const owner = placeOwner.current
     const scroller = actScrollRef.current
