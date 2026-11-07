@@ -3106,7 +3106,8 @@ export default defineSchema({
     revoked_by_admin: v.optional(v.literal(true)),
   })
     .index('by_uuid', ['id'])
-    // a seat's tokens, for the cascade and the admin access report
+    // a seat's tokens, for the cascade, an organization's deletion, the demo
+    // cleanup and the admin access report
     .index('by_profile', ['profile_id'])
     .index('by_hash', ['token_hash'])
     // API access: the organization's tokens, or one person's, in name order
