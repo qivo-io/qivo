@@ -487,11 +487,11 @@ export function threadCommentBody(n) {
     each with its poster in turn among `posters`, given the ids of the
     comments the task holds (`present`), and the label toggles that bring
     its history, `history` rows now, to `count`, given the ids of the
-    labels the task carries (`labels`). The toggles use THREAD_LABEL, or
-    the first of the task's own labels by id when the task has no free
-    label slot, starting from whether that label is on the task. Refuses a
-    count that would take the task past the comment cap with the comments
-    it holds that are not the seed's. */
+    labels the task carries (`labels`). The toggles use THREAD_LABEL when
+    the task carries it or has a free label slot, and otherwise the first
+    of the task's own labels by id, starting from whether that label is on
+    the task. Refuses a count that would take the task past the comment cap
+    with the comments it holds that are not the seed's. */
 export function planThread(count, { task, present, posters, history, labels }) {
   const own = new Set(Array.from({ length: count }, (_, n) => threadCommentId(task.id, n)))
   const others = [...present].filter((id) => !own.has(id)).length
