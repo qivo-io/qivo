@@ -61,7 +61,7 @@ due date.
   from the server for the Board's cards, so their delay shows without
   loading every task; where that work cannot be read, the card says
   **Delay unknown**. Once every task has loaded for something that needs
-  them, as the Inbox's search does, the cards of the tasks you have loaded
+  them, as a new task does, the cards of the tasks you have loaded
   take their delay from your browser, and a task you created while they
   loaded shows its delay once loading finishes.
 - **Task window** shows **Currently delayed** or **Delayed** beside Due.

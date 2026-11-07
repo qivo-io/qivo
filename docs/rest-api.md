@@ -2371,8 +2371,7 @@ and up to 500 read ones (most recently read first). It looks at no more than
 1,000 of each, counting the stored ones about tasks it does not list. When
 some messages were not looked at, `truncated` is `true`, so a large backlog
 about such tasks can set it too. Items whose messages were not looked at are
-then missing, and an item listed may lack its older messages. The app's
-Inbox loads up to 500 of the same messages, unread ones first. Marking items
+then missing, and an item listed may lack its older messages. Marking items
 read keeps only each item's latest message, so `POST /v1/inbox/read` with
 `{"all": true}`, repeated while `has_more` is `true`, shrinks the inbox until
 it fits.

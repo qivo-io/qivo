@@ -398,10 +398,9 @@ Useful field rules:
   and up to 500 read ones (most recently read first), and looks at no more
   than 1,000 of each, counting messages about tasks it does not list.
   `truncated: true` means some were not looked at, so mark everything read
-  to shrink the inbox. The app's Inbox loads up to 500 of them, unread
-  first. An item keeps at most 50 unread messages, dropping the oldest
-  except its first unread one and the newest of each kind, on a busy task
-  moments after an arrival. Its `dropped_count` says how many it dropped
+  to shrink the inbox. An item keeps at most 50 unread messages, dropping
+  the oldest except its first unread one and the newest of each kind, on a
+  busy task moments after an arrival. Its `dropped_count` says how many it dropped
   until the item is read. Archiving a task
   or project marks the messages about its tasks read for everyone, and
   messages about an archived task arrive read.

@@ -212,7 +212,7 @@ describe('tasks on demand', () => {
     expect(load.state).toBe('failed')
     expect(load.state === 'failed' && load.reason).toBeTruthy()
     expect(store.TASKS_FAILED_TEXT).toContain('Changes you make show as you made them')
-    // not snapshot trouble: edits go on, and the Inbox's search keeps waiting
+    // not snapshot trouble: edits go on, and a create keeps waiting
     expect(store.P.snapshotTrouble()).toBeNull()
     expect(store.P.editsPaused()).toBe(false)
     expect(store.P.tasksHeld()).toBe(false)

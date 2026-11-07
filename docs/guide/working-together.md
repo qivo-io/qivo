@@ -221,36 +221,46 @@ you unsubscribe. Reviewers receive **Ready for your review**. Setting a
 reviewer before review does not subscribe them yet. Tasks with subtasks stay
 with their assignee and do not hand over ([Task ownership](./how-work-is-organized.md#the-task)).
 
-**Reading messages.** Each task has one inbox row showing its title and
-age, and its project and sub-project once the task has loaded into the
-workspace, which it does once every task has loaded for a page that needs
-them. Until then a row shows the title its message stored, not a later
-rename. New updates refresh that row and increase its unread
-counter. Opening the row or the task marks its messages read, also older
-ones the list does not load, and leaves only the latest message in the
-inbox. Further updates start the unread counter
-again on the same row. A row keeps at most 50 unread updates. Beyond that,
-Qivo drops the oldest ones but keeps the first unread update and the newest
+**Reading messages.** The Inbox shows 50 tasks a page, newest first unless
+you choose oldest, with **Previous** and **Next** at the list's end. Each
+task has one row showing its current title, its age, and its project and
+sub-project. The order, the filters and the search cover your whole Inbox
+before the page is cut, so every task with messages is reachable. A page
+updates as news arrives: a task with news moves to the start of Newest
+first, or to the end of Oldest first, where it can show again on a later
+page. While you read a later page, news can also move tasks of an earlier
+page past where you came from; **Previous** and then **Next** shows them.
+New updates refresh a task's row and increase its unread counter. Opening
+the row or the task marks its messages read and leaves only the latest
+message in the inbox. Further updates start the unread counter again on
+the same row. A row keeps at most 50 unread updates. Beyond that, Qivo
+drops the oldest ones but keeps the first unread update and the newest
 mention, comment and change. On a task with many subscribers it does so
 moments after the update arrives. The row says how many it dropped, such as
 **12 earlier updates on this task are not listed**, and the task's comments
-and history still show what those updates were about. The Inbox loads up to
-500 messages, unread ones first. When older ones exist, the list ends with
-**Older messages are not listed**, and names **Mark all as read** or **Remove
-all read** when that action reaches them. Neither reaches snoozed
-messages. The badge still counts the tasks the list does not show.
+and history still show what those updates were about.
+
+To stay fast, Qivo can stop a page early, as when a search or filter
+matches few tasks of a long Inbox. The end of the page then says how far it
+looked, such as **Qivo looked through your messages back to** a date and
+time, and **Next** looks further. It never says nothing matches before it
+has looked through everything. While your messages in an organization are
+still being prepared, as for a new seat, the list says **Messages in**
+that organization **are still being prepared and are not listed yet.** and
+lists your other organizations' messages. When Qivo could not check some
+messages, it says **Some messages could not be checked and are not
+listed.**
 
 The Inbox badge counts the tasks with unread updates you have not snoozed,
-across all your organizations, also those the list does not load, and shows
-**99+** above 99. While Qivo is counting, or can't count right now, it shows
-**…** instead of a number, never 0. When it could count only part of them, it
-shows the count it reached with a plus, such as **12+**. Read state follows
-you across devices. Sort by newest or oldest, or filter for unread,
-snoozed, mention, comment or change messages. Desktop search includes the
-messages grouped in each row, and their task IDs and project names once
-every task has loaded. Typing a search starts that load, and until it ends
-the list says **Searching every task once it has loaded…** above the rows
-it matched so far.
+across all your organizations, and shows **99+** above 99. While Qivo is
+counting, or can't count right now, it shows **…** instead of a number,
+never 0. When it could count only part of them, it shows the count it
+reached with a plus, such as **12+**. Read state follows you across devices.
+Sort by newest or oldest, or filter for unread, snoozed, mention, comment or
+change messages. Desktop search looks through each task's title, task ID
+and project names and each message's author and summary, on the server,
+once you pause typing, so it finds every task in your Inbox. A search can
+be at most 200 characters ([Limits](./limits.md)).
 
 On desktop, selecting a row opens the task's discussion pane and marks the
 row read. The pane opens the task at once, read from the server, also before
@@ -259,25 +269,26 @@ can't be opened. Click
 **Description** to expand its collapsed description. The pane shows the
 current assignee or reviewer, Activity and comment box. Use the pop-out button
 for editable details, attachments and links; a related task opened there
-opens in both the pane and the pop-out. Once the task has loaded into the
-workspace, **Open task in board**, in the pane's **Task actions** menu or a
-row's right-click menu, opens the full task window over its Board, scrolls
-to the task's card and rings it until a moment after the window closes.
-Before then neither menu offers it. The project breadcrumb
-does the same ([Showing a task on the Board](./the-board.md#showing-a-task-on-the-board)).
+opens in both the pane and the pop-out. **Open task in board**, in the
+pane's **Task actions** menu or a row's right-click menu, opens the full
+task window over its Board, scrolls to the task's card and rings it until a
+moment after the window closes. It shows for every task whose project you
+can open. The project breadcrumb does the same
+([Showing a task on the Board](./the-board.md#showing-a-task-on-the-board)).
 
 The address follows the selected task, such as `/app/<org>/inbox/tasks/qn-14`,
 so saved links and reloads reopen it. **Esc** closes a pop-out first, then the
 selected task, then the inbox. New updates on an open task are marked read as
 they arrive. Once you mark the task unread or unsnooze it, Qivo leaves it
-unread while it stays open. A **New** divider marks unread comments and stays in
-place while you read. It marks where the unread part starts also for updates
-the list does not load. Unread changes without comments show a note instead.
+unread while it stays open, until you mark it read from its row. A **New**
+divider marks unread comments and stays in place while you read. It marks
+where the unread part starts. Unread changes without comments show a note
+instead.
 
-On phones, use **Unread / Mentions / All** and **Filter**. Tap a row to open
-the full task, including **Details**. **Back to inbox** restores your list
-position. Each row's actions button provides read, snooze and removal
-controls. There is no inbox search field on phones; use global search to find
+On phones, use **Unread / Mentions / All** and **Filter**, and **Previous**
+and **Next** at the list's end. Tap a row to open the full task, including
+**Details**. **Back to inbox** restores your list position. Each row's
+actions button provides read, snooze and removal controls. There is no inbox search field on phones; use global search to find
 tasks and projects. A desktop inbox search does not filter the phone list.
 
 **Desktop notifications.** In a browser, choose **Enable notifications** in
@@ -289,8 +300,10 @@ Your operating system's notification settings also apply.
 
 **Managing messages.** Right-click a row, or use its phone actions button, for
 **Mark as read / unread** and **Remove notification**, and **Open task in
-board** once the task has loaded into the workspace. Read and removal
-actions apply to all messages in that row.
+board** for every task whose project you can open. Read and removal apply
+to the task's messages up to the newest one the row shows, so an update
+that arrives meanwhile stays unread, or stays as the row's only message
+after a removal.
 
 The Inbox toolbar and context menu also offer:
 
