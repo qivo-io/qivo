@@ -371,7 +371,7 @@ archived ones included, unless they are already in that project.
 A subtask moved to another project stops being a subtask of its parent,
 because a subtask stays in its parent's project. The dialog says both before
 you move. Qivo refuses the move if a subtask that would move is in a
-sub-project you cannot edit (an organization admin can move it), or if the
+sub-project you cannot edit (someone who can edit it can move it), or if the
 task has more than 200 subtasks, archived ones included. Restore some
 archived subtasks from **Archived tasks** and remove them from the task
 first, or move the task within its project. A move or a new parent is also refused in
@@ -415,8 +415,8 @@ which needs edit access. **Archive** is selected first. For a task with
 subtasks, the window lists them, and a box such as **Also archive the 3
 subtasks**, selected first, archives the whole subtask tree, including
 subtasks in other sub-projects. Qivo refuses that when one of them is in a
-project you cannot edit, and an organization admin can archive the whole tree
-instead. While one of them is in a project being moved to Deleted items, Qivo
+project you cannot edit, and someone who can edit that project can archive
+the whole tree instead. While one of them is in a project being moved to Deleted items, Qivo
 refuses it for everyone until that move finishes. Qivo also refuses the whole
 tree when the task and its subtasks are too large to change at once, such as
 several subtasks with very long descriptions saved before Qivo limited
@@ -448,11 +448,14 @@ the filters with a button that takes it off, or **All projects** of one
 organization, which the page never starts on. A project includes its
 sub-projects. The page lists one organization at a time, so another
 organization's projects wait until you clear your choice. It lists the
-projects you can see that are not archived. An organization admin's list
-holds the projects they lead or hold a grant or team share on, and **All
-projects** still reads the organization's whole archive for them. Opened on a
-project they reach only as an admin, the page says it couldn't open on that
-project and starts with nothing chosen. A sub-project archived on its own,
+projects you can see that are not archived. An organization admin's list,
+and **All projects**, hold the projects they lead or hold a grant or team
+share on, as anyone's. Opened on a project you cannot read, such as one an
+admin only manages, the page says **This page can't show the tasks of the
+project it was opened for. The project list shows the projects you take part
+in.** and starts with nothing chosen. When Qivo could not finish checking
+that project, the page says so with **Retry**, and when the check failed it
+says **Couldn't check that project.** with **Retry**. A sub-project archived on its own,
 and an archived project, show their tasks again once they are restored. The
 page shows 25 tasks at a time, newest archived first, and **Next** and
 **Previous** move between pages. The line above the list says which tasks
@@ -469,10 +472,8 @@ every archived task says that nothing matches. A page reads only the
 projects you can see. When you can see very many projects, **All projects**
 asks you to choose a project instead, a project with very many sub-projects
 you can see asks you to choose one of them, and several projects that Qivo
-cannot list together ask you to choose fewer. An organization
-admin's page then reads the organization's whole archive, and a step can
-stop before it finds one of the tasks, so the page shows no tasks and still
-offers **Next**.
+cannot list together ask you to choose fewer, for an organization admin
+as for anyone.
 
 Select a task's ID or title to open it read-only over the page, with its
 description and comments, and **Restore** for someone who can edit its
@@ -488,7 +489,8 @@ a top-level task, and Qivo says so. Its followers are told it left its
 parent, and you can give it a parent again once there is room, as a restore
 from Deleted items does. If a restore would change a parent task in a
 project you cannot edit, Qivo
-refuses the restore, and an organization admin can restore it instead.
+refuses the restore, and someone who can edit that project can restore it
+instead.
 While the parent's project is being moved to Deleted items, Qivo refuses
 the restore for everyone until the move finishes.
 Parents restored this way send no **Restored** update. Restoring a Done task

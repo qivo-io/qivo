@@ -140,8 +140,10 @@ task** in the task list lets you choose its project. The Team strip omits
 When you can see no active project, Qivo opens the views over all projects.
 Their pages, Team sync and the Inbox then say that no active projects are
 shared with you, and that an organization admin or a project lead can give
-you access. An organization admin sees every project there, so for an admin
-they say that the organization has no active projects. The directory says
+you access. An organization admin sees, like anyone, only the projects they
+take part in, so for an admin they say that they take part in no active
+projects and that Settings › Projects › All projects lists every project of
+the organization. The directory says
 that you have no active projects, and tells an admin that Settings ›
 Projects › All projects lists every project of the organization. **New
 project** appears there if you can create projects ([Who can create projects](./organization-and-team-settings.md#who-can-create-projects)).
@@ -268,9 +270,9 @@ Search asks again at once. The choice lasts while Search stays open. The
 list shows up to 200 projects and then asks you to search for the rest.
 Escape clears the list's search first, then closes the list. An
 organization admin's list holds the projects they lead or hold a grant or
-team share on, and **All projects** still searches the whole organization
-for them. **Search this sub-project** on a sub-project they reach only as
-an admin opens Search on **All projects**.
+team share on, and **All projects** searches those projects, as anyone's.
+**Search this sub-project** on a sub-project they cannot open opens Search
+on **All projects**.
 
 Search finds a task by its ID (`QN-12` or `12`), the words of its title and
 the text its description shows, not link addresses or the hidden part of a
@@ -304,8 +306,8 @@ When Search could not cover everything, it says that some results might be
 missing and offers to choose a project to search in. Choosing a project
 searches every task there that you can open, but a very common word can
 still leave some results out, and then the note asks for more words
-instead. Someone who is not an organization admin and can open many
-projects sees the note on every search of a whole organization.
+instead. Someone who can open many projects, an organization admin as
+anyone, sees the note on every search of a whole organization.
 
 Use Up/Down and Enter to open a result, or select it directly. Enter does
 nothing until the results of what you typed have arrived. A task picked while the

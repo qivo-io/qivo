@@ -1,8 +1,11 @@
 Projects can be shared with teams and individual people. Access also applies
 to their tasks and sub-projects.
 
-- **Organization admin** can access all organization projects and settings,
-  including users, billing, teams and labels.
+- **Organization admin** manages the organization and every project's
+  settings, sharing and sub-projects, including users, billing, teams and
+  labels. Like anyone else, an admin sees and works on only the projects they
+  lead, hold a grant on or reach through a team share. Admin status alone
+  gives no access to a project's tasks.
 - **Team leader** manages the team and its members. Only people can lead a
   team, never agents. Leadership alone grants no project access.
 - **Project Viewer** reads the project and tasks without editing.
@@ -23,8 +26,8 @@ the role beside it, stay chosen while you search again. Team grants can be
 member removes that source of access.
 
 The strongest applicable role wins. A Viewer team grant does not reduce an
-individual User grant. Removing one grant leaves access through other teams,
-individual grants or organization administration intact.
+individual User grant. Removing one grant leaves access through other teams
+or individual grants intact.
 
 Removing a person's or a team's grant asks first when someone would lose
 sight of open tasks they are assigned to or reviewing in that project or its
@@ -65,21 +68,27 @@ nothing; remove fewer people at once, or reassign some of the tasks first.
 Removing a person's grant that is already Viewer offers only the reassignment.
 Done tasks keep their assignee and are not listed.
 
-A team leader who cannot share those projects and edit their tasks removes
-the member at once. A message then says who can no longer see how many of
-their tasks, so a project lead can reassign them. An organization admin
-removes access the same way while billing or a pending deletion pauses
-editing ([Billing and free access](./administration-guard-rails-and-the-demo.md#billing-and-free-access)).
+An organization admin who manages a project without editing its tasks gets
+the window with **Keep as Viewer** alone, and Reassign off with the reason.
+The window counts the tasks in projects you can't see without naming them. A
+caller who can neither keep the people as Viewers nor reassign their tasks,
+such as a team leader who cannot share those projects or edit their tasks,
+removes the member at once. A message then says who can no longer see how
+many of their tasks, so a project lead can reassign them. A caller who may
+reassign but not keep people as Viewers gets that message too. An
+organization admin removes access the same way while billing or a pending
+deletion pauses editing ([Billing and free access](./administration-guard-rails-and-the-demo.md#billing-and-free-access)).
 
 Only organization admins and the named project lead can manage sharing and
 invitations, and only people can change sharing, never agents. Renaming,
-archiving, deleting or changing project settings also requires Lead access,
-which organization admins have.
+archiving, deleting or changing project settings also needs the project's
+lead or an organization admin.
 
 [Deleted items](./how-work-is-organized.md#deleted-items) follows project
 access too. Organization admins see every deleted task and project, except
-one that is being deleted for good. A project lead sees what they deleted and
-what was deleted in projects they lead.
+one that is being deleted for good, and a task item whose project they cannot
+read shows without its title. A project lead sees what they deleted and what
+was deleted in projects they lead.
 Everyone else sees what they deleted. Except for admins, an item stays in
 view only while you can still open the project it was in. Restoring needs
 edit access where the work goes back, or Lead access for a project. Only
@@ -169,8 +178,9 @@ admins like anyone else. The teams and people you check stay checked while
 you search, and with the search empty they are listed first under
 **Selected**.
 
-If you are not an organization admin and pick someone else as lead, Qivo adds
-you to **Project access** as **User**. The field then names you, such as
+If you pick someone else as lead, Qivo adds you to **Project access** as
+**User**, an organization admin as anyone, since admin status gives no access
+to a project's work. The field then names you, such as
 **Aisha Rahman (you)**, or **You, 1 team** when there are other shares. You
 can change that level or remove the entry. If you make yourself lead again,
 Qivo removes the entry unless you changed it. A changed entry stays alongside
@@ -178,23 +188,26 @@ the lead role, and the higher access wins. Once the project exists, its
 settings show you only as **Lead**. If someone else later becomes lead, you
 keep **User** access.
 
-If you are not an organization admin, the dialog footer warns you before you
-create the project:
+The dialog footer warns you before you create the project:
 
-- When someone else leads, it names them, such as **Only Leo Martins and org
-  admins can manage it.** Only the lead and organization admins can change
-  the project's settings and access, archive it or delete it.
+- When someone else leads and you are not an organization admin, it names
+  them, such as **Only Leo Martins and org admins can manage it.** Only the
+  lead and organization admins can change the project's settings and access,
+  archive it or delete it. An organization admin keeps managing it, so gets
+  no such note.
 - When you would have no access, it says **You won't see this project.**
-  instead. That happens when you are not the lead, have no individual entry
-  in **Project access** and are in no team it is shared with.
+  instead, an organization admin too. That happens when you are not the
+  lead, have no individual entry in **Project access** and are in no team
+  it is shared with.
 
 Qivo normally opens the new project. If you cannot see it, you stay where you
 are, and a message confirms the project was created, such as **Project “Luma
 Mount” created. You don't have access to it.**
 
 **New sub-project** asks for a name, parent project and lead; add optional
-shares in its settings. It requires Lead access to the parent project, and
-**Who can create new projects?** does not affect it. **Project** lists the
+shares in its settings. It needs managing the parent project, as its lead or
+an organization admin, and **Who can create new projects?** does not affect
+it. **Project** lists the
 projects you may add a sub-project to in the organization you opened it
 from, 25 at a time with a search: every project of the organization for an
 organization admin, and the projects you lead for anyone else. If the project
@@ -202,7 +215,11 @@ you opened it from can't take a sub-project, the dialog says why and asks you
 to choose another. **Lead** lists that organization's people who may lead
 it, 25 at a time, and starts as you. When someone else leads and you are not
 an organization admin, the footer names them with the same note. As the
-parent's lead, you keep **User** access to the sub-project.
+parent's lead, you keep **User** access to the sub-project. An organization
+admin who names someone else as lead under a parent they take no part in will
+not see the sub-project, and the footer says **You won't see this
+sub-project.** Qivo then stays where you are and says **Sub-project “Docs”
+created. You don't have access to it.**
 
 ## People outside your organization
 

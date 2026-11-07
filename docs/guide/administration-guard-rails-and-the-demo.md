@@ -5,8 +5,10 @@ Qivo Admin is a separate area for platform operators.
 
 Open **Settings → Organization → Users** to manage account status:
 
-- **Org admin** can access and manage every project and can always create
-  projects.
+- **Org admin** manages every project's settings, sharing and sub-projects
+  and can always create projects. Like anyone else, an org admin sees and
+  works on only the projects they lead, hold a grant on or reach through a
+  team share.
 - **Standard user** can access projects shared with them, directly or through
   a team. They can create projects when the organization allows it
   ([Who can create projects](./organization-and-team-settings.md#who-can-create-projects)).
@@ -98,8 +100,10 @@ MCP ([Automation and AI](./automation-ai-the-rest-api-and-the-mcp-server.md)).
 
 The Northstar Labs demo includes **Atlas** alongside seven fictional people.
 Its Luma Sensor, Luma Cloud and Pilot & Launch projects contain planned work,
-reviews, comments and archived tasks. Nora is the organization admin. The
-private demo signs you in as Nora and does not support external agent keys ([Private demo](./qivo-in-one-minute.md#private-demo)).
+reviews, comments and archived tasks. Nora is the organization admin. Her
+teams' shares give her **User** on every project, so she works on all of
+them but leads none, and like any admin she manages every project from
+Settings. The private demo signs you in as Nora and does not support external agent keys ([Private demo](./qivo-in-one-minute.md#private-demo)).
 
 ## API access
 
@@ -154,8 +158,9 @@ access.
 **Settings → Projects → All projects** lists 25 projects a page in name
 order, with **Previous** and **Next**, and a search that finds projects and
 sub-projects, each sub-project with the project it is in. Organization
-admins see every project of the organization; everyone else sees the
-projects they can see. With seats in several organizations, you choose the
+admins see every project of the organization here, also one they take no
+part in, which they manage from here; everyone else sees the projects they
+can see. With seats in several organizations, you choose the
 organization at the top, your own first. Open a project to see its
 sub-projects, which load 25 at a time as you scroll, or use its **…** menu
 to open settings or to create a sub-project, which leads and organization

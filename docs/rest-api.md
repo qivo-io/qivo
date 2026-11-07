@@ -1236,7 +1236,7 @@ agent has no plannable week, because its capacity is unbounded`. The change writ
 no activity row, as in the app.
 
 In practice this route needs a person's token. An agent is **never an
-organization admin**, because an admin reaches every project without a
+organization admin**, because an admin manages every project without a
 grant, the one thing a key must not be able to do if it leaks. The profile
 shape refuses it (0100, widened by 0102 to admit `viewer` and nothing else).
 It never leads a team either, because only people lead teams. A leaked agent
@@ -1428,11 +1428,9 @@ sub-projects you can read, even when you can read only some of them. To read
 one sub-project's archive alone, name that sub-project.
 
 A page reads only the projects it lists, side by side, and never tasks of
-projects you cannot read. Unless you are an organization admin, a project
-with more than 200 projects to list, itself and its sub-projects you can
-read, is refused. Name its sub-projects one at a time instead. An
-organization admin's request can read the organization's whole archive for
-such a project.
+projects you cannot read. A project with more than 200 projects to list,
+itself and its sub-projects you can read, is refused, for an organization
+admin as for anyone. Name its sub-projects one at a time instead.
 
 These requests are a `400`:
 
@@ -1746,10 +1744,10 @@ orthogonal to `status`). Archiving a task archives its subtasks with it;
 restoring one also restores its parent chain (both server-side cascades).
 Both reach subtasks and parents in other projects, so the caller needs User
 access on every project the cascade changes. Otherwise the PATCH is a `400`
-with `archiving this task would change a subtask in a project you cannot edit; an
-organization admin can archive it` or `restoring this task would change a
-parent task in a project you cannot edit; an organization admin can restore
-it`, and nothing changes. A subtask or parent in a project that is being
+with `archiving this task would change a subtask in a project you cannot edit;
+someone who can edit that project can archive it` or `restoring this task
+would change a parent task in a project you cannot edit; someone who can
+edit that project can restore it`, and nothing changes. A subtask or parent in a project that is being
 moved to Deleted items refuses the PATCH for everyone, admins included, with
 `a subtask of this task is being moved to Deleted items; try again when that
 finishes` or `a parent of this task is being moved to Deleted items; try
@@ -2210,7 +2208,7 @@ limits](#request-limits-and-billing)).
 `DELETE /v1/comments/{id}` answers `{ "deleted": true, "id": "…", "task_id":
 "…" }`. `{id}` is the comment's `id` from the thread. As in the app, the
 comment's author may edit or delete it, and so may a lead of the task's
-project (an organization admin leads every project); anyone else gets `403`
+project, an organization admin only as its lead; anyone else gets `403`
 (`only the author or a project lead can edit this comment`, or `delete`). A
 comment on a task the caller cannot read answers `404` (`comment not found`),
 like an unknown id. The body is trimmed and may not be blank (`400` `a comment
@@ -2661,9 +2659,8 @@ GET /v1/tasks/{ref}/activity   the task's newest history, oldest first (read)
 These are the rows the task window's **All** filter shows beside the
 comments, which `GET /v1/tasks/{ref}/comments` lists instead. `actor_id` and
 `actor_name` are `null` once the user who made the change has been removed
-from the organization. Organization admins receive
-every row. Other users do not receive a row that names a project they cannot
-access, such as the project the task was in before a move, or one that names
+from the organization. Every user, an organization admin as anyone, does
+not receive a row that names a project they cannot access, such as the project the task was in before a move, or one that names
 another task they cannot read, such as the other end of a link. An
 archived task's history is answered too, by the same rule, as the app's
 read-only window on an archived task shows it under **All**. A task keeps
@@ -2675,7 +2672,7 @@ an empty array means there is no earlier history. A `before` that is not the
 row in this task's history`). The request reads on past rows you do not
 receive. When it cannot find one row you receive before it has read as much
 as one request may, it is a `400` (`too many of this task's changes are
-hidden from you to read them at once; an organization admin can read them`).
+hidden from you to read them at once`).
 When Qivo cannot finish checking which projects you can see for the
 projects a page's rows name, the request is a `400` (`Qivo could not finish
 checking which projects you can see in one request. Contact support@qivo.io

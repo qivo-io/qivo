@@ -2216,11 +2216,9 @@ its sub-projects you can read, even when you can read only some of them. To
 read one sub-project's archive alone, name that sub-project.
 
 A page reads only the projects it lists, side by side, and never tasks of
-projects you cannot read. Unless you are an organization admin, a project
-with more than 200 projects to list, itself and its sub-projects you can
-read, is refused. Name its sub-projects one at a time instead. An
-organization admin's call can read the organization's whole archive for such
-a project.
+projects you cannot read. A project with more than 200 projects to list,
+itself and its sub-projects you can read, is refused, for an organization
+admin as for anyone. Name its sub-projects one at a time instead.
 
 These calls are refused: `archived: true` without `project` (`archived:
 true needs project, because archived tasks are listed one project at a
@@ -2490,8 +2488,8 @@ rows the task window's **All** filter shows beside the comments
 ]
 ```
 
-You receive the rows the task window's **All** filter shows you. Organization
-admins receive every row. Other users do not receive a row that names a
+You receive the rows the task window's **All** filter shows you. Every
+user, an organization admin as anyone, does not receive a row that names a
 project they cannot access, such as where the task was before a move, or
 another task they cannot read, such as the other end of a link. An
 archived task's history is answered too, by the same rule. `actor_id` and
@@ -2504,7 +2502,7 @@ task's history is refused with `before must be the id of a row in this task's
 history`. The call reads on past rows you do not receive, and when it cannot
 find one you receive before it has read as much as one call may, it is
 refused with `too many of this task's changes are hidden from you to read them
-at once; an organization admin can read them`. When Qivo cannot finish
+at once`. When Qivo cannot finish
 checking which projects you can see for the projects a page's rows name, the
 call is refused with `Qivo could not finish checking which projects you can
 see in one request. Contact support@qivo.io so we can help.` rather than
@@ -2610,8 +2608,8 @@ this task with `before must be the id of a comment on this task`.
 
 `update_comment` and `delete_comment` take the comment's `id` from
 `list_comments`. As in the app, the comment's author may edit or delete it,
-and so may a lead of the task's project (an organization admin leads every
-project); anyone else is refused with `only the author or a project lead can
+and so may a lead of the task's project, an organization admin only as its
+lead; anyone else is refused with `only the author or a project lead can
 edit this comment` (or `delete`). A comment on a task you cannot read reads
 `comment "<id>" not found (or not visible to you)`, like an unknown one. The
 new body is trimmed and may not be blank. Sending the text the comment
