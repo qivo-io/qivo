@@ -1854,10 +1854,11 @@ period costs one `billingSync:finalizeStorage` call when it is recorded,
 reading its period row, its days' samples (at most 31) and a few documents
 more, 37 documents and 8 index ranges for 31 days at 1,000 people in
 `convex/tests/billing.test.ts`, and writing the period and its charge, one
-more call each time a run or hourly call finds it waiting for its last day,
-and one `billingSync:finalizeDue` call for each 25 periods a run or call
-lists. `billing.usageFigures` reads at most 31 more documents for an admin
-of an open daily period.
+more call each time a day's run finds it waiting for its last day, and one
+`billingSync:finalizeDue` call for each 25 periods a run or call lists. A
+period stopped after 3 days costs one write of its row and one audit row.
+`billing.usageFigures` reads at most 31 more documents for an admin of an
+open daily period.
 
 Switching daily storage billing on is the owner's decision, never a stage's.
 First ship the docs change above. Then accept one daily period in the Polar
