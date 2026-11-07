@@ -1005,6 +1005,68 @@ describe('the benchmark server', () => {
     expect(listed.answer.rows.map((row) => row.id)).toEqual([id('1', 49)])
   }, 60_000)
 
+  it('answers people the people part leaves out by id with their pictures, and the forced states of peoplebyids', async () => {
+    /** What `name` answers with `args(snap)` on a workspace with page
+        parameters `params`, and the snapshot. */
+    const read = async (params, name, args = () => ({})) => {
+      const { posted, send } = await server(`tasks=20&latency=0&mbps=100000&${params}`)
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      await send({
+        type: 'query',
+        id: 'read',
+        name,
+        args: { org_id: snap.orgs[0].id, ...args(snap) },
+      })
+      const answer = posted.find((m) => m.to === 'read')
+      return { snap, answer: answer.error ? { error: answer.error } : JSON.parse(answer.text) }
+    }
+    const unheld = [id('1', 48), id('1', 49)]
+    const faces = await read('people=50&unheldpeople=2&pictures=1', 'people:byIds', () => ({
+      ids: unheld,
+    }))
+    // each unheld person comes with a picture's version and hours
+    expect(faces.answer.rows.map((row) => typeof row.avatar)).toEqual(['string', 'string'])
+    expect(faces.answer.rows.every((row) => 'plannable_hours' in row)).toBe(true)
+    // and files:mintUrls answers their pictures by that version
+    const minted = await read('people=50&unheldpeople=2&pictures=1', 'files:mintUrls', () => ({
+      profile_ids: unheld,
+    }))
+    for (const row of faces.answer.rows)
+      expect(minted.answer.avatars[row.id].url).toContain(`v=${row.avatar}`)
+    expect(
+      (
+        await read('people=50&unheldpeople=2&peoplebyids=byids-error', 'people:byIds', () => ({
+          ids: unheld,
+        }))
+      ).answer.error,
+    ).toContain('fails')
+    expect(
+      (
+        await read('people=50&unheldpeople=2&peoplebyids=byids-gone', 'people:byIds', () => ({
+          ids: unheld,
+        }))
+      ).answer,
+    ).toEqual({ rows: [] })
+    // byids-slow holds a live read's answer two seconds
+    const { posted, send } = await server(
+      'tasks=20&latency=0&mbps=100000&people=50&unheldpeople=2&peoplebyids=byids-slow',
+    )
+    await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+    const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+    await send({
+      type: 'subscribe',
+      id: 'faces',
+      name: 'people:byIds',
+      args: { org_id: snap.orgs[0].id, ids: unheld },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    expect(posted.some((m) => m.to === 'faces')).toBe(false)
+    await vi.waitFor(() => expect(posted.some((m) => m.to === 'faces')).toBe(true), {
+      timeout: 4000,
+    })
+  }, 60_000)
+
   it("answers Settings › Teams and a team's page from the workspace, with the states the page asks for", async () => {
     /** What `name` answers with `args` on a workspace with page parameters
         `params`, and the workspace. */

@@ -14,6 +14,7 @@ import {
 import { COMMENT_PAGE_MAX } from '../convex/model/comments'
 import { billingBytes, CALLS_COUNTING, STORAGE_COUNTING } from '../src/lib/billingDisplay'
 import { endText } from '../src/lib/deletedItems'
+import { LABEL_COLORS } from '../src/lib/labelColors'
 import { creatorPhrase } from '../src/lib/projectCreators'
 import {
   ADMIN_MANAGEMENT_CLEANUP,
@@ -198,7 +199,14 @@ describe('staging check REST contract', () => {
       count: '1 active task',
       confirm:
         'Used by 1 active task. Deleting this label removes it from all tasks, including archived tasks. This cannot be undone.',
+      taken: 'A label with that name already exists',
+      palette: LABEL_COLORS.map((c) => c.color),
     })
+    // New label's check of a typed name, by the page's own marks and words
+    expect(page).toContain("export const NAME_TAKEN = 'A label with that name already exists'")
+    expect(page).toContain('data-label-name-check={checked}')
+    expect(page).toContain('data-label-add=""')
+    expect(page).toContain('placeholder="New label name"')
   })
   it("checks its own team in Settings › Teams and on its page, by the pages' own marks and words", () => {
     const page = readFileSync(
@@ -1439,7 +1447,11 @@ describe('staging check REST contract', () => {
       check.indexOf('export const ON_DEMAND_STEP'),
     )
     expect(step).toContain('const names = [found.name, madeName]')
-    expect(step).toContain('window.PLANNER.removeLabel(id)')
+    // the app deletes each label as the page would show it
+    expect(step).toContain('evaluate(app, removeLabelInApp, label.id)')
+    expect(check).toContain(
+      'window.PLANNER.removeLabel(id, { orgId: label.org, name: label.name, color: label.color })',
+    )
     expect(step).toMatch(/\} finally \{\s+await dropLabels\(\)/)
     for (const mark of [
       'data-label-picker',
