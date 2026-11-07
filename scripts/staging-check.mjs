@@ -6193,8 +6193,10 @@ async function inboxListCheck() {
         ),
         "Open task in board did not ring t0's card",
       )
+      // the Board of Alpha, which the app remembers as the project the
+      // person opened last
       const scope = await evaluate(app, () => window.PLANNER?.loadUI?.() ?? null)
-      eq(scope?.scope, A.id, "the Board's project")
+      eq(scope?.lastProject?.project_id, A.id, "the Board's project")
       expect(
         await until(
           () =>
