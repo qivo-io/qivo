@@ -233,10 +233,8 @@ task is Done, the dependency labels become **Previously blocked** or
 groups omit status, and unowned tasks omit the portrait.
 
 **Subtasks**, **Linked tasks** and **Attachments** load their own lists when
-the window shows them. Until a list arrives, its section shows the items
-Qivo already has once every task has loaded for a page that needs them,
-also while you are offline, and otherwise says the list is loading, such as
-**Loading subtasks…**. A list that could not load says **Couldn't load
+the window shows them. Until a list arrives, its section says the list is
+loading, such as **Loading subtasks…**. A list that could not load says **Couldn't load
 subtasks.** with **Retry**. When Qivo no longer lets you
 see the task, a section says **Subtasks are not available.** A list too large
 to load at once shows the rows that loaded with **Some subtasks could not be
@@ -247,14 +245,14 @@ subtask has loaded, Progress says **Subtasks are still loading.** or
 **Completion unknown.**, and Remaining says **Loading…** or **Unknown**. The
 Inbox's task pane has no details column, so it loads none of these lists
 until you open the task in its own window. On a phone they load when you
-choose **Details**. A file, a subtask and a linked task can be removed
-before every task has loaded. A file's or a linked task's row shows that it
+choose **Details**. A file, a subtask and a linked task can be removed from
+these lists. A file's or a linked task's row shows that it
 is being removed until the list no longer holds it, and a subtask leaves
 the list at once. A removal is checked against the list as it showed, so
 while **Subtasks** or **Linked tasks** could not load its latest list, the
 **×** of its rows waits with **Available once Qivo can check this task for
-changes**. A link you make to a task that has not loaded into the
-workspace yet shows in **Linked tasks** with the list's next answer.
+changes**. A link you make shows in **Linked tasks** with the list's next
+answer.
 
 A task you open from these lists, from Search, from a link, a bookmark,
 Back or Forward, or from an Inbox row before it has loaded into the
@@ -271,8 +269,7 @@ Qivo cannot reach the server, the window says **Couldn't open QN-12.**,
 with **Retry**. A task you open by the number in its link takes no change,
 which says **Available once Qivo can check this task for changes**, until
 the window has read the task on its own, which comes after the reads
-already on their way, such as every task loading for a page that needs
-them. Then, if you can edit its project, you can
+already on their way. Then, if you can edit its project, you can
 change it: its fields, its description and the images in it, its
 labels and its files, its parent, its subtasks and its links, and create
 a parent, subtask or linked task from its pickers. Each change shows at once and
@@ -285,12 +282,24 @@ project access** you cannot change it or comment on it, but you can link it
 to a task you can edit, and you can still edit or delete your own comments. Anyone who can see the task can
 follow it and open **Subscribers**, and plan it on the roadmap, which opens
 at once and highlights the task once its timeline holds it, unless you have
-left the roadmap meanwhile. Once every task has loaded for a page that needs them,
-the window shows the task from the workspace in place, and a title, hours
-or a comment you were typing stay. If Qivo cannot check such a task for changes, the window keeps showing
+left the roadmap meanwhile. If Qivo cannot check such a task for changes, the window keeps showing
 it as it last loaded and says so, with **Retry**. Its changes then wait with
 **Available once Qivo can check this task for changes**, and a title,
 description, hours or comment you are typing stays until you can save it.
+
+A task you create, from **New task**, a status column's **+**, a new
+sub-project's first task or a picker's **Create new** row, opens at once
+from what you typed, before Qivo has saved it. Its title, description,
+status, priority, dates, hours, due date, pause, labels, files, comments
+and the eye take changes at once, and Qivo saves each of them after the
+task. Its assignee and reviewer, **Parent**, **Subtasks** and **Linked
+tasks**, **Subscribers**, **Move to sub-project…** and **Archive or
+delete…** read the task on the server, so they wait with **Available once
+this task is saved** until Qivo has saved it and the window has read it,
+a moment later. The owner's portrait on its card waits the same way. If
+Qivo cannot save the task, as when you no longer have access to its
+sub-project, the task leaves the Board, its window closes and a message
+says why, and the changes you made in it meanwhile go with it.
 
 The **×** button removes a relationship without deleting the task.
 **Remove subtask** clears the child's parent and keeps the task.
@@ -454,8 +463,7 @@ in the window leaves the list.
 **Restore** returns a task to its Board and restores archived parents when
 needed. The task leaves the list at once, and the page asks for its tasks
 again, so the next archived task moves up into it. A task someone else
-restores leaves the list too once every task has loaded for a page that
-needs them, and otherwise when the page asks for its tasks again. A subtask whose parent already has 100 active subtasks comes back as
+restores leaves the list when the page asks for its tasks again. A subtask whose parent already has 100 active subtasks comes back as
 a top-level task, and Qivo says so. Its followers are told it left its
 parent, and you can give it a parent again once there is room, as a restore
 from Deleted items does. If a restore would change a parent task in a

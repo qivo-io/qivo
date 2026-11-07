@@ -112,10 +112,9 @@ them again.
 
 Delays on the Board's tasks come from Qivo's server, which reads each
 owner's other work. The Board shows no banner while that read is on its
-way. Once every task has loaded for something that needs them, as a new
-task does, the tasks you have loaded show their delay from your
-browser, and a task you created while they loaded shows its delay once
-loading finishes.
+way. A task you create shows on the Board at once, and its delay comes
+from the server like any card's, so its card and its window show the same
+verdict.
 
 A Board shows at most 1,000 tasks, subtasks included, across its project
 or sub-project with its filters, or across My view
