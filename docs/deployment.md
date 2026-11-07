@@ -858,6 +858,13 @@ demo to a deployment of a commit before the release that replaced
 `snapshot.forMe` with the parts (the release after v0.1.52). Roll forward
 instead.
 
+An app from before the release after v0.1.159 joins the milestones of every
+workspace projects part it reads, which later backends no longer send, so
+it cannot load its workspace against them, and that includes a tab already
+open when the release deploys, until it reloads. Never return the app or
+the demo alone to a deployment of a commit before that release; return the
+backend with it, or roll forward.
+
 REST `GET /v1/tasks` and MCP `list_tasks` page active tasks with a cursor
 from the release that made them answer `{next_cursor, tasks}`. Returning the
 backend to a commit before it makes active lists answer an array again,
@@ -2014,6 +2021,26 @@ that app reads the workspace's roster, which the backend still sends. The
 release changes no server function, has no schema change, no backfill and
 no release step.
 
+From the release after v0.1.159, the workspace's projects part
+(`workspace.projects`) answers each window's projects with their grants and
+team grants, and reads and sends no milestone. The app reads every
+milestone it shows through `milestones.get`, `section` and `between`, which
+the floors above already hold, the `mine` scope included, and it ignores a
+milestones list an earlier backend still sends, so this release sets no new
+floor for the backend, and returning the backend to a commit before it,
+down to the newest floor above, stays safe for this app. An app from before
+this release joins the milestones of every projects part it reads and
+cannot load its workspace against a backend from this release on, also in a
+tab that was open when the release deploys, until it reloads. So this
+release is the app's rollback floor. From it on, never return the app or
+the demo alone to a deployment of a commit before it; return the backend
+with it, or roll forward (see Rollback and hotfixes). The staging check's
+`ui/roadmap-milestones` step moves the run's milestone through a flag's
+store write, which takes its row from the Roadmap's range read and its
+organization from the store's project, and checks over REST that the
+backend saved the move. The release changes no table, field or index, and
+has no backfill and no release step.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
@@ -2124,7 +2151,12 @@ Rollback and hotfixes. Two releases broke that rule on purpose, by the
 owner's decision while Qivo had no users: v0.1.52 and the release after it,
 which replaced `snapshot.forMe` with the workspace parts. A tab open across
 either deploy shows wrong load or cannot load until it reloads, and each is a
-rollback floor (see Rollback and hotfixes). Later changes keep the rule.
+rollback floor (see Rollback and hotfixes). Later changes keep the rule,
+with one exception. By the owner's decision of 7 November 2026, while
+nobody uses the app, a change removes an old function, part or answer field
+in the same release that stops using it, as the release after v0.1.159
+removes the milestones of the workspace projects part, and its deployment
+paragraph names only the floor a later rollback needs.
 Test migrations with representative synthetic data and retain verified
 production backups before destructive changes.
 
