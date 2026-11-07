@@ -1974,19 +1974,14 @@ for the desktop alerts. The list shows only what the `inbox_items` rows
 hold. The release changes no server function, has no schema change, no
 backfill and no release step.
 
-From the release after v0.1.158, a create of a task no longer asks for every
-task. The new task shows at once in the Board's and the Roadmap's rows and
-in its window from what the create sends, and once the create answers,
-from the stored row `issues.create` answers. The window's changes go out
-behind the create on the same connection, and its reads of the task start
-once the server took it. The app relies on `issues.create` answering the
-stored row, which it has since v0.1.6 (`ce4cf109e`), and on
+From the release after v0.1.158, a create of a task no longer loads every
+task. The release changes no server function, so it sets no new rollback
+floor and needs no release step. The app relies on `issues.create`
+answering the stored row, which it has since v0.1.6 (`ce4cf109e`), and on
 `issues.createParent` answering the new parent's number (`parent_num`),
-which it has since v0.1.26 (`1dfbf802b`). The floors above already hold far
-newer backends, so the release changes no server function, sets no new
-rollback floor and needs no release step. Returning the app alone to an
-earlier release is safe, because that app asks for every task at a create
-and paints the task into the workspace. There is no schema change and no
+which it has since v0.1.26 (`1dfbf802b`), and the floors above already
+hold far newer backends. The staging check's `ui/create-answer` step
+checks the create on the deployment. There is no schema change and no
 backfill.
 
 ## Node.js version
