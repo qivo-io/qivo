@@ -850,17 +850,15 @@ function Roadmap({
   if (mine && held && markerScope) lastNamed.current = { scope: info.id, projects: markerScope }
   const showMobileAgenda =
     mobile && mobileLayout !== 'timeline' && !session && !focusPlan && !revealTask
-  const markers = useRoadmapMilestones(
-    markerScope,
-    w0,
-    w1,
-    !showMobileAgenda && !(wide && stripMode === 'max'),
-  )
+  // whether the flags show at all, which they do neither under the
+  // phone's agenda nor on My view's rows while Team fills the panel
+  const markersActive = !showMobileAgenda && !(wide && stripMode === 'max')
+  const markers = useRoadmapMilestones(markerScope, w0, w1, markersActive)
   /* Where the flags draw. In a project or sub-project, every flag of the
      read sits in the header and its guide runs through every row. In My
      view each sits on its own project's track row, with its guide through
      that track's rows only, so a project's guide never crosses another
-     project's rows: a milestone whose project has no track on screen, as
+     project's rows. A milestone whose project has no track on screen, as
      one a filter pruned, draws nowhere. */
   const projMilestones: readonly MilestoneVM[] = wide ? [] : markers.view.rows
   const trackMilestones = new Map<string, MilestoneVM[]>()
@@ -870,10 +868,12 @@ function Roadmap({
       if (shown.has(m.project))
         trackMilestones.set(m.project, [...(trackMilestones.get(m.project) ?? []), m])
   }
-  // the line beside the toolbar, which stands down where the Roadmap's own
+  // the line beside the toolbar, which says nothing while the flags show
+  // nowhere and their read stops, and stands down where the Roadmap's own
   // note already says that access could not be checked
   const markersLine =
-    view.answer?.state === 'unavailable' && view.answer.reason === 'access_unchecked'
+    !markersActive ||
+    (view.answer?.state === 'unavailable' && view.answer.reason === 'access_unchecked')
       ? null
       : markerLine(markers.view, mine, P.fmtISO)
 

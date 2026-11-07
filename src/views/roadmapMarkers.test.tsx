@@ -500,6 +500,37 @@ describe("My view's milestones", { timeout: 30_000 }, () => {
   })
 })
 
+describe("My view's milestones while Team fills the panel", { timeout: 30_000 }, () => {
+  it('says nothing of the flags when the first answer arrives with Team expanded', async () => {
+    // the Roadmap's first answer, which names the tracks, waits
+    holdRoadmap = true
+    await app(world(), '/app/~/roadmap/mine')
+    const expand = await waitFor(
+      () => document.querySelector<HTMLElement>('[data-workspace-view] [data-strip-expand]'),
+      "Team's expand",
+    )
+    await act(async () => expand.click())
+    holdRoadmap = false
+    await act(async () => {
+      for (const send of heldRoadmaps.splice(0)) send()
+    })
+    await roadmap('loading')
+    await settle()
+    // the read stops before it starts, and the flags show nowhere
+    expect(ranges()).toHaveLength(0)
+    // must fail: "Loading milestones…" over rows that are hidden
+    expect(line()).toBeNull()
+    const split = await waitFor(
+      () => document.querySelector<HTMLElement>('[data-workspace-view] [data-strip-split]'),
+      "Team's split",
+    )
+    await act(async () => split.click())
+    await roadmap('ok')
+    expect(flag('m-plan')?.closest('[hidden]')).toBeNull()
+    expect(liveRanges()).toHaveLength(1)
+  })
+})
+
 describe("a project's milestones", { timeout: 30_000 }, () => {
   it('keeps them in the header with guides through every row, read for its top-level project', async () => {
     await app(world(), '/app/testbed/roadmap/p/1')
