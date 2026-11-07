@@ -573,10 +573,12 @@ describe('who sees an item (design 6.1)', () => {
     await deleteProject(t, f.user, f.meta.id)
     const projectItem = await itemFor(t, f.meta.id)
 
-    // Restore opens the project item first
+    // Restore opens the project item first, and the task follows it, as
+    // the admin's User grant on TBED comes back with TBED
     expect((await rowOf(t, f.admin, taskItem.id))?.blocked).toEqual({
       reason: 'project_deleted',
       item_id: projectItem.id,
+      with_project: true,
     })
     // not even to the lead of the subtask's project, which is still live
     expect(await idsOf(t, f.guest)).toEqual([])

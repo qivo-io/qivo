@@ -715,8 +715,8 @@ export type Memo = {
   legacyGrants: Map<string, Promise<Doc<'deleted_rows'>[]>>
   /** whether the organization is read-only, by organization (orgReadOnly) */
   readOnly: Map<string, Promise<boolean>>
-  /** the item holding a stored project, by project */
-  heldBy: Map<string, Promise<string | undefined>>
+  /** the item holding a stored project, by project (holdingItem) */
+  heldBy: Map<string, Promise<Item | null>>
   /** a project item's hierarchy, by item */
   hierarchy: Map<string, Promise<Hierarchy>>
   /** a person's levels inside a project item, keyed `item:profile` */
@@ -2268,17 +2268,26 @@ export async function sightOf(ctx: QueryCtx, me: Doc<'profiles'>): Promise<Sight
 /** The names a blocked row's sentence needs (design 5.3): the project it
  * speaks of and, for view_only and not_lead, that project's effective lead
  * when it has one. For project_deleted and parent_deleted (admins only),
- * the item holding the deleted project, which must be restored first. */
+ * the item holding the deleted project, which must be restored first, and
+ * for a task item waiting for its project, `with_project` when that
+ * project item gives the viewer Edit on the task's project once it is back
+ * (editsOnceBack), so the task can follow it in the same restore. Without
+ * it the task's restore would be refused after the project's, so the app
+ * restores the project alone (src/lib/deletedItems.ts
+ * restoresWithProject). */
 export type BlockDetail = {
   reason: RestoreBlock
   project?: string
   lead?: string
   item_id?: string
+  with_project?: true
 }
 
+/** The names `me`'s blocked row of `item` shows for `reason` (BlockDetail). */
 export async function blockDetail(
   ctx: QueryCtx,
   memo: Memo,
+  me: Doc<'profiles'>,
   item: Item,
   reason: RestoreBlock,
 ): Promise<BlockDetail> {
@@ -2290,7 +2299,13 @@ export async function blockDetail(
   }
   if (reason === 'project_deleted' || reason === 'parent_deleted') {
     const id = reason === 'project_deleted' ? item.project_id : item.parent_project_id
-    return { reason, item_id: id === undefined ? undefined : await holderOf(s, id) }
+    const holder = id === undefined ? null : await holdingItem(s, id)
+    const follows =
+      item.kind === 'task' &&
+      reason === 'project_deleted' &&
+      holder !== null &&
+      (await editsOnceBack(s, me, holder, item.project_id))
+    return { reason, item_id: holder?.id, ...(follows ? { with_project: true as const } : {}) }
   }
   if (item.kind === 'task') {
     const project = await namedProject(s, item.project_id, 'project')
@@ -2310,10 +2325,10 @@ export async function blockDetail(
   return { reason, project: item.name, lead: await named(h.root?.lead_id ?? h.parent?.lead_id) }
 }
 
-/** The id of the item that holds stored project `projectId`, unless it is
- * purging. Many task items can wait for one deleted project, so it is read
- * once per list. */
-const holderOf = (s: Scope, projectId: string) =>
+/** The item that holds stored project `projectId`, unless it is purging.
+ * Many task items can wait for one deleted project, so it is read once per
+ * list. */
+const holdingItem = (s: Scope, projectId: string) =>
   memoRead(s.memo.heldBy, projectId, async () => {
     const row = await s.ctx.db
       .query('deleted_rows')
@@ -2321,9 +2336,24 @@ const holderOf = (s: Scope, projectId: string) =>
       .first()
     const holder = row === null ? null : await byId(s.ctx, 'deleted_items', row.item_id)
     return holder !== null && holder.org_id === s.item.org_id && holder.state !== 'purging'
-      ? holder.id
-      : undefined
+      ? holder
+      : null
   })
+
+/** The id of the item that holds stored project `projectId` (holdingItem). */
+const holderOf = async (s: Scope, projectId: string) => (await holdingItem(s, projectId))?.id
+
+/** Whether project item `holder` gives `me` Edit on its project `projectId`
+ * once it is back: their level there by the item's stored rows
+ * (storedLevels), which its restore writes back, is User or Lead. A task
+ * item's restore needs that Edit (taskItemBlock), so only then can one
+ * waiting for `holder` follow it; its other checks, such as a subtask's
+ * project, run when it is sent. It reads what an admin's view of the
+ * project item reads (adminView), once per list for each item and person. */
+async function editsOnceBack(s: Scope, me: Doc<'profiles'>, holder: Item, projectId: string) {
+  const levels = await storedLevels({ ...s, item: holder }, me)
+  return levelRank(levels.levelOf({ id: projectId, org_id: holder.org_id })) >= LEVEL_RANK.user
+}
 
 /** The tally of what `item` stores now, which a restore subtracts from. */
 const tallyFromItem = (item: Item): Tally => ({

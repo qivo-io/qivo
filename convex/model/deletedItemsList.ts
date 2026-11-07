@@ -452,7 +452,7 @@ export async function rowOf(
   const block = view.redacted ? 'no_access' : await restoreBlock(ctx, me, item, memo)
   let blocked: BlockDetail | undefined
   if (ready && block !== null)
-    blocked = view.redacted ? { reason: block } : await blockDetail(ctx, memo, item, block)
+    blocked = view.redacted ? { reason: block } : await blockDetail(ctx, memo, me, item, block)
   const base = {
     id: item.id,
     org_id: item.org_id,
@@ -700,7 +700,7 @@ export async function matchesFor(
       if (ready && block !== null)
         blocked = view.redacted
           ? { reason: block }
-          : await blockDetail(reader, sight.memo, item, block)
+          : await blockDetail(reader, sight.memo, me, item, block)
       // the row of a task item names its root, unless it is redacted, and
       // a hidden row by its key alone
       const subtask = item.kind === 'task' && !view.redacted && task.task_id !== item.target_id

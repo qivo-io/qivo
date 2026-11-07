@@ -537,14 +537,15 @@ describe('an admin by ordinary access', () => {
     expect(await rowOf(t, f.admin, waiting.id)).toMatchObject({
       title: '',
       hidden: true,
-      blocked: { reason: 'project_deleted', item_id: holder.id },
       can_purge: true,
     })
-    expect(await rowOf(t, f.admin, gone.id)).toMatchObject({
-      title: '',
-      hidden: true,
-      blocked: { reason: 'project_deleted' },
+    // the admin holds no row on TBED, so the task cannot follow it
+    expect((await rowOf(t, f.admin, waiting.id))?.blocked).toEqual({
+      reason: 'project_deleted',
+      item_id: holder.id,
     })
+    expect((await rowOf(t, f.admin, gone.id))?.blocked).toEqual({ reason: 'project_deleted' })
+    expect(await rowOf(t, f.admin, gone.id)).toMatchObject({ title: '', hidden: true })
     // a project's name, key, path and reason are project management data
     const projectRow = await rowOf(t, f.admin, holder.id)
     expect(projectRow).toMatchObject({
@@ -557,6 +558,52 @@ describe('an admin by ordinary access', () => {
       can_purge: true,
     })
     expect(projectRow).not.toHaveProperty('hidden')
+  })
+
+  it("says a task item waiting for its deleted project follows it in one restore only where the project item's stored rows give the admin Edit there", async () => {
+    // the admin's grant on TBED when it is deleted, and what the task's
+    // restore answers once TBED is back
+    const cases: { level: 'user' | 'viewer' | null; follows: boolean; refused: string[] }[] = [
+      { level: 'user', follows: true, refused: [] },
+      { level: 'viewer', follows: false, refused: ['view_only'] },
+      { level: null, follows: false, refused: ['no_access'] },
+    ]
+    for (const c of cases) {
+      const t = newT()
+      const f = await withOrg(t)
+      if (c.level !== null) await grant(t, f.meta.id, f.admin.id, c.level)
+      const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+      await deleteTask(t, f.guest, task.id)
+      later()
+      await deleteProject(t, f.user, f.meta.id)
+      await runSteps(t)
+      const waiting = await itemFor(t, task.id)
+      const holder = await itemFor(t, f.meta.id)
+      const blocked = {
+        reason: 'project_deleted',
+        item_id: holder.id,
+        ...(c.follows ? { with_project: true } : {}),
+      }
+      // hidden from the admin while TBED is in Deleted items, in the page,
+      // the list and the item read alike
+      const scope = { org_id: f.org.id, all: true as const }
+      const row = (await walk(t, f.admin, { scope })).items.find((r) => r.id === waiting.id)
+      expect(row).toMatchObject({ title: '', hidden: true, can_restore: false })
+      expect(row?.blocked).toEqual(blocked)
+      expect((await rowOf(t, f.admin, waiting.id))?.blocked).toEqual(blocked)
+      expect((await itemRow(t, f.admin, waiting.id))?.blocked).toEqual(blocked)
+      // the restore that sends both: the task waits for TBED, and its own
+      // restore then goes through exactly where with_project said so
+      expect(await restore(t, f.admin, [holder.id, waiting.id])).toMatchObject({
+        restored: [holder.id],
+        refused: [],
+        deferred: [waiting.id],
+      })
+      await runSteps(t)
+      expect((await restore(t, f.admin, [waiting.id])).refused).toEqual(
+        c.refused.map((reason) => ({ id: waiting.id, reason })),
+      )
+    }
   })
 
   it('keeps a project item whole and takes its hits only from the projects its stored rows give the admin', async () => {

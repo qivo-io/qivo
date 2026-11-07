@@ -1119,7 +1119,8 @@ export function DeletedItemsPage() {
             // a hit comes back with its item; an item that waits for its
             // project, a hit's or the line's own, goes in the same call
             // after that project and is deferred, unless it is a task the
-            // person cannot read, which stays (restoresWithProject)
+            // person cannot read and will not edit once that project is
+            // back, which stays (restoresWithProject)
             const item = lineItem(line)
             const alone = holder.id === item.id || !restoresWithProject(item)
             const outcome = await restore(alone ? [holder] : [holder, item], {
@@ -1409,9 +1410,10 @@ function comesBack(holder: DeletedRow): string {
     comes back only after that project item, and so does a hit whose item
     was, so Restore brings that project back first, in the same call, and
     the store sends the item again once the project is back. A task item the
-    person cannot read (restoresWithProject) is not sent. Restore brings the
-    project back alone, and the window says the task stays in Deleted items
-    until they can open its project. The project
+    person cannot read now is sent only when the project item gives them
+    Edit on its project once it is back (restoresWithProject). Otherwise
+    Restore brings the project back alone, and the window says the task
+    stays in Deleted items until they can edit its project. The project
     item the line's item waits for is the page's when it holds it, and is
     read from deletedItems.item while the window shows otherwise, Restore
     waiting for it; a failed read says so with Try again, and an answer
@@ -1463,7 +1465,8 @@ function WholeItemWindow({
   // project item or the item itself
   const itemCalled = root?.key ?? (line.kind === 'hit' ? item.title : name)
   const project = waits ? (holder?.kind === 'project' ? holder.title : undefined) : undefined
-  // a task the person cannot read stays behind when its project comes back
+  // a task the person cannot read stays behind when its project comes
+  // back without giving them Edit on it
   const stays = waits && !restoresWithProject(item)
   const canRestore = holder?.can_restore === true
   const reason = !holder
@@ -1516,7 +1519,7 @@ function WholeItemWindow({
   // what the store sends once the project waited for is back, or what
   // stays behind
   const follows = stays
-    ? ` ${root?.key ?? itemCalled} stays in Deleted items until you can open its project.`
+    ? ` ${root?.key ?? itemCalled} stays in Deleted items until you can edit its project.`
     : root
       ? ` ${root.key} and its subtasks follow once the project is back.`
       : ` ${itemCalled} follows once the project is back.`

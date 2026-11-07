@@ -65,12 +65,13 @@ export const lineItem = (line: Line): DeletedRow => (line.kind === 'item' ? line
 
 /** Whether `row`, waiting for the deleted project it was in, goes in the
     same restore as that project item. A task item the restorer cannot
-    read, an admin's row without its title, never does, as the project
-    item's right says nothing of the task's. That needs their own access
-    to the project once it is back, so the task stays in Deleted items
-    until then. */
+    read now, an admin's row without its title, does only when the server
+    says that project item gives them Edit on the task's project once it is
+    back (`blocked.with_project`), as the project item's right says nothing
+    of the task's. Without it the task stays in Deleted items until they
+    can edit its project. */
 export const restoresWithProject = (row: DeletedRow): boolean =>
-  !(row.kind === 'task' && row.hidden === true)
+  row.kind !== 'task' || row.hidden !== true || row.blocked?.with_project === true
 
 /** The key of a line, which also names it for focus. */
 export const lineKey = (line: Line): string =>

@@ -932,10 +932,14 @@ describe('restoring', () => {
     const fixture = deletedFixtureOf(next, { tasks: 1, at: NOW.toISOString() })
     const task = fixture.items.find((i) => i.row.kind === 'task')
     if (!task) throw new Error('no task item')
+    // QN-10 was deleted before Firmware, so the admin cannot read it now,
+    // and Firmware's item gives them Edit on it once it is back
     task.row = {
       ...task.row,
+      title: '',
+      hidden: true,
       can_restore: false,
-      blocked: { reason: 'project_deleted', item_id: `deleted-${FW}` },
+      blocked: { reason: 'project_deleted', item_id: `deleted-${FW}`, with_project: true },
     }
     // the page that shows the task holds no project item
     fixture.items = fixture.items.filter((i) => i.row.kind === 'task')
@@ -959,14 +963,16 @@ describe('restoring', () => {
     expect(toasts().some((t) => /Restored 2/.test(String(t)))).toBe(false)
   })
 
-  it('restores only the project of a task the admin cannot read, which stays in Deleted items', async () => {
+  it('restores only the project of a task the admin will not edit once that project is back, which stays in Deleted items', async () => {
     const next = world({ tasks: 1 })
     const fixture = deletedFixtureOf(next, { tasks: 1, at: NOW.toISOString() })
     const task = fixture.items.find((i) => i.row.kind === 'task')
     if (!task) throw new Error('no task item')
-    // QN-10 was deleted before Firmware, and the admin cannot read it
+    // QN-10 was deleted before Firmware, and Firmware's item gives the
+    // admin no Edit on it once it is back
     task.row = {
       ...task.row,
+      title: '',
       hidden: true,
       can_restore: false,
       blocked: { reason: 'project_deleted', item_id: `deleted-${FW}` },
@@ -977,7 +983,7 @@ describe('restoring', () => {
     await choose(LUMA)
     await click(find(`[data-deleted-row="${task.row.id}"] [data-restore]`))
     expect(text('[data-project-first]')).toContain(
-      'QN-10 stays in Deleted items until you can open its project.',
+      'QN-10 stays in Deleted items until you can edit its project.',
     )
     expect(all('[role="dialog"] button').map((b) => b.textContent)).not.toContain(
       'Restore Firmware and QN-10',
