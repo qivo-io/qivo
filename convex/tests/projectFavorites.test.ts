@@ -839,6 +839,13 @@ describe('the one way to write a favorite', () => {
       .filter(([path, source]) => path !== '../model/projectFavorites.ts' && INSERT.test(source))
       .map(([path]) => path)
     expect(others).toEqual([])
+    // the seed's insert skips the writer's access check, so only the seed
+    // calls it, beside its definition
+    const callers = Object.entries(sources)
+      .filter(([, source]) => /\binsertSeededFavorite\(/.test(source))
+      .map(([path]) => path)
+      .sort()
+    expect(callers).toEqual(['../model/demoSeed.ts', '../model/projectFavorites.ts'])
   })
 
   it('patches them only in the writer and the tree changes', () => {
