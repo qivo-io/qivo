@@ -57,7 +57,13 @@ import type { Visibility } from '../lib/viewVisibility'
     Board named 101 people and read the 2 the workspace did not hold in one
     people.byIds read, and Settings › Users searched for "99" named 19 and
     read the 10 it did not hold in one read. 1,000 people a view names are
-    read in 10 reads of 100 ids, each id once (profileCache.test.ts). */
+    read in 10 reads of 100 ids, each id once (profileCache.test.ts). Each
+    live chunk of BY_IDS_MAX (100) ids is one people.byIds read of 103
+    ranges, 101 documents and 0.048 MiB answering about 25 KB, timed on 7
+    November 2026 on a local backend on Boat (8 vCPU, one call at a time,
+    as a standard user's login) at 9 to 13 ms of server JavaScript quiet
+    and 15 to 40 ms beside eight busy loops in an organization of 1,000
+    people, so the 1,000 people a view can name cost 10 such reads. */
 export const PROFILE_CACHE = { most: 1_000 }
 
 /** A person a view names: the organization to ask and the profile id. */
