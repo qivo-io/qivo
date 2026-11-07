@@ -8,7 +8,9 @@
  * page as the list shows them (src/panels/Inbox.tsx), each by its task and
  * organization, and acts on an item as the row does (messages.snoozeItem,
  * readItem). Touches only Nora's own inbox rows and puts every one of them
- * back, unsnoozed and read again if it was read. */
+ * back, unsnoozed and read again if it was read, then reads the server's
+ * pages with snoozed rows included and fails if one of them stays
+ * snoozed. */
 import { mkdirSync } from 'node:fs'
 import { chromium } from 'playwright'
 import { loadBrowserDemo, signInBrowser, signInDemo } from './browser-demo.mjs'
@@ -275,12 +277,40 @@ try {
           if (e.read) await convex.mutation('messages:readItem', item)
         }
       }, restore)
-      await sleep(1000)
-      const final = await groups(pageA)
-      if (final.some((g) => g.snoozed)) console.error('✘ a row is still snoozed after restore')
-      else log('restored: nothing snoozed, read state put back')
+      // The list on screen shows no snoozed row with Show snoozed off, so
+      // the check reads the server's pages with snoozed rows included,
+      // until it found every restored task or the Inbox ends.
+      const check = await pageA.evaluate(async (entries) => {
+        const { convex } = await import('/src/lib/convex.ts')
+        const left = new Set(entries.map((e) => `${e.org}:${e.task}`))
+        const snoozed = []
+        let after
+        for (let n = 0; n < 40 && left.size > 0; n++) {
+          const page = await convex.query('inbox:page', {
+            order: 'newest',
+            unread_only: false,
+            include_snoozed: true,
+            kinds: [],
+            ...(after ? { after } : {}),
+          })
+          for (const row of page.rows)
+            if (left.delete(`${row.org_id}:${row.issue_id}`) && row.snoozed_until !== null)
+              snoozed.push(row.title)
+          if (!page.next) break
+          after = page.next
+        }
+        return { snoozed, unfound: left.size }
+      }, restore)
+      if (check.snoozed.length > 0) {
+        console.error(`✘ still snoozed after restore: ${check.snoozed.join(', ')}`)
+        process.exitCode = 1
+      } else if (check.unfound > 0) {
+        console.error(`✘ ${check.unfound} restored row(s) not found to check`)
+        process.exitCode = 1
+      } else log('restored: nothing snoozed, read state put back')
     } catch (e) {
       console.error('✘ restore failed:', e.message)
+      process.exitCode = 1
     }
   }
   if (ctxB) await ctxB.close().catch(() => {})
