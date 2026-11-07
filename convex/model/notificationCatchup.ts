@@ -164,7 +164,9 @@ export type Missed = { state: 'found' | 'none' | 'stopped'; keys: string[] }
  * eligible, and `stopped` when a seat that is not ready or a check of the
  * seat's access that a bound stopped (lib/access.ts accessUnchecked) ended
  * it before it found one, or when the budget (CATCH_UP) ended it at any
- * point, so `found` always comes with the keys of its whole last stretch.
+ * point, so `found` comes with the keys of the whole last stretch of every
+ * seat it read to its end. A seat not ready, or a stopped access check
+ * after a find, leaves that seat's keys out, or the rest of them.
  *
  * It reads each seat's readiness (two ranges at most) and its items after
  * `after`, a project check for each project, the task of each item its

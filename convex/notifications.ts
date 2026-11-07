@@ -85,12 +85,14 @@
  *   under current access, read state and snooze (model/notificationCatchup.ts
  *   missedActivity). It answers `baseline` where no checkpoint exists yet
  *   (in 'all', where the caller's session has none of its own), `summary`
- *   when it found eligible activity and read its last minute whole, `none`
- *   when it read everything and found none, and `unchecked` when a seat not
- *   ready stopped it first or a budget stopped it at any point, then moves
- *   the checkpoint and the summary floor to now, in 'recent' naming the
- *   caller's session as the one that moved it, so the same gap answers
- *   `none` from any session and any retry. It holds no count.
+ *   when it found eligible activity and the budget did not stop it,
+ *   recording the last minute of every seat it read to its end, `none` when
+ *   it read everything and found none, and `unchecked` when a seat not
+ *   ready or a stopped access check ended it before it found any, or a
+ *   budget stopped it at any point, then moves the checkpoint and the
+ *   summary floor to now, in 'recent' naming the caller's session as the
+ *   one that moved it, so the same gap answers `none` from any session and
+ *   any retry. It holds no count.
  *
  * What a client does with the answers:
  * - It beats every `every_ms`, again at once when its capability or the
