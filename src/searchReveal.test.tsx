@@ -22,8 +22,9 @@ import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixt
    comments on, saves a title to and uploads an image to in that
    organization, through that task's own answer, never as the held task,
    whose files its lists never show, even with every task held. A refused
-   title save there rebases on that task's own title. And two rows of one
-   task id
+   title save there rebases on that task's own title, and an upload there
+   that the person discarded is removed in that organization once the pane
+   shows the held task. And two rows of one task id
    in two organizations, neither held, where the pane goes from the first
    row's task to the second's and reads the second's item. */
 
@@ -555,6 +556,66 @@ async function twoOrganizations({ homeHeld, homeRead }: { homeHeld: boolean; hom
   }
 }
 
+/* Answers each image upload's post with a stored file, at once, or with
+   `hold` only once release() lets it, and answers the upload's writes as
+   the server does. */
+function stubUploads({ hold }: { hold: boolean }) {
+  let release = () => {}
+  const answer = { ok: true, status: 200, json: async () => ({ storageId: 'st-1' }) }
+  const posted = hold
+    ? new Promise((resolve) => {
+        release = () => resolve(answer)
+      })
+    : Promise.resolve(answer)
+  const fetch = vi.fn(() => posted)
+  vi.stubGlobal('fetch', fetch)
+  network.query.mockImplementation((ref) =>
+    Promise.resolve(
+      getFunctionName(ref) === 'files:mintUrls' ? { attachments: {}, avatars: {} } : null,
+    ),
+  )
+  network.mutation.mockImplementation((ref, args) => {
+    const name = getFunctionName(ref)
+    if (name === 'files:uploadUrl') return Promise.resolve('https://convex.example/upload')
+    if (name !== 'files:attach') return Promise.resolve(null)
+    return Promise.resolve({
+      attachment: {
+        id: args.id,
+        issue_id: args.issue_id,
+        name: args.name,
+        mime: args.mime,
+        size_bytes: 3,
+        storage_id: 'st-1',
+        inline: true,
+        created_at: AT,
+      },
+    })
+  })
+  return { posts: () => fetch.mock.calls.length, release: () => act(async () => release()) }
+}
+
+/* Opens the description editor of the task the Inbox pane shows and
+   pastes an image into it. */
+async function pasteImage() {
+  await act(async () =>
+    document.querySelector<HTMLElement>('.inbox-detail-frame [data-desc-toggle]')?.click(),
+  )
+  const description = await waitFor(
+    () =>
+      document.querySelector<TiptapEditorHTMLElement>(
+        '[role="textbox"][aria-label="Task description"]',
+      )?.editor,
+    'the description editor',
+  )
+  const image = new File(['png'], 'photo.png', { type: 'image/png' })
+  await act(async () => {
+    description.view.pasteHTML('', {
+      clipboardData: { files: [image], getData: () => '' },
+      preventDefault: () => {},
+    } as unknown as ClipboardEvent)
+  })
+}
+
 describe("an Inbox row of another organization's task with a held task's id", {
   timeout: 30_000,
 }, () => {
@@ -680,49 +741,8 @@ describe("an Inbox row of another organization's task with a held task's id", {
     expect(sentArgs('issues:update')).toHaveLength(3)
     // an image pasted into its description uploads to that organization's
     // task too, and its file never shows on the held task
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ storageId: 'st-1' }) })),
-    )
-    network.query.mockImplementation((ref) =>
-      Promise.resolve(
-        getFunctionName(ref) === 'files:mintUrls' ? { attachments: {}, avatars: {} } : null,
-      ),
-    )
-    network.mutation.mockImplementation((ref, args) => {
-      const name = getFunctionName(ref)
-      if (name === 'files:uploadUrl') return Promise.resolve('https://convex.example/upload')
-      if (name !== 'files:attach') return Promise.resolve(null)
-      return Promise.resolve({
-        attachment: {
-          id: args.id,
-          issue_id: args.issue_id,
-          name: args.name,
-          mime: args.mime,
-          size_bytes: 3,
-          storage_id: 'st-1',
-          inline: true,
-          created_at: AT,
-        },
-      })
-    })
-    await act(async () =>
-      document.querySelector<HTMLElement>('.inbox-detail-frame [data-desc-toggle]')?.click(),
-    )
-    const description = await waitFor(
-      () =>
-        document.querySelector<TiptapEditorHTMLElement>(
-          '[role="textbox"][aria-label="Task description"]',
-        )?.editor,
-      'the description editor',
-    )
-    const image = new File(['png'], 'photo.png', { type: 'image/png' })
-    await act(async () => {
-      description.view.pasteHTML('', {
-        clipboardData: { files: [image], getData: () => '' },
-        preventDefault: () => {},
-      } as unknown as ClipboardEvent)
-    })
+    stubUploads({ hold: false })
+    await pasteImage()
     await waitFor(() => sentArgs('files:attach').length === 1, "the image's attach")
     expect(sentArgs('files:uploadUrl')).toEqual([
       { org_id: GUEST, issue_id: SOAK, size: 3, name: 'photo.png' },
@@ -731,6 +751,40 @@ describe("an Inbox row of another organization's task with a held task's id", {
       expect.objectContaining({ org_id: GUEST, issue_id: SOAK, inline: true }),
     ])
     expect(held()?.attachments.map((file) => file.id)).toEqual([HOME_FILE])
+  })
+
+  it('removes an image of that task whose draft was discarded in that organization, though the pane moved to the held task before it uploaded', async () => {
+    const { store, home, rowOpen, title } = await twoOrganizations({
+      homeHeld: true,
+      homeRead: true,
+    })
+    const guestRow = await rowOpen(GUEST)
+    await act(async () => guestRow.click())
+    await waitFor(() => title() === 'Calibrate the guest rig', "the guest task's title")
+    // an image pasted into its description uploads, and the person
+    // discards the draft and opens the held task's row before it finished
+    const upload = stubUploads({ hold: true })
+    await pasteImage()
+    await waitFor(() => upload.posts() === 1, "the image's post")
+    const discard = await waitFor(
+      () =>
+        [...document.querySelectorAll('.inbox-detail-frame button')].find(
+          (b): b is HTMLElement => b.textContent === 'Discard changes',
+        ),
+      "the description's Discard changes",
+    )
+    await act(async () => discard.click())
+    const homeRow = await rowOpen(home)
+    await act(async () => homeRow.click())
+    await waitFor(() => title() === 'Run the soak test', "the held task's title")
+    await waitFor(() => store.P.detail?.org !== GUEST, 'the store on the held task')
+    // the upload finishes in that organization's task, which no text holds,
+    // so its file goes again, in that organization, never the held task's
+    await upload.release()
+    await waitFor(() => sentArgs('files:removeAttachment').length === 1, "the image's removal")
+    const [attach] = sentArgs('files:attach')
+    expect(attach).toEqual(expect.objectContaining({ org_id: GUEST, issue_id: SOAK }))
+    expect(sentArgs('files:removeAttachment')).toEqual([{ org_id: GUEST, id: attach.id }])
   })
 })
 

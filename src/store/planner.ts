@@ -9582,19 +9582,20 @@ function refuseUpload(id: string, name: string) {
     hold: a file only the watched task's attachments answer holds, of a task
     the window shows from its own answer or of a held task whose file has
     not arrived yet, or an upload of task `opts.task` that no list holds. It
-    sends files.removeAttachment to that task's organization without a
-    paint, which `opts.org` names for an upload of a task the store no
-    longer holds or watches, as once the window that showed it closed. The
-    attachments answer drops the row when the write commits, before the
-    write resolves (lib/convexOrdering.test.ts), so the row shows busy
-    until then, and a refusal toasts and leaves it. */
+    sends files.removeAttachment without a paint to the organization of the
+    answer that lists the file, else to `opts.org` when the uploader names
+    it, as two organizations can hold one task id and the store may no
+    longer watch the uploaded one, else to the watched or held task's
+    organization (orgOfTask). The attachments answer drops the row when the
+    write commits, before the write resolves (lib/convexOrdering.test.ts),
+    so the row shows busy until then, and a refusal toasts and leaves it. */
 function removeUnheldAttachment(
   attId: string,
   opts: { deferWhilePaused?: boolean; task?: string; org?: string },
 ): Promise<boolean> {
   const listed = sectionAttachment(attId)
   const task = listed?.row.issue_id ?? opts.task
-  const org = listed?.org ?? (task ? (orgOfTask(task) ?? opts.org) : undefined)
+  const org = listed?.org ?? opts.org ?? (task ? orgOfTask(task) : undefined)
   if (!task || !org) return Promise.resolve(false)
   if (opts.deferWhilePaused && (snapshotTrouble || savePause())) {
     reapAfterPause.set(attId, { task, org })
