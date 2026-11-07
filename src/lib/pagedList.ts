@@ -204,8 +204,9 @@ export type PagedList<A, Row> = {
   /** whether a live batch waits for the halves it splits into, so the
       list shows older answers and claims no end */
   settling: boolean
-  /** whether a live list waits for fresh answers to what it shows, after
-      the page showed again or the socket reconnected */
+  /** whether the list shows older answers while it reads them again: a
+      live list after the page showed again or the socket reconnected, or a
+      list read once while `refresh` reads its first batch again */
   refreshing: boolean
   /** Load more: one batch after the last, while `next` and not `full`,
       and none while one is on its way */
