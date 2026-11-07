@@ -1196,6 +1196,9 @@ describe('tokens — agent keys are the admin’s, MCP tokens are yours', () => 
     key_hash: HEX64,
     ...over,
   })
+  /** The agent's keys as Settings › Users reads them (tokens.agentKeys). */
+  const keysOf = async (t: T, who: Doc<'profiles'>, orgId: string, agentId: string) =>
+    (await as(t, who).query(api.tokens.agentKeys, { org_id: orgId, agent_ids: [agentId] })).agents
   /** The caller's own personal tokens, the first batch MCP access reads. */
   const myTokens = async (t: T, who: Doc<'profiles'>) =>
     (await as(t, who).query(api.tokens.personalTokens, {})).rows
@@ -1217,17 +1220,17 @@ describe('tokens — agent keys are the admin’s, MCP tokens are yours', () => 
       detail: 'a new key “CI key”',
       actor_id: f.admin.id,
     })
-    const listed = await as(t, f.admin).query(api.tokens.listAgentKeys, {})
-    expect(listed).toHaveLength(1)
-    expect(listed[0]).toMatchObject({
+    const [agent] = await keysOf(t, f.admin, f.org.id, f.agent.id)
+    expect(agent.keys).toHaveLength(1)
+    expect(agent.keys[0]).toMatchObject({
       id: args.id,
       agentId: f.agent.id,
       prefix: 'qva_012...abcde',
       revokedAt: null,
     })
-    // a non-admin sees no rows at all
-    expect(await as(t, f.user).query(api.tokens.listAgentKeys, {})).toEqual([])
-    expect(await as(t, f.otherAdmin).query(api.tokens.listAgentKeys, {})).toEqual([])
+    // a non-admin is refused, and another organization's admin finds no agent
+    await expectRefusal(keysOf(t, f.user, f.org.id, f.agent.id), 'forbidden')
+    expect(await keysOf(t, f.otherAdmin, f.otherOrg.id, f.agent.id)).toEqual([])
   })
 
   it('refuses non-admins, person targets, bad hashes and replayed secrets', async () => {
@@ -1273,8 +1276,8 @@ describe('tokens — agent keys are the admin’s, MCP tokens are yours', () => 
       label: 'Relay',
       detail: 'the key “CI key”',
     })
-    const listed = await as(t, f.admin).query(api.tokens.listAgentKeys, {})
-    expect(listed[0].revokedAt).not.toBeNull() // revoked keys stay listed
+    const [agent] = await keysOf(t, f.admin, f.org.id, f.agent.id)
+    expect(agent.keys[0].revokedAt).not.toBeNull() // revoked keys stay listed
     // another org's admin cannot even see the key exists
     await expectRefusal(
       as(t, f.otherAdmin).mutation(api.tokens.revokeAgentKey, {
@@ -1284,7 +1287,7 @@ describe('tokens — agent keys are the admin’s, MCP tokens are yours', () => 
       'not_found',
     )
     await as(t, f.admin).mutation(api.tokens.deleteAgentKey, { org_id: f.org.id, id: args.id })
-    expect(await as(t, f.admin).query(api.tokens.listAgentKeys, {})).toEqual([])
+    expect((await keysOf(t, f.admin, f.org.id, f.agent.id))[0].keys).toEqual([])
     expect(await activityFor(t, f.org.id)).toHaveLength(1) // delete narrates nothing
   })
 

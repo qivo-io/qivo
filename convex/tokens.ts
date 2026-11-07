@@ -36,8 +36,8 @@
  * never as a subscription either, and lists the login's connected apps the
  * same way (connectedApps.ts). Machine auth stamps last_used_at on every
  * call, so a live read of key or token rows would run again on each API
- * call of each credential on screen. listAgentKeys and listMcpTokens,
- * which the app read before, stay for one release, deprecated. */
+ * call of each credential on screen. listMcpTokens, which the app read
+ * before, stays for one release, deprecated. */
 
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
@@ -177,9 +177,8 @@ export type AgentKeysRow = { agent_id: string; keys: ReturnType<typeof pubKey>[]
  * hash, and `more` when the agent holds another. An id that names no agent
  * of the organization (unknown, a person, or another organization's agent)
  * is left out, a definite answer, as myAgentKey treats such a target
- * alike. It reads one organization, where listAgentKeys read every
- * organization the caller administers, at most 25 lookups and 25 ranges
- * of 51 keys.
+ * alike. It reads one organization, at most 25 lookups and 25 ranges of
+ * 51 keys.
  */
 export const agentKeys = orgQuery({
   args: { agent_ids: v.array(v.string()) },
@@ -218,36 +217,6 @@ export async function agentKeysOf(
   }
   return { agents }
 }
-
-/**
- * @deprecated The app reads tokens.agentKeys since the release after
- * v0.1.146. This query stays, with its arguments and its answer, through
- * that release, so tabs and desktop windows loaded before it still list
- * keys on Settings › Users, and a later release removes it and adds it to
- * the Instant Rollback list in docs/deployment.md.
- *
- * Before then P.listAgentKeys read it in one flat fetch for the whole
- * page (grouped by agentId client-side), across every org where the caller
- * is an admin. */
-export const listAgentKeys = authedQuery({
-  args: {},
-  handler: async (ctx) => {
-    const out: ReturnType<typeof pubKey>[] = []
-    for (const me of ctx.myProfiles.values()) {
-      if (me.org_role !== 'admin') continue
-      const seats = ctx.db.query('profiles').withIndex('by_org', (q) => q.eq('org_id', me.org_id))
-      for await (const seat of seats) {
-        if (seat.kind !== 'agent') continue
-        const keys = await ctx.db
-          .query('agent_keys')
-          .withIndex('by_profile', (q) => q.eq('profile_id', seat.id))
-          .collect()
-        for (const k of keys) out.push(pubKey(k))
-      }
-    }
-    return byCreatedDesc(out)
-  },
-})
 
 /* P.createAgentKey (awaited — the secret exists only in the client). */
 export const createAgentKey = orgMutation({

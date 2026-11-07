@@ -774,7 +774,6 @@ tokens:createAgentKey mutation public {"type":"object","value":{"id":{"fieldType
 tokens:createMcpToken mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"profile_id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"token_prefix":{"fieldType":{"type":"string"},"optional":false},"token_hash":{"fieldType":{"type":"string"},"optional":false},"access":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"write"}]},"optional":false},"expires_at":{"fieldType":{"type":"string"},"optional":true}}}
 tokens:deleteAgentKey mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 tokens:deleteMcpToken mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
-tokens:listAgentKeys query public {"type":"object","value":{}}
 tokens:listMcpTokens query public {"type":"object","value":{}}
 tokens:personalTokens query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true}}}
 tokens:revokeAgentKey mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -1353,14 +1352,12 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // Revoking and deleting an agent key stay open to org admins during a
   // billing pause; creating one does not. agentKeys reads the keys of up to
   // 25 agents of one organization for an org admin (checked in the
-  // handler), for Settings › Users; listAgentKeys is deprecated for one
-  // release. personalTokens reads a batch of the
+  // handler), for Settings › Users. personalTokens reads a batch of the
   // signed-in login's own tokens across its active seats for MCP access,
   // refused in the demo in the handler; listMcpTokens, the full list, is
   // deprecated for one release.
   tokens: {
     agentKeys: 'orgQuery',
-    listAgentKeys: 'authedQuery',
     createAgentKey: 'orgMutation',
     revokeAgentKey: 'accessRemovalMutation',
     deleteAgentKey: 'accessRemovalMutation',
@@ -1384,7 +1381,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 259
+const PUBLIC_COUNT = 258
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')
