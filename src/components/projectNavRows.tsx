@@ -253,7 +253,9 @@ export function navOpenText(opening: NavOpening, name: string): string | null {
  * another row replaces the wait. `cancel()` drops it, as a caller does on
  * a page move or a new search, and so does the caller hiding (React's
  * Activity runs this hook's cleanup) or going, so nothing opens later in
- * a place the person left.
+ * a place the person left. Hiding or going while it waits also ends its
+ * "Opening <name>…" line with `say(null)`, so a page shown again does not
+ * say it opens what nothing waits for.
  */
 export function useNavOpen(go: (id: string) => void, say: (line: string | null) => void) {
   const wait = useRef<{ id: string; stop: () => void } | null>(null)
@@ -263,7 +265,13 @@ export function useNavOpen(go: (id: string) => void, say: (line: string | null) 
     wait.current?.stop()
     wait.current = null
   }, [])
-  useEffect(() => cancel, [cancel])
+  useEffect(
+    () => () => {
+      if (wait.current) sayNow(null)
+      cancel()
+    },
+    [cancel, sayNow],
+  )
   const open = (row: { id: string; name: string }) => {
     if (P.project(row.id)) {
       cancel()

@@ -315,7 +315,7 @@ describe('the open rule', { timeout: 30_000 }, () => {
     expect(go).not.toHaveBeenCalled()
   })
 
-  it('drops the wait when its caller hides or goes, so nothing opens in a place the person left', async () => {
+  it('drops the wait and its line when its caller hides or goes, so nothing opens in a place the person left', async () => {
     const next = base()
     await load(next)
     const after = later(next)
@@ -327,6 +327,7 @@ describe('the open rule', { timeout: 30_000 }, () => {
     ]
     await render(list)
     await press(late)
+    expect(line()).toBe('Opening Late arrival…')
     // hidden, as a kept page or the tree under Settings is
     await render(list, 'hidden')
     await act(async () => {
@@ -336,6 +337,8 @@ describe('the open rule', { timeout: 30_000 }, () => {
     await settle()
     await render(list)
     expect(go).not.toHaveBeenCalled()
+    // shown again, it no longer says it opens what nothing waits for
+    expect(line()).toBe('')
     // and gone, as the palette closing; the workspace holds Late arrival now
     const more = later(after)
     const last = top(more, 'Last one')
