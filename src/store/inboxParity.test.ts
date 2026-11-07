@@ -6,8 +6,10 @@
  * and the Inbox page in each order and filter, and for planted cases a
  * snoozed group, a read group, a mention in the description alone and a
  * comment mention alone, and an everyday Inbox of 60 groups over 3
- * projects, which holds a second page, with a search by a task ID and by a
- * sub-project's name. A page's cursors differ by design, so the comparison
+ * projects, which holds a second page, a woken group and two groups at one
+ * time, asked also with Unread only beside Show snoozed and beside a kind
+ * filter, with a search by a task ID, a sub-project's name, a change
+ * detail only an older message holds and the actor's name. A page's cursors differ by design, so the comparison
  * asks only whether one follows, and each side reads its second page at its
  * own `next`. `through` is the newest message's
  * _creationTime on the server, which the workspace's rows do not carry, so
@@ -27,6 +29,7 @@ import type { Doc } from '../../convex/_generated/dataModel'
 import { MENTION_DETAILS } from '../../convex/lib/messageDetails'
 import type { Workspace } from '../../convex/lib/workspaceJoin'
 import { NOT_INBOX_CURSOR as SERVER_NOT_INBOX_CURSOR } from '../../convex/model/inboxPage'
+import { wakeSnoozedItem } from '../../convex/model/messages'
 import {
   as,
   newT,
@@ -37,7 +40,7 @@ import {
   withOrg,
   workspaceOf,
 } from '../../convex/tests/helpers.setup'
-import { grant, post } from '../../convex/tests/inboxItems.setup'
+import { at, grant, post } from '../../convex/tests/inboxItems.setup'
 import { plantNorthstar } from '../../convex/tests/northstar.setup'
 import {
   INBOX_NO_ANSWER,
@@ -268,6 +271,13 @@ const PAGE_ASKS: PageArgs[] = (['newest', 'oldest'] as const).flatMap((order) =>
   { order, unread_only: false, include_snoozed: true, kinds: ['comment', 'change'] },
 ])
 
+/** Unread only together with Show snoozed and with a kind filter, which
+    the planted everyday Inbox asks besides PAGE_ASKS. */
+const COMBINED_ASKS: PageArgs[] = (['newest', 'oldest'] as const).flatMap((order) => [
+  { order, unread_only: true, include_snoozed: true, kinds: [] },
+  { order, unread_only: true, include_snoozed: false, kinds: ['comment', 'change'] },
+])
+
 /** The server's first two pages for `who` with `args` and the stand-in's,
     each second page read at its own side's `next`. */
 async function pagesOf(t: T, who: Doc<'profiles'>, args: PageArgs) {
@@ -300,7 +310,7 @@ describe("the Inbox page's stand-in", () => {
     expect(rows).toBeGreaterThan(0)
   })
 
-  it('answers an everyday Inbox of 60 groups over 3 projects on its first and second page, and finds a row by its task ID and by its project', async () => {
+  it('answers an everyday Inbox of 60 groups over 3 projects on its first and second page, with a woken group and two at one time, and finds a row by its task ID, its project, a change detail and an actor', async () => {
     const t = newT()
     const f = await withOrg(t)
     const guest = as(t, f.guest)
@@ -320,7 +330,12 @@ describe("the Inbox page's stand-in", () => {
           : kind === 'comment'
             ? 'New comment'
             : `Status ${n}`
-      const row = await post(t, f, { to: f.guest, task, minute: n, kind, body })
+      // an older change whose detail only the search of every message finds
+      if (n === 12)
+        await post(t, f, { to: f.guest, task, minute: -5, body: 'Firmware freeze approved' })
+      // groups 30 and 31 at one time, which the order ties by task
+      const minute = n === 31 ? 30 : n
+      const row = await post(t, f, { to: f.guest, task, minute, kind, body })
       if (!row) throw new Error('no message')
       // every seventh group read, every eleventh snoozed
       if (n % 7 === 3)
@@ -332,16 +347,30 @@ describe("the Inbox page's stand-in", () => {
           until: new Date(Date.now() + 86_400_000).toISOString(),
         })
     }
-    for (const args of PAGE_ASKS) {
+    // group 20 snoozed and woken after every other message, so its list
+    // time is the wake's
+    const until = new Date(Date.now() + 86_400_000).toISOString()
+    await guest.mutation(api.messages.snoozeItem, {
+      org_id: f.org.id,
+      issue_id: tasks[20].id,
+      until,
+    })
+    await t.run((ctx) =>
+      wakeSnoozedItem(ctx, { recipient_id: f.guest.id, issue_id: tasks[20].id, until }, at(90)),
+    )
+    for (const args of [...PAGE_ASKS, ...COMBINED_ASKS]) {
       const got = await pagesOf(t, f.guest, args)
       expect(got.stand, JSON.stringify(args)).toEqual(got.server)
     }
-    // the browse holds a full first page and a second
+    // the browse holds a full first page and a second, the woken group first
     const browse = await pagesOf(t, f.guest, PAGE_ASKS[0])
     expect(browse.server).toHaveLength(2)
-    expect((browse.server[0] as { rows: unknown[] }).rows).toHaveLength(50)
-    // a search by a task ID, and by a sub-project's name
-    for (const search of [`QN-${tasks[41].num}`, f.sub2.name]) {
+    const first = browse.server[0] as { rows: { issue_id: string; woke_at: string | null }[] }
+    expect(first.rows).toHaveLength(50)
+    expect(first.rows[0]).toMatchObject({ issue_id: tasks[20].id, woke_at: at(90) })
+    // a search by a task ID, a sub-project's name, a change detail of an
+    // older message and the actor's name
+    for (const search of [`QN-${tasks[41].num}`, f.sub2.name, 'freeze approved', f.admin.name]) {
       const got = await pagesOf(t, f.guest, { ...PAGE_ASKS[0], search })
       expect(got.stand, search).toEqual(got.server)
       expect((got.server[0] as { rows: unknown[] }).rows.length, search).toBeGreaterThan(0)
