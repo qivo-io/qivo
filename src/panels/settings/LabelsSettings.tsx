@@ -397,6 +397,9 @@ export function OrgLabelsPage() {
   // once the server accepts it, so a refused one never shows as the
   // label's name or color, or goes out later as `expected`.
   const known = useRef(new Map<string, { name: string; color: string }>())
+  // the labels of the kept rows the store's catalogue held during this
+  // visit: one it no longer holds was deleted, here or by someone else
+  const heldHere = useRef(new Set<string>())
   const [saved, setSaved] = useState<ReadonlyMap<string, { name?: string; color?: string }>>(
     () => new Map(),
   )
@@ -454,10 +457,22 @@ export function OrgLabelsPage() {
       return next ?? m
     })
   })
-  const kept = [...new Set([...made, ...renamed, ...drafts])].filter(
+  // a created or renamed label, or one with an unsaved name, that no loaded
+  // batch shows: while the store holds it, or while the page knows it and
+  // the store never held it, as a label the answers show before the
+  // catalogue does. One the store held and no longer holds is gone.
+  const candidates = [...new Set([...made, ...renamed, ...drafts])]
+  for (const id of candidates) if (storeLabel(id) !== null) heldHere.current.add(id)
+  const kept = candidates.filter(
     (id) =>
-      !loaded.has(id) && !deleting.has(id) && (storeLabel(id) !== null || known.current.has(id)),
+      !loaded.has(id) &&
+      !deleting.has(id) &&
+      (storeLabel(id) !== null || (known.current.has(id) && !heldHere.current.has(id))),
   )
+  // forget the labels neither a batch, a kept row nor a delete on its way
+  // shows
+  for (const id of known.current.keys())
+    if (!loaded.has(id) && !kept.includes(id) && !deleting.has(id)) known.current.delete(id)
   /** Label `id` as the page shows it: the store's while it holds it, else
       what the page last held or created, with what it saved over that. */
   const shownLabel = (id: string, answer: LabelRowAnswer | null) => {

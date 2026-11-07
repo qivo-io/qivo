@@ -588,6 +588,26 @@ describe('Settings › Labels', () => {
     )
   })
 
+  it('drops a label it made past the loaded rows once someone else deletes it', async () => {
+    await load(many(30))
+    await render()
+    await type(find<HTMLInputElement>('input[placeholder="New label name"]'), 'Zeta release')
+    await rest()
+    await settle()
+    await click(button('Add label'))
+    const id = requests[0]?.args.id as string
+    await answer('labels:create', 'accept')
+    // the catalogue holds it, and no loaded batch does
+    await elsewhere((snap) => labelRow(snap, id, 'Zeta release'))
+    expect(rows()[0]).toEqual({ id, name: 'Zeta release', count: 'Added' })
+    // another admin deletes it
+    await elsewhere((snap) => {
+      snap.labels = snap.labels.filter((label) => label.id !== id)
+    })
+    expect(document.querySelector(`[data-label-row="${id}"]`)).toBeNull()
+    expect(rows().map((row) => row.id)).not.toContain(id)
+  })
+
   it('checks a new name once on the server’s exact, and keeps Add off until the answer for the text on screen is free', async () => {
     await load((snap) => labelRow(snap, 'fw', 'Firmware'))
     await render()
