@@ -191,14 +191,16 @@ and shows nothing of it before that check. Otherwise Qivo asks you to choose
 a project from a list of your projects, your favorites first, and when you
 can no longer open the project you opened last, it says that the project
 is no longer available to you. It never opens
-another project, **My view** or all projects by itself. **My view**, **All
-projects** and Team sync do not change the project Qivo remembers, and
-neither does a task you open from the Inbox or by its link. If you switch
-views or go elsewhere before the check answers, Qivo does not open that
-project afterwards. If Qivo could not finish the check, it says so with
-**Retry**, which checks again. The top bar stays meanwhile, so the Inbox
-and the view you will open are one click away. On a phone, Qivo opens the
-Inbox.
+another project, **My view** or all projects by itself. Opening **My
+view**, **All projects** or Team sync does not change the project Qivo
+remembers, and neither does reading a task in the Inbox or opening one by
+its link. A jump from Team sync or the Inbox to a project's Board or
+Roadmap, such as **Open task in board**, remembers that project, as opening
+it yourself does. If you switch views or go elsewhere before the check
+answers, Qivo does not open that project afterwards. If Qivo could not
+finish the check, it says so with **Retry**, which checks again. The top
+bar stays meanwhile, so the Inbox and the view you will open are one click
+away. On a phone, Qivo opens the Inbox.
 
 ## Pages stay as you left them
 
