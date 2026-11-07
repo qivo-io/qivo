@@ -872,6 +872,44 @@ describe('reading', { timeout: 60_000 }, () => {
   })
 })
 
+describe('the reveal', { timeout: 60_000 }, () => {
+  it("reveals the scope's row again after a scope that names no row, such as My view", async () => {
+    const next0 = base()
+    const ids = projects(next0, 30, 3)
+    // A, the 21st project, with a sub-project of its own
+    const a = ids[20]
+    const part = sub(next0, a, 'Zulu part')
+    await load(next0)
+    const list = () => find('[data-sidebar-projects]')
+    const into = 40 + 21 * 32 - 320
+    await render(a)
+    expect(scrolled).toEqual([into])
+    // the person scrolls back to the top and goes to My view, which names
+    // no row, and back to A, whose row comes into view again; A's
+    // sub-projects load no more from here on
+    tops.set(list(), 0)
+    await render('mine')
+    expect(scrolled).toEqual([into])
+    holding = (s) => s.name === 'projectNav:children'
+    await render(a)
+    expect(scrolled).toEqual([into, into])
+    expect(lit()).toEqual([a])
+    // the same through a sub-project of A the tree does not hold yet, its
+    // list still loading
+    tops.set(list(), 0)
+    await render(part)
+    expect(childNames()).toEqual([])
+    expect(lit()).toEqual([])
+    expect(scrolled).toEqual([into, into])
+    await render(a)
+    expect(scrolled).toEqual([into, into, into])
+    // a render on the same scope scrolls nothing
+    tops.set(list(), 0)
+    await render(a)
+    expect(scrolled).toEqual([into, into, into])
+  })
+})
+
 describe('focus', { timeout: 60_000 }, () => {
   it('focuses a requested row once the server lists it, in the tree’s view, and drops a request it cannot meet', async () => {
     const next0 = base()

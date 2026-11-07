@@ -23,7 +23,9 @@
      the same for a scoped sub-project. The row the scope names scrolls
      into the tree's view once, the first time it renders after a scope
      change or the boot, by the tree's own scrollTop, so nothing else
-     scrolls and the person's own scrolling is left alone.
+     scrolls and the person's own scrolling is left alone. Every scope
+     change counts, also to a scope that names no row, such as My view, so
+     a return to a project reveals its row again.
    - Rows carry the shared rules of components/projectNavRows.tsx: another
      organization's name on a second line inside the name button, so a
      foreign row's accessible name includes it, number tags for equal
@@ -231,27 +233,35 @@ export function SidebarProjects({
   // which its own layout effect writes before this component's run
   const childrenSeek = useRef(false)
 
-  // the row the scope names, revealed once after a scope change, and App's
-  // focus request, taken once for the scope it was made in
-  const revealed = useRef<string | null>(null)
+  // the scope the tree last looked at, whether the row it names still
+  // waits for its one-time reveal, and App's focus request, taken once for
+  // the scope it was made in
+  const seenScope = useRef<string | null>(null)
+  const revealing = useRef(false)
   const taken = useRef<number | null>(null)
   const request = useRef<{ id: string; scope: string } | null>(null)
   /* Looks at the rows after each commit of the tree, and of its expanded
-     list, which renders on its own as its batches land: the row the scope
-     names scrolls into view the first time it shows after a scope change,
-     and the requested row takes focus the first time it shows. It reads
-     this render's values, which stay the tree's latest until it renders
-     again. */
+     list, which renders on its own as its batches land. Every scope change,
+     the boot's included, also to a scope that names no row, such as My
+     view or a sub-project the tree does not hold, asks for the reveal
+     again, and the row the scope names scrolls into view the first time it
+     shows after it. The requested row takes focus the first time it shows.
+     It reads this render's values, which stay the tree's latest until it
+     renders again. */
   const settle = useRef(() => {})
   settle.current = () => {
     const box = tree.current
     if (!box) return
-    if (revealed.current !== scope) {
+    if (seenScope.current !== scope) {
+      seenScope.current = scope
+      revealing.current = true
+    }
+    if (revealing.current) {
       const row = box.querySelector(
         `[data-project-row="${scope}"], [data-subproject-row="${scope}"]`,
       )
       if (row) {
-        revealed.current = scope
+        revealing.current = false
         intoTreeView(box, row)
       }
     }
