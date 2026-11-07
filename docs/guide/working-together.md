@@ -36,12 +36,15 @@ again, or your sample portrait in the demo.
 
 Uploaded pictures are visible to members and invited guests in that
 organization. Qivo uses temporary download links, which you should treat as
-private. Qivo loads your own picture and the pictures of the people on the
-page, list or picker you have open, and shows their initials until a
-picture is ready. Someone whose details are still loading shows as a plain
-square, with **Loading…** in place of their name, for a moment. Your
-browser keeps recently shown pictures for your signed-in account, so a page
-you open again shows them without loading them again.
+private. Qivo loads your own picture and the pictures of the people the
+page, list or picker you have open shows, and shows their initials until a
+picture is ready. The **Assignee** filter and the **+ Add** list under
+**Subscribers** load no pictures themselves: they show a picture another
+open view has loaded, and initials otherwise. Someone whose details are
+still loading shows as a plain square, with **Loading…** in place of their
+name, for a moment. Your browser keeps recently shown pictures for your
+signed-in account, so a page you open again shows them without loading
+them again.
 
 Other people's changes appear automatically, also while your own changes are
 still saving. Your edits appear immediately. If the server refuses an edit,
