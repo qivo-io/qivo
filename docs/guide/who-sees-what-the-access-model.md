@@ -151,9 +151,9 @@ moves to a project you cannot access, its history leaves your view. People who
 can access only the new project see the changes made after the move. A task
 that moved out of a project before the project was deleted keeps that earlier
 history for everyone who can open the task. Changes that name a deleted task
-reach organization admins only. Changes to the organization itself, such as
-its address, and changes to projects, milestones, teams, people, labels and
-agent keys are kept in the
+reach no one in the app, the REST API or MCP. They, changes to the
+organization itself, such as its address, and changes to projects,
+milestones, teams, people, labels and agent keys are kept in the
 [organization export](./organization-and-team-settings.md#export-data), which
 only organization admins can download. So is every revocation an admin makes
 on [API access](./administration-guard-rails-and-the-demo.md#api-access). A
