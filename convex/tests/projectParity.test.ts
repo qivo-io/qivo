@@ -16,11 +16,11 @@
  *      project an admin manages without reading it. */
 /// <reference types="vite/client" />
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
-import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
+import { ACCESS_NEEDS_A_PERSON, OWN_READS } from '../lib/access'
 import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
@@ -1146,6 +1146,10 @@ describe('changing a project', () => {
 /* ------------------------------------------------------------- 3. access */
 
 describe('project access, one user or team at a time', () => {
+  const ownReads = structuredClone(OWN_READS)
+  afterEach(() => {
+    Object.assign(OWN_READS, structuredClone(ownReads))
+  })
   const setAccess = (fx: Fx, p: Doc<'profiles'>, args: Json) =>
     parsed(
       fx.t.mutation(internal.machine.projects.mcpSetProjectAccess, {
@@ -1285,6 +1289,61 @@ describe('project access, one user or team at a time', () => {
     const byLead = await setAccess(fx, fx.user, { user_id: fx.pia.id })
     expect((byLead.stranded as Json[]).map((h) => h.id)).toEqual([open.id, reviewing.id])
     expect(byLead.hidden).toEqual({ tasks: 0, user_ids: [] })
+  })
+
+  it('counts a task as hidden when the check of whether the remover sees its project stops, never naming it', async () => {
+    const fx = await setup()
+    const { open, reviewing } = await held(fx)
+    // the admin reads FW by a grant of their own, and FW is shared with
+    // Firmware, a team without members, whose membership the check asks
+    await grant(fx.t, fx.sub.id, fx.admin.id, 'user')
+    await fx.t.run(async (ctx) => {
+      const firmware = uuid()
+      await ctx.db.insert('teams', {
+        id: firmware,
+        org_id: fx.org.id,
+        name: 'Firmware',
+        track_delay_default: false,
+        created_at: fx.team.created_at,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: fx.sub.id,
+        team_id: firmware,
+        level: 'viewer',
+      })
+    })
+    // with the check finished they see FW's tasks listed
+    const listed = await setAccess(fx, fx.admin, { user_id: fx.pia.id })
+    expect((listed.stranded as Json[]).map((h) => h.id)).toEqual([open.id, reviewing.id])
+    expect(listed.hidden).toEqual({ tasks: 0, user_ids: [] })
+    // a membership bound stops the check of FW, which then counts its tasks
+    // as hidden over MCP and over REST
+    Object.assign(OWN_READS, { lookups: -1, members: -1 })
+    await grant(fx.t, fx.sub.id, fx.pia.id, 'user')
+    const viaMcp = await setAccess(fx, fx.admin, { user_id: fx.pia.id, on_held_tasks: 'leave' })
+    expect(viaMcp).toMatchObject({ changed: true, stranded: [], reassigned: [] })
+    expect(viaMcp.hidden).toEqual({ tasks: 2, user_ids: [fx.pia.id] })
+    await grant(fx.t, fx.sub.id, fx.pia.id, 'user')
+    const viaRest = await fx.t.mutation(internal.machine.projects.restRemoveUserAccess, {
+      ...rest(fx.admin),
+      ref: 'FW',
+      subject: fx.pia.id,
+      body: JSON.stringify({ on_held_tasks: 'leave' }),
+    })
+    expect(viaRest).toMatchObject({
+      removed: true,
+      stranded: [],
+      reassigned: [],
+      hidden: { tasks: 2, user_ids: [fx.pia.id] },
+    })
+    for (const out of [viaMcp, viaRest])
+      for (const task of [open, reviewing]) {
+        expect(JSON.stringify(out)).not.toContain(task.id)
+        expect(JSON.stringify(out)).not.toContain(`QN-${task.num}`)
+      }
+    // the removals went through, and left the tasks with Pia
+    expect((await grants(fx.t, fx.sub.id))[fx.pia.id]).toBeUndefined()
+    expect((await taskRow(fx.t, open.id))?.assignee_id).toBe(fx.pia.id)
   })
 
   it('judges sight after the write, so a caller removing their own access counts what they no longer see', async () => {
