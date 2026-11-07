@@ -4,35 +4,35 @@
  * these lists. Each case boots the real store from the caller's real
  * workspace, as projectNavParity.test.ts does, and compares, as sets over
  * every batch: the projects list with P.visibleProjects() and each row's
- * right to a sub-project with the store's New sub-project rule (P.levelOn
- * is 'lead'); each top-level project's sub-projects with the live
- * children P.canSee keeps; Archived projects with P.archivedProjects less
- * the rows beneath an archived parent, each row's parent and its Restore
- * and Delete with the store's `manage`, in the store's order wherever
- * archive times differ; each entry's chips with the store's archived
- * children and `withParent`; and a search for a word with the store's rows
- * whose name key holds it, through the server's nameKey. The cases are
- * Northstar's Nora (an admin), Leo and Ben, with Northstar projects
- * archived as Nora before the store boots, every access shape of a user, a
- * guest and a Viewer with Firmware archived alone and then Testbed
+ * right to a sub-project with the store's New sub-project rule
+ * (P.canManageOwnProjectAccess); each top-level project's sub-projects with
+ * the live children P.canSee keeps; Archived projects with
+ * P.archivedProjects less the rows beneath an archived parent, each row's
+ * parent and its Restore and Delete with the store's `manage`, in the
+ * store's order wherever archive times differ; each entry's chips with the
+ * store's archived children and `withParent`; and a search for a word with
+ * the store's rows whose name key holds it, through the server's nameKey.
+ * The cases are Northstar's Nora (an admin), Leo and Ben, with Northstar
+ * projects archived as Nora before the store boots, every access shape of a
+ * user, a guest and a Viewer with Firmware archived alone and then Testbed
  * platform archived carrying Board rev, and the fixture's admin without a
- * grant. Every answer is also held to the rule worked out without reach
- * rows (convex/tests/projectSettingsLists.setup.ts), and to the stand-in
- * the jsdom tests and the browser benchmark read
+ * grant. Every answer is also held to the rule worked out without reach rows
+ * (convex/tests/projectSettingsLists.setup.ts), and to the stand-in the
+ * jsdom tests and the browser benchmark read
  * (store/projectSettingsListsStandIn.setup.ts) over the caller's own
  * workspace: the same rows in the same order, Archived projects by archive
  * time where the server ties equal times by fields the workspace does not
- * carry. Two cases hold the stand-in to the real queries at the design
- * size, 200 live top-level projects for Settings › Projects and the New
- * sub-project dialog's parents and 300 archived ones for Archived
- * projects, and one at everyday values the parents of a user who leads 3
- * projects.
+ * carry. Two cases hold the stand-in to the real queries at the design size,
+ * 200 live top-level projects for Settings › Projects and the New
+ * sub-project dialog's parents and 300 archived ones for Archived projects,
+ * and one at everyday values the parents of a user who leads 3 projects.
  *
- * Today the store's admin rule (planner.ts levelOnProject) gives an
- * organization admin every project and Lead on each, which is what
- * management sight answers, so the admins' sets equal the store's too. The
- * admin access split removes that rule from the store and replaces these
- * admin expectations with the server rule's alone. */
+ * An organization admin's lists hold every project they manage, while
+ * their store, judged by ordinary access since the admin access split,
+ * holds only the projects they take part in, so an admin's lists are
+ * compared with the rule worked out without reach rows and with the
+ * stand-in over every project of the organization, and not with the
+ * store's sets. */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'

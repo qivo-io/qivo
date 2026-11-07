@@ -10,7 +10,7 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
  * top-level project led by the signed-in Planner, an organization admin,
  * with Leo's User grant; the server also holds Away, which the workspace
  * leaves out, as it does for a project an admin manages without taking
- * part in it once the admin access split lands. Each case sends a write
+ * part in it since the admin access split. Each case sends a write
  * with and without `shown`, held and not, and checks its organization, its
  * `expected` and what it painted. */
 

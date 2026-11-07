@@ -12,8 +12,8 @@ import { isProjectSettingsRead, projectSettingsServer } from './store/projectSet
    does not hold, on App and the real store (lib/router.ts
    noteProjectPage). The server holds Away, a top-level project of Testbed
    Labs that I manage as its organization admin, and the workspace leaves
-   it out, as it will for a project an admin only manages once the admin
-   access split lands. Its page reads from the server
+   it out, as it does for a project an admin only manages since the admin
+   access split. Its page reads from the server
    (projectSettings.get) and names it by its uuid under its organization,
    so a reload, Back and Forward open it again, and the server's
    `unavailable` sends the page to Your preferences. */

@@ -805,8 +805,6 @@ function FoldLine({ children }: { children: ReactNode }) {
   )
 }
 
-/* A read that failed, with a way to try it again, and `after` it what else
-   the person can do, such as the other move. */
 /** What the page says when the project it was opened for does not open
     for this person. The answer carries no cause, so the words hold for an
     unknown project, one in Deleted items, an archived one and one the
@@ -819,6 +817,8 @@ const UNAVAILABLE_NOTE =
 const UNCHECKED_FALLBACK =
   'Qivo could not finish checking which projects you can see in one request. Contact support@qivo.io so we can help.'
 
+/* A read that failed, with a way to try it again, and `after` it what else
+   the person can do, such as the other move. */
 function Failed({
   children,
   onRetry,
