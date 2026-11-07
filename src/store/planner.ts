@@ -10030,10 +10030,13 @@ type AnswerTask = { uuid: string; org: string; answer: TaskOk; model: IssueVM }
     the task from the read of its reference (refRead, which taskDetailNow
     serves until the task side answers) edits nothing until the task side
     answered. The creating answer of the person's own new task
-    (creatingAnswerOf) serves too, before the task side runs: a write from
-    it goes out behind the create on the same connection, and Convex runs
-    one client's mutations in the order they were sent (createBehind). It
-    is the answer the window
+    (creatingAnswerOf) serves too, before the task side runs. A write from
+    it goes out at once, behind the create on the same connection, and the
+    server runs it after the create: "When mutations are called from the
+    React or Rust clients, they are executed one at a time in a single,
+    ordered queue" (Convex's documentation, Mutations), the order an upload
+    after a just-sent create relies on (P.addAttachment) and the field check
+    states (convex/model/expected.ts). It is the answer the window
     draws, not a newer delivery the window has yet to draw, so the write
     never sends another member's change as what the person saw. The
     workspace may hold another organization's task of the same id
