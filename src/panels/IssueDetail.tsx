@@ -137,9 +137,9 @@ const NO_PROFILE = '__none__'
    to arrive. WAITS_FOR_SAVE says why the controls that read the server
    about the person's own new task wait while the window shows it from what
    its create sent (TaskDetailVM saving): the owner, Parent, Subtasks,
-   Linked tasks and Subscribers pickers, Plan on roadmap, Move to
-   sub-project… and Archive or delete…. Its fields, labels, files,
-   comments and the eye take changes
+   Linked tasks and Subscribers pickers, a new parent's Remove subtask,
+   Plan on roadmap, Move to sub-project… and Archive or delete…. Its
+   fields, labels, files, comments and the eye take changes
    at once, which go out behind the create. WAITS_FOR_CHECK says why a
    change to a task
    the window shows from its own read waits while that read failed or runs
@@ -4517,12 +4517,16 @@ function IssueDetail({
                                             false,
                                           ),
                                         ),
-                                      disabled: !canDetach(row),
-                                      hint: current
-                                        ? waits(subtasks)
-                                          ? WAITS_FOR_CHECK
-                                          : undefined
-                                        : roTip,
+                                      // a new parent's subtask waits until the
+                                      // parent is saved, as Subtasks + does
+                                      disabled: !canDetach(row) || saving,
+                                      hint: saving
+                                        ? WAITS_FOR_SAVE
+                                        : current
+                                          ? waits(subtasks)
+                                            ? WAITS_FOR_CHECK
+                                            : undefined
+                                          : roTip,
                                       busy: removing.has(row.uuid),
                                     }}
                                   />

@@ -1148,6 +1148,12 @@ describe('a new task before the server stored it', { timeout: 20_000 }, () => {
       expect(P.taskDetail(uuid)).toMatchObject({ state: 'ok', saving: true })
       expect(readsOf(uuid)).toEqual([])
       expect(titlesOf('subtasks')).toEqual(made === 'parent' ? ['Ship firmware'] : [])
+      // the new parent's subtask is removed from the parent's answer, so its
+      // × waits as Subtasks + does
+      if (made === 'parent') {
+        expect(button('Remove subtask')?.disabled).toBe(true)
+        expect(await hintOf(button('Remove subtask'))).toBe('Available once this task is saved')
+      }
       // the server takes the create: its window reads its thread and its
       // own answer
       await server.accept(40)
