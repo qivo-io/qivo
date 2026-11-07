@@ -478,6 +478,39 @@ describe("My view's milestones", { timeout: 30_000 }, () => {
     )
   })
 
+  it("draws a crowded week's nudged diamonds in the order of their shifts, not their days", async () => {
+    const snap = world()
+    // six of Plan's milestones in next week, stored before the weekly rule,
+    // their days in another order than their names
+    snap.milestones = snap.milestones.filter((m) => m.project_id !== 'plan')
+    for (const [n, name] of ['Zeta', 'Epsilon', 'Alpha', 'Delta', 'Beta', 'Gamma'].entries())
+      snap.milestones.push({
+        id: `m-plan-${n}`,
+        project_id: 'plan',
+        name,
+        week: mondayIn(1, n),
+        created_at: AT,
+      })
+    await app(snap, '/app/~/roadmap/mine')
+    await roadmap()
+    const drawn = await waitFor(() => {
+      const found = [
+        ...document.querySelectorAll<HTMLElement>(
+          '[data-workspace-view] [data-msrow="plan"] [data-msflag]',
+        ),
+      ]
+      return found.length === 6 && found
+    }, "Plan's six flags")
+    // the top row's flags, in the order they are drawn, each over the last
+    const top = drawn.filter((f) => f.style.bottom === drawn.at(-1)?.style.bottom)
+    expect(top).toHaveLength(5)
+    const lefts = top.map((f) => Number.parseFloat(f.style.left))
+    // must fail: drawn by day, where a diamond drawn before both its
+    // neighbours is hidden under them
+    expect(lefts).toEqual([...lefts].sort((a, b) => a - b))
+    expect(new Set(lefts).size).toBe(5)
+  })
+
   it('shows no flag or guide while Team fills the panel, and a project keeps its header flags', async () => {
     await app(world(), '/app/~/roadmap/mine')
     await roadmap()

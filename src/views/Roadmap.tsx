@@ -2032,8 +2032,10 @@ function Roadmap({
 
   /* My view's flags on track `track`'s row, in the rows of flags its
      height holds (roadmap/flagLanes.ts layoutTrackFlags), at its bottom and
-     not scrolling. A flag rides with its row, so a pinned heading keeps it
-     in sight and a folded track keeps it. A drag stays in its row. */
+     not scrolling, drawn in the order the layout gives them, so a crowded
+     week's nudged diamonds each draw over the one before. A flag rides with
+     its row, so a pinned heading keeps it in sight and a folded track keeps
+     it. A drag stays in its row. */
   const trackFlagsKeyOf = (track: string) =>
     JSON.stringify([
       P.gridEpoch,
@@ -2043,41 +2045,40 @@ function Roadmap({
       milestonesOf(track).map((m) => [m.id, m.week, msWeek(m), m.name, P.canWrite(m.project)]),
     ])
   const trackFlags = (track: string) => {
-    const flags = milestonesOf(track)
+    const flags = milestonesOf(track).filter((m) => m.week >= w0 && m.week <= w1)
     const places = layoutTrackFlags(
-      flags
-        .filter((m) => m.week >= w0 && m.week <= w1)
-        .map((m) => ({ id: m.id, week: m.week, name: m.name, live: msWeek(m) })),
+      flags.map((m) => ({ id: m.id, week: m.week, name: m.name, live: msWeek(m) })),
       { w0, weekW, end: NW * weekW },
     )
+    const byId = new Map(flags.map((m) => [m.id, m]))
     return (
       <div
         data-msrow={track}
         style={{ height: TRACK_FLAGS_H }}
         className="[position:absolute] [left:0] [right:0] [bottom:0]"
       >
-        {flags
-          .filter((m) => msWeek(m) >= w0 && msWeek(m) <= w1)
-          .map((m) => {
-            const place = places.get(m.id)
-            return (
-              place && (
-                <MilestoneFlag
-                  key={m.id}
-                  m={m}
-                  week={msWeek(m)}
-                  w0={w0}
-                  w1={w1}
-                  weekW={weekW}
-                  place={place}
-                  movable={P.canWrite(m.project)}
-                  onLive={msOnLive}
-                  onCommit={msCommit}
-                  onEdit={editMilestone}
-                />
-              )
+        {[...places].map(([id, place]) => {
+          const m = byId.get(id)
+          return (
+            m &&
+            msWeek(m) >= w0 &&
+            msWeek(m) <= w1 && (
+              <MilestoneFlag
+                key={m.id}
+                m={m}
+                week={msWeek(m)}
+                w0={w0}
+                w1={w1}
+                weekW={weekW}
+                place={place}
+                movable={P.canWrite(m.project)}
+                onLive={msOnLive}
+                onCommit={msCommit}
+                onEdit={editMilestone}
+              />
             )
-          })}
+          )
+        })}
       </div>
     )
   }

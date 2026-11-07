@@ -200,10 +200,38 @@ describe('flagLanesShown', () => {
 })
 
 /* My view's flags on a track row: the rows of flags its height holds,
-   names cut short rather than run into the next flag, and every flag of a
-   crowded week in sight and apart. */
+   names cut short rather than run into the next flag, every flag of a
+   crowded week in sight, apart and drawn so each keeps a strip to point
+   at. */
 describe('layoutTrackFlags', () => {
   const row = { w0: 0, weekW: WEEK_W, end: 20 * WEEK_W }
+  type TrackFlag = Parameters<typeof layoutTrackFlags>[0][number]
+  /** Each flag's box, diamond and label at its room, [from, to] in pixels,
+      by row and sorted, from the places layoutTrackFlags gives, at the week
+      each is drawn in. */
+  const trackBoxes = (flags: TrackFlag[], g = row) => {
+    const places = layoutTrackFlags(flags, g)
+    const rows = new Map<number, [number, number][]>()
+    for (const f of flags) {
+      const p = places.get(f.id)
+      if (!p) throw new Error(`no place for ${f.id}`)
+      const x = ((f.live ?? f.week) - g.w0) * g.weekW + (p.shift ?? 0)
+      const from = p.side === 'right' ? x - 4.5 : x + 4.5 - p.room
+      rows.set(p.lane, [...(rows.get(p.lane) ?? []), [from, from + p.room]])
+    }
+    return [...rows.values()].map((lane) => lane.sort((a, b) => a[0] - b[0]))
+  }
+  /** How much of `box` none of `over` covers, in pixels. */
+  const uncovered = (box: [number, number], over: [number, number][]) => {
+    let free = [box]
+    for (const [a, b] of over)
+      free = free.flatMap(([s, e]) => {
+        const left: [number, number] = [s, Math.min(e, a)]
+        const right: [number, number] = [Math.max(s, b), e]
+        return [left, right].filter(([x, y]) => y > x)
+      })
+    return free.reduce((sum, [s, e]) => sum + e - s, 0)
+  }
   /** Each flag's diamond box, [from, to] in pixels, and its bottom. */
   const diamonds = (flags: ReturnType<typeof flag>[], over: Partial<typeof row> = {}) => {
     const g = { ...row, ...over }
@@ -267,6 +295,61 @@ describe('layoutTrackFlags', () => {
       const top = shown.filter((d) => d.lane === TRACK_FLAG_LANES - 1)
       expect(top).toHaveLength(2)
       expect(top.every((d) => d.room === 9)).toBe(true)
+    }
+  })
+
+  it("stops a later week's label short of a crowded week's nudged diamonds", () => {
+    // four in week 4, of milestones stored before the weekly rule, and one
+    // in each of the next two weeks, near the timeline's end so names run
+    // left
+    const flags = [
+      flag('a', 4, 'Alpha supplier contract review'),
+      flag('b', 4, 'Beta supplier contract review'),
+      flag('g', 4, 'Gamma check'),
+      flag('z', 4, 'Zeta check'),
+      flag('d', 5, 'Delta field test'),
+      flag('e', 6, 'Epsilon supplier contract review'),
+    ]
+    const g = { w0: 0, weekW: 36, end: 252 }
+    const places = layoutTrackFlags(flags, g)
+    expect(places.get('g')?.shift).toBeGreaterThan(0)
+    expect(places.get('z')?.shift).toBeGreaterThan(0)
+    // must fail: Epsilon's left-running label over Zeta's diamond, where it
+    // takes Zeta's clicks
+    for (const lane of trackBoxes(flags, g))
+      for (let i = 1; i < lane.length; i++) expect(lane[i - 1][1]).toBeLessThanOrEqual(lane[i][0])
+    expect(places.get('e')?.room).toBeGreaterThan(9)
+  })
+
+  it('draws a crowded week in the order of its shifts, each diamond with a strip to point at', () => {
+    // six in one week, saved before the weekly rule, the days in another
+    // order than the names, as the server answers them by day
+    const byDay = ['Zeta', 'Epsilon', 'Alpha', 'Delta', 'Beta', 'Gamma'].map((name, i) =>
+      flag(`d${i}`, 4, name),
+    )
+    for (const [weekW, strip] of [
+      [WEEK_W, 9],
+      [24, 3.75],
+    ] as const) {
+      const g = { ...row, weekW, end: 20 * weekW }
+      const places = layoutTrackFlags(byDay, g)
+      expect([...places.keys()].sort()).toEqual(byDay.map((f) => f.id).sort())
+      // the order to draw them in, each diamond's box
+      const drawn = [...places].map(([id, p]) => {
+        const x = 4 * weekW + (p.shift ?? 0)
+        const from = p.side === 'right' ? x - 4.5 : x + 4.5 - p.room
+        return { id, lane: p.lane, x, box: [from, from + p.room] as [number, number] }
+      })
+      const top = drawn.filter((d) => d.lane === TRACK_FLAG_LANES - 1)
+      expect(top).toHaveLength(5)
+      // must fail: drawn by day, a diamond before both its neighbours
+      for (let i = 1; i < top.length; i++) expect(top[i].x).toBeGreaterThan(top[i - 1].x)
+      for (const [i, d] of drawn.entries()) {
+        const later = drawn.slice(i + 1).filter((o) => o.lane === d.lane)
+        const diamond: [number, number] = [d.x - 4.5, d.x + 4.5]
+        const over = later.map((o) => o.box)
+        expect(uncovered(diamond, over)).toBeGreaterThanOrEqual(strip)
+      }
     }
   })
 
