@@ -947,7 +947,7 @@ describe("a daily period's days and its average (model/storageSamples.ts)", () =
     expect(february[28]).toBe('2028-02-29')
   })
 
-  it("averages every measured day with the allowance applied once: the owner's example and the edges of one ceiling", () => {
+  it("averages every measured day with the allowance applied once, in the owner's example and at the edges of one ceiling", () => {
     const days = periodDays('2026-09-01T12:00:00.000Z', '2026-10-01T12:00:00.000Z')
     const final = { final: true }
     // half the days 4 GB and half 6 GB average exactly the 5 GB included

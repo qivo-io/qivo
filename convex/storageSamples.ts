@@ -264,8 +264,8 @@ export const step = internalMutation({
 })
 
 /* The last millisecond of the UTC day after `day`, as an ISO time. A daily
- * period ends at or before it exactly when its last day
- * (model/storageSamples.ts periodDays) is at or before `day`. */
+ * period that crosses a UTC midnight ends at or before it exactly when its
+ * last day (model/storageSamples.ts periodDays) is at or before `day`. */
 const lastOfDayAfter = (day: string) =>
   new Date(Date.parse(`${day}T00:00:00.000Z`) + 2 * DAY_MS - 1).toISOString()
 

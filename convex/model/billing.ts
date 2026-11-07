@@ -325,9 +325,10 @@ export const openDailyPeriods = (ctx: QueryCtx, until: string) =>
         .lte('period_end', until),
     )
 
-/** The first open daily period that ends at or before `until`, or null:
- * one indexed read of at most one row, which the daily samples' triggers
- * read before they schedule billingSync.ts finalizeDue (storageSamples.ts). */
+/** The first open daily period that ends at or before `until`, or null.
+ * It is one indexed read of at most one row, which the daily samples'
+ * triggers read before they schedule billingSync.ts finalizeDue
+ * (storageSamples.ts). */
 export const openDailyPeriodBy = (ctx: QueryCtx, until: string) =>
   openDailyPeriods(ctx, until).first()
 
