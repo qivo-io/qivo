@@ -24,10 +24,10 @@
    (components/projectNavRows.tsx useNavOpen): one the workspace holds at
    once, and one it does not hold yet through projectNav.resolve, while
    the palette stays open saying "Opening <name>…" and closes as it opens,
-   or says why it cannot (openProjectResult). Any change of the text, the
-   toggle or Search in drops the wait with its notice, a cleared field and
-   a text past the limit too, and so do another page of the results, a
-   navigation the person makes and the palette closing. */
+   or says why it cannot (openProjectResult). Any change of the search the
+   text, the toggle and Search in describe drops the wait with its notice,
+   to a cleared field or a text past the limit too, and so do another page
+   of the results, a navigation the person makes and the palette closing. */
 import {
   type KeyboardEvent,
   type ReactNode,
