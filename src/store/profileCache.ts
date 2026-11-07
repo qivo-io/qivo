@@ -17,9 +17,9 @@
      chunk. Every read stops while the page is hidden and starts again on
      return.
    - An answer keeps each row as the person's face. An id the current answer
-     of its chunk leaves out is `gone`, and its face goes, while that answer
-     is current; a chunk whose read restarts holds no answer until the new
-     one arrives. A failed chunk marks its ids `failed`, except those that
+     of its chunk leaves out is `gone` in that chunk's organization, and its
+     face or name of that organization goes, while that answer is current;
+     a chunk whose read restarts holds no answer until the new one arrives. A failed chunk marks its ids `failed`, except those that
      hold a face or a name, which stay as they are.
    - A picker's rows and picks are taken as names (`take`), which name a
      person at once until a face arrives and never replace one, nor a
@@ -165,8 +165,10 @@ export function createProfileCache(deps: ProfileCacheDeps) {
       entries.set(row.id, { org: chunk.org, face: row })
       touch()
     }
-    // a person the current answer leaves out is not one of the organization
-    for (const id of chunk.ids) if (!answered.has(id) && entries.delete(id)) touch()
+    // a person the current answer leaves out is not one of the organization;
+    // a face or name taken under another organization stays
+    for (const id of chunk.ids)
+      if (!answered.has(id) && entries.get(id)?.org === chunk.org && entries.delete(id)) touch()
     const same =
       chunk.result instanceof Set &&
       chunk.result.size === answered.size &&
@@ -355,13 +357,20 @@ export function createProfileCache(deps: ProfileCacheDeps) {
       bound()
       flush()
     },
-    /** What the cache knows of person `id`, marking nothing. */
-    look(id: string): CachedPerson {
-      const chunk = chunkOf.get(id)
+    /** What the cache knows of person `id`, marking nothing: as a person
+        of organization `org` when given, so the answer of a read of
+        another organization, and a face or name taken under one, say
+        nothing of them there. */
+    look(id: string, org?: string): CachedPerson {
+      const ours = (of: string) => org === undefined || of === org
+      const read = chunkOf.get(id)
+      const chunk = read && ours(read.org) ? read : undefined
       if (chunk && chunk.result instanceof Set && !chunk.result.has(id)) return { state: 'gone' }
       const entry = entries.get(id)
-      if (entry?.face) return { state: 'face', org: entry.org, face: entry.face }
-      if (entry?.name) return { state: 'name', org: entry.org, name: entry.name }
+      if (entry && ours(entry.org)) {
+        if (entry.face) return { state: 'face', org: entry.org, face: entry.face }
+        if (entry.name) return { state: 'name', org: entry.org, name: entry.name }
+      }
       if (chunk?.result === 'failed') return { state: 'failed' }
       return { state: 'loading' }
     },

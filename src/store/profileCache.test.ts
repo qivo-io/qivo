@@ -175,6 +175,24 @@ describe('the profile cache', () => {
     expect(s.cache.look('p1')).toMatchObject({ state: 'face', org: 'a' })
   })
 
+  it('answers gone only in the organization whose answer leaves an id out, keeping a name taken under another', () => {
+    const s = setup()
+    // a picker of organization A gives p0's name, and two views name p0,
+    // one under B first, so B's read asks for them
+    s.cache.take('a', [face('p0', 'Pat Picked')])
+    s.cache.name('b-view', [{ org: 'b', id: 'p0' }])
+    s.cache.name('a-view', [{ org: 'a', id: 'p0' }])
+    expect(s.reads().map((r) => [r.org, r.ids])).toEqual([['b', ['p0']]])
+    s.answer(s.reads()[0]?.token ?? '', [])
+    expect(s.cache.look('p0', 'b').state).toBe('gone')
+    expect(s.cache.look('p0', 'a')).toMatchObject({ state: 'name', name: { name: 'Pat Picked' } })
+    // a face cached under A is no person of B
+    s.cache.name('b-view', [])
+    s.answer(s.reads()[0]?.token ?? '')
+    expect(s.cache.look('p0', 'a')).toMatchObject({ state: 'face', org: 'a' })
+    expect(s.cache.look('p0', 'b').state).toBe('loading')
+  })
+
   it('stops every read while the page is hidden and starts them again on return', () => {
     const s = setup()
     s.cache.name('board', people(150))

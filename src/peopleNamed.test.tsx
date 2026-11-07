@@ -374,6 +374,39 @@ describe('people the workspace does not hold, on each page', () => {
   )
 
   it(
+    'names no lead for an Overview health row whose project the workspace cannot place',
+    async () => {
+      const { board, names } = await load(
+        (snap) => {
+          spread(1)(snap)
+          const two = snap.projects.find((p) => p.id === 'two')
+          if (two) two.lead_id = GINA
+        },
+        { scope: 'plan' },
+      )
+      // a row of a project the workspace does not hold, led by Hal
+      board.server.overview.edit = (query, answer) => {
+        const ok = answer as { state: string; rows?: { project_id: string; lead_id: string }[] }
+        if (query !== 'health' || ok.state !== 'ok' || !ok.rows?.[0]) return answer
+        return {
+          ...ok,
+          rows: [...ok.rows, { ...ok.rows[0], project_id: 'elsewhere', lead_id: HAL }],
+        }
+      }
+      const { Overview } = await import('./views/Overview')
+      const actions = new Proxy({}, { get: () => () => {} }) as never
+      await board.renderView(root, (info) => <Overview info={info} actions={actions} />)
+      await repaint()
+      expect(document.querySelector('[data-ovcard="elsewhere"]')).not.toBeNull()
+      // the placed row's lead is named in its organization, and Hal not at
+      // all, since a read in another organization would answer him gone
+      expect(names.named().has(GINA)).toBe(true)
+      expect(names.named().has(HAL)).toBe(false)
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
     'names the task window’s reporter, holders and its relation rows’ owners, loading and then by name',
     async () => {
       const { board, names } = await load(

@@ -12053,7 +12053,7 @@ export const PLANNER = {
     if (!id) return null
     const view = personViews.get(id)
     if (view && (org === undefined || view.org === org)) return view
-    const known = profileCache.look(id)
+    const known = profileCache.look(id, org)
     const state = known.state === 'face' || known.state === 'name' ? 'loading' : known.state
     const key = `${state}\n${id}`
     let shown = personStates.get(key)
