@@ -1672,7 +1672,7 @@ describe('board-scale-seed --projects', () => {
     }
     expect(fake.calls.filter(([name]) => name === 'projects:create')).toEqual([])
     expect(said).toContain(
-      '--projects fell 4 short of its count: all 200 of its numbers are taken, archived and deleted ones included.',
+      '--projects fell 4 short of its count, as all 200 of its numbers are taken, archived and deleted ones included.',
     )
   })
 

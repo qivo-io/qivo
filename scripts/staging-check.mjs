@@ -6513,12 +6513,13 @@ export const PROJECT_DIRECTORY_MARKS = {
  *  delivered yet, which the step waits out. */
 export const NOT_LOADED_YET = 'has not loaded yet'
 
-/** The group of each row the directory shows, by id, from `sequence`, its
- *  group headings (`{ group }`, 'favorites' or 'rest') and rows (`{ row,
- *  starred }`) in page order: 'favorites' or 'rest' under a heading, null
- *  on a page without headings. Null for the whole page where it breaks
- *  favorites first: Other projects before Favorites, a heading twice, a
- *  starred row under Other projects or an unstarred one under Favorites. */
+/** The group of each row the directory shows, by id, read from
+ *  `sequence`, the page's group headings (`{ group }`, 'favorites' or
+ *  'rest') and rows (`{ row, starred }`) in order. A row under a heading
+ *  has that heading's group, and a row on a page without headings has
+ *  null. Null for the whole page where it breaks favorites first, as when
+ *  Other projects comes before Favorites, a heading shows twice, a starred
+ *  row sits under Other projects or an unstarred one under Favorites. */
 export function directoryGroups(sequence) {
   const groups = {}
   let group = null
@@ -6642,7 +6643,7 @@ async function projectDirectoryCheck() {
       let pressed = false
       const opened = await until(async () => {
         if (atProject(path(), Z.num)) return true
-        // the directory left for another page: wait, pressing nothing more
+        // the directory left for another page, so wait and press nothing more
         if (!path().endsWith('/projects')) return false
         const note = (await app.locator(`[${m.status}]`).textContent()) ?? ''
         // a project the workspace has not delivered yet: the directory says

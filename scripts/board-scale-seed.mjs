@@ -1950,7 +1950,7 @@ async function seedProjects(plan, { client, org, target, log }) {
   )
   if (plan.short > 0)
     log(
-      `--projects fell ${plan.short} short of its count: all ${MOST_PROJECTS} of its numbers are taken, archived and deleted ones included.`,
+      `--projects fell ${plan.short} short of its count, as all ${MOST_PROJECTS} of its numbers are taken, archived and deleted ones included.`,
     )
 }
 
