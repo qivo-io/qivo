@@ -50,6 +50,21 @@ const PAID: BillingUsageFigures = {
   storage_basis: 'start',
 }
 
+/* PAID charged on its daily average instead, open with 19 of its 31 days
+   averaged so far, 2 of them estimated. */
+const DAILY: BillingUsageFigures = {
+  ...PAID,
+  storage_basis: 'daily',
+  storage_average: {
+    bytes: 6_400_000_000,
+    days: 31,
+    measured: 17,
+    estimated: 2,
+    estimated_earlier: 0,
+    final: false,
+  },
+}
+
 let container: HTMLDivElement
 let root: Root
 
@@ -155,6 +170,50 @@ describe('current storage', () => {
       await render({ ...USAGE, period_kind, sampled_storage_bytes: 5 })
       expect(text('[data-billing-storage-sample]')).toBeNull()
     }
+  })
+
+  it("shows a daily period's average in the sample line's place, and a period sampled at its start no average", async () => {
+    await render({ ...DAILY, storage_bytes: 7_000_000_000 }, { currency: 'usd' })
+    expect(text('[data-billing-storage-average]')).toBe(
+      '6.40 GB average so far, from 19 of this period’s 31 days. 2 of them estimated from the next measured day.',
+    )
+    expect(text('[data-billing-storage-sample]')).toBeNull()
+    expect(container.textContent).toContain(
+      'Storage is charged on the average of this period’s daily measurements, which is recorded shortly before the period ends.',
+    )
+    // recorded, and recorded without any measurement
+    const recorded = { ...DAILY.storage_average!, final: true, measured: 31, estimated: 0 }
+    await render(
+      { ...DAILY, storage_overage_cents: 200, storage_average: recorded },
+      { currency: 'usd' },
+    )
+    expect(text('[data-billing-storage-average]')).toBe(
+      '6.40 GB average over this period’s 31 days.',
+    )
+    expect(container.textContent).toContain(
+      'Extra storage charge recorded this period: $2.00, based on this period’s average storage.',
+    )
+    await render(
+      { ...DAILY, storage_average: { ...recorded, bytes: null, measured: 0 } },
+      { currency: 'usd' },
+    )
+    expect(text('[data-billing-storage-average]')).toBe(
+      'No storage measurement was available for this period.',
+    )
+    expect(container.textContent).toContain(
+      'No storage charge for this period, since no storage measurement was available.',
+    )
+    // the case that must fail: a period sampled at its start shows its
+    // sample and none of the daily text
+    await render({ ...PAID, sampled_storage_bytes: 1_200_000_000 }, { currency: 'usd' })
+    expect(text('[data-billing-storage-sample]')).toBe(
+      '1.20 GB measured at the start of this period.',
+    )
+    expect(container.querySelector('[data-billing-storage-average]')).toBeNull()
+    expect(container.textContent).not.toMatch(/average|daily/)
+    // nor for a trial
+    await render(DAILY, { status: 'trialing' })
+    expect(container.querySelector('[data-billing-storage-average]')).toBeNull()
   })
 })
 
