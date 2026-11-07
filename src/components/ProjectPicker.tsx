@@ -1,6 +1,8 @@
 /* The shared project picker, which Search's Search in, Settings ›
-   Archived tasks and Settings › Projects › Deleted items open, and which
-   startup selection can take later. It lists the person's projects from the server's navigation
+   Archived tasks and Settings › Projects › Deleted items open in a
+   popover, and whose panel the project chooser embeds in the page
+   (components/ProjectChooser.tsx, ProjectPickerPanel's autoFocus, fill
+   and whenEmpty). It lists the person's projects from the server's navigation
    reads (convex/projectNav.ts), never from the workspace's projects, each
    judged by ordinary access, and picks by the rules of its caller
    (lib/projectPick.ts): one project, or several of one organization, or
@@ -42,7 +44,8 @@
      among the projects a search's sub-project rows name, carry their
      number, "Test #4" (store/viewModels.ts duplicateNameTags).
 
-   Keyboard: the search field takes focus as the picker opens. Up and Down
+   Keyboard: the search field takes focus as the picker opens, unless a
+   caller that embeds the panel says otherwise (autoFocus). Up and Down
    move between the rows, Enter picks the active row, Right expands and
    Left collapses a top-level row when the caret is at the text's end or
    start, and Escape clears the text first and then closes the picker
@@ -260,11 +263,24 @@ export type ProjectPickerPanelProps = {
   oneOrgNote?: string
   /** the search field's accessible name */
   label?: string
+  /** whether the search field takes focus as the panel mounts, and as
+      Load more leaves while focus is nowhere; false leaves focus where it
+      is, as a panel in a page on a phone must, where the keyboard would
+      open over the page */
+  autoFocus?: boolean
+  /** whether the list takes the height its container gives it, as in a
+      page, rather than stopping at a popover's 360 px */
+  fill?: boolean
+  /** what shows in place of the whole panel once its browse list ended
+      confirmed empty: no text in the field, no row, and no batch held,
+      stopped or failed */
+  whenEmpty?: ReactNode
 }
 
 /**
  * The picker's list with its own search field, for a caller that embeds
- * it, as ProjectPicker does in its popover.
+ * it, as ProjectPicker does in its popover and the project chooser in the
+ * page.
  */
 export function ProjectPickerPanel({
   pick,
@@ -273,6 +289,9 @@ export function ProjectPickerPanel({
   onDone,
   oneOrgNote = 'Choose projects of one organization at a time.',
   label = 'Search projects',
+  autoFocus = true,
+  fill = false,
+  whenEmpty,
 }: ProjectPickerPanelProps) {
   const id = useId()
   // a sub-project's text sits 16 px past its project's, which follows the
@@ -469,7 +488,7 @@ export function ProjectPickerPanel({
   }, [active])
 
   const searchBox = useRef<HTMLInputElement>(null)
-  useFocusWhenGone(mainEnd === 'more', () => searchBox.current)
+  useFocusWhenGone(autoFocus && mainEnd === 'more', () => searchBox.current)
 
   /** Whether a row shows checked, whether a picked project includes it,
       and why it takes no press, null when it takes one. In one mode only
@@ -677,6 +696,17 @@ export function ProjectPickerPanel({
     )
   }
 
+  // the browse list ended with no row, and the server said so: no text,
+  // no fixed row, and no batch held back, stopped or failed (listEnd)
+  if (
+    whenEmpty !== undefined &&
+    text === '' &&
+    fixed.length === 0 &&
+    mainEnd === 'end' &&
+    main.rows.length === 0
+  )
+    return whenEmpty
+
   const state =
     mainEnd === 'too_long'
       ? 'too_long'
@@ -695,13 +725,13 @@ export function ProjectPickerPanel({
       data-project-picker=""
       data-project-picker-state={state}
       aria-busy={state === 'loading' || state === 'more' || undefined}
-      className="flex min-h-0 flex-col"
+      className={cn('flex min-h-0 flex-col', fill && 'flex-1')}
     >
       <div className="flex items-center gap-2 border-b px-2 pb-1.5 pt-1">
         <Icon name="search" size={16} color="var(--text-3)" />
         <Input
           ref={searchBox}
-          autoFocus
+          autoFocus={autoFocus}
           data-project-picker-search=""
           aria-label={label}
           aria-controls={`${id}-list`}
@@ -737,7 +767,11 @@ export function ProjectPickerPanel({
       )}
       <div
         id={`${id}-list`}
-        className="flex max-h-[min(360px,55vh)] min-h-0 flex-col gap-px overflow-y-auto overscroll-contain p-1"
+        data-project-picker-list=""
+        className={cn(
+          'flex min-h-0 flex-col gap-px overflow-y-auto overscroll-contain p-1',
+          fill ? 'flex-1' : 'max-h-[min(360px,55vh)]',
+        )}
       >
         {fixed.map(rowView)}
         {fixed.length > 0 && <div aria-hidden className="mx-2 my-1 border-t" />}
