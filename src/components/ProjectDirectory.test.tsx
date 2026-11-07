@@ -806,6 +806,49 @@ describe('the expanded list', { timeout: 60_000 }, () => {
     expect(document.querySelector('[data-directory-children]')).toBeNull()
   })
 
+  it('mounts its scroll marker with the first rows, so only a scroll to the end loads more', async () => {
+    // IntersectionObserver reports a marker where the layout puts it as it
+    // is observed, in view below an empty list and out of view below 25
+    // rows, until a scroll
+    let inView = true
+    const markers: ((seen: boolean) => void)[] = []
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        report: (seen: boolean) => void
+        constructor(receive: (entries: { isIntersecting: boolean }[]) => void) {
+          this.report = (seen) => receive([{ isIntersecting: seen }])
+        }
+        observe() {
+          markers.push(this.report)
+          this.report(inView)
+        }
+        disconnect() {}
+      },
+    )
+    const next0 = base()
+    const big = top(next0, 'Luma Sensor')
+    for (let s = 0; s < 30; s++) sub(next0, big, named(s, 'Board'))
+    await load(next0)
+    await render()
+    holding = (s) => s.name === 'projectNav:children'
+    await click(find('[data-directory-expand]', row(big)))
+    expect(asked('children')).toHaveLength(1)
+    // the first rows land and push the marker below the fold
+    inView = false
+    await act(async () => answer(asked('children')[0]))
+    await settle()
+    const later = () => asked('children').filter((s) => s.args.after !== undefined)
+    expect(document.querySelectorAll('[data-directory-child]')).toHaveLength(25)
+    expect(later()).toEqual([])
+    // a scroll to the list's end reads the next batch
+    holding = null
+    await act(async () => markers.at(-1)?.(true))
+    await settle()
+    expect(later()).toHaveLength(1)
+    expect(document.querySelectorAll('[data-directory-child]')).toHaveLength(30)
+  })
+
   it('says a batch that stopped where it began could not be checked, with Retry', async () => {
     const next0 = base()
     const big = top(next0, 'Luma Sensor')
@@ -850,6 +893,25 @@ describe('opening and the menu', { timeout: 60_000 }, () => {
     )
     await click(people)
     expect(actions.openSettings).toHaveBeenCalledWith(`project:${plan}`)
+  })
+
+  it('clears its note and goes back to the top on a page move', async () => {
+    const next0 = base()
+    for (let n = 0; n < 12; n++) top(next0, named(n))
+    await load(next0)
+    // first by name, and not yet in the workspace
+    const late = top(snap, 'Late arrival')
+    force.batch = 5
+    await render()
+    await click(find('[data-directory-open]', row(late)))
+    const status = () => find('[data-directory-status]').textContent
+    expect(status()).toBe('Late arrival has not loaded yet. Try again in a moment.')
+    const list = find('[data-project-directory]')
+    list.scrollTop = 400
+    await next()
+    expect(rowIds()).not.toContain(late)
+    expect(status()).toBe('')
+    expect(list.scrollTop).toBe(0)
   })
 
   it('offers New sub-project… after Archived tasks once the project’s settings allow it', async () => {
