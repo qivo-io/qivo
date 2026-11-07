@@ -262,14 +262,19 @@ export const itemKinds = (counts: KindCounts): MessageKind[] =>
 export const kindsMatch = (counts: KindCounts, kinds: readonly MessageKind[]): boolean =>
   kinds.length === 0 || kinds.some((kind) => counts[KIND_COUNT[kind]] > 0)
 
-/** A message's detail as the Inbox shows and searches it. Migration 0075
- * stored one privacy-fenced fallback with the former noun, which reads
- * "a task in another project" here (src/panels/Inbox.tsx detailText). */
+/** A message's detail as the Inbox shows and searches it (messageLine,
+ * inboxSearchText), on the server (model/inboxPage.ts), in the app's rows
+ * (src/store/viewModels.ts shapeInboxRow) and in the page's stand-in
+ * (src/store/inboxStandIn.setup.ts). Migration 0075 stored one
+ * privacy-fenced fallback with the former noun, which reads "a task in
+ * another project" here. */
 export const messageDetail = (detail: string): string =>
   detail.replace('an issue in another project', 'a task in another project')
 
-/** The second line of an Inbox row, from its newest message
- * (src/panels/Inbox.tsx secondLine): "from @Name" for a mention, with
+/** The second line of an Inbox row, from its newest message, which the
+ * page's search reads on the server (model/inboxPage.ts) and in its
+ * stand-in (src/store/inboxStandIn.setup.ts), and the app's row shows
+ * (src/store/viewModels.ts shapeInboxRow): "from @Name" for a mention, with
  * "Someone" where Qivo cannot name the actor (a machine caller or a
  * removed profile), "New comment" for a comment, and a change's detail. */
 export function messageLine(
