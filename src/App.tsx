@@ -1334,8 +1334,9 @@ function App() {
   ])
   // the task the boot, Back or Forward named by a reference, once its
   // answer names its project: its scope, unless the page moved meanwhile.
-  // A boot that waits for it with no scope takes the startup rule once
-  // the wait ends without one, or once the answer names no project.
+  // A boot, Back or Forward that waits for it with no scope takes the
+  // startup rule once the wait ends without one, or once the answer names
+  // no project.
   useEffect(() => {
     const pending = pendingTask.current
     const waiting = opening.kind === 'task' && scope === undefined
