@@ -393,10 +393,11 @@ describe("an Inbox row of another organization's task with a held task's id", {
     snap.profiles.push({ ...me, id: 'me-guest', org_id: GUEST })
     snap.myProfileIds.push('me-guest')
     const guestProject = {
-      ...snap.projects[1],
+      ...snap.projects[0],
       id: 'guest-work',
       org_id: GUEST,
       name: 'Guest work',
+      parent_id: undefined,
     }
     snap.projects.push(guestProject)
     const task = (org: string, project: string, num: number, title: string) => ({
@@ -417,7 +418,7 @@ describe("an Inbox row of another organization's task with a held task's id", {
     // the workspace holds the home organization's task, and the server
     // also holds the guest organization's task of the same id, which the
     // parts do not send
-    snap.issues.push(task(snap.orgs[0].id, snap.projects[1].id, 2, 'Run the soak test'))
+    snap.issues.push(task(snap.orgs[0].id, snap.projects[0].id, 2, 'Run the soak test'))
     const guestTask = task(GUEST, guestProject.id, 7, 'Calibrate the guest rig')
     Object.assign(snap, { unheld: { issues: [guestTask] } })
     for (const [org, recipient] of [
