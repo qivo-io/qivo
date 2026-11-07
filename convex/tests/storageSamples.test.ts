@@ -27,12 +27,12 @@
  *      of a run under way, and refuses a malformed or longer one.
  *   9. The reads of one step at the batch size, logged for SAMPLE_PAGE.
  *  10. A daily period's days and its average (model/storageSamples.ts
- *      periodDays and periodAverage), pure: the dates of a period, the
- *      allowance once and one ceiling, a missing day from the next reading,
- *      a 0 reading measured, a trailing gap unresolved before the cutoff
- *      and at it from the next period, the last measured day or an earlier
- *      period, every day or none.
- *  11. The finalize's triggers: while billing is on, a tick within two
+ *      periodDays and periodAverage), as pure functions. The dates of a
+ *      period, the allowance once and one ceiling, a missing day from the
+ *      next reading, a 0 reading measured, a trailing gap unresolved
+ *      before the cutoff and at it from the next period, the last measured
+ *      day or an earlier period, every day or none.
+ *  11. The finalize's triggers. While billing is on, a tick within two
  *      hours of a daily period's end and the step that ends the run of its
  *      last day start billingSync:finalizeDue, the step's read counted in
  *      the run; nothing on the demo or with billing off.
@@ -994,7 +994,7 @@ describe("a daily period's days and its average (model/storageSamples.ts)", () =
     expect(over.bytes).toBe(5 * GB + 1)
     // one byte over the allowance summed across the period costs a block
     expect(blocksOf(over.bytes)).toBe(1)
-    // no day is rounded on its own: 29 days at 0 and one at 29 bytes
+    // no day is rounded on its own, so 29 days at 0 and one at 29 bytes
     // average 1 byte, not 0 or 29
     expect(
       periodAverage(
@@ -1145,7 +1145,7 @@ describe("the finalize's triggers", () => {
     const t = newT()
     const orgId = await plantOrg(t, 10)
     await runDay(t)
-    // a tick with nothing due: the run row and the empty range of periods
+    // a tick with nothing due reads the run row and the empty range of periods
     expect(await measured(t, tickFn, {})).toMatchObject({ ranges: 2, documents: 1, written: 0 })
     // two hours and a minute before its end, a period is not due yet
     await plantDaily(t, orgId, AT + 2 * HOUR + 60_000)
@@ -1178,7 +1178,7 @@ describe("the finalize's triggers", () => {
     SAMPLE_PAGE.orgs = 2
     const t = newT()
     const orgs = [await plantOrg(t, 10), await plantOrg(t, 20), await plantOrg(t, 30)]
-    // a period whose last day is tomorrow: today's run leaves it alone
+    // today's run leaves alone a period whose last day is tomorrow
     await plantDaily(t, orgs[0], AT + 2 * DAY_MS - 20 * 60_000)
     await runDay(t)
     expect(await runRow(t)).toMatchObject({ finished_at: AT })
@@ -1188,7 +1188,7 @@ describe("the finalize's triggers", () => {
     await plantDaily(t, orgs[1], AT + 2 * DAY_MS + 12 * HOUR)
     await tick(t)
     const run = (await runRow(t, dayAfter(1)))?.run ?? ''
-    // a full page, then the page that ends the run with the read: the
+    // a full page, then the page that ends the run with the read. The run's
     // counters grow by exactly what each transaction measured, the read
     // included, which they would miss if it came after the run row's update
     for (const _ of [0, 1]) {

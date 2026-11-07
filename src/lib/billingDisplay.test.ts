@@ -151,7 +151,7 @@ describe('storageAverageLine', () => {
   })
 
   it('shows no average for a period sampled at its start, an older backend, a month, a pending interval or a trial', () => {
-    // the case that must fail: the daily text for a start-basis period
+    // the case that fails if the daily text shows for a start-basis period
     expect(storageAverageLine({ ...daily(), storage_basis: 'start' }, 'active')).toBeNull()
     expect(storageAverageLine(paid(5), 'active')).toBeNull()
     for (const period_kind of ['month', 'pending'] as const)

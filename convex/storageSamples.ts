@@ -9,11 +9,11 @@
  * recording them costs.
  *
  * While billing is on, the job also starts the finalize of the open daily
- * periods that are due (billingSync.ts finalizeDue): the step that ends a
- * day's run for those whose last day is at or before the run's day, and
- * every tick for those within STORAGE_FINALIZE_LEAD_MS of their end or
- * past it. Each is one indexed read of at most one period row, and nothing
- * more when none is due. With billing off neither reads anything.
+ * periods that are due (billingSync.ts finalizeDue). The step that ends a
+ * day's run starts it for those whose last day is at or before the run's
+ * day, and every tick for those within STORAGE_FINALIZE_LEAD_MS of their
+ * end or past it. Each is one indexed read of at most one period row, and
+ * nothing more when none is due. With billing off neither reads anything.
  *
  * The hourly cron (crons.ts 'storage-daily-samples', minute 20) calls tick.
  * The day's first tick starts its run; a later one resumes the run under a
@@ -220,9 +220,10 @@ async function record(
  * clears its cursor and schedules the expiry, and while billing is on it
  * schedules the finalize (billingSync.ts finalizeDue) when an open daily
  * period's last day is at or before `day`, so a period whose last day the
- * run just sampled is normally recorded a day or more before its end. An
- * organization created behind the cursor waits for the next day. Does
- * nothing unless the day's run row holds this run and has not finished. */
+ * run just sampled is normally recorded about a day or more before its
+ * end. An organization created behind the cursor waits for the next day.
+ * Does nothing unless the day's run row holds this run and has not
+ * finished. */
 export const step = internalMutation({
   args: { day: v.string(), run: v.string() },
   handler: async (ctx, { day, run }): Promise<null> => {

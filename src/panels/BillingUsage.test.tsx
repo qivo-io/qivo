@@ -203,8 +203,8 @@ describe('current storage', () => {
     expect(container.textContent).toContain(
       'No storage charge for this period, since no storage measurement was available.',
     )
-    // the case that must fail: a period sampled at its start shows its
-    // sample and none of the daily text
+    // a period sampled at its start shows its sample and none of the daily
+    // text, the case that fails if the daily text shows for it
     await render({ ...PAID, sampled_storage_bytes: 1_200_000_000 }, { currency: 'usd' })
     expect(text('[data-billing-storage-sample]')).toBe(
       '1.20 GB measured at the start of this period.',

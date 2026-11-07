@@ -676,7 +676,7 @@ describe("a period's storage basis and a daily period's average", () => {
       storage_basis: null,
       storage_average: null,
     })
-    // the case that must answer: the organization's own row, from its own
+    // the case that must answer, the organization's own row, from its own
     // sample only
     await t.run((ctx) => ctx.db.delete(theirs))
     await period(t, f, sub)

@@ -148,7 +148,7 @@ export async function samplesOfDays(
 const midnight = (iso: string) => Math.floor(Date.parse(iso) / DAY_MS) * DAY_MS
 
 /** The UTC dates (YYYY-MM-DD) a daily period from `start` to `end`, ISO
- * times, averages: from its start's date up to the day before its end's
+ * times, averages, from its start's date up to the day before its end's
  * date, and at least the start's date. Consecutive periods of a
  * subscription share their boundary, so when they cross a UTC midnight
  * each date belongs to exactly one of them and none is skipped, and a
@@ -166,11 +166,12 @@ export function periodDays(start: string, end: string): string[] {
 }
 
 /** One day of a daily period's record (schema.ts billing_periods
- * storage_days): the reading the average used, absent while the day is
- * unresolved, and for an estimate the day of the actual sample it copied. */
+ * storage_days), with the reading the average used, absent while the day
+ * is unresolved, and for an estimate the day of the actual sample it
+ * copied. */
 export type StorageDay = { day: string; bytes?: number; from?: string }
 
-/** What periodAverage answers: each day's entry for the record, how many
+/** What periodAverage answers, each day's entry for the record, how many
  * days were measured by their own sample, estimated from another day's
  * (`estimated`, of them `estimated_earlier` from an earlier day at the
  * cutoff) and left unresolved, and the average of the resolved days
@@ -210,10 +211,11 @@ function ceilAverage(values: readonly number[]): number {
  * day, which can be an earlier period's. No source is ever another
  * estimate. With `final` every day resolves, or none when the organization
  * has no reading in, after or before the period. The average is rounded up
- * to a whole byte with integer arithmetic. That changes no block: the
- * allowance A is a whole number of bytes (model/billing.ts validatePlan
- * keeps its settings whole) and GB is one too, so for any average y,
- * ceil(max(0, ceil(y) - A) / GB) equals ceil(max(0, y - A) / GB). */
+ * to a whole byte with integer arithmetic. That changes no block, since
+ * the allowance A is a whole number of bytes (model/billing.ts
+ * validatePlan keeps its settings whole) and GB is one too, so for any
+ * average y, ceil(max(0, ceil(y) - A) / GB) equals
+ * ceil(max(0, y - A) / GB). */
 export function periodAverage(
   days: readonly string[],
   readings: ReadonlyMap<string, number>,

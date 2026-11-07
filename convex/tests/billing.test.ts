@@ -2809,10 +2809,10 @@ describe('storage charged on the daily average', () => {
   const isoAt = (day: string, time = '00:20') => new Date(at(day, time)).toISOString()
 
   /* Moves the clock to `time` of `day` and runs the hourly tick of the
-   * daily samples with every call it schedules: the day's run when the day
-   * has none yet, whose last step starts the finalize of the periods whose
-   * last day it reached, and the finalize of the periods within two hours
-   * of their end. */
+   * daily samples with every call it schedules. Those are the day's run
+   * when the day has none yet, whose last step starts the finalize of the
+   * periods whose last day it reached, and the finalize of the periods
+   * within two hours of their end. */
   async function tickAt(t: T, day: string, time = '00:20') {
     vi.setSystemTime(at(day, time))
     await t.mutation(internal.storageSamples.tick, {})
@@ -2958,7 +2958,7 @@ describe('storage charged on the daily average', () => {
       await tickAt(t, '2026-09-28')
       vi.setSystemTime(Date.parse(S))
       expect(await record(t, f.org.id)).toMatchObject({ storage_basis: 'daily' })
-      // switched off with the daily period open: it stays daily and is
+      // switched off with the daily period open, it stays daily and is
       // recorded by the run of its last day
       vi.stubEnv('DAILY_STORAGE_BILLING', 'false')
       vi.setSystemTime(Date.parse(S) + STORAGE_STALL_MS + 1000)
@@ -3301,7 +3301,7 @@ describe('storage charged on the daily average', () => {
       await tickAt(t, '2026-09-28')
       vi.setSystemTime(Date.parse(S))
       await record(t, f.org.id)
-      // billing is off over the last days: the job samples, and nothing
+      // billing is off over the last days, so the job samples and nothing
       // finalizes
       vi.stubEnv('BILLING_ENABLED', 'false')
       await tickAt(t, '2026-09-29')

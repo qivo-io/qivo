@@ -75,7 +75,7 @@ export const details = orgQuery({
  * sample an earlier release finished, which scanned the attachment rows
  * and left those files out). Both are null for any other bucket, for a
  * daily period, or while the sample has not finished. A daily period
- * answers `storage_average` instead: the recorded average with its
+ * answers `storage_average` instead, the recorded average with its
  * measured and estimated days, or while it is open the average so far,
  * never 0 for a day not measured yet (lib/billingTypes.ts). Billing's API
  * calls by account reads billing.apiAccounts for the period_key this

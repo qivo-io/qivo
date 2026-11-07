@@ -310,10 +310,10 @@ export async function periodHead(
 }
 
 /** The open daily periods of every organization that end at or before
- * `until`, an ISO time, by their end: on the daily basis, not recorded and
- * not stopped (schema.ts billing_periods by_storage_open). period_end is an
- * ISO time from toISOString, so its order is the time's. billingSync.ts
- * finalizeDue pages it. */
+ * `until`, an ISO time, by their end, that is the periods on the daily
+ * basis that are neither recorded nor stopped (schema.ts billing_periods
+ * by_storage_open). period_end is an ISO time from toISOString, so its
+ * order is the time's. billingSync.ts finalizeDue pages it. */
 export const openDailyPeriods = (ctx: QueryCtx, until: string) =>
   ctx.db
     .query('billing_periods')
@@ -338,9 +338,9 @@ type PeriodStorage = Pick<
   'sampled_storage_bytes' | 'sampled_storage_at' | 'storage_basis' | 'storage_average'
 >
 
-/* How the average answers a daily period's days: the resolved days split
- * into measured and estimated, and how many estimates took an earlier
- * day's reading at the cutoff. */
+/* The counts the average answers for a daily period's recorded days, its
+ * resolved days split into measured and estimated, and how many estimates
+ * took an earlier day's reading at the cutoff. */
 function averageOf(
   days: readonly StorageDay[],
 ): Omit<NonNullable<BillingUsageFigures['storage_average']>, 'bytes' | 'days' | 'final'> {
@@ -359,7 +359,7 @@ function averageOf(
  * provider id, and a period without a row or of another organization.
  *
  * A period sampled at its start (billingSync.ts storageStep) answers
- * storage_basis 'start' and its sample: the bytes the period's storage
+ * storage_basis 'start' and its sample, the bytes the period's storage
  * charge uses, the organization's stored-byte totals when the sample read
  * them, files in Deleted items included, and when it read them. Both are
  * null while the sample runs or after it stopped, and the time is null for

@@ -186,9 +186,9 @@ export function storageSampleLine(
 /* `n` days, in words. */
 const dayCount = (n: number) => `${n} day${n === 1 ? '' : 's'}`
 
-/* The sentence on a daily average's estimated days, or nothing without
-   any: those that copied the next measured day's reading, and at the
-   cutoff those that copied the most recent one before them. */
+/* The sentence on a daily average's estimated days, those that copied the
+   next measured day's reading and, at the cutoff, those that copied the
+   most recent one before them, or nothing without any. */
 function estimatedDays(average: NonNullable<BillingUsageFigures['storage_average']>): string {
   const { estimated, estimated_earlier: earlier } = average
   const next = estimated - earlier

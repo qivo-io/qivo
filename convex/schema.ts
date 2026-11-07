@@ -904,7 +904,7 @@ export default defineSchema({
     // Local membership evidence, never profiles from another tenant.
     profile_ids: v.array(v.string()),
     // How the period's storage is charged, set when the period is recorded
-    // and never changed: 'daily' for the average of its organization's
+    // and never changed. 'daily' means the average of its organization's
     // daily storage samples (billingSync.ts finalizeStorage), for a period
     // recorded while the deployment's DAILY_STORAGE_BILLING was true.
     // Absent means the sample at the period's start, as for every period

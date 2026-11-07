@@ -160,7 +160,7 @@ export const STORAGE_RETRY_MS = 6 * 60 * 60_000
  * delivery before eventReady stops sending 30 seconds before the end, room
  * for six attempts, whose five waits after a failure (eventResult) take
  * about 31 minutes. Normally the run that samples the period's last day
- * finalizes it a day or more before its end. */
+ * finalizes it about a day or more before its end. */
 export const STORAGE_FINALIZE_LEAD_MS = 2 * 60 * 60_000
 
 /** How many open daily periods one finalizeDue call lists and schedules a
@@ -182,7 +182,7 @@ export const STORAGE_FINALIZE_RETRY_MS = 3 * DAY_MS
 
 /** Whether a paid period recorded now is charged for storage on the
  * average of its organization's daily storage samples (finalizeStorage)
- * instead of a sample at its start: only while the deployment's
+ * instead of a sample at its start, which holds only while the deployment's
  * DAILY_STORAGE_BILLING is exactly `true`. Read only when apply records a
  * period, which keeps the answer as its storage_basis, so a change of the
  * variable acts from each organization's next renewal, and a period
@@ -620,7 +620,7 @@ async function applySubscription(ctx: MutationCtx, remote: PolarSubscription): P
     })
     if (!daily) await startStorageSample(ctx, periodId)
   } else if (period && period.storage_basis === undefined && period.storage_bytes === undefined) {
-    // Only a period sampled at its start: a daily one has no storage_bytes
+    // Only a period sampled at its start. A daily one has no storage_bytes
     // until it is finalized and no storage_run_at, which would read as a
     // stalled sample here and start a sample at its start.
     const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
@@ -737,8 +737,9 @@ async function retryStoppedSample(ctx: MutationCtx, period: Doc<'billing_periods
  * finished sample records is sent only while the period is still the
  * subscription's current one and more than 30 seconds from its end
  * (eventReady), so a restart after that records the bytes but charges
- * nothing. A daily period is left alone too, answering false: it takes no
- * sample, and the daily samples' run and tick finalize it. An operator who
+ * nothing. A daily period is left alone too, answering false, since it
+ * takes no sample and the daily samples' run and tick finalize it. An
+ * operator who
  * must record one at once runs finalizeStorage with it, which follows the
  * same rules. */
 export const restartStorage = internalMutation({
@@ -930,7 +931,7 @@ export const finalizeDue = internalMutation({
 })
 
 /* Stops the triggers trying open daily period `period`, which is still not
- * recorded STORAGE_FINALIZE_RETRY_MS after its end: storage_failed_at takes
+ * recorded STORAGE_FINALIZE_RETRY_MS after its end. storage_failed_at takes
  * it out of their range (model/billing.ts openDailyPeriods), an error log
  * and a billing.storage_finalize_stopped audit row name it, and it records
  * no storage, never 0. An operator records it with finalizeStorage once
@@ -953,9 +954,9 @@ async function stopFinalize(ctx: MutationCtx, period: Doc<'billing_periods'>): P
   })
 }
 
-/** What finalizeStorage did with its period: recorded an average,
- * recorded it as unavailable, waits for a reading of its last day, or
- * nothing (null) for a period that is gone, not daily or already
+/** What finalizeStorage did with its period. It recorded an average, or
+ * recorded it as unavailable, or waits for a reading of its last day, or
+ * did nothing (null) for a period that is gone, not daily or already
  * recorded. */
 export type FinalizeOutcome = 'recorded' | 'unavailable' | 'waiting' | null
 
@@ -964,8 +965,9 @@ const readingOf = (row: Doc<'storage_daily_samples'> | null): DayReading | null 
   row && { day: row.day, bytes: row.bytes }
 
 /* Whether no step of UTC day `day`'s run of the daily samples can still
- * write a sample of that day at `now`: it has no run row, or its run
- * finished, or its last step is SAMPLE_STALLED_MS old. Asked only once a
+ * write a sample of that day at `now`, which holds when it has no run row,
+ * its run finished or its last step is SAMPLE_STALLED_MS old. Asked only
+ * once a
  * later day has a sample, when no tick resumes or starts that day's run
  * (storageSamples.ts tick). */
 async function dayClosed(ctx: MutationCtx, day: string, now: number): Promise<boolean> {
@@ -979,33 +981,33 @@ async function dayClosed(ctx: MutationCtx, day: string, now: number): Promise<bo
  * start's date up to the day before its end's date (periodDays).
  *
  * Before its deadline, STORAGE_FINALIZE_LEAD_MS before its end, it records
- * only a period whose every day resolves without the cutoff: its last day
- * has its own sample, or a later day's sample stands for the last day and
- * that day's run can no longer write one (dayClosed). Otherwise it waits
- * and writes nothing. At or after the deadline it records the period
- * whatever is missing: a day without a sample takes the first later one,
- * the next period's first day included, else the most recent one before
- * it, an earlier period's included. With a reading, the average rounded up
- * to a whole byte goes through finishStorageSample, so the allowance is
- * subtracted once, the blocks are one ceiling, and the charge keeps its
- * event id `${subscription_id}:${period_start}:storage`, its complimentary
- * rule and its single insert, together with the days and storage_finalized_at
- * in one patch. With no reading of the organization in, after or before
- * the period, it records the days and storage_unavailable, no bytes,
- * blocks or event, never 0, with a warning and a billing.storage_unavailable
- * audit row naming the period.
+ * only a period whose every day resolves without the cutoff, which is when
+ * its last day has its own sample, or when a later day's sample stands for
+ * the last day and that day's run can no longer write one (dayClosed).
+ * Otherwise it waits and writes nothing. At or after the deadline it
+ * records the period whatever is missing. A day without a sample takes the
+ * first later one, the next period's first day included, else the most
+ * recent one before it, an earlier period's included. With a reading, the
+ * average rounded up to a whole byte goes through finishStorageSample, so
+ * the allowance is subtracted once, the blocks are one ceiling, and the
+ * charge keeps its event id `${subscription_id}:${period_start}:storage`,
+ * its complimentary rule and its single insert, together with the days and
+ * storage_finalized_at in one patch. With no reading of the organization
+ * in, after or before the period, it records the days and
+ * storage_unavailable, no bytes, blocks or event, never 0, with a warning
+ * and a billing.storage_unavailable audit row naming the period.
  *
  * The daily samples' run of the period's last day (storageSamples.ts step)
- * normally finalizes it a day or more before its end, and the run of the
- * day after when that day's sample is missing; at the latest the hourly
- * tick does at its first call within STORAGE_FINALIZE_LEAD_MS of the end,
- * one to two hours before it, and every later run and tick tries a period
+ * normally finalizes it about a day or more before its end, and the run
+ * of the day after when that day's sample is missing; at the latest the
+ * hourly tick does at its first call within STORAGE_FINALIZE_LEAD_MS of the
+ * end, one to two hours before it, and every later run and tick tries a period
  * still open again (finalizeDue). The charge is sent while eventReady
  * allows, so a period finalized after its end, as after the cron stood
  * still, records its figures and eventReady abandons its event with a
  * billing.usage_delivery_stopped audit row. So does a subscription that
  * ends or is revoked before the recorded end, which the sample at a
- * period's start had already charged: a daily period then has no storage
+ * period's start had already charged. A daily period then has no storage
  * charge, as its API calls after the end have none. The finalize times
  * itself by the row's period_end, which apply never moves; if Polar moved
  * a recorded period's end later the charge is recorded early, and earlier
@@ -1025,7 +1027,12 @@ async function dayClosed(ctx: MutationCtx, day: string, now: number): Promise<bo
  * the last day's run row when the last day has no sample, its latest
  * sample before its first day only when it has none in or after it, then
  * the plan, the subscription, the charge's id when blocks are due and the
- * period again for the next reconciliation. */
+ * period again for the next reconciliation. Its largest call, before the
+ * deadline for 31 days with the last one missing and blocks due, at 1,000
+ * people, read 37 documents over 8 index ranges, about 122 KB, most of it
+ * the period row with its 1,000 profile ids, and wrote the period and the
+ * charge, about 39 KB, in convex/tests/billing.test.ts ("reads the period,
+ * its days and a few documents more"). */
 export const finalizeStorage = internalMutation({
   args: { period: v.id('billing_periods') },
   handler: async (ctx, { period: periodId }): Promise<FinalizeOutcome> => {
