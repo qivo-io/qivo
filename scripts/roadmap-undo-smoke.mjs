@@ -5,7 +5,11 @@
  * It asks for every task (P.askTasks, reason script) and looks its tasks up
  * in the workspace, so it drives the Roadmap's writes of held tasks; the
  * writes of tasks only the Roadmap's answer brings are the jsdom suites'
- * (src/store/roadmapWrites.test.ts, src/views/roadmapView.test.tsx). */
+ * (src/store/roadmapWrites.test.ts, src/views/roadmapView.test.tsx). The
+ * workspace holds no milestone, so it picks its project, checks what the
+ * backend saved and cleans up through the server's milestone reads
+ * (milestones.between), and writes its milestone through the Roadmap's
+ * range read, once that read shows its flag. */
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
@@ -34,12 +38,18 @@ const errors = []
 page.on('pageerror', (error) => errors.push(error.message))
 const log = (message) => console.log(`[roadmap-undo] ${message}`)
 const undo = () => page.locator('[data-roadmap-undo]').filter({ visible: true })
+/* The flag of milestone `id` in the shown Roadmap, which its range read
+   (milestones.between) holds. */
+const flag = (id) => page.locator(`[data-workspace-view] [data-msflag="${id}"]`)
 /* A Roadmap of the scope the drive left stays in the page, hidden, until the
    next view has painted and the page is idle (KeptView), and holds the same
    task bars. Bars are looked up in the shown view, which alone has
    data-workspace-view. */
 const bar = (id) => page.locator(`[data-workspace-view] [data-bar="${id}"]`)
 let initialUI
+/* The run's project, Northstar's top-level project it adds its milestones
+   to, and the weeks they lie in, once chosen. */
+let fixture
 let passed = false
 
 async function selectView(name) {
@@ -73,17 +83,49 @@ async function undoShows(enabled, message) {
     })
 }
 
-async function persisted() {
-  await page.waitForFunction(() => window.__roadmapSmokeConnection().inflightMutations === 0)
+/* A client of the backend signed in as the person page `on` is signed in
+   as. */
+async function clientOf(on) {
   const client = new ConvexHttpClient(demo.target.url, { logger: false })
   client.setAuth(
-    await page.evaluate(async () => {
+    await on.evaluate(async () => {
       const { authClient } = await import('/src/lib/auth.ts')
       const { data } = await authClient.convex.token()
       if (!data?.token) throw new Error('Could not authenticate roadmap persistence check')
       return data.token
     }),
   )
+  return client
+}
+
+/* The milestones of this run (named with its prefix) that the backend holds
+   on top-level project `project` on a day of `weeks` ([from, to)), read
+   through `client` with milestones.between, following `next` until the
+   range ends, as the Roadmap reads them. */
+async function runMilestones(client, project, weeks) {
+  const rows = []
+  let after
+  for (let round = 0; round < 20; round++) {
+    const batch = await client.query(makeFunctionReference('milestones:between'), {
+      projects: [project],
+      from: weeks.from,
+      to: weeks.to,
+      ...(after ? { after } : {}),
+    })
+    rows.push(...batch.rows)
+    if (!batch.next)
+      return rows
+        .filter((row) => row.name.startsWith(prefix))
+        .map(({ id, name, week, project_id }) => ({ id, name, week, project_id }))
+        .sort((a, b) => a.id.localeCompare(b.id))
+    after = batch.next
+  }
+  throw new Error('The milestone range did not end within 20 batches')
+}
+
+async function persisted() {
+  await page.waitForFunction(() => window.__roadmapSmokeConnection().inflightMutations === 0)
+  const client = await clientOf(page)
   const snapshot = await readWorkspace((name, args) =>
     client.query(makeFunctionReference(name), args),
   )
@@ -97,10 +139,7 @@ async function persisted() {
         end: row.end_week ?? null,
       }
     }),
-    milestones: snapshot.milestones
-      .filter((row) => row.name.startsWith(prefix))
-      .map(({ id, name, week, project_id }) => ({ id, name, week, project_id }))
-      .sort((a, b) => a.id.localeCompare(b.id)),
+    milestones: await runMilestones(client, fixture.project, fixture.weeks),
   }
 }
 
@@ -158,8 +197,13 @@ async function cleanup() {
   try {
     const cleanupPage = await context.newPage()
     await signInDemo(cleanupPage, demo)
+    // the run's milestones, which lie on its project in this week and the
+    // next two; without a project the run made none
+    const made = fixture
+      ? await runMilestones(await clientOf(cleanupPage), fixture.project, fixture.weeks)
+      : []
     await cleanupPage.evaluate(
-      async ({ ids, prefix, orgSlug, initialUI }) => {
+      async ({ ids, milestones, orgSlug, initialUI }) => {
         const P = window.PLANNER
         const { convex } = await import('/src/lib/convex.ts')
         const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
@@ -171,7 +215,7 @@ async function cleanup() {
           if (snapshot.issues.some((row) => row.id === id && row.org_id === org.id))
             await convex.mutation('issues:deleteDeep', { org_id: org.id, id })
         }
-        for (const row of snapshot.milestones.filter((row) => row.name.startsWith(prefix))) {
+        for (const row of milestones) {
           const project = snapshot.projects.find((project) => project.id === row.project_id)
           if (project?.org_id === org.id)
             await convex.mutation('projects:removeMilestone', { org_id: org.id, id: row.id })
@@ -181,7 +225,7 @@ async function cleanup() {
           await convex.mutation('prefs:save', { profile_id: P.CURRENT_USER, prefs: P.loadUI() })
         }
       },
-      { ids: tasks.map(({ id }) => id), prefix, orgSlug: demo.orgSlug, initialUI },
+      { ids: tasks.map(({ id }) => id), milestones: made, orgSlug: demo.orgSlug, initialUI },
     )
     // deleting moved the tasks to Deleted items; delete them for good there
     await purgeDeletedTasks(
@@ -197,28 +241,36 @@ async function cleanup() {
 try {
   await signInDemo(page, demo)
   initialUI = await page.evaluate(() => window.PLANNER.loadUI())
-  const fixture = await page.evaluate(
+  fixture = await page.evaluate(
     async ({ tasks, milestone }) => {
       const P = window.PLANNER
+      const { convex } = await import('/src/lib/convex.ts')
+      const today = P.TODAY_WEEK
+      const iso = (week) => P.isoFromDate(P.weekToDate(week))
       // A top-level project holds one milestone a week, so the run uses a
       // Northstar project, Luma Sensor when it can, whose milestones leave
-      // this week and the next free for the milestones it adds and moves.
-      const free = (p) =>
-        P.milestonesIn(p.id).every((m) => m.week !== P.TODAY_WEEK && m.week !== P.TODAY_WEEK + 1)
-      // P.projects holds only active projects; the demo organization's own
-      const project = P.projects
+      // this week and the next free for the milestones it adds and moves,
+      // as the server's range read of those weeks answers them. P.projects
+      // holds only active projects; the demo organization's own.
+      const candidates = P.projects
         .filter((p) => p.type === 'meta' && p.org === P.org.id)
         .sort((a, b) => Number(b.name === 'Luma Sensor') - Number(a.name === 'Luma Sensor'))
-        .find(free)
+        .slice(0, 200)
+      const taken = await convex.query('milestones:between', {
+        projects: candidates.map((p) => p.id),
+        from: iso(today),
+        to: iso(today + 2),
+      })
+      const whole = taken.next === null && taken.stopped === null
+      const project = whole
+        ? candidates.find((p) => !taken.rows.some((m) => m.project_id === p.id))
+        : undefined
       const subs = P.projects.filter((p) => p.parent === project?.id)
       const sub = subs.find((p) => p.name === 'Electronics') ?? subs[0]
       if (!project || !sub)
         throw new Error('No Northstar project has this week and the next free for milestones')
       P.saveUINow({ roadmapWin: P.DEFAULT_WIN })
-      const { convex } = await import('/src/lib/convex.ts')
       window.__roadmapSmokeConnection = () => convex.connectionState()
-      const today = P.TODAY_WEEK
-      const iso = (week) => P.isoFromDate(P.weekToDate(week))
       for (const [i, task] of tasks.entries()) {
         await convex.mutation('issues:create', {
           org_id: P.org.id,
@@ -246,7 +298,13 @@ try {
         name: milestone.name,
         week: iso(today),
       })
-      return { project: project.id, name: project.name, today }
+      // every milestone the run makes lies in this week or the next two
+      return {
+        project: project.id,
+        name: project.name,
+        today,
+        weeks: { from: iso(today), to: iso(today + 3) },
+      }
     },
     { tasks, milestone },
   )
@@ -301,12 +359,24 @@ try {
   assert.deepEqual(await persisted(), first, 'Undo did not restore only the latest action')
   log("Task drags save only the dragged task; the parent's span follows; Undo restores one step")
 
-  await page.evaluate(({ id, week }) => window.PLANNER.updateMilestone(id, { week }), {
-    id: milestone.id,
-    week: fixture.today + 1,
-  })
+  // the store writes a milestone from a read that shows it, here the
+  // Roadmap's range read, once its flag shows
+  await flag(milestone.id).waitFor()
+  assert.equal(
+    await page.evaluate(({ id, week }) => window.PLANNER.updateMilestone(id, { week }), {
+      id: milestone.id,
+      week: fixture.today + 1,
+    }),
+    true,
+    'The milestone move was not saved',
+  )
   await settled(2)
-  await page.evaluate((id) => window.PLANNER.removeMilestone(id), milestone.id)
+  await flag(milestone.id).waitFor()
+  assert.equal(
+    await page.evaluate((id) => window.PLANNER.removeMilestone(id), milestone.id),
+    true,
+    'The milestone delete was not saved',
+  )
   await settled(3)
   await undo().click()
   await settled(2)
