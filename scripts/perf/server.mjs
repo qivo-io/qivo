@@ -16,12 +16,13 @@
 // answer from them (src/store/milestoneStandIn.setup.ts).
 // It also answers snapshot:forMe, the one query apps before the parts read,
 // with the whole it holds, milestones included, for a baseline build. A
-// baseline build from before the projects part stopped sending milestones
-// joins the parts this server sends and cannot load against it
-// (scripts/benchmark-browser.mjs --baseline), so measure such a build in a
-// checkout of its own. It answers the task window's own queries
-// (taskWindow:task, links and attachments) from the workspace it holds,
-// which a write sends again with the parts it changed. The task window's relation pickers' read
+// baseline build from after the parts and before the projects part
+// stopped sending milestones joins the parts this server sends and
+// cannot load against it (scripts/benchmark-browser.mjs --baseline), so
+// measure such a build in a checkout of its own. It answers the task
+// window's own queries (taskWindow:task, links and attachments) from the
+// workspace it holds, which a write sends
+// again with the parts it changed. The task window's relation pickers' read
 // (taskWindow:relationCandidates), which the app reads once a batch, comes
 // from a stand-in (src/store/relationPickerStandIn.setup.ts) before the
 // task window's other reads.
