@@ -318,9 +318,12 @@ export type ParentCheck =
  * `me` neither manages nor sees read as missing; then a parent that is not
  * a meta, an archived parent and a parent `me` sees without managing are
  * refused with the create's own sentences (projects_hierarchy_guard
- * 0078:341-349, archive-parent guard 0106:68). The lead picker of a new
- * sub-project (model/projectSettings.ts leadCandidatesOf) asks the same, so
- * both say the same.
+ * 0078:341-349, archive-parent guard 0106:68). A sub-project named as the
+ * parent counts as managed by its real root (managesSubProject), so an
+ * organization admin who manages it without seeing it, as REST, MCP and
+ * Settings find it, is told it is not top level rather than not found. The
+ * lead picker of a new sub-project (model/projectSettings.ts
+ * leadCandidatesOf) asks the same, so both say the same.
  *
  * `levelOf` answers `me`'s level on a parent they do not manage, navigation
  * included, which decides whether they see it (canSeeProject), and for a
@@ -339,12 +342,29 @@ export async function subProjectParent(
   if (parent === null || parent.org_id !== me.org_id) return { state: 'missing' }
   const manages = managesIn(me, parent, parent)
   const level = manages ? null : await levelOf(parent)
-  if (!manages && level === null) return { state: 'missing' }
+  if (!manages && level === null && !(await managesSubProject(ctx, me, parent)))
+    return { state: 'missing' }
   if (parent.type !== 'meta') return { state: 'refused', refusal: rule(PARENT_NOT_TOP_LEVEL) }
   if (parent.archived_at !== undefined) return { state: 'refused', refusal: rule(PARENT_ARCHIVED) }
   if (!manages && levelRank(level) < levelRank('lead'))
     return { state: 'refused', refusal: forbidden(LEAD_ACCESS_NEEDED) }
   return { state: 'ok', parent }
+}
+
+/* Whether `me` manages `project`, a sub-project, through the top-level
+ * project above it (lib/access.ts managesIn on its real root), with one
+ * read of that root. A top-level project, a legacy meta row stored with a
+ * parent, which keeps the level path, a missing root and one that is not
+ * a top-level meta answer false, so it never throws where rootMetaOf
+ * would. */
+async function managesSubProject(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  project: Doc<'projects'>,
+): Promise<boolean> {
+  if (project.parent_id === undefined || project.type !== 'project') return false
+  const root = await byId(ctx, 'projects', project.parent_id)
+  return root !== null && managesIn(me, project, root)
 }
 
 /** A new project as a caller asks for it. The core checks the parent, the

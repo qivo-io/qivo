@@ -612,13 +612,20 @@ export function leadCandidatesStandIn(
     if (force.unavailable) return { state: 'unavailable' }
     const parent = ws.projects.find((p) => p.id === args.parent_id)
     // model/projects.ts subProjectParent: a top-level meta the caller
-    // manages passes without its level, any other parent by its level
+    // manages passes without its level, any other parent by its level, and
+    // a sub-project the caller manages through its root is not missing, a
+    // legacy meta row with a parent aside
     const managed = !!parent && parent.parent_id === undefined && manages(ws, me, parent)
     const level =
       parent && parent.org_id === me.org_id && treeOf(ws, parent) !== null
         ? levelOf(ws, me, parent)
         : null
-    if (!parent || (!managed && level === null)) return { state: 'unavailable' }
+    const managedSub =
+      !!parent &&
+      parent.type === 'project' &&
+      parent.parent_id !== undefined &&
+      manages(ws, me, parent)
+    if (!parent || (!managed && level === null && !managedSub)) return { state: 'unavailable' }
     if (parent.type !== 'meta') return refused(PARENT_NOT_TOP_LEVEL)
     if (parent.archived_at !== undefined) return refused(PARENT_ARCHIVED)
     if ((!managed && level !== 'lead') || force.refused) return refused(LEAD_ACCESS_NEEDED)

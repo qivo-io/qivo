@@ -453,6 +453,52 @@ describe('creating projects and sub-projects', () => {
     }
   })
 
+  it('tells an admin who manages a sub-project without reading it that it takes no sub-project, over REST, MCP and the lead picker, as a reader is told', async () => {
+    const fx = await setup()
+    // Sam, a standard user who neither reads nor manages FW
+    const sam = await plantSeat(fx.t, {
+      org_id: fx.org.id,
+      name: 'Sam',
+      email: 'sam@testbed.test',
+      auth_user_id: `auth_sam_${fx.org.id}`,
+      accepted_at: NOW,
+    })
+    await keyOrg(fx.t, fx.org.id)
+    const NOT_TOP = 'sub-projects live directly under a project, never under another sub-project'
+    const mcpSub = (p: Doc<'profiles'>) =>
+      fx.t.mutation(internal.machine.projects.mcpCreateProject, {
+        ...as_(p),
+        name: 'Optics',
+        parent: 'FW',
+      })
+    const restSub = (p: Doc<'profiles'>) =>
+      fx.t.mutation(internal.machine.projects.restCreateProject, {
+        ...rest(p),
+        body: JSON.stringify({ name: 'Optics', parent: 'FW' }),
+      })
+    const leads = (p: Doc<'profiles'>) =>
+      as(fx.t, p).query(api.projectSettings.leadCandidates, {
+        org_id: fx.org.id,
+        parent_id: fx.sub.id,
+      })
+    // the admin takes part in nothing of TBED, and FW is its sub-project
+    await refused(mcpSub(fx.admin), 'rule', NOT_TOP)
+    await refused(restSub(fx.admin), 'rule', NOT_TOP)
+    expect(await leads(fx.admin)).toEqual({ state: 'refused', message: NOT_TOP })
+    // Pia, who reads FW, is told the same
+    await refused(mcpSub(fx.pia), 'rule', NOT_TOP)
+    expect(await leads(fx.pia)).toEqual({ state: 'refused', message: NOT_TOP })
+    // Sam finds it nowhere
+    await refused(mcpSub(sam), 'not_found', 'parent project "FW" not found (or not visible to you)')
+    await refused(restSub(sam), 'bad_request', 'parent project not found')
+    expect(await leads(sam)).toEqual({ state: 'unavailable' })
+    // nothing was created
+    const made = await fx.t.run(async (ctx) =>
+      (await ctx.db.query('projects').collect()).filter((p) => p.name === 'Optics'),
+    )
+    expect(made).toEqual([])
+  })
+
   it('a creator naming another lead keeps User access, an admin as anyone', async () => {
     const fx = await setup()
     const byUser = await parsed(
