@@ -987,11 +987,10 @@ they stay through that app's release, and a later release may remove them
 and adds them to the Instant Rollback list above.
 
 The Inbox's pages, `inbox.page`, first ship in the release after v0.1.122.
-No app, REST or MCP caller reads them yet, so that release sets no rollback
-floor and needs no step, and returning the backend to a commit before it is
-safe while no app reads the pages. The release whose app lists the Inbox
-from them makes the release that shipped them the backend's floor, and its
-own paragraph here says so. The pages read the `inbox_items` and
+When it shipped no app, REST or MCP caller read them, so that release set no
+rollback floor and needed no step. The release after v0.1.158, whose app
+lists the Inbox from them, makes v0.1.123 the backend's floor for that app,
+as its own paragraph below says. The pages read the `inbox_items` and
 `inbox_state` rows every deployment holds since the inbox items backfill
 below, and the release changes no table, field or index. The same release
 makes `inbox.item` answer `unread_change` for an unread mention in the
@@ -1945,6 +1944,27 @@ project's Overview and My view's read their milestones from
 `milestones.section`, My view with `mine`. The release changes no table,
 field or index and has no backfill.
 
+From the release after v0.1.158, the Inbox lists its tasks from
+`inbox.page`, 50 a page with Previous and Next, which v0.1.123 (`a7239f99`)
+first shipped, and a row's actions send `messages.readItem`, `unreadItem`,
+`removeItem` and `snoozeItem`, which v0.1.97 (`92434062`) first shipped,
+instead of reading the workspace inbox part's messages and sending their
+ids. So the Inbox reaches every task with messages, and its search asks the
+server and loads no task. This makes v0.1.123 the backend's floor for this
+app, which the floors above already hold, so the release sets no new
+rollback floor. Against a backend before v0.1.123 the Inbox says it
+couldn't load your messages, also in a tab that was open when the backend
+went back, until the backend rolls forward. Returning the app alone to an
+earlier release is safe, because that app lists the workspace inbox part,
+which the backend still sends, and its writes by message id stay. The
+workspace inbox part stays for the desktop alerts. The list shows only what
+the `inbox_items` rows hold, so the gate of the inbox items backfill below
+applies: every hosted deployment reported its backfill complete with
+v0.1.96, and before this release reaches staging and production the
+read-only dry run there must again report no rows that differ, are missing
+or are extra, as before v0.1.148. The release changes no server function,
+has no schema change, no backfill and no release step.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
@@ -2383,8 +2403,8 @@ item and the Inbox's pages of task groups, and answers that a person's Inbox
 is not ready while their `inbox_state` is not built, which a page says by
 naming the organization in `not_ready`. Since the release after v0.1.147
 the app's badge, its Mark all as read and Remove all read and its task
-window read the summary and the item. The Inbox list keeps the workspace
-inbox until a later release switches it, and REST and MCP still read the
+window read the summary and the item, and since the release after
+v0.1.158 its Inbox list reads the pages. REST and MCP still read the
 messages. A person whose messages were stored before the
 release that added the rows (PR 299, merged as `cf3d683`) has no complete
 rows until the one-time `internal/inboxItemsBackfill` builds them, while a
