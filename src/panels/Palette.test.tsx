@@ -1024,18 +1024,29 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     await last().answer([project('not-loaded', 'Firmware tools', null)])
     const rows = () => [...document.querySelectorAll<HTMLElement>('[cmdk-item]')]
     let release = () => {}
+    // the server's ok, with the delivery that brings the project
     resolving = {
       hold: new Promise<void>((resolve) => {
         release = resolve
+      }),
+      answer: async () => ({
+        state: 'ok',
+        project: { id: 'not-loaded', org_id: ORG, name: 'Firmware tools', num: 40, parent: null },
       }),
     }
     await click(rows()[0])
     expect(status()).toBe('Opening Firmware tools…')
     await type('firmware')
-    await act(async () => release())
+    const next = structuredClone(snap)
+    next.projects.push({ ...next.projects[1], id: 'not-loaded', name: 'Firmware tools', num: 40 })
+    next.delivered_at = '2026-09-15T10:00:00.000Z'
+    await act(async () => {
+      publish(next)
+      release()
+    })
     await settle()
-    // the stand-in answers it unavailable, which the dropped wait says nothing of
-    expect(document.body.textContent).not.toContain('You can no longer open Firmware tools.')
+    // the dropped wait opens nothing and says nothing
     expect(ctx.setScope).not.toHaveBeenCalled()
+    expect(document.body.textContent).not.toContain('Opening Firmware tools…')
   })
 })

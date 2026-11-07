@@ -9,6 +9,7 @@ import {
   type ForcedProjectNav,
   isProjectNavRead,
   NAV_UNCHECKED,
+  queryProjectNav,
 } from '../store/projectNavStandIn.setup'
 import type { FocusRow } from './SidebarProjects'
 import { TooltipProvider } from './ui/tooltip'
@@ -935,6 +936,18 @@ describe('rows', { timeout: 60_000 }, () => {
       ['Opening Late arrival…', 'info', { key: 'sidebar-open' }],
       ["Couldn't open Late arrival. Try again.", 'info', { key: 'sidebar-open' }],
     ])
+    // the server's ok, with the delivery that brings the project, opens it
+    // and takes the toast away
+    window.dismissToast = vi.fn()
+    const whole = subs.find((s) => s.name === 'workspace:whole')
+    network.query.mockImplementation(async (_ref, args) => {
+      whole?.next(structuredClone({ ...snap, delivered_at: '2026-09-15T09:00:00.000Z' }))
+      return queryProjectNav(snap, 'projectNav:resolve', args)
+    })
+    await click(find('button', row(late)))
+    await settle()
+    expect(actions.openProject).toHaveBeenLastCalledWith(late)
+    expect(window.dismissToast).toHaveBeenCalledExactlyOnceWith('sidebar-open')
   })
 })
 

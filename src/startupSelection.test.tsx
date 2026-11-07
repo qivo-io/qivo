@@ -17,6 +17,7 @@ import {
   queryProjectNav,
 } from './store/projectNavStandIn.setup'
 import { answerRoadmap } from './store/roadmapStandIn.setup'
+import { taskRow } from './views/boardFixture.setup'
 
 /* Startup selection on the real store and App (App.tsx opening,
    components/ProjectChooser.tsx). The workspace comes through the live
@@ -292,10 +293,10 @@ const viewReads = () =>
       s.name.startsWith('overview:'),
   )
 /** The projects App remembered, in order, each sent at once
-    (P.saveUINow). */
+    (P.saveUINow), and null for a write that cleared it. */
 const sentProjects = () =>
   remembers.mock.calls.flatMap(([patch]) =>
-    patch.lastProject ? [patch.lastProject.project_id] : [],
+    'lastProject' in patch ? [patch.lastProject?.project_id ?? null] : [],
   )
 const lastSent = () => sentProjects().at(-1)
 async function click(element: Element | null | undefined) {
@@ -413,6 +414,7 @@ describe('opening the remembered project', { timeout: 60_000 }, () => {
       expect(location.pathname).toBe('/app/testbed')
       // a loss leaves what is remembered
       expect(sentProjects()).toEqual([])
+      expect(store.P.loadUI().lastProject?.project_id).toBe(id)
       await leave()
     }
   })
@@ -443,6 +445,70 @@ describe('opening the remembered project', { timeout: 60_000 }, () => {
     await until(() => shown() === 'overview', 'the Overview')
     expect(asks).toHaveLength(2)
     expect(location.pathname).toBe('/app/testbed/overview/p/10')
+  })
+
+  it("says Couldn't open with Retry where the server says ok and the current workspace lacks the project", async () => {
+    const snap = world()
+    // the server holds a project the workspace's delivery has not brought
+    const held = structuredClone(snap)
+    const late = meta(held, 'Late programme')
+    resolveWith = (args) => queryProjectNav(held, 'projectNav:resolve', args)
+    await app(snap, '/app/testbed', remembering(late))
+    await chooser('retry')
+    expect(line()).toBe("Couldn't open Late programme.")
+    expect(q('[data-project-picker]')).toBeNull()
+    expect(shown()).toBeUndefined()
+    expect(viewReads()).toEqual([])
+    // Retry asks again, and opens once the delivery brought it
+    resolveWith = (args) => {
+      publish({ ...held, delivered_at: '2026-09-15T09:00:00.000Z' })
+      return queryProjectNav(held, 'projectNav:resolve', args)
+    }
+    await click(q('[data-project-chooser-retry]'))
+    await until(() => shown() === 'overview', 'the Overview')
+    expect(asks).toHaveLength(2)
+    expect(store.P.scopeInfo(late)?.name).toBe('Late programme')
+  })
+
+  it('drops a check’s answer once the person moved to another address meanwhile', async () => {
+    const release = holdResolve()
+    await app(world(), '/app/testbed', remembering(LUMA))
+    await chooser('checking')
+    // Back or Forward reaches an address under a slug this login cannot
+    // resolve, which shows the chooser with its note and checks nothing
+    await go('/app/globex/board/p/3')
+    await chooser('lost')
+    await release()
+    expect(chooserState()).toBe('lost')
+    expect(note()).toBe('That project is not available to you.')
+    expect(shown()).toBeUndefined()
+    expect(viewReads()).toEqual([])
+  })
+
+  it('keeps the remembered project for a task address of a task in it, else opens the task’s sub-project, checking nothing', async () => {
+    const snap = world()
+    // QN-7 in Firmware, which the workspace holds from its boot
+    snap.orgs[0].next_issue_num = 8
+    snap.issues.push({
+      ...taskRow(snap, '01000000-0000-4000-8000-000000000007', 'todo', 7),
+      project_id: FW,
+    })
+    for (const [id, org, name] of [
+      [LUMA, ORG, 'Luma Sensor'],
+      [PORTAL, PARTNER, 'Firmware'],
+    ] as const) {
+      await app(structuredClone(snap), '/app/testbed/board/tasks/qn-7', remembering(id, org))
+      await until(() => shown() === 'kanban', 'the Board')
+      expect(q('[data-scope-crumb] h1')?.textContent).toBe(name)
+      expect(asks).toEqual([])
+      // a task's address chose the scope, so nothing is remembered
+      expect(sentProjects()).toEqual([])
+      if (id === LUMA) await leave()
+    }
+    // the person's own press on the scope the task chose remembers it
+    await until(() => q(`aside [data-subproject-row="${FW}"] > button`), "Firmware's row")
+    await click(q(`aside [data-subproject-row="${FW}"] > button`))
+    await until(() => lastSent() === FW, 'Firmware remembered')
   })
 
   it('never restores a saved All projects or My view, and lets an address that names a scope win', async () => {
@@ -548,6 +614,13 @@ describe('the chooser', { timeout: 60_000 }, () => {
     expect(q('[data-project-chooser]')?.textContent).toContain(
       'The project you choose opens in its task list.',
     )
+    // a pick opens the project's task list, whatever view the address named
+    await leave()
+    await app(structuredClone(snap), '/app/testbed/roadmap')
+    await chooser('choose')
+    await until(() => picks().includes(LUMA), 'Luma Sensor')
+    await click(q(`[data-project-pick="${LUMA}"]`))
+    await until(() => location.pathname === '/app/testbed/board/p/10', "Luma Sensor's task list")
   })
 
   it('takes focus in its field on a desktop where focus is nowhere', async () => {
@@ -688,6 +761,8 @@ describe('the access guard and Settings', { timeout: 60_000 }, () => {
     expect(note()).toBe('Luma Sensor is no longer available to you.')
     expect(store.P.project(PORTAL)).toBeDefined()
     expect(location.pathname).toBe('/app/testbed')
+    // the loss leaves what is remembered
+    expect(sentProjects()).toEqual([LUMA])
     await leave()
     // an archived sub-project
     await app(structuredClone(snap), `/app/testbed/board/p/11`)
@@ -695,6 +770,20 @@ describe('the access guard and Settings', { timeout: 60_000 }, () => {
     publish({
       ...server,
       projects: server.projects.filter((p) => p.id !== FW),
+      delivered_at: '2026-09-15T09:00:00.000Z',
+    })
+    await chooser('lost')
+    expect(note()).toBe('Firmware is no longer available to you.')
+    await leave()
+    // the scope's top-level project gone while the workspace still holds
+    // the sub-project, which the person holds a grant on of its own
+    const direct = structuredClone(snap)
+    direct.access.push({ project_id: FW, profile_id: ME, level: 'user' })
+    await app(direct, `/app/testbed/board/p/11`)
+    await until(() => shown() === 'kanban', 'the Board')
+    publish({
+      ...server,
+      projects: server.projects.filter((p) => p.id !== LUMA),
       delivered_at: '2026-09-15T09:00:00.000Z',
     })
     await chooser('lost')
@@ -733,20 +822,26 @@ describe('the access guard and Settings', { timeout: 60_000 }, () => {
     const snap = world()
     await app(snap, '/app/testbed/board/p/11')
     await until(() => shown() === 'kanban', 'the Board')
-    const settingsThen = async (gone: { id: string; parent: string | null }) => {
+    const settingsThen = async (
+      gone: { id: string; parent: string | null },
+      whileOpen: () => void = () => {},
+    ) => {
       settings.gone = gone
       await click(q('aside [data-settings-nav]'))
       await until(() => q('[data-gone]'), 'Settings')
       await click(q('[data-gone]'))
+      whileOpen()
       await click(q('[data-exit]'))
     }
     // another project's archive leaves the scope
     await settingsThen({ id: PORTAL, parent: null })
     await until(() => shown() === 'kanban', 'the Board')
     expect(location.pathname).toBe('/app/testbed/board/p/11')
-    // the scope's own archive moves to its parent
-    await settingsThen({ id: FW, parent: LUMA })
+    // the scope's own archive moves to its parent, which is remembered only
+    // once its view shows, never under Settings
+    await settingsThen({ id: FW, parent: LUMA }, () => expect(sentProjects()).toEqual([FW]))
     await until(() => location.pathname === '/app/testbed/board/p/10', "the parent's Board")
+    await until(() => lastSent() === LUMA, 'the parent remembered')
     // the top-level project's own archive shows the chooser with no note
     await settingsThen({ id: LUMA, parent: null })
     await chooser('choose')

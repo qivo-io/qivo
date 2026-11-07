@@ -583,12 +583,15 @@ describe('Back to a task during the first load', { timeout: 30_000 }, () => {
       true,
       (slug) => `/app/${slug}/board/tasks/qn-2`,
       // My view, which an earlier app saved as the scope, is read by
-      // nothing, and nobody has QN-2
-      (snap) =>
+      // nothing, though QN-2 is the person's own and My view holds it
+      (snap) => {
+        const own = snap.issues.find((t) => t.num === 2)
+        if (own) own.assignee_id = snap.profiles[0].id
         localStorage.setItem(
           `planner.ui.v1:${snap.profiles[0].id}`,
           JSON.stringify({ scope: 'mine', view: 'kanban' }),
-        ),
+        )
+      },
     )
     await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
     await arrive()
