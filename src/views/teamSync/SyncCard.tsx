@@ -348,9 +348,11 @@ const MENTION_SEARCH = 'data-sync-mention-search'
     choice the check finds no longer eligible goes to `onGone`, which
     clears it, says why and leaves the choice to the person, but only while
     it is still the choice, so a person picked before the answer keeps
-    their pick. `initial` is chosen (`onWho` without a press) once a batch
-    row or an `eligible` answer holds them, while the person has picked no
-    one (`picked`). A failed or refused check chooses nothing. */
+    their pick. A check that answers after this window closed changes
+    nothing, as a later opening holds its own choice and check. `initial`
+    is chosen (`onWho` without a press) once a batch row or an `eligible`
+    answer holds them, while the person has picked no one (`picked`). A
+    failed or refused check chooses nothing. */
 function MentionPeople({
   it,
   initial,
@@ -393,7 +395,11 @@ function MentionPeople({
   useEffect(() => {
     const id = openedWith?.id ?? initial
     if (!id) return
+    // an answer after the window closed is an older opening's, which says
+    // nothing of the choice a later opening holds
+    let live = true
     void P.ownerChecks({ task, field: 'recipient', ids: [id] }).then((answer) => {
+      if (!live) return
       const row = answer?.state === 'ready' ? answer.rows.find((r) => r.id === id) : undefined
       if (!row) return
       if (openedWith) {
@@ -402,6 +408,9 @@ function MentionPeople({
         onGone(openedWith)
       } else if (row.eligible && row.person) setSuggested(row.person)
     })
+    return () => {
+      live = false
+    }
   }, [])
   // `initial`, once a batch or the check says they may be mentioned
   const fromBatch = initial ? list.rows.find((row) => row.id === initial) : undefined

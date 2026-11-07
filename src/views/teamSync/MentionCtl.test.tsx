@@ -752,6 +752,39 @@ describe('the Team sync @ window’s Send', () => {
     expect(line()).toBeNull()
   })
 
+  it('ignores the opening check of a window that closed before it answered', async () => {
+    await load(3)
+    await write('Can you check the soak report?', vi.fn())
+    await pressSend()
+    await toggle()
+    await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: RULE })))
+    force.add('check-ineligible')
+    holding = true
+    // opened and closed while its check of the kept Aisha is on its way,
+    // then opened again
+    await toggle()
+    await toggle()
+    expect(windowOpen()).toBe(false)
+    await toggle()
+    expect(reads('pickers:canOwn').slice(-2).map((a) => a.args.ids)).toEqual([
+      ['aisha'],
+      ['aisha'],
+    ])
+    await release('pickers:syncRecipients')
+    await release('pickers:syncRecipients')
+    // Ben Carter, picked in the second opening
+    const ben = 'person-0000'
+    await act(async () => person(ben)?.click())
+    expect(pressed()).toEqual([ben])
+    // the first opening's check says no of Aisha, and changes nothing
+    await release('pickers:canOwn')
+    expect(pressed()).toEqual([ben])
+    expect(line()).toBeNull()
+    await release('pickers:canOwn')
+    expect(pressed()).toEqual([ben])
+    expect(line()).toBeNull()
+  })
+
   it('never sends a kept note to the suggestion once Send dropped the chosen person', async () => {
     await load(3)
     await mount(vi.fn())
