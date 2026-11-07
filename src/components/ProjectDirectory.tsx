@@ -40,7 +40,7 @@
      and moves nothing.
    - No list says it found nothing or ended before the server said so: not
      ready, the access_unchecked refusal, a stopped page or batch and a
-     failure each show as themselves.
+     failure each show as themselves, the refusal and a failure with Retry.
 
    The page is a kept page (lib/keptPages.ts): while another page shows,
    its reads stop and it keeps what it shows, and coming back shows the
@@ -699,7 +699,9 @@ function BatchNote({
 }
 
 /* The line that ends an expanded list (lib/pagedList.ts listEnd). Its Load
-   more stays in place while it reads, so keyboard focus stays on it. */
+   more stays in place while it reads, so keyboard focus stays on it. A
+   failed list and the access_unchecked refusal offer Retry, which reads the
+   list again from its first batch. */
 function ChildrenEnd({
   list,
   end,
@@ -717,8 +719,31 @@ function ChildrenEnd({
   switch (end) {
     case 'loading':
       return line('Loading sub-projects…', 'status')
-    case 'held':
-      return line(heldText(list.answers[0], 'children'))
+    case 'held': {
+      const answer = list.answers[0]
+      // the refusal of a check the server could not finish offers Retry,
+      // which reads the list again; not ready answers by itself once the
+      // server is ready, and a project the person cannot open has nothing
+      // to read again
+      if (answer?.state !== 'unavailable' || answer.reason !== 'access_unchecked')
+        return line(heldText(answer, 'children'))
+      return (
+        <div
+          data-directory-children-end={end}
+          className={cn('flex flex-wrap items-center gap-2', noteClass)}
+        >
+          {heldText(answer, 'children')}
+          <Button
+            variant="ghost"
+            className="h-control-sm text-sm"
+            data-directory-children-retry=""
+            onClick={() => list.retry()}
+          >
+            Retry
+          </Button>
+        </div>
+      )
+    }
     case 'failed':
       return (
         <div

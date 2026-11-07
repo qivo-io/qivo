@@ -849,6 +849,40 @@ describe('the expanded list', { timeout: 60_000 }, () => {
     expect(document.querySelectorAll('[data-directory-child]')).toHaveLength(30)
   })
 
+  it('offers Retry beside a list the server could not check, and none while not ready or for a lost project', async () => {
+    const next0 = base()
+    const big = top(next0, 'Luma Sensor')
+    for (let s = 0; s < 3; s++) sub(next0, big, named(s, 'Board'))
+    const other = top(next0, 'Luma Cloud')
+    await load(next0)
+    await render()
+    const endOf = () => find('[data-directory-children-end]')
+    const retry = () => document.querySelector('[data-directory-children-retry]')
+    // the page answered before; the list's first answer is the refusal
+    force.unchecked = NAV_UNCHECKED
+    await click(find('[data-directory-expand]', row(big)))
+    expect(endOf().dataset.directoryChildrenEnd).toBe('held')
+    expect(endOf().textContent).toContain(NAV_UNCHECKED)
+    expect(document.querySelectorAll('[data-directory-child]')).toHaveLength(0)
+    // Retry reads the list again, which now answers its rows
+    force.unchecked = undefined
+    const before = asked('children').length
+    await click(retry())
+    expect(asked('children').length).toBeGreaterThan(before)
+    expect(document.querySelectorAll('[data-directory-child]')).toHaveLength(3)
+    // not ready offers nothing to press, as the server answers again by itself
+    force.notReady = true
+    await click(find('[data-directory-expand]', row(other)))
+    expect(endOf().textContent).toBe('Qivo is still preparing your project list.')
+    expect(retry()).toBeNull()
+    // nor does a project the person can no longer open
+    force.notReady = false
+    snap.access = snap.access.filter((a) => a.project_id !== big)
+    await click(find('[data-directory-expand]', row(big)))
+    expect(endOf().textContent).toBe('You can no longer open this project.')
+    expect(retry()).toBeNull()
+  })
+
   it('says a batch that stopped where it began could not be checked, with Retry', async () => {
     const next0 = base()
     const big = top(next0, 'Luma Sensor')
