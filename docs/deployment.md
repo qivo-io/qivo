@@ -427,7 +427,7 @@ and that Search finds the control task and not the managed one
 task after the step, also after a failure, and reports that delete as
 `cleanup/admin-management`; the control sub-project goes with its first
 project in the cleanup. Against a backend from before the release after
-v0.1.158, where admin status still gives access to project work, that
+v0.1.159, where admin status still gives access to project work, that
 step fails. It then makes a sub-project of its
 own under its first project, uploads one file of 2,048 bytes over REST to a
 task there, opens **Billing**, checks that current storage shows a figure
@@ -2058,7 +2058,7 @@ organization from the store's project, and checks over REST that the
 backend saved the move. The release changes no table, field or index, and
 has no backfill and no release step.
 
-From the release after v0.1.158, organization admin status gives no access
+From the release after v0.1.159, organization admin status gives no access
 to project work, so this release is the backend's floor. A backend returned
 below it gives organization admins every project again, which widens
 access, so roll forward instead. The release sets no app floor and changes
