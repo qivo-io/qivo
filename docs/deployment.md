@@ -1755,16 +1755,17 @@ From the release after v0.1.151, `files.mintUrls` refuses a call that names
 more than 100 attachments or more than 1,000 profile pictures, whole and
 before its handler reads anything (only the membership check runs first),
 and reads each task and each project's access once a call. The app of that
-release asks for file URLs through one queue, at most 100 ids a call and two
-calls at a time, loads description and comment images as they come near
-view, and holds pictures and the background while the page is hidden. It
-works against any backend. A backend from before the release reads the
-access of each image's project on its own, so a call of 100 images of a
-task stored on a top-level project with the design size's 30 sub-projects
-can pass that backend's read limit. The app then asks for each half of a
-failed call once more, and 50 images stay within the limit. So the release
-sets no rollback floor and needs no step. Returning the app to
-an earlier release stays safe, and so does returning the backend down to the
+release asks for its file URLs through one queue, at most 100 ids a call and
+two calls at a time, apart from its browser export, which still asks for
+one file a call beside the queue. It loads description and comment images
+as they come near view, and holds pictures and the background while the
+page is hidden. It works against any backend. A backend from before the
+release reads the access of each image's project on its own, so a call of
+100 images of a task stored on a top-level project with the design size's
+30 sub-projects can pass that backend's read limit. The app then asks for
+each half of a failed call once more, and 50 images stay within the limit.
+So the release sets no rollback floor and needs no step. Returning the app
+to an earlier release stays safe, and so does returning the backend down to the
 newest floor above. An app loaded before the release asks for one attachment
 a call and works unchanged. It asks for every picture its workspace holds in
 one call, which inside the design size is at most 1,000, and a tab whose
