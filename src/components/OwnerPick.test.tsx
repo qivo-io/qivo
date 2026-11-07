@@ -486,6 +486,36 @@ describe('the owner list’s search', () => {
       patch: { assignee_id: 'edward' },
     })
   })
+
+  it('takes Enter on the first person once Try again answers a search whose first read failed', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await load({ edward: true })
+    await openList()
+    force.add('error')
+    await type('Ed')
+    await rest()
+    expect(listText()).toContain("Couldn't load people.")
+    expect(choiceIds()).toEqual([])
+    // Try again from the keyboard, as a person reaches it
+    await press('ArrowDown')
+    expect(selected()?.hasAttribute('data-picker-retry')).toBe(true)
+    force.delete('error')
+    await press('Enter')
+    await settle()
+    expect(reads('pickers:taskOwners').map((a) => a.args.search)).toEqual([undefined, 'Ed', 'Ed'])
+    expect(writes).toHaveLength(0)
+    // the answer Try again brought moves the highlight, as a fresh answer
+    // does, so Enter picks Edward and never clears the field
+    expect(unassigned()).toBeDefined()
+    expect(choiceIds()).toEqual(['edward'])
+    expect(selected()?.dataset.ownerChoice).toBe('edward')
+    await press('Enter')
+    await settle()
+    expect(writes).toHaveLength(1)
+    expect(network.mutation.mock.calls.at(-1)?.[1]).toMatchObject({
+      patch: { assignee_id: 'edward' },
+    })
+  })
 })
 
 describe('the owner list’s batches and states', () => {

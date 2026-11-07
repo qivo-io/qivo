@@ -75,14 +75,16 @@ function OwnerFace({ id }: { id: string }) {
  * the typed text lands, which moves the highlight to its first row; Enter
  * acts only then. Under a search that first row is a person whenever the
  * answer holds one, so Enter after a name never clears the field, even
- * when the clear row's label also holds the typed words. Load more moves
- * the highlight to the first new row. A held, refused, unavailable,
- * over-budget, stopped or failed list says so in the field's words
- * (CommandChoiceEnd), never as an empty or ended list. An unavailable list
- * and a refused assignee list also disable the clear row, which the write
- * would refuse. A refused reviewer list keeps it, since the write still
- * clears the reviewer a task with subtasks kept from before
- * (REVIEWER_ON_GROUP), though it refuses a clear below Edit.
+ * when the clear row's label also holds the typed words. A failed or held
+ * first read moves no highlight, so the answer Try again brings moves it
+ * as a fresh answer does. Load more moves the highlight to the first new
+ * row. A held, refused, unavailable, over-budget, stopped or failed list
+ * says so in the field's words (CommandChoiceEnd), never as an empty or
+ * ended list. An unavailable list and a refused assignee list also
+ * disable the clear row, which the write would refuse. A refused reviewer
+ * list keeps it, since the write still clears the reviewer a task with
+ * subtasks kept from before (REVIEWER_ON_GROUP), though it refuses a clear
+ * below Edit.
  *
  * Picking writes `field` when the pick changes it through P.updateIssue,
  * whose refusal toasts the server's sentence and is the only check of the
@@ -200,9 +202,13 @@ export function OwnerPickList({
     if (typed !== '' && person) return person
     return showNone && !closed ? NONE : (person ?? '')
   }
+  // the key whose answer moved the highlight. Only a batch the server
+  // answered for the key moves it, an empty one included, never a failed
+  // or held first read, so the answer Try again brings for the same key
+  // moves it as a fresh answer does.
   const highlighted = useRef<string | null>(null)
   useEffect(() => {
-    if (!answered || highlighted.current === listKey) return
+    if (!answered || list.phase !== 'ready' || highlighted.current === listKey) return
     highlighted.current = listKey
     setValue(firstValue())
   })
