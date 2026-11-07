@@ -360,7 +360,7 @@ The Roadmap must reach its ok state and show that task's row, having
 subscribed its own read (`tasks:roadmap`) and never the planning panel's
 old read (`planning:assigneeLoad`) (`ui/tasks-on-demand`). It reads only,
 and an app from before the Roadmap read the server fails it. Next it makes a
-sub-project of its own with its run tag under the run project over REST,
+sub-project of its own with its run tag under the run project, with one task, over REST,
 records the frames the page sends and receives on its sync socket from a
 fresh load of that sub-project's Board, presses **New task in To Do**,
 creates a task with its run tag through the dialog and renames it in its

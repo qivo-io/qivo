@@ -5241,8 +5241,9 @@ export function createOrder(frames) {
 
 /** Creates a task through the Board, over the deployment's socket, in a
  *  sub-project of its own under the run project, so no later step meets
- *  an active task it did not make: from a fresh load of that sub-project's
- *  Board it presses New task in To Do, types the run's tagged title, presses
+ *  an active task it did not make, with one task over REST so its Board
+ *  shows its columns: from a fresh load of that sub-project's Board it
+ *  presses New task in To Do, types the run's tagged title, presses
  *  Create, and once the window and the card show it renames the task in the
  *  window at once. On the frames of that load it checks that nothing
  *  subscribed the task windows (TASK_WINDOWS_QUERY) and that no read of the
@@ -5259,6 +5260,14 @@ async function createAnswerCheck() {
       parent: M.id,
     })
     expect(Number.isInteger(sub.num), 'the sub-project has no number')
+    // one task over REST, so its Board shows its columns, whose + it presses
+    run.created.push(
+      await restOk(w, 'POST', '/tasks', {
+        project: sub.id,
+        title: `${run.tag} create answer column`,
+        status: 'todo',
+      }),
+    )
     // the frames the fresh load passes on its sync socket, in order
     let frames = []
     const record = (ws) => {
