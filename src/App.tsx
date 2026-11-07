@@ -2030,8 +2030,9 @@ function App() {
       ),
     // All projects: the project directory, from the sidebar's row and the
     // phone's Projects tab. It leaves the scope and the view as they are,
-    // so visiting it never changes the saved scope, and closes a task
-    // window, since its address names no task
+    // so visiting it never changes the remembered project
+    // (UIPrefs.lastProject), and closes a task window, since its address
+    // names no task
     openProjects: () =>
       move(
         { settingsPage: null, inboxOpen: false, sync: null, openIssue: null, projectsOpen: true },
