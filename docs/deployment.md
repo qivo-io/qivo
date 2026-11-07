@@ -1738,9 +1738,10 @@ a star fails, also in a tab that was open when the backend went back, until
 the backend rolls forward. The floors above already hold v0.1.126, so this
 release sets no new floor. From it on, as from them, never return the
 backend to a commit before the newest floor above; roll forward instead.
-Returning the app alone to an earlier release is safe, because that app
-lists the workspace's projects and ignores the stored favorites, which
-stay. The release adds the internal module `internal/favoritesRepair`
+Returning the app alone to an earlier release is safe, because that app's
+directory lists the workspace's projects and its pickers keep listing the
+stored favorites first, and the rows stay. The release adds the internal
+module `internal/favoritesRepair`
 ([Recovery and compatibility](#recovery-and-compatibility), the favorites
 paragraph), and has no schema change, no backfill and no release step.
 Northstar's dataset becomes version 10, which stars a top-level project for
@@ -2446,10 +2447,12 @@ Returning the app alone changes nothing, because no app calls the link or
 the route.
 
 Each seat's favorite top-level projects are rows in `project_favorites`,
-which only `projectNav:setFavorite` writes, which the app's star in the All
-projects directory calls from the release after v0.1.150. The table
-starts empty and needs no backfill, and the Northstar seed writes its
-people's stars directly from dataset version 10. A rename, archive or restore of a
+which the app writes only through `projectNav:setFavorite`, the call of the
+All projects directory's star from the release after v0.1.150; the
+Northstar seed inserts its people's stars from dataset version 10
+(`model/projectFavorites.ts` `insertSeededFavorite`), and
+`internal/favoritesRepair` deletes and patches what a rollback left. The
+table starts empty and needs no backfill. A rename, archive or restore of a
 project keeps the rows' name key and live copies in its transaction, and
 profile removal, organization deletion, the public demo's cleanup, the
 Northstar wipe and the Deleted items purge delete them. A rollback past the
