@@ -79,6 +79,8 @@ const fake = vi.hoisted(() => ({
   threadComments: [],
   threadHistory: [],
   rateRefusals: 0,
+  // the issue_labels rows the workspace's tasks part answers
+  issueLabels: [],
 }))
 vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
@@ -186,7 +188,7 @@ vi.mock('convex/browser', () => ({
           state: 'ok',
           issues: fake.issues,
           links: [],
-          issueLabels: [],
+          issueLabels: fake.issueLabels,
           attachments: [],
           issueSubs: [],
           orgLoad: [],
@@ -2048,6 +2050,7 @@ describe('board-scale-seed --thread', () => {
     fake.threadComments = []
     fake.threadHistory = []
     fake.rateRefusals = 0
+    fake.issueLabels = []
   })
 
   it('takes a comment count up to the comment cap', () => {
@@ -2060,7 +2063,7 @@ describe('board-scale-seed --thread', () => {
   })
 
   it('plans the missing comments in ordinary text, posters in turn, and toggles up to the count', () => {
-    const plan = planThread(6, { task, present: new Set(), posters, history: 2, on: false })
+    const plan = planThread(6, { task, present: new Set(), posters, history: 2, labels: [] })
     expect(plan.comments.map((c) => c.poster.id)).toEqual([
       'aisha',
       'leo',
@@ -2088,7 +2091,7 @@ describe('board-scale-seed --thread', () => {
       present: new Set(plan.comments.slice(0, 4).map((c) => c.fields.id)),
       posters,
       history: 6,
-      on: false,
+      labels: [],
     })
     expect(again.comments.map((c) => c.fields.id)).toEqual(
       plan.comments.slice(4).map((c) => c.fields.id),
@@ -2099,16 +2102,45 @@ describe('board-scale-seed --thread', () => {
   it('refuses a count that would take the task past the cap with the comments it holds', () => {
     const others = new Set(Array.from({ length: 30 }, (_, n) => `northstar-${n}`))
     expect(() =>
-      planThread(971, { task, present: others, posters, history: 0, on: false }),
+      planThread(971, { task, present: others, posters, history: 0, labels: [] }),
     ).toThrow(
       '--thread 971 would take "Calibrate the pilot sensors" past 1000 comments; it holds 30 already.',
     )
     expect(
-      planThread(970, { task, present: others, posters, history: 0, on: false }).comments,
+      planThread(970, { task, present: others, posters, history: 0, labels: [] }).comments,
     ).toHaveLength(970)
     expect(() =>
-      planThread(5, { task, present: new Set(), posters: [], history: 0, on: false }),
+      planThread(5, { task, present: new Set(), posters: [], history: 0, labels: [] }),
     ).toThrow('Nobody with a login can post on')
+  })
+
+  it('toggles the first of the task’s own labels by id when the task has no free label slot', () => {
+    const full = Array.from(
+      { length: LIMITS.labels.max },
+      (_, n) => `label-${String(n).padStart(2, '0')}`,
+    ).reverse()
+    const plan = (labels) =>
+      planThread(3, { task, present: new Set(), posters, history: 0, labels }).toggles.map((t) => [
+        t.label_id,
+        t.on,
+      ])
+    // label-00 is on the task, so it goes off first
+    expect(plan(full)).toEqual([
+      ['label-00', false],
+      ['label-00', true],
+      ['label-00', false],
+    ])
+    // a free slot, or the seed's own label among the full set, keeps it
+    expect(plan(full.slice(1))).toEqual([
+      [THREAD_LABEL, true],
+      [THREAD_LABEL, false],
+      [THREAD_LABEL, true],
+    ])
+    expect(plan([...full.slice(1), THREAD_LABEL])).toEqual([
+      [THREAD_LABEL, false],
+      [THREAD_LABEL, true],
+      [THREAD_LABEL, false],
+    ])
   })
 
   it('posts as Nora and the sub-project owners in turn, waits out the posting rate, and toggles the label', async () => {
@@ -2158,5 +2190,26 @@ describe('board-scale-seed --thread', () => {
     expect(
       fake.calls.some(([name, call]) => name === 'labels:create' && call.id === THREAD_LABEL),
     ).toBe(true)
+  })
+
+  it('toggles one of the task’s own labels and makes none when the task carries the most labels', async () => {
+    fake.issues = [
+      { id: 'task-1', org_id: 'org', project_id: 'sub', num: 1, title: 'First', assignee_id: 'x' },
+    ]
+    // --labels can fill the task's slots before the thread step runs
+    fake.issueLabels = Array.from({ length: LIMITS.labels.max }, (_, n) => ({
+      org_id: 'org',
+      issue_id: 'task-1',
+      label_id: `label-${String(n).padStart(2, '0')}`,
+    }))
+    await runBoardScaleSeed([...local, '--tasks', '0', '--thread', '3'], { env, log: () => {} })
+    expect(fake.comments.size).toBe(3)
+    const toggles = fake.calls.filter(([name]) => name === 'labels:toggle')
+    expect(toggles.map(([, call]) => [call.issue_id, call.label_id, call.on])).toEqual([
+      ['task-1', 'label-00', false],
+      ['task-1', 'label-00', true],
+      ['task-1', 'label-00', false],
+    ])
+    expect(fake.calls.some(([name]) => name === 'labels:create')).toBe(false)
   })
 })

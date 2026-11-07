@@ -205,7 +205,10 @@
  * changes come from putting one label the seed makes on the task and
  * taking it off again through labels:toggle, one change each, until the
  * task's history, counted as Nora reads it first, holds N rows, so a rerun
- * adds none. */
+ * adds none. A task that already carries the most labels a task can have
+ * (LIMITS.labels), as --labels can leave it, has one of its own labels
+ * taken off and put back instead, so it ends without that label when the
+ * count of changes is odd. */
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -483,11 +486,13 @@ export function threadCommentBody(n) {
 /** The --thread plan for `task`: the comments still missing of `count`,
     each with its poster in turn among `posters`, given the ids of the
     comments the task holds (`present`), and the label toggles that bring
-    its history, `history` rows now, to `count`, starting from whether the
-    label is on the task (`on`). Refuses a count that would take the task
-    past the comment cap with the comments it holds that are not the
-    seed's. */
-export function planThread(count, { task, present, posters, history, on }) {
+    its history, `history` rows now, to `count`, given the ids of the
+    labels the task carries (`labels`). The toggles use THREAD_LABEL, or
+    the first of the task's own labels by id when the task has no free
+    label slot, starting from whether that label is on the task. Refuses a
+    count that would take the task past the comment cap with the comments
+    it holds that are not the seed's. */
+export function planThread(count, { task, present, posters, history, labels }) {
   const own = new Set(Array.from({ length: count }, (_, n) => threadCommentId(task.id, n)))
   const others = [...present].filter((id) => !own.has(id)).length
   if (others + count > LIMITS.comments.max)
@@ -504,11 +509,15 @@ export function planThread(count, { task, present, posters, history, on }) {
       fields: { id, org_id: task.org_id, issue_id: task.id, body: threadCommentBody(n) },
     })
   }
+  const label =
+    labels.includes(THREAD_LABEL) || labels.length < LIMITS.labels.max
+      ? THREAD_LABEL
+      : [...labels].sort()[0]
   const toggles = []
-  let state = on
+  let state = labels.includes(label)
   for (let n = history; n < count; n++) {
     state = !state
-    toggles.push({ org_id: task.org_id, issue_id: task.id, label_id: THREAD_LABEL, on: state })
+    toggles.push({ org_id: task.org_id, issue_id: task.id, label_id: label, on: state })
   }
   return { comments, toggles }
 }
@@ -1529,8 +1538,8 @@ const RATE_REFUSAL = /^too many comments on this task.*Try again in (\d+) second
 /* Gives the --thread task its comments and changes (planThread): the task
    --labels starts with, its comments and history read as Nora first, the
    comments posted as their posters' logins, waiting out the posting rate
-   when the server refuses one, then the label made if it is missing and
-   toggled. */
+   when the server refuses one, then THREAD_LABEL made if the toggles use
+   it and it is missing, and the label toggled. */
 async function seedThread(count, { client, target, people, actor, org, log }) {
   const snapshot = await readWorkspace((name, args) => client.query(ref(name), args))
   const joined = (name) =>
@@ -1574,10 +1583,10 @@ async function seedThread(count, { client, target, people, actor, org, log }) {
         (p.id === actor.id || owners.has(p.id)),
     )
     .sort((a, b) => (a.id < b.id ? -1 : 1))
-  const on = [...snapshot.issueLabels, ...(snapshot.more?.issueLabels ?? []).flat()].some(
-    (row) => row.issue_id === task.id && row.label_id === THREAD_LABEL,
-  )
-  const plan = planThread(count, { task, present, posters, history, on })
+  const labels = [...snapshot.issueLabels, ...(snapshot.more?.issueLabels ?? []).flat()]
+    .filter((row) => row.issue_id === task.id)
+    .map((row) => row.label_id)
+  const plan = planThread(count, { task, present, posters, history, labels })
   log(
     `--thread: QN-${task.num} "${task.title}" holds ${present.size} comments and ${history} changes; ${plan.comments.length} comments and ${plan.toggles.length} changes to add, posted by ${posters.length} people.`,
   )
@@ -1611,17 +1620,17 @@ async function seedThread(count, { client, target, people, actor, org, log }) {
     }
     if (posted % 100 === 0 && posted) log(`${posted} --thread comments posted`)
   }
-  if (plan.toggles.length) {
-    const labels = joined('labels')
-    if (!labels.some((label) => label.id === THREAD_LABEL))
-      await client.mutation(ref('labels:create'), {
-        org_id: org,
-        id: THREAD_LABEL,
-        name: 'Thread check',
-        color: LABEL_COLORS[0],
-      })
-    for (const call of plan.toggles) await client.mutation(ref('labels:toggle'), call)
-  }
+  if (
+    plan.toggles[0]?.label_id === THREAD_LABEL &&
+    !joined('labels').some((label) => label.id === THREAD_LABEL)
+  )
+    await client.mutation(ref('labels:create'), {
+      org_id: org,
+      id: THREAD_LABEL,
+      name: 'Thread check',
+      color: LABEL_COLORS[0],
+    })
+  for (const call of plan.toggles) await client.mutation(ref('labels:toggle'), call)
   log(
     `Done: ${posted} comments and ${plan.toggles.length} changes added on QN-${task.num} in Northstar on ${target.url}.`,
   )
