@@ -217,15 +217,14 @@ import { taskFields } from './workspaceParts'
  *   documents and 0.58 MiB for one whose team shares 50 live and 150
  *   archived projects.
  *
- * The slowest calls inside the design size are the batch at its full
- * `scan`, whose caller reads 167 sub-projects, a member's rare word over
- * the project of 800 open tasks and a member's rare word in all your
- * projects over 200 sub-projects, as those cases build them. The Boat
- * timing of 31 October 2026 (owner) took the first two, beside a rare word
- * over the catalogue's 700 live projects for an organization admin, who
- * then read every project, which no caller inside the design size reads
- * since the admin access split. If the slowest call's JavaScript passes
- * 0.5 s, lower `scan`.
+ * Inside the design size the batch at its full `scan`, whose caller reads
+ * 167 sub-projects, reads the most of these cases on every count. The Boat
+ * timing of its slowest calls (owner, 31 October 2026) took that batch and
+ * a member's rare word over the project of 800 open tasks, as those cases
+ * build them, beside a rare word over the catalogue's 700 live projects
+ * for an organization admin, who then read every project, which no caller
+ * inside the design size reads since the admin access split. If the
+ * slowest call's JavaScript passes 0.5 s, lower `scan`.
  */
 export const RELATION_PICKER = {
   rows: 25,
