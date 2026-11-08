@@ -1804,6 +1804,13 @@ The first pages read within a bound of their own, so a read or an
 Qivo prepares the organization's names, leaves a list no room, it answers
 no rows and a cursor at its start, never an empty list as complete.
 
+Where a fixed limit of one call stops the check of your access to the
+project, `get_project` is refused with `Qivo could not finish checking which
+projects you can see in one request. Contact support@qivo.io so we can
+help.`, never answered with `access` guessed, and so are `create_project`
+and `update_project`, whose change is then not saved. Only a person far past
+the sizes Qivo is built for, such as one in hundreds of teams, meets it.
+
 `list_project_related` answers one page of one list, `{next_cursor,
 milestones}`, `{next_cursor, user_grants}` or `{next_cursor, team_grants}`,
 the cursor first, rows as in `get_project`, at most `limit` (50 by default,

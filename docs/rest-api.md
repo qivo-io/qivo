@@ -689,6 +689,13 @@ finds an object; read its `projects` and follow `next_cursor` until it is
   inherits its parent's grants, which the parent's own read lists. Anyone who
   can read or manage the project sees its grants, as in the app.
 
+Where a fixed limit of one request stops the check of your access to the
+project, the single-project read is a `400` with `Qivo could not finish
+checking which projects you can see in one request. Contact support@qivo.io
+so we can help.`, never an answer with `access` guessed. Only a person far
+past the sizes Qivo is built for, such as one in hundreds of teams, meets
+it.
+
 An organization admin manages every project of the organization, also one
 they take no part in. Admin status gives no access to a project's work, so
 `GET /v1/projects` leaves such a project out, while `GET` and `PATCH
@@ -808,7 +815,9 @@ Only `name` is required. Without `parent` the request creates a top-level
 project, and with `parent` (a project number, key or uuid) a sub-project
 under it. Qivo picks the id, the number, the key (from the name, as in the
 app) and the position in the list. The answer is the `201` single-project
-read, `access` flags included.
+read, `access` flags included. Where the single-project read meets the
+refusal of a stopped access check described above, the request is that
+`400` and the project is not created.
 
 - A top-level project follows the organization's **Who can create new
   projects?** setting, the same rule as the app's **New project** button.
@@ -855,7 +864,9 @@ PATCH /v1/projects/{ref}  {"name": "…", "description": "…", "review_hours": 
                            "archived": true, "expected": {"name": "…"}}
 ```
 
-Every field is optional, and the answer is the single-project read. Changing a
+Every field is optional, and the answer is the single-project read. Where
+that read meets the refusal of a stopped access check described under
+[Projects](#projects), the request is that `400` and nothing changes. Changing a
 project needs managing it, as its lead or an organization admin (`requires
 lead access to this project` for someone who only reads it). A lead handover alone on a top-level project
 follows the rule for managing its users instead, so someone who is neither an
