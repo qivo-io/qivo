@@ -6453,9 +6453,9 @@ async function ownerPickersCheck() {
     // and then the User grant a handover leaves the outgoing lead goes
     await restOk(w, 'PATCH', `/projects/${sub.id}`, { lead_id: nora.id })
     await restOk(w, 'DELETE', `/projects/${sub.id}/access/users/${leo.id}`)
-    // the people who can read the sub-project, one array with no paging
+    // the people who can read the sub-project, read a page at a time
     const reaches = async () =>
-      (await restOk(w, 'GET', `/projects/${sub.id}/users`)).some((u) => u.id === leo.id)
+      (await restRows(w, `/projects/${sub.id}/users`, 'users')).some((u) => u.id === leo.id)
     expect(
       await until(async () => !(await reaches())),
       `GET /projects/${sub.key}/users still lists ${leo.name}`,
@@ -10120,14 +10120,22 @@ async function archiveChecks() {
         list.map((p) => p.id),
         'the archived pages on both surfaces',
       )
-      // M first, then its sub-projects archived with it in key order
-      eq(list[0]?.id, M.id, 'M comes first in the archived pages')
-      const subKeys = list.filter((p) => p.parent_id === M.id).map((p) => p.key)
+      // the run's archived top-level projects in key order, other steps'
+      // among them, and M followed at once by its sub-projects archived
+      // with it, in key order
+      const byKey = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+      const roots = list.filter((p) => !p.parent_id).map((p) => p.key)
+      same(roots, [...roots].sort(byKey), 'the archived top-level projects in key order')
+      const at = list.findIndex((p) => p.id === M.id)
+      expect(at >= 0, 'M is not in the archived pages')
+      const subs = list.filter((p) => p.parent_id === M.id)
       same(
-        subKeys,
-        [...subKeys].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
-        "M's archived sub-projects in key order",
+        list.slice(at + 1, at + 1 + subs.length).map((p) => p.id),
+        subs.map((p) => p.id),
+        "M's archived sub-projects right after it",
       )
+      const subKeys = subs.map((p) => p.key)
+      same(subKeys, [...subKeys].sort(byKey), "M's archived sub-projects in key order")
       for (const p of [M, A, Z]) {
         expect(
           list.some((r) => r.id === p.id && r.archived),
