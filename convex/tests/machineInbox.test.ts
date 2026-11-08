@@ -2,11 +2,12 @@
  * list_inbox): one page of the caller's inbox items through the Inbox's
  * walk (model/inboxPage.ts inboxWalk), with its arguments and refusals in
  * order, a sealed cursor that continues across both surfaces, the walk's
- * order, the same items the old whole read answered (inboxOracle.setup.ts),
- * who sees what, actors named by id, the refusals of a seat not ready and
- * of a stopped access check, the read budget's ends, and the answer of the
- * bulk change with `all` asked through one accessOf instance. The reads at
- * the design size are logged as inboxPage.test.ts logs the app's. */
+ * order, the same items the old whole read answered
+ * (machineInboxOracle.setup.ts), who sees what, actors named by id, the
+ * refusals of a seat not ready and of a stopped access check, the read
+ * budget's ends, and the answer of the bulk change with `all` asked through
+ * one accessOf instance. The reads at the design size are logged as
+ * inboxPage.test.ts logs the app's. */
 
 import { ConvexError } from 'convex/values'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -61,7 +62,7 @@ import {
   plantRaw,
   reader,
 } from './inboxItems.setup'
-import { type OracleItem, oracleInbox } from './inboxOracle.setup'
+import { machineInboxItems, type OracleItem } from './machineInboxOracle.setup'
 import { plantNorthstar } from './northstar.setup'
 import { deleteTask, installTrashTimers, itemFor, runSteps } from './trash.setup'
 
@@ -519,7 +520,7 @@ describe('parity with the old read', () => {
     for (const who of profiles)
       for (const filters of FILTERS) {
         const want = await t.run((ctx) =>
-          oracleInbox(ctx, who, {
+          machineInboxItems(ctx, who, {
             unreadOnly: filters.unread_only === true,
             includeSnoozed: filters.include_snoozed === true,
           }),
@@ -838,7 +839,7 @@ describe('the read budget', () => {
       expect(page.items.at(-1)?.task.id).toBe(id)
     }
     const oracle = await t.run((ctx) =>
-      oracleInbox(ctx, f.agent, { unreadOnly: false, includeSnoozed: false }),
+      machineInboxItems(ctx, f.agent, { unreadOnly: false, includeSnoozed: false }),
     )
     expect(all.flatMap((p) => p.items)).toEqual(oracle)
   })

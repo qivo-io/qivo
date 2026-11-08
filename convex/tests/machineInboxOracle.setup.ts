@@ -51,7 +51,7 @@ const newerThan = (a: Doc<'messages'>, b: Doc<'messages'>): boolean =>
  * of the unread messages' `dropped`, and `latest_at` the newest message's
  * time or a later wake, as the old read folded them.
  */
-export async function oracleInbox(
+export async function machineInboxItems(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   o: { unreadOnly: boolean; includeSnoozed: boolean },
