@@ -739,10 +739,12 @@ function MemberRow({
   const isAgent = user ? user.isAgent : answer?.kind === 'agent'
   const memberHeld = !!user && user.teams.includes(teamId)
   const isLeader = memberHeld ? user.teamLeads.includes(teamId) : (answer?.is_leader ?? false)
-  // the Leader box shows a change at once while its write is on its way, as
-  // the store paints only the signed-in person's own memberships; the
+  // the Leader box shows the newest change at once while its write is on
+  // its way, as the store paints only the signed-in person's own
+  // memberships, and the members read again once that write answered; the
   // members read holds an accepted change before the write answers
-  const [sentLeader, setSentLeader] = useState<boolean | null>(null)
+  const [sentLeader, setSentLeader] = useState<{ on: boolean; write: number } | null>(null)
+  const leaderWrites = useRef(0)
   // the person as the row shows them, for the hours write; none for a
   // member known only by the picker's name
   const shown = user
@@ -812,14 +814,19 @@ function MemberRow({
           <Input
             id={`team-leader-${teamId}-${id}`}
             type="checkbox"
-            checked={sentLeader ?? isLeader}
+            checked={sentLeader?.on ?? isLeader}
             disabled={!leaderOn}
             onChange={(e) => {
               const next = e.target.checked
-              const sent = P.setTeamLeader(teamId, id, next, { orgId: org, isLeader })
+              // from what the box showed, an earlier write's value while it
+              // waits, so a reversal goes out too
+              const shownLeader = { orgId: org, isLeader: sentLeader?.on ?? isLeader }
+              const sent = P.setTeamLeader(teamId, id, next, shownLeader)
               if (!sent) return
-              setSentLeader(next)
-              void sent.then(() => setSentLeader(null))
+              const write = ++leaderWrites.current
+              setSentLeader({ on: next, write })
+              // an older write's answer leaves the newer one's value
+              void sent.then(() => setSentLeader((was) => (was?.write === write ? null : was)))
             }}
             className="[accent-color:var(--primary)]"
           />

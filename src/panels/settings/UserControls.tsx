@@ -621,21 +621,27 @@ export function PlannableHoursInput({
    (projectRightBox). The phone's user page shows a single row without the
    header, so there the checkbox carries a visible label and the empty cell
    is left out. `waiting` turns the checkbox off with WAITING while the
-   page's read is not current. */
+   page's read is not current. A click while an earlier one's write waits
+   sends the change from what the box showed, so a reversal goes out too,
+   checked against the earlier write's value. */
 export function ProjectRightCell({
   user,
   labelled,
   waiting = false,
+  onAccepted,
 }: {
   user: ShownPerson
   labelled: boolean
   waiting?: boolean
+  onAccepted?: OnAccepted
 }) {
   const box = projectRightBox(user, P.org.projectCreators)
-  // the box shows a change at once while its write is on its way, as the
-  // store paints only the signed-in person's own profile; the page's read
-  // holds an accepted change before the write answers
-  const [sent, setSent] = useStateS<boolean | null>(null)
+  // the box shows the newest change at once while its write is on its
+  // way, as the store paints only the signed-in person's own profile, and
+  // the page's read again once that write answered; the page's read holds
+  // an accepted change before the write answers
+  const [sent, setSent] = useStateS<{ on: boolean; write: number } | null>(null)
+  const writes = React.useRef(0)
   if (labelled && box === null) return null
   const inputId = `can-create-projects-${user.id}`
   const locked = box === 'locked' || waiting
@@ -657,17 +663,22 @@ export function ProjectRightCell({
             type="checkbox"
             data-can-create-projects={user.id}
             aria-label={`${user.name} can create projects`}
-            checked={box === 'locked' || (sent ?? !!user.canCreateProjects)}
+            checked={box === 'locked' || (sent?.on ?? !!user.canCreateProjects)}
             disabled={locked}
             title={waiting ? WAITING : undefined}
             onChange={(e) => {
               const on = e.target.checked
               if (waiting || P.refusePausedEdit()) return
-              // a write that sends nothing settles at once, after this
-              setSent(on)
-              const settle = () => setSent(null)
-              if (!P.updateUser(user.id, { canCreateProjects: on }, { onSettled: settle }, user))
-                settle()
+              // the person as the box showed them, with an earlier write's
+              // value while it waits
+              const shown = { ...user, canCreateProjects: sent?.on ?? user.canCreateProjects }
+              const write = ++writes.current
+              setSent({ on, write })
+              // a write that sends nothing settles at once, after this;
+              // an older write's answer leaves the newer one's value
+              const settle = () => setSent((was) => (was?.write === write ? null : was))
+              const save = learning({ onSettled: settle }, { can_create_projects: on }, onAccepted)
+              if (!P.updateUser(user.id, { canCreateProjects: on }, save, shown)) settle()
               window.showToast?.(
                 on
                   ? `${user.name} can create projects`

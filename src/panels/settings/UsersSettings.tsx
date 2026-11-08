@@ -486,7 +486,9 @@ function UserRow({
             <Icon name="zap" size={16} />
           </Button>
         )}
-        {ctx.rightColumn && <ProjectRightCell user={u} labelled={labelled} waiting={waiting} />}
+        {ctx.rightColumn && (
+          <ProjectRightCell user={u} labelled={labelled} waiting={waiting} onAccepted={learn} />
+        )}
         <UserRoleSelect
           user={u}
           isSelf={isSelf}

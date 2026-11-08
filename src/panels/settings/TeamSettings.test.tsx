@@ -766,6 +766,37 @@ describe("a team's page", () => {
     expect(leader('leo').checked).toBe(true)
   })
 
+  it('sends a Leader box turned back before the first answer, so the server and the box end unticked', async () => {
+    await load()
+    await teamPage()
+    const leader = () =>
+      find<HTMLInputElement>('[data-settings-team-member="leo"] [data-team-leader-toggle] input')
+    const crewLeo = () =>
+      server.snap.teamMembers.find((m) => m.team_id === 'crew' && m.profile_id === 'leo')
+    await click(leader())
+    await click(leader())
+    expect(leader().checked).toBe(false)
+    expect(requests.map((r) => [r.name, r.args.is_leader])).toEqual([
+      ['teams:setLeader', true],
+      ['teams:setLeader', false],
+    ])
+    // the server takes both in order; the box shows the newest choice while
+    // the second waits, and then the members read
+    const leads = (on: boolean) => {
+      const member = crewLeo()
+      if (member) member.is_leader = on
+    }
+    leads(true)
+    await rerun()
+    await answer('teams:setLeader', 'accept')
+    expect(leader().checked).toBe(false)
+    leads(false)
+    await rerun()
+    await answer('teams:setLeader', 'accept')
+    expect(crewLeo()?.is_leader).toBe(false)
+    expect(leader().checked).toBe(false)
+  })
+
   it('searches the members on the server and loads more, and says no member matches only at a real end', async () => {
     await load((snap) => {
       for (let i = 0; i < 3; i++) {

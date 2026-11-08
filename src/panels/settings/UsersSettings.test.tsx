@@ -578,6 +578,49 @@ describe('the list', () => {
     })
   })
 
+  it('sends a project right turned back before the first answer, so the server and the box end unticked', async () => {
+    await load((s) => {
+      s.orgs[0].project_creators = 'selected'
+      s.profiles.push(person('abby', 'Abby Unheld'))
+    })
+    await show()
+    const abby = () => snap.profiles.find((p) => p.id === 'abby')
+    const box = () => find<HTMLInputElement>('[data-can-create-projects="abby"]')
+    const updates = () => pending.filter((p) => p.name === 'profiles:update')
+    expect(box().checked).toBe(false)
+    await click(box())
+    expect(box().checked).toBe(true)
+    // turned back before the server answered the first click
+    await click(box())
+    expect(box().checked).toBe(false)
+    expect(updates().map((p) => p.args)).toMatchObject([
+      {
+        id: 'abby',
+        patch: { can_create_projects: true },
+        expected: { can_create_projects: false },
+      },
+      {
+        id: 'abby',
+        patch: { can_create_projects: false },
+        expected: { can_create_projects: true },
+      },
+    ])
+    // the server takes both in order; the box shows the newest choice
+    // while the second waits, and then the page's read
+    const [first, second] = updates()
+    Object.assign(abby() ?? {}, { can_create_projects: true })
+    await act(async () => server.rerun())
+    await act(async () => first.resolve(null))
+    await settle()
+    expect(box().checked).toBe(false)
+    Object.assign(abby() ?? {}, { can_create_projects: undefined })
+    await act(async () => server.rerun())
+    await act(async () => second.resolve(null))
+    await settle()
+    expect(abby()?.can_create_projects).toBeUndefined()
+    expect(box().checked).toBe(false)
+  })
+
   it('reads nothing while the tab is hidden, and reads again on return', async () => {
     await load()
     await show()
