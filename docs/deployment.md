@@ -1624,7 +1624,8 @@ from v0.1.123 on. The floors above, the Milestones window's v0.1.142
 new floor. From it on, as from them, never return the backend to a commit
 before the newest floor above; roll forward instead. Returning the app alone to an earlier release is safe
 against a later backend, because that app counts the loaded groups and
-marks loaded messages read through `messages.markRead`, which stays. The
+marks loaded messages read through `messages.markRead`, which stays until
+the release after v0.1.161 removes both (its paragraph below). The
 release changes no server function and needs no step. It is the first whose
 app shows the inbox items' reads, which the inbox items paragraph below
 lets reach a deployment only once the backfill reported complete there.
@@ -2083,8 +2084,9 @@ server and loads no task. This makes v0.1.123 the backend's floor for this
 app, which the floors above already hold, so the release sets no new
 rollback floor. Against a backend before v0.1.123 the Inbox says it
 couldn't load your messages, also in a tab that was open when the backend
-went back, until the backend rolls forward. The workspace inbox part stays
-for the desktop alerts. The list shows only what the `inbox_items` rows
+went back, until the backend rolls forward. The workspace inbox part stayed
+for the desktop alerts until the release after v0.1.161 removed it. The list
+shows only what the `inbox_items` rows
 hold. The release changes no server function, has no schema change, no
 backfill and no release step.
 
@@ -2236,6 +2238,23 @@ lets `projectNav.page` take `org_id` and `team_id`, adds `lead_id` and
 `taskWindow.task`'s archived answer, none of which an app before it reads.
 These navigation reads add no table, field or index, and need no backfill
 and no release step.
+
+From the release after v0.1.161, the app raises its desktop notifications
+from `inbox.feed`, which that release first ships, a small read of the
+person's newest unread Inbox events under ordinary access, instead of the
+workspace inbox part, and asks `notifications.beat`, `claimAlerts` and
+`claimSummary`, which v0.1.154 (`2898c8c8`) first shipped, which session
+shows each one; after a sleep or a lost connection it shows one
+notification that new unread activity arrived. The release removes the
+workspace inbox part (`workspace.inbox`), and `messages.markRead`,
+`markUnread`, `remove` and `snooze`. So it is the backend's floor for its
+app's desktop notifications: against an earlier backend the app loses only
+its feed, a side whose failure holds nothing else, so it shows no desktop
+notification. Its backend serves no app before it, whose workspace needs
+the removed part and fails to load as a whole. From it on, never return
+the backend to a commit before it, and never return the app alone to a
+release before it; roll forward instead. There is no schema change, no
+backfill and no release step.
 
 ## Node.js version
 

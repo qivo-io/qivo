@@ -305,11 +305,20 @@ actions button provides read, snooze and removal controls. There is no inbox sea
 tasks and projects. A desktop inbox search does not filter the phone list.
 
 **Desktop notifications.** In a browser, choose **Enable notifications** in
-Inbox to receive a notification for each new event. Clicking one opens Qivo.
-In supported Windows and Linux desktop builds, **Settings → User account →
-Desktop app → Show notifications** controls native Inbox and update alerts
-and is on by default. Turning it off leaves your Inbox messages available.
-Your operating system's notification settings also apply.
+Inbox to receive a notification for each new event while Qivo runs, also with
+the Inbox closed and the tab in the background. Clicking one opens your Inbox.
+When several of your browsers, or a browser and the desktop app, have
+notifications on, one of them shows each notification, and another tab of the
+same browser never repeats it. Signing in or reloading shows no notification
+for each message already there. After your computer sleeps or Qivo loses its
+connection, when a burst of updates is too large to show one by one, and after
+you enable notifications or they move to another of your browsers or devices,
+one notification may say that new unread activity arrived, with no count; it
+opens your Inbox. A notification marks nothing read, and the Inbox badge keeps
+counting what is unread. In supported Windows and Linux desktop builds,
+**Settings → User account → Desktop app → Show notifications** controls native
+Inbox and update alerts and is on by default. Turning it off leaves your Inbox
+messages available. Your operating system's notification settings also apply.
 
 **Managing messages.** Right-click a row, or use its phone actions button, for
 **Mark as read / unread** and **Remove notification**, and **Open task in
