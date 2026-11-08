@@ -10,7 +10,9 @@
  * after a floor before their newest message and after it, and for planted
  * cases a
  * snoozed group, a read group, a mention in the description alone and a
- * comment mention alone, and an everyday Inbox of 60 groups over 3
+ * comment mention alone, a burst of 70 messages over 7 groups that the
+ * feed cuts at its cap, with floors that leave 51, 50 and 49 events after
+ * them, and an everyday Inbox of 60 groups over 3
  * projects, which holds a second page, a woken group and two groups at one
  * time, asked also with Unread only beside Show snoozed and beside a kind
  * filter, with a search by a task ID, a sub-project's name, a change
@@ -34,6 +36,8 @@ import type { Doc } from '../../convex/_generated/dataModel'
 import { MENTION_DETAILS } from '../../convex/lib/messageDetails'
 import { NOT_INBOX_CURSOR as SERVER_NOT_INBOX_CURSOR } from '../../convex/model/inboxPage'
 import { wakeSnoozedItem } from '../../convex/model/messages'
+import { FEED } from '../../convex/model/notificationCatchup'
+import { NOTIFY } from '../../convex/model/notificationSessions'
 import {
   as,
   newT,
@@ -49,6 +53,8 @@ import { oracleInbox } from '../../convex/tests/inboxOracle.setup'
 import { plantNorthstar } from '../../convex/tests/northstar.setup'
 import type { Whole } from './guard/liveDouble.setup'
 import {
+  FEED_EVENTS,
+  FEED_LAG_MS,
   INBOX_NO_ANSWER,
   inboxFeedStandIn,
   inboxItemStandIn,
@@ -424,6 +430,34 @@ describe("the feed's stand-in", () => {
     }
     // the seed leaves unread events, so the comparison compares some
     expect(events).toBeGreaterThan(0)
+  })
+
+  it('cuts a burst over several groups at the server’s cap, with more only for an event after the floor', async () => {
+    // the stand-in's copies of the server's bounds
+    expect(FEED_EVENTS).toBe(FEED.events)
+    expect(FEED_LAG_MS).toBe(NOTIFY.lag_ms)
+    const t = newT()
+    const f = await withOrg(t)
+    const tasks: Doc<'issues'>[] = []
+    for (let i = 0; i < 7; i++)
+      tasks.push(await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }))
+    // 70 messages over 7 groups, 600 ms apart from minute 10 on
+    for (let i = 0; i < 70; i++)
+      await post(t, f, { to: f.guest, task: tasks[i % 7], minute: 10 + 0.01 * i })
+    const ws = await workspace(t, f.guest)
+    // floors with 51, 50 and 49 events after them, the rest inside the
+    // minute read back
+    for (const [minute, more] of [
+      [10.185, true],
+      [10.195, false],
+      [10.205, false],
+    ] as const) {
+      const after = Date.parse(at(minute))
+      const server = await as(t, f.guest).query(api.inbox.feed, { after })
+      expect(server.events, String(minute)).toHaveLength(FEED.events)
+      expect(server.more, String(minute)).toBe(more)
+      expect(inboxFeedStandIn(ws, { after }), String(minute)).toEqual(server)
+    }
   })
 
   it('answers a woken group, a snoozed one, a read one and a mention as the server does', async () => {
