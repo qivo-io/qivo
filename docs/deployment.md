@@ -558,7 +558,7 @@ item (`messages.readItem`), so the summary drops back, and removes the
 task's item from Nora's Inbox with the row's own **Remove notification**
 (`ui/inbox-badge`). Against a backend from before v0.1.97 that step fails.
 In a page granted notifications for the app's origin it then checks a
-desktop alert (`ui/inbox-feed`): once the page took its fresh start's
+desktop alert (`ui/inbox-feed`). Once the page took its fresh start's
 baseline, the Standard agent mentions Nora on the fixture task over REST,
 and one alert must carry that message's id as its tag and the agent's
 mention as its title, from `inbox.feed` and a granted
@@ -2257,13 +2257,22 @@ shows each one; after a sleep or a lost connection it shows one
 notification that new unread activity arrived. The release removes the
 workspace inbox part (`workspace.inbox`), and `messages.markRead`,
 `markUnread`, `remove` and `snooze`. So it is the backend's floor for its
-app's desktop notifications: against an earlier backend the app loses only
+app's desktop notifications. Against an earlier backend the app loses only
 its feed, a side whose failure holds nothing else, so it shows no desktop
 notification. Its backend serves no app before it, whose workspace needs
 the removed part and fails to load as a whole. From it on, never return
 the backend to a commit before it, and never return the app alone to a
 release before it; roll forward instead. There is no schema change, no
 backfill and no release step.
+
+From the release after v0.1.161, one tab of each browser profile leads its
+desktop notifications and calls `notifications.beat`, with real `active`
+reports, and `end`, and **Settings → Your preferences → Notifications**
+reads `notifications.settings` and calls `setDelivery`. v0.1.154
+(`2898c8c8`) first shipped all four, which the floors above already hold,
+and the floor the paragraph above sets for `inbox.feed` still holds. The
+release changes no server function and sets no new rollback floor. There
+is no schema change, no backfill and no release step.
 
 ## Node.js version
 
