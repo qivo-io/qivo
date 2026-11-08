@@ -895,9 +895,9 @@ function App() {
   const taskScope = useRef<string | null>(
     liveScope(r0Scope) && !r0?.scope && task0 ? (r0Scope ?? null) : null,
   )
-  // counts the person's scope moves, so the save effect remembers one that
-  // keeps the scope as it was
-  const [picks, setPicks] = useState(0)
+  // counts the person's scope moves, so one that keeps the scope as it was
+  // commits too and the save effect looks again
+  const [, setPicks] = useState(0)
   const [view, setView] = useState(() =>
     // a viewless issue short link keeps the saved view (the modal sits over
     // whatever's behind), and so does Team sync, which returns to it on Done;
@@ -1433,8 +1433,9 @@ function App() {
         ? `Choose a project to see ${personJump.first}'s tasks in its task list.`
         : `Choose a project to see ${personJump.first}'s tasks on the ${view === 'kanban' ? 'Board' : 'Roadmap'}.`
       : null
-  // whether the scope's project cache state is ok, which a scope opened
-  // from a row reaches after it is set
+  // the scope's project cache state, which a scope opened from a row
+  // reaches after it is set, so the rule looks again after every commit and
+  // writes only what changed
   const scopeOk = scopeInfo?.state === 'ok'
   useEffect(() => {
     if (!viewShown || !scope || P.isMineScope(scope) || taskScope.current === scope) return
@@ -1443,7 +1444,7 @@ function App() {
     const was = P.loadUI().lastProject
     if (was?.project_id === p.id && was.org_id === p.org) return
     P.saveUINow({ lastProject: { org_id: p.org, project_id: p.id } })
-  }, [scope, viewShown, picks, scopeOk])
+  })
 
   // url sync — every "page" (scope/view/open issue/settings) gets its own
   // path. rev is a dependency on purpose: paths embed store-derived refs (the
