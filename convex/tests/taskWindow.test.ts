@@ -104,6 +104,14 @@ async function expectParity(t: T, orgId: string, person: Doc<'profiles'>): Promi
         .query('issue_labels')
         .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
         .collect()
+      // whether the task's project or its parent is archived
+      const projectOf = (id: string) =>
+        ctx.db
+          .query('projects')
+          .withIndex('by_uuid', (q) => q.eq('id', id))
+          .unique()
+      const project = await projectOf(task.project_id)
+      const parent = project?.parent_id ? await projectOf(project.parent_id) : null
       archived.push([
         task.id,
         row && {
@@ -111,6 +119,7 @@ async function expectParity(t: T, orgId: string, person: Doc<'profiles'>): Promi
           task: row,
           description: await descriptionOf(ctx.db, task),
           labels: labels.map(relationRow),
+          project_archived: project?.archived_at !== undefined || parent?.archived_at !== undefined,
         },
       ])
     }
@@ -570,7 +579,14 @@ describe('refusals', () => {
     const { place: _place, owner_name: _owner, can_restore: _restore, ...row } = listed ?? {}
     expect(
       await as(t, f.guest).query(api.taskWindow.task, { org_id: f.org.id, ref: w.archived.id }),
-    ).toEqual({ state: 'archived', task: row, description: '', labels: [], level: 'user' })
+    ).toEqual({
+      state: 'archived',
+      task: row,
+      description: '',
+      labels: [],
+      level: 'user',
+      project_archived: false,
+    })
     // the guest cannot see the hidden project, so its archived task is unavailable
     const secret = await plantIssue(t, {
       org_id: f.org.id,
@@ -580,6 +596,30 @@ describe('refusals', () => {
     expect(
       await as(t, f.guest).query(api.taskWindow.task, { org_id: f.org.id, ref: secret.id }),
     ).toEqual({ state: 'unavailable' })
+  })
+
+  it("says whether an archived task's project or its parent is archived", async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const task = (project_id: string) =>
+      plantIssue(t, { org_id: f.org.id, project_id, archived_at: NOW })
+    const live = await task(f.sub.id)
+    const inArchived = await task(f.sub.id)
+    const ask = (ref: string) =>
+      as(t, f.guest).query(api.taskWindow.task, { org_id: f.org.id, ref })
+    expect(await ask(live.id)).toMatchObject({ state: 'archived', project_archived: false })
+    // the sub-project archived on its own
+    await t.run((ctx) => ctx.db.patch(f.sub._id, { archived_at: NOW }))
+    expect(await ask(inArchived.id)).toMatchObject({ state: 'archived', project_archived: true })
+    // the sub-project live again under an archived parent
+    await t.run(async (ctx) => {
+      await ctx.db.patch(f.sub._id, { archived_at: undefined })
+      await ctx.db.patch(f.meta._id, { archived_at: NOW })
+    })
+    expect(await ask(inArchived.id)).toMatchObject({ state: 'archived', project_archived: true })
+    // a task the caller cannot see answers unavailable, which names nothing
+    const secret = await task(f.hidden.id)
+    expect(await ask(secret.id)).toEqual({ state: 'unavailable' })
   })
 
   it("answers an archived task's text, labels and the caller's level, so the window shows it read-only", async () => {

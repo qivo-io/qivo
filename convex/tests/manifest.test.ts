@@ -715,10 +715,12 @@ profiles:setPlannableHours mutation public {"type":"object","value":{"profile_id
 profiles:update mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"patch":{"fieldType":{"type":"object","value":{"org_role":{"fieldType":{"type":"union","value":[{"type":"literal","value":"admin"},{"type":"literal","value":"user"},{"type":"literal","value":"guest"},{"type":"literal","value":"viewer"}]},"optional":true},"active":{"fieldType":{"type":"boolean"},"optional":true},"name":{"fieldType":{"type":"string"},"optional":true},"email":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"teams":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":true},"can_create_projects":{"fieldType":{"type":"boolean"},"optional":true}}},"optional":false},"expected":{"fieldType":{"type":"object","value":{"org_role":{"fieldType":{"type":"string"},"optional":true},"active":{"fieldType":{"type":"boolean"},"optional":true},"name":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"email":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"can_create_projects":{"fieldType":{"type":"union","value":[{"type":"boolean"},{"type":"null"}]},"optional":true},"plannable_hours":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":true},"avatar_storage_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projectNav:byIds query public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
 projectNav:children query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true}}}
-projectNav:page query public {"type":"object","value":{"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true}}}
+projectNav:holds query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":true}}}
+projectNav:page query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":true},"team_id":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true}}}
 projectNav:resolve query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":true},"num":{"fieldType":{"type":"number"},"optional":true}}}
 projectNav:search query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true}}}
 projectNav:setFavorite mutation public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"favorite":{"fieldType":{"type":"boolean"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+projectNav:targets query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":true},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true}}}
 projectSettings:archived query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projectSettings:archivedSubProjects query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projectSettings:candidates query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":true},"lead_id":{"fieldType":{"type":"string"},"optional":true},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -1275,6 +1277,8 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // is read-only.
   projectNav: {
     byIds: 'authedQuery',
+    holds: 'authedQuery',
+    targets: 'authedQuery',
     page: 'authedQuery',
     children: 'authedQuery',
     resolve: 'authedQuery',
@@ -1382,7 +1386,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 255
+const PUBLIC_COUNT = 257
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

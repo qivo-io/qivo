@@ -45,11 +45,13 @@ const byIds = (t: T, seats: Seats, ids: readonly string[]) =>
   t.run((ctx) => navByIdsOf(ctx, mapOf(seats), ids))
 
 /** `p` as a byIds row with level `level`. */
-const byIdRow = (p: Doc<'projects'>, level: string) => ({
+const byIdRow = (p: Doc<'projects'>, level: string, reviewHours = 2) => ({
   ...row(p),
   parent_id: p.parent_id ?? null,
   level,
   track_delay: p.track_delay,
+  lead_id: p.lead_id ?? null,
+  review_hours: reviewHours,
 })
 
 /** The rows of `answer` by id, for answers whose order does not matter. */

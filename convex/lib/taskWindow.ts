@@ -567,7 +567,7 @@ async function shownParent(
  *   caller is shown, as short rows by number and then id. A subtask in an
  *   archived project is neither a row nor hidden. A live one the caller is
  *   not shown sets has_hidden_subtasks and sends no row.
- * - `{ state: 'archived', task, description, labels, level }` for an
+ * - `{ state: 'archived', task, description, labels, level, project_archived }` for an
  *   archived task of the organization whose project the caller sees
  *   (lib/archivedTasks.ts archivedTaskCore's rule, canSeeProject), so the
  *   window shows it read-only. That includes a task in an archived
@@ -575,7 +575,9 @@ async function shownParent(
  *   restored. `task` is the page's row (ArchivedPageRow), which names no
  *   parent, `description` its text from its description row, `labels` its
  *   label rows and `level` the caller's level on its project, by which the
- *   app offers Restore. An answer from before this release
+ *   app offers Restore. `project_archived` says whether its project or that
+ *   project's parent is archived, from the documents the access check read,
+ *   so the window says to restore the project first. An answer from before this release
  *   holds only `task`. It asks with the caller's seat in this organization
  *   only, never another seat of the login (lib/functions.ts loadMember), so
  *   another organization's archived task answers unavailable.
@@ -628,18 +630,22 @@ async function windowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: string) {
     if (!(await access.visible(task.project_id))) return UNAVAILABLE
     // what the window shows of it read-only: its text, labels and the
     // caller's level, which says whether they may restore it
-    const [row, description, labels, level] = await Promise.all([
+    const [row, description, labels, level, project] = await Promise.all([
       archivedRowOf(ctx, { ...task, archived_at }),
       descriptionOf(ctx.db, task),
       labelRows(),
       access.level(task.project_id),
+      access.project(task.project_id),
     ])
+    // the project and its parent, which the access check read already
+    const parent = project?.parent_id === undefined ? null : await access.project(project.parent_id)
     return {
       state: 'archived' as const,
       task: row,
       description,
       labels: labels.map(relationRow),
       level,
+      project_archived: project?.archived_at !== undefined || parent?.archived_at !== undefined,
     }
   }
   if (!(await access.holds(task))) return UNAVAILABLE
