@@ -1,6 +1,7 @@
 /* A stand-in for the project navigation reads (convex/projectNav.ts page,
-   children, search and resolve) that answers from a workspace the app
-   holds, for the jsdom tests of the shared project picker and its callers,
+   children, search, resolve and byIds) that answers from a workspace the
+   app holds, or the server's whole, for the jsdom tests of the shared
+   project picker and its callers,
    the All projects directory, the sidebar's project tree and the project
    chooser, and of resolve's callers, startup's check of the remembered
    project and of a project address, and the lists' open rule
@@ -32,6 +33,15 @@
    and an empty org_id with bad_request, as the server does, and resolve
    any form but `project_id` alone or `org_id` with `num`.
 
+   byIds answers each asked id once by the same rule, each opened
+   sub-project's top-level project as a row of its own, with the seat's
+   level where it reaches the project for a reason of its own and `viewer`
+   for a top-level project it sees only for navigation, and refuses more
+   than BY_IDS_MAX ids with the server's sentence. `force.unchecked` lists
+   every asked id apart with that sentence, `force.fail` fails it, and
+   `force.byIdsLoading` leaves a subscription without an answer, so a
+   project the store's project cache names reads as loading.
+
    A batch holds LIST_BATCH rows, or with `through` every row up to it and
    at most four times that, stopping short past them, and `next` null at
    the list's end. Its cursors are plain JSON of the list, its scope and
@@ -50,11 +60,13 @@
    the real star. It imports nothing the benchmark's worker cannot load. */
 
 import { ConvexError, compareValues } from 'convex/values'
-import { LIMITS, LIST_BATCH, overText } from '../../convex/lib/limits'
+import { BY_IDS_MAX, LIMITS, LIST_BATCH, overText } from '../../convex/lib/limits'
 import { nameKey } from '../../convex/lib/nameKey'
 import { allWordsMatcher } from '../../convex/lib/search'
 import type {
   NavBatch,
+  NavByIdRow,
+  NavByIds,
   NavChildRow,
   NavChildren,
   NavPage,
@@ -94,6 +106,7 @@ export type ForcedProjectNav = {
   fail?: boolean
   batch?: number
   favorites?: Iterable<string>
+  byIdsLoading?: boolean
 }
 
 /** The access_unchecked refusal's sentence, as convex/lib/access.ts
@@ -108,6 +121,9 @@ export const NAV_BLANK_SEARCH =
 export const NAV_EMPTY_ORG = 'org_id must name an organization, or be left out to search every seat'
 export const NAV_RESOLVE_FORM =
   'resolve takes project_id alone, or org_id with num, a whole number of at least 1'
+/** The refusal of a byIds call past BY_IDS_MAX ids, as
+    convex/model/projectNavReads.ts BY_IDS_LIMIT words it. */
+export const NAV_BY_IDS_LIMIT = `ids must name at most ${BY_IDS_MAX} projects`
 const NOT_A_CURSOR =
   'after and through must be cursors from an earlier answer of this list; start again from the first batch'
 
@@ -188,11 +204,20 @@ function navRule(w: NavWorkspace, favorites: ReadonlySet<string>) {
     return levelOf(me, p) !== null || liveChildren(p).some((c) => levelOf(me, c) !== null)
   }
   const nav = (p: Project): NavProject => ({ id: p.id, org_id: p.org_id, name: p.name, num: p.num })
+  /* The byIds row of `p`, which `me` sees: its level where `me` reaches it
+     for a reason of its own, else viewer. */
+  const byIdRow = (me: Profile, p: Project): NavByIdRow => ({
+    ...nav(p),
+    parent_id: p.parent_id ?? null,
+    level: levelOf(me, p) ?? 'viewer',
+    track_delay: p.track_delay,
+  })
   return {
     byId,
     seats,
     seatIn,
     sees,
+    byIdRow,
     visible,
     liveChildren,
     nav,
@@ -274,17 +299,19 @@ function batchOf<Row>(
 const byPosition = <C extends { at: Position }>(list: C[]) =>
   list.sort((a, b) => compareValues([...a.at], [...b.at]))
 
-/** The four reads' names, as the app calls them. */
+/** The five reads' names, as the app calls them. */
 export const PROJECT_NAV_READS = [
   'projectNav:page',
   'projectNav:children',
   'projectNav:search',
   'projectNav:resolve',
+  'projectNav:byIds',
 ] as const
 export type ProjectNavRead = (typeof PROJECT_NAV_READS)[number]
 
-/** The arguments of the four reads. */
+/** The arguments of the five reads. */
 export type ProjectNavArgs = {
+  ids?: readonly string[]
   after?: string
   through?: string
   project_id?: string
@@ -326,22 +353,50 @@ export function projectNavStandIn(
 ): NavResolve
 export function projectNavStandIn(
   workspace: NavWorkspace,
+  name: 'projectNav:byIds',
+  args: ProjectNavArgs,
+  options?: { force?: ForcedProjectNav },
+): NavByIds
+export function projectNavStandIn(
+  workspace: NavWorkspace,
   name: ProjectNavRead,
   args: ProjectNavArgs,
   options?: { force?: ForcedProjectNav },
-): NavPage | NavChildren | NavSearch | NavResolve
+): NavPage | NavChildren | NavSearch | NavResolve | NavByIds
 export function projectNavStandIn(
   workspace: NavWorkspace,
   name: ProjectNavRead,
   args: ProjectNavArgs,
   options: { force?: ForcedProjectNav } = {},
-): NavPage | NavChildren | NavSearch | NavResolve {
+): NavPage | NavChildren | NavSearch | NavResolve | NavByIds {
   const force = options.force ?? {}
   const rule = navRule(workspace, new Set(force.favorites ?? []))
   const unchecked =
     force.unchecked === undefined
       ? null
       : ({ state: 'unavailable', reason: 'access_unchecked', message: force.unchecked } as const)
+
+  if (name === 'projectNav:byIds') {
+    const ids = args.ids ?? []
+    if (ids.length > BY_IDS_MAX)
+      throw new ConvexError({ code: 'bad_request', message: NAV_BY_IDS_LIMIT })
+    if (force.fail) throw new Error('the navigation read fails, as the stand-in was asked')
+    const asked = [...new Set(ids)]
+    if (force.unchecked !== undefined) {
+      const apart = asked.filter((id) => rule.byId.has(id))
+      return { rows: [], unchecked: apart, message: apart.length > 0 ? force.unchecked : null }
+    }
+    const rows = new Map<string, NavByIdRow>()
+    for (const id of asked) {
+      const p = rule.byId.get(id)
+      const seat = p ? rule.seatIn(p.org_id) : undefined
+      if (!p || !seat || !rule.sees(seat, p)) continue
+      rows.set(p.id, rule.byIdRow(seat, p))
+      const parent = p.parent_id === undefined ? undefined : rule.byId.get(p.parent_id)
+      if (parent && !rows.has(parent.id)) rows.set(parent.id, rule.byIdRow(seat, parent))
+    }
+    return { rows: [...rows.values()], unchecked: [], message: null }
+  }
 
   if (name === 'projectNav:resolve') {
     const byNumber = args.org_id !== undefined || args.num !== undefined
@@ -444,7 +499,7 @@ export function projectNavStandIn(
   return batchOf(list, [], byPosition(candidates), after, through, force)
 }
 
-/** Whether `name` is one of the four reads. */
+/** Whether `name` is one of the five reads. */
 export const isProjectNavRead = (name: string): name is ProjectNavRead =>
   (PROJECT_NAV_READS as readonly string[]).includes(name)
 
@@ -501,6 +556,8 @@ export function answerProjectNav(
   fail?: (error: unknown) => void,
   options?: { force?: ForcedProjectNav },
 ) {
+  // a byIds read that never answers, as one still on its way
+  if (name === 'projectNav:byIds' && options?.force?.byIdsLoading) return
   let answer: unknown
   try {
     answer = projectNavStandIn(workspace, name, args as ProjectNavArgs, options)

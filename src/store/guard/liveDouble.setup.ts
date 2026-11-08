@@ -51,6 +51,13 @@ import type { Row } from '../rows'
    the milestone reads from them (store/milestoneStandIn.setup.ts), and
    the store never receives them otherwise.
 
+   It may name projects the projects part leaves out (`unheldProjects`):
+   the part sends neither them nor their grants and team shares, while
+   every stand-in that reads the whole, the navigation reads' byIds among
+   them (store/projectNavStandIn.setup.ts), answers them as the server
+   does, so a view, the task window and the store's project cache
+   (store/projectCache.ts) meet a project the workspace does not hold.
+
    The two inbox reads every store watches beside the parts, the unread
    summary and the open task's item (convex/inbox.ts summary and item), and
    the Inbox list's page (convex/inbox.ts page), which the Inbox watches as
@@ -94,7 +101,9 @@ type Client = {
     parts do not send (`unheld`), which the page names its rows by, such as
     another organization's task of the same id as one the workspace holds,
     and the server's milestones (`milestones`), which no part sends and the
-    milestone stand-in answers from. */
+    milestone stand-in answers from, and the projects the projects part
+    leaves out with their grants and team shares (`unheldProjects`, by id),
+    which the stand-ins answer from `projects`. */
 export type Whole = Omit<Workspace, 'messagesCut' | 'profiles' | 'create'> & {
   profiles: (Workspace['profiles'][number] & { sync_at?: string; sync_since?: string })[]
   labels: Row<'labels'>[]
@@ -103,6 +112,7 @@ export type Whole = Omit<Workspace, 'messagesCut' | 'profiles' | 'create'> & {
   beyondCut?: Workspace['messages']
   unheld?: Partial<Pick<Workspace, 'issues' | 'projects'>>
   milestones?: MilestoneRow[]
+  unheldProjects?: readonly string[]
 }
 
 /** What a test publishes for a login whose seats a running organization
@@ -184,8 +194,13 @@ function answerOf(whole: Published, name: string, args: Record<string, unknown>)
     from: typeof args.from === 'string' ? args.from : '',
     to: typeof args.to === 'string' ? args.to : null,
   }
-  const org = whole
-    ? splitWorkspace(whole, () => [window]).find((o) => o.org_id === args.org_id)
+  // the projects the part leaves out go before the split, with their
+  // grants and team shares, which the split sends only for its projects
+  const left = whole?.unheldProjects ? new Set(whole.unheldProjects) : null
+  const sent =
+    whole && left ? { ...whole, projects: whole.projects.filter((p) => !left.has(p.id)) } : whole
+  const org = sent
+    ? splitWorkspace(sent, () => [window]).find((o) => o.org_id === args.org_id)
     : undefined
   if (!org) return { state: 'gone' }
   const part = PARTS[name]

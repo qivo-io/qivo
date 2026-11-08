@@ -1632,6 +1632,49 @@ describe('the benchmark server', () => {
     )
   }, 60_000)
 
+  it('leaves the programs unheldprojects names out of the projects part while projectNav.byIds answers them, with its forced states', async () => {
+    /** What snapshot:forMe and then byIds of the programs answer with `params`. */
+    const byIds = async (params) => {
+      const { posted, send } = await server(
+        `tasks=20&programs=4&subprojects=2&latency=0&mbps=100000&${params}`,
+      )
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      await send({ type: 'query', id: 'all', name: 'projectNav:page', args: {} })
+      const page = JSON.parse(posted.find((m) => m.to === 'all').text)
+      const ids = page.rows.map((row) => row.id)
+      await send({ type: 'query', id: 'ids', name: 'projectNav:byIds', args: { ids } })
+      const answer = posted.find((m) => m.to === 'ids')
+      return {
+        snap,
+        ids,
+        answer:
+          answer === undefined
+            ? null
+            : answer.error
+              ? { error: answer.error }
+              : JSON.parse(answer.text),
+      }
+    }
+    const plain = await byIds('')
+    expect(plain.snap.projects.filter((p) => !p.parent_id)).toHaveLength(4)
+    expect(plain.answer.rows.map((row) => row.id)).toEqual(plain.ids)
+    expect(plain.answer.unchecked).toEqual([])
+    const left = await byIds('unheldprojects=2')
+    // the two highest-numbered programs and their sub-projects leave the part
+    const held = left.snap.projects.filter((p) => !p.parent_id).map((p) => p.name)
+    expect(held).toEqual(['Testbed program', 'Testbed program 2'])
+    expect(left.snap.projects).toHaveLength(6)
+    // while byIds still answers them
+    expect(left.answer.rows).toHaveLength(4)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect((await byIds('unheldprojects=2&projectnav=byids-loading')).answer).toBeNull()
+    expect((await byIds('unheldprojects=2&projectnav=byids-error')).answer.error).toContain('fails')
+    const apart = await byIds('unheldprojects=2&projectnav=byids-unchecked')
+    expect(apart.answer).toMatchObject({ rows: [], unchecked: apart.ids })
+    expect(apart.answer.message).toContain('could not finish checking')
+  }, 60_000)
+
   it('remembers the first program as the project opened last, or none or a lost one as startup asks', async () => {
     /** What prefs:get and then resolve of its project answer with `params`. */
     const startup = async (params) => {

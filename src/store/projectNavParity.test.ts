@@ -38,9 +38,12 @@ import { allWordsMatcher } from '../../convex/lib/search'
 import { TOP_LEVEL_ONLY } from '../../convex/model/projectFavorites'
 import {
   BLANK_SEARCH,
+  BY_IDS_LIMIT,
   EMPTY_ORG,
   type NavBatch,
+  type NavByIds,
   type NavRefusal,
+  navByIdsOf,
   navChildrenOf,
   navPageOf,
   navResolveOf,
@@ -174,7 +177,7 @@ async function refusalOf(run: () => unknown): Promise<string | null> {
 }
 
 /**
- * Holds the stand-in to the four real reads for `profile`, whose workspace
+ * Holds the stand-in to the five real reads for `profile`, whose workspace
  * it answers from, with `favorites` the projects their seat stars, over
  * every project of their organization and the search for each of `terms`.
  */
@@ -226,6 +229,17 @@ async function compareStandIn(
       ),
     )
   }
+  // byIds of every project of the organization and an unknown id, in
+  // chunks the server takes, the rows compared as sets
+  const ids = [...projects.map((p) => p.id), crypto.randomUUID()]
+  const byId = (rows: { id: string }[]) => [...rows].sort((a, b) => a.id.localeCompare(b.id))
+  for (let at = 0; at < ids.length; at += 100) {
+    const chunk = ids.slice(at, at + 100)
+    const real = await t.run((ctx) => navByIdsOf(ctx, seats, chunk))
+    const stood = (await mine('projectNav:byIds', { ids: chunk })) as NavByIds
+    expect(byId(stood.rows), `${label}: byIds rows`).toEqual(byId(real.rows))
+    expect(stood.unchecked, `${label}: byIds apart`).toEqual(real.unchecked)
+  }
   for (const p of projects.slice(0, 3))
     expect(
       await mine('projectNav:resolve', { org_id: p.org_id, num: p.num }),
@@ -259,6 +273,9 @@ async function compareStandIn(
     EMPTY_ORG,
   )
   expect(await refusalOf(() => mine('projectNav:resolve', { num: 2 }))).toBe(RESOLVE_FORM)
+  const many = Array.from({ length: 101 }, () => crypto.randomUUID())
+  expect(await refusalOf(() => mine('projectNav:byIds', { ids: many }))).toBe(BY_IDS_LIMIT)
+  expect(await refusalOf(() => t.run((ctx) => navByIdsOf(ctx, seats, many)))).toBe(BY_IDS_LIMIT)
   expect(
     await refusalOf(() => t.run((ctx) => navSearchOf(ctx, login, seats, { search: ' \u0301 ' }))),
   ).toBe(BLANK_SEARCH)
