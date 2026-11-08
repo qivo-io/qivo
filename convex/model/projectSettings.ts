@@ -448,14 +448,14 @@ const wholeNumber = (n: number | undefined): n is number =>
  *
  * Timed on 8 November 2026 at 8e501d53 on a local backend on Boat (8 vCPU,
  * one call at a time), in one quiet session and one beside 8 busy loops,
- * for the whole call with its sign-in. The { org_id, num } form costs what
- * the { id } form costs for every caller timed, call for call (settingsGate
- * has the design-size cases). A member in 3 teams on an everyday project
- * and an admin with the same rows each read 9 ranges, 6 documents and
- * 0.002 MiB in 11 to 30 ms of JavaScript quiet and at most 57 ms busy. A
- * free number reads 4 ranges and 1 document, the sign-in's reads plus one
- * by_org_num range, and answers unavailable in at most 50 ms of JavaScript
- * in either session.
+ * for the whole call with its sign-in. The `{ org_id, num }` form reads
+ * what the `{ id }` form reads for every caller timed, call for call
+ * (settingsGate has the design-size cases). A member in 3 teams on an
+ * everyday project and an admin with the same rows each read 9 ranges, 6
+ * documents and 0.002 MiB in 11 to 30 ms of JavaScript quiet and at most
+ * 57 ms busy. A free number reads 4 ranges and 1 document, the sign-in's
+ * reads plus one by_org_num range, and answers unavailable in at most 50
+ * ms of JavaScript in either session.
  */
 export async function projectSettingsOf(
   ctx: QueryCtx,
