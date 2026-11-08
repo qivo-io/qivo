@@ -41,13 +41,17 @@
      after NOTIFY_CLIENT.retry_ms in turn, and so does a beat refused for
      a missing sign-in, which the Convex client sends while it arms the
      socket again after it dropped the sign-in (lib/authSession.ts
-     recover), for as long as those retries last; a sign-in still missing
-     after them counts as lost for good. A refusal of the session (it
-     ended, the login was banned, a demo that is not active, or its
-     sign-in was lost for good) stops the leader and lets go of the lock,
-     so another tab, such as one loaded after a new sign-in, may lead; it
-     stays stopped until the store starts a new one (refused). A bad
-     request does the same and is a defect it reports.
+     recover). That retry is bounded by time, not by a count, so the
+     feed's own beats, such as a resume each tick runs again, do not
+     shorten it. A beat refused for a missing sign-in as long after the
+     first such refusal as the retries take together (155 s), in one
+     leadership with no beat answered between, counts as lost for good.
+     A refusal of the session (it ended, the login was banned, a demo
+     that is not active, or its sign-in was lost for good) stops the
+     leader and lets go of the lock, so another tab, such as one loaded
+     after a new sign-in, may lead; it stays stopped until the store
+     starts a new one (refused). A bad request does the same and is a
+     defect it reports.
    - Use. The first trusted pointer, key, touch or wheel input
      (lib/inputIdle.ts INPUTS, which the store passes) in a visible page of the profile, a pointer
      move only when it moved, NOTIFY_CLIENT.report_ms or more after the
@@ -119,7 +123,8 @@ export const NOTIFY_CLIENT = {
   forward_ms: 15_000,
   /** the waits after a failed beat, in turn, each at most `every_ms`; the
       last is under the server's live_ms (180 s), so a retry lands before
-      the session lapses */
+      the session lapses. Their sum bounds how long a missing sign-in is
+      tried again */
   retry_ms: [5_000, 30_000, 120_000],
   /** the server's `every_ms` is clamped to this range, so a bad answer
       cannot make a tight loop or stop the beat */
@@ -344,8 +349,9 @@ export function startNotificationLeader(deps: LeaderDeps) {
   let ends = 0
   let beatTimer: ReturnType<typeof setTimeout> | null = null
   let retry = 0
-  // the beats refused in a row for a missing sign-in
-  let unsigned = 0
+  // the local time of the first beat refused for a missing sign-in since
+  // one answered or this tab gained leadership, or null
+  let unsignedSince: number | null = null
   let inFlight = false
   // the local time the in-flight beat went out
   let sentAt = 0
@@ -473,17 +479,25 @@ export function startNotificationLeader(deps: LeaderDeps) {
       if (e instanceof CallOffline) socketWait = true
       else {
         const refusal = refusalOf(e)
-        if (refusal === 'signin') unsigned += 1
         if (refusal === 'stop' || refusal === 'defect') refuse(refusal, e)
-        // a sign-in still missing after every retry is lost for good
-        else if (refusal === 'signin' && unsigned > NOTIFY_CLIENT.retry_ms.length) refuse('stop', e)
-        else if (can && capable) {
-          // the retries in turn, then the server's pace, or the last retry's
-          // wait before the server named one
-          const last = NOTIFY_CLIENT.retry_ms[NOTIFY_CLIENT.retry_ms.length - 1] ?? 60_000
-          const wait = NOTIFY_CLIENT.retry_ms[retry] ?? every ?? last
-          retry += 1
-          schedule(Math.min(wait, every ?? wait))
+        // a sign-in still missing as long after its first refusal as every
+        // retry takes is lost for good, whichever beats came between
+        else if (
+          refusal === 'signin' &&
+          unsignedSince !== null &&
+          at - unsignedSince >= NOTIFY_CLIENT.retry_ms.reduce((sum, ms) => sum + ms, 0)
+        )
+          refuse('stop', e)
+        else {
+          if (refusal === 'signin') unsignedSince ??= at
+          if (can && capable) {
+            // the retries in turn, then the server's pace, or the last
+            // retry's wait before the server named one
+            const last = NOTIFY_CLIENT.retry_ms[NOTIFY_CLIENT.retry_ms.length - 1] ?? 60_000
+            const wait = NOTIFY_CLIENT.retry_ms[retry] ?? every ?? last
+            retry += 1
+            schedule(Math.min(wait, every ?? wait))
+          }
         }
       }
       throw e
@@ -491,7 +505,7 @@ export function startNotificationLeader(deps: LeaderDeps) {
     inFlight = false
     if (mine !== leadership || stopped) return answer
     retry = 0
-    unsigned = 0
+    unsignedSince = null
     socketWait = false
     beats += 1
     beatenSinceGain = true
@@ -618,6 +632,7 @@ export function startNotificationLeader(deps: LeaderDeps) {
     role = as
     leadership += 1
     beatenSinceGain = false
+    unsignedSince = null
     clearPoll()
     capable = deps.canNotify()
     if (!capable) freshLeft = false

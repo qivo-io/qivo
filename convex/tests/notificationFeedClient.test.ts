@@ -74,8 +74,10 @@ const minutesNow = () => (Date.now() - START) / MINUTE
     throttled tab does. */
 const jump = (minutes: number) => vi.setSystemTime(Date.now() + minutes * MINUTE)
 
-/** A Better Auth session of a login, planted in the component's own table. */
-type Session = { sessionId: string; as: ReturnType<T['withIdentity']> }
+/** A Better Auth session of a login, planted in the component's own table,
+    and the same backend without it (`unsigned`), as the Convex client sends
+    a call while it arms the socket again. */
+type Session = { sessionId: string; as: ReturnType<T['withIdentity']>; unsigned: T }
 
 async function signIn(t: T, authUserId: string): Promise<Session> {
   const now = Date.now()
@@ -88,7 +90,7 @@ async function signIn(t: T, authUserId: string): Promise<Session> {
       updatedAt: now,
     }),
   )
-  return { sessionId, as: t.withIdentity({ subject: authUserId, sessionId }) }
+  return { sessionId, as: t.withIdentity({ subject: authUserId, sessionId }), unsigned: t }
 }
 
 /** One call a tab sent, with what it answered. */
@@ -114,6 +116,8 @@ type Tab = {
   connection: number
   online: boolean
   can: boolean
+  /** whether its calls carry the sign-in */
+  signedIn: boolean
   /** tells the leader that the capability may have changed */
   permissionChanged: () => void
   /** a mutation name the next call of fails once, for a failure case */
@@ -149,6 +153,7 @@ function openTab(s: Session, can = true, locks: LeaderLocks | null = null): Tab 
     connection: 1,
     online: true,
     can,
+    signedIn: true,
     permissionChanged: () => {},
     failNext: null,
     holdNext: null,
@@ -178,7 +183,10 @@ function openTab(s: Session, can = true, locks: LeaderLocks | null = null): Tab 
             }
           })
         // convex-test's mutation, typed loosely as the client's is
-        const mutate = s.as.mutation as (ref: unknown, args: unknown) => Promise<unknown>
+        const mutate = (tab.signedIn ? s.as : s.unsigned).mutation as (
+          ref: unknown,
+          args: unknown,
+        ) => Promise<unknown>
         call.answer = await mutate(ref, args)
         return call.answer
       })()
@@ -838,6 +846,40 @@ describe('resumes', () => {
     expect(answers(tab, 'notifications:claimSummary')).toEqual([{ state: 'summary' }])
     expect(tab.notes.map((n) => n.tag)).toEqual([SUMMARY_TAG])
     expect(tab.notes.map((n) => n.tag)).not.toContain(lost?.id)
+  })
+
+  it('keeps leading through a missing sign-in while each tick runs the resume again, and stops only 155 s after the first refusal', async () => {
+    const t = newT()
+    const { s } = await fixture(t)
+    const tab = openTab(s)
+    await startTabs([tab])
+    // the Convex client sends calls without the sign-in, and a resume is due
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    tab.signedIn = false
+    const from = tab.calls.length
+    const first = Date.now()
+    tab.client.resume()
+    await settle([tab])
+    const refused = () => names(tab, from).filter((n) => n === 'notifications:beat').length
+    expect(refused()).toBe(1)
+    // a minute on, the retries and each tick's resume have sent more beats
+    // than the retries alone, and the leader still leads
+    await wait([tab], MINUTE)
+    expect(refused()).toBeGreaterThan(NOTIFY_CLIENT.retry_ms.length + 1)
+    expect(tab.leader?.refused()).toBe(false)
+    expect(tab.after).not.toBeNull()
+    const lost = NOTIFY_CLIENT.retry_ms.reduce((sum, ms) => sum + ms, 0)
+    await wait([tab], first + lost - 1_000 - Date.now())
+    expect(tab.leader?.refused()).toBe(false)
+    // the first beat 155 s after the first refusal takes the sign-in as lost
+    await wait([tab], NOTIFY_CLIENT.tick_ms + 1_000)
+    expect(tab.leader?.refused()).toBe(true)
+    expect(tab.after).toBeNull()
+    const sent = tab.calls.length
+    await wait([tab], 10 * MINUTE)
+    expect(tab.calls).toHaveLength(sent)
+    expect(names(tab, from).every((n) => n === 'notifications:beat')).toBe(true)
+    warn.mockRestore()
   })
 })
 

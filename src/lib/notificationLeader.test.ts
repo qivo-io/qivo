@@ -873,11 +873,12 @@ describe('failures', () => {
     }
   })
 
-  it('tries a beat refused for a missing sign-in again, and beats on once the sign-in is back', async () => {
+  it('tries a beat refused for a missing sign-in again, beats on once the sign-in is back, and counts no refusal of an earlier leadership', async () => {
     const tab = openTab(profile())
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     // the Convex client arms the socket again and sends the beat without one
-    tab.state.fail = () => new ConvexError({ code: 'forbidden', message: 'not signed in' })
+    const unsigned = () => new ConvexError({ code: 'forbidden', message: 'not signed in' })
+    tab.state.fail = unsigned
     await flush()
     expect(tab.beats()).toHaveLength(1)
     expect(tab.leader.refused()).toBe(false)
@@ -891,26 +892,44 @@ describe('failures', () => {
     expect(tab.feed.leads).toHaveLength(1)
     await vi.advanceTimersByTimeAsync(MINUTE)
     expect(tab.beats()).toHaveLength(3)
+    // refused again, then a freeze of three minutes, and the first beat of
+    // the next leadership starts its own wait
+    tab.state.fail = unsigned
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    expect(tab.beats()).toHaveLength(4)
+    tab.page.doc.fire('freeze')
+    await vi.advanceTimersByTimeAsync(3 * MINUTE)
+    tab.page.doc.fire('resume')
+    await flush()
+    expect(tab.beats()).toHaveLength(5)
+    expect(tab.leader.refused()).toBe(false)
+    expect(tab.leader.role()).toBe('leader')
   })
 
-  it('takes a sign-in still missing after every retry as lost for good, and lets the next tab lead', async () => {
+  it('takes a sign-in still missing as long after its first refusal as every retry as lost for good, and lets the next tab lead', async () => {
     const p = profile()
     const [a, b] = [openTab(p), openTab(p)]
     await flush()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     a.state.fail = () => new ConvexError({ code: 'forbidden', message: 'not signed in' })
     b.state.fail = a.state.fail
-    // the periodic beat, then the retries after 5, 30 and 120 seconds
+    // the periodic beat, then the retries after 5, 30 and 120 seconds, the
+    // last at the server's pace of a minute, 95 s after the first refusal
     await vi.advanceTimersByTimeAsync(MINUTE)
     for (const wait of [5_000, 30_000, MINUTE]) await vi.advanceTimersByTimeAsync(wait)
     await flush()
     expect(a.beats()).toHaveLength(5)
+    expect(a.leader.refused()).toBe(false)
+    // the next beat comes 155 s after the first refusal, the retries' sum
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    await flush()
+    expect(a.beats()).toHaveLength(6)
     expect(a.leader.refused()).toBe(true)
     expect(a.leader.role()).toBe('stopped')
     // the next tab of the profile leads, and is refused in turn
     expect(b.beats().length).toBeGreaterThan(0)
     await vi.advanceTimersByTimeAsync(10 * MINUTE)
-    expect(a.beats()).toHaveLength(5)
+    expect(a.beats()).toHaveLength(6)
     expect(b.leader.refused()).toBe(true)
     expect(await p.manager?.query()).toEqual({ held: [], pending: [] })
   })
