@@ -2426,6 +2426,7 @@ describe('the task window on a task whose project the workspace does not hold', 
   })
 
   it("opens a crumb's project only the project cache holds through the server's check, never moving to it unheld", async () => {
+    window.dismissToast = vi.fn()
     await load(false, withLab)
     const resolved = {
       state: 'ok',
@@ -2475,6 +2476,16 @@ describe('the task window on a task whose project the workspace does not hold', 
         ),
       ),
     )
+    expect(shown).not.toHaveBeenCalled()
+    // a second press says Opening again, and a move elsewhere takes its
+    // line away
+    const { navMoved } = await import('../components/projectNavRows')
+    const again = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 })
+    await act(async () => {
+      crumb.dispatchEvent(again)
+      navMoved()
+    })
+    expect(window.dismissToast).toHaveBeenCalledExactlyOnceWith('task-crumb-open')
     expect(shown).not.toHaveBeenCalled()
   })
 
