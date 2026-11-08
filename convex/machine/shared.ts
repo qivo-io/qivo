@@ -167,34 +167,21 @@ export function pageLimit(range: Limit, raw: string | number | undefined): numbe
   return raw === undefined ? DEFAULT_PAGE_SIZE : limitedWhole(range, numberOf(raw))
 }
 
-/** The refusal of an `offset` that is not a whole number from 0 up. */
-export const OFFSET_SENTENCE = 'offset must be a whole number, 0 or more'
-
-/** A list's `offset`, the rows to skip, from a REST query parameter or an
- * MCP argument. Absent is 0. */
-export function pageOffset(raw: string | number | undefined): number {
-  if (raw === undefined) return 0
-  const n = numberOf(raw)
-  if (!Number.isSafeInteger(n) || n < 0) throw badRequest(OFFSET_SENTENCE)
-  return n
-}
-
 /** Whether a list that pages with a cursor was sent an `offset` other than
  * 0, from a REST query parameter or an MCP argument. Absent is 0, and so is
  * any text that reads as 0, such as `00`; anything else, text that is no
  * number included, is an offset sent. The task lists refuse such an offset
  * in lib/core.ts taskListRequest, REST GET /v1/workload and MCP
- * get_workload in machine/records.ts, and the lists in name order and a
- * task's related lists in cursorPaging, with lib/listCursor.ts
- * offsetRefusal; REST GET /v1/inbox and MCP list_inbox
- * (t3/limits-machine-inbox) are to do the same once they page with a
- * cursor. */
+ * get_workload in machine/records.ts, and the lists in name order, a
+ * task's and a project's related lists and REST GET /v1/inbox and MCP
+ * list_inbox in cursorPaging, with lib/listCursor.ts offsetRefusal. */
 export const offsetSent = (raw: string | number | undefined): boolean =>
   raw !== undefined && numberOf(raw) !== 0
 
 /** The paging of a REST or MCP list that pages with a cursor and takes no
  * search, such as a task's related lists (REST GET
- * /v1/tasks/{ref}/subtasks and MCP list_task_related), checked in the
+ * /v1/tasks/{ref}/subtasks and MCP list_task_related) and the Inbox (REST
+ * GET /v1/inbox and MCP list_inbox, machine/discussion.ts), checked in the
  * order both surfaces document: `limit` against `range`, the list's
  * registry entry (DEFAULT_PAGE_SIZE when absent), then any `offset` but 0,
  * refused with offsetRefusal(noun). An absent cursor is null. REST passes

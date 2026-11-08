@@ -206,7 +206,9 @@ export const MENTION_BATCH = 8
 export const BY_IDS_MAX = 100
 
 /** The most messages one seat's bounded inbox walk examines in each of its
- * unread and read halves (lib/inbox.ts). */
+ * unread and read halves (lib/inbox.ts loadInbox), which only the workspace
+ * inbox part reads, and which stays for it until it goes. REST and MCP page
+ * the Inbox through model/inboxPage.ts instead. */
 export const INBOX_LIMIT = 500
 
 /** The task groups one Inbox page holds (model/inboxPage.ts INBOX_PAGE.rows),

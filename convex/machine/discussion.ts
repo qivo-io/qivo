@@ -19,10 +19,12 @@
  *
  * Visibility: a comment, a follow or an inbox item about a task the caller
  * cannot read answers like an unknown one, and a bulk inbox change names
- * only tasks the caller can read (lib/workingSet.ts with the machine Shown,
- * lib/core.ts machineShown). The inbox lists what the app's Inbox lists, the
- * items about tasks in the caller's working set (lib/workingSet.ts
- * inWorkingSet), so an archived task's item leaves it until a restore, and
+ * only tasks the caller can read, asked through one lib/access.ts accessOf
+ * instance (lib/core.ts machineShown). The inbox is read a page at a time
+ * through the app's Inbox walk (model/inboxPage.ts inboxWalk), from the
+ * caller's stored items, with the walk's rule of who sees what
+ * (model/inboxReads.ts inboxScope): the items about tasks in the caller's
+ * working set, so an archived task's item leaves it until a restore, and
  * `unread` and `snooze` refuse such a task, so its messages stay read. It
  * shows the live task title and key, never the title stored on the
  * message. */
@@ -36,16 +38,14 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from '../_generated/server'
-import { canSeeProject } from '../lib/access'
+import { accessOf, accessUnchecked } from '../lib/access'
 import {
   asMachineCaller,
   type Caller,
   commentOut,
   findIssue,
   issueKey,
-  listUsersCore,
   machineShown,
-  projectReader,
   type RestCommentJson,
   type TaskRefJson,
   taskRefOf,
@@ -54,9 +54,9 @@ import {
 import { byId } from '../lib/db'
 import { vCredentialAccess } from '../lib/enums'
 import { badRequest, notFound, type Refusal, rule } from '../lib/functions'
-import { loadInbox } from '../lib/inbox'
-import { DEFAULT_PAGE_SIZE, INBOX_LIMIT, LIMITS } from '../lib/limits'
-import { inWorkingSet } from '../lib/workingSet'
+import { DEFAULT_PAGE_SIZE, LIMITS } from '../lib/limits'
+import { CURSOR_REFUSAL, filtersKey, listCursorText, openListCursor } from '../lib/listCursor'
+import { type NamedAt, namedCeiling, type ReadGuard } from '../lib/namedPages'
 import { COMMENT_FIELDS, deleteComment, editComment } from '../model/comments'
 import {
   EXPECTED_DELETE_SENTENCE,
@@ -66,6 +66,7 @@ import {
   sentKeys,
   vExpected,
 } from '../model/expected'
+import { INBOX_PAGE, type InboxGroup, type InboxTie, inboxTie, inboxWalk } from '../model/inboxPage'
 import {
   followTask,
   ITEM_UNREAD_CAP,
@@ -81,14 +82,7 @@ import {
 } from '../model/messages'
 import type { TOOLS } from './mcp'
 import type { ROUTES, route as restRoute } from './rest'
-import {
-  needJson,
-  optionalJson,
-  pageLimit,
-  pageOffset,
-  pretty,
-  refuseUnknownFields,
-} from './shared'
+import { cursorPaging, needJson, optionalJson, pretty, refuseUnknownFields } from './shared'
 
 type McpTool = (typeof TOOLS)[number]
 type RestRoute = (typeof ROUTES)[number]
@@ -151,137 +145,165 @@ type InboxItemJson = {
   messages: InboxMessageJson[]
 }
 
-/** A page of inbox items, and whether some of the caller's messages were
- * left unexamined, because more than INBOX_LIMIT unread or read ones were
- * about listed tasks, or a backlog about unlisted ones used up a walk's
- * examination bound (lib/inbox.ts). */
-type InboxPageJson = { items: InboxItemJson[]; truncated: boolean }
+/** One page of the caller's inbox items, as REST GET /v1/inbox and MCP
+ * list_inbox answer it, the cursor first. */
+type InboxPageJson = { next_cursor: string | null; items: InboxItemJson[] }
 
 /* (created_at, id), the total order the app and the prune use. */
 const newerThan = (a: Doc<'messages'>, b: Doc<'messages'>): boolean =>
   a.created_at > b.created_at || (a.created_at === b.created_at && a.id > b.id)
 
-/**
- * The inbox's Shown for the caller, asked one task id at a time while
- * lib/inbox.ts reads the inbox. A task is shown when it is in the caller's
- * working set (lib/workingSet.ts inWorkingSet), which holds its
- * organization's active tasks in active projects it can see, as the app's
- * snapshot shows them. Each task and project is read once, and `tasks`
- * keeps the shown tasks for the fold. One inbox read asks about at most
- * 2 * INBOX_LIMIT rows per walk, which bounds these lookups (see
- * INBOX_LIMIT in lib/limits.ts).
- */
-function inboxShown(
+/** The list name REST GET /v1/inbox and MCP list_inbox seal their cursors
+ * with (lib/listCursor.ts). Both answer the same rows, so a cursor of one
+ * continues on the other. */
+export const MACHINE_INBOX_LIST = 'machine.inbox'
+
+/** The refusal of a page for a seat whose inbox items Qivo has not finished
+ * building (model/inboxItems.ts seatReady), so an inbox is never answered
+ * as empty or whole before its items are. Every seat that the inbox items
+ * backfill built, and every new one, is ready; a seat it left stuck stays
+ * refused until support helps. */
+export const INBOX_NOT_READY =
+  'your inbox cannot be read until Qivo has finished preparing it. Try again in a few minutes, or contact support@qivo.io if it stays so.'
+
+/* One inbox item as a machine row: the item's counts and every message the
+ * caller holds about its task, oldest first, each actor named from the
+ * caller's organization by id (InboxGroup nameOf, one profile read once a
+ * page). It reads the item's messages in one range, each counted by the
+ * page's guard; the walk already read the task and the item. A row is read
+ * whole once the walk starts it, so an item at the item cap, or one kept
+ * from before the cap, is answered whole and the page stops after it. */
+async function inboxItemOf(
   ctx: QueryCtx,
-  me: Caller,
-): { shown: (taskId: string) => Promise<boolean>; tasks: Map<string, Doc<'issues'>> } {
-  const sight = new Map<string, Promise<{ project?: Doc<'projects'>; visible: boolean }>>()
-  const answers = new Map<string, Promise<boolean>>()
-  const tasks = new Map<string, Doc<'issues'>>()
-  const projectSight = (projectId: string) => {
-    let seen = sight.get(projectId)
-    if (seen === undefined) {
-      seen = byId(ctx, 'projects', projectId).then(async (p) =>
-        p === null ? { visible: false } : { project: p, visible: await canSeeProject(ctx, me, p) },
-      )
-      sight.set(projectId, seen)
-    }
-    return seen
+  group: InboxGroup,
+  guard: ReadGuard,
+): Promise<InboxItemJson> {
+  await guard.range()
+  const rows: Doc<'messages'>[] = []
+  const stored = ctx.db
+    .query('messages')
+    .withIndex('by_recipient_issue', (q) =>
+      q.eq('recipient_id', group.seat.id).eq('issue_id', group.item.issue_id),
+    )
+  for await (const row of stored) {
+    await guard.document(row)
+    rows.push(row)
   }
-  const shown = (taskId: string): Promise<boolean> => {
-    let answer = answers.get(taskId)
-    if (answer === undefined) {
-      answer = byId(ctx, 'issues', taskId).then(async (task) => {
-        if (task === null || task.org_id !== me.org_id || task.archived_at !== undefined) {
-          return false
-        }
-        const { project, visible } = await projectSight(task.project_id)
-        if (!inWorkingSet(task, project, visible)) return false
-        tasks.set(task.id, task)
-        return true
-      })
-      answers.set(taskId, answer)
-    }
-    return answer
+  rows.sort((a, b) => (newerThan(a, b) ? 1 : newerThan(b, a) ? -1 : 0))
+  const messages: InboxMessageJson[] = []
+  for (const m of rows)
+    messages.push({
+      id: m.id,
+      kind: m.kind,
+      detail: m.detail,
+      actor_id: m.actor_id ?? null,
+      actor_name: await group.nameOf(m.actor_id),
+      created_at: m.created_at,
+      read_at: m.read_at ?? null,
+    })
+  return {
+    task: taskRefOf(group.task),
+    unread_count: group.item.unread_count,
+    dropped_count: group.item.dropped,
+    latest_at: group.item.sort_at,
+    snoozed_until: group.item.snoozed_until ?? null,
+    messages,
   }
-  return { shown, tasks }
 }
 
 /**
- * The caller's inbox items, the latest activity first, folded as the
- * workspace inbox part's messages fold into items (src/store/viewModels.ts
- * shapeMessageGroup). It lists only tasks in the caller's working set
- * (inboxShown). Rows about other tasks stay stored and come back if the
- * task does. It reads with the part's limit (lib/inbox.ts loadInbox,
- * INBOX_LIMIT) and folds up to INBOX_LIMIT unread messages, newest first,
- * and up to INBOX_LIMIT read ones, most recently read first. Each walk
- * examines at most 2 * INBOX_LIMIT rows, those about unlisted tasks
- * included. Only that part, which the app keeps for its desktop alerts,
- * shares this selection. It delivers at most the first 500 of it, so what
- * it holds for this profile is among what this lists. The app's Inbox list
- * reads inbox.page (model/inboxPage.ts) instead, a page of the caller's
- * task groups at a time. It says `truncated` when some messages were not
- * examined. Items whose messages were not examined are
- * then missing, and an item listed may lack older messages. A snoozed item
- * is left out unless `includeSnoozed`, and `unreadOnly` keeps items with an
- * unread message.
+ * One page of `me`'s inbox items for REST GET /v1/inbox and MCP list_inbox,
+ * after `a.cursor`, the next_cursor of an earlier page, at most `a.limit`
+ * of them, read through the Inbox's walk (model/inboxPage.ts inboxWalk) from
+ * the caller's own stored items (inbox_items), with `unread_only` and
+ * `include_snoozed` applied before the page is cut.
+ *
+ * An item shows only when its task is in the caller's working set, the
+ * rule of the app's Inbox (model/inboxReads.ts inboxScope, lib/access.ts
+ * accessOf holds): a task of the caller's organization, not archived, in a
+ * live project they can see. Each row is inboxItemOf. The order is the
+ * walk's, the latest activity first (an item's newest message's time, or a
+ * later wake), equal times by task id descending.
+ *
+ * The page reads within INBOX_PAGE.reads past what the call read before it
+ * (lib/namedPages.ts namedCeiling), always reads its first item, and stops
+ * early with a cursor once the budget is spent, so a short or empty page is
+ * never the end and next_cursor is null only once the walk ended. The
+ * cursor is sealed with the organization, `me` and a digest of the two
+ * filters, so it opens only for that list, on either surface; any other
+ * cursor is refused with CURSOR_REFUSAL. Pages are not a snapshot. A seat
+ * whose items are not built is refused with INBOX_NOT_READY, and a check a
+ * bound of lib/access.ts OWN_READS stopped refuses the whole page with
+ * accessUnchecked, never a page missing an item.
+ *
+ * What one page reads, measured in convex/tests/machineInbox.test.ts
+ * ("reads at the design size"), one figure raised at a time beside an
+ * everyday reader (3 teams, 63 sub-projects):
+ * - the everyday Inbox, 60 groups of 2 messages over 3 sub-projects: 176
+ *   index ranges and 269 documents for a page of 50, and all 60 at limit
+ *   200 in 207 ranges and 318 documents, answered in 44 KB of JSON (63 KB
+ *   as MCP's text); in 5 teams, 196 ranges and 248 documents;
+ * - a page of 200 over one sub-project's 450 groups (300 open and 150 Done
+ *   tasks) or one project's 1,000 (800 and 200 over 3 sub-projects): at
+ *   most 667 ranges and 859 documents, 107 KB (149 KB);
+ * - 60 groups at the item cap, 51 messages each, at limit 200: 206 ranges,
+ *   3,258 documents and 1.4 MiB read, the largest answer, 667 KB of JSON
+ *   and 979 KB as MCP's text;
+ * - 800 groups of a project the reader no longer sees, newer than 60
+ *   visible ones: 178 ranges and 1,013 documents at 50, 208 and 1,052 at
+ *   200, the hint skipping the hidden items without their tasks;
+ * - an organization of 1,000 people whose 60 groups name 180 of them: 376
+ *   ranges and 548 documents at 200, exactly 180 of each more than the
+ *   same page naming nobody;
+ * - the 200 sub-projects one person can read, 6,000 groups: 1,037 ranges
+ *   and 1,208 documents at 200 and 323 and 344 at 50, with no check
+ *   stopped by OWN_READS;
+ * - 2,000 groups of archived tasks in one visible sub-project, newer than
+ *   an everyday Inbox: a first page of no items, stopped with a cursor at
+ *   2,001 ranges and 3,988 documents (1.8 MiB), one task read for each
+ *   group it passes.
  */
-async function inboxItems(
+export async function inboxPage(
   ctx: QueryCtx,
   me: Caller,
-  o: { unreadOnly: boolean; includeSnoozed: boolean; limit: number; offset: number },
+  a: { unread_only: boolean; include_snoozed: boolean; limit: number; cursor: string | null },
 ): Promise<InboxPageJson> {
-  const { shown, tasks } = inboxShown(ctx, me)
-  const inbox = await loadInbox(ctx, me.id, shown, INBOX_LIMIT)
-  const byTask = new Map<string, Doc<'messages'>[]>()
-  for (const row of [...inbox.unread, ...inbox.read]) {
-    const list = byTask.get(row.issue_id)
-    if (list === undefined) byTask.set(row.issue_id, [row])
-    else list.push(row)
+  const scope = [
+    me.org_id,
+    me.id,
+    await filtersKey({ unread_only: a.unread_only, include_snoozed: a.include_snoozed }),
+  ]
+  let after: NamedAt<InboxTie> | null = null
+  if (a.cursor !== null) {
+    const at = await openListCursor(a.cursor, MACHINE_INBOX_LIST, scope, 2)
+    const tie = inboxTie(at)
+    if (tie === null) throw badRequest(CURSOR_REFUSAL)
+    after = { key: at.key, tie }
   }
-  const names = new Map((await listUsersCore(ctx, me)).map((p) => [p.id, p.name]))
-  const items: InboxItemJson[] = []
-  for (const [taskId, list] of byTask) {
-    const task = tasks.get(taskId)
-    if (task === undefined) continue // unreachable: shown tasks were loaded
-    list.sort((a, b) => (newerThan(a, b) ? 1 : newerThan(b, a) ? -1 : 0))
-    const latest = list[list.length - 1]
-    // every row of an item carries the same stamp; the newest decides
-    const snoozed_until = latest.snoozed_until ?? null
-    if (snoozed_until !== null && !o.includeSnoozed) continue
-    const unread = list.filter((m) => m.read_at === undefined)
-    const unread_count = unread.length
-    if (o.unreadOnly && unread_count === 0) continue
-    const dropped_count = unread.reduce((n, m) => n + (m.dropped ?? 0), 0)
-    let latest_at = latest.created_at
-    for (const m of list) {
-      if (m.woke_at !== undefined && m.woke_at > latest_at) latest_at = m.woke_at
-    }
-    items.push({
-      task: taskRefOf(task),
-      unread_count,
-      dropped_count,
-      latest_at,
-      snoozed_until,
-      messages: list.map((m) => ({
-        id: m.id,
-        kind: m.kind,
-        detail: m.detail,
-        actor_id: m.actor_id ?? null,
-        actor_name: m.actor_id === undefined ? null : (names.get(m.actor_id) ?? null),
-        created_at: m.created_at,
-        read_at: m.read_at ?? null,
-      })),
-    })
-  }
-  items.sort((a, b) =>
-    a.latest_at === b.latest_at
-      ? a.task.id.localeCompare(b.task.id)
-      : a.latest_at < b.latest_at
-        ? 1
-        : -1,
+  const walk = await inboxWalk(
+    ctx,
+    [me],
+    {
+      order: 'desc',
+      unread_only: a.unread_only,
+      include_snoozed: a.include_snoozed,
+      kinds: [],
+      search: '',
+    },
+    {
+      after,
+      through: null,
+      limit: a.limit,
+      ceiling: await namedCeiling(ctx, INBOX_PAGE.reads),
+      row: (group, guard) => inboxItemOf(ctx, group, guard),
+    },
   )
-  return { items: items.slice(o.offset, o.offset + o.limit), truncated: inbox.truncated }
+  if (walk.not_ready.length > 0) throw rule(INBOX_NOT_READY)
+  if (walk.unchecked) throw accessUnchecked()
+  return {
+    next_cursor: walk.ended ? null : await listCursorText(MACHINE_INBOX_LIST, scope, walk.at),
+    items: walk.rows,
+  }
 }
 
 /**
@@ -382,13 +404,22 @@ type InboxChangeJson = {
  * Applies `action` to the caller's inbox items about the named tasks, or
  * with `all` to every item, as the app's Mark all as read and Remove all
  * read notifications do, one bounded batch per call and rows about tasks the
- * caller cannot read included. The answer names only tasks the caller can
- * read. A ref the caller cannot read refuses the whole change with
+ * caller cannot read included. The answer names only tasks of the caller's
+ * organization whose project one lib/access.ts accessOf instance shows
+ * them (visible), each distinct project asked once; a check a bound of
+ * OWN_READS stopped refuses the whole change, which Convex then rolls back,
+ * rather than name fewer tasks than it changed. A ref the caller cannot read refuses the whole change with
  * `unknownTask`. Every ref is resolved before anything else, so that
  * refusal comes first. Then `unread` and `snooze` refuse the whole change
  * when a named task is archived or in an archived project, whether or not
  * the caller holds messages about it (model/messages.ts
  * refuseArchivedItems). `read` and `remove` still work there.
+ *
+ * With `all`, a batch of INBOX_BATCH messages on as many tasks in as many
+ * sub-projects the caller reads by grant read 1,108 index ranges and 1,499
+ * documents for `read` and 787 and 1,338 for `remove`, all 160 named, and
+ * the same with 300 more projects in the organization
+ * (convex/tests/machineInbox.test.ts, "reads at the design size").
  */
 async function changeInbox(
   ctx: MutationCtx,
@@ -415,7 +446,8 @@ async function changeInbox(
       const task = await byId(ctx, 'issues', id)
       if (task !== null) touched.push(task)
     }
-    const shown = await machineShown(touched, me, projectReader(ctx, me))
+    const access = accessOf(ctx, me)
+    const shown = await machineShown(touched, me, (projectId) => access.visible(projectId))
     return {
       action,
       tasks: touched
@@ -525,8 +557,9 @@ export const mcpDeleteComment = internalMutation({
   },
 })
 
-/* list_inbox answers a page of the caller's items, its `limit` and `offset`
- * checked as REST checks them (shared.ts pageLimit, pageOffset). */
+/* list_inbox answers one page of the caller's items (inboxPage), the
+ * cursor first, so a cut tool result still shows it, its `limit` and
+ * `offset` checked as REST checks them (shared.ts cursorPaging). */
 export const mcpListInbox = internalQuery({
   args: {
     callerId: v.string(),
@@ -535,14 +568,15 @@ export const mcpListInbox = internalQuery({
     include_snoozed: v.optional(v.boolean()),
     limit: v.optional(v.number()),
     offset: v.optional(v.number()),
+    cursor: v.optional(v.string()),
   },
   handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    const page = await inboxItems(ctx, me, {
-      unreadOnly: a.unread_only === true,
-      includeSnoozed: a.include_snoozed === true,
-      limit: pageLimit(LIMITS.listInbox, a.limit),
-      offset: pageOffset(a.offset),
+    const paging = cursorPaging(LIMITS.listInbox, 'inbox items', a)
+    const page = await inboxPage(ctx, me, {
+      ...paging,
+      unread_only: a.unread_only === true,
+      include_snoozed: a.include_snoozed === true,
     })
     return pretty(page)
   },
@@ -630,7 +664,10 @@ export const restDeleteComment = internalMutation({
   },
 })
 
-/* GET /v1/inbox?unread_only=&include_snoozed=&limit=&offset= */
+/* GET /v1/inbox?unread_only=&include_snoozed=&limit=&cursor=&offset= —
+ * one page of the caller's items (inboxPage), checked in the order the
+ * docs give: `limit` and `offset` (cursorPaging), the two flags, then the
+ * page's own refusals. An empty cursor is taken as absent. */
 export const restListInbox = internalQuery({
   args: {
     callerId: v.string(),
@@ -639,15 +676,17 @@ export const restListInbox = internalQuery({
     include_snoozed: v.optional(v.string()),
     limit: v.optional(v.string()),
     offset: v.optional(v.string()),
+    cursor: v.optional(v.string()),
   },
   handler: async (ctx, a): Promise<InboxPageJson> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    return await inboxItems(ctx, me, {
-      unreadOnly: flagParam(a.unread_only, 'unread_only'),
-      includeSnoozed: flagParam(a.include_snoozed, 'include_snoozed'),
-      limit: pageLimit(LIMITS.listInbox, a.limit),
-      offset: pageOffset(a.offset),
+    const paging = cursorPaging(LIMITS.listInbox, 'inbox items', {
+      ...a,
+      cursor: a.cursor || undefined,
     })
+    const unread_only = flagParam(a.unread_only, 'unread_only')
+    const include_snoozed = flagParam(a.include_snoozed, 'include_snoozed')
+    return await inboxPage(ctx, me, { ...paging, unread_only, include_snoozed })
   },
 })
 
@@ -805,7 +844,7 @@ export const DISCUSSION_TOOLS: McpTool[] = [
     def: {
       name: 'list_inbox',
       title: 'List inbox',
-      description: `Your inbox as the app shows it: \`items\`, one per active task you can read, with its unread count, its messages (oldest first) and \`dropped_count\`, how many earlier unread messages it no longer holds because an item keeps at most ${ITEM_UNREAD_CAP} unread, latest activity first. \`unread_only\` keeps items with unread messages. Snoozed items are left out unless \`include_snoozed\`. \`limit\` (${DEFAULT_PAGE_SIZE} by default, at most ${LIMITS.listInbox.max}) and \`offset\` page through the items. One call lists up to ${INBOX_LIMIT} unread messages (newest first) and ${INBOX_LIMIT} read ones (most recently read first), looking at no more than ${2 * INBOX_LIMIT} of each, counting messages about tasks it does not list; \`truncated: true\` means some were not looked at. Mark items read to shrink the inbox.`,
+      description: `Your inbox as the app shows it, one page at a time. The answer is \`{next_cursor, items}\`. \`items\` holds one item per active task you can read, latest activity first, each with its unread count, every message (oldest first) and \`dropped_count\`, how many earlier unread messages it no longer holds because an item keeps at most ${ITEM_UNREAD_CAP} unread. \`unread_only\` keeps items with unread messages. Snoozed items are left out unless \`include_snoozed\`. A page holds at most \`limit\` items (${DEFAULT_PAGE_SIZE} by default, at most ${LIMITS.listInbox.max}), and can hold fewer, even none, while \`next_cursor\` is set; pass \`next_cursor\` as \`cursor\` with the same filters until it is null. \`offset\` is refused unless 0. Mark items read to shrink the inbox.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -824,6 +863,11 @@ export const DISCUSSION_TOOLS: McpTool[] = [
           offset: {
             type: 'integer',
             minimum: 0,
+            maximum: 0,
+          },
+          cursor: {
+            type: 'string',
+            minLength: 1,
           },
         },
       },
@@ -837,6 +881,7 @@ export const DISCUSSION_TOOLS: McpTool[] = [
           include_snoozed?: boolean
           limit?: number
           offset?: number
+          cursor?: string
         }),
       }),
   },
@@ -949,7 +994,7 @@ export const DISCUSSION_ROUTES: RestRoute[] = [
     path: 'inbox',
     access: 'read',
     status: 200,
-    query: ['unread_only', 'include_snoozed', 'limit', 'offset'],
+    query: ['unread_only', 'include_snoozed', 'limit', 'cursor', 'offset'],
     run: (r, { callerId, access, query }) =>
       r.runQuery(internal.machine.discussion.restListInbox, {
         callerId,
@@ -957,6 +1002,7 @@ export const DISCUSSION_ROUTES: RestRoute[] = [
         unread_only: query('unread_only'),
         include_snoozed: query('include_snoozed'),
         limit: query('limit'),
+        cursor: query('cursor'),
         offset: query('offset'),
       }),
   }),

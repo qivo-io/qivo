@@ -19,9 +19,9 @@
  * milestones, user grants and team shares (lib/core.ts projectUserPage and
  * machine/projects.ts milestoneRows and grantRows), whose last three first
  * pages REST GET /v1/projects/{ref} and MCP get_project answer with a
- * cursor each (machine/projects.ts projectDetail). REST GET /v1/inbox and MCP
- * list_inbox (t3/limits-machine-inbox) are to page with them too. A
- * cursor is a position in one list's order, sealed with the
+ * cursor each (machine/projects.ts projectDetail), and REST GET /v1/inbox
+ * and MCP list_inbox the caller's inbox items (machine/discussion.ts
+ * inboxPage). A cursor is a position in one list's order, sealed with the
  * list's name and its scope (lib/namedPages.ts namedCursor over
  * lib/archiveCursorSeal.ts), so it shows nothing and opens only for the list
  * and scope it came from. A cursor of another list, organization, caller or
@@ -49,7 +49,11 @@
  * seal the organization, the caller and the project, so a cursor of the
  * details continues on the list call for the same project, at a position
  * of a name key and the holder's id (model/nameKeys.ts idTieOf), or for a
- * milestone its day, name key and id. A cursor never grants access by itself,
+ * milestone its day, name key and id. The Inbox, machine.inbox, checks its
+ * paging with cursorPaging and seals the organization, the caller and a
+ * digest of its two filters, at the Inbox walk's position, the list time
+ * with the task id and the profile id (model/inboxPage.ts inboxTie). A
+ * cursor never grants access by itself,
  * since every page checks the caller's access again. Archived task lists
  * keep their own `2~` cursors (lib/archivedTasks.ts). */
 

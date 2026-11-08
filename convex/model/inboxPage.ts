@@ -5,8 +5,10 @@
  * cut, so a page holds up to INBOX_PAGE.rows groups whatever the filters
  * leave out. The app's Inbox list (src/panels/Inbox.tsx) reads one page at
  * a time, open, and moves Next at the shown page's live `next`, so it never
- * sends `through`. REST and MCP are to page with inboxWalk under their own
- * cursors.
+ * sends `through`. REST GET /v1/inbox and MCP list_inbox page the caller's
+ * one profile with inboxWalk too (machine/discussion.ts inboxPage), with
+ * LIMITS.listInbox's limit, a row of every message of the item and their
+ * own cursor list, machine.inbox. INBOX_PAGE.reads bounds both callers.
  *
  * Who sees what. Each seat reads only its own items (recipient_id), and a
  * group shows only when its task is in the seat's working set, the rule of
@@ -294,9 +296,12 @@ export type InboxWalk<Out> = NamedBatch<Out> & {
  * One batch of the Inbox of `seats`, the caller's active profiles, by
  * `ask`, after position `o.after`, holding up to `o.limit` rows, each what
  * `o.row` builds for a group the walk keeps, and none past position
- * `o.through` when it is not null (lib/namedPages.ts readBatch). REST and
- * MCP are to call it for one profile with their own limit, row and cursor
- * list.
+ * `o.through` when it is not null (lib/namedPages.ts readBatch). The app's
+ * Inbox pages call it for every seat of the login (readInboxPage), REST GET
+ * /v1/inbox and MCP list_inbox for the caller's one profile
+ * (machine/discussion.ts inboxPage), with LIMITS.listInbox's limit, a row
+ * of every message of the item, `through` null and the list machine.inbox,
+ * both under INBOX_PAGE.reads.
  *
  * Each seat's readiness comes first (seatReady). A seat that is not ready
  * adds its organization to `not_ready` and no stream. Unlike
@@ -757,18 +762,27 @@ export async function readInboxPage(
   }
 }
 
+/**
+ * The tie of `at`, an opened cursor's position, when it has an Inbox
+ * position's shape, two strings, the task id and the seat's profile id,
+ * else null. The app's Inbox pages refuse null with NOT_INBOX_CURSOR
+ * (openCursor), REST GET /v1/inbox and MCP list_inbox with CURSOR_REFUSAL
+ * (machine/discussion.ts inboxPage).
+ */
+export function inboxTie(at: NamedAt): InboxTie | null {
+  const [issue, recipient] = at.tie
+  if (at.tie.length !== 2 || typeof issue !== 'string' || typeof recipient !== 'string') {
+    return null
+  }
+  return [issue, recipient]
+}
+
 /* The position cursor `text` names in the Inbox list with `scope`, or a
  * refusal (NOT_INBOX_CURSOR) for any other text or a tie of another
  * shape. */
 async function openCursor(text: string, scope: readonly string[]): Promise<NamedAt<InboxTie>> {
   const at = await openNamedCursor(text, INBOX_LIST, scope)
-  const [issue, recipient] = at?.tie ?? []
-  if (
-    at === null ||
-    at.tie.length !== 2 ||
-    typeof issue !== 'string' ||
-    typeof recipient !== 'string'
-  )
-    throw badRequest(NOT_INBOX_CURSOR)
-  return { key: at.key, tie: [issue, recipient] }
+  const tie = at === null ? null : inboxTie(at)
+  if (at === null || tie === null) throw badRequest(NOT_INBOX_CURSOR)
+  return { key: at.key, tie }
 }
