@@ -965,8 +965,9 @@ this project; hand the lead to someone else first`.
 project's `grants` or in the pages of `/access/users` or `/access/teams`.
 It is `null` only when neither the single-project read's first page nor
 those pages, followed until `next_cursor` is `null`, listed a grant of
-their own, because the read holds only the first 50 grants. `PUT` saves
-nothing when it changed since (see [Refusing a change when a field changed
+their own, because the read holds only the first 50 user grants and the
+first 50 team grants. `PUT` saves nothing when it changed since (see
+[Refusing a change when a field changed
 since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it)).
 
 Removing access can hide open tasks from the people working on them. These
@@ -3173,7 +3174,8 @@ Send each field as the read showed it:
   `GET /v1/projects/{ref}/access/users` or `/access/teams`, list for that
   user or team. It is `null` only when none of them lists a grant of their
   own, with those pages followed until `next_cursor` is `null`, because the
-  single-project read holds only the first 50 grants.
+  single-project read holds only the first 50 user grants and the first 50
+  team grants.
 
 Values compare in a normalized form, so formatting alone never refuses a
 change. Titles and names are trimmed. A task's or project's description

@@ -1480,12 +1480,12 @@ Send each value as a read tool answered it:
   cannot see. An active task with subtasks reads `remaining_hours: null`,
   also while it stores hours of its own, so send `null`.
 - `get_project` gives a project's fields, the first 50 of its milestones'
-  `name` and `date` and the first 50 of its `grants`, and
-  `list_project_related` the rest of each. `lead_id` is the lead it shows,
-  so a sub-project without a lead of its own compares its parent's lead. A
-  grant's `level` is `null` only when neither `grants` nor the pages of
-  `list_project_related`, followed until `next_cursor` is `null`, list a
-  grant of that user or team.
+  `name` and `date` and the first 50 of its user grants and of its team
+  grants (`grants`), and `list_project_related` the rest of each. `lead_id`
+  is the lead it shows, so a sub-project without a lead of its own compares
+  its parent's lead. A grant's `level` is `null` only when neither `grants`
+  nor the pages of `list_project_related`, followed until `next_cursor` is
+  `null`, list a grant of that user or team.
 - `list_labels` gives a label's `color` as clients paint it, so a label
   stored before the `#rrggbb` rule compares as `#8A8F98`.
 - `list_comments`, `list_teams` and `list_users` give a comment's `body`, a
