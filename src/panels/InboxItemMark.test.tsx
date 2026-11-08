@@ -13,10 +13,8 @@ import type { Row } from '../store/rows'
    the task's inbox item (convex/inbox.ts item, store/planner.ts
    P.inboxItem), on the real store over the live double, which answers the
    item from the server's messages through its stand-in
-   (store/inboxStandIn.setup.ts). The server here holds the task's messages
-   beyond the inbox part's cut, so the workspace holds none of them, as
-   for an Inbox past 500 messages, and the divider and the read come from
-   the item alone. The read waits for the item's answer, takes the task's
+   (store/inboxStandIn.setup.ts). The store holds no message, so the
+   divider and the read come from the item alone. The read waits for the item's answer, takes the task's
    organization, uuid and the answer's `through`, goes once a `through`,
    and never for a snoozed item, a seat whose items are building, a failed
    read or no item. An Inbox row's press only opens its task, whose pane
@@ -52,7 +50,7 @@ let P: Planner
 let container: HTMLDivElement
 let root: Root
 let snap: Snapshot
-// the messages the server holds beyond the inbox part's cut
+// more messages the server holds, which a test changes apart from the rest
 let beyond: Row<'messages'>[]
 let me: string
 let publish: () => void
@@ -107,9 +105,10 @@ const mine = (m: Row<'messages'>): Row<'messages'> => ({
 })
 
 /* Loads the store with task-a and task-b, and what `edit` adds, the server
-   holding `held` beyond the inbox part's cut, and `loaded` in the
-   workspace's own messages, each in the fixture's organization unless it
-   names another. */
+   holding the messages `held` and `loaded`, each in the fixture's
+   organization unless it names another; a test changes `held` through
+   `beyond` and `loaded` through the whole's own messages. The store holds
+   none of them. */
 async function load(
   held: Row<'messages'>[] = [],
   loaded: Row<'messages'>[] = [],
@@ -144,7 +143,8 @@ async function load(
   network.onUpdate.mockImplementation((ref, _args, next) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') {
-      publish = () => next(structuredClone({ ...snap, beyondCut: beyond.map(mine) }))
+      publish = () =>
+        next(structuredClone({ ...snap, messages: [...snap.messages, ...beyond.map(mine)] }))
       publish()
     } else if (name === 'snapshot:threadComments') {
       const thread = { next, closed: false }
@@ -243,7 +243,6 @@ const itemReads = () => writes.filter((w) => w.name === 'messages:readItem').map
 describe("the task window's New mark from the inbox item", { timeout: 20_000 }, () => {
   it("draws the divider at the item's first unread message, which the workspace never loaded", async () => {
     await load([message('task-a', 5), message('task-a', 7)])
-    expect(P.messages).toEqual([])
     await openTask()
     await comments(range(1, 10))
     // at or after the start, as a comment and its notice share one time
@@ -409,8 +408,10 @@ describe("the task window's read on open", { timeout: 20_000 }, () => {
     await openTask()
     expect(itemReads()).toEqual([])
     // Unsnooze, which brings the item back unread
-    await act(async () => P.snoozeMessages(['message-task-a-5'], null))
-    const wake = writes.find((w) => w.name === 'messages:snooze')
+    await act(async () =>
+      P.snoozeItem({ org: snap.orgs[0].id, task: 'task-a', through: Date.parse(at(5)) }, null),
+    )
+    const wake = writes.find((w) => w.name === 'messages:snoozeItem')
     if (!wake) throw new Error('no snooze write went out')
     snap.messages = snap.messages.map(({ snoozed_until: _, ...m }) => m)
     await act(async () => publish())
@@ -424,8 +425,10 @@ describe("the task window's read on open", { timeout: 20_000 }, () => {
     const until = new Date(Date.now() + 86_400_000).toISOString()
     await load([], [message('task-a', 5, { kind: 'comment', snoozed_until: until })])
     await openTask()
-    await act(async () => P.snoozeMessages(['message-task-a-5'], null))
-    const wake = writes.find((w) => w.name === 'messages:snooze')
+    await act(async () =>
+      P.snoozeItem({ org: snap.orgs[0].id, task: 'task-a', through: Date.parse(at(5)) }, null),
+    )
+    const wake = writes.find((w) => w.name === 'messages:snoozeItem')
     if (!wake) throw new Error('no snooze write went out')
     await act(async () => wake.refuse())
     await settle()
@@ -444,8 +447,10 @@ describe("the task window's read on open", { timeout: 20_000 }, () => {
   it('reads an update that came while an unread write waited, once the server refuses it', async () => {
     await load([], [message('task-a', 5, { kind: 'comment', read_at: at(6) })])
     await openTask()
-    await act(async () => P.markMessagesUnread(['message-task-a-5']))
-    const unread = writes.find((w) => w.name === 'messages:markUnread')
+    await act(async () =>
+      P.unreadItem({ org: snap.orgs[0].id, task: 'task-a', through: Date.parse(at(5)) }),
+    )
+    const unread = writes.find((w) => w.name === 'messages:unreadItem')
     if (!unread) throw new Error('no unread write went out')
     // the update stays unread while the write waits
     snap.messages = [...snap.messages, mine(message('task-a', 12, { kind: 'comment' }))]
@@ -470,9 +475,13 @@ describe("the task window's read on open", { timeout: 20_000 }, () => {
       ],
     )
     await openTask()
-    await act(async () => P.markMessagesUnread(['message-task-a-5']))
-    await act(async () => P.markMessagesUnread(['message-task-a-7']))
-    const [earlier, later] = writes.filter((w) => w.name === 'messages:markUnread')
+    await act(async () =>
+      P.unreadItem({ org: snap.orgs[0].id, task: 'task-a', through: Date.parse(at(5)) }),
+    )
+    await act(async () =>
+      P.unreadItem({ org: snap.orgs[0].id, task: 'task-a', through: Date.parse(at(7)) }),
+    )
+    const [earlier, later] = writes.filter((w) => w.name === 'messages:unreadItem')
     if (!later) throw new Error('two unread writes did not go out')
     // the server accepts the later write, then the earlier one fails
     snap.messages = snap.messages.map((m) => {
@@ -496,8 +505,10 @@ describe("the task window's read on open", { timeout: 20_000 }, () => {
   it('holds nothing in the next visit for an unread write of an earlier one', async () => {
     await load([], [message('task-a', 5, { kind: 'comment', read_at: at(6) })])
     await openTask()
-    await act(async () => P.markMessagesUnread(['message-task-a-5']))
-    const unread = writes.find((w) => w.name === 'messages:markUnread')
+    await act(async () =>
+      P.unreadItem({ org: snap.orgs[0].id, task: 'task-a', through: Date.parse(at(5)) }),
+    )
+    const unread = writes.find((w) => w.name === 'messages:unreadItem')
     if (!unread) throw new Error('no unread write went out')
     // the window closes and opens the task again while the write waits
     await act(async () => root.unmount())

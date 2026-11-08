@@ -70,6 +70,7 @@ async function worldOf(t: T, profile: Doc<'profiles'>): Promise<Snapshot> {
   return {
     ...ws,
     milestones: [],
+    messages: [],
     projects: [...ws.projects, ...rest.filter((p) => !held.has(p.id))],
   }
 }

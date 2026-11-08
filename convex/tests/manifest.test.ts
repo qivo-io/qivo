@@ -567,18 +567,14 @@ machine/uploads:begin mutation internal {"type":"object","value":{"ticket":{"fie
 machine/uploads:finish mutation internal {"type":"object","value":{"ticket":{"fieldType":{"type":"string"},"optional":false},"minter":{"fieldType":{"type":"string"},"optional":false},"attempt":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false}}}
 messages:bulkReach query public {"type":"object","value":{"action":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"remove"}]},"optional":false}}}
 messages:markAllRead mutation public {"type":"object","value":{"before":{"fieldType":{"type":"number"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-messages:markRead mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-messages:markUnread mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:notifyFollowers mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false},"task":{"fieldType":{"type":"id","tableName":"issues"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"actor_id":{"fieldType":{"type":"string"},"optional":true},"now":{"fieldType":{"type":"string"},"optional":false},"note":{"fieldType":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"comment"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"change"},"optional":false},"parts":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"assigned":{"fieldType":{"type":"string"},"optional":true},"reviewer":{"fieldType":{"type":"string"},"optional":true},"handed":{"fieldType":{"type":"boolean"},"optional":false},"assignee_id":{"fieldType":{"type":"string"},"optional":true},"reviewer_id":{"fieldType":{"type":"string"},"optional":true},"parent":{"fieldType":{"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"key":{"fieldType":{"type":"string"},"optional":false}}},"optional":true}}}]},"optional":false},"mentioned":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"after":{"fieldType":{"type":"string"},"optional":true}}}
 messages:notifyMentions mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false},"task":{"fieldType":{"type":"id","tableName":"issues"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"actor_id":{"fieldType":{"type":"string"},"optional":true},"now":{"fieldType":{"type":"string"},"optional":false},"body":{"fieldType":{"type":"string"},"optional":false},"recipients":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
 messages:readArchivedProject mutation internal {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"rest":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true},"batch":{"fieldType":{"type":"number"},"optional":true},"tasks":{"fieldType":{"type":"number"},"optional":true}}}
 messages:readArchivedTasks mutation internal {"type":"object","value":{"issues":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"batch":{"fieldType":{"type":"number"},"optional":true}}}
 messages:readItem mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"through":{"fieldType":{"type":"number"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:rekeyItems mutation internal {"type":"object","value":{"issues":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
-messages:remove mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:removeItem mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"through":{"fieldType":{"type":"number"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:removeRead mutation public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-messages:snooze mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"until":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:snoozeItem mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"until":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:trimItems mutation internal {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"recipients":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
 messages:unreadItem mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -832,7 +828,6 @@ webhooks:remove mutation internal {"type":"object","value":{"owner":{"fieldType"
 webhooks:removeOrganization mutation internal {"type":"object","value":{"owner":{"fieldType":{"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"credential_table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"agent_keys"},{"type":"literal","value":"mcp_tokens"},{"type":"literal","value":"oauth_connections"}]},"optional":false},"credential_id":{"fieldType":{"type":"string"},"optional":false},"credential_row_id":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false}}}
 webhooks:save mutation internal {"type":"object","value":{"owner":{"fieldType":{"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"credential_table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"agent_keys"},{"type":"literal","value":"mcp_tokens"},{"type":"literal","value":"oauth_connections"}]},"optional":false},"credential_id":{"fieldType":{"type":"string"},"optional":false},"credential_row_id":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"union","value":[{"type":"literal","value":"task.created"},{"type":"literal","value":"task.updated"},{"type":"literal","value":"task.deleted"},{"type":"literal","value":"task.restored"},{"type":"literal","value":"comment.created"}]},"optional":false},"filters":{"fieldType":{"type":"object","value":{"task_id":{"fieldType":{"type":"string"},"optional":true},"project_id":{"fieldType":{"type":"string"},"optional":true}}},"optional":false},"url":{"fieldType":{"type":"string"},"optional":false},"encrypted_secret":{"fieldType":{"type":"string"},"optional":false},"secret_hash":{"fieldType":{"type":"string"},"optional":true},"legacy_secret_hash":{"fieldType":{"type":"string"},"optional":true},"expires_at":{"fieldType":{"type":"number"},"optional":true}}}
 webhooks:sweep mutation internal {"type":"object","value":{}}
-workspace:inbox query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 workspace:projects query public {"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 workspace:root query public {"type":"object","value":{}}
 workspace:tasks query public {"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -1131,13 +1126,9 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   messages: {
     bulkReach: 'authedQuery',
     markAllRead: 'orgMutation',
-    markRead: 'orgMutation',
-    markUnread: 'orgMutation',
     readItem: 'orgMutation',
-    remove: 'orgMutation',
     removeItem: 'orgMutation',
     removeRead: 'orgMutation',
-    snooze: 'orgMutation',
     snoozeItem: 'orgMutation',
     unreadItem: 'orgMutation',
   },
@@ -1388,12 +1379,11 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     root: 'authedQuery',
     projects: 'seatQuery',
     tasks: 'seatQuery',
-    inbox: 'seatQuery',
   },
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 258
+const PUBLIC_COUNT = 253
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

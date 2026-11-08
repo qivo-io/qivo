@@ -3,7 +3,7 @@
 
    The registry subscribes to the root part, which carries the caller's
    seats, organizations and own profiles, team memberships and teams, and
-   for each organization it names to the inbox and windows of its projects
+   for each organization it names to the windows of its projects
    (convex/lib/idWindows.ts), as many as its counts of projects say it
    fills (startWindows), chosen once when it adds the organization. No part
    sends another person, a team the caller is not in or a label; the views
@@ -82,13 +82,17 @@
    once. Each side is its own. Its failure never holds the workspace or
    another side.
 
-   Two sides concern the Inbox. The unread summary (convex/inbox.ts
+   Three sides concern the Inbox. The unread summary (convex/inbox.ts
    summary) is watched by every registry as it starts, right after the
    root part, so its first answer comes with the first parts, and a retry's
    or a re-init's registry watches it again. It runs while the tab is
    hidden, as the parts do, since the badge counts unread tasks also then.
    The open task's inbox item (convex/inbox.ts item) rides with the thread
-   (store/planner.ts subscribeThread), with the thread's own arguments.
+   (store/planner.ts subscribeThread), with the thread's own arguments. The
+   feed of new unread events (convex/inbox.ts feed) is watched by the
+   store's desktop alert client with the floor it holds, only while the
+   session can notify (lib/notificationFeed.ts), and also runs while the
+   tab is hidden. No part sends a message.
 
    Watching one query with the same arguments twice shares one Convex
    subscription and one token (lib/liveQueries.ts), and a watch that joins
@@ -112,7 +116,6 @@ import {
   tasksIn,
 } from '../../convex/lib/idWindows'
 import {
-  type InboxPart,
   joinParts,
   type OrgParts,
   type ProjectsPart,
@@ -165,8 +168,10 @@ export const TASKS_STALLED = 'Every task did not arrive in time. Try again in a 
     organization after another, until an answer names its uuid and
     organization (store/planner.ts P.watchTaskRef). `summary` is the
     unread summary across the login's seats (convex/inbox.ts summary),
-    which every registry watches from its start, and `item` the open
-    task's inbox item (convex/inbox.ts item), beside its thread. */
+    which every registry watches from its start, `item` the open task's
+    inbox item (convex/inbox.ts item), beside its thread, and `feed` the
+    newest unread events after a floor (convex/inbox.ts feed), which the
+    desktop alert client watches (store/planner.ts startAlerts). */
 export const SIDE_NAMES = [
   'thread',
   'history',
@@ -176,6 +181,7 @@ export const SIDE_NAMES = [
   'reference',
   'summary',
   'item',
+  'feed',
 ] as const
 export type SideName = (typeof SIDE_NAMES)[number]
 
@@ -261,7 +267,6 @@ type Node = IdWindow & { slot: Slot; pieces: Node[] | null }
 /* What the registry holds for one organization. */
 type Org = {
   id: string
-  inbox: Slot
   /** the windows of each kind */
   kinds: Record<Kind, Node[]>
   /** whether its task windows were subscribed, which they are once tasks
@@ -396,7 +401,6 @@ export function createLiveParts(
     for (const { row, tasks } of added) {
       orgs.set(row.id, {
         id: row.id,
-        inbox: watch(api.workspace.inbox, { org_id: row.id }),
         kinds: { tasks: windows(row.id, 'tasks', tasks), projects: [] },
         tasksStarted: tasksNow,
       })
@@ -431,7 +435,6 @@ export function createLiveParts(
     }
   }
   function* orgSlots(org: Org): Generator<Slot> {
-    yield org.inbox
     for (const kind of KINDS) for (const n of nodesOf(org.kinds[kind])) yield n.slot
   }
 
@@ -487,13 +490,12 @@ export function createLiveParts(
   }
 
   /** The slots complete() needs an answer from other than task windows:
-      the root, each organization's inbox, and each project window that
+      the root, and each project window that
       shows its rows neither itself nor through its pieces (rowsOf), or,
       when it has pieces, the pieces that cannot. */
   function* neededParts(): Generator<Slot> {
     if (root) yield root
     for (const org of orgs.values()) {
-      yield org.inbox
       for (const kind of PART_KINDS) for (const n of org.kinds[kind]) yield* neededIn(n)
     }
   }
@@ -568,11 +570,10 @@ export function createLiveParts(
       }
       for (const n of org.kinds.tasks)
         if (rowsOf(n) !== null) loaded += (idShare(n) * weight(row)) / allTasks
-      const inbox = rowsOfSlot<InboxPart>(org.inbox)
       const tasks = withTasks ? windowsOf<TasksPart>('tasks') : []
       const projects = windowsOf<ProjectsPart>('projects')
-      if (!inbox || !tasks || !projects) return null
-      parts.push({ inbox, tasks, projects })
+      if (!tasks || !projects) return null
+      parts.push({ tasks, projects })
     }
     return { value: joinParts(answer, parts, new Date(lastAt).toISOString()), loaded }
   }

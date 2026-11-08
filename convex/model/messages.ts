@@ -240,7 +240,7 @@ function oldestFirst(
 }
 
 /* ------------------------------------------------------------------- prune
- * 0109's invariant, kept at both ends (postMessage and messages.markRead):
+ * 0109's invariant, kept at both ends (postMessage and markMessagesRead):
  * "an item holds every UNREAD message it has been sent, plus its newest
  * message when that one has been read." Deletes every READ message of the
  * (recipient, issue) pair except the pair's newest message, read or not.
@@ -326,10 +326,10 @@ const itemStart = (ctx: MutationCtx, a: { recipient_id: string; issue_id: string
  * woke the item from any snooze.
  *
  * The item counts what the cap deleted in `dropped` (schema.ts), kept on
- * `holder`, its newest unread row by insertion. The workspace inbox part's
- * read (lib/inbox.ts loadInbox) walks unread rows newest first and stops at
- * INBOX_LIMIT, so whenever it lists an item it holds that row, while its
- * oldest rows are the first it leaves out.
+ * `holder`, its newest unread row by insertion. The bounded read of
+ * lib/inbox.ts loadInbox, which only tests call, walks unread rows newest
+ * first and stops at INBOX_LIMIT, so whenever it lists an item it holds
+ * that row, while its oldest rows are the first it leaves out.
  * A trim adds the rows it deleted to the counts its rows carried, the
  * deleted ones included, and to the count of the last holder, read on its
  * own when the item is longer than `unread`, and moves the total to the
@@ -877,29 +877,9 @@ export async function unfollowTask(
 /* ------------------------------------------------------------ inbox writes
  * The recipient's own writes on its inbox, shared by the app's Inbox
  * (convex/messages.ts) and the machine inbox (machine/discussion.ts). Each
- * takes rows the caller already chose as its own. The app passes the message
- * ids its list holds through ownMessages, or for an item action the task's
- * id through itemMessages, and the machine every row of the items it names
- * through itemMessages. Each returns the ids of the tasks whose items it
- * changed. */
-
-/**
- * The rows among `ids` that belong to `me`, each once. Other people's rows
- * and unknown ids are skipped silently, so a probe learns nothing and a
- * stale id is not an error.
- */
-export async function ownMessages(
-  ctx: MutationCtx,
-  me: Doc<'profiles'>,
-  ids: readonly string[],
-): Promise<Doc<'messages'>[]> {
-  const out: Doc<'messages'>[] = []
-  for (const id of new Set(ids)) {
-    const row = await byId(ctx, 'messages', id)
-    if (row !== null && row.recipient_id === me.id) out.push(row)
-  }
-  return out
-}
+ * takes rows the caller already chose as its own: the app's item actions
+ * and the machine pass every row of the items they name through
+ * itemMessages. Each returns the ids of the tasks whose items it changed. */
 
 /**
  * Every row of `me`'s inbox item about one task, or with `through` the rows

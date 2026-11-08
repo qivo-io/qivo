@@ -70,7 +70,6 @@ function fixture(): Snapshot {
       ...(read ? { read_at: AT } : {}),
     })
   }
-  snap.readMessageCount = 1
   return snap
 }
 
@@ -175,7 +174,6 @@ describe('the unread summary in the store', () => {
     })
     // the workspace goes on
     expect(P().snapshotTrouble()).toBeNull()
-    expect(P().messages).toHaveLength(3)
     // opening the Inbox runs it again from a fresh subscription, which
     // fails again while the server still fails it
     P().retryInboxSummary()
@@ -218,7 +216,6 @@ describe('the unread summary in the store', () => {
     document.dispatchEvent(new Event('visibilitychange'))
     inboxEmits.length = 0
     snapshot.messages = snapshot.messages.map((m) => ({ ...m, read_at: undefined }))
-    snapshot.readMessageCount = 0
     deliver(snapshot)
     expect(P().inboxSummary).toMatchObject({ state: 'ok', answer: { unread_count: 3 } })
     expect(inboxEmits.length).toBeGreaterThan(0)
@@ -229,8 +226,9 @@ describe('the unread summary in the store', () => {
     let workspaceEmits = 0
     P().updates.workspace.subscribe(() => workspaceEmits++)
     inboxEmits.length = 0
+    // the organization's rename and the messages arrive in one transition
+    snapshot.orgs[0].name = 'Renamed Labs'
     snapshot.messages = snapshot.messages.map((m) => ({ ...m, read_at: undefined }))
-    snapshot.readMessageCount = 0
     deliver(snapshot)
     // the workspace emit showed the summary's news too
     expect(workspaceEmits).toBe(1)
@@ -288,7 +286,7 @@ describe("Mark all as read and Remove all read from the summary's seat flags", (
     snap.myProfileIds = [...snap.myProfileIds, seat.id]
   }
 
-  it('follows the flags, and takes nothing from the loaded rows once the summary answered', async () => {
+  it('follows the flags of the summary’s answer', async () => {
     await store.initStore()
     expect(P().canMarkAllRead).toBe(true)
     expect(P().canRemoveRead).toBe(true)
@@ -297,24 +295,27 @@ describe("Mark all as read and Remove all read from the summary's seat flags", (
     deliver(snapshot)
     expect(P().canMarkAllRead).toBe(false)
     expect(P().canRemoveRead).toBe(true)
-    // a loaded message painted unread is not the server's answer yet
-    P().markMessagesUnread(['message-2'])
-    expect(P().messages.find((m) => m.id === 'message-2')?.read).toBe(false)
-    expect(P().unreadMessages).toBe(1)
+    // an item marked unread is not the server's answer yet
+    P().unreadItem({
+      org: snapshot.orgs[0].id,
+      task: snapshot.messages[0].issue_id,
+      through: Date.parse(snapshot.messages[0].created_at),
+    })
     expect(P().canMarkAllRead).toBe(false)
-    // and an answer that says otherwise wins over the loaded rows
-    deliver({ ...snapshot, unreadTruncated: true })
+    // and an answer that says otherwise wins
+    deliver({
+      ...snapshot,
+      messages: snapshot.messages.map((m, i) => (i === 0 ? { ...m, read_at: undefined } : m)),
+    })
     expect(P().canMarkAllRead).toBe(true)
   })
 
   it('is true for both while the summary has no answer, loading or failed', async () => {
     live().forceInbox('loading', 'inbox:summary')
     snapshot.messages = []
-    snapshot.readMessageCount = 0
     await store.initStore()
     expect(P().inboxSummary.state).toBe('loading')
-    // the loaded rows hold nothing, but the server may
-    expect(P().messages).toEqual([])
+    // the store holds no message, and the server may hold some
     expect(P().canMarkAllRead).toBe(true)
     expect(P().canRemoveRead).toBe(true)
     live().forceInbox(null)
@@ -330,7 +331,6 @@ describe("Mark all as read and Remove all read from the summary's seat flags", (
   it('is true for a seat an incomplete answer left out, and for none a complete one leaves', async () => {
     secondSeat(snapshot)
     snapshot.messages = []
-    snapshot.readMessageCount = 0
     live().forceInbox('budget', 'inbox:summary')
     await store.initStore()
     // the budget stopped before the second seat, so its flags are unknown
@@ -351,7 +351,6 @@ describe("Mark all as read and Remove all read from the summary's seat flags", (
 
   it('keeps the actions guarded by the flags', async () => {
     snapshot.messages = []
-    snapshot.readMessageCount = 0
     await store.initStore()
     expect(P().canMarkAllRead).toBe(false)
     await P().markAllMessagesRead()

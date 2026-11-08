@@ -3,25 +3,19 @@
  * says before a bulk action starts how much it has to do. Rows are created
  * only by model/messages' notify family, and everything else is immutable
  * by not appearing in any validator. The app's Inbox names a row's item by
- * its task (readItem, unreadItem, removeItem, snoozeItem), so a row the
- * workspace did not load is reached too, and the bulk actions take none
- * (markAllRead, removeRead). The id actions (markRead, markUnread, remove,
- * snooze) have no caller in the app's views any more; open old clients
- * keep calling them, so they stay.
+ * its task (readItem, unreadItem, removeItem, snoozeItem), and the bulk
+ * actions take none (markAllRead, removeRead). No write takes message ids.
  *
- * Own rows only, silently: the RLS filter's successor (model/messages.ts
- * ownMessages) skips non-own and unknown ids without a trace (the client
- * pre-filters anyway), so a probe learns nothing and a stale id is not an
- * error. An item action reads only the caller's own item
+ * Own rows only, silently: an item action reads only the caller's own item
  * (model/messages.ts itemMessages), and a task without one, or an unknown
- * task id, changes nothing and raises nothing, except that snoozeItem
- * still refuses an `until` that snooze refuses.
+ * task id, changes nothing and raises nothing, so a probe learns nothing,
+ * except that snoozeItem still refuses an `until` the snooze refuses.
  *
  * Each write is a model/messages.ts function the machine inbox
- * (machine/discussion.ts) runs too. markRead then restores 0109's invariant
+ * (machine/discussion.ts) runs too. readItem then restores 0109's invariant
  * per DISTINCT (recipient, issue) pair among the rows it marked, as the
- * statement trigger fired once per pair. markUnread prunes nothing.
- * markUnread and snooze refuse a message about an archived task.
+ * statement trigger fired once per pair. unreadItem prunes nothing.
+ * unreadItem and snoozeItem refuse a message about an archived task.
  * markAllRead visits bounded batches beyond the snapshot cap, keeping the
  * first batch's server-selected cutoff, which the app asks bulkReach for
  * when the person presses the action. There is no boot
@@ -40,7 +34,6 @@ import {
   markMessagesUnread,
   notifyFollowersStep,
   notifyMentionsStep,
-  ownMessages,
   readArchivedProjectMessages,
   readArchivedTaskMessages,
   readBulkReach,
@@ -52,17 +45,6 @@ import {
   vMentionStep,
   wakeSnoozedItem,
 } from './model/messages'
-
-/* P.markMessagesRead, which no view calls any more (an older app's Inbox
- * row). One `now` stamps every row of the act. */
-export const markRead = orgMutation({
-  args: { ids: v.array(v.string()) },
-  handler: async (ctx, { ids }) => {
-    const now = new Date().toISOString()
-    await markMessagesRead(ctx, ctx.me, await ownMessages(ctx, ctx.me, ids), now)
-    return null
-  },
-})
 
 /* P.markAllMessagesRead. The cutoff is the newest stored unread row at the
  * first call, not the browser clock or the notification's narrated date.
@@ -101,28 +83,6 @@ export const bulkReach = authedQuery({
   }),
 })
 
-/* P.markMessagesUnread, which no view calls any more, the same column the
- * other way. A message about an archived task refuses the whole act
- * (model/messages.ts refuseArchivedItems), and the client rolls back. */
-export const markUnread = orgMutation({
-  args: { ids: v.array(v.string()) },
-  handler: async (ctx, { ids }) => {
-    await markMessagesUnread(ctx, ctx.me, await ownMessages(ctx, ctx.me, ids))
-    return null
-  },
-})
-
-/* P.deleteMessages, which no view calls any more. Removing an item removes
- * every message in it, so an older app's Inbox passed the whole list of its
- * loaded messages. */
-export const remove = orgMutation({
-  args: { ids: v.array(v.string()) },
-  handler: async (ctx, { ids }) => {
-    await removeMessages(ctx, await ownMessages(ctx, ctx.me, ids))
-    return null
-  },
-})
-
 /* Read cleanup reaches every read message, loaded or not. Each bounded
  * batch selects the current read rows, so a message reopened by another
  * device survives. The caller repeats while hasMore is true. `ids` names
@@ -136,21 +96,6 @@ export const removeRead = orgMutation({
       ids: done.removed.map((row) => row.id),
       hasMore: done.hasMore,
     }
-  },
-})
-
-/* P.snoozeMessages, which no view calls any more. Hides an item until
- * `until` on every client at once, or lifts the snooze early (null). The
- * ids name the item; the write covers the WHOLE (recipient, issue) pair,
- * loaded or not (model/messages.ts snoozeMessages). The return trip is the scheduled wake below, a server
- * event, so the laptop that snoozed and the phone that did not see the row
- * come back at the same instant, and a closed phone finds it back the
- * moment it opens. An archived task refuses it like markUnread. */
-export const snooze = orgMutation({
-  args: { ids: v.array(v.string()), until: v.union(v.string(), v.null()) },
-  handler: async (ctx, { ids, until }) => {
-    await snoozeMessages(ctx, ctx.me, await ownMessages(ctx, ctx.me, ids), until)
-    return null
   },
 })
 
@@ -171,7 +116,7 @@ const vThrough = v.number()
  * item's newest message
  * (model/messages.ts markMessagesRead), which is that later message when
  * there is one. That message keeps the dropped count the item cap moved
- * onto it (schema.ts messages.dropped), as markRead leaves it: a trim after
+ * onto it (schema.ts messages.dropped), as the machine inbox's mark leaves it: a trim after
  * the caller's view can also have dropped messages stored after it, which
  * the count cannot tell apart, so the count stays until that message is
  * read.
@@ -180,8 +125,8 @@ const vThrough = v.number()
  * One stored before the cap holds more. The backfill builds an item of up
  * to BUILD.pair_rows (1,000) messages as it is and trims only larger ones,
  * an arrival trims at most ITEM_TRIM_STEP (50), and on a seat not built yet
- * the item can be larger still, as it is for markRead's prune and for
- * snooze, which read the whole item too. A 1,000-message item costs about
+ * the item can be larger still, as it is for snoozeItem, which reads the
+ * whole item too. A 1,000-message item costs about
  * 2,000 of Convex's 16,000 writes (1,000 patches and 999 deletes by the
  * prune), and each message is read up to four times (the item, the patch,
  * the prune's read and its delete): about 1.3 MB written and 5.3 MB read
@@ -196,11 +141,11 @@ export const readItem = orgMutation({
   },
 })
 
-/* Marks the caller's item about one task unread, as markUnread does with
- * all its ids, which opens again the one read message the prune keeps. A
- * task that is archived or in an archived project refuses it with
- * markUnread's sentences (model/messages.ts refuseArchivedItems), and one
- * the caller can no longer see changes nothing. */
+/* Marks the caller's item about one task unread, every message of it,
+ * which opens again the one read message the prune keeps. A
+ * task that is archived or in an archived project refuses it
+ * (model/messages.ts refuseArchivedItems), and one the caller can no
+ * longer see changes nothing. */
 export const unreadItem = orgMutation({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => {
@@ -228,10 +173,15 @@ export const removeItem = orgMutation({
 })
 
 /* Snoozes the caller's item about one task until `until`, or with null
- * lifts its snooze now, with snooze's checks, refusals and scheduled wake
- * (model/messages.ts snoozeMessages). An `until` that snooze refuses, in
- * the past or past LIMITS.snooze, is refused also when the caller holds no
- * item about the task, as snooze refuses it with no ids. */
+ * lifts its snooze now, with the snooze's checks, refusals and scheduled
+ * wake (model/messages.ts snoozeMessages). The ids name nothing: the write
+ * covers the WHOLE (recipient, issue) pair. The return trip is the
+ * scheduled wake below, a server event, so the laptop that snoozed and the
+ * phone that did not come back at the same instant, and a closed phone
+ * finds it back the moment it opens. An `until` the snooze refuses, in the
+ * past or past LIMITS.snooze, is refused also when the caller holds no
+ * item about the task, as snoozeMessages refuses it with no rows. An
+ * archived task refuses it like unreadItem. */
 export const snoozeItem = orgMutation({
   args: { issue_id: v.string(), until: v.union(v.string(), v.null()) },
   handler: async (ctx, { issue_id, until }) => {

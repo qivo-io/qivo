@@ -22,12 +22,6 @@ vi.mock('../lib/auth', () => ({
   authClient: { getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }) },
   signOut: vi.fn(),
 }))
-// the desktop notifications the store raises, by their tag (a message id)
-const notes = vi.hoisted(() => ({ tags: [] as string[] }))
-vi.mock('../lib/notify', async (original) => ({
-  ...(await original<typeof import('../lib/notify')>()),
-  desktopNotify: (tag: string) => notes.tags.push(tag),
-}))
 // a demo store, which disposeDemoStore clears, only where a test asks
 const demo = vi.hoisted(() => ({ on: false }))
 vi.mock('../lib/demoMode', async (original) => {
@@ -427,113 +421,6 @@ describe('tasks on demand', () => {
     expect(store.P.familyOf(it)).toBeNull()
     expect(store.P.sectionsFor(it.uuid)).toBeNull()
     expect(store.P.delayOf(it)).toBeNull()
-  })
-
-  /** An unread message to the signed-in person about task `task`, made at
-      `at`, of `kind`. */
-  const message = (id: string, task: string, at: string, kind = 'change') => ({
-    id,
-    org_id: snapshot.orgs[0].id,
-    recipient_id: snapshot.profiles[0].id,
-    issue_id: task,
-    issue_title: `Task ${task}`,
-    kind: kind as 'change',
-    detail: 'Status changed',
-    created_at: at,
-  })
-
-  it('raises no notification for the stored messages of a task that comes back into view while not asked, and one for a new one', async () => {
-    snapshot.delivered_at = '2026-09-14T09:00:00.000Z'
-    await boot()
-    notes.tags.length = 0
-    // access to task x returns: the Inbox part brings its stored message,
-    // made before the previous delivery; no task enters the rows
-    snapshot.messages.push(message('stored', 'x', '2026-09-14T08:00:00.000Z'))
-    snapshot.delivered_at = '2026-09-14T09:30:00.000Z'
-    deliver(structuredClone(snapshot))
-    await tick()
-    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
-    expect(store.P.messages.some((m) => m.id === 'stored')).toBe(true)
-    expect(notes.tags).toEqual([])
-    // a new mention on it, made after, notifies
-    snapshot.messages.push(message('mention', 'x', '2026-09-14T10:00:00.000Z', 'mention'))
-    snapshot.delivered_at = '2026-09-14T10:30:00.000Z'
-    deliver(structuredClone(snapshot))
-    await tick()
-    expect(notes.tags).toEqual(['mention'])
-  })
-
-  it('notifies a first mention made just before the previous delivery whose commit reached only this one, while not asked', async () => {
-    snapshot.delivered_at = '2026-09-14T09:00:00.000Z'
-    await boot()
-    notes.tags.length = 0
-    snapshot.delivered_at = '2026-09-14T09:30:00.000Z'
-    deliver(structuredClone(snapshot))
-    await tick()
-    // the mention's mutation read the clock before the 09:30 delivery and
-    // committed after it, so that delivery did not hold it; no task enters
-    // the rows, and nothing else tells x apart from a task coming into view
-    snapshot.messages.push(message('late', 'x', '2026-09-14T09:29:59.000Z', 'mention'))
-    snapshot.delivered_at = '2026-09-14T09:30:01.000Z'
-    deliver(structuredClone(snapshot))
-    await tick()
-    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
-    expect(notes.tags).toEqual(['late'])
-  })
-
-  it('raises no notification for the messages a restore brings back while not asked', async () => {
-    snapshot.delivered_at = '2026-09-14T09:00:00.000Z'
-    await boot()
-    notes.tags.length = 0
-    network.mutation.mockResolvedValue({})
-    expect(
-      await store.P.unarchiveIssue('y', 'Task y', snapshot.projects[0].id, snapshot.orgs[0].id),
-    ).toBe(true)
-    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
-    // its stored message, and the Restored notice written after the restore
-    snapshot.messages.push(
-      message('kept', 'y', '2026-09-14T08:00:00.000Z'),
-      message('restored', 'y', '2026-09-14T09:10:00.000Z'),
-    )
-    snapshot.delivered_at = '2026-09-14T09:30:00.000Z'
-    deliver(structuredClone(snapshot))
-    await tick()
-    expect(store.P.messages.filter((m) => m.issueUuid === 'y')).toHaveLength(2)
-    expect(notes.tags).toEqual([])
-  })
-
-  it('notifies a later mention on a restored task that brought no message back while not asked', async () => {
-    snapshot.delivered_at = '2026-09-14T09:00:00.000Z'
-    await boot()
-    notes.tags.length = 0
-    const restore = (id: string) =>
-      store.P.unarchiveIssue(id, `Task ${id}`, snapshot.projects[0].id, snapshot.orgs[0].id)
-    /** Delivers the snapshot as the server holds it at `at`. */
-    const at = async (time: string) => {
-      snapshot.delivered_at = time
-      deliver(structuredClone(snapshot))
-      await tick()
-    }
-    // as Convex does, the delivery that holds the restore comes before the
-    // write resolves; it brings no message for the person who restored
-    network.mutation.mockImplementationOnce(async () => {
-      snapshot.delivered_at = '2026-09-14T09:10:00.000Z'
-      deliver(structuredClone(snapshot))
-      return {}
-    })
-    expect(await restore('r1')).toBe(true)
-    // the next delivery is a colleague's mention on it
-    snapshot.messages.push(message('m1', 'r1', '2026-09-14T09:20:00.000Z', 'mention'))
-    await at('2026-09-14T09:30:00.000Z')
-    expect(notes.tags).toEqual(['m1'])
-    // a restore that resolves before any delivery ends with the next one
-    network.mutation.mockResolvedValueOnce({})
-    expect(await restore('r2')).toBe(true)
-    await at('2026-09-14T09:40:00.000Z')
-    snapshot.messages.push(message('m2', 'r2', '2026-09-17T10:00:00.000Z', 'mention'))
-    await at('2026-09-17T10:30:00.000Z')
-    expect(notes.tags).toEqual(['m1', 'm2'])
-    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
   })
 
   it('resets the ask when the demo store is disposed', async () => {

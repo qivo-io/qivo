@@ -125,6 +125,5 @@ describe('the task window while snapshot trouble pauses edits', { timeout: 30_00
     expect(store.P.editsPaused()).toBe(false)
     // the item's own read, once its answer came back with the delivery
     expect(sent()).toContain('messages:readItem')
-    expect(sent()).not.toContain('messages:markRead')
   })
 })

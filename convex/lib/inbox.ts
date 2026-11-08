@@ -1,12 +1,8 @@
-/* The one bounded read of a recipient's inbox, which only the app's
- * workspace inbox part reads (lib/workspaceParts.ts readInbox). The part
- * keeps the first INBOX_LIMIT (lib/limits.ts) across a person's seats,
- * unread rows first (blendInbox), for the desktop alerts. loadInbox and
- * INBOX_LIMIT stay for that part until it goes (t3/limits-inbox-feed,
- * t3/limits-tasks-part-removal). The app's Inbox list reads inbox.page
- * instead, and REST GET /v1/inbox and MCP list_inbox page the stored inbox
- * items through the same walk (model/inboxPage.ts inboxWalk), so no other
- * read shares this selection.
+/* The one bounded read of a recipient's inbox, which no surface reads any
+ * more. The app's Inbox list reads inbox.page, its desktop alerts read
+ * inbox.feed, and REST GET /v1/inbox and MCP list_inbox page the stored
+ * inbox items through model/inboxPage.ts inboxWalk. Only tests call
+ * loadInbox.
  *
  * Unread rows are never retired by retention, and read rows stay while a
  * person keeps retention at Never, so an inbox nobody clears grows without
@@ -15,8 +11,8 @@
  * which for the app means it cannot load at all. This read never
  * collects the recipient's rows. It walks two index ranges newest first and
  * stops at fixed bounds, so its cost depends on `limit` and `peek`, never on
- * the size of the inbox. src/ imports this module for blendInbox, so it
- * must stay free of server runtime: its imports are types.
+ * the size of the inbox. src/ imports this module for the rules below, so
+ * it must stay free of server runtime: its imports are types.
  *
  * It also holds the rules of an Inbox row's text and kinds (messageDetail,
  * messageLine, inboxSearchText, itemKinds, kindsMatch), which the Inbox
@@ -30,21 +26,15 @@ import type { QueryCtx } from '../_generated/server'
 import type { MessageKind } from './enums'
 
 /* INBOX_LIMIT (lib/limits.ts) is the most unread rows, and separately the
- * most read rows, that one inbox read keeps. The workspace inbox part reads
- * with it for each seat.
+ * most read rows, that one inbox read keeps.
  *
  * Each walk examines at most 2 * INBOX_LIMIT rows plus one that shows it
- * stopped early, so one read fetches at most 2,002 messages. The part's read
- * also looks past a walk's stop at up to INBOX_LIMIT snoozed rows (loadInbox
- * `peek`), so its read fetches at most 3,002. Its Shown reads a task for
- * each new task id among the examined rows, so at most 2,000 task lookups,
- * plus the access reads of each distinct project, each project checked
- * once, within the part's own bounds (readInbox). Raising the limit raises
- * those counts in step. */
+ * stopped early, so one read fetches at most 2,002 messages, and a read
+ * that passes `peek` looks past a walk's stop at up to that many snoozed
+ * rows more (loadInbox). Raising the limit raises those counts in step. */
 
 /** Whether the reader is shown the task with this id, answered at once or
- * after a read (the workspace inbox part reads each task as it is
- * asked). */
+ * after a read. */
 export type InboxShown = (issueId: string) => boolean | Promise<boolean>
 
 /** What one bounded inbox read kept. */
@@ -121,10 +111,9 @@ async function keepShown(
  *
  * `peek` is how many snoozed rows a walk that stopped early
  * reads past its stop, looking for one the bulk actions reach, which decides
- * unreadTruncated and readTruncated. The app's read passes INBOX_LIMIT, so a
- * backlog of snoozed rows alone does not keep those actions available. With
- * 0, the default, which only tests use since the machine Inbox moved to
- * the Inbox's walk, they equal each walk's truncation, at no extra read.
+ * unreadTruncated and readTruncated, so a backlog of snoozed rows alone does
+ * not keep those actions available. With 0, the default, they equal each
+ * walk's truncation, at no extra read.
  */
 export async function loadInbox(
   ctx: QueryCtx,
@@ -174,65 +163,6 @@ type Ordered = Pick<Doc<'messages'>, 'id' | 'created_at' | 'read_at'>
 export const newestFirst = (a: Ordered, b: Ordered): number => {
   if (a.created_at !== b.created_at) return a.created_at < b.created_at ? 1 : -1
   return a.id === b.id ? 0 : a.id < b.id ? 1 : -1
-}
-
-/** Most recently read first, then newestFirst. */
-export const recentlyReadFirst = (a: Ordered, b: Ordered): number => {
-  const ra = a.read_at ?? ''
-  const rb = b.read_at ?? ''
-  if (ra !== rb) return ra < rb ? 1 : -1
-  return newestFirst(a, b)
-}
-
-/** One seat's inbox as the app receives it (lib/workspaceParts.ts
- * readInbox): its kept unread and read rows in their orders, the read rows
- * it kept minus snoozed ones, and its read's truncation flags. */
-export type SeatInbox<M> = {
-  unread: M[]
-  read: M[]
-  readMessageCount: number
-  unreadTruncated: boolean
-  readTruncated: boolean
-  truncated: boolean
-}
-
-/**
- * The inbox the app shows across a person's seats: one cap of `cap`
- * messages over all of them, unread rows first, newest first, then read
- * rows, most recently read first, as the list shows them.
- *
- * - readMessageCount adds up each seat's kept read rows minus snoozed ones,
- *   counted before the cut, so cleanup stays available when unread rows fill
- *   the cap. The app only asks whether it is above zero.
- * - unreadTruncated and readTruncated hold when a seat's bounded read left
- *   rows the bulk actions reach unexamined. When several seats keep unread
- *   rows, the cut can also drop some that Mark all as read reaches while
- *   every unread row shown is snoozed, which sets unreadTruncated too. Read
- *   rows it drops are in readMessageCount already.
- * - messagesCut holds when the Inbox lists fewer messages than the person
- *   has: a seat's read stopped early, snoozed rows included, or the cap
- *   dropped some.
- *
- * Each seat sends every unread row it kept, and ordering one seat's rows
- * alone never ranks a row higher than among all seats' rows, so this equals
- * one sort over every seat's rows.
- */
-export function blendInbox<M extends Ordered & Pick<Doc<'messages'>, 'snoozed_until'>>(
-  seats: readonly SeatInbox<M>[],
-  cap: number,
-) {
-  const unread = seats.flatMap((s) => s.unread).sort(newestFirst)
-  const read = seats.flatMap((s) => s.read).sort(recentlyReadFirst)
-  const messages = [...unread, ...read].slice(0, cap)
-  return {
-    messages,
-    readMessageCount: seats.reduce((n, s) => n + s.readMessageCount, 0),
-    unreadTruncated:
-      seats.some((s) => s.unreadTruncated) ||
-      unread.slice(cap).some((message) => message.snoozed_until === undefined),
-    readTruncated: seats.some((s) => s.readTruncated),
-    messagesCut: seats.some((s) => s.truncated) || unread.length + read.length > cap,
-  }
 }
 
 /* ------------------------------------------------------ an Inbox row's text */

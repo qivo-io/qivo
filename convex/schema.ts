@@ -2845,7 +2845,7 @@ export default defineSchema({
     kind: vMessageKind,
     detail: v.string(),
     created_at: v.string(),
-    // client-writable (markRead/markUnread; snooze and wake clear it). A
+    // client-writable (readItem/unreadItem; snooze and wake clear it). A
     // write that leaves a row read and not snoozed keeps message_sweeps in
     // step (model/messages.ts noteSweepable).
     read_at: v.optional(v.string()),

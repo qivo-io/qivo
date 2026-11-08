@@ -959,16 +959,15 @@ try {
   // Opening a task marks its messages read. Pick an existing task with no
   // unread messages, so this regression does not alter the demo notification state.
   await everyTask(pageA)
-  const enterTarget = await palette.locator('[cmdk-item]').evaluateAll((items) => {
+  // the task's inbox item says whether it holds an unread message
+  const enterTarget = await palette.locator('[cmdk-item]').evaluateAll(async (items) => {
+    const { convex } = await import('/src/lib/convex.ts')
     for (const [index, item] of items.entries()) {
       const value = item.getAttribute('data-value') || ''
       const issue = value.startsWith('issue-') && window.PLANNER.issueById[value.slice(6)]
-      if (
-        issue &&
-        !window.PLANNER.messages.some(
-          (message) => message.issueUuid === issue.uuid && !message.read,
-        )
-      )
+      if (!issue) continue
+      const read = await convex.query('inbox:item', { org_id: issue.org, issue_id: issue.uuid })
+      if (read?.state === 'ok' && (read.item === null || read.item.unread_count === 0))
         return { index, value, key: issue.key }
     }
     return null
@@ -1605,15 +1604,15 @@ try {
   if (!(await frameBeforeRotation.evaluate((element) => element.isConnected)))
     await fail('Physical phone rotation remounted the active timeline layer')
   await frameBeforeRotation.dispose()
-  const landscapeTask = await landscape.locator('[data-bar]').evaluateAll((items) => {
+  const landscapeTask = await landscape.locator('[data-bar]').evaluateAll(async (items) => {
+    const { convex } = await import('/src/lib/convex.ts')
     for (const element of items) {
       const id = element.getAttribute('data-bar')
       const issue = window.PLANNER.issueById[id]
-      if (
-        !issue ||
-        window.PLANNER.messages.some((message) => message.issueUuid === issue.uuid && !message.read)
-      )
-        continue
+      if (!issue) continue
+      // opening it must not mark an unread message read (inbox.item)
+      const read = await convex.query('inbox:item', { org_id: issue.org, issue_id: issue.uuid })
+      if (read?.state !== 'ok' || (read.item !== null && read.item.unread_count > 0)) continue
       const rect = element.getBoundingClientRect()
       const clip = element.parentElement.getBoundingClientRect()
       const left = Math.max(rect.left, clip.left, 0)

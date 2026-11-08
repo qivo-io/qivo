@@ -40,7 +40,15 @@ describe('rollback during snapshot trouble', () => {
     for (let i = 0; i < 8; i++) await Promise.resolve()
   }
   const P = () => store.P
-  const message = (id: string) => P().messages.find((m) => m.id === id)
+  /* The mark of task `task`'s Inbox row (P.inboxMarks). */
+  const markOf = (task: string) => P().inboxMarks.get(`${snapshot.orgs[0].id}:${task}`)
+  /* The Inbox row of task `task`, as a row action names it. */
+  const row = (task: string) => ({
+    org: snapshot.orgs[0].id,
+    task,
+    through: Date.parse('2026-09-14T08:00:00.000Z'),
+    latestAt: '2026-09-14T08:00:00.000Z',
+  })
   const task = (title: string) => P().issues.find((issue) => issue.title === title)!
   const user = (name: string) => P().users.find((u) => u.name === name)
   const me = () => snapshot.profiles[0].id
@@ -118,7 +126,6 @@ describe('rollback during snapshot trouble', () => {
     addTask('task-z', 'Order the brackets')
     addMessage('message-a', 'task-a', false)
     addMessage('message-b', 'task-b', true)
-    snapshot.readMessageCount = 1
     snapshot.issueSubs.push({
       issue_id: 'task-b',
       profile_id: me(),
@@ -175,12 +182,12 @@ describe('rollback during snapshot trouble', () => {
     truth: (snap: Snapshot) => void
   }[] = [
     {
-      name: 'a read mark',
+      name: 'an item read',
       act: async () => {
-        P().markMessagesRead(['message-a'])
+        P().readItem(row('task-a'))
         await accept()
       },
-      shown: () => expect(message('message-a')?.read).toBe(true),
+      shown: () => expect(markOf('task-a')).toMatchObject({ read: true, settled: true }),
       truth: (snap) => {
         snap.messages[0].read_at = '2026-09-15T08:30:00.000Z'
       },
@@ -194,7 +201,6 @@ describe('rollback during snapshot trouble', () => {
         await done
       },
       shown: () => {
-        expect(message('message-a')?.read).toBe(true)
         // the action's availability follows the unread summary, which
         // fails with the whole, so it stays available until the summary
         // answers again, and then the server says nothing is unread
@@ -205,12 +211,12 @@ describe('rollback during snapshot trouble', () => {
       },
     },
     {
-      name: 'an unread mark',
+      name: 'an item back to unread',
       act: async () => {
-        P().markMessagesUnread(['message-b'])
+        P().unreadItem(row('task-b'))
         await accept()
       },
-      shown: () => expect(message('message-b')?.read).toBe(false),
+      shown: () => expect(markOf('task-b')).toMatchObject({ read: false, settled: true }),
       truth: (snap) => {
         snap.messages[1].read_at = undefined
       },
@@ -218,21 +224,21 @@ describe('rollback during snapshot trouble', () => {
     {
       name: 'a snooze',
       act: async () => {
-        P().snoozeMessages(['message-a'], UNTIL)
+        P().snoozeItem(row('task-a'), UNTIL)
         await accept()
       },
-      shown: () => expect(message('message-a')?.snoozedUntil).toBe(Date.parse(UNTIL)),
+      shown: () => expect(markOf('task-a')).toMatchObject({ snoozedUntil: UNTIL, settled: true }),
       truth: (snap) => {
         snap.messages[0].snoozed_until = UNTIL
       },
     },
     {
-      name: 'a removed message',
+      name: 'a removed item',
       act: async () => {
-        P().deleteMessages(['message-a'])
+        P().removeItem(row('task-a'))
         await accept()
       },
-      shown: () => expect(message('message-a')).toBeUndefined(),
+      shown: () => expect(markOf('task-a')).toMatchObject({ removed: true, settled: true }),
       truth: (snap) => {
         snap.messages.splice(0, 1)
       },
@@ -246,13 +252,11 @@ describe('rollback during snapshot trouble', () => {
         await done
       },
       shown: () => {
-        expect(message('message-b')).toBeUndefined()
         // as for mark all as read, from the unread summary
         expect(P().canRemoveRead).toBe(P().inboxSummary.state !== 'ok')
       },
       truth: (snap) => {
         snap.messages.splice(1, 1)
-        snap.readMessageCount = 0
       },
     },
     {
@@ -323,8 +327,8 @@ describe('rollback during snapshot trouble', () => {
 
   it('keeps writes saved before a lost sign-in when a write in flight is refused', async () => {
     live().fail(new Error(QUERY_FAILURE))
-    P().markMessagesRead(['message-a'])
-    P().snoozeMessages(['message-b'], UNTIL)
+    P().setMessageRetention(30)
+    P().snoozeItem(row('task-b'), UNTIL)
     await accept()
     P().setIssueSubscribed(task('Order the brackets').id, true)
     live().fail(new ConvexError({ code: 'forbidden', message: 'not signed in' }))
@@ -333,8 +337,8 @@ describe('rollback during snapshot trouble', () => {
     await settle()
     // the refused write takes back only its own paint, and says why
     expect(task('Order the brackets').subscribed).toBe(false)
-    expect(message('message-a')?.read).toBe(true)
-    expect(message('message-b')?.snoozedUntil).toBe(Date.parse(UNTIL))
+    expect(user('Planner')?.messageRetentionDays).toBe(30)
+    expect(markOf('task-b')).toMatchObject({ snoozedUntil: UNTIL, settled: true })
     expect(showToast).toHaveBeenCalledWith(store.SIGNED_OUT_TEXT, 'error')
     expect(showToast).not.toHaveBeenCalledWith(
       "You don't have permission for that. Change reverted.",
@@ -367,182 +371,6 @@ describe('rollback during snapshot trouble', () => {
     expect(task('Calibrate the sensor').status).toBe('progress')
     // nothing was painted, so nothing is said to be reverted
     expect(showToast).toHaveBeenCalledWith("Couldn't save.", 'error')
-  })
-
-  it('paints accepted writes again in the order the server took them', async () => {
-    live().fail(new Error(QUERY_FAILURE))
-    P().markMessagesRead(['message-a'])
-    await accept()
-    // a snooze leaves the item unread, so the read mark must come first
-    P().snoozeMessages(['message-a'], UNTIL)
-    await accept()
-    await refuseFollow()
-    expect(message('message-a')?.read).toBe(false)
-    expect(message('message-a')?.snoozedUntil).toBe(Date.parse(UNTIL))
-  })
-
-  it('forgets kept writes once a good delivery holds the newer truth', async () => {
-    live().fail(new Error(QUERY_FAILURE))
-    P().markMessagesRead(['message-a'])
-    await accept()
-    await refuseFollow()
-    expect(message('message-a')?.read).toBe(true)
-    // the server took the read mark, then another device marked it unread
-    deliverTruth(() => {})
-    expect(message('message-a')?.read).toBe(false)
-    await refuseFollow()
-    expect(message('message-a')?.read).toBe(false)
-  })
-
-  it('lets a later batch of mark all as read skip a row snoozed between batches', async () => {
-    live().fail(new Error(QUERY_FAILURE))
-    const done = P().markAllMessagesRead()
-    await settle()
-    P().snoozeMessages(['message-a'], UNTIL)
-    const [first, snooze] = sent.splice(0)
-    expect([first.name, snooze.name]).toEqual(['messages:markAllRead', 'messages:snooze'])
-    first.resolve({ marked: 0, ids: [], hasMore: true, before: 1 })
-    await settle()
-    snooze.resolve(null)
-    await settle()
-    // the server's last batch skips the snoozed row
-    sent.pop()!.resolve({ marked: 0, ids: [], hasMore: false, before: 1 })
-    await done
-    await refuseFollow()
-    expect(message('message-a')?.read).toBe(false)
-    expect(message('message-a')?.snoozedUntil).toBe(Date.parse(UNTIL))
-  })
-
-  it('keeps a pending write on screen when another write is refused first', async () => {
-    live().fail(new Error(QUERY_FAILURE))
-    P().markMessagesRead(['message-a'])
-    // the refusal answers first and takes away only its own paint
-    await refuseFollow()
-    expect(message('message-a')?.read).toBe(true)
-    await accept()
-    expect(message('message-a')?.read).toBe(true)
-  })
-
-  it('paints a write kept after a held delivery once the last write settles', async () => {
-    P().markMessagesRead(['message-a'])
-    // another client's change arrives, then the query fails
-    deliverTruth(() => {})
-    live().fail(new Error(QUERY_FAILURE))
-    await accept()
-    expect(message('message-a')?.read).toBe(true)
-  })
-
-  it('keeps the bulk actions spent after a refused write', async () => {
-    deliverTruth((snap) => {
-      snap.unreadTruncated = true
-      snap.readTruncated = true
-    })
-    live().fail(new Error(QUERY_FAILURE))
-    const read = P().markAllMessagesRead()
-    await settle()
-    await accept({ marked: 1, ids: ['message-a'], hasMore: false, before: 1 })
-    await read
-    const removed = P().deleteReadMessages()
-    await settle()
-    await accept({ removed: 2, ids: ['message-a', 'message-b'], hasMore: false })
-    await removed
-    await refuseFollow()
-    // the workspace's own flags stay spent, and the actions' availability
-    // follows the unread summary, which failed with the whole, so both stay
-    // available until it answers again
-    expect(P().inboxCutReach).toEqual({ markAllRead: false, removeRead: false })
-    expect(P().canMarkAllRead).toBe(true)
-    expect(P().canRemoveRead).toBe(true)
-    // the server's rows after both actions answer the summary again
-    deliverTruth((snap) => {
-      snap.messages = []
-      snap.readMessageCount = 0
-    })
-    expect(P().canMarkAllRead).toBe(false)
-    expect(P().canRemoveRead).toBe(false)
-  })
-
-  it('keeps each batch of mark all as read in the order the server took it', async () => {
-    live().fail(new Error(QUERY_FAILURE))
-    const done = P().markAllMessagesRead()
-    await settle()
-    sent.pop()!.resolve({ marked: 1, ids: ['message-a'], hasMore: true, before: 1 })
-    await settle()
-    // a read message reopened between batches, which the next batch marks again
-    P().markMessagesUnread(['message-b'])
-    const [batch, unread] = sent.splice(0)
-    expect([batch.name, unread.name]).toEqual(['messages:markAllRead', 'messages:markUnread'])
-    unread.resolve(null)
-    await settle()
-    batch.resolve({ marked: 1, ids: ['message-b'], hasMore: false, before: 1 })
-    await done
-    await refuseFollow()
-    expect(message('message-a')?.read).toBe(true)
-    expect(message('message-b')?.read).toBe(true)
-  })
-
-  it('keeps the batches the server saved when a later batch is refused', async () => {
-    live().fail(new Error(QUERY_FAILURE))
-    const done = P().markAllMessagesRead()
-    await settle()
-    sent.pop()!.resolve({ marked: 1, ids: ['message-a'], hasMore: true, before: 1 })
-    await settle()
-    sent.pop()!.reject(new ConvexError({ code: 'forbidden', message: 'not signed in' }))
-    await done
-    expect(message('message-a')?.read).toBe(true)
-  })
-
-  it('keeps no paint of a write the newest delivery already holds', async () => {
-    live().fail(new Error(QUERY_FAILURE))
-    deliverTruth(() => {})
-    expect(P().snapshotTrouble()).toBeNull()
-    const done = P().deleteReadMessages()
-    await settle()
-    expect(message('message-b')).toBeUndefined()
-    // another device reopened the message, so the server kept it
-    deliverTruth((snap) => {
-      snap.messages[1].read_at = undefined
-      snap.readMessageCount = 0
-    })
-    await accept({ removed: 0, ids: [], hasMore: false })
-    await done
-    expect(message('message-b')?.read).toBe(false)
-    await refuseFollow()
-    expect(message('message-b')?.read).toBe(false)
-  })
-
-  it('keeps no paint once the trouble has ended', async () => {
-    live().fail(new Error(QUERY_FAILURE))
-    deliverTruth(() => {})
-    P().markMessagesRead(['message-a'])
-    // the delivery that holds the read mark, which another device undid
-    deliverTruth(() => {})
-    await accept()
-    expect(message('message-a')?.read).toBe(false)
-  })
-
-  it('keeps the paint of a write accepted after Try again replaced the subscription', async () => {
-    live().fail(new Error(QUERY_FAILURE))
-    P().markMessagesRead(['message-a'])
-    // a held delivery from before the read mark, then Try again
-    deliverTruth(() => {})
-    P().retrySnapshot()
-    await accept()
-    expect(message('message-a')?.read).toBe(true)
-  })
-
-  it('leaves a message reopened before Remove all read ran on screen', async () => {
-    const done = P().deleteReadMessages()
-    await settle()
-    // the server kept the reopened message, then the query failed
-    deliverTruth((snap) => {
-      snap.messages[1].read_at = undefined
-      snap.readMessageCount = 0
-    })
-    live().fail(new Error(QUERY_FAILURE))
-    await accept({ removed: 0, ids: [], hasMore: false })
-    await done
-    expect(message('message-b')?.read).toBe(false)
   })
 
   it('takes back only the refused edit of three waiting online, at every step', async () => {
@@ -612,17 +440,5 @@ describe('rollback during snapshot trouble', () => {
     expect(task('Replace the gasket')).toBeDefined()
     await refuseFollow()
     expect(task('Replace the gasket')).toBeDefined()
-  })
-
-  it('reverts only the refused write outside trouble', async () => {
-    P().markMessagesRead(['message-a'])
-    // Convex delivers a write's own snapshot before its promise resolves
-    deliverTruth((snap) => {
-      snap.messages[0].read_at = '2026-09-15T08:30:00.000Z'
-    })
-    await accept()
-    await refuseFollow()
-    expect(message('message-a')?.read).toBe(true)
-    expect(P().snapshotTrouble()).toBeNull()
   })
 })

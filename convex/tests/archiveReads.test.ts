@@ -30,6 +30,7 @@ import {
   uuid,
   withReadingAdmin,
 } from './helpers.setup'
+import { markRead, markUnread, removeIds, snoozeIds } from './inboxItems.setup'
 
 type Patch = FunctionArgs<typeof api.issues.update>['patch']
 
@@ -228,7 +229,7 @@ describe('archiving a task', () => {
     await threeChanges(t, f, task.id)
     const ids = (await messagesFor(t, f.admin.id, task.id)).map((m) => m.id)
     const until = new Date(Date.now() + 3_600_000).toISOString()
-    await as(t, f.admin).mutation(api.messages.snooze, { org_id: f.org.id, ids, until })
+    await snoozeIds(t, f.admin, ids, until)
     // the follower archives it, so no Archived notice reaches their item
     await archive(t, f.admin, task.id)
     expect(
@@ -670,7 +671,8 @@ const viaRest = (t: T, f: OrgFixture, action: InboxAction, body: InboxBody) =>
     body: JSON.stringify(body),
   })
 
-/* The app's own inbox writes for `who`, on message ids. */
+/* The model's inbox writes for `who` on message ids, which the app's item
+ * actions and the machine inbox run (inboxItems.setup.ts). */
 const viaApp = (
   t: T,
   who: Doc<'profiles'>,
@@ -678,12 +680,10 @@ const viaApp = (
   ids: string[],
   until?: string | null,
 ) => {
-  const args = { org_id: who.org_id, ids }
-  const app = as(t, who)
-  if (action === 'read') return app.mutation(api.messages.markRead, args)
-  if (action === 'unread') return app.mutation(api.messages.markUnread, args)
-  if (action === 'remove') return app.mutation(api.messages.remove, args)
-  return app.mutation(api.messages.snooze, { ...args, until: until ?? null })
+  if (action === 'read') return markRead(t, who, ids)
+  if (action === 'unread') return markUnread(t, who, ids)
+  if (action === 'remove') return removeIds(t, who, ids)
+  return snoozeIds(t, who, ids, until ?? null)
 }
 
 /* Asserts a refusal with exactly this code and sentence. */

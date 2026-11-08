@@ -1,9 +1,11 @@
 /* Notification delivery across a person's sessions: the Notification
  * delivery setting, the signed-in sessions that can show alerts, the
  * records of the alerts granted, and the catch-up checkpoint
- * (model/notificationSessions.ts, model/notificationCatchup.ts). No app
- * calls these yet. The Inbox feed and its client (a later release) and the
- * leader tab and the Settings control (the release after it) will.
+ * (model/notificationSessions.ts, model/notificationCatchup.ts). The app's
+ * desktop alert client (src/lib/notificationFeed.ts) calls beat,
+ * claimAlerts and claimSummary beside the Inbox feed (inbox.ts feed), from
+ * every tab that can notify; settings, setDelivery and end wait for
+ * t3/limits-notification-delivery's leader tab and Settings control.
  *
  * Every function needs a sign-in whose Better Auth session is live, and on
  * the demo an active demo (lib/functions.ts sessionQuery,

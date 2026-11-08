@@ -107,6 +107,12 @@ export const convex = {
   mutation(ref, args) {
     return call({ type: 'mutation', name: getFunctionName(ref), args })
   },
+  /* The worker answers every call, so the socket always counts as
+     connected, which the desktop alert client asks before it sends
+     (src/lib/notificationFeed.ts). */
+  connectionState() {
+    return { isWebSocketConnected: true, inflightMutations: 0 }
+  },
 }
 /* The watched parts by token, each with its id on the server, its latest
    value or error and how many watch it; tokens by id; the handlers. */

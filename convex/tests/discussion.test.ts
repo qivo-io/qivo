@@ -46,8 +46,8 @@ import {
   TODAY,
   uuid,
   withReadingAdmin,
-  workspaceOf,
 } from './helpers.setup'
+import { listedTasks, markRead, removeIds } from './inboxItems.setup'
 
 /* A message stored for its recipient as helpers.setup.ts plantMessage
  * stores one, but through the item writer (model/inboxItems.ts itemEdits)
@@ -729,10 +729,7 @@ describe('reading the inbox', () => {
     expect(await held(shelved)).toEqual([['Priority: Medium → High', true]])
     const listed = async () =>
       (await listMcp(fx, { include_snoozed: true }, fx.admin.id)).map((i) => i.task.id).sort()
-    const inApp = async () => {
-      const snapshot = await workspaceOf(as(fx.t, fx.admin))
-      return [...new Set((snapshot?.messages ?? []).map((m) => m.issue_id))].sort()
-    }
+    const inApp = async () => (await listedTasks(fx.t, fx.admin)).sort()
     expect(await listed()).toEqual([fx.task.id])
     expect(await inApp()).toEqual([fx.task.id])
     const rest = await fx.t.query(internal.machine.discussion.restListInbox, {
@@ -1087,17 +1084,11 @@ describe('changing the inbox', () => {
       recipient_id: fx.agent.id,
       issue_id: fx.task.id,
     })
-    await as(fx.t, fx.user).mutation(api.messages.markRead, {
-      org_id: fx.org.id,
-      ids: [mine.id, theirs.id, uuid()],
-    })
+    await markRead(fx.t, fx.user, [mine.id, theirs.id, uuid()])
     const rows = new Map((await allMessages(fx.t)).map((m) => [m.id, m]))
     expect(rows.get(mine.id)?.read_at).toBeDefined()
     expect(rows.get(theirs.id)?.read_at).toBeUndefined()
-    await as(fx.t, fx.user).mutation(api.messages.remove, {
-      org_id: fx.org.id,
-      ids: [mine.id, theirs.id],
-    })
+    await removeIds(fx.t, fx.user, [mine.id, theirs.id])
     expect((await allMessages(fx.t)).map((m) => m.id)).toEqual([theirs.id])
   })
 })

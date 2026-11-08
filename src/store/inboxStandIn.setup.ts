@@ -1,11 +1,12 @@
-/* A stand-in for the three inbox reads the app watches (convex/inbox.ts
-   summary, item and page) that answers from a workspace the app holds, for
-   the jsdom tests, whose live double answers them from the published whole
-   (store/guard/liveDouble.setup.ts), and for the browser benchmark's
-   server (scripts/perf/server.mjs), as store/projectNavStandIn.setup.ts
-   answers the project picker.
+/* A stand-in for the four inbox reads the app watches (convex/inbox.ts
+   summary, item, page and feed) that answers from the server's stored
+   messages beside the workspace (the whole's `messages`, which no part
+   sends), for the jsdom tests, whose live double answers them from the
+   published whole (store/guard/liveDouble.setup.ts), and for the browser
+   benchmark's server (scripts/perf/server.mjs), as
+   store/projectNavStandIn.setup.ts answers the project picker.
 
-   It folds the workspace's messages into items, one per seat and task, by
+   It folds the stored messages into items, one per seat and task, by
    the rule the server keeps its inbox_items rows to (convex/model/
    inboxItems.ts itemOf): the newest message by (created_at, id) is the
    item's latest and carries its snooze, the unread count counts the unread
@@ -16,12 +17,10 @@
      seats the workspace names, at most SUMMARY_MOST (100), with
      `unread_more` from there, and answers complete. Each seat's line holds
      its organization, ready, and the bulk actions' flags, true for an
-     unsnoozed unread (read) message of the seat, or when the workspace's
-     inbox part left unread (read) rows unexamined (unreadTruncated,
-     readTruncated) or counts read rows it did not send (readMessageCount).
-     The workspace sends messages about tasks the person is shown only, so
-     the stand-in cannot see a message about a task the seat lost, which the
-     server's flags count (src/store/inboxParity.test.ts names it).
+     unsnoozed unread (read) message of the seat. A test gives the whole the
+     messages it means the person to hold, so a message about a task the
+     seat lost counts as the server's flags count it
+     (src/store/inboxParity.test.ts names the difference).
    - The item answers the seat's item about one task with its counts, the
      oldest unread message's created_at, whether an unread message tells of
      a change (a change, or a mention in the description, as
@@ -45,6 +44,16 @@
      it looked (`checked_to`) and goes on from `next`, as the server's read
      budget stops a page. A task the workspace does not hold leaves its
      item out, as the server leaves out a task the seat is not shown.
+   - The feed (inboxFeedStandIn) answers the newest unread events after a
+     floor, walking each seat's items newest first by the rule of
+     convex/model/notificationCatchup.ts readInboxFeed: for each unread,
+     unsnoozed item about a task the workspace holds in the seat's
+     organization, every unread message after the floor less NOTIFY.lag_ms
+     and the item's wake when it is after that time, with the actor named
+     by the seat's own organization's profiles, newest first, at most
+     FEED.events, passing the rest of a seat once its items can hold no
+     newer event, with `more` only where an event newer than the floor
+     itself may be left out. It reads no budget.
 
    `force` makes them answer what a workspace cannot say: no answer at all
    (`loading`), a failure (`failed`), an incomplete count (`incomplete`), a
@@ -59,8 +68,9 @@
    finish (`unchecked`), every cursor refused (`badCursor`), and a page
    after the first that stopped without moving past its start (`stuck`),
    which the server's `next` never does, for the list's fail-safe. The
-   summary and the item ignore those. It imports nothing the benchmark's
-   worker cannot load. */
+   summary and the item ignore those. For the feed: `more`, an answer that
+   says an event is missing. It imports nothing the benchmark's worker
+   cannot load. */
 
 import { ConvexError } from 'convex/values'
 import {
@@ -68,6 +78,7 @@ import {
   itemKinds,
   type KindCounts,
   kindsMatch,
+  messageDetail,
   messageLine,
   newestFirst,
 } from '../../convex/lib/inbox'
@@ -77,19 +88,11 @@ import { allWordsMatcher } from '../../convex/lib/search'
 import { issueKey } from '../../convex/lib/taskRefs'
 import type { Whole } from './guard/liveDouble.setup'
 
-/** The workspace sections the reads' rule reads. The page reads `issues`
-    and `projects` too, which a caller that answers only the summary and
-    the item may leave out. */
-export type InboxWorkspace = Pick<
-  Whole,
-  | 'myProfileIds'
-  | 'profiles'
-  | 'messages'
-  | 'readMessageCount'
-  | 'unreadTruncated'
-  | 'readTruncated'
-> &
-  Partial<Pick<Whole, 'issues' | 'projects'>>
+/** The whole's sections the reads' rule reads. The page and the feed read
+    `issues` and `projects` too, which a caller that answers only the
+    summary and the item may leave out, and no `messages` holds none. */
+export type InboxWorkspace = Pick<Whole, 'myProfileIds' | 'profiles'> &
+  Partial<Pick<Whole, 'messages' | 'issues' | 'projects'>>
 
 /** A state the stand-in answers whatever the workspace says. */
 export type ForcedInbox =
@@ -113,7 +116,7 @@ export const INBOX_NO_ANSWER = Symbol('no inbox answer')
     SUMMARY.most). */
 export const SUMMARY_MOST = 100
 
-type Message = Whole['messages'][number] & { _creationTime?: number }
+type Message = NonNullable<Whole['messages']>[number] & { _creationTime?: number }
 
 /** The summary as convex/inbox.ts summary answers it. */
 export type SummaryAnswer = {
@@ -156,7 +159,7 @@ function seatsOf(w: InboxWorkspace) {
 /* The messages of `w` folded per seat and task, each list newest first. */
 function itemsOf(w: InboxWorkspace): Map<string, Message[]> {
   const items = new Map<string, Message[]>()
-  for (const m of w.messages as readonly Message[]) {
+  for (const m of (w.messages ?? []) as readonly Message[]) {
     const key = `${m.recipient_id}:${m.issue_id}`
     const list = items.get(key)
     if (list) list.push(m)
@@ -183,18 +186,15 @@ export function inboxSummaryStandIn(
   // did not reach out of `seats`
   const seats = force === 'budget' && all.length > 1 ? all.slice(0, -1) : all
   const items = itemsOf(w)
-  const messages = w.messages as readonly Message[]
-  const loadedRead = messages.filter((m) => m.read_at !== undefined && !m.snoozed_until).length
-  const unreadLeft = w.unreadTruncated
-  const readLeft = w.readTruncated || w.readMessageCount > loadedRead
+  const messages = (w.messages ?? []) as readonly Message[]
   const lines = seats.map((seat, at) => {
     const mine = messages.filter((m) => m.recipient_id === seat.id && !m.snoozed_until)
     return {
       org_id: seat.org_id,
       // the first seat stands for one whose items are not complete
       ready: !(force === 'notReady' && at === 0),
-      can_mark_all_read: unreadLeft || mine.some((m) => m.read_at === undefined),
-      can_remove_read: readLeft || mine.some((m) => m.read_at !== undefined),
+      can_mark_all_read: mine.some((m) => m.read_at === undefined),
+      can_remove_read: mine.some((m) => m.read_at !== undefined),
     }
   })
   const ready = new Set(lines.filter((line) => line.ready).map((line) => line.org_id))
@@ -561,4 +561,102 @@ export function inboxPageStandIn(
     if (index + 1 >= budget) return answer(last, rows.length < INBOX_PAGE_ROWS)
   }
   return answer(null, false)
+}
+
+/* --------------------------------------------------------------- the feed */
+
+/** The most events one feed answer holds (convex/model/notificationCatchup.ts
+    FEED.events). */
+export const FEED_EVENTS = 50
+
+/** How far before its floor the feed reads (convex/model/notificationSessions.ts
+    NOTIFY.lag_ms). */
+export const FEED_LAG_MS = 60_000
+
+/** One event of the feed (convex/model/notificationCatchup.ts FeedEvent). */
+export type FeedEventAnswer = {
+  key: string
+  at: number
+  kind: Message['kind'] | 'wake'
+  title: string
+  actor_name: string | null
+  detail: string
+}
+
+/** What inbox.feed answers (convex/model/notificationCatchup.ts Feed). */
+export type FeedAnswer = { events: FeedEventAnswer[]; through: number; more: boolean }
+
+/**
+ * The feed of `w`'s seats after the floor `args.after` (convex/inbox.ts
+ * feed), or INBOX_NO_ANSWER under `loading`, on the rule in the file
+ * comment. Throws under `failed`, and the server's refusal of a floor that
+ * is not a time a four-digit year holds. `more` forces `more`.
+ */
+export function inboxFeedStandIn(
+  w: InboxWorkspace,
+  args: { after: number },
+  force?: ForcedInbox,
+): FeedAnswer | typeof INBOX_NO_ANSWER {
+  if (force === 'loading') return INBOX_NO_ANSWER
+  if (force === 'failed') throw new Error('the Inbox feed fails, as the test forces')
+  const { after } = args
+  if (!Number.isFinite(after) || after < 0 || after > 253_402_300_799_999)
+    throw new ConvexError({ code: 'bad_request', message: 'after must be epoch milliseconds' })
+  const from = new Date(after - FEED_LAG_MS).toISOString()
+  const floor = new Date(after).toISOString()
+  const tasks = new Map((w.issues ?? []).map((task) => [`${task.org_id}:${task.id}`, task]))
+  const newer = (a: FeedEventAnswer, b: FeedEventAnswer) =>
+    b.at - a.at || (a.key < b.key ? 1 : a.key > b.key ? -1 : 0)
+  let held: FeedEventAnswer[] = []
+  let more = force === 'more'
+  const items = seatItems(w, seatsOf(w))
+  // each seat's unread, unsnoozed items after the floor less the minute,
+  // newest first, as the server's index walks them
+  for (const seat of seatsOf(w)) {
+    const walk = items
+      .filter((item) => item.seat === seat && item.unread.length > 0)
+      .filter((item) => item.latest.snoozed_until === undefined && item.sortAt > from)
+      .sort((a, b) => compare(b.at, a.at))
+    for (const item of walk) {
+      // past the cap: no event of this item or a later one is kept
+      if (
+        held.length === FEED_EVENTS &&
+        item.sortAt < new Date(held[FEED_EVENTS - 1].at).toISOString()
+      ) {
+        if (item.sortAt > floor) more = true
+        break
+      }
+      const orgId = seat.org_id
+      const task = tasks.get(`${orgId}:${item.latest.issue_id}`)
+      if (!task || task.archived_at) continue
+      const nameOf = (actorId: string | undefined) =>
+        actorId === undefined
+          ? null
+          : (w.profiles.find((p) => p.id === actorId && p.org_id === orgId)?.name ?? null)
+      const events: FeedEventAnswer[] = []
+      for (const m of item.unread)
+        if (m.created_at > from)
+          events.push({
+            key: m.id,
+            at: Date.parse(m.created_at),
+            kind: m.kind,
+            title: task.title,
+            actor_name: nameOf(m.actor_id),
+            detail: messageDetail(m.detail),
+          })
+      if (item.wokeAt !== null && item.wokeAt > from)
+        events.push({
+          key: `${task.id}:${item.wokeAt}`,
+          at: Date.parse(item.wokeAt),
+          kind: 'wake',
+          title: task.title,
+          actor_name: null,
+          detail: messageDetail(item.unread[0]?.detail ?? ''),
+        })
+      const all = [...held, ...events].sort(newer)
+      if (all.slice(FEED_EVENTS).some((e) => e.at > after)) more = true
+      held = all.slice(0, FEED_EVENTS)
+    }
+  }
+  return { events: held, through: Math.max(after, held[0]?.at ?? after), more }
 }

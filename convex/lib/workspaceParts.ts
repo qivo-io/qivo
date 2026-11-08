@@ -1,7 +1,7 @@
 /* The readers behind the workspace parts (workspace.ts), which together
  * send what the app shows of every organization the caller holds a seat in:
  * the root part with the caller's seats, organizations and own rows, and
- * per organization its projects, tasks and inbox. No part sends another
+ * per organization its projects and tasks. No part sends another
  * person's profile, membership or Team sync stamp, a team the caller is not
  * in, or a label; the app reads those by id or a batch at a time.
  *
@@ -58,8 +58,6 @@ import { chunkLists } from './arrayLimit'
 import { orgCreateFor, seatlessState } from './billingAccess'
 import { byId } from './db'
 import { cutPieces, halve, type IdWindow, roundedCounts } from './idWindows.ts'
-import { loadInbox, newestFirst, recentlyReadFirst } from './inbox'
-import { INBOX_LIMIT } from './limits'
 import { loadRowFor, type OrgLoadRow } from './loadRows'
 import { taskOwnerId } from './review'
 import { parentLink } from './workingSet'
@@ -173,9 +171,6 @@ export const PAGE = {
    * past half of it the window asks to be cut, so it is cut while it still
    * shows, before it would answer overflow */
   relations: 2000,
-  /** how many new tasks the inbox reads between checks of PAGE.hard: 32 of
-   * the largest hold about 2 MiB */
-  inboxCheck: 32,
   /** what a tasks part's description reads, its last reads, keep back from
    * Convex's own limits: they read a step only while the reads are under
    * PAGE.hard, at least one row, and a step stays this far inside Convex's
@@ -851,60 +846,4 @@ async function hiddenLoadOf(
     })
   })
   return rows === null ? null : rows.filter((row) => row !== null).sort(byLoad)
-}
-
-// --- inbox --------------------------------------------------------------------
-
-/** The caller's inbox in this organization: its kept unread rows, newest
- * first, and read rows, most recently read first, each read within
- * lib/inbox.ts's bounds (INBOX_LIMIT of each) and about tasks of the
- * caller's working set. Each task a message names is read once by id. The
- * app blends every seat's answer (lib/inbox.ts blendInbox). Rows about an
- * archived task, a task in an archived project or a task the caller can no
- * longer access stay stored and return if the task or access does, unless
- * they were removed meanwhile. An archive marks the rows about its tasks
- * read in the background (model/messages.ts), so the retention sweep and
- * removeRead delete them like any read row.
- *
- * A task read costs its whole body, and the messages can name 2,000 tasks,
- * more than 16 MiB of the largest ones. So once the reads pass PAGE.hard,
- * checked every PAGE.inboxCheck new tasks, a message about a task not read
- * yet counts as not shown, and the answer says it was cut (truncated, and
- * both bulk actions stay available). A message whose task's access check a
- * bound stopped (lib/access.ts accessUnchecked) counts as not shown the same
- * way, and cuts the answer too. */
-export async function readInbox(ctx: QueryCtx, me: Doc<'profiles'>) {
-  const byIdShown = shownById(ctx, me, accessOf(ctx, me))
-  const asked = new Set<string>()
-  let cut = false
-  const shown = async (id: string) => {
-    if (!asked.has(id)) {
-      if (cut) return false
-      if (asked.size % PAGE.inboxCheck === 0 && (await readPast(ctx, PAGE.hard))) {
-        cut = true
-        return false
-      }
-      asked.add(id)
-    }
-    try {
-      return await byIdShown(id)
-    } catch (e) {
-      if (!isAccessUnchecked(e)) throw e
-      cut = true
-      return false
-    }
-  }
-  const inbox = await loadInbox(ctx, me.id, shown, INBOX_LIMIT, INBOX_LIMIT)
-  return {
-    state: 'ok' as const,
-    unread: inbox.unread.sort(newestFirst).map((m): AppRow<'messages'> => rowOf(m)),
-    read: inbox.read.sort(recentlyReadFirst).map((m): AppRow<'messages'> => rowOf(m)),
-    // The read rows kept minus snoozed ones, which removeRead leaves alone.
-    // removeRead also deletes read rows about tasks the caller is not shown,
-    // which are not counted because the caller cannot see them.
-    readMessageCount: inbox.read.reduce((n, m) => n + (m.snoozed_until === undefined ? 1 : 0), 0),
-    unreadTruncated: cut || inbox.unreadTruncated,
-    readTruncated: cut || inbox.readTruncated,
-    truncated: cut || inbox.truncated,
-  }
 }

@@ -6,9 +6,9 @@ import type { Row } from './rows'
 
 /* The store's Inbox row actions (store/planner.ts P.readItem, P.unreadItem,
    P.removeItem, P.snoozeItem), which name a row's item by its organization
-   and task, read and remove with the row's cutoff, paint the workspace
-   inbox part's loaded messages of that item, and mark the row
-   (P.inboxMarks) from the moment the write goes out. A refusal ends its
+   and task, read and remove with the row's cutoff, paint nothing, since
+   the store holds no message, and mark the row (P.inboxMarks) from the
+   moment the write goes out. A refusal ends its
    mark at once, an acceptance keeps it until an Inbox ends it
    (P.endInboxMarks), and each write settles only its own. The pause
    refuses a write first, with no mark. Mark as unread and a snooze of the
@@ -67,12 +67,6 @@ const settle = async () => {
   for (let i = 0; i < 8; i++) await Promise.resolve()
   await new Promise((resolve) => setTimeout(resolve, 0))
 }
-/* The loaded messages of `task`, by id, read or not, and snoozed. */
-const loaded = (task: string) =>
-  P()
-    .messages.filter((m) => m.issueUuid === task)
-    .map((m) => `${m.id} ${m.read ? 'read' : 'unread'}${m.snoozedUntil !== null ? ' snoozed' : ''}`)
-    .sort()
 const markOf = (task: string, orgId = org()) => P().inboxMarks.get(`${orgId}:${task}`)
 const answer = (n: number) => sent[n].resolve(null)
 const refuse = (n: number) =>
@@ -148,17 +142,16 @@ afterEach(() => {
 })
 
 describe('an Inbox row action', () => {
-  it("sends the row's organization, task and cutoff, and paints the item's loaded messages", async () => {
+  it("sends the row's organization, task and cutoff, and marks its row", async () => {
     const through = Date.parse(at(5))
     expect(P().unreadItem({ org: org(), task: 'task-b', through })).toBe(true)
-    expect(loaded('task-b')).toEqual(['b-1 unread'])
+    expect(markOf('task-b')).toMatchObject({ through, read: false })
     expect(P().removeItem({ org: org(), task: 'task-a', through, latestAt: at(1) })).toBe(true)
-    // the paint removes what the row showed, up to its newest message then
-    expect(loaded('task-a')).toEqual(['a-5 unread'])
+    expect(markOf('task-a')).toMatchObject({ through, removed: true })
     expect(P().snoozeItem({ org: org(), task: 'task-b', through }, at(600))).toBe(true)
-    expect(loaded('task-b')).toEqual(['b-1 unread snoozed'])
+    expect(markOf('task-b')).toMatchObject({ through, snoozedUntil: at(600) })
     expect(P().snoozeItem({ org: org(), task: 'task-b', through }, null)).toBe(true)
-    expect(loaded('task-b')).toEqual(['b-1 unread'])
+    expect(markOf('task-b')).toMatchObject({ through, snoozedUntil: null })
     expect(sent.map(({ name, args }) => ({ name, args }))).toEqual([
       { name: 'messages:unreadItem', args: { org_id: org(), issue_id: 'task-b' } },
       { name: 'messages:removeItem', args: { org_id: org(), issue_id: 'task-a', through } },
@@ -208,7 +201,7 @@ describe('an Inbox row action', () => {
     expect(markOf('task-a')).toEqual({ through, read: false, settled: true })
   })
 
-  it('refuses every action first while edits pause, with no mark and no paint', async () => {
+  it('refuses every action first while edits pause, with no mark', async () => {
     // the seat went, so the Inbox's writes pause
     deliver(null)
     await settle()
@@ -219,7 +212,6 @@ describe('an Inbox row action', () => {
     expect(P().readItem({ ...target, latestAt: at(5) })).toBe(false)
     expect(sent).toEqual([])
     expect(P().inboxMarks.size).toBe(0)
-    expect(loaded('task-a')).toEqual(['a-1 unread', 'a-5 unread'])
   })
 })
 

@@ -365,6 +365,10 @@ export type Feed = {
 /* The feed's read stopped, by FEED.items or the budget. */
 class FeedStop extends Error {}
 
+/** The feed's order: newest first, then by key, last first. */
+export const newerEvent = (a: Pick<FeedEvent, 'at' | 'key'>, b: Pick<FeedEvent, 'at' | 'key'>) =>
+  b.at - a.at || (a.key < b.key ? 1 : a.key > b.key ? -1 : 0)
+
 /* Item `item`'s newest unread message, one index read. */
 const newestUnreadMessage = (ctx: QueryCtx, item: Doc<'inbox_items'>) =>
   ctx.db
@@ -409,16 +413,19 @@ const newestUnreadMessage = (ctx: QueryCtx, item: Doc<'inbox_items'>) =>
  * null, as the Inbox page names one (model/inboxPage.ts nameOf), each actor
  * read once a seat.
  *
- * It stops once it holds FEED.events + 1 events, has examined FEED.items
- * items or the budget says no room, and a check a bound stopped
- * (lib/access.ts accessUnchecked) ends that seat and keeps nothing of its
- * item. `more` is set only where an event newer than `after` itself may be
- * missing, never for the minute read back alone: a stop before an item
- * whose sort_at is after the floor (an item's events are never later than
- * its sort_at, and the items after it sort earlier), a stopped check of
- * such an item, a budget that ended the read before a seat, and an event
- * after the floor that the cap dropped. So a burst inside the minute
- * before a floor the client moved past it does not answer `more` again.
+ * It holds the FEED.events newest events so far, and once it holds that
+ * many it passes, with the rest of its seat, an item whose sort_at is
+ * before the oldest of them, since an item's events are never later than
+ * its sort_at and the items after it sort earlier; so it answers the
+ * newest events exactly. It stops once it has examined FEED.items items or
+ * the budget says no room, and a check a bound stopped (lib/access.ts
+ * accessUnchecked) ends that seat and keeps nothing of its item. `more` is
+ * set only where an event newer than `after` itself may be missing, never
+ * for the minute read back alone: an item passed so, or one a stop came
+ * before, whose sort_at is after the floor, a stopped check of such an
+ * item, a budget that ended the read before a seat, and an event after the
+ * floor that the cap dropped. So a burst inside the minute before a floor
+ * the client moved past it does not answer `more` again.
  *
  * The floor is the safeguard for restored tasks and tasks newly in view: a
  * stored unread message about such a task is answered only when it is
@@ -448,11 +455,24 @@ export async function readInboxFeed(
   const step = stepBudget(ctx, FEED)
   const from = new Date(after - NOTIFY.lag_ms).toISOString()
   const floor = new Date(after).toISOString()
-  const held: FeedEvent[] = []
+  // the newest events so far, newest first, at most FEED.events
+  let held: FeedEvent[] = []
   let items = 0
   let more = false
   /* whether `item` may hold an event newer than the floor itself */
   const late = (item: Doc<'inbox_items'> | null) => item === null || item.sort_at > floor
+  /* Whether `item` can hold no event the answer keeps: FEED.events are
+     held, and its sort_at, which no event of it is later than, is before
+     the oldest of them. The items after it in its seat sort earlier. */
+  const past = (item: Doc<'inbox_items'>) =>
+    held.length === FEED.events && item.sort_at < new Date(held[FEED.events - 1].at).toISOString()
+  /* Takes `events` into the newest held, saying more when the cap drops
+     one newer than the floor. */
+  const take = (events: FeedEvent[]) => {
+    const all = [...held, ...events].sort(newerEvent)
+    if (all.slice(FEED.events).some((e) => e.at > after)) more = true
+    held = all.slice(0, FEED.events)
+  }
   walk: for (const [place, me] of ordered.entries()) {
     if (!(await step())) {
       // the seats left may hold anything
@@ -486,9 +506,10 @@ export async function readInboxFeed(
     try {
       for await (const item of unread) {
         current = item
-        if (held.length > FEED.events) {
-          // the cap: the first item past it in this seat, and in each seat
-          // after it, says whether an event after the floor waits there
+        if (past(item)) {
+          // the cap: this item, and the items after it in this seat, hold
+          // only events the cap drops, so it says whether one after the
+          // floor may wait there, and the next seat goes on
           if (late(item)) more = true
           continue walk
         }
@@ -525,7 +546,7 @@ export async function readInboxFeed(
             detail: newest === null ? '' : messageDetail(newest.detail),
           })
         }
-        held.push(...events)
+        take(events)
         current = null
       }
     } catch (e) {
@@ -539,8 +560,5 @@ export async function readInboxFeed(
       if (late(current)) more = true
     }
   }
-  held.sort((a, b) => b.at - a.at || (a.key < b.key ? 1 : a.key > b.key ? -1 : 0))
-  const events = held.slice(0, FEED.events)
-  if (held.slice(FEED.events).some((e) => e.at > after)) more = true
-  return { events, through: Math.max(after, events[0]?.at ?? after), more }
+  return { events: held, through: Math.max(after, held[0]?.at ?? after), more }
 }

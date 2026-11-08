@@ -356,10 +356,10 @@ describe('a boot on a task address', { timeout: 30_000 }, () => {
     await act(async () => reads[0]?.next(answerOf(snap)))
     expect(dialog()).toBeNull()
     expect(document.body.textContent).not.toContain('Run the soak test')
-    const marks = network.mutation.mock.calls.filter(
-      ([ref]) => getFunctionName(ref) === 'messages:markRead',
+    const itemReads = network.mutation.mock.calls.filter(
+      ([ref]) => getFunctionName(ref) === 'messages:readItem',
     )
-    expect(marks).toEqual([])
+    expect(itemReads).toEqual([])
   })
 })
 

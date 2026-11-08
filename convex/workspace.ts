@@ -36,9 +36,10 @@
  *   task restored before its archive marks were cleared, one per task
  *   outside it that a task names (a parent, a link target) and one per
  *   owner of a hidden task.
- * - inbox (per organization): the caller's messages, at most 3,002 messages
- *   read and one range per task they name, cut short where those tasks
- *   would read too much.
+ *
+ * No part sends a message: the app reads the Inbox through inbox.ts (its
+ * unread summary, the open task's item, the list's pages and the feed its
+ * desktop alerts take).
  *
  * Every part reads the caller's own profiles first (lib/functions.ts), so
  * all of them rerun when one of those changes, and answer the same. A part
@@ -65,7 +66,7 @@
  * the projects the window asks about (lib/access.ts roomSpent) and the
  * window can still be cut, and else `{state: 'refused', message}` with
  * lib/access.ts accessUnchecked's sentence, as a window too full to cut
- * does; it cuts the inbox part. Each windowed part stays inside Convex's limits at any size by
+ * does. Each windowed part stays inside Convex's limits at any size by
  * answering `split` or `overflow` (lib/workspaceParts.ts), and the app
  * chooses the windows from the organization's counts of the rows they read,
  * without asking (lib/idWindows.ts startWindows).
@@ -75,7 +76,7 @@
 import { v } from 'convex/values'
 import { authedQuery, badRequest, seatQuery } from './lib/functions'
 import { type IdWindow, isIdWindow } from './lib/idWindows'
-import { readInbox, readProjects, readRoot, readTasks } from './lib/workspaceParts'
+import { readProjects, readRoot, readTasks } from './lib/workspaceParts'
 
 const GONE = { state: 'gone' as const }
 
@@ -105,9 +106,4 @@ export const projects = seatQuery({
 export const tasks = seatQuery({
   args: windowArgs,
   handler: async (ctx, w) => (ctx.me === null ? GONE : await readTasks(ctx, ctx.me, gridWindow(w))),
-})
-
-export const inbox = seatQuery({
-  args: {},
-  handler: async (ctx) => (ctx.me === null ? GONE : await readInbox(ctx, ctx.me)),
 })

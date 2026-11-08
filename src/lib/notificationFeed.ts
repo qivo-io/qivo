@@ -110,6 +110,11 @@ let inFlight = 0
     threw at once, is never counted. */
 export const notificationCallsInFlight = () => inFlight
 
+/** How many of `inflight`, the Convex client's mutations in flight, are
+    not this page's notification calls, which the close guard asks about
+    (src/main.tsx). */
+export const othersInFlight = (inflight: number) => Math.max(0, inflight - inFlight)
+
 /* A call the client could not send. */
 class CallFailed extends Error {}
 

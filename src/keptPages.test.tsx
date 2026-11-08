@@ -220,13 +220,11 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
   network.mutation.mockImplementation(async (ref, args) => {
     await Promise.resolve()
     const name = getFunctionName(ref)
-    const a = args as { ids?: string[]; issue_id?: string }
+    const a = args as { issue_id?: string }
     const read =
-      name === 'messages:markRead'
-        ? (m: Snapshot['messages'][number]) => !!a.ids?.includes(m.id)
-        : name === 'messages:readItem'
-          ? (m: Snapshot['messages'][number]) => m.issue_id === a.issue_id
-          : null
+      name === 'messages:readItem'
+        ? (m: Snapshot['messages'][number]) => m.issue_id === a.issue_id
+        : null
     if (read) {
       const at = '2026-09-14T09:00:00.000Z'
       snap.messages = snap.messages.map((m) => (!m.read_at && read(m) ? { ...m, read_at: at } : m))

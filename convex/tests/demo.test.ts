@@ -598,7 +598,8 @@ describe('demo lifetime and capabilities', () => {
   it('marks messages read and sets the retention at the record limit without spending a record', async () => {
     const a = await readyDemo()
     const orgId = a.demo.orgId!
-    // two unread items, one for markRead and one for markAllRead
+    // two unread items, one for readItem and one for markAllRead
+    const tasks: string[] = []
     const planted = await t.run(async (ctx) => {
       const issues = await ctx.db
         .query('issues')
@@ -619,6 +620,7 @@ describe('demo lifetime and capabilities', () => {
           created_at: new Date(Date.now() + 60_000).toISOString(),
         })
         ids.push(id)
+        tasks.push(issue.id)
       }
       return ids
     })
@@ -636,7 +638,7 @@ describe('demo lifetime and capabilities', () => {
       })
     await sweepRows()
     await setCounts(a.receipt, { insert_count: DEMO_INSERTS_TOTAL })
-    await a.as.mutation(api.messages.markRead, { org_id: orgId, ids: [planted[0]] })
+    await a.as.mutation(api.messages.readItem, { org_id: orgId, issue_id: tasks[0] })
     expect(await sweepRows()).toBe(1)
     await a.as.mutation(api.messages.markAllRead, { org_id: orgId })
     expect(await sweepRows()).toBe(1)

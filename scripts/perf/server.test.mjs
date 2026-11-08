@@ -2636,6 +2636,50 @@ describe('the benchmark server', () => {
     expect(notReady.item).toEqual({ state: 'building' })
   })
 
+  it('answers the Inbox feed and the notification calls in the states the page asks for', async () => {
+    /** What the feed answers after `after` on a page with `params`, and
+        what the notification calls answer. */
+    const read = async (params, after = 0) => {
+      const { posted, send } = await server(`tasks=20&latency=0&mbps=100000&unread=12&${params}`)
+      await send({ type: 'query', id: 'feed', name: 'inbox:feed', args: { after } })
+      const got = posted.find((m) => m.to === 'feed')
+      const feed =
+        got === undefined ? undefined : got.error ? { error: got.error } : JSON.parse(got.text)
+      const call = async (name, args) => {
+        await send({ type: 'mutation', id: name, name, args })
+        return posted.find((m) => m.id === name)?.value
+      }
+      return {
+        feed,
+        beat: await call('notifications:beat', {
+          instance: 'tab',
+          can_notify: true,
+          active: false,
+        }),
+        claim: await call('notifications:claimAlerts', {
+          events: [{ key: 'k', at: 1 }],
+          through: 1,
+        }),
+        summary: await call('notifications:claimSummary', {}),
+      }
+    }
+    const plain = await read('')
+    // the twelve unread messages, newest first, with their keys and times
+    expect(plain.feed.events).toHaveLength(12)
+    expect(plain.feed.more).toBe(false)
+    expect(plain.feed.through).toBe(plain.feed.events[0].at)
+    expect(plain.beat).toMatchObject({ every_ms: 60_000, live_ms: 180_000 })
+    expect(plain.claim).toEqual({ state: 'granted', keys: ['k'], limited: false })
+    expect(plain.summary).toEqual({ state: 'none' })
+    // a floor past every message answers none, and through is the floor
+    const late = Date.parse('2999-01-01T00:00:00.000Z')
+    expect((await read('', late)).feed).toEqual({ events: [], through: late, more: false })
+    expect((await read('inboxfeed=more')).feed.more).toBe(true)
+    expect((await read('inboxfeed=failed')).feed.error).toContain('fails')
+    expect((await read('inboxfeed=loading')).feed).toBeUndefined()
+    expect((await read('notify=summary')).summary).toEqual({ state: 'summary' })
+  })
+
   it('serves the workspace in parts and re-sends only the window a remote rename changed, in one transition', async () => {
     const { posted, send } = await server('tasks=500&latency=0&mbps=100000')
     await send({ type: 'query', id: 'root', name: 'workspace:root', args: {} })

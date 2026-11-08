@@ -66,12 +66,10 @@ const firstArgument = (call: Call) => {
    disposal, and the paint helpers a layer's paint calls. */
 const PAINT_HELPERS = new Set([
   'buildThreadRows',
-  'countInbox',
   'disposeDemoStore',
   'purgeIssueRows',
   'dropProjectRows',
   'dropDeletedTasks',
-  'markLoadedMessagesRead',
   'patchIssueRow',
   'clearParentHours',
   'paintDescriptionImages',
@@ -421,6 +419,14 @@ describe('Convex writes outside the store', () => {
     // snapshot health), so they do not pause or paint
     'src/panels/OrganizationDeletion.tsx': ['orgRemovals:keep', 'orgRemovals:request'],
     'src/panels/OrganizationExport.tsx': ['orgRemovals:recordExport'],
+    // the desktop alert client's bookkeeping on the caller's own session,
+    // which paints nothing and must not wait for a save pause the
+    // workspace's trouble set (store/planner.ts startAlerts)
+    'src/lib/notificationFeed.ts': [
+      'notifications:beat',
+      'notifications:claimAlerts',
+      'notifications:claimSummary',
+    ],
     // Billing's details are a live query and its figures and lists one-shot
     // queries (billing.details, usageFigures, apiAccounts, accountList and
     // storageProjects), not writes

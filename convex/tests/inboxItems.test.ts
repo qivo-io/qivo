@@ -43,7 +43,7 @@ import {
   uuid,
   withReadingAdmin,
 } from './helpers.setup'
-import { at, drift, post } from './inboxItems.setup'
+import { at, drift, markRead, markUnread, post, removeIds, snoozeIds } from './inboxItems.setup'
 import { plantNorthstar } from './northstar.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 import { deleteProject, deleteTask, installTrashTimers, itemFor, runSteps } from './trash.setup'
@@ -187,13 +187,12 @@ describe('every message write keeps the items exact', () => {
     const a2 = (await post(t, f, { to: f.user, task: a, minute: 2 }))!
     await post(t, f, { to: f.user, task: a, minute: 3, kind: 'comment' })
     const b1 = (await post(t, f, { to: f.user, task: b, minute: 4 }))!
-    const user = as(t, f.user)
-    await user.mutation(api.messages.markRead, { org_id: f.org.id, ids: [a1.id, a2.id] })
+    await markRead(t, f.user, [a1.id, a2.id])
     expect(await itemOfPair(t, f.user.id, a.id)).toMatchObject({ unread_count: 1 })
     expect(await drift(t)).toEqual([])
-    await user.mutation(api.messages.markUnread, { org_id: f.org.id, ids: [a1.id] })
+    await markUnread(t, f.user, [a1.id])
     expect(await drift(t)).toEqual([])
-    await user.mutation(api.messages.remove, { org_id: f.org.id, ids: [b1.id] })
+    await removeIds(t, f.user, [b1.id])
     expect(await itemOfPair(t, f.user.id, b.id)).toBeNull()
     expect(await drift(t)).toEqual([])
     // the machine inbox acts on every row of the item (machine/discussion.ts)
@@ -220,7 +219,7 @@ describe('every message write keeps the items exact', () => {
     const f = await withReadingAdmin(t)
     const [a] = await tasks(t, f, 1)
     const first = (await post(t, f, { to: f.user, task: a, minute: 1 }))!
-    await as(t, f.user).mutation(api.messages.markRead, { org_id: f.org.id, ids: [first.id] })
+    await markRead(t, f.user, [first.id])
     // a later arrival prunes the read row
     const next = (await post(t, f, { to: f.user, task: a, minute: 2 }))!
     expect((await pairRows(t, f.user.id, a.id)).map((m) => m.id)).toEqual([next.id])
@@ -229,7 +228,7 @@ describe('every message write keeps the items exact', () => {
       unread_count: 1,
     })
     // an arrival stored older than the read newest row is deleted at once
-    await as(t, f.user).mutation(api.messages.markRead, { org_id: f.org.id, ids: [next.id] })
+    await markRead(t, f.user, [next.id])
     await t.run(async (ctx) => {
       await ctx.db.patch(a._id, { archived_at: at(3) })
       await postMessage(ctx, {
@@ -252,9 +251,8 @@ describe('every message write keeps the items exact', () => {
     const [a] = await tasks(t, f, 1)
     const one = (await post(t, f, { to: f.user, task: a, minute: 1 }))!
     await post(t, f, { to: f.user, task: a, minute: 2 })
-    const user = as(t, f.user)
     const until = new Date(Date.now() + 3_600_000).toISOString()
-    await user.mutation(api.messages.snooze, { org_id: f.org.id, ids: [one.id], until })
+    await snoozeIds(t, f.user, [one.id], until)
     expect(await itemOfPair(t, f.user.id, a.id)).toMatchObject({
       snoozed: true,
       snoozed_until: until,
@@ -268,7 +266,7 @@ describe('every message write keeps the items exact', () => {
     expect(await drift(t)).toEqual([])
     // read, then news: the read rows that carried the stamp go, and so does it
     const ids = (await pairRows(t, f.user.id, a.id)).map((m) => m.id)
-    await user.mutation(api.messages.markRead, { org_id: f.org.id, ids })
+    await markRead(t, f.user, ids)
     expect(await itemOfPair(t, f.user.id, a.id)).toMatchObject({ woke_rows: 1 })
     const news = (await post(t, f, { to: f.user, task: a, minute: 30 }))!
     expect(await itemOfPair(t, f.user.id, a.id)).toMatchObject({
@@ -280,15 +278,15 @@ describe('every message write keeps the items exact', () => {
     expect(await drift(t)).toEqual([])
     // an arrival wakes a snoozed item
     const later = new Date(Date.now() + 7_200_000).toISOString()
-    await user.mutation(api.messages.snooze, { org_id: f.org.id, ids: [news.id], until: later })
+    await snoozeIds(t, f.user, [news.id], later)
     await post(t, f, { to: f.user, task: a, minute: 31 })
     expect(await itemOfPair(t, f.user.id, a.id)).toMatchObject({ snoozed: false })
     expect(await drift(t)).toEqual([])
     // the early return, and the nightly fallback for a wake that was lost
-    await user.mutation(api.messages.snooze, { org_id: f.org.id, ids: [news.id], until: later })
-    await user.mutation(api.messages.snooze, { org_id: f.org.id, ids: [news.id], until: null })
+    await snoozeIds(t, f.user, [news.id], later)
+    await snoozeIds(t, f.user, [news.id], null)
     expect(await drift(t)).toEqual([])
-    await user.mutation(api.messages.snooze, { org_id: f.org.id, ids: [news.id], until: later })
+    await snoozeIds(t, f.user, [news.id], later)
     await t.mutation(internal.jobs.wakeSnoozes, {
       now: new Date(Date.parse(later) + 1).toISOString(),
       woken: 0,
@@ -304,7 +302,7 @@ describe('every message write keeps the items exact', () => {
     const one = (await post(t, f, { to: f.user, task: a, minute: 1 }))!
     await post(t, f, { to: f.user, task: a, minute: 2 })
     const until = new Date(Date.now() + 3_600_000).toISOString()
-    await as(t, f.user).mutation(api.messages.snooze, { org_id: f.org.id, ids: [one.id], until })
+    await snoozeIds(t, f.user, [one.id], until)
     await t.run(async (ctx) => {
       await ctx.db.patch(a._id, { archived_at: at(5) })
       await wakeSnoozedItem(ctx, { recipient_id: f.user.id, issue_id: a.id }, at(6))
@@ -403,11 +401,7 @@ describe('every message write keeps the items exact', () => {
       }
     const until = new Date(Date.now() + 3_600_000).toISOString()
     const snoozed = (await pairRows(t, f.guest.id, a.id))[0]
-    await as(t, f.guest).mutation(api.messages.snooze, {
-      org_id: f.org.id,
-      ids: [snoozed.id],
-      until,
-    })
+    await snoozeIds(t, f.guest, [snoozed.id], until)
     // two rows a step, so a step stops inside an item and the next goes on
     await t.run(async (ctx) => {
       await ctx.db.patch(a._id, { archived_at: at(20) })
