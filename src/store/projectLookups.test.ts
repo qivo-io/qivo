@@ -342,13 +342,40 @@ describe('the project lookups', () => {
     expect(P.project(w.edits.id)?.name).toBe('Edits')
     expect(P.canWrite(w.edits.id)).toBe(false)
     // back on the Board, its projects read again at once from the answer
-    // it kept, while its own read has not answered again
+    // it kept, while its own read has not answered again; the Roadmap's
+    // release waits for the effect pass that hid it
     P.watchRoadmap(null)
+    await Promise.resolve()
     P.watchBoard('board:desktop', '{"board":1}', 0, 0, false)
     expect(named()).toEqual(sorted([w.edits.id, w.granted.id]))
     await vi.waitFor(() => expect(P.canWrite(w.edits.id)).toBe(true))
     expect(reads.get('tasks:board')).toBe(2)
     expect(P.boardRead('board:desktop').current).toBe(false)
+  })
+
+  it("keeps reading a Board's projects by id through a narrower filter, whose effect stops and starts its read in one pass", async () => {
+    const w = world()
+    const board: BoardAnswer = {
+      state: 'ok',
+      rows: [viewRow(w.snap, 'board-task', w.edits.id)],
+      parents: [],
+      held_projects: [w.granted.id],
+    }
+    const reads = new Map<string, number>()
+    const { P, byIds } = await start(w.snap, {}, { board, reads })
+    P.watchBoard('board:desktop', '{"board":1}', 0, 0, false)
+    await vi.waitFor(() => expect(P.canWrite(w.edits.id)).toBe(true))
+    const opened = byIds.length
+    // the effect's cleanup stops the read, and its next run asks for a text
+    // filter that only narrows, which holds the answer and its rows
+    P.watchBoard('board:desktop', null, 0, 0, false)
+    P.watchBoard('board:desktop', '{"board":2}', 0, 0, false, true)
+    expect(P.canWrite(w.edits.id)).toBe(true)
+    await vi.waitFor(() => expect(P.boardRead('board:desktop').key).toBe('{"board":2}'))
+    expect(reads.get('tasks:board')).toBe(2)
+    // the cache kept its read of the Board's projects, and with it the right
+    expect(byIds).toHaveLength(opened)
+    expect(P.canWrite(w.edits.id)).toBe(true)
   })
 
   it('stays loading while byIds has not answered, never gone, with no right', async () => {

@@ -4901,10 +4901,17 @@ function watchView(
   // a view whose read stops, as a kept page that hides, lets its projects
   // go with its read, so the project cache stops reading them, and names
   // them again from the answer it kept as it reads again, so the cache
-  // reads them at once rather than after the view's next answer
+  // reads them at once rather than after the view's next answer. A view
+  // effect's cleanup stops the read and its next run may start it again
+  // in the same pass, as a narrower Board filter or a Roadmap pan does, so
+  // the release waits for the pass and is dropped once the slot reads again
   const named = read.query.projects
-  if (named && wasLive && read.live === null) nameSlotProjects(slot, [])
-  else if (named && !wasLive && read.live !== null && read.held?.value !== undefined) {
+  if (named && wasLive && read.live === null) {
+    const stopped = read
+    queueMicrotask(() => {
+      if (viewReads.get(slot) === stopped && stopped.live === null) nameSlotProjects(slot, [])
+    })
+  } else if (named && !wasLive && read.live !== null && read.held?.value !== undefined) {
     nameSlotProjects(slot, named(read.held.value) ?? [])
     // the part painted every delivery it took, so nothing waits for it
     if (!owed.workspace) nameWaiting()
