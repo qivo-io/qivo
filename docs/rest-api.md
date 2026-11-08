@@ -702,10 +702,12 @@ completion and milestones are planning data. The
 read the project. A project you neither read nor manage answers `404`,
 exactly like an unknown one.
 
-The writes below, and the [project access](#project-access) and
-[milestone](#milestones) routes, answer `403` with the read-only sentence for
-a read-only credential before any reference is resolved, like every other
-write.
+The writes below, the `PUT` and `DELETE` [project access](#project-access)
+routes and the `POST`, `PATCH` and `DELETE` [milestone](#milestones) routes
+answer `403` with the read-only sentence for a read-only credential before
+any reference is resolved, like every other write. The `GET` routes of a
+project, its users, milestones and grants included, take a read-only
+credential.
 
 `num` is the durable per-org project number (migration 0050) — it never
 changes. `key` is the short code the app shows. The app has no screen that
