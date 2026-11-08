@@ -1124,6 +1124,68 @@ function logged(what: string, pages: PageReads[]) {
   }
 }
 
+/* The live and archived top-level projects and sub-projects of `orgId`,
+ * counted whole, which a case at the catalogue's sum asserts before it
+ * measures. */
+const totals = (t: T, orgId: string) =>
+  t.run(async (ctx) => {
+    const all = await ctx.db
+      .query('projects')
+      .withIndex('by_org', (q) => q.eq('org_id', orgId))
+      .collect()
+    const count = (top: boolean, archived: boolean) =>
+      all.filter(
+        (p) => (p.parent_id === undefined) === top && (p.archived_at !== undefined) === archived,
+      ).length
+    return {
+      live: count(true, false),
+      archived: count(true, true),
+      liveSubs: count(false, false),
+      archivedSubs: count(false, true),
+    }
+  })
+
+/* withOrg with Pia, an everyday person with grants on three top-level
+ * projects of three sub-projects each, and with `big` the organization at
+ * the catalogue's sum, the four figures together (200 and 300 top-level
+ * projects, 500 and 1,000 sub-projects), the read the catalogue made
+ * before. withOrg's TBED with FW and PCB and SKNK, and Pia's projects,
+ * count towards those figures. Each is seeded once and shared by the cases
+ * below, which leave it as they found it. */
+const catalogueOrgs = new Map<boolean, ReturnType<typeof seedCatalogueOrg>>()
+const catalogueOrg = (big: boolean) => {
+  let made = catalogueOrgs.get(big)
+  if (made === undefined) {
+    made = seedCatalogueOrg(big)
+    catalogueOrgs.set(big, made)
+  }
+  return made
+}
+async function seedCatalogueOrg(big: boolean) {
+  const t = newT({ transactionLimits: true })
+  const f = await withOrg(t)
+  if (big) {
+    // withOrg's 2 and Pia's 3 make 200 live top-level projects, and
+    // withOrg's FW and PCB and Pia's 9 make 500 live sub-projects
+    const live = await plantMetas(t, f.org.id, names('Live ', 195))
+    const old = await plantMetas(t, f.org.id, names('Old ', 300), { archived_at: NOW })
+    for (const p of live.slice(0, 163)) await plantSubs(t, p, names(`${p.name} sub `, 3))
+    for (const p of old.slice(0, 250))
+      await plantSubs(t, p, names(`${p.name} sub `, 4), { archived_at: NOW })
+  }
+  const pia = await person(t, f.org.id, 'Pia')
+  const mine = await plantMetas(t, f.org.id, ['Mine A', 'Mine B', 'Mine C'])
+  for (const p of mine) await plantSubs(t, p, names(`${p.name} sub `, 3))
+  await plantGrants(t, pia, mine)
+  await ready(t, f)
+  expect(await totals(t, f.org.id)).toEqual(
+    big
+      ? { live: 200, archived: 300, liveSubs: 500, archivedSubs: 1000 }
+      : { live: 5, archived: 0, liveSubs: 11, archivedSubs: 0 },
+  )
+  return { t, f, pia }
+}
+
 describe('reads at the design size', () => {
   /* Pia with grants on 200 top-level projects (withOrg's two and 198) and
    * the 200 live sub-projects she reads beneath 67 of them. */
@@ -1249,20 +1311,7 @@ describe('reads at the design size', () => {
 
   it('reads the same for an everyday person whatever the organization holds', async () => {
     const reads = async (big: boolean) => {
-      const t = newT({ transactionLimits: true })
-      const f = await withOrg(t)
-      if (big) {
-        const live = await plantMetas(t, f.org.id, names('Live ', 198))
-        const old = await plantMetas(t, f.org.id, names('Old ', 300), { archived_at: NOW })
-        for (const p of live.slice(0, 166)) await plantSubs(t, p, names(`${p.name} sub `, 3))
-        for (const p of old.slice(0, 250))
-          await plantSubs(t, p, names(`${p.name} sub `, 4), { archived_at: NOW })
-      }
-      const pia = await person(t, f.org.id, 'Pia')
-      const mine = await plantMetas(t, f.org.id, ['Mine A', 'Mine B', 'Mine C'])
-      for (const p of mine) await plantSubs(t, p, names(`${p.name} sub `, 3))
-      await plantGrants(t, pia, mine)
-      await ready(t, f)
+      const { t, pia } = await catalogueOrg(big)
       const active = await measuredPages(t, pia, { limit: 50 })
       const archived = await measuredPages(t, pia, { archived: true, limit: 50 })
       expect(active.rows.length).toBe(12)
