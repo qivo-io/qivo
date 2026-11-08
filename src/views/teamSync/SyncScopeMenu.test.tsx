@@ -44,6 +44,10 @@ let asked: Record<string, unknown>[]
 /** whether teams:get holds its answers back until `release` */
 let holdGet: boolean
 let release: (() => void)[]
+/** the team reads' stand-in, which reruns them as Convex does */
+let reads: ReturnType<typeof teamSettingsServer>
+/** how many times teams:get was watched */
+let getWatches: number
 
 async function load() {
   vi.resetModules()
@@ -63,7 +67,8 @@ async function load() {
   asked = []
   holdGet = false
   release = []
-  const reads = teamSettingsServer(
+  getWatches = 0
+  reads = teamSettingsServer(
     () => snap,
     () => force,
   )
@@ -75,6 +80,7 @@ async function load() {
   })
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
+    if (name === 'teams:get') getWatches++
     if (name === 'teams:get' && holdGet) {
       release.push(() => void reads.watch(name, args, next, fail))
       return () => {}
@@ -236,5 +242,26 @@ describe("Team sync's scope menu", () => {
     // no scope asks for one
     await render({ kind: 'none' }, false)
     expect(trigger()?.dataset.syncScopeTrigger).toBe('Choose a scope')
+  })
+
+  it('keeps a named team after a failed refresh, with Try again beside it, which reads it again', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const retry = () => document.querySelector<HTMLElement>('[data-sync-scope-retry]')
+    await render({ kind: 'team', id: team(31) })
+    expect(trigger()?.dataset.syncScopeTrigger).toBe('Team 31')
+    expect(retry()).toBeNull()
+    // a later run of teams.get fails while the page shows the scope
+    force = { fail: ['get'] }
+    await act(async () => reads.rerun())
+    await settle()
+    expect(trigger()?.dataset.syncScopeTrigger).toBe('Team 31')
+    expect(retry()).not.toBeNull()
+    const watched = getWatches
+    force = {}
+    await act(async () => retry()?.click())
+    await settle()
+    expect(getWatches).toBeGreaterThan(watched)
+    expect(trigger()?.dataset.syncScopeTrigger).toBe('Team 31')
+    expect(retry()).toBeNull()
   })
 })

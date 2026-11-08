@@ -22,7 +22,8 @@
    that scope (panels/settings/useTeamSettings.ts), "Loading…" until it
    answers, the page's sentence for a team it cannot show, and a failed
    read with Try again, never "Choose a scope" for a team it has not named
-   yet. */
+   yet. A refresh that fails after the team was named keeps its name, with
+   Try again beside it. */
 
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { Icon, Popover } from '@/components/qivo'
@@ -65,8 +66,9 @@ const SCOPE_WORDS = {
 }
 
 /** The words for scope `scope` on the closed trigger, with whether the
-    team read behind them failed, from the store's own teams and projects
-    and `team`, teams.get's read of a team the person is not in. */
+    team read behind them failed, also one that keeps an earlier answer's
+    name, from the store's own teams and projects and `team`, teams.get's
+    read of a team the person is not in. */
 function scopeName(
   scope: SyncPlaceScope,
   named: boolean,
@@ -84,7 +86,7 @@ function scopeName(
   const icon = <Icon name="people" size={14} />
   const own = P.teamById(scope.id)
   if (own && own.org === P.homeOrg) return { label: own.name, icon, failed: false }
-  if (team.answer) return { label: team.answer.team.name, icon, failed: false }
+  if (team.answer) return { label: team.answer.team.name, icon, failed: team.state === 'failed' }
   if (team.state === 'unavailable') return { label: SCOPE_WORDS.unavailable, icon, failed: false }
   if (team.state === 'failed') return { label: SCOPE_WORDS.failed, icon, failed: true }
   return { label: SCOPE_WORDS.loading, icon, failed: false }
