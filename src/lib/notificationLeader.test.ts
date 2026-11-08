@@ -107,8 +107,13 @@ type Tab = {
 const tabs: Tab[] = []
 let tabCount = 0
 
-/** Opens a tab of profile `p`, which can notify unless `can` is false. */
-function openTab(p: Profile, { can = true, locks }: { can?: boolean; locks?: LeaderLocks } = {}) {
+/** Opens a tab of profile `p`, which can notify unless `can` is false, and
+    whose settings watch answers `mode` at once when one is given, as a
+    query the client already holds does. */
+function openTab(
+  p: Profile,
+  { can = true, locks, mode }: { can?: boolean; locks?: LeaderLocks; mode?: Delivery } = {},
+) {
   const number = ++tabCount
   const capability = new Set<(can: boolean) => void>()
   const powers = new Set<() => void>()
@@ -193,6 +198,7 @@ function openTab(p: Profile, { can = true, locks }: { can?: boolean; locks?: Lea
     watchSettings: (take) => {
       tab.settings.take = take
       tab.settings.watching += 1
+      if (mode) take(mode)
       return () => {
         tab.settings.take = null
         tab.settings.watching -= 1
@@ -607,6 +613,16 @@ describe('reports of use', () => {
     input(tab, 'touchstart')
     await flush()
     expect(tab.beats().map((b) => b.args.active)).toEqual([false, true, true, false, true])
+  })
+
+  it('carries no report on the first beat even when the mode is known at once', async () => {
+    const tab = openTab(profile(), { mode: 'recent' })
+    input(tab)
+    await flush()
+    expect(tab.beats().map((b) => b.args.active)).toEqual([false])
+    input(tab)
+    await flush()
+    expect(tab.beats().map((b) => b.args.active)).toEqual([false, true])
   })
 
   it('counts nothing hidden, untrusted or from a pointer that did not move', async () => {
