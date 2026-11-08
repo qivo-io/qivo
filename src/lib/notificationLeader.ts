@@ -238,7 +238,7 @@ type Message =
   | { kind: 'capability' }
   | ({ kind: 'state' } & Handover)
 
-/* The most keys a handover carries in each list: one feed answer's, and
+/* The most keys a handover carries in each list, one feed answer's and
    one more. */
 const HANDOVER_KEYS = 51
 
@@ -289,9 +289,9 @@ function randomInstance(): string {
    session row and a demo that is not active, 'defect' for a bad request,
    'signin' for a call without a sign-in (convex/lib/functions.ts
    loadSession's forbidden 'not signed in'), else null for a failure worth
-   trying again. A missing sign-in is tried again for a while: the Convex
-   client sends calls without one while it arms the socket again, and the
-   beat goes on once it is armed. */
+   trying again. A missing sign-in is tried again for a while, since the
+   Convex client sends calls without one while it arms the socket again,
+   and the beat goes on once it is armed. */
 function refusalOf(e: unknown): 'stop' | 'defect' | 'signin' | null {
   if (!(e instanceof ConvexError)) return null
   const data: unknown = e.data
@@ -555,7 +555,7 @@ export function startNotificationLeader(deps: LeaderDeps) {
     feedStarted = true
     const start = startOf(first)
     freshLeft = false
-    // taken once: a later start, such as after the capability turned on
+    // taken once, so a later start, such as after the capability turned on
     // again, runs the resume order unless a newer handover comes
     heard = null
     feed.lead(start, link, first)
@@ -719,7 +719,7 @@ export function startNotificationLeader(deps: LeaderDeps) {
     })
   }
 
-  /* Follows for election `mine`: says hello and queues for the lock,
+  /* Follows for election `mine`. It says hello and queues for the lock,
      dropping any turn it queued before. */
   function follow(mine: number) {
     if (stopped || !locks) return
@@ -909,9 +909,9 @@ export function startNotificationLeader(deps: LeaderDeps) {
   elect()
 
   return {
-    /** Stops for good: lets go of the lock or its turn, whatever the role
-        says, and of an election still waiting, closes the channel and the
-        listeners, and sends no `end`. */
+    /** Stops for good. It lets go of the lock or its turn, whatever the
+        role says, and of an election still waiting, closes the channel and
+        the listeners, and sends no `end`. */
     stop() {
       if (stopped) return
       stopped = true

@@ -22,7 +22,7 @@
      recorded none of them and one may come back into the feed, as when
      the person reads it and marks it unread again.
    - A takeover starts from the floor, the keys and the baseline's keys the
-     tab that led before posted, as if it went on from there: it offers
+     tab that led before posted, as if it went on from there. It offers
      what its first answer holds beyond those keys, and takes no baseline.
    - Each later answer offers the events whose keys the last handled
      answer did not hold, oldest first, in one claim with the answer's

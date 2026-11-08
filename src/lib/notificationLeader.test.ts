@@ -582,8 +582,8 @@ describe('the pace', () => {
 describe('reports of use', () => {
   it('reports input at once a minute after the last report, and not inside it', async () => {
     const tab = openTab(profile())
-    // input before it leads: the first beat carries no report, since the
-    // server ignores `active` on a session's first beat
+    // input before it leads, and the first beat carries no report, since
+    // the server ignores `active` on a session's first beat
     input(tab)
     await flush()
     expect(tab.beats().map((b) => b.args.active)).toEqual([false])
@@ -785,7 +785,7 @@ describe('the capability', () => {
     await flush()
     expect(c.leader.role()).toBe('follower')
     expect((await p.manager?.query())?.pending).toHaveLength(0)
-    // the capable leader goes: nobody can lead, so nobody holds the lock
+    // the capable leader goes, and nobody can lead, so nobody holds the lock
     b.page.win.fire('pagehide', { persisted: false })
     await vi.advanceTimersByTimeAsync(2 * MINUTE)
     expect(await p.manager?.query()).toEqual({ held: [], pending: [] })
