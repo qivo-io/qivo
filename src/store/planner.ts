@@ -5365,7 +5365,7 @@ const milestoneOnScreen = (id: string): MilestoneRow | undefined => milestoneRow
 
 /** The organization of milestone `row`: the one a `get` answer named for
     it, else its project's in the store (orgOfProject, from the projects
-    part until t3/limits-projects-part removes it), else none (''). */
+    part else the project cache), else none (''). */
 const milestoneOrg = (row: MilestoneRow): string =>
   milestoneRows.orgOf(row.id) ?? orgOfProject(row.project_id)
 
@@ -8828,12 +8828,15 @@ const visibleLevelOnProject = (p: ProjectVM | null | undefined): string | null =
 }
 
 /** The organization a project belongs to, from the projects part else the
-    project cache (P.project), or '' where neither knows it. Its callers: a
-    milestone's organization when the milestone rows hold none
-    (milestoneOrg), P.addMilestone's sending organization, an attachment
-    limit's organization (P.projectAttachmentLimit), the access invite's
-    organization and a new sub-project's (P.addProject); each falls to the
-    home organization or sends nothing where it answers ''. */
+    project cache (P.project), or '' where neither knows it. Its callers,
+    and what each does with '': milestoneOrg, a milestone's organization
+    when the milestone rows hold none, where a milestone write then sends
+    nothing; P.inviteToProject, the organization an invite goes to without
+    a page's lookup, which then sends nothing; P.nextIssueKey, the
+    organization whose counter the preview reads, else the home one;
+    P.unarchiveIssue, the organization a restore goes to when the caller
+    names none, else the home one; and P.addProject, a new sub-project's
+    organization from its parent's without a page's, else the home one. */
 function orgOfProject(pid: string | null | undefined): string {
   if (!pid) return ''
   return rows.projects.get(pid)?.org_id ?? cachedFacts.get(pid)?.org ?? ''

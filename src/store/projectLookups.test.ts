@@ -1,5 +1,8 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { BoardAnswer } from '../../convex/lib/board'
+import type { RoadmapAnswer } from '../../convex/lib/roadmap'
+import type { ViewRow } from '../../convex/lib/viewReads'
 import type { Whole } from './guard/liveDouble.setup'
 import { plannerFixture } from './plannerFixture.setup'
 import {
@@ -81,17 +84,32 @@ function world() {
 }
 
 /** A fresh store on `snap`, whose byIds reads the stand-in answers with
-    `force`, and the ids of every byIds subscription it opened. */
-async function start(snap: Whole, force: ForcedProjectNav = {}) {
+    `force`, the ids of every byIds subscription it opened, and a way to
+    answer every open byIds read again from `snap` as it stands, as the
+    server reruns them after an access change. The Board's and the
+    Roadmap's reads answer `views.board` and `views.roadmap`. */
+async function start(
+  snap: Whole,
+  force: ForcedProjectNav = {},
+  views: { board?: BoardAnswer; roadmap?: RoadmapAnswer } = {},
+) {
   vi.resetModules()
   vi.stubGlobal('window', { showToast: vi.fn() })
   const byIds: string[][] = []
+  const open = new Set<() => void>()
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') next(structuredClone(snap))
+    else if (name === 'tasks:board' && views.board) next(structuredClone(views.board))
+    else if (name === 'tasks:roadmap' && views.roadmap) next(structuredClone(views.roadmap))
     else if (isProjectNavRead(name)) {
-      if (name === 'projectNav:byIds') byIds.push([...(args as { ids: string[] }).ids])
-      answerProjectNav(snap, name, args, next, fail, { force })
+      const answer = () => answerProjectNav(snap, name, args, next, fail, { force })
+      if (name === 'projectNav:byIds') {
+        byIds.push([...(args as { ids: string[] }).ids])
+        open.add(answer)
+      }
+      answer()
+      return () => open.delete(answer)
     }
     return () => {}
   })
@@ -100,8 +118,29 @@ async function start(snap: Whole, force: ForcedProjectNav = {}) {
   const store = await import('./planner')
   const { PROJECT_CACHE } = await import('./projectCache')
   await store.initStore()
-  return { P: store.P, byIds, PROJECT_CACHE }
+  const rerun = () => {
+    for (const answer of open) answer()
+  }
+  return { P: store.P, byIds, PROJECT_CACHE, rerun }
 }
+
+/** Task `id` of project `project` as a view's answer sends it. */
+const viewRow = (snap: Whole, id: string, project: string): ViewRow => ({
+  id,
+  org_id: snap.orgs[0].id,
+  project_id: project,
+  num: 90,
+  title: `Task ${id}`,
+  status: 'todo',
+  priority: 'medium',
+  paused: false,
+  assignee_id: snap.profiles[0].id,
+  created_at: NOW,
+  updated_at: NOW,
+  has_subtasks: false,
+  has_hidden_subtasks: false,
+  has_hidden_parent: false,
+})
 
 describe('the project lookups', () => {
   it('answers a project the part holds from the part, never reading it by id', async () => {
@@ -177,6 +216,61 @@ describe('the project lookups', () => {
     expect(P.writeNote(w.hidden.id)).toBe("You can't open this project.")
   })
 
+  it('names nothing of a project it answered once the answer leaves it out, as after access goes', async () => {
+    const w = world()
+    const { P, rerun } = await start(w.snap)
+    P.nameProjects('test', [w.twin.id])
+    await vi.waitFor(() => expect(P.projectState(w.twin.id)).toBe('ok'))
+    expect(P.projectTag(w.twin.id)).toBe(`#${w.twin.num}`)
+    expect(P.projectTag(w.held.id)).toBe(`#${w.held.num}`)
+    // the caller no longer leads the twin, so the server's next answer
+    // leaves it out
+    const twin = w.snap.projects.find((p) => p.id === w.twin.id)
+    if (!twin) throw new Error('no twin')
+    twin.lead_id = undefined
+    rerun()
+    await vi.waitFor(() => expect(P.projectState(w.twin.id)).toBe('gone'))
+    // the facts follow with the cache's repaint, a frame later
+    await vi.waitFor(() => expect(P.project(w.twin.id)).toBeUndefined())
+    expect(P.metaOf(w.twin.id)).toBeNull()
+    expect(P.orgOf(w.twin.id)).toBe('')
+    expect(P.projectTag(w.twin.id)).toBeNull()
+    // the held project has no twin left to be told apart from
+    expect(P.projectTag(w.held.id)).toBeNull()
+    expect(P.writeNote(w.twin.id)).toBe("You can't open this project.")
+  })
+
+  it("names the projects a Board's and a Roadmap's answer name while their slots hold them", async () => {
+    const w = world()
+    const board: BoardAnswer = {
+      state: 'ok',
+      rows: [viewRow(w.snap, 'board-task', w.edits.id)],
+      parents: [],
+      held_projects: [w.granted.id],
+    }
+    const roadmap: RoadmapAnswer = {
+      state: 'ok',
+      rows: [viewRow(w.snap, 'roadmap-task', w.led.id)],
+      parents: [],
+      subtasks: [],
+      held_sub_projects: [w.views.id],
+      remaining: { state: 'ok', tenths: {} },
+    }
+    const { P } = await start(w.snap, {}, { board, roadmap })
+    const read = () => P.cacheStats().reads.flat()
+    P.watchBoard('board:desktop', '{"board":1}', 0, 0, false)
+    await vi.waitFor(() =>
+      expect(read()).toEqual(expect.arrayContaining([w.edits.id, w.granted.id])),
+    )
+    await vi.waitFor(() => expect(P.project(w.edits.id)?.name).toBe('Edits'))
+    P.releaseView('board:desktop')
+    expect(read()).toEqual([])
+    P.watchRoadmap('{"roadmap":1}')
+    await vi.waitFor(() => expect(read()).toEqual(expect.arrayContaining([w.led.id, w.views.id])))
+    P.releaseRoadmap()
+    expect(read()).toEqual([])
+  })
+
   it('stays loading while byIds has not answered, never gone, with no right', async () => {
     const w = world()
     const { P, byIds } = await start(w.snap, { byIdsLoading: true })
@@ -214,11 +308,13 @@ describe('the project lookups', () => {
     expect(P.canWrite(w.edits.id)).toBe(false)
   })
 
-  it('reads 200 named top-level projects in two chunks and keeps all 200 while named, past a lowered bound', async () => {
+  it('reads the 199 unheld of 200 top-level projects in two chunks and keeps them while named, past a lowered bound', async () => {
     const w = world()
     const org = w.org
     const me = w.snap.profiles[0].id
-    const tops = Array.from({ length: 200 }, (_, i) => ({
+    // beside the fixture's 6 top-level projects, so the organization holds
+    // 200, the design size, 199 of them left out of the projects part
+    const tops = Array.from({ length: 194 }, (_, i) => ({
       id: crypto.randomUUID(),
       org_id: org,
       type: 'meta' as const,
@@ -236,15 +332,19 @@ describe('the project lookups', () => {
     )
     w.snap.unheldProjects = [...(w.snap.unheldProjects ?? []), ...tops.map((p) => p.id)]
     const { P, byIds, PROJECT_CACHE } = await start(w.snap)
+    const unheld = w.snap.projects.filter((p) => !p.parent_id && p.id !== w.held.id)
+    expect(unheld).toHaveLength(199)
     PROJECT_CACHE.most = 50
     try {
       P.nameProjects(
         'test',
-        tops.map((p) => p.id),
+        unheld.map((p) => p.id),
       )
-      expect(byIds.map((ids) => ids.length)).toEqual([100, 100])
+      expect(byIds.map((ids) => ids.length)).toEqual([100, 99])
       await vi.waitFor(() => expect(tops.every((p) => P.projectState(p.id) === 'ok')).toBe(true))
-      expect(P.cacheStats().cached).toBe(200)
+      await vi.waitFor(() => expect(P.projectState(w.hidden.id)).toBe('gone'))
+      // every answered project but Hidden, which the person cannot open
+      expect(P.cacheStats().cached).toBe(198)
     } finally {
       PROJECT_CACHE.most = 2_000
     }
