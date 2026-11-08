@@ -2,7 +2,7 @@
  * and deploys regenerate it, but CI typechecks the committed copy, and that
  * copy fell behind twice without any check noticing. Codegen itself needs a
  * deployment, so this applies the Convex CLI's module rules (bundler
- * entryPoints in convex 1.48, which scripts/check-convex-runtime.mjs pins) to
+ * entryPoints in convex 1.49, which scripts/check-convex-runtime.mjs pins) to
  * the source tree instead.
  *
  * To fix a reported difference, run `npx convex dev` (or `npx convex codegen`)
