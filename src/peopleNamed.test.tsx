@@ -15,7 +15,8 @@ import { BOARD_TEST_TIMEOUT, loadBoard, spread, taskRow } from './views/boardFix
 
 /* The people every page shows, as the profile cache names and paints them
    (store/profileCache.ts, store/planner.ts P.person): a person the
-   workspace's people part does not hold shows as loading, then by name once
+   workspace does not hold, which is everyone but the signed-in person,
+   shows as loading, then by name once
    people.byIds answers, never as Unassigned, "Unknown user" or "Unavailable
    user" until the answer leaves them out; and the audit, one case a page:
    every portrait a page renders ([data-avatar]) is of a person an open view
@@ -84,8 +85,9 @@ afterEach(async () => {
 
 type Board = Awaited<ReturnType<typeof loadBoard>>
 
-/** Gina and Hal, people of the organization the workspace's people part
-    does not hold, who own work the views show. */
+/** Gina and Hal, people of the organization, whom the workspace does not
+    hold as it holds nobody but the signed-in person, who own work the
+    views show. */
 const GINA = 'gina'
 const HAL = 'hal'
 const unheld = (snap: Snapshot) => {
@@ -105,9 +107,8 @@ const unheld = (snap: Snapshot) => {
     })
 }
 
-/** Loads the Board's store with `prepare`, Gina and Hal left out of the
-    people part and their faces held back, and records what the views
-    name. */
+/** Loads the Board's store with `prepare` and Gina's and Hal's faces held
+    back, and records what the views name. */
 async function load(prepare: (snap: Snapshot) => void, options: Parameters<typeof loadBoard>[2]) {
   const board = await loadBoard(
     network,
@@ -117,7 +118,6 @@ async function load(prepare: (snap: Snapshot) => void, options: Parameters<typeo
     },
     options,
   )
-  board.server.people.unheld = new Set([GINA, HAL])
   board.server.people.hold = true
   await board.deliver()
   const names = watchNames(board)

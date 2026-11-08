@@ -53,11 +53,11 @@ import { type ForcedSync, type SyncArgs, teamSyncStandIn } from '../store/teamSy
    (store/ownerPickersStandIn.setup.ts, `server.owners`), and people:byIds
    through store/peopleSettingsStandIn.setup.ts, so the owner lists and
    Team sync's Mention window list people; every other one-shot read
-   answers null. The people of `server.people.unheld` stay out of the
-   workspace's people part while the views' answers and people:byIds
-   name them, as once the part no longer sends every profile, and
-   `server.people` holds back, fails or empties people:byIds' answers, so
-   a test reaches a person who is loading, failed or gone. */
+   answers null. The store holds nobody but the signed-in person (the
+   live double's root, convex/lib/workspaceJoin.ts rootOf), so everyone
+   else the views name reaches it through people:byIds, and
+   `server.people` holds back, fails or empties those answers, so a test
+   reaches a person who is loading, failed or gone. */
 
 type Network = {
   mutation: ReturnType<typeof vi.fn>
@@ -239,12 +239,10 @@ export async function loadBoard(
         canOwn) and people:byIds: `force` answers the stand-in's states,
         `asked` is every read's name and arguments, oldest first */
     owners: { force: Set<string>; asked: { name: string; args: unknown }[] }
-    /** the people the workspace's people part leaves out (`unheld`), and
-        people.byIds' answers: `hold` keeps them back until `answer()`,
+    /** people.byIds' answers: `hold` keeps them back until `answer()`,
         `force` answers every read failed (`error`) or without any asked
         id (`gone`), and `open` holds the reads open now */
     people: {
-      unheld: Set<string>
       hold: boolean
       force: 'error' | 'gone' | null
       open: Set<{ args: unknown; next: (value: unknown) => void; fail?: (e: unknown) => void }>
@@ -295,14 +293,9 @@ export async function loadBoard(
     sync: { hold: false, force: {}, fail: undefined, edit: null, asked: [], open: new Set() },
     comments: new Set(),
     owners: { force: new Set(), asked: [] },
-    people: { unheld: new Set(), hold: false, force: null, open: new Set() },
+    people: { hold: false, force: null, open: new Set() },
     milestones: { hold: false, force: {}, asked: [], open: new Set() },
   }
-  /** `snap` as the workspace's parts send it, without the unheld people. */
-  const held = (snap: Snapshot): Snapshot =>
-    server.people.unheld.size === 0
-      ? snap
-      : { ...snap, profiles: snap.profiles.filter((p) => !server.people.unheld.has(p.id)) }
   /** Answers people:byIds read `read` from the snapshot as it is now, with
       the state the test forces. */
   const answerPeople = (read: {
@@ -429,7 +422,7 @@ export async function loadBoard(
       return () => server.people.open.delete(read)
     }
     if (name === 'workspace:whole') {
-      deliver = (snap) => next(structuredClone(held(snap)))
+      deliver = (snap) => next(structuredClone(snap))
       deliver(snapshot)
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name === 'tasks:board') {

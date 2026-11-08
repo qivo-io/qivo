@@ -280,8 +280,8 @@ describe('Team utilization from the owner loads', { timeout: BOARD_TEST_TIMEOUT 
     // the store repaints the faces an answer brings in the next frame
     vi.stubGlobal('requestAnimationFrame', (run: () => void) => setTimeout(run, 0))
     const board = await loadBoard(network, twoPeople())
-    // the people part no longer holds Other, and their face is held back
-    board.server.people.unheld = new Set([OTHER])
+    // the store holds nobody but the signed-in person, and Other's face is
+    // held back
     board.server.people.hold = true
     await board.deliver()
     await renderRoadmap(board)

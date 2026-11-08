@@ -224,8 +224,8 @@ const planOne = (board: Board, n = 1): RoadmapRequest => ({
 const planCard = (id = 'QN-1') => document.querySelector<HTMLElement>(`[data-plan-card="${id}"]`)
 
 /** plan, with one-1 unscheduled, 100 hours remaining and owned by Gina
-    Ghost, a standard user of 25-hour weeks whom a case keeps out of the
-    workspace's people part (`server.people.unheld`), so her weekly hours
+    Ghost, a standard user of 25-hour weeks, whom the store does not hold
+    as it holds nobody but the signed-in person, so her weekly hours
     arrive with her details (people.byIds). */
 const ownedByGina = (snap: Snapshot) => {
   plan(snap)
@@ -884,9 +884,8 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
   it.each(['load', 'hours'] as const)(
     "places an unscheduled task's end once its owner's load and weekly hours are both in, the %s last",
     async (last) => {
-      // Gina, whom the workspace's people part does not hold, owns one-1
+      // Gina, whom the store does not hold, owns one-1
       const board = await loadBoard(network, ownedByGina, { scope: 'plan' })
-      board.server.people.unheld = new Set(['gina'])
       board.server.people.hold = last === 'hours'
       board.server.holdLoads = last === 'load'
       await board.deliver()
@@ -918,11 +917,9 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
   it.each(['error', 'gone'] as const)(
     "spends an unscheduled task's first fit once its owner's read answers %s, so their hours arriving later leave the dropped dates",
     async (answer) => {
-      // Gina, whom the workspace's people part does not hold, owns one-1,
-      // and her read fails or leaves her out, so the panel says auto-fit
-      // is off
+      // Gina, whom the store does not hold, owns one-1, and her read
+      // fails or leaves her out, so the panel says auto-fit is off
       const board = await loadBoard(network, ownedByGina, { scope: 'plan' })
-      board.server.people.unheld = new Set(['gina'])
       board.server.people.force = answer
       await board.deliver()
       board.P.roadmapContext(true, false)
@@ -956,7 +953,6 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
       // a picker named Gina before the plan, so she shows by name while her
       // details load
       const board = await loadBoard(network, ownedByGina, { scope: 'plan' })
-      board.server.people.unheld = new Set(['gina'])
       board.server.people.hold = true
       await board.deliver()
       const org = board.snapshot.issues[0].org_id
@@ -1020,7 +1016,6 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
 
   it("spends the first fit once its owner's read fails while their load is on its way, so neither their details nor the load move the dropped dates", async () => {
     const board = await loadBoard(network, ownedByGina, { scope: 'plan' })
-    board.server.people.unheld = new Set(['gina'])
     board.server.people.force = 'error'
     board.server.holdLoads = true
     await board.deliver()
