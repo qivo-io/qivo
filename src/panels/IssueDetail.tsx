@@ -158,6 +158,8 @@ function EditorSlot({ fallback, children }: { fallback: ReactNode; children: Rea
 const RESTORE_TO_CHANGE = 'Restore this task to change it'
 /* Why a control is off for someone who can only read the project. */
 const READ_ONLY = READ_ONLY_PROJECT
+/** The key of the toast the crumb's open rule's lines share. */
+const CRUMB_TOAST = 'task-crumb-open'
 
 /** Whether the store's level agrees that the caller writes in project
     `id`, for a control a task's answer gives Edit: the store's level where
@@ -2317,14 +2319,17 @@ function IssueDetail({
   // a crumb's press shows its project on the Board, one the workspace
   // holds at once and one only the project cache holds through the lists'
   // open rule, which asks the server and shows it once the workspace holds
-  // it, else toasts why it cannot (components/projectNavRows.tsx)
+  // it (components/projectNavRows.tsx). The rule's lines show in one toast
+  // that each line replaces and that an open or a move takes away, as the
+  // sidebar's do
   const crumbOpen = useNavOpen(
     (id) => {
       if (it) onShowOnBoard?.(id, it.id, !mobile)
     },
-    (line) => {
-      if (line) window.showToast?.(line)
-    },
+    (line) =>
+      line === null
+        ? window.dismissToast?.(CRUMB_TOAST)
+        : window.showToast?.(line, 'info', { key: CRUMB_TOAST }),
   )
   // A task lives in its sub-project. The parent may be navigation-only for a
   // child grant, so all task edits must follow the task's own write level.

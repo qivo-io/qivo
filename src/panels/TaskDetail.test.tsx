@@ -2460,12 +2460,18 @@ describe('the task window on a task whose project the workspace does not hold', 
     expect(
       network.query.mock.calls.filter(([ref]) => getFunctionName(ref) === 'projectNav:resolve'),
     ).toHaveLength(1)
+    // its lines share one toast, so the next one replaces this one
+    expect(window.showToast).toHaveBeenCalledWith('Opening Lab work…', 'info', {
+      key: 'task-crumb-open',
+    })
     // the workspace, current, does not hold it, so the window says so and
     // moves nowhere
     await act(() =>
       vi.waitFor(() =>
         expect(window.showToast).toHaveBeenCalledWith(
           'Lab work has not loaded yet. Try again in a moment.',
+          'info',
+          { key: 'task-crumb-open' },
         ),
       ),
     )
