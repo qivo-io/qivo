@@ -43,7 +43,9 @@ Inactive agent can neither read nor clear its inbox.
 For projects, MCP offers `list_projects`, `get_project`, `create_project`,
 `update_project`, `set_project_access`, `set_milestone` and
 `delete_milestone`, and REST uses `/v1/projects`, `/v1/projects/{ref}/access`
-and `/v1/projects/{ref}/milestones`. Both create projects and sub-projects,
+and `/v1/projects/{ref}/milestones`. Both list projects a page at a time,
+each top-level project followed by its sub-projects, find them by a word of
+their name or by their key, create projects and sub-projects,
 change their settings, archive and restore them, add and change milestones
 and change sharing one user or team at a time, by the same rules as the app
 ([Creating projects and sub-projects](./who-sees-what-the-access-model.md#creating-projects-and-sub-projects)).

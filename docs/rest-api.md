@@ -415,6 +415,7 @@ into the range.
 | Linked tasks per list page | 1 to 200 linked tasks | limit must be a whole number of linked tasks from 1 to 200. |
 | Followers per list page | 1 to 200 followers | limit must be a whole number of followers from 1 to 200. |
 | Attachments per list page | 1 to 200 attachments | limit must be a whole number of attachments from 1 to 200. |
+| Projects per list page | 1 to 200 projects | limit must be a whole number of projects from 1 to 200. |
 | Tasks per inbox change | 100 tasks | tasks must name at most 100 tasks per call. Send the rest in another call. |
 | Webhook subscription lifetime | 60,000 to 604,800,000 milliseconds | ttlMs must be a whole number of milliseconds from 60,000 (1 minute) to 604,800,000 (7 days), or null for no expiry. |
 | Webhook subscriptions per organization | 100 subscriptions | an organization can have at most 100 unexpired webhook subscriptions, and one agent key, token or OAuth connection at most 20. Delete an unused subscription first. |
@@ -500,7 +501,10 @@ The response never contains a secret, a hash or a display identifier.
 ### Projects
 
 ```
-GET   /v1/projects                → readable ACTIVE projects, with access flags
+GET   /v1/projects?search=&limit=&cursor=
+                                  → one page of the ACTIVE projects you
+                                    can read, in tree order, with access
+                                    flags
 GET   /v1/projects?archived=true  → the archived ones instead (0106)
 GET   /v1/projects/{id|num|KEY}   → one project you read or manage
                                     (uuid, per-org number, or key) with
@@ -515,16 +519,90 @@ PATCH /v1/projects/{ref}          → change its settings or lead, archive or
                                     restore it (write)
 ```
 
-A row of the list:
+A page of the list, with a top-level project and one of its
+sub-projects:
 
 ```json
 {
-  "id": "…uuid…", "key": "ENC", "num": 2, "name": "Enclosure", "type": "project",
-  "parent_id": "…uuid…", "team_id": null, "description": "",
-  "archived": false, "archived_at": null,
-  "access": { "read": true, "write": false }
+  "next_cursor": "…",
+  "projects": [
+    { "id": "…uuid…", "key": "SENS", "num": 1, "name": "Luma Sensor", "type": "meta",
+      "parent_id": null, "team_id": null, "description": "",
+      "archived": false, "archived_at": null,
+      "access": { "read": true, "write": false } },
+    { "id": "…uuid…", "key": "ENC", "num": 2, "name": "Enclosure", "type": "project",
+      "parent_id": "…uuid…", "team_id": null, "description": "",
+      "archived": false, "archived_at": null,
+      "access": { "read": true, "write": true } }
+  ]
 }
 ```
+
+`GET /v1/projects` answers one page of projects at a time, `limit` of them
+at most, 50 by default and 1 to 200, as for [users](#users). The order is
+the tree's: each top-level project by key, followed by its sub-projects by
+key, with the ids breaking ties. Keys compare by their bytes, so digits
+come before letters and a key before the longer keys it begins (`A`, `A1`,
+`AB`). Pass `next_cursor` unchanged, URL-encoded, as `cursor` for the next
+page, with the same `archived` and `search`, and stop when it is `null`. A
+page can hold fewer than `limit` projects, or none, while `next_cursor` is
+set, because each page reads a bounded amount however many projects you
+reach. A short or empty page is never the end of the list. Only a `null`
+`next_cursor` is. `limit` may change from one page to the next.
+
+The active list holds every active top-level project you can see, also one
+you see only because you can read one of its sub-projects, and every active
+sub-project you can read. `archived=true` holds every archived top-level
+project you can see, each followed by its archived sub-projects you can
+read, and the archived sub-projects you can read of an active project, at
+that project's place without the project's own row; their `parent_id`
+names it. An organization admin's pages hold what their own leads, grants
+and team shares reach, as anyone's.
+
+`search` keeps the projects whose own name holds every whitespace-separated
+word of it, in any order, ignoring case and accents, or whose key is the
+whole search, ignoring case, so `search=sensor%20luma` and `search=sens`
+both find Luma Sensor. A match does not bring its sub-projects along, and a
+matching sub-project shows without its parent's row. The search runs over
+the whole list on the server before `limit`, so it can answer short or
+empty pages with a `next_cursor` before it reaches a match, and it reads no
+task and no file. An empty `search` lists everything, and a `search` holds
+at most 200 characters.
+
+A cursor works only for the organization, caller, side of the archive and
+search it came from, on REST and MCP alike, so a `next_cursor` from `GET
+/v1/projects` continues `list_projects` on MCP. Two searches that differ
+only in case or accents share their cursors. Pages are not a snapshot. A
+project created, archived, restored, shared or unshared while you page, or
+one whose key changes, lands where it then belongs, so a page may miss it
+or show it again until you start again from the first page.
+
+These requests are a `400`, checked in this order after any unknown query
+parameter:
+
+- `limit` that is not a whole number from 1 to 200: `limit must be a whole
+  number of projects from 1 to 200.`
+- `offset` other than `0`: `offset does not apply to projects; pass
+  next_cursor as cursor`
+- a `search` longer than 200 characters: `a search must be at most 200
+  characters. Search for fewer words.`
+- `archived` other than `true` or `false`: `archived must be true or false`
+- a page before Qivo has prepared the organization's projects for these
+  pages: `this list cannot be read until this organization's projects are
+  ready; try again in a few minutes`
+- a `cursor` that is not the `next_cursor` of an earlier page of the same
+  list: `cursor must be the next_cursor of an earlier page`
+- a caller far past the sizes Qivo is built for, whose check of which
+  projects they can see stops at the fixed limits of one request: `Qivo
+  could not finish checking which projects you can see in one request.
+  Contact support@qivo.io so we can help.` The whole page is refused, never
+  answered with a project missing.
+
+Until November 2026 `GET /v1/projects` answered every readable project at
+once, as an array in key order, and refused `search`, `limit`, `cursor`
+and `offset` as unknown query parameters. Code that read the array now
+finds an object; read its `projects` and follow `next_cursor` until it is
+`null`.
 
 `GET /v1/projects/{ref}` answers the same row with these fields added:
 
@@ -1422,8 +1500,9 @@ tasks under it than one request can read, such as thousands of subtasks, its
 row has `start_week` and `end_week` set to `null` and a `progress` of `0` of
 `0` with `partial: true`, so paging still moves past it.
 
-To find every archived task you can read, take two steps. First list
-projects with `GET /v1/projects` and `GET /v1/projects?archived=true`.
+To find every archived task you can read, take two steps. First page
+projects with `GET /v1/projects` and `GET /v1/projects?archived=true`,
+each until its `next_cursor` is `null`.
 Archived tasks can sit in active projects as well as archived ones, and both
 lists include sub-projects. Then page `archived=true` for each top-level
 project, the rows whose `parent_id` is `null`. Each covers all its
@@ -3012,8 +3091,17 @@ the new values in `expected`.
 # who this credential acts as, the calendar settings and whether it can write
 curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/me"
 
-# readable projects
-curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/projects"
+# readable projects, a page at a time in tree order; repeat with the
+# answer's next_cursor as cursor until it is null
+curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/projects?limit=200"
+curl -G -H "Authorization: Bearer $QIVO_KEY" --data-urlencode "cursor=<next_cursor>" \
+  "$BASE/projects?limit=200"
+
+# projects whose name holds "sensor"
+curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/projects?search=sensor"
+
+# the project whose key is ENC, and any whose name holds "enc"
+curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/projects?search=enc"
 
 # the organization's users and how many hours a week each of them has, a
 # page at a time; repeat with the answer's next_cursor as cursor until it is
