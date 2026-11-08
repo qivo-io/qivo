@@ -1389,10 +1389,11 @@ function App() {
       return
     }
     const inPlace = pathMatchesState(location.pathname, state)
-    // a person jump's chooser marks its entry with the person, and every
-    // other page's entry carries no mark, also one that replaces the
-    // chooser's in place, as a pick does (onPop)
-    const mark = jumpHolds ? personJump : null
+    // a person jump's chooser marks its entry, the front door, with the
+    // person, and every other entry the address sync writes carries no
+    // mark, also one that replaces the chooser's in place, as a pick does
+    // (onPop)
+    const mark = jumpHolds && isFrontDoor(p) ? personJump : null
     if (replaceNextHistory.current || inPlace)
       history.replaceState(withJumpMark(history.state, mark), '', p)
     else

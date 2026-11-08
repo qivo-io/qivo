@@ -306,6 +306,20 @@ describe("Team sync's person jumps", { timeout: 60_000 }, () => {
     expect(taskReads()).toHaveLength(reads)
   })
 
+  it("marks only the chooser's own entry with the person, not the Inbox that takes that entry in place", async () => {
+    await app(world(), '/app/testbed/board/p/11')
+    await until(() => shown() === 'kanban', 'the Board')
+    await jump(`/app/testbed/sync/all/people/${ME}`, 'board')
+    await until(() => chooserState() === 'choose', 'the chooser')
+    expect(history.state?.qivoJump).toMatchObject({ id: ME, first: 'Planner' })
+    const entries = history.length
+    await click(q('[data-view-switch] button[aria-label^="Inbox"]'))
+    await until(() => q('[data-inbox-page-state]'), 'the Inbox')
+    expect(location.pathname).toBe('/app/~/inbox')
+    expect(history.length).toBe(entries)
+    expect(history.state?.qivoJump).toBeUndefined()
+  })
+
   it('on a phone, Back before a pick then Forward shows the chooser again with its task list line, not the Inbox the front door opens there', async () => {
     phone = true
     await app(world(), '/app/testbed/board/p/11')
