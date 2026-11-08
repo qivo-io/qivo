@@ -6894,7 +6894,9 @@ export function notificationCall(text) {
 
 /** A desktop alert from the deployment's feed. Nora's context is granted
  *  notifications for the app's origin, and the app page leaves the app
- *  meanwhile, so no other tab of her session claims the alerts. A new page,
+ *  meanwhile, so no other tab of her session claims the alerts, and comes
+ *  back to it at the end, as the steps and the in-app cleanup after this
+ *  one expect; a failed return fails a step that passed. A new page,
  *  whose Convex sync socket the step can close (page.routeWebSocket, set
  *  before it loads, since it reaches only new sockets), loads Alpha's
  *  Board; once it sent its fresh start's beat, its baseline claim with no
@@ -6922,6 +6924,8 @@ async function inboxFeedCheck() {
     await context.grantPermissions(['notifications'], { origin })
     await app.goto('about:blank')
     const page = await context.newPage()
+    let note = null
+    let back = null
     const sent = []
     // the page's newest sync socket, and whether a new one is refused
     let socket = null
@@ -7038,12 +7042,29 @@ async function inboxFeedCheck() {
       expect(claimed < 0 || asked < claimed, 'the page claimed before it asked claimSummary')
       // Nora's Inbox as the step found it
       await removeInboxRow(page, t0)
-      return `one alert for the mention from ${INBOX_FEED_QUERY}, tagged with its message, and one summary after the dropped socket, asked before any claim`
+      note = `one alert for the mention from ${INBOX_FEED_QUERY}, tagged with its message, and one summary after the dropped socket, asked before any claim`
     } finally {
       await context.clearPermissions()
       await page.close()
+      back = await showApp().then(
+        () => null,
+        (error) => error,
+      )
+      if (back && note === null)
+        say('NOTE', INBOX_FEED_STEP, `the app page did not come back: ${describe(back)}`)
     }
+    // reached only once the step passed, which a failed return fails
+    if (back) throw back
+    return note
   })
+}
+
+/** Brings the run's app page back to the app and waits for its
+ *  navigation, for a step that sent it elsewhere, since later steps and
+ *  the in-app cleanup (deleteProjectInApp) run on it. */
+async function showApp() {
+  await app.goto(`${cfg.appOrigin}/app/~/projects`, { waitUntil: 'domcontentloaded' })
+  await app.waitForSelector('[data-all-nav]', { timeout: 60_000 })
 }
 
 /** Removes task `task`'s item from the Inbox page `page` shows, with its
