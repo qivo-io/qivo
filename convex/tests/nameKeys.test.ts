@@ -937,7 +937,9 @@ describe('readiness', () => {
       ...snap.access,
       ...snap.teamAccess,
     ]
-    expect(rows.length).toBeGreaterThan(10)
+    // the admin's own profile, membership and team, the projects and the
+    // admin's own grants
+    expect(rows.length).toBeGreaterThanOrEqual(6)
     for (const row of rows) expect(row).not.toHaveProperty('name_key')
     const page = makeFunctionReference<
       'query',

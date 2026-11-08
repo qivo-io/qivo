@@ -41,13 +41,7 @@
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
-import {
-  canManageOwnProjectAccess,
-  canSeeProject,
-  hasProjectLevel,
-  keepsInbox,
-  projectLevelsForProfiles,
-} from './lib/access'
+import { canManageOwnProjectAccess, canSeeProject, hasProjectLevel, keepsInbox } from './lib/access'
 import {
   ARCHIVED_PAGE_ROWS,
   ARCHIVED_SCOPE,
@@ -70,6 +64,7 @@ import {
 } from './lib/functions'
 import { limitedText } from './lib/limitRules'
 import { LIMITS } from './lib/limits'
+import { nameKey } from './lib/nameKey'
 import { assertArchiveReasonRoom, postArchiveReason } from './model/comments'
 import { cleanReason, moveTasksToTrash } from './model/deletedItems'
 import { descriptionOf } from './model/descriptions'
@@ -86,6 +81,7 @@ import {
 } from './model/issues'
 import { addLinkCore, removeLinkCore, storedLink, vTaskLinkKind } from './model/links'
 import { followTask, subscribeToIssue, unfollowTask } from './model/messages'
+import { type FollowerRow, followerRow, MANAGE_FOLLOWERS_RULE } from './model/pickers'
 
 type MeCtx = QueryCtx & { me: Doc<'profiles'> }
 
@@ -645,43 +641,45 @@ async function subscriptionTarget(ctx: MeCtx, issueId: string) {
   return { issue, project }
 }
 
-/* Organization roster ids only; profile display data already lives in the
- * snapshot. Existing subscriptions remain visible after access/deactivation
- * so a manager can remove them. Add candidates require CURRENT access, an
- * active seat and an inbox (lib/access.ts keepsInbox, which leaves out
- * Viewer agents); a subscription itself never grants project access. Their
- * levels on the task's sub-project are read for everyone at once
- * (projectLevelsForProfiles), in a few index ranges, because one check per
- * person passed Convex's 4,096 in an organization of some thousands. */
+/** The followers of task `issue_id` for the follower popover
+ * (src/components/IssueSubscribers.tsx), and whether the caller may add
+ * and remove other people's follows (`canManage`, a project lead or an
+ * organization admin with the project in reach, the write's rule). Anyone
+ * who sees the task reads them, as a follow is visible to every reader of
+ * the task. Each follower is a row (model/pickers.ts FollowerRow, the name,
+ * initials, color and whether their seat is on), in name order, so the
+ * popover names them without loading anyone's profile. Existing follows
+ * stay listed after a loss of access or a deactivation, so a manager can
+ * remove them; a follow whose profile is gone or of another organization
+ * is left out. It reads at most LIMITS.followers.max of the task's follows
+ * and one profile each; a task followed past the cap before the cap
+ * existed answers the first of them with `more` true, which the popover
+ * says. The people a manager may add come from pickers.taskFollowers, a
+ * batch at a time, never from this answer. */
 export const subscribers = orgQuery({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => {
     const { issue, project } = await subscriptionTarget(ctx, issue_id)
     const canManage = await canManageOwnProjectAccess(ctx, ctx.me, project)
+    const most = LIMITS.followers.max
     const rows = await ctx.db
       .query('issue_subscriptions')
       .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issue.id))
-      .collect()
-    const subscribed = new Set(rows.map((row) => row.profile_id))
-    const profiles = await ctx.db
-      .query('profiles')
-      .withIndex('by_org', (q) => q.eq('org_id', issue.org_id))
-      .collect()
-    const subscribers: string[] = []
-    const candidates: string[] = []
-    const levelOf = canManage ? await projectLevelsForProfiles(ctx, project) : undefined
-    for (const profile of profiles) {
-      if (subscribed.has(profile.id)) subscribers.push(profile.id)
-      else if (
-        levelOf !== undefined &&
-        profile.active &&
-        keepsInbox(profile) &&
-        levelOf(profile) !== null
-      ) {
-        candidates.push(profile.id)
-      }
+      .take(most + 1)
+    const subscribers: FollowerRow[] = []
+    const keys = new Map<string, string>()
+    for (const row of rows.slice(0, most)) {
+      const profile = await byId(ctx, 'profiles', row.profile_id)
+      if (profile === null || profile.org_id !== issue.org_id) continue
+      subscribers.push(followerRow(profile))
+      keys.set(profile.id, nameKey(profile.name))
     }
-    return { canManage, subscribers, candidates }
+    subscribers.sort((a, b) => {
+      const ka = keys.get(a.id) ?? ''
+      const kb = keys.get(b.id) ?? ''
+      return ka < kb ? -1 : ka > kb ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+    })
+    return { canManage, subscribers, more: rows.length > most }
   },
 })
 
@@ -694,7 +692,7 @@ export const setSubscriber = orgMutation({
   handler: async (ctx, { issue_id, profile_id, subscribed }) => {
     const { issue, project } = await subscriptionTarget(ctx, issue_id)
     if (profile_id !== ctx.me.id && !(await canManageOwnProjectAccess(ctx, ctx.me, project))) {
-      throw forbidden('only project leads and organization admins can manage other subscribers')
+      throw forbidden(MANAGE_FOLLOWERS_RULE)
     }
     const profile = await byId(ctx, 'profiles', profile_id)
     if (profile === null || profile.org_id !== issue.org_id) {

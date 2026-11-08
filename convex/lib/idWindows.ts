@@ -132,9 +132,7 @@ export const inIdWindow = (id: string, w: IdWindow) => id >= w.from && (w.to ===
 
 /** About how many rows the app's first windows of each kind hold, from the
  * organization's counts (startWindows; lib/workspaceParts.ts PAGE has the
- * split points). The people of an organization have no count, so they
- * start in one window, which a large organization overflows at once, and
- * its answer says how many pieces to cut it into (cutPieces). */
+ * split points). */
 export const WINDOW_ROWS = { tasks: 200, projects: 250 }
 
 /** An organization as the root part sends it (lib/workspaceParts.ts

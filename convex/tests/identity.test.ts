@@ -558,7 +558,7 @@ describe('createOrganization guards (0118)', () => {
  * state is 'now' (lib/workspaceParts.ts readRoot), so it must agree with
  * createOrganization for every set of seats a login can hold. A login with
  * no seat it can open gets the seatless answer, or null when nothing holds
- * it or when an older app asks. */
+ * it. */
 describe("the root part's create state", () => {
   type Seat = { org: 'home' | 'other'; role: 'user' | 'guest'; active: boolean }
   const cases: [string, Seat[], unknown, boolean][] = [
@@ -594,14 +594,9 @@ describe("the root part's create state", () => {
         org_role: seat.role,
         active: seat.active,
       })
-    const answer = await login.as.query(api.workspace.root, { seatless: 'all' })
+    const answer = await login.as.query(api.workspace.root, {})
     if (typeof root === 'string') expect(answer).toMatchObject({ create: root })
     else expect(answer).toEqual(root)
-    // an app from before the deactivated answer asks without it, and gets
-    // null rather than an answer it would read as a deletion
-    const before = await login.as.query(api.workspace.root, {})
-    if (typeof root === 'string') expect(before).toMatchObject({ create: root })
-    else expect(before).toBeNull()
     const created = login.as.mutation(api.identity.createOrganization, { name: 'Nimbus' })
     if (creates) expect(typeof (await created)).toBe('string')
     else await expectRefusal(created, 'rule', /^you already belong to an organization$/)

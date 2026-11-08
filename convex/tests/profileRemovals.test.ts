@@ -38,6 +38,7 @@ import {
   withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
+import { keyOrg } from './nameKeys.setup'
 import { countOrg } from './overviewCounts.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
@@ -697,7 +698,13 @@ describe('access ends in the removal transaction', () => {
         resource: mcpResource(),
       }),
       connections: (await session.query(api.connectedApps.list, {})).rows.length,
-      roster: ((await workspaceOf(as(t, f.admin)))?.profiles ?? []).map((p) => p.id),
+      // the people the app can still name, as its profile cache reads them
+      roster: (
+        await as(t, f.admin).query(api.people.byIds, {
+          org_id: f.org.id,
+          ids: [user.id, f.agent.id],
+        })
+      ).rows.map((p) => p.id),
     })
 
     // control case, everything works while both profiles exist
@@ -896,6 +903,11 @@ describe('access rows past the first pass', () => {
     })
     const shown = async () => {
       const rows = await workspaceOf(as(t, f.admin))
+      await keyOrg(t, f.org.id)
+      const members = await as(t, f.admin).query(api.teams.members, {
+        org_id: f.org.id,
+        team_id: f.team.id,
+      })
       const projectUsers = await t.query(internal.machine.rest.listProjectUsers, {
         callerId: f.admin.id,
         access: 'read',
@@ -907,7 +919,9 @@ describe('access rows past the first pass', () => {
         ref: f.sub.id,
       })
       return [
-        ...(rows?.teamMembers ?? []).map((m) => m.profile_id),
+        ...(members.state === 'ready' ? members.rows : [{ id: 'members not ready' }]).map(
+          (m) => m.id,
+        ),
         ...(rows?.access ?? []).map((g) => g.profile_id),
         ...projectUsers.map((u) => u.id),
         ...detail.grants.users.map((u) => u.id),

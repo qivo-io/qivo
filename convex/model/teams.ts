@@ -397,6 +397,7 @@ export const TEAM_LIST_REFUSAL =
 const SETTINGS_TEAMS_LIST = 'teams.settings'
 const SETTINGS_MEMBERS_LIST = 'teams.members'
 const ADDABLE_LIST = 'teams.addable'
+const PICKER_LIST = 'teams.picker'
 
 /* The organization roles Add member offers: a guest is never a member
  * (addTeamMemberCore), so the guests' role index is never read. */
@@ -475,6 +476,52 @@ export async function settingsTeamsOf(
     ceiling: await namedCeiling(ctx),
   })
   return { state: 'ready', teams, ...batch }
+}
+
+/** A team as Team sync's scope menu lists it: its id and name. */
+export type TeamChoiceRow = { id: string; name: string }
+
+/** What teams.picker answers: `not_ready` without name keys, or one batch
+ * of teams in name order. */
+export type TeamPickerAnswer =
+  | { state: 'not_ready' }
+  | ({ state: 'ready' } & ListBatch<TeamChoiceRow>)
+
+/**
+ * teams.picker for `me`: one batch of LIST_BATCH teams of their
+ * organization for Team sync's scope menu (src/views/teamSync/
+ * SyncScopeMenu.tsx), in name order (teamIndex, the name key in Convex's
+ * byte order, then the id), each as its id and name. Any active seat of
+ * the organization reads it, guests and Viewers included, as every seat
+ * received every team's id and name through the workspace's catalog part
+ * before it was removed, and reads any one team through teams.get.
+ *
+ * The search keeps the teams whose name holds every word of it in any
+ * order, ignoring case and accents, matched over every team before the
+ * batch is cut. A search past LIMITS.search is refused with that limit's
+ * sentence, and a cursor that is not one of this list's for the same
+ * organization, caller and search with NOT_TEAM_CURSOR. The batch reads
+ * within NAMED_READ (lib/namedPages.ts listBatch), so it can stop short
+ * with `stopped`, and it answers `not_ready` until the organization's name
+ * keys are all written. It reads teams.by_org_name and nothing else: no
+ * membership, count, share or profile.
+ */
+export async function teamPickerOf(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  a: ListArgs,
+): Promise<TeamPickerAnswer> {
+  const ask = await teamListAsk(PICKER_LIST, [me.org_id, me.id], a)
+  if (!(await nameKeysReady(ctx, me.org_id))) return { state: 'not_ready' }
+  const matches = allWordsMatcher(nameKey(ask.search))
+  const batch = await listBatch(ctx, ask, {
+    stream: indexAfter(teamIndex(ctx, me.org_id), ask.after),
+    keep: async (team: Doc<'teams'>): Promise<TeamChoiceRow | null> =>
+      matches(nameKey(team.name)) ? { id: team.id, name: team.name } : null,
+    limit: LIST_BATCH,
+    ceiling: await namedCeiling(ctx),
+  })
+  return { state: 'ready', ...batch }
 }
 
 /** What teams.get answers: `unavailable` for a team the caller's

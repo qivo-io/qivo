@@ -33,6 +33,14 @@
  * level, task, title or project. None reads a task's title, description,
  * comments or files, and none writes.
  *
+ * - taskFollowers: the people the follower popover's Add list offers for a
+ *   task, 25 at a time in name order, with a search over names and email
+ *   (src/components/IssueSubscribers.tsx reads it once a batch while the
+ *   list is open). Its gate is issues.subscribers' and its rule
+ *   issues.setSubscriber's, so a caller who may not manage the task's
+ *   followers is refused with the write's sentence. Its rows are follower
+ *   rows (model/pickers.ts FollowerRow), with the portrait's initials and
+ *   color and no email.
  * - mentions: the people the editor's @ mention popup offers, 8 at a time
  *   in name order, with the popup's match over names, initials and email
  *   (src/components/mentionSuggestion.ts reads it once a batch while the
@@ -41,13 +49,16 @@
  *   profile of the organization to any active seat there, guests and
  *   viewers included, as the popup always has; the mention fan-out still
  *   decides who is notified. Its rows hold the email, initials and color,
- *   since the popup shows and matches them, and the workspace's people
- *   part sends them to every seat today (model/pickers.ts mentionsOf). */
+ *   since the popup shows and matches them, the fields the workspace's
+ *   people part sent every seat before it was removed (model/pickers.ts
+ *   mentionsOf). */
 
 import { v } from 'convex/values'
 import { orgQuery } from './lib/functions'
 import {
   canOwnOf,
+  type FollowerBatch,
+  followerChoicesOf,
   type MentionBatch,
   mentionsOf,
   type OwnerChecks,
@@ -105,6 +116,19 @@ export const canOwn = orgQuery({
     ids: v.array(v.string()),
   },
   handler: (ctx, a): Promise<OwnerChecks> => canOwnOf(ctx, ctx.me, a),
+})
+
+/** One batch, in name order, of the people the follower popover's Add
+ * list offers for task `issue_id` (model/pickers.ts followerChoicesOf):
+ * the active people and Standard user agents who see the task's project
+ * and do not follow it yet, the caller left out, whose name or email holds
+ * every word of the search. Answers `unavailable` for a task the caller
+ * cannot see, `refused` for a caller who may not manage its followers,
+ * `not_ready`, `over_budget`, or `ready` with rows of id, name, initials,
+ * color and active, `next` and `stopped` (lib/namedPages.ts ListBatch). */
+export const taskFollowers = orgQuery({
+  args: { issue_id: v.string(), ...vListArgs },
+  handler: (ctx, a): Promise<FollowerBatch> => followerChoicesOf(ctx, ctx.me, a),
 })
 
 /** One batch, in name order, of the people of the organization the

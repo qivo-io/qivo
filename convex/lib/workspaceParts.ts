@@ -1,9 +1,13 @@
 /* The readers behind the workspace parts (workspace.ts), which together
- * send what the app shows of every organization the caller holds a seat in.
+ * send what the app shows of every organization the caller holds a seat in:
+ * the root part with the caller's seats, organizations and own rows, and
+ * per organization its projects, tasks and inbox. No part sends another
+ * person's profile, membership or Team sync stamp, a team the caller is not
+ * in, or a label; the app reads those by id or a batch at a time.
  *
  * The long sections come in windows (lib/idWindows.ts): a window [from,
- * to) of the organization's people holds those whose id falls in it, and
- * one of its tasks or projects those whose window key does. The server
+ * to) of the organization's tasks or projects holds those whose window key
+ * falls in it. The server
  * picks a task's or project's window key at random when it inserts the row
  * (lib/db.ts newWindowKey), so no writer can crowd rows into one window,
  * and the ids writers choose say nothing about where a row lands. The app
@@ -19,8 +23,8 @@
  * One whose reads would pass the hard budget stops early and answers
  * `overflow` instead, before Convex would refuse the read, so the app cuts
  * it before it shows it: into the pieces the answer names when its own rows
- * did not fit in one read, so a large window, such as the one window the
- * people of an organization start in, reaches its size in one round. A window that cannot be cut further and still does
+ * did not fit in one read, so a large window reaches its size in one
+ * round. A window that cannot be cut further and still does
  * not fit answers `refused` with a sentence the app shows. Bounds are fixed
  * points of the id space, so no bound says anything about the rows.
  *
@@ -32,7 +36,6 @@ import type { IndexRange } from 'convex/server'
 import type { Doc, TableNames } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { descriptionsOf } from '../model/descriptions'
-import { shownLabelColor } from '../model/labels'
 import {
   countersRow,
   type LiveCounts,
@@ -41,8 +44,15 @@ import {
   type OrgCounters,
 } from '../model/orgs'
 import { shownAvatarColor } from '../model/people'
-import { stampOfRow } from '../model/syncStamps'
-import { type Access, accessOf, isAccessUnchecked, isOrgStaff, isRoomSpent } from './access'
+import {
+  type Access,
+  accessOf,
+  accessUnchecked,
+  isAccessUnchecked,
+  isOrgStaff,
+  isRoomSpent,
+  OWN_READS,
+} from './access'
 import { roomOf } from './archivedTasks'
 import { chunkLists } from './arrayLimit'
 import { orgCreateFor, seatlessState } from './billingAccess'
@@ -107,10 +117,6 @@ const orgRowFor = (
   return isAdmin && billing !== undefined ? { ...row, billing } : row
 }
 
-/* A person as the app receives it, without the name key, with their Team
- * sync stamp (model/syncStamps.ts) as sync_at and sync_since. */
-type ProfileRow = KeyFree<AppRow<'profiles'>> & { sync_at?: string; sync_since?: string }
-
 /** A task as the app receives it. The parent id goes out only when the
  * reader is shown the parent (lib/workingSet.ts parentLink), and the text
  * comes from the task's description row (model/descriptions.ts
@@ -138,7 +144,7 @@ export function taskFields(task: Doc<'issues'>) {
 }
 
 /** The windowed kinds. */
-export type Kind = 'tasks' | 'people' | 'projects'
+export type Kind = 'tasks' | 'projects'
 
 /* A read budget, as Convex counts a transaction's reads. */
 type Budget = { bytes: number; documents: number; ranges: number }
@@ -150,7 +156,6 @@ type Budget = { bytes: number; documents: number; ranges: number }
  * window. Tests lower them. */
 export const PAGE = {
   tasks: { split: 300, most: 1500 },
-  people: { split: 1000, most: 1200 },
   projects: { split: 600, most: 1200 },
   soft: { bytes: 4 * 1024 * 1024, documents: 8000, ranges: 2000 } satisfies Budget,
   hard: { bytes: 8 * 1024 * 1024, documents: 16_000, ranges: 3200 } satisfies Budget,
@@ -316,31 +321,75 @@ async function mapInBatches<R, T>(
 
 // --- root -------------------------------------------------------------------
 
-/** The caller's seats and organizations, with when the login may create an
- * organization (lib/billingAccess.ts OrgCreate). With no seat it can open,
- * null when it may create one and no deletion holds it, else the seatless
- * answer (lib/billingAccess.ts seatlessState): whether a running
- * organization deletion holds its seats, and the create state. That answer
- * names no organization and no rows, only the reason and when the login may
- * create an organization. Without `deactivated`, a login whose seat an
- * organization deactivated, and that no deletion holds, gets null instead,
- * as an app from before that answer expects (workspace.ts root). */
+/* The caller's own rows the root part sends: each profile without its name
+ * key and with its color as clients paint it (model/people.ts
+ * shownAvatarColor), each membership and each team without its name key. */
+type OwnProfile = KeyFree<AppRow<'profiles'>>
+type OwnMembership = KeyFree<AppRow<'team_members'>>
+type OwnTeam = KeyFree<AppRow<'teams'>>
+
+/** The memberships of the caller's profile `me` and the teams they name of
+ * `me`'s organization, each once: one range for the memberships, read with
+ * take(OWN_READS.teams + 1), and one lookup a membership. A membership whose
+ * team is gone or of another organization names no team. Past
+ * OWN_READS.teams memberships it throws accessUnchecked's refusal rather
+ * than send part of them, as the plannable hours write refuses past the
+ * same bound (model/orgs.ts). That refusal is the root part's own, and it
+ * is wider than the access layer's: on most paths the access layer skips
+ * the team shares past the bound or asks team by team (lib/access.ts), so
+ * such a person passes most checks, while this refusal fails the workspace
+ * of every organization of the login. */
+async function ownTeamsOf(ctx: QueryCtx, me: Doc<'profiles'>) {
+  const most = OWN_READS.teams
+  const memberships = await ctx.db
+    .query('team_members')
+    .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
+    .take(most + 1)
+  if (memberships.length > most) throw accessUnchecked()
+  const teams: Doc<'teams'>[] = []
+  for (const m of memberships) {
+    const team = await byId(ctx, 'teams', m.team_id)
+    if (team !== null && team.org_id === me.org_id && !teams.some((t) => t.id === team.id))
+      teams.push(team)
+  }
+  return { memberships, teams }
+}
+
+/** The caller's seats and organizations, their own rows and when the login
+ * may create an organization (lib/billingAccess.ts OrgCreate). With no seat
+ * it can open, null when it may create one and no deletion holds it, else
+ * the seatless answer (lib/billingAccess.ts seatlessState): whether a
+ * running organization deletion holds its seats, and the create state. That
+ * answer names no organization and no rows, only the reason and when the
+ * login may create an organization.
+ *
+ * With a seat it answers, in seat order, the caller's active profiles
+ * (`profiles`), every team membership of each (`teamMembers`) and the teams
+ * those name (`teams`, ownTeamsOf), and nothing of another person: no other
+ * profile, membership, Team sync stamp, team or label. So it reruns on the
+ * caller's seat and membership changes and on a change to one of their
+ * teams, beside the organization settings and counters. Past
+ * OWN_READS.teams memberships of one seat it throws accessUnchecked's
+ * refusal, which the app shows as the workspace's failure (ownTeamsOf). */
 export async function readRoot(
   ctx: QueryCtx & { authUserId: string; myProfiles: Map<string, Doc<'profiles'>> },
-  deactivated: boolean,
 ) {
   /* Signed in but seatless is the app's "create your organization" signal,
    * unless an organization the login cannot open holds a seat, as one being
    * deleted or one that deactivated it. A failed read throws instead, so it
    * never looks like no seat. */
-  if (ctx.myProfiles.size === 0) {
-    const seatless = await seatlessState(ctx, ctx.authUserId)
-    return seatless?.deleting || deactivated ? seatless : null
-  }
+  if (ctx.myProfiles.size === 0) return await seatlessState(ctx, ctx.authUserId)
   const orgs: OrgRow[] = []
+  const profiles: OwnProfile[] = []
+  const teamMembers: OwnMembership[] = []
+  const teams: OwnTeam[] = []
   for (const me of ctx.myProfiles.values()) {
     const org = await byId(ctx, 'organizations', me.org_id)
     if (org === null) continue // a seat in a vanished org contributes nothing
+    profiles.push({ ...keyFree(rowOf(me)), color: shownAvatarColor(me.color) })
+    const own = await ownTeamsOf(ctx, me)
+    for (const m of own.memberships) teamMembers.push(keyFree(rowOf(m)))
+    for (const team of own.teams) teams.push(keyFree(rowOf(team)))
     const counters = await countersRow(ctx, org.id)
     /* Staff see hidden work counted anonymously (capacity views). Guests
      * and Viewers may not learn how much there is, so they get the counts
@@ -358,86 +407,10 @@ export async function readRoot(
     auth_user_id: ctx.authUserId,
     myProfileIds: [...ctx.myProfiles.values()].map((p) => p.id),
     orgs,
+    profiles,
+    teamMembers,
+    teams,
     create: await orgCreateFor(ctx, ctx.authUserId),
-  }
-}
-
-// --- catalog ------------------------------------------------------------------
-
-/** The organization's teams and labels, which every member sees. Clients
- * paint a label color as a CSS background, so an older non-hex value goes
- * out as gray. */
-export async function readCatalog(ctx: QueryCtx, me: Doc<'profiles'>) {
-  const [teams, labels] = await Promise.all([
-    ctx.db
-      .query('teams')
-      .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
-      .collect(),
-    ctx.db
-      .query('labels')
-      .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
-      .collect(),
-  ])
-  return {
-    state: 'ok' as const,
-    ...chunkLists({
-      teams: teams.map((team): KeyFree<AppRow<'teams'>> => keyFree(rowOf(team))),
-      labels: labels.map(
-        (l): AppRow<'labels'> => ({ ...rowOf(l), color: shownLabelColor(l.color) }),
-      ),
-    }),
-  }
-}
-
-// --- people -------------------------------------------------------------------
-
-/** The people of window `w`, inactive, agent and unclaimed ones included,
- * each with their Team sync stamp and team memberships. Clients paint the
- * avatar color as a CSS background, so an older non-hex value goes out as
- * gray. One range for the people and one for their stamps, and one per
- * person for their memberships. */
-export async function readPeople(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) {
-  const read = await pageOf(
-    ctx.db.query('profiles').withIndex('by_org_id', (q) => ids(q.eq('org_id', me.org_id), 'id', w)),
-    PAGE.people.most,
-  )
-  if (!read.complete) return overflow(w, read.rows.at(-1)?.id)
-  const people = read.rows
-  const stamps = new Map(
-    (
-      await ctx.db
-        .query('sync_stamps')
-        .withIndex('by_org_profile', (q) => ids(q.eq('org_id', me.org_id), 'profile_id', w))
-        .collect()
-    ).map((row) => [row.profile_id, stampOfRow(row)]),
-  )
-  const memberships: Doc<'team_members'>[][] = people.map(() => [])
-  const done = await inBatches(ctx, people, async (p, at) => {
-    memberships[at] = await ctx.db
-      .query('team_members')
-      .withIndex('by_profile', (q) => q.eq('profile_id', p.id))
-      .collect()
-  })
-  if (!done) return overflow(w)
-  const profiles = people.map((p): ProfileRow => {
-    const stamp = stamps.get(p.id)
-    return {
-      ...keyFree(rowOf(p)),
-      color: shownAvatarColor(p.color),
-      ...(stamp === undefined
-        ? {}
-        : stamp.since === undefined
-          ? { sync_at: stamp.at }
-          : { sync_at: stamp.at, sync_since: stamp.since }),
-    }
-  })
-  return {
-    state: 'ok' as const,
-    ...chunkLists({
-      profiles,
-      teamMembers: memberships.flat().map((m) => keyFree(rowOf(m))),
-    }),
-    ...(await softSplit(ctx, w, read.split || people.length > PAGE.people.split)),
   }
 }
 

@@ -4,8 +4,9 @@
  * Team sync's budget and ceiling. The app's Team sync page reads its meeting
  * from it (src/views/teamSync/useSyncMeeting.ts). `stamp` records that a change was made on a person
  * through the sync page (the person's sync_stamps row, model/syncStamps.ts,
- * read through the sitting rule in lib/teamSync.ts; the app's people part
- * sends it on its profile rows as sync_at and sync_since). `lastComments`
+ * read through the sitting rule in lib/teamSync.ts; the agenda answers it on
+ * each walker, and the app stamps the page owner from that row).
+ * `lastComments`
  * is the one per-task fact the workspace lacks: when each open task was
  * last commented on, for the page's "untouched" and "changed" marks. The
  * page subscribes to it only while it is open, and only for the people
