@@ -415,6 +415,11 @@ into the range.
 | Linked tasks per list page | 1 to 200 linked tasks | limit must be a whole number of linked tasks from 1 to 200. |
 | Followers per list page | 1 to 200 followers | limit must be a whole number of followers from 1 to 200. |
 | Attachments per list page | 1 to 200 attachments | limit must be a whole number of attachments from 1 to 200. |
+| Projects per list page | 1 to 200 projects | limit must be a whole number of projects from 1 to 200. |
+| Project users per list page | 1 to 200 users | limit must be a whole number of users from 1 to 200. |
+| Milestones per list page | 1 to 200 milestones | limit must be a whole number of milestones from 1 to 200. |
+| User grants per list page | 1 to 200 user grants | limit must be a whole number of user grants from 1 to 200. |
+| Team grants per list page | 1 to 200 team grants | limit must be a whole number of team grants from 1 to 200. |
 | Tasks per inbox change | 100 tasks | tasks must name at most 100 tasks per call. Send the rest in another call. |
 | Webhook subscription lifetime | 60,000 to 604,800,000 milliseconds | ttlMs must be a whole number of milliseconds from 60,000 (1 minute) to 604,800,000 (7 days), or null for no expiry. |
 | Webhook subscriptions per organization | 100 subscriptions | an organization can have at most 100 unexpired webhook subscriptions, and one agent key, token or OAuth connection at most 20. Delete an unused subscription first. |
@@ -500,31 +505,116 @@ The response never contains a secret, a hash or a display identifier.
 ### Projects
 
 ```
-GET   /v1/projects                → readable ACTIVE projects, with access flags
+GET   /v1/projects?search=&limit=&cursor=
+                                  → one page of the ACTIVE projects you
+                                    can read, in tree order, with access
+                                    flags
 GET   /v1/projects?archived=true  → the archived ones instead (0106)
 GET   /v1/projects/{id|num|KEY}   → one project you read or manage
                                     (uuid, per-org number, or key) with
-                                    its lead, settings, completion,
-                                    milestones and grants; an explicit
-                                    ref resolves an archived project too
-GET   /v1/projects/{ref}/users    → users with access to that project, for
-                                    reporter, assignee and reviewer
-                                    selection
+                                    its lead, settings, completion and
+                                    the first 50 of its milestones and
+                                    grants; an explicit ref resolves an
+                                    archived project too
+GET   /v1/projects/{ref}/users?limit=&cursor=
+                                  → one page of the users with access to
+                                    that project, for reporter, assignee
+                                    and reviewer selection
+GET   /v1/projects/{ref}/milestones?limit=&cursor=
+                                  → one page of its milestones
+GET   /v1/projects/{ref}/access/users?limit=&cursor=
+                                  → one page of its user grants
+GET   /v1/projects/{ref}/access/teams?limit=&cursor=
+                                  → one page of its team grants
 POST  /v1/projects                → create a project or sub-project (write)
 PATCH /v1/projects/{ref}          → change its settings or lead, archive or
                                     restore it (write)
 ```
 
-A row of the list:
+A page of the list, with a top-level project and one of its
+sub-projects:
 
 ```json
 {
-  "id": "…uuid…", "key": "ENC", "num": 2, "name": "Enclosure", "type": "project",
-  "parent_id": "…uuid…", "team_id": null, "description": "",
-  "archived": false, "archived_at": null,
-  "access": { "read": true, "write": false }
+  "next_cursor": "…",
+  "projects": [
+    { "id": "…uuid…", "key": "SENS", "num": 1, "name": "Luma Sensor", "type": "meta",
+      "parent_id": null, "team_id": null, "description": "",
+      "archived": false, "archived_at": null,
+      "access": { "read": true, "write": false } },
+    { "id": "…uuid…", "key": "ENC", "num": 2, "name": "Enclosure", "type": "project",
+      "parent_id": "…uuid…", "team_id": null, "description": "",
+      "archived": false, "archived_at": null,
+      "access": { "read": true, "write": true } }
+  ]
 }
 ```
+
+`GET /v1/projects` answers one page of projects at a time, `limit` of them
+at most, 50 by default and 1 to 200, as for [users](#users). The order is
+the tree's: each top-level project by key, followed by its sub-projects by
+key, with the ids breaking ties. Keys compare by their bytes, so digits
+come before letters and a key before the longer keys it begins (`A`, `A1`,
+`AB`). Pass `next_cursor` unchanged, URL-encoded, as `cursor` for the next
+page, with the same `archived` and `search`, and stop when it is `null`. A
+page can hold fewer than `limit` projects, or none, while `next_cursor` is
+set, because each page reads a bounded amount however many projects you
+reach. A short or empty page is never the end of the list. Only a `null`
+`next_cursor` is. `limit` may change from one page to the next.
+
+The active list holds every active top-level project you can see, also one
+you see only because you can read one of its sub-projects, and every active
+sub-project you can read. `archived=true` holds every archived top-level
+project you can see, each followed by its archived sub-projects you can
+read, and the archived sub-projects you can read of an active project, at
+that project's place without the project's own row; their `parent_id`
+names it. An organization admin's pages hold what their own leads, grants
+and team shares reach, as anyone's.
+
+`search` keeps the projects whose own name holds every whitespace-separated
+word of it, in any order, ignoring case and accents, or whose key is the
+whole search, ignoring case, so `search=sensor%20luma` and `search=sens`
+both find Luma Sensor. A match does not bring its sub-projects along, and a
+matching sub-project shows without its parent's row. The search runs over
+the whole list on the server before `limit`, so it can answer short or
+empty pages with a `next_cursor` before it reaches a match, and it reads no
+task and no file. An empty `search` lists everything, and a `search` holds
+at most 200 characters.
+
+A cursor works only for the organization, caller, side of the archive and
+search it came from, on REST and MCP alike, so a `next_cursor` from `GET
+/v1/projects` continues `list_projects` on MCP. Two searches that differ
+only in case or accents share their cursors. Pages are not a snapshot. A
+project created, archived, restored, shared or unshared while you page, or
+one whose key changes, lands where it then belongs, so a page may miss it
+or show it again until you start again from the first page.
+
+These requests are a `400`, checked in this order after any unknown query
+parameter:
+
+- `limit` that is not a whole number from 1 to 200: `limit must be a whole
+  number of projects from 1 to 200.`
+- `offset` other than `0`: `offset does not apply to projects; pass
+  next_cursor as cursor`
+- a `search` longer than 200 characters: `a search must be at most 200
+  characters. Search for fewer words.`
+- `archived` other than `true` or `false`: `archived must be true or false`
+- a page before Qivo has prepared the organization's projects for these
+  pages: `this list cannot be read until this organization's projects are
+  ready; try again in a few minutes`
+- a `cursor` that is not the `next_cursor` of an earlier page of the same
+  list: `cursor must be the next_cursor of an earlier page`
+- a caller far past the sizes Qivo is built for, whose check of which
+  projects they can see stops at the fixed limits of one request: `Qivo
+  could not finish checking which projects you can see in one request.
+  Contact support@qivo.io so we can help.` The whole page is refused, never
+  answered with a project missing.
+
+Until November 2026 `GET /v1/projects` answered every readable project at
+once, as an array in key order, and refused `search`, `limit`, `cursor`
+and `offset` as unknown query parameters. Code that read the array now
+finds an object; read its `projects` and follow `next_cursor` until it is
+`null`.
 
 `GET /v1/projects/{ref}` answers the same row with these fields added:
 
@@ -533,7 +623,10 @@ A row of the list:
   "lead_id": "…uuid…", "lead_name": "Leo Martins",
   "review_hours": null, "effective_review_hours": 2, "track_delay": true,
   "completion": { "status": "ok", "done": 12, "total": 30, "percent": 40 },
+  "milestones_next_cursor": null,
   "milestones": [{ "id": "…uuid…", "name": "Prototype validated", "date": "2026-11-02" }],
+  "user_grants_next_cursor": "…",
+  "team_grants_next_cursor": null,
   "grants": {
     "users": [{ "id": "…uuid…", "name": "Emil Strand", "level": "user" }],
     "teams": [{ "id": "…uuid…", "name": "Hardware", "level": "viewer" }]
@@ -575,13 +668,33 @@ A row of the list:
   `unavailable` as described below. `status` arrived in November 2026,
   and `counting` later that month, so treat a `status` you do not know as
   no completion.
-- `milestones` are the milestones of the top-level project, ordered by date.
-  A sub-project shows its parent's, because milestones live on the top-level
-  project's roadmap.
-- `grants` are the project's own individual and team grants, as its
-  **Project access** list shows them, ordered by name. A sub-project also
+- `milestones` are the first 50 milestones of the top-level project, by
+  date, then by name ignoring case and accents, then by id. A sub-project
+  shows its parent's, because milestones live on the top-level project's
+  roadmap, and an archived project's are listed too.
+  `milestones_next_cursor` is `null` where they end on this page; else page
+  the rest with `GET /v1/projects/{ref}/milestones` (see
+  [Milestones](#milestones)).
+- `grants` are the first 50 of the project's own individual grants and the
+  first 50 of its team grants, as its **Project access** list shows them,
+  each ordered by name, ignoring case and accents, then by id; a row placed
+  by a name that changed a moment ago can come at the earlier name's place.
+  `user_grants_next_cursor` continues `grants.users` and
+  `team_grants_next_cursor` continues `grants.teams`, `null` where the list
+  ends on this page; page the rest with `GET
+  /v1/projects/{ref}/access/users` and `/access/teams` (see [Project
+  access](#project-access)). A page of grants lists the explicit grants, not
+  who can work in the project, which `GET /v1/projects/{ref}/users` answers.
+  A sub-project also
   inherits its parent's grants, which the parent's own read lists. Anyone who
   can read or manage the project sees its grants, as in the app.
+
+Where a fixed limit of one request stops the check of your access to the
+project, the single-project read is a `400` with `Qivo could not finish
+checking which projects you can see in one request. Contact support@qivo.io
+so we can help.`, never an answer with `access` guessed. Only a person far
+past the sizes Qivo is built for, such as one in hundreds of teams, meets
+it.
 
 An organization admin manages every project of the organization, also one
 they take no part in. Admin status gives no access to a project's work, so
@@ -596,10 +709,12 @@ completion and milestones are planning data. The
 read the project. A project you neither read nor manage answers `404`,
 exactly like an unknown one.
 
-The writes below, and the [project access](#project-access) and
-[milestone](#milestones) routes, answer `403` with the read-only sentence for
-a read-only credential before any reference is resolved, like every other
-write.
+The writes below, the `PUT` and `DELETE` [project access](#project-access)
+routes and the `POST`, `PATCH` and `DELETE` [milestone](#milestones) routes
+answer `403` with the read-only sentence for a read-only credential before
+any reference is resolved, like every other write. The `GET` routes of a
+project, its users, milestones and grants included, take a read-only
+credential.
 
 `num` is the durable per-org project number (migration 0050) — it never
 changes. `key` is the short code the app shows. The app has no screen that
@@ -612,7 +727,25 @@ number added when another project already holds it (`TES`, then `TES2`).
 retained as a nullable compatibility field for legacy rows; team sharing is
 reported through the access model, not project ownership.
 
-The project-user route has the same rows as `GET /v1/users`, plus
+The first pages of the details and their next pages read within a bound
+of their own, so a project read or a project write never fails for them.
+Where that bound, or a moment while Qivo prepares the organization's names,
+leaves a list no room, it answers no rows and a cursor at its start, never
+an empty list as complete; follow the cursor with its list's route.
+
+The project-user route answers one page of users at a time, `{next_cursor,
+users}`, `limit` of them at most, 50 by default and 1 to 200, as for
+[users](#users): pass `next_cursor` unchanged, URL-encoded, as `cursor` for
+the next page, and stop when it is `null`. A page can hold fewer than
+`limit` users, or none, while `next_cursor` is set. Users come in name
+order, ignoring case and accents, then by id, compared by their UTF-8
+bytes. Who is listed and `assignable` are decided from the project's own
+access before `limit`, so a user missing from the pages you have read is
+not ineligible until `next_cursor` is `null`. A cursor works only for the
+organization, caller and project it came from, on REST and MCP alike.
+Pages are not a snapshot.
+
+Its rows are the rows of `GET /v1/users`, plus
 `"assignable": true | false`. Every returned row is an existing Qivo profile
 that can see the named project. Any row may be used as `reporter_id`;
 `assignee_id` and `reviewer_id` additionally require `assignable: true` (the
@@ -628,7 +761,40 @@ itself: its lead and its individual or team grants. These
 are the people its **Project access** list shows in the app. Someone who
 reaches the parent only through one of its sub-projects is listed under that
 sub-project, not under the parent. A caller that sees the parent only through
-one of its sub-projects may still call this route for the parent.
+one of its sub-projects may still call this route for the parent. An
+organization admin is listed, and assignable, only through their own lead,
+grants and team shares, as anyone.
+
+The list routes of a project, `/users`, `/milestones`, `/access/users` and
+`/access/teams`, are a `400` for these requests, checked in this order
+after any unknown query parameter, and an unknown project or one you cannot
+use them for is a `404`, checked after the first two:
+
+- `limit` that is not a whole number from 1 to 200: `limit must be a whole
+  number of users from 1 to 200.` for users, and `limit must be a whole
+  number of milestones from 1 to 200.`, `limit must be a whole number of
+  user grants from 1 to 200.` and `limit must be a whole number of team
+  grants from 1 to 200.` for the other lists
+- `offset` other than `0`: `offset does not apply to project users; pass
+  next_cursor as cursor`, `offset does not apply to milestones; pass
+  next_cursor as cursor`, `offset does not apply to user grants; pass
+  next_cursor as cursor` and `offset does not apply to team grants; pass
+  next_cursor as cursor`, each on its list
+- for users and grants, a page before Qivo has prepared the organization's
+  names for name order: `this list cannot be read until this
+  organization's names are ready; try again in a few minutes`
+- a `cursor` that is not the `next_cursor` of an earlier page of the same
+  list, project and caller: `cursor must be the next_cursor of an earlier
+  page`
+- for users, a project whose access is too large to check in one request:
+  `this project's access is too large to check in one request, so Qivo
+  cannot list its users. Contact support@qivo.io so we can help.`
+
+Until November 2026 these routes answered every row at once, the details
+held every milestone and grant, and `/users` refused `limit`, `cursor` and
+`offset` as unknown query parameters. Code that read the users array now
+finds an object; read its `users` and follow `next_cursor` until it is
+`null`, and follow the details' cursors for the rest of each list.
 
 **Archived projects** (migration 0106) are projects that have been put away
 in the app. They keep every task, comment and attachment they had, but they
@@ -649,7 +815,9 @@ Only `name` is required. Without `parent` the request creates a top-level
 project, and with `parent` (a project number, key or uuid) a sub-project
 under it. Qivo picks the id, the number, the key (from the name, as in the
 app) and the position in the list. The answer is the `201` single-project
-read, `access` flags included.
+read, `access` flags included. Where the single-project read meets the
+refusal of a stopped access check described above, the request is that
+`400` and the project is not created.
 
 - A top-level project follows the organization's **Who can create new
   projects?** setting, the same rule as the app's **New project** button.
@@ -696,7 +864,9 @@ PATCH /v1/projects/{ref}  {"name": "…", "description": "…", "review_hours": 
                            "archived": true, "expected": {"name": "…"}}
 ```
 
-Every field is optional, and the answer is the single-project read. Changing a
+Every field is optional, and the answer is the single-project read. Where
+that read meets the refusal of a stopped access check described under
+[Projects](#projects), the request is that `400` and nothing changes. Changing a
 project needs managing it, as its lead or an organization admin (`requires
 lead access to this project` for someone who only reads it). A lead handover alone on a top-level project
 follows the rule for managing its users instead, so someone who is neither an
@@ -755,6 +925,10 @@ A request that renames a project and hands over its lead writes only
 ### Project access
 
 ```
+GET    /v1/projects/{ref}/access/users?limit=&cursor=
+                                               → one page of its user grants
+GET    /v1/projects/{ref}/access/teams?limit=&cursor=
+                                               → one page of its team grants
 PUT    /v1/projects/{ref}/access/users/{user}  {"level": "user" | "viewer",
                                                 "expected"?: {"level": …}}
 DELETE /v1/projects/{ref}/access/users/{user}  [{"on_held_tasks": …}]
@@ -763,7 +937,17 @@ PUT    /v1/projects/{ref}/access/teams/{team}  {"level": "user" | "viewer",
 DELETE /v1/projects/{ref}/access/teams/{team}  [{"on_held_tasks": …}]
 ```
 
-These give, change or remove one person's or one team's grant on a project
+The two lists answer `{next_cursor, user_grants}` and `{next_cursor,
+team_grants}`, each row `{id, name, level}` as in the single-project read,
+by name, ignoring case and accents, then by id, 50 by default and 1 to 200,
+paged as the [project users](#projects) are. They list the project's own
+grants of people and teams of its organization, which anyone who can read or
+manage the project may page, and a sub-project's list leaves out what it
+inherits from its parent. The single-project read's `user_grants_next_cursor`
+and `team_grants_next_cursor` continue here, and a cursor of one list does
+not open another.
+
+The writes give, change or remove one person's or one team's grant on a project
 or sub-project, as the app's **Project access** list does. `{user}` and
 `{team}` are uuids from `GET /v1/users` and `GET /v1/teams`; one outside the
 organization answers `404` (`user not found`, `team not found`).
@@ -778,10 +962,13 @@ this project; hand the lead to someone else first`.
 `PUT` answers `{"project_id", "user" | "team": {"id", "name"}, "level",
 "changed"}`; giving the level someone already has changes nothing.
 `expected.level` is the level you last read for that user or team in the
-project's `grants`, or `null` when the project listed no grant of their own,
-and `PUT` saves nothing when it changed since (see [Refusing a change when a
-field changed since you read
-it](#refusing-a-change-when-a-field-changed-since-you-read-it)).
+project's `grants` or in the pages of `/access/users` or `/access/teams`.
+It is `null` only when neither the single-project read's first page nor
+those pages, followed until `next_cursor` is `null`, listed a grant of
+their own, because the read holds only the first 50 user grants and the
+first 50 team grants. `PUT` saves nothing when it changed since (see
+[Refusing a change when a field changed
+since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it)).
 
 Removing access can hide open tasks from the people working on them. These
 are the tasks of the project and its sub-projects that are not Done, whose
@@ -853,10 +1040,19 @@ curl -X DELETE -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: applicatio
 ### Milestones
 
 ```
+GET    /v1/projects/{ref}/milestones?limit=&cursor=
+                                           → one page of its milestones
 POST   /v1/projects/{ref}/milestones       {"name": "…", "date": "2026-11-02"}
 PATCH  /v1/projects/{ref}/milestones/{id}  {"name"?, "date"?, "expected"?}
 DELETE /v1/projects/{ref}/milestones/{id}  [{"expected": {"name"?, "date"?}}]
 ```
+
+`GET` answers `{next_cursor, milestones}`, each row `{id, name, date}`, the
+milestones of the top-level project by date, then by name ignoring case and
+accents, then by id, 50 by default and 1 to 200, paged as the [project
+users](#projects) are, for a project you can read. The single-project
+read's `milestones_next_cursor` continues here. A milestone stored on a
+sub-project before 14 October 2026 is left out, as in the app.
 
 Milestones live on a top-level project's roadmap. Naming a sub-project in
 `{ref}` adds the milestone to its top-level project, as the app does, and a
@@ -888,7 +1084,7 @@ requests that claim the same week at the same time cannot both succeed.
 Different projects can each have a milestone in the same week. `POST` answers `201` and `PATCH` `200` with
 `{"id", "name", "date", "project_id"}`, where `project_id` is the top-level project;
 `DELETE` answers `{"deleted": true, "id"}`.
-`GET /v1/projects/{ref}` lists them. Each write narrates `added milestone`,
+`GET /v1/projects/{ref}` lists the first 50. Each write narrates `added milestone`,
 `renamed milestone`, `moved milestone` or `deleted milestone`. A `PATCH` that
 changes neither the name nor the date writes no row.
 
@@ -1422,8 +1618,9 @@ tasks under it than one request can read, such as thousands of subtasks, its
 row has `start_week` and `end_week` set to `null` and a `progress` of `0` of
 `0` with `partial: true`, so paging still moves past it.
 
-To find every archived task you can read, take two steps. First list
-projects with `GET /v1/projects` and `GET /v1/projects?archived=true`.
+To find every archived task you can read, take two steps. First page
+projects with `GET /v1/projects` and `GET /v1/projects?archived=true`,
+each until its `next_cursor` is `null`.
 Archived tasks can sit in active projects as well as archived ones, and both
 lists include sub-projects. Then page `archived=true` for each top-level
 project, the rows whose `parent_id` is `null`. Each covers all its
@@ -2328,22 +2525,23 @@ roadmap save or an access removal changes, and of the subtasks a task delete
 detaches, get their messages moments after it saves.
 
 ```
-GET  /v1/inbox                 items, latest activity first (read)
+GET  /v1/inbox                 a page of items, latest activity first (read)
 POST /v1/inbox/read            { "tasks": ["QN-3"] } or { "all": true }
 POST /v1/inbox/unread          { "tasks": ["QN-3"] }
 POST /v1/inbox/remove          { "tasks": ["QN-3"] } or { "all": true }
 POST /v1/inbox/snooze          { "tasks": ["QN-3"], "until": "2026-11-02T08:00:00Z" }
 ```
 
-`GET /v1/inbox` takes `unread_only=true` (items with an unread message),
-`include_snoozed=true` (snoozed items are left out otherwise, as in the app),
-`limit` (1 to 200, 50 by default) and `offset`. A `limit` outside that range
-is a `400` with `limit must be a whole number of items from 1 to 200.`, and
-an `offset` that is not a whole number from 0 up is a `400` with `offset must
-be a whole number, 0 or more`. It answers:
+`GET /v1/inbox` answers one page of items at a time, `limit` of them at
+most, 50 by default and 1 to 200. It takes `unread_only=true` (items with an
+unread message), `include_snoozed=true` (snoozed items are left out
+otherwise, as in the app), `limit`, `cursor` and `offset`, which is refused
+unless it is `0`. Both filters apply before the page is cut. A page with one
+item:
 
 ```json
 {
+  "next_cursor": "…",
   "items": [
     {
       "task": { "id": "…uuid…", "key": "QN-3", "title": "Fix hinge tolerance", "status": "progress" },
@@ -2359,8 +2557,7 @@ be a whole number, 0 or more`. It answers:
         }
       ]
     }
-  ],
-  "truncated": false
+  ]
 }
 ```
 
@@ -2368,10 +2565,49 @@ be a whole number, 0 or more`. It answers:
 items are listed only for active tasks the caller can read in active
 projects. Messages about a task it has lost access to, an archived task or a
 task in an archived project stay stored and come back when the access or the
-task does, unless they were removed meanwhile. `messages` run oldest first;
-`kind` is `mention`, `comment` or `change`, and `detail` is the line the app
-shows. `latest_at` is the newest message's time, or the end of a snooze when
-that is later, and orders the list.
+task does, unless they were removed meanwhile. `messages` holds every message
+of the item, oldest first; `kind` is `mention`, `comment` or `change`,
+`detail` is the line the app shows, and `actor_name` is the name of the
+person or agent of the caller's organization who caused it, or `null`.
+`latest_at` is the newest message's time, or the end of a snooze when that
+is later, and orders the list, newest first. Items with the same
+`latest_at` come in descending order of their task's `id`.
+
+Pass `next_cursor` unchanged, URL-encoded, as `cursor` for the next page,
+with the same `unread_only` and `include_snoozed`, and stop when it is
+`null`. A page can hold fewer than `limit` items, or none, while
+`next_cursor` is set, because each page reads a bounded amount however
+large the inbox is, the items about tasks it does not list included. A
+short or empty page is never the end of the inbox. Only a `null`
+`next_cursor` is. `limit` may change from one page to the next. A cursor
+works only for the organization, caller and filters it came from, on REST
+and MCP alike, so a `next_cursor` from `GET /v1/inbox` continues
+`list_inbox` on MCP. Pages are not a snapshot. An item that gets a new
+message, wakes from a snooze or, with `unread_only`, is read while you page
+moves, so a page may miss it or show it again; start again from the first
+page to see the inbox as it is. An item about a task that a large move took
+into a project the caller can read shows moments after the move.
+
+These requests are a `400`, checked in this order after any unknown query
+parameter:
+
+- `limit` that is not a whole number from 1 to 200: `limit must be a whole
+  number of items from 1 to 200.`
+- `offset` other than `0`: `offset does not apply to inbox items; pass
+  next_cursor as cursor`
+- `unread_only` or `include_snoozed` other than `true` or `false`:
+  `unread_only must be true or false` or `include_snoozed must be true or
+  false`
+- a `cursor` that is not the `next_cursor` of an earlier page of the same
+  list: `cursor must be the next_cursor of an earlier page`
+- an inbox Qivo has not finished preparing: `your inbox cannot be read
+  until Qivo has finished preparing it. Try again in a few minutes, or
+  contact support@qivo.io if it stays so.`
+- a check of which projects the caller can see that a fixed limit of one
+  request stopped: `Qivo could not finish checking which projects you can
+  see in one request. Contact support@qivo.io so we can help.` Only a
+  person far past the sizes Qivo is built for, such as one in hundreds of
+  teams, meets it.
 
 Archiving a task marks every message about it and the subtasks archived
 with it read, for every recipient, shortly after the archive. Archiving a
@@ -2391,15 +2627,15 @@ send no `Restored` message. Deleting a task or a project deletes the
 messages about its tasks, and restoring it from Deleted items does not
 bring them back.
 
-One request lists up to 500 of the caller's unread messages (newest first)
-and up to 500 read ones (most recently read first). It looks at no more than
-1,000 of each, counting the stored ones about tasks it does not list. When
-some messages were not looked at, `truncated` is `true`, so a large backlog
-about such tasks can set it too. Items whose messages were not looked at are
-then missing, and an item listed may lack its older messages. Marking items
-read keeps only each item's latest message, so `POST /v1/inbox/read` with
-`{"all": true}`, repeated while `has_more` is `true`, shrinks the inbox until
-it fits.
+Marking items read keeps only each item's latest message, so `POST
+/v1/inbox/read` with `{"all": true}`, repeated while `has_more` is `true`,
+shrinks the inbox.
+
+Until November 2026 `GET /v1/inbox` answered `{items, truncated}`, read at
+most 500 unread and 500 read messages and paged with `offset`. Code that
+read `items` now reads the first page, which can hold fewer than `limit`
+items, or none, while `next_cursor` is set. Follow `next_cursor` until it is
+`null`. An `offset` other than `0` is refused, and `truncated` is gone.
 
 The `POST` routes change the caller's own items and answer `{ "action":
 "read", "tasks": ["QN-3"], "has_more": false }`, where `tasks` lists the
@@ -2439,7 +2675,11 @@ above. `read` and `remove` still work on archived tasks.
 With `all`, repeat the call while `has_more` is `true`. Like the app's bulk
 actions, `all` also reaches messages about tasks that are not listed,
 archived ones and those the caller can no longer read, but `tasks` names
-only readable ones. Other bodies are `400`: neither or both of `tasks` and
+only readable ones, asking for each project of the changed tasks whether
+the caller can see it. Where a fixed limit of one request stops that check,
+the call is a `400` with `Qivo could not finish checking which projects you
+can see in one request. Contact support@qivo.io so we can help.`, and
+nothing changes. Other bodies are `400`: neither or both of `tasks` and
 `all`, `all` with `unread` or `snooze`, `until` on another action, or
 `snooze` without `until`.
 
@@ -2928,10 +3168,14 @@ Send each field as the read showed it:
   so a sub-project without a lead of its own compares its parent's lead.
 - **A label's color.** `color` is the color reads show, so a label stored
   before the `#rrggbb` rule compares as `#8A8F98`.
-- **A milestone's day.** `date` is the `date` the project read lists for the
-  milestone.
-- **A grant.** `level` is the level the project's `grants` list for that user
-  or team, or `null` when it lists no grant of their own.
+- **A milestone's day.** `date` is the `date` the project read, or a page
+  of `GET /v1/projects/{ref}/milestones`, lists for the milestone.
+- **A grant.** `level` is the level the project's `grants`, or the pages of
+  `GET /v1/projects/{ref}/access/users` or `/access/teams`, list for that
+  user or team. It is `null` only when none of them lists a grant of their
+  own, with those pages followed until `next_cursor` is `null`, because the
+  single-project read holds only the first 50 user grants and the first 50
+  team grants.
 
 Values compare in a normalized form, so formatting alone never refuses a
 change. Titles and names are trimmed. A task's or project's description
@@ -3012,16 +3256,30 @@ the new values in `expected`.
 # who this credential acts as, the calendar settings and whether it can write
 curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/me"
 
-# readable projects
-curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/projects"
+# readable projects, a page at a time in tree order; repeat with the
+# answer's next_cursor as cursor until it is null
+curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/projects?limit=200"
+curl -G -H "Authorization: Bearer $QIVO_KEY" --data-urlencode "cursor=<next_cursor>" \
+  "$BASE/projects?limit=200"
+
+# projects whose name holds "sensor"
+curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/projects?search=sensor"
+
+# the project whose key is ENC, and any whose name holds "enc"
+curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/projects?search=enc"
 
 # the organization's users and how many hours a week each of them has, a
 # page at a time; repeat with the answer's next_cursor as cursor until it is
 # null. Who may be assigned work in a project is /projects/{ref}/users.
 curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/users?limit=200"
 
-# valid reporters and assignees for Enclosure
-curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/projects/ENC/users"
+# valid reporters and assignees for Enclosure, a page at a time; repeat
+# with the answer's next_cursor as cursor until it is null
+curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/projects/ENC/users?limit=200"
+
+# the next page of Enclosure's user grants after its details' first 50
+curl -G -H "Authorization: Bearer $QIVO_KEY" \
+  --data-urlencode "cursor=<user_grants_next_cursor>" "$BASE/projects/ENC/access/users"
 
 # open high-priority tasks in Enclosure, a page at a time. Repeat with the
 # answer's next_cursor as cursor until it is null.
@@ -3095,9 +3353,11 @@ curl -H "Authorization: Bearer $QIVO_KEY" \
 curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
   -d '{"plannable_hours":30}' "$BASE/users/<profile uuid>"
 
-# follow QN-26, then read what is new and mark it read
+# follow QN-26, then read what is new, a page at a time, and mark it read
 curl -X PUT -H "Authorization: Bearer $QIVO_KEY" "$BASE/tasks/QN-26/following"
 curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/inbox?unread_only=true"
+curl -G -H "Authorization: Bearer $QIVO_KEY" --data-urlencode "cursor=<next_cursor>" \
+  "$BASE/inbox?unread_only=true"
 curl -X POST -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
   -d '{"tasks":["QN-26"]}' "$BASE/inbox/read"
 

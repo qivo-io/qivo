@@ -72,7 +72,10 @@ answers a project they only manage with `access.read` `false`, completion
   `{next_cursor, labels}`, `{next_cursor, teams}` and
   `{next_cursor, team, members}`, and take `search`, every word of it in
   the name, ignoring case and accents. A user missing from the pages read
-  so far is not gone until `next_cursor` is null. A tool refuses an
+  so far is not gone until `next_cursor` is null. `list_projects` pages
+  the same way as `{next_cursor, projects}`, in tree order, each top-level
+  project by key followed by its sub-projects, and its `search` matches a
+  project's own name or its whole key. A tool refuses an
   argument it does not know and names it. Refresh the tool list and retry
   with current names.
 - **REST:** Use `https://api.qivo.io/v1` with an agent key or a personal
@@ -85,7 +88,7 @@ answers a project they only manage with `access.read` `false`, completion
   at most 50 tasks a page when `limit` is left out, for active and archived
   lists; pass `next_cursor` back as `cursor` until it is null, even after a
   short or empty page. `offset` is refused unless 0. `archived=true` needs
-  `project`. `GET /v1/users`, `/v1/labels`, `/v1/teams` and
+  `project`. `GET /v1/projects`, `/v1/users`, `/v1/labels`, `/v1/teams` and
   `/v1/teams/{id}/members` page the same way and take `search`;
   `GET /v1/users/{id}` reads one user.
 - **Browser:** Use it for the actions under
@@ -131,7 +134,9 @@ the credential that deleted the task.
 
 ## Resolve the work and people
 
-Call `list_projects` to identify the intended project and its sub-projects.
+Call `list_projects` to identify the intended project and its sub-projects,
+following `next_cursor` until it is null, or pass `search` with a word of
+the project's name or its key.
 Tasks live in sub-projects. For `create_task`, pass the sub-project as
 `project`, or pass its meta-project as `project` and that meta-project's child
 as `sub_project`.
@@ -144,7 +149,9 @@ one organization; use the credential for the intended organization.
 
 Before writing `assignee_id`, `reviewer_id` or `reporter_id`, call
 `list_project_users` with the destination project, or REST
-`GET /v1/projects/{ref}/users`. Any returned profile may be the reporter; only
+`GET /v1/projects/{ref}/users`, which answer `{next_cursor, users}` a page
+at a time; follow `next_cursor` until it is null, as a user missing from the
+pages read so far is not ineligible. Any returned profile may be the reporter; only
 `assignable: true` profiles may be assignees or reviewers. On a subtask, the
 assignee or reviewer must also be able to see every task above it, which
 `assignable` does not show; Qivo refuses the write otherwise.
@@ -395,14 +402,14 @@ Useful field rules:
   a `400` with `this task already has 100 followers, the most a task can
   have. Someone must unfollow it first.`, and comments and mentions add no follower there, though a mention
   still notifies. A new assignee or reviewer still becomes a follower.
-- **Read your inbox:** `list_inbox` or `GET /v1/inbox` answers `items`, one
-  per active task you can read, latest activity first, with its unread count
-  and messages. Use `unread_only` to see what is new. The task title shown is
-  the current one. One call lists up to 500 unread messages (newest first)
-  and up to 500 read ones (most recently read first), and looks at no more
-  than 1,000 of each, counting messages about tasks it does not list.
-  `truncated: true` means some were not looked at, so mark everything read
-  to shrink the inbox. An item keeps at most 50 unread messages, dropping
+- **Read your inbox:** `list_inbox` or `GET /v1/inbox` answers one page,
+  `{next_cursor, items}`, one item per active task you can read, latest
+  activity first, with its unread count and every message it holds. Use
+  `unread_only` to see what is new. The task title shown is the current
+  one. Pass `next_cursor` back as `cursor`, with the same filters, until it
+  is `null`; a page can hold fewer than `limit` items, or none, before the
+  end. `truncated` is gone, and an `offset` other than 0 is refused. Mark
+  everything read to shrink the inbox. An item keeps at most 50 unread messages, dropping
   the oldest except its first unread one and the newest of each kind, on a
   busy task moments after an arrival. Its `dropped_count` says how many it dropped
   until the item is read. Archiving a task
@@ -428,6 +435,7 @@ Useful field rules:
 | Operation | MCP tool | REST request |
 | --- | --- | --- |
 | Read a project | `get_project` | `GET /v1/projects/{ref}` |
+| Page a project's milestones, user grants or team grants | `list_project_related` | `GET /v1/projects/{ref}/milestones`, `…/access/users`, `…/access/teams` |
 | Create a project or sub-project | `create_project` | `POST /v1/projects` |
 | Change, archive or restore a project, hand over its lead | `update_project` | `PATCH /v1/projects/{ref}` |
 | Give, change or remove one user's or team's access | `set_project_access` | `PUT` and `DELETE /v1/projects/{ref}/access/users/{user}` or `…/teams/{team}` |
@@ -457,7 +465,9 @@ Useful field rules:
   Confirm the choice with the user when it is not clear. A misspelled
   `on_held_tasks` is refused, on MCP and on these REST routes.
 - **Milestones:** they live on the top-level project; naming a sub-project
-  adds them there. `date` is `YYYY-MM-DD`. `get_project` lists them. A
+  adds them there. `date` is `YYYY-MM-DD`. `get_project` lists the first 50
+  of them, and of the project's user and team grants, each with a cursor
+  that `list_project_related` continues until it is null. A
   top-level project holds at most one milestone in each calendar week of its
   organization, so a date in a week that holds another of its milestones is
   refused; pick another week or move that milestone first.
@@ -655,9 +665,10 @@ sub-projects' included, most recently archived first, a page at a time.
 Archiving a task carries its subtasks; restoring it also restores its parent
 chain. `get_task` resolves archived tasks without restoring them.
 
-To find archived tasks anywhere, call `list_projects` once without arguments
+To find archived tasks anywhere, page `list_projects` once without `archived`
 and once with `archived: true` (REST `GET /v1/projects` and
-`GET /v1/projects?archived=true`), because archived tasks can sit in active
+`GET /v1/projects?archived=true`), each until `next_cursor` is null, because
+archived tasks can sit in active
 and archived projects. Then list the archived tasks of each top-level
 project, the rows whose `parent_id` is `null`. Each covers the sub-projects
 you can read.

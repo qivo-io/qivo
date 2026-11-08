@@ -48,6 +48,7 @@ import {
   withOrg,
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
+import { withReach } from './projectReach.setup'
 
 /* edge-runtime provides TextEncoder; convex/tsconfig's ESNext-only lib lacks
  * it. */
@@ -1349,6 +1350,8 @@ async function credentials() {
     })
   }
   await keyOrg(t, f.org.id)
+  // the project lists read the reach rows every deployment holds
+  await withReach(t)
   // the fixture's real Better Auth login for the user
   const authUserId = f.user.auth_user_id!
   /* An approved OAuth connection with these scopes and one live access token. */
@@ -1518,13 +1521,22 @@ describe('read-only credentials over HTTP', () => {
     const args: Record<string, Record<string, unknown>> = {
       list_project_users: { project: c.f.sub.key },
       get_project: { project: c.f.sub.key },
+      list_project_related: { project: c.f.sub.key, list: 'milestones' },
       get_task: { ref: MISSING_TASK },
       list_task_related: { ref: MISSING_TASK, list: 'subtasks' },
       list_comments: { ref: MISSING_TASK },
       list_team_members: { team_id: c.f.team.id },
     }
     // the lists every seat reads answer a page, not a refusal
-    const pages = ['list_users', 'list_labels', 'list_teams', 'list_team_members']
+    const pages = [
+      'list_users',
+      'list_labels',
+      'list_teams',
+      'list_team_members',
+      'list_projects',
+      'list_project_users',
+      'list_project_related',
+    ]
     for (const secret of [c.readToken, c.viewerKey, readGrant]) {
       for (const tool of READ_TOOLS) {
         const res = await callTool(c.t, secret, tool.def.name, args[tool.def.name] ?? {})
@@ -1538,7 +1550,10 @@ describe('read-only credentials over HTTP', () => {
         }
         // a project row never offers a write this credential cannot make
         if (tool.def.name === 'list_projects' || tool.def.name === 'get_project') {
-          const rows = [JSON.parse(text)].flat() as { access: { write: boolean } }[]
+          const answer = JSON.parse(text)
+          const rows = (tool.def.name === 'list_projects' ? answer.projects : [answer]) as {
+            access: { write: boolean }
+          }[]
           expect(rows.length, tool.def.name).toBeGreaterThan(0)
           expect(
             rows.map((row) => row.access.write),
@@ -1561,7 +1576,7 @@ describe('read-only credentials over HTTP', () => {
     const before = await c.counts()
     for (const secret of [c.writeToken, writeGrant, c.agentKey]) {
       const listed = await callTool(c.t, secret, 'list_projects', {})
-      const rows = JSON.parse(toolText(listed.body).text) as {
+      const rows = JSON.parse(toolText(listed.body).text).projects as {
         key: string
         access: { write: boolean }
       }[]

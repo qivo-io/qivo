@@ -206,7 +206,9 @@ export const MENTION_BATCH = 8
 export const BY_IDS_MAX = 100
 
 /** The most messages one seat's bounded inbox walk examines in each of its
- * unread and read halves (lib/inbox.ts). */
+ * unread and read halves (lib/inbox.ts loadInbox), which only the workspace
+ * inbox part reads, and which stays for it until it goes. REST and MCP page
+ * the Inbox through model/inboxPage.ts instead. */
 export const INBOX_LIMIT = 500
 
 /** The task groups one Inbox page holds (model/inboxPage.ts INBOX_PAGE.rows),
@@ -811,6 +813,43 @@ export const LIMITS = {
     1,
     200,
     'attachments',
+    'limit',
+    MACHINE,
+    'machine',
+  ),
+  listProjects: whole('Projects per list page', 1, 200, 'projects', 'limit', MACHINE, 'machine'),
+  listProjectUsers: whole(
+    'Project users per list page',
+    1,
+    200,
+    'users',
+    'limit',
+    MACHINE,
+    'machine',
+  ),
+  listMilestones: whole(
+    'Milestones per list page',
+    1,
+    200,
+    'milestones',
+    'limit',
+    MACHINE,
+    'machine',
+  ),
+  listUserGrants: whole(
+    'User grants per list page',
+    1,
+    200,
+    'user grants',
+    'limit',
+    MACHINE,
+    'machine',
+  ),
+  listTeamGrants: whole(
+    'Team grants per list page',
+    1,
+    200,
+    'team grants',
     'limit',
     MACHINE,
     'machine',

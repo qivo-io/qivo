@@ -12,6 +12,7 @@ import { ACTIVE_RESERVE } from '../lib/activeTaskPage'
 import { ARCHIVE_RESERVE } from '../lib/archivedTasks'
 import {
   COMPLETION_RESERVE,
+  PROJECT_DETAILS,
   RELATED_READ,
   SUBTASK_PAGE,
   TASK_DETAILS,
@@ -26,6 +27,7 @@ describe('the read budgets', () => {
       ACTIVE_RESERVE,
       ARCHIVE_RESERVE,
       COMPLETION_RESERVE,
+      PROJECT_DETAILS,
       RELATED_READ,
       SUBTASK_PAGE,
       TASK_DETAILS,
@@ -33,6 +35,8 @@ describe('the read budgets', () => {
       TEXT_READ,
     ])
       for (const value of Object.values(budget)) expect(Number.isFinite(value)).toBe(true)
+    // the completion keeps back the details' first pages and their reserve
+    expect(COMPLETION_RESERVE.ranges).toBeGreaterThan(PROJECT_DETAILS.ranges)
     // a text is charged two documents at Convex's document size limit
     expect(TEXT_READ).toEqual({ documents: 2, bytes: 2 * DOCUMENT_MAX_BYTES })
   })

@@ -112,7 +112,8 @@ Use these steps for a personal-token fallback or a named agent's key:
   `Authorization: Bearer <full-qvt-or-qva-secret>`. `X-Api-Key` is also
   accepted by REST. Check the credential with `GET https://api.qivo.io/v1/me`, which
   returns its user, kind and access, verify readable access with
-  `GET https://api.qivo.io/v1/projects`, then use
+  `GET https://api.qivo.io/v1/projects`, which answers a page of projects,
+  then use
   `GET /v1/tasks?project=<ref>` for tasks in a returned project and
   `GET /v1/tasks/{ref}` for one task, on the same API origin.
 

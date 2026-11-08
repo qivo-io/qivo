@@ -7,8 +7,10 @@
  *   2. Following: own follows only, the single-task read's `following` and
  *      `followers`, and news reaching an agent that follows a task.
  *   3. Reading the inbox: what the app lists (tasks in the caller's working
- *      set, so not archived ones), the live title, the app's item fold,
- *      filters, paging and the bounded read of a large backlog.
+ *      set, so not archived ones), the live title, the item's counts and
+ *      messages, filters and paging with a cursor. The pages' arguments,
+ *      cursors, order, visibility, names, budget and reads at the design
+ *      size are machineInbox.test.ts'.
  *   4. Changing the inbox: each action by task, `all` for read and remove
  *      with only readable tasks named, the input rules on both surfaces, and
  *      own rows only.
@@ -20,11 +22,13 @@
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
-import { INBOX_LIMIT, LIMITS } from '../lib/limits'
+import { LIMITS } from '../lib/limits'
+import { offsetRefusal } from '../lib/listCursor'
 import { sha256hex } from '../machine/auth'
 import { INBOX_TASKS_MAX } from '../machine/discussion'
-import { OFFSET_SENTENCE } from '../machine/shared'
+import { itemEdits } from '../model/inboxItems'
 import { ITEM_UNREAD_CAP } from '../model/messages'
 import {
   allMessages,
@@ -35,7 +39,7 @@ import {
   newT,
   type OrgFixture,
   plantIssue,
-  plantMessage,
+  type plantMessage,
   plantSeat,
   plantSubscription,
   type T,
@@ -44,6 +48,33 @@ import {
   withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
+
+/* A message stored for its recipient as helpers.setup.ts plantMessage
+ * stores one, but through the item writer (model/inboxItems.ts itemEdits)
+ * without postMessage's checks, so its inbox_items row is kept and the
+ * Inbox's walk finds the recipient's items ready, as for every message a
+ * deployment holds. A recipient who already holds raw messages gets no
+ * build state, as ensureInboxState gives none. */
+async function plantHeld(t: T, m: Parameters<typeof plantMessage>[1]): Promise<Doc<'messages'>> {
+  return await t.run(async (ctx) => {
+    const edits = itemEdits(ctx)
+    await edits.state(m.recipient_id, 'ensure')
+    const task = await byId(ctx, 'issues', m.issue_id)
+    const _id = await edits.insert(
+      {
+        id: uuid(),
+        issue_title: 'Planted task',
+        kind: 'change',
+        detail: 'planted',
+        created_at: NOW,
+        ...m,
+      },
+      task?.project_id ?? uuid(),
+    )
+    await edits.flush()
+    return (await ctx.db.get(_id)) as Doc<'messages'>
+  })
+}
 
 async function refused(p: Promise<unknown>, code: RefusalCode, sentence: string): Promise<void> {
   const e = await expectRefusal(p, code)
@@ -429,6 +460,7 @@ const pageMcp = async (fx: Fx, args: Record<string, unknown> = {}, callerId = fx
   JSON.parse(
     await fx.t.query(internal.machine.discussion.mcpListInbox, { callerId, ...R, ...args }),
   ) as {
+    next_cursor: string | null
     items: {
       task: { id: string; key: string; title: string }
       unread_count: number
@@ -437,7 +469,6 @@ const pageMcp = async (fx: Fx, args: Record<string, unknown> = {}, callerId = fx
       snoozed_until: string | null
       messages: { id: string; detail: string; read_at: string | null }[]
     }[]
-    truncated: boolean
   }
 
 /* list_inbox's items. */
@@ -448,22 +479,22 @@ describe('reading the inbox', () => {
   it('lists only tasks the caller can read, with the live title, one item per task', async () => {
     const fx = await setup()
     const base = { org_id: fx.org.id, recipient_id: fx.agent.id }
-    const older = await plantMessage(fx.t, {
+    const older = await plantHeld(fx.t, {
       ...base,
       issue_id: fx.task.id,
       issue_title: 'Stale stored title',
       created_at: '2026-01-02T00:00:00.000Z',
       read_at: '2026-01-02T01:00:00.000Z',
     })
-    const newer = await plantMessage(fx.t, {
+    const newer = await plantHeld(fx.t, {
       ...base,
       issue_id: fx.task.id,
       actor_id: fx.user.id,
       created_at: '2026-01-03T00:00:00.000Z',
     })
     // a task the agent lost sight of, and a deleted one
-    await plantMessage(fx.t, { ...base, issue_id: fx.secret.id, issue_title: 'Secret' })
-    await plantMessage(fx.t, { ...base, issue_id: uuid(), issue_title: 'Deleted' })
+    await plantHeld(fx.t, { ...base, issue_id: fx.secret.id, issue_title: 'Secret' })
+    await plantHeld(fx.t, { ...base, issue_id: uuid(), issue_title: 'Deleted' })
     const items = await listMcp(fx)
     expect(items).toEqual([
       {
@@ -497,35 +528,42 @@ describe('reading the inbox', () => {
     expect(JSON.stringify(items)).not.toContain('Secret')
     // the rows about the hidden task stay stored for when access returns
     expect(await messagesFor(fx.t, fx.agent.id, fx.secret.id)).toHaveLength(1)
-    // REST answers the same items
+    // REST answers the same items, the whole inbox on one page
     expect(
       await fx.t.query(internal.machine.discussion.restListInbox, { callerId: fx.agent.id, ...R }),
-    ).toEqual({ items, truncated: false })
+    ).toEqual({ next_cursor: null, items })
   })
 
-  it('keeps the dropped count of every item it lists when the inbox holds more unread messages than it reads', async () => {
+  it('keeps the dropped count and every message of each item it lists, across pages', async () => {
     const fx = await setup()
     const tasks = await Promise.all(
       Array.from({ length: 11 }, () =>
         plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id }),
       ),
     )
-    // 51 unread messages on each, more than INBOX_LIMIT in all
+    // 51 unread messages on each, stored through the item writer without
+    // postMessage's trim, as an item past the cap held them
     for (const task of tasks) {
       await plantSubscription(fx.t, { issue_id: task.id, profile_id: fx.agent.id })
       await fx.t.run(async (ctx) => {
+        const edits = itemEdits(ctx)
+        await edits.state(fx.agent.id, 'ensure')
         for (let n = 0; n < ITEM_UNREAD_CAP + 1; n++) {
-          await ctx.db.insert('messages', {
-            id: uuid(),
-            org_id: fx.org.id,
-            recipient_id: fx.agent.id,
-            issue_id: task.id,
-            issue_title: task.title,
-            kind: 'change',
-            detail: `change ${n}`,
-            created_at: `2026-01-01T00:00:${String(n).padStart(2, '0')}.000Z`,
-          })
+          await edits.insert(
+            {
+              id: uuid(),
+              org_id: fx.org.id,
+              recipient_id: fx.agent.id,
+              issue_id: task.id,
+              issue_title: task.title,
+              kind: 'change',
+              detail: `change ${n}`,
+              created_at: `2026-01-01T00:00:${String(n).padStart(2, '0')}.000Z`,
+            },
+            task.project_id,
+          )
         }
+        await edits.flush()
       })
     }
     // a comment on each makes its item drop two
@@ -536,10 +574,24 @@ describe('reading the inbox', () => {
         issue_id: task.id,
         body: 'news',
       })
-    const page = await pageMcp(fx)
-    expect(page.truncated).toBe(true)
-    expect(page.items.length).toBeGreaterThan(0)
-    expect(page.items.every((item) => item.dropped_count === 2)).toBe(true)
+    const items: Awaited<ReturnType<typeof pageMcp>>['items'] = []
+    let cursor: string | null = null
+    do {
+      const page: Awaited<ReturnType<typeof pageMcp>> = await pageMcp(fx, {
+        limit: 4,
+        ...(cursor === null ? {} : { cursor }),
+      })
+      expect(page.items.length).toBeLessThanOrEqual(4)
+      items.push(...page.items)
+      cursor = page.next_cursor
+    } while (cursor !== null)
+    expect(items.map((i) => i.task.id).sort()).toEqual(tasks.map((task) => task.id).sort())
+    for (const item of items) {
+      expect([item.unread_count, item.dropped_count]).toEqual([ITEM_UNREAD_CAP, 2])
+      // the item cap kept 50 unread rows, the comment's among them
+      expect(item.messages).toHaveLength(ITEM_UNREAD_CAP)
+      expect(item.messages.at(-1)?.detail).toBe('New comment')
+    }
   })
 
   it(`says how many earlier unread messages an item past ${ITEM_UNREAD_CAP} dropped, until it is read`, async () => {
@@ -580,7 +632,7 @@ describe('reading the inbox', () => {
     for (const day of [1, 2, 3, 4]) {
       const task = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
       tasks.push(task)
-      await plantMessage(fx.t, {
+      await plantHeld(fx.t, {
         ...base,
         issue_id: task.id,
         created_at: `2026-02-0${day}T00:00:00.000Z`,
@@ -598,7 +650,9 @@ describe('reading the inbox', () => {
           q.eq('recipient_id', fx.agent.id).eq('issue_id', tasks[0].id),
         )
         .collect()
-      await ctx.db.patch(rows[0]._id, { woke_at: '2026-02-09T00:00:00.000Z' })
+      const edits = itemEdits(ctx)
+      await edits.patch(rows[0], { woke_at: '2026-02-09T00:00:00.000Z' })
+      await edits.flush()
     })
     const keys = (items: { task: { key: string } }[]) => items.map((i) => i.task.key)
     const [a, b, c, d] = tasks.map(key)
@@ -606,22 +660,30 @@ describe('reading the inbox', () => {
     expect((await listMcp(fx))[0].latest_at).toBe('2026-02-09T00:00:00.000Z')
     expect(keys(await listMcp(fx, { unread_only: true }))).toEqual([a, d])
     expect(keys(await listMcp(fx, { include_snoozed: true }))).toEqual([a, d, c, b])
-    expect(keys(await listMcp(fx, { limit: 1, offset: 1 }))).toEqual([d])
-    const rest = async (q: Record<string, string>) =>
-      (
-        await fx.t.query(internal.machine.discussion.restListInbox, {
-          callerId: fx.agent.id,
-          ...R,
-          ...q,
-        })
-      ).items
-    expect(keys(await rest({ unread_only: 'true', include_snoozed: 'true' }))).toEqual([a, d, c])
-    expect(keys(await rest({ limit: '2', offset: '1' }))).toEqual([d, b])
+    // pages continue from next_cursor, on either surface
+    const one = await pageMcp(fx, { limit: 1 })
+    expect(keys(one.items)).toEqual([a])
+    expect(one.next_cursor).toEqual(expect.any(String))
+    const rest = (q: Record<string, string>) =>
+      fx.t.query(internal.machine.discussion.restListInbox, {
+        callerId: fx.agent.id,
+        ...R,
+        ...q,
+      })
+    const two = await rest({ limit: '1', cursor: one.next_cursor as string })
+    expect(keys(two.items)).toEqual([d])
+    const last = await pageMcp(fx, { limit: 2, cursor: two.next_cursor })
+    expect([keys(last.items), last.next_cursor]).toEqual([[b], null])
+    expect(keys((await rest({ unread_only: 'true', include_snoozed: 'true' })).items)).toEqual([
+      a,
+      d,
+      c,
+    ])
     for (const [q, sentence] of [
       [{ unread_only: 'yes' }, 'unread_only must be true or false'],
       [{ include_snoozed: '1' }, 'include_snoozed must be true or false'],
-      [{ offset: '-1' }, OFFSET_SENTENCE],
-      [{ offset: '1.5' }, OFFSET_SENTENCE],
+      [{ offset: '1' }, offsetRefusal('inbox items')],
+      [{ offset: '-1' }, offsetRefusal('inbox items')],
     ] as const) {
       await refused(rest(q), 'bad_request', sentence)
     }
@@ -630,7 +692,7 @@ describe('reading the inbox', () => {
       await refused(rest({ limit: String(limit) }), 'rule', LIMITS.listInbox.refusal)
       await refused(listMcp(fx, { limit }), 'rule', LIMITS.listInbox.refusal)
     }
-    await refused(listMcp(fx, { offset: -1 }), 'bad_request', OFFSET_SENTENCE)
+    await refused(listMcp(fx, { offset: 1 }), 'bad_request', offsetRefusal('inbox items'))
   })
 
   it('lists what the app lists: an archived task or one in an archived project leaves until restored', async () => {
@@ -702,149 +764,15 @@ describe('reading the inbox', () => {
     expect(back?.messages).toMatchObject([{ detail: 'Restored', read_at: null }])
   })
 
-  it('reads only the newest messages of a backlog that outgrows one transaction, and says so', async () => {
-    // Folding every message would read more documents than this allows.
-    const fx = await setup(
-      newT({
-        transactionLimits: { documentsRead: 2 * INBOX_LIMIT + 100 },
-      }),
-    )
-    const fresh = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
-    await fx.t.run(async (ctx) => {
-      for (let n = 0; n < 2 * INBOX_LIMIT + 200; n++) {
-        await ctx.db.insert('messages', {
-          id: uuid(),
-          org_id: fx.org.id,
-          recipient_id: fx.agent.id,
-          issue_id: fx.task.id,
-          issue_title: 'Backlog',
-          kind: 'change',
-          detail: 'backlog',
-          created_at: `2026-01-01T00:00:00.${String(n % 1000).padStart(3, '0')}Z`,
-        })
-      }
-    })
-    await plantMessage(fx.t, {
-      org_id: fx.org.id,
-      recipient_id: fx.agent.id,
-      issue_id: fresh.id,
-      created_at: '2026-02-01T00:00:00.000Z',
-    })
-    const page = await pageMcp(fx)
-    expect(page.truncated).toBe(true)
-    expect(page.items.map((i) => [i.task.key, i.unread_count])).toEqual([
-      [key(fresh), 1],
-      [key(fx.task), INBOX_LIMIT - 1],
-    ])
-    const rest = await fx.t.query(internal.machine.discussion.restListInbox, {
-      callerId: fx.agent.id,
-      ...R,
-      unread_only: 'true',
-      limit: '1',
-    })
-    expect(rest).toEqual({ items: [page.items[0]], truncated: true })
-  })
-
-  it('reads unread messages newest first and read ones most recently read first, as the app does', async () => {
-    const fx = await setup()
-    const busy = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
-    // the n-th message, created n ms and read n s after the start of its day
-    const row = (issue: Doc<'issues'>, n: number, read: boolean) => ({
-      id: uuid(),
-      org_id: fx.org.id,
-      recipient_id: fx.agent.id,
-      issue_id: issue.id,
-      issue_title: 'Backlog',
-      kind: 'change' as const,
-      detail: `n${n}`,
-      created_at: new Date(Date.parse('2026-01-01T00:00:00.000Z') + n).toISOString(),
-      ...(read
-        ? { read_at: new Date(Date.parse('2026-02-01T00:00:00.000Z') + n * 1000).toISOString() }
-        : {}),
-    })
-    // three old unread messages, then newer unread ones about a hidden task,
-    // then read messages about another task, three more than the read walk
-    // keeps
-    await fx.t.run(async (ctx) => {
-      for (let n = 0; n < 3; n++) await ctx.db.insert('messages', row(fx.task, n, false))
-      for (let n = 0; n < 5; n++) await ctx.db.insert('messages', row(fx.secret, n, false))
-      for (let n = 0; n < INBOX_LIMIT + 3; n++) {
-        await ctx.db.insert('messages', row(busy, n, true))
-      }
-    })
-    const counts = (page: Awaited<ReturnType<typeof pageMcp>>) =>
-      page.items.map((i) => [i.task.key, i.unread_count, i.messages.length])
-    let page = await pageMcp(fx)
-    // the unread ones all come back, and the most recently read fill the
-    // read walk's own limit
-    expect(counts(page)).toEqual([
-      [key(busy), 0, INBOX_LIMIT],
-      [key(fx.task), 3, 3],
-    ])
-    expect(page.items[0].messages.at(-1)?.detail).toBe(`n${INBOX_LIMIT + 2}`)
-    expect(page.items[0].messages.map((m) => m.detail)).not.toContain('n2')
-    expect(page.truncated).toBe(true)
-    const unread = await listMcp(fx, { unread_only: true })
-    expect(unread.map((i) => i.task.key)).toEqual([key(fx.task)])
-
-    // with the three least recently read gone, everything fits in one read
-    await fx.t.run(async (ctx) => {
-      for (const m of await ctx.db
-        .query('messages')
-        .withIndex('by_recipient_issue', (q) =>
-          q.eq('recipient_id', fx.agent.id).eq('issue_id', busy.id),
-        )
-        .collect()) {
-        if (['n0', 'n1', 'n2'].includes(m.detail)) await ctx.db.delete(m._id)
-      }
-    })
-    page = await pageMcp(fx)
-    expect(counts(page)).toEqual([
-      [key(busy), 0, INBOX_LIMIT],
-      [key(fx.task), 3, 3],
-    ])
-    expect(page.truncated).toBe(false)
-  })
-
-  it('each walk examines at most 2 * INBOX_LIMIT rows, so hidden rows cannot widen the read', async () => {
-    // Examining every row of either walk would pass this limit.
-    const fx = await setup(
-      newT({
-        transactionLimits: { documentsRead: 4 * INBOX_LIMIT + 200 },
-      }),
-    )
-    const base = { org_id: fx.org.id, recipient_id: fx.agent.id, issue_title: 'T' }
-    await fx.t.run(async (ctx) => {
-      const read = (n: number) => new Date(Date.parse(NOW) + n * 1000).toISOString()
-      const row = (issue: Doc<'issues'>, read_at?: string) => ({
-        ...base,
-        id: uuid(),
-        issue_id: issue.id,
-        kind: 'change' as const,
-        detail: 'd',
-        created_at: NOW,
-        ...(read_at === undefined ? {} : { read_at }),
-      })
-      // the visible message was read before every hidden one
-      await ctx.db.insert('messages', row(fx.task, read(0)))
-      for (let n = 1; n <= 1500; n++) {
-        await ctx.db.insert('messages', row(fx.secret))
-        await ctx.db.insert('messages', row(fx.secret, read(n)))
-      }
-    })
-    // each walk examines 2 * INBOX_LIMIT hidden rows and stops, so the
-    // visible read one is not reached, as in the app
-    expect(await pageMcp(fx)).toEqual({ items: [], truncated: true })
-  })
-
   it("lists only the caller's own rows", async () => {
     const fx = await setup()
-    await plantMessage(fx.t, {
+    await plantHeld(fx.t, {
       org_id: fx.org.id,
       recipient_id: fx.user.id,
       issue_id: fx.task.id,
     })
-    expect(await listMcp(fx)).toEqual([])
+    // the agent holds no message and no build state: an empty inbox, whole
+    expect(await pageMcp(fx)).toEqual({ next_cursor: null, items: [] })
     expect(await listMcp(fx, {}, fx.user.id)).toHaveLength(1)
   })
 })
@@ -896,10 +824,10 @@ describe('changing the inbox', () => {
   it('marks items read and unread by task, pruning read rows like the app', async () => {
     const fx = await setup()
     const base = { org_id: fx.org.id, recipient_id: fx.agent.id, issue_id: fx.task.id }
-    const first = await plantMessage(fx.t, { ...base, created_at: '2026-03-01T00:00:00.000Z' })
-    const last = await plantMessage(fx.t, { ...base, created_at: '2026-03-02T00:00:00.000Z' })
+    const first = await plantHeld(fx.t, { ...base, created_at: '2026-03-01T00:00:00.000Z' })
+    const last = await plantHeld(fx.t, { ...base, created_at: '2026-03-02T00:00:00.000Z' })
     // someone else's row about the same task is never touched
-    const theirs = await plantMessage(fx.t, { ...base, recipient_id: fx.user.id })
+    const theirs = await plantHeld(fx.t, { ...base, recipient_id: fx.user.id })
     expect(await updateMcp(fx, { action: 'read', tasks: [key(fx.task), fx.task.id] })).toEqual({
       action: 'read',
       tasks: [key(fx.task)],
@@ -925,8 +853,8 @@ describe('changing the inbox', () => {
     const fx = await setup()
     const other = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
     const base = { org_id: fx.org.id, recipient_id: fx.agent.id }
-    await plantMessage(fx.t, { ...base, issue_id: fx.task.id, read_at: NOW })
-    await plantMessage(fx.t, { ...base, issue_id: other.id })
+    await plantHeld(fx.t, { ...base, issue_id: fx.task.id, read_at: NOW })
+    await plantHeld(fx.t, { ...base, issue_id: other.id })
     vi.useFakeTimers()
     try {
       const until = new Date(Date.now() + 3_600_000).toISOString()
@@ -955,13 +883,13 @@ describe('changing the inbox', () => {
   it('all: read marks every item and remove clears read ones, naming only readable tasks', async () => {
     const fx = await setup()
     const base = { org_id: fx.org.id, recipient_id: fx.agent.id }
-    await plantMessage(fx.t, { ...base, issue_id: fx.task.id })
+    await plantHeld(fx.t, { ...base, issue_id: fx.task.id })
     // a row about a task the agent lost sight of is marked too, as in the
     // app, but never named
-    await plantMessage(fx.t, { ...base, issue_id: fx.secret.id })
+    await plantHeld(fx.t, { ...base, issue_id: fx.secret.id })
     // a snoozed item stays out of both
     const snoozedTask = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
-    await plantMessage(fx.t, {
+    await plantHeld(fx.t, {
       ...base,
       issue_id: snoozedTask.id,
       snoozed_until: '2099-01-01T00:00:00.000Z',
@@ -1009,7 +937,7 @@ describe('changing the inbox', () => {
       const first = await readAll({ all: true })
       expect(first).toMatchObject({ tasks: [key(fx.task)], has_more: true })
       expect(first.before).toEqual(expect.any(Number))
-      const arrival = await plantMessage(fx.t, {
+      const arrival = await plantHeld(fx.t, {
         org_id: fx.org.id,
         recipient_id: fx.agent.id,
         issue_id: other.id,
@@ -1033,7 +961,7 @@ describe('changing the inbox', () => {
 
   it('refuses requests that name nothing, too much or the wrong instant, alike on both surfaces', async () => {
     const fx = await setup()
-    await plantMessage(fx.t, { org_id: fx.org.id, recipient_id: fx.agent.id, issue_id: fx.task.id })
+    await plantHeld(fx.t, { org_id: fx.org.id, recipient_id: fx.agent.id, issue_id: fx.task.id })
     const t = [key(fx.task)]
     for (const [action, body, sentence] of [
       ['read', {}, 'name the inbox items with tasks, or set all to true'],
@@ -1130,8 +1058,8 @@ describe('changing the inbox', () => {
   it('a task the caller cannot read refuses the whole change like an unknown one', async () => {
     const fx = await setup()
     const base = { org_id: fx.org.id, recipient_id: fx.agent.id }
-    await plantMessage(fx.t, { ...base, issue_id: fx.task.id })
-    await plantMessage(fx.t, { ...base, issue_id: fx.secret.id })
+    await plantHeld(fx.t, { ...base, issue_id: fx.task.id })
+    await plantHeld(fx.t, { ...base, issue_id: fx.secret.id })
     for (const ref of [key(fx.secret), 'QN-999999']) {
       await refused(
         updateMcp(fx, { action: 'remove', tasks: [key(fx.task), ref] }),
@@ -1149,12 +1077,12 @@ describe('changing the inbox', () => {
 
   it('the app runs the same writes on message ids, own rows only', async () => {
     const fx = await setup()
-    const mine = await plantMessage(fx.t, {
+    const mine = await plantHeld(fx.t, {
       org_id: fx.org.id,
       recipient_id: fx.user.id,
       issue_id: fx.task.id,
     })
-    const theirs = await plantMessage(fx.t, {
+    const theirs = await plantHeld(fx.t, {
       org_id: fx.org.id,
       recipient_id: fx.agent.id,
       issue_id: fx.task.id,
@@ -1233,8 +1161,8 @@ describe('the routes over HTTP', () => {
     const inbox = await http(fx.t, secret, 'GET', '/v1/inbox?unread_only=true')
     expect(inbox.status).toBe(200)
     expect(inbox.body).toMatchObject({
+      next_cursor: null,
       items: [{ task: { key: ref }, unread_count: 1 }],
-      truncated: false,
     })
     expect(await http(fx.t, secret, 'POST', '/v1/inbox/read', { tasks: [ref] })).toEqual({
       status: 200,
@@ -1274,7 +1202,7 @@ describe('the routes over HTTP', () => {
       }),
     )
     const own = await plantComment(fx.t, fx.task, viewerAgent)
-    await plantMessage(fx.t, {
+    await plantHeld(fx.t, {
       org_id: fx.org.id,
       recipient_id: viewerAgent.id,
       issue_id: fx.task.id,
@@ -1282,6 +1210,7 @@ describe('the routes over HTTP', () => {
     const secret = await plantKey(fx.t, viewerAgent)
     const ref = key(fx.task)
     expect((await http(fx.t, secret, 'GET', '/v1/inbox')).body).toMatchObject({
+      next_cursor: null,
       items: [{ task: { key: ref } }],
     })
     const readOnly = { status: 403, body: { error: 'this agent is a Viewer and can only read' } }

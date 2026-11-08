@@ -35,15 +35,20 @@ through the inbox ([Your inbox](./working-together.md#your-inbox)). MCP uses
 `list_comments`, `add_comment`, `update_comment`, `delete_comment`,
 `set_following`, `list_inbox` and `update_inbox`. REST uses
 `/v1/tasks/{ref}/comments`, `/v1/comments/{id}`, `/v1/tasks/{ref}/following`
-and `/v1/inbox`. A Standard user agent reads and clears its own inbox this
-way. A Viewer agent gets no new inbox messages and cannot follow tasks or
+and `/v1/inbox`. Both read the inbox a page at a time and give the next
+page's cursor until the end. A Standard user agent reads and clears its own
+inbox this way. A Viewer agent gets no new inbox messages and cannot follow tasks or
 clear its inbox, but it can still read messages it received before. An
 Inactive agent can neither read nor clear its inbox.
 
-For projects, MCP offers `list_projects`, `get_project`, `create_project`,
-`update_project`, `set_project_access`, `set_milestone` and
-`delete_milestone`, and REST uses `/v1/projects`, `/v1/projects/{ref}/access`
-and `/v1/projects/{ref}/milestones`. Both create projects and sub-projects,
+For projects, MCP offers `list_projects`, `get_project`,
+`list_project_related`, `create_project`, `update_project`,
+`set_project_access`, `set_milestone` and `delete_milestone`, and REST uses
+`/v1/projects`, `/v1/projects/{ref}/access` and
+`/v1/projects/{ref}/milestones`. A project's read holds the first 50 of its
+milestones and grants, and both page the rest. Both list projects a page at a time,
+each top-level project followed by its sub-projects, find them by a word of
+their name or by their key, create projects and sub-projects,
 change their settings, archive and restore them, add and change milestones
 and change sharing one user or team at a time, by the same rules as the app
 ([Creating projects and sub-projects](./who-sees-what-the-access-model.md#creating-projects-and-sub-projects)).
@@ -66,8 +71,9 @@ To learn who a credential acts as and find people, MCP offers `get_me`,
 `list_users` and `list_project_users`, and `update_user` sets a person's
 plannable weekly hours. REST reads with `/v1/me`, `/v1/users` and
 `/v1/projects/{ref}/users`, and `PATCH /v1/users/{id}` sets the hours. Both
-list the organization's people, labels and teams a page at a time in name
-order, and find them by a name search, every word of it in any order.
+list the organization's people, labels and teams, and a project's people,
+a page at a time in name order, and find people, labels and teams by a name
+search, every word of it in any order.
 
 Both APIs support `reviewer_id` with the same eligibility rules as
 `assignee_id`. Moving a task into `review` sets its remaining hours to the

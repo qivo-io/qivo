@@ -1057,11 +1057,20 @@ type Held = { teams: string[]; onRoot: string[]; seat: boolean }
  * access_unchecked as well), a member's task history
  * (lib/activityVisibility.ts, whose pages in the task window, REST and MCP
  * refuse a page whose check stopped, and whose receivedRows leaves such a
- * row out, so model/issues.ts taskWriters names nobody for it) and the REST
+ * row out, so model/issues.ts taskWriters names nobody for it), the REST
  * and MCP single-task read with its related lists (lib/core.ts taskOut and
  * relatedPage, which refuse the whole call where a check stopped, and whose
- * delay answers it unavailable, lib/machineDelay.ts taskForecaster) apply
- * this one rule, each with its own answer for that refusal. */
+ * delay answers it unavailable, lib/machineDelay.ts taskForecaster), and
+ * the REST and MCP project lists, single-project read and project write
+ * answers (machine/projects.ts projectPage and projectRead, which refuse
+ * the whole call, and roll a write back, where a check of a row or of the
+ * project's level stopped, and whose completion answers it unavailable,
+ * lib/core.ts projectCompletion), the REST and MCP Inbox's pages
+ * (machine/discussion.ts inboxPage, through the Inbox's walk, which refuse
+ * the whole page where a check stopped) and the answer of its bulk change
+ * with `all` (lib/core.ts machineShown, which refuses the change, rolled
+ * back, where a check stopped) apply this one rule, each with its own
+ * answer for that refusal. */
 export function accessOf(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
@@ -1139,9 +1148,9 @@ export async function canSeeProject(
 /* Access for a reason other than read-only navigation, the per-profile
  * counterpart of accessOf's accessible. On a parent it means its lead, or
  * an individual or team grant on the parent itself, for an organization
- * admin as for anyone. On a sub-project it equals canSeeProject. The
- * project user list answers it for every profile at once through
- * projectLevelsForProfiles. */
+ * admin as for anyone. On a sub-project it equals canSeeProject. The REST
+ * and MCP project user list (lib/core.ts projectUserPage) answers it for
+ * every profile at once through projectLevelsForProfiles. */
 export async function canAccessProject(
   ctx: QueryCtx,
   profile: Doc<'profiles'>,
@@ -1317,7 +1326,7 @@ export const orgProjects = (ctx: QueryCtx, orgId: string): Promise<Doc<'projects
     .collect()
 
 /* Amortized counterpart of projectLevel, used by REST and MCP access flags
- * and lists (lib/core.ts accessFlags and orgReach), Deleted items
+ * and lists (lib/core.ts accessFlags), Deleted items
  * (model/deletedItems.ts seenBy) and projectLevelsForPeople for people of
  * another organization. Evaluate actual projects rather than reusing the
  * parent's answer for all siblings. Navigation-only parent visibility is
@@ -1362,8 +1371,8 @@ export async function projectLevelsForOrg(
  * where a bounded design would add refusal paths and a second level rule
  * beside levelsFrom for sizes the design size says not to build for (agent
  * decision, 5 November 2026, closing t3/limits-machine-access-rows). Its
- * readers are REST and MCP access flags and lists (lib/core.ts accessFlags
- * and orgReach, through projectLevelsForOrg) and Deleted items
+ * readers are the REST and MCP task routes' access flags (lib/core.ts
+ * accessFlags), through projectLevelsForOrg, and Deleted items
  * (model/deletedItems.ts sightOf, pendingAccess and seenBy). Callers that ask for many people at
  * once keep their own bounds: projectLevelsForPeople with LEVELS_READ, and
  * Deleted items' steps with SIGHT_READ and the step budget. */
@@ -1713,8 +1722,8 @@ export async function projectLevelsForProfiles(
  * profile of another organization answers false. The task owner pickers
  * ask it for a new assignee or reviewer (model/pickers.ts ownerRule), the
  * rule the task writes ask one person at a time (model/issues.ts
- * assertAssigneeRule), and REST and MCP project users compute `assignable`
- * the same way (lib/core.ts listProjectUsersCore). Levels come only from
+ * assertAssigneeRule), and REST and MCP project users take `assignable`
+ * from it (lib/core.ts projectUserPage). Levels come only from
  * levelsFrom, so an organization admin passes only with a level of their
  * own, like anyone else. */
 export async function canBeAssignedFor(

@@ -1,7 +1,7 @@
 /* LIVE contract pass — the /mcp surface over the real wire, replaying its
  * byte-stable subset against the Convex deployment. Expected bytes are shared
  * with convex/tests/mcp.test.ts. Data-dependent exchanges (16
- * list_teams rows, 24 list_projects rows, last_used_at read-backs) are
+ * list_teams rows, the list_projects pages' 24 rows, last_used_at read-backs) are
  * deliberately skipped; gateway/infra headers are never pinned — only
  * content-type, allow, www-authenticate and the CORS surface.
  *
@@ -575,15 +575,21 @@ describe('write trip (modern leg, qva key — creates only what it deletes)', ()
 
     // Agents discover only valid destination-project users, with the
     // assignment-specific restriction stated separately.
-    const projectUsers = JSON.parse(
+    // Northstar's eight people fit one page, so its cursor is null
+    const projectPage = JSON.parse(
       await callTool('list_project_users', { project: 'SENS' }, 8),
-    ) as Array<{
-      id: string
-      name: string
-      active: boolean
-      org_role: string
-      assignable: boolean
-    }>
+    ) as {
+      next_cursor: string | null
+      users: Array<{
+        id: string
+        name: string
+        active: boolean
+        org_role: string
+        assignable: boolean
+      }>
+    }
+    expect(projectPage.next_cursor).toBeNull()
+    const projectUsers = projectPage.users
     expect(projectUsers.length).toBeGreaterThan(1)
     expect(Object.fromEntries(projectUsers.map((user) => [user.name, user.assignable]))).toEqual({
       'Nora Berg': true,

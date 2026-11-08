@@ -211,8 +211,20 @@ try {
   stage = 'default approval and project planning writes'
   const writeConnection = await authorize({ readOnly: false })
   stage = 'listing projects with default write approval'
-  const projects = await toolData(writeConnection.access_token, 'list_projects')
-  const project = projects.find((candidate) => candidate.type === 'project')
+  // list_projects answers {next_cursor, projects} a page at a time, so read
+  // on until a page holds a sub-project or the list ends
+  let project
+  let cursor = null
+  for (let page = 0; page < 20 && project === undefined; page++) {
+    const listed = await toolData(writeConnection.access_token, 'list_projects', {
+      limit: 200,
+      ...(cursor === null ? {} : { cursor }),
+    })
+    assert.ok(Array.isArray(listed.projects), 'list_projects answers a page of projects')
+    project = listed.projects.find((candidate) => candidate.type === 'project')
+    cursor = listed.next_cursor
+    if (cursor === null) break
+  }
   assert.ok(project, 'Existing Northstar sub-project is available')
   stage = 'creating a temporary planning task'
   taskAttempted = true

@@ -49,12 +49,11 @@ import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { ActionCtx, QueryCtx } from '../_generated/server'
 import { internalMutation, internalQuery } from '../_generated/server'
-import { hasProjectLevel, managesIn } from '../lib/access'
+import { hasProjectLevel } from '../lib/access'
 import { listActiveIssuesCore } from '../lib/activeTaskPage'
 import { archiveCursorText } from '../lib/archivedTasks'
 import { ORG_DELETING } from '../lib/billingAccess'
 import {
-  type AccessFlag,
   accessFlags,
   applyTaskUpdate,
   asMachineCaller,
@@ -67,19 +66,19 @@ import {
   credentialVia,
   destinationOf,
   findIssue,
+  findProject,
   findProjectRef,
   issueKey,
   listArchivedIssuesCore,
   listCommentsCore,
-  listProjectsCore,
-  listProjectUsersCore,
   loadCatalogue,
   type MeJson,
   meCore,
-  projectCompletion,
-  projectJson,
+  type ProjectUsersPageJson,
+  projectUserPage,
   type RestCommentJson,
   type RestIssueJson,
+  seesProject,
   type TaskAttachmentsJson,
   type TaskDetailJson,
   type TaskRefJson,
@@ -162,11 +161,19 @@ import { PLANNABLE_FIELDS } from '../model/people'
 import { assertRemainingShape, cleanTaskDate } from '../model/taskValues'
 import { authenticateSecret, goneWithDeletion, restAuth401, sha256hex } from './auth'
 import { DISCUSSION_ROUTES } from './discussion'
-import { orgProfile, PROJECT_ROUTES, projectDetailJson } from './projects'
+import {
+  managedProject,
+  orgProfile,
+  PROJECT_ROUTES,
+  type ProjectsPageJson,
+  projectPage,
+  projectRead,
+} from './projects'
 import { RECORD_ROUTES } from './records'
 import { conflictRetrying, type MachineEntry, type Principal, runEntry } from './registry'
 import {
   REST_CALLER as CALLER,
+  cursorPaging,
   internalError,
   namedPaging,
   needJson,
@@ -185,10 +192,8 @@ import {
 } from './shared'
 import { TEAM_ROUTES } from './teams'
 
-type RestProjectJson = ReturnType<typeof projectJson>
-type RestProjectDetailJson = Awaited<ReturnType<typeof projectDetailJson>>
+type RestProjectDetailJson = Awaited<ReturnType<typeof projectRead>>
 type RestUserJson = ReturnType<typeof userJson>
-type RestProjectUserJson = Awaited<ReturnType<typeof listProjectUsersCore>>[number]
 type RestTaskJson = RestIssueJson & TaskDetailJson & TaskAttachmentsJson
 /** A page of active or archived tasks; `next_cursor` is null on the last
  * one. */
@@ -200,13 +205,16 @@ const noWrite = (me: Caller): ConvexError<Refusal> => forbidden(CALLER[me.kind].
 
 /* --------------------------------------------------------- shared plumbing */
 
-/* The org project catalogue + the caller's flags on every project — ONE
- * indexed by_org scan per request. It resolves every ref in the org; nothing
- * here grants anything, and every disclosed id runs past the flags. */
+/* The org project catalogue and the caller's flags on every project, from
+ * ONE indexed by_org scan per request, which the task routes read: GET
+ * /v1/tasks with its archived tasks, POST /v1/tasks and a task move in
+ * PATCH /v1/tasks/{ref}, accepted at the design size's sum. It resolves
+ * every ref in the org; nothing here grants anything, and every disclosed
+ * id runs past the flags. The project routes read none of it
+ * (machine/projects.ts projectPage and projectRead). */
 type Access = {
   me: Caller
   cat: Catalogue
-  flags: Map<string, AccessFlag>
   readable: (projectId: string) => boolean
   writable: (projectId: string) => boolean
 }
@@ -233,7 +241,6 @@ async function catalogueAccess(
   return {
     me,
     cat,
-    flags,
     readable: (id) => flags.get(id)?.read === true,
     writable: (id) => flags.get(id)?.write === true,
   }
@@ -450,58 +457,83 @@ function patchFrom(fields: Record<string, unknown>): IssuePatch {
 
 /* ------------------------------------------------------------- projects -- */
 
-/* GET /v1/projects?archived= — readable projects on ONE side of the archived
- * axis, sorted by key, with the caller's access flags (rest:330-339). */
+/* GET /v1/projects?archived=&search=&limit=&cursor=&offset=, one page of
+ * the projects the caller can see on ONE side of the archived axis, in tree
+ * order, with the caller's access flags (machine/projects.ts projectPage,
+ * shared with MCP's list_projects). Checked in the order the docs give:
+ * `limit`, `offset` and the search (namedPaging), then `archived`, then
+ * the page's own refusals. An empty `cursor` or `search` is taken as
+ * absent. */
 export const listProjects = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess, archived: v.optional(v.string()) },
-  handler: async (ctx, a): Promise<RestProjectJson[]> => {
-    const { cat, flags, readable } = await withAccess(ctx, a.callerId, a.access)
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    archived: v.optional(v.string()),
+    search: v.optional(v.string()),
+    limit: v.optional(v.string()),
+    offset: v.optional(v.string()),
+    cursor: v.optional(v.string()),
+  },
+  handler: async (ctx, a): Promise<ProjectsPageJson> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const paging = namedPaging(LIMITS.listProjects, 'projects', {
+      ...a,
+      cursor: a.cursor || undefined,
+      search: a.search || undefined,
+    })
     if (a.archived !== undefined && a.archived !== 'true' && a.archived !== 'false') {
       throw badRequest('archived must be true or false')
     }
-    return listProjectsCore(cat, a.archived === 'true', readable).map((p) =>
-      projectJson(p, flags.get(p.id) ?? { read: false, write: false }),
-    )
+    return await projectPage(ctx, me, a.access, { ...paging, archived: a.archived === 'true' })
   },
 })
 
 /* GET /v1/projects/{ref} — an explicit ref resolves an archived project too;
- * a project the caller reads, or manages (lib/access.ts managesIn over the
- * catalogue, which reads nothing more: an organization admin or the
- * effective lead, in a meta tree), answers, and an unknown one or one they
- * neither read nor manage answers the one 404 (NO oracle on GET,
- * rest:341-347). The list row gains the single read's fields: lead, review
- * time, delay tracking, completion, milestones and grants, and for a
- * project the caller only manages neither completion nor milestones
- * (machine/projects.ts projectDetailJson). */
+ * a project the caller reads, or manages (machine/projects.ts
+ * managedProject: an organization admin or the effective lead, in a meta
+ * tree), answers, and an unknown one or one they neither read nor manage
+ * answers the one 404 (NO oracle on GET, rest:341-347). The list row gains
+ * the single read's fields: lead, review time, delay tracking, completion,
+ * milestones and grants, and for a project the caller only manages neither
+ * completion nor milestones (machine/projects.ts projectRead, which reads
+ * the project and the caller's access to it alone). */
 export const getProject = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
   handler: async (ctx, a): Promise<RestProjectDetailJson> => {
-    const { me, cat, flags, readable } = await withAccess(ctx, a.callerId, a.access)
-    const p = findProjectRef(cat, a.ref)
-    const root = p?.parent_id === undefined ? p : cat.byUuid.get(p.parent_id)
-    const manages = p !== undefined && root !== undefined && managesIn(me, p, root)
-    if (p === undefined || !(readable(p.id) || manages)) throw notFound('project not found')
-    return await projectDetailJson(
-      ctx,
-      p,
-      flags.get(p.id) ?? { read: false, write: false },
-      async () => await projectCompletion(ctx, p, { cat, readable }),
-    )
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const project = await managedProject(ctx, me, a.ref)
+    if (project === null) throw notFound('project not found')
+    return await projectRead(ctx, me, project, a.access)
   },
 })
 
-/* GET /v1/projects/{ref}/users — the project-scoped identity resolver for
- * imports and user pickers. A caller may only enumerate a project it can
- * itself read. Reporter eligibility is membership in this result; assignee
- * eligibility additionally requires `assignable`. */
+/* GET /v1/projects/{ref}/users?limit=&cursor=&offset=, the project-scoped
+ * identity resolver for imports and user pickers, one page of the
+ * project's people in name order, shared with MCP's list_project_users
+ * (lib/core.ts projectUserPage). A caller may only enumerate a project it
+ * can itself read (lib/core.ts findProject and seesProject), checked after
+ * the paging. Reporter eligibility is membership in this list; assignee
+ * eligibility additionally requires `assignable`. An empty cursor is taken
+ * as absent. */
 export const listProjectUsers = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
-  handler: async (ctx, a): Promise<RestProjectUserJson[]> => {
-    const { me, cat, readable } = await withAccess(ctx, a.callerId, a.access)
-    const project = findProjectRef(cat, a.ref)
-    if (project === undefined || !readable(project.id)) throw notFound('project not found')
-    return await listProjectUsersCore(ctx, me, project)
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    ref: v.string(),
+    limit: v.optional(v.string()),
+    cursor: v.optional(v.string()),
+    offset: v.optional(v.string()),
+  },
+  handler: async (ctx, a): Promise<ProjectUsersPageJson> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const paging = cursorPaging(LIMITS.listProjectUsers, 'project users', {
+      ...a,
+      cursor: a.cursor || undefined,
+    })
+    const project = await findProject(ctx, me, a.ref)
+    if (project === null || !(await seesProject(ctx, me, project)))
+      throw notFound('project not found')
+    return await projectUserPage(ctx, me, project, paging)
   },
 })
 
@@ -1283,12 +1315,16 @@ export const ROUTES: RestRoute[] = [
     path: 'projects',
     access: 'read',
     status: 200,
-    query: ['archived'],
+    query: ['archived', 'search', 'limit', 'cursor', 'offset'],
     run: (r, { callerId, access, query }) =>
       r.runQuery(internal.machine.rest.listProjects, {
         callerId,
         access,
         archived: query('archived'),
+        search: query('search'),
+        limit: query('limit'),
+        cursor: query('cursor'),
+        offset: query('offset'),
       }),
   }),
   route({
@@ -1304,8 +1340,16 @@ export const ROUTES: RestRoute[] = [
     path: 'projects/:ref/users',
     access: 'read',
     status: 200,
-    run: (r, { callerId, access, param }) =>
-      r.runQuery(internal.machine.rest.listProjectUsers, { callerId, access, ref: param('ref') }),
+    query: ['limit', 'cursor', 'offset'],
+    run: (r, { callerId, access, param, query }) =>
+      r.runQuery(internal.machine.rest.listProjectUsers, {
+        callerId,
+        access,
+        ref: param('ref'),
+        limit: query('limit'),
+        cursor: query('cursor'),
+        offset: query('offset'),
+      }),
   }),
   route({
     method: 'GET',

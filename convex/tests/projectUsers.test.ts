@@ -1,10 +1,15 @@
-/* listProjectUsersCore (lib/core.ts), the project user list behind REST
- * GET /v1/projects/{ref}/users and MCP list_project_users. It answers every
- * profile from the project's grants (lib/access.ts projectLevelsForProfiles)
- * and must list whom canAccessProject admits and mark `assignable` whom
+/* projectUserPage (lib/core.ts), the project user list behind REST
+ * GET /v1/projects/{ref}/users and MCP list_project_users, one page at a
+ * time in name order. It answers every profile from the project's grants
+ * (lib/access.ts projectLevelsForProfiles and canBeAssignedFor) and must
+ * list whom canAccessProject admits and mark `assignable` whom
  * profileCanBeAssigned admits, which is how it was computed before and how
- * the task writes still decide. The per-profile walk is kept here as the
- * reference.
+ * the task writes still decide. The per-profile walk over the whole
+ * roster, in the pages' order, is the reference (projectDetails.setup.ts).
+ * Every fixture keys its organization's names (nameKeys.setup.ts keyOrg)
+ * after its last planted profile, team, membership or grant, as every
+ * deployment holds them; a profile planted after it would make the walk
+ * throw on a profile without a key.
  *
  * The removal window's Reassign picker reads the same levels with a
  * removal's rows left out (projectLevelsForProfiles `without`), which must
@@ -34,26 +39,33 @@ import {
   projectLevelsForProfiles,
   type RemovedAccess,
 } from '../lib/access'
-import { listProjectUsersCore, listUsersCore, userJson } from '../lib/core'
+import { type ProjectUserJson, type ProjectUsersPageJson, projectUserPage } from '../lib/core'
 import { ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
 import { newTeam, SHAPES } from './accessShapes.setup'
 import { expectRefusal, NOW, newT, plantProject, plantSeat, uuid, withOrg } from './helpers.setup'
+import { keyOrg } from './nameKeys.setup'
+import { perProfileUsers } from './projectDetails.setup'
 
-/* The list as listProjectUsersCore built it before, one canAccessProject and
- * one profileCanBeAssigned walk per profile. */
-async function perProfileUsers(ctx: QueryCtx, me: Doc<'profiles'>, project: Doc<'projects'>) {
-  const out = []
-  for (const profile of await listUsersCore(ctx, me)) {
-    if (!(await canAccessProject(ctx, profile, project))) continue
-    out.push({
-      ...userJson(profile),
-      assignable: await profileCanBeAssigned(ctx, profile, project),
-    })
+/* Every page of `project`'s users for `me` in one transaction, `limit` a
+ * page. */
+async function allUsers(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  project: Doc<'projects'>,
+  limit = 7,
+): Promise<ProjectUserJson[]> {
+  const rows: ProjectUserJson[] = []
+  let cursor: string | null = null
+  for (let n = 0; n < 500; n++) {
+    const page: ProjectUsersPageJson = await projectUserPage(ctx, me, project, { limit, cursor })
+    rows.push(...page.users)
+    if (page.next_cursor === null) return rows
+    cursor = page.next_cursor
   }
-  return out
+  throw new Error('the list did not end')
 }
 
-describe('listProjectUsersCore', () => {
+describe('projectUserPage', () => {
   it('equals canAccessProject and profileCanBeAssigned for every role, kind, seat and grant shape', async () => {
     const seen = new Set<string>()
     for (const [name, plant] of SHAPES) {
@@ -61,6 +73,7 @@ describe('listProjectUsersCore', () => {
       const f = await withOrg(t)
       const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
       await t.run((ctx) => plant(ctx, f, subject))
+      await keyOrg(t, f.org.id)
       await t.run(async (ctx) => {
         // as the shape left them, leads and archive marks included
         const projects = await Promise.all(
@@ -73,7 +86,7 @@ describe('listProjectUsersCore', () => {
             for (const active of [true, false]) {
               await ctx.db.patch(subject._id, { org_role, kind, active })
               for (const project of projects) {
-                const users = await listProjectUsersCore(ctx, f.admin, project)
+                const users = await allUsers(ctx, f.admin, project)
                 expect(
                   users,
                   `${name}: ${active ? 'active' : 'inactive'} ${org_role} ${kind} on ${project.key}`,
@@ -106,6 +119,7 @@ describe('listProjectUsersCore', () => {
       type: 'project',
       parent_id: f.otherProject.id,
     })
+    await keyOrg(t, f.org.id)
     await t.run(async (ctx) => {
       for (const project of [loose, nested, foreignParent]) {
         const levelOf = await projectLevelsForProfiles(ctx, project)
@@ -113,7 +127,7 @@ describe('listProjectUsersCore', () => {
           expect(levelOf(me), `${me.name} on ${project.key}`).toBeNull()
           expect(await canAccessProject(ctx, me, project)).toBe(false)
         }
-        expect(await listProjectUsersCore(ctx, f.admin, project)).toEqual([])
+        expect(await allUsers(ctx, f.admin, project)).toEqual([])
       }
     })
     // A missing parent or a cycle refuses, as rootMetaOf does for each profile.
@@ -128,23 +142,20 @@ describe('listProjectUsersCore', () => {
     await plantProject(t, { org_id: f.org.id, type: 'meta', id: two, parent_id: one })
     for (const project of [dangling, cycle]) {
       await expectRefusal(
-        t.run((ctx) => listProjectUsersCore(ctx, f.admin, project)),
+        t.run((ctx) => allUsers(ctx, f.admin, project)),
         'not_found',
         /project not found/,
       )
     }
   })
 
-  it("stays within Convex's 4,096 index ranges for 1,100 people in two teams sharing the parent, where the per-profile checks did not", async () => {
-    const CROWD = 1100
+  it("pages 1,000 people in two teams sharing the parent inside Convex's limits, where the per-profile checks passed them", async () => {
+    // withOrg's five people and 995 more, the design size's 1,000
+    const CROWD = 995
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     // Hardware and a second team each hold User on TBED, and the crowd is
     // split between them, so each person reaches FW only through a team.
-    // convex-test counts every query, about 19 per person here. A deployment
-    // counts a range the function already read once, which leaves each
-    // person's two grants and two team memberships, about 4,400 ranges for
-    // this crowd.
     await t.run(async (ctx) => {
       const second = await newTeam(ctx, f.org.id)
       for (const team_id of [f.team.id, second]) {
@@ -175,26 +186,43 @@ describe('listProjectUsersCore', () => {
         })
       }
     })
+    await keyOrg(t, f.org.id)
     await expect(t.run((ctx) => perProfileUsers(ctx, f.admin, f.sub))).rejects.toThrow(
       /Too many index ranges read/,
     )
-    const ranges = await t.run(async (ctx) => {
-      const users = await listProjectUsersCore(ctx, f.admin, f.sub)
-      // the crowd, admin, user (TBED's lead), guest, and viewer, who only reads
-      expect(users).toHaveLength(CROWD + 4)
-      expect(users.filter((u) => !u.assignable).map((u) => u.id)).toEqual([f.viewer.id])
-      return (await ctx.meta.getTransactionMetrics()).databaseQueries.used
-    })
-    // the roster, FW's root, the grants and shares on FW and TBED, and both
-    // teams with their members
-    expect(ranges).toBeLessThanOrEqual(10)
     const as_ = { callerId: f.admin.id, access: 'read' as const }
-    const rest = await t.query(internal.machine.rest.listProjectUsers, { ...as_, ref: 'FW' })
+    const rest: ProjectUserJson[] = []
+    const mcp: ProjectUserJson[] = []
+    let cursor: string | undefined
+    let pages = 0
+    do {
+      const page = await t.query(internal.machine.rest.listProjectUsers, {
+        ...as_,
+        ref: 'FW',
+        limit: '200',
+        cursor,
+      })
+      rest.push(...page.users)
+      cursor = page.next_cursor ?? undefined
+      pages += 1
+    } while (cursor !== undefined)
+    do {
+      const page = JSON.parse(
+        await t.query(internal.machine.mcp.listProjectUsers, {
+          ...as_,
+          project: 'FW',
+          limit: 200,
+          cursor,
+        }),
+      ) as ProjectUsersPageJson
+      mcp.push(...page.users)
+      cursor = page.next_cursor ?? undefined
+    } while (cursor !== undefined)
+    // the crowd, admin, user (TBED's lead), guest, and viewer, who only reads
     expect(rest).toHaveLength(CROWD + 4)
-    const mcp: unknown[] = JSON.parse(
-      await t.query(internal.machine.mcp.listProjectUsers, { ...as_, project: 'FW' }),
-    )
-    expect(mcp).toHaveLength(CROWD + 4)
+    expect(rest.filter((u) => !u.assignable).map((u) => u.id)).toEqual([f.viewer.id])
+    expect(mcp).toEqual(rest)
+    expect(pages).toBeGreaterThanOrEqual(5)
   })
 })
 
