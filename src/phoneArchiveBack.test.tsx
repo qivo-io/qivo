@@ -7,7 +7,11 @@ import { TooltipProvider } from './components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixture.setup'
-import { projectNavStandIn } from './store/projectNavStandIn.setup'
+import {
+  answerProjectNav,
+  isProjectNavRead,
+  projectNavStandIn,
+} from './store/projectNavStandIn.setup'
 
 /* Archiving a task on a phone, on App and the real store: the task leaves
    the board while its Archive or delete dialog is open, and the window
@@ -136,8 +140,8 @@ async function openArchive() {
     else if (name.startsWith('overview:')) answerOverview(server, name, args, next, fail)
     // the navigation lists the views and pickers read, as the server
     // answers them
-    if (name.startsWith('projectNav:') && name !== 'projectNav:byIds')
-      next(projectNavStandIn(snap, name, args))
+    if (isProjectNavRead(name) && name !== 'projectNav:byIds')
+      answerProjectNav(snap, name, args, next, fail)
     return () => {}
   })
   let answer = () => {}

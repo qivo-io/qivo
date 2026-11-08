@@ -16,7 +16,11 @@ import {
 } from '../store/milestoneStandIn.setup'
 import { answerOverview } from '../store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
-import { projectNavStandIn } from '../store/projectNavStandIn.setup'
+import {
+  answerProjectNav,
+  isProjectNavRead,
+  projectNavStandIn,
+} from '../store/projectNavStandIn.setup'
 import { answerRoadmap, type ForcedRoadmap } from '../store/roadmapStandIn.setup'
 
 /* The Roadmap's milestone flags on App and the real store, from the
@@ -230,7 +234,7 @@ async function app(
     } else if (name.startsWith('overview:')) answerOverview(server, name, args, next, fail)
     // the sidebar's and the pickers' navigation lists, as the server
     // answers them
-    else if (name.startsWith('projectNav:')) next(projectNavStandIn(server, name, args))
+    else if (isProjectNavRead(name)) answerProjectNav(server, name, args, next, fail)
     else if (isMilestoneRead(name)) {
       const sub: Sub = { name, args: args as Sub['args'], next, fail, stopped: false }
       subs.push(sub)

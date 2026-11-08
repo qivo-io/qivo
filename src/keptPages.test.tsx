@@ -8,7 +8,11 @@ import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, underProgram } from './store/plannerFixture.setup'
-import { projectNavStandIn } from './store/projectNavStandIn.setup'
+import {
+  answerProjectNav,
+  isProjectNavRead,
+  projectNavStandIn,
+} from './store/projectNavStandIn.setup'
 import { answerRoadmap } from './store/roadmapStandIn.setup'
 import { type SyncArgs, teamSyncStandIn } from './store/teamSyncStandIn.setup'
 import { taskRow } from './views/boardFixture.setup'
@@ -220,8 +224,8 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
     }
     // the navigation lists the views and pickers read, as the server
     // answers them
-    if (name.startsWith('projectNav:') && name !== 'projectNav:byIds')
-      next(projectNavStandIn(snap, name, args))
+    if (isProjectNavRead(name) && name !== 'projectNav:byIds')
+      answerProjectNav(snap, name, args, next, fail)
     return () => {}
   })
   // a numbered project address resolves through projectNav.resolve

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LIMITS } from '../../convex/lib/limits'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
-import { projectNavStandIn } from '../store/projectNavStandIn.setup'
+import { answerProjectNav, isProjectNavRead } from '../store/projectNavStandIn.setup'
 
 /* An Inbox item whose task the workspace does not hold, while every task
    loads (store/liveParts.ts) or in a session that never asked for them:
@@ -158,7 +158,7 @@ async function loadingInbox(
     else if (name === 'snapshot:threadComments') threadReads.push(next)
     // the Move window's targets and the other navigation lists, as the
     // server answers them
-    else if (name.startsWith('projectNav:')) next(projectNavStandIn(snap, name, args))
+    else if (isProjectNavRead(name)) answerProjectNav(snap, name, args, next)
     return () => {}
   })
   network.query.mockResolvedValue(null)

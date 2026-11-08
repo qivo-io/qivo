@@ -8,7 +8,11 @@ import { TooltipProvider } from '../components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from '../store/boardStandIn.setup'
 import { answerOverview } from '../store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
-import { projectNavStandIn } from '../store/projectNavStandIn.setup'
+import {
+  answerProjectNav,
+  isProjectNavRead,
+  projectNavStandIn,
+} from '../store/projectNavStandIn.setup'
 
 /* The New task dialog's Create on App's own create wiring, in a store that
    never asked for every task, as the app boots: the window opens on the
@@ -127,7 +131,7 @@ async function app(path: string) {
     else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
     // the navigation reads the New task picker lists from, as the server
     // answers them
-    else if (name.startsWith('projectNav:')) next(projectNavStandIn(snap, name, args))
+    else if (isProjectNavRead(name)) answerProjectNav(snap, name, args, next, fail)
     return () => {}
   })
   // a numbered project address resolves through projectNav.resolve
