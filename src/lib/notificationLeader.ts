@@ -56,8 +56,8 @@
      `active` on a session's first beat.
    - The feed. A leader that can notify starts the feed after its first
      beat: fresh, with a baseline, on the page's first leadership with
-     nothing heard; as a takeover from the floor and keys the leader before
-     posted (`state`, sent each time they move and after each beat, once a
+     nothing heard; as a takeover from the floor, the keys and the
+     baseline's keys the leader before posted (`state`, sent each time they move and after each beat, once a
      fresh start took its baseline) when
      that tab's last beat is under RESUME_GAP_MS old; else with the resume
      order, as after a freeze, the back and forward cache, a capability
@@ -226,12 +226,20 @@ type Message =
   | { kind: 'capability' }
   | ({ kind: 'state' } & Handover)
 
-/* The most keys a handover carries: one feed answer's, and one more. */
+/* The most keys a handover carries in each list: one feed answer's, and
+   one more. */
 const HANDOVER_KEYS = 51
+
+/* Whether `value` is a list of keys a handover may carry. */
+const keysOf = (value: unknown): value is string[] =>
+  Array.isArray(value) &&
+  value.length <= HANDOVER_KEYS &&
+  value.every((k) => typeof k === 'string' && k.length <= 200)
 
 /* A message read off the channel, or null for one the leader drops: an
    unknown kind, a time that is not finite or a key that is no short
-   string, as after a deploy two builds share the channel. */
+   string, as after a deploy two builds share the channel. A state from a
+   build before the baseline's keys carries none. */
 function messageOf(data: unknown): Message | null {
   if (typeof data !== 'object' || data === null) return null
   const m = data as Record<string, unknown>
@@ -242,12 +250,11 @@ function messageOf(data: unknown): Message | null {
     case 'capability':
       return { kind: m.kind }
     case 'state': {
-      const { after, beat_at, keys } = m
+      const { after, beat_at, keys, baselined = [] } = m
       if (typeof after !== 'number' || !Number.isFinite(after) || after < 0) return null
       if (typeof beat_at !== 'number' || !Number.isFinite(beat_at) || beat_at < 0) return null
-      if (!Array.isArray(keys) || keys.length > HANDOVER_KEYS) return null
-      if (!keys.every((k) => typeof k === 'string' && k.length <= 200)) return null
-      return { kind: 'state', after, beat_at, keys: keys as string[] }
+      if (!keysOf(keys) || !keysOf(baselined)) return null
+      return { kind: 'state', after, beat_at, keys, baselined }
     }
     default:
       return null
@@ -379,7 +386,8 @@ export function startNotificationLeader(deps: LeaderDeps) {
 
   function postState() {
     if (!leading() || ownState === null || lastBeatAt === null) return
-    post({ kind: 'state', after: ownState.after, keys: ownState.keys, beat_at: lastBeatAt })
+    const { after, keys, baselined } = ownState
+    post({ kind: 'state', after, keys, baselined, beat_at: lastBeatAt })
   }
 
   /* Reads whether another tab waits for the lock. */
@@ -507,7 +515,7 @@ export function startNotificationLeader(deps: LeaderDeps) {
       h.after <= first.now &&
       first.now - h.beat_at <= RESUME_GAP_MS
     )
-      return { kind: 'takeover', after: h.after, keys: h.keys }
+      return { kind: 'takeover', after: h.after, keys: h.keys, baselined: h.baselined }
     if (freshLeft && h === null) return { kind: 'fresh' }
     return { kind: 'resume' }
   }
@@ -772,7 +780,8 @@ export function startNotificationLeader(deps: LeaderDeps) {
         return
       case 'state':
         if (!leading() && (heard === null || message.beat_at >= heard.beat_at)) {
-          heard = { after: message.after, keys: message.keys, beat_at: message.beat_at }
+          const { after, keys, baselined, beat_at } = message
+          heard = { after, keys, baselined, beat_at }
           // a page that heard a tab lead is no first start
           freshLeft = false
         }

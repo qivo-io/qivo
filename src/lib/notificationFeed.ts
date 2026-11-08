@@ -18,10 +18,12 @@
      first answer as a baseline: a claim with no events and that answer's
      `through`, never offering its events, so signing in or reloading
      replays no stored history. That answer's `more` is part of the
-     baseline too.
-   - A takeover starts from the floor and the keys the tab that led before
-     posted, as if it went on from there: it offers what its first answer
-     holds beyond those keys, and takes no baseline.
+     baseline too. Its keys are never offered later, since the baseline
+     recorded none of them and one may come back into the feed, as when
+     the person reads it and marks it unread again.
+   - A takeover starts from the floor, the keys and the baseline's keys the
+     tab that led before posted, as if it went on from there: it offers
+     what its first answer holds beyond those keys, and takes no baseline.
    - Each later answer offers the events whose keys the last handled
      answer did not hold, oldest first, in one claim with the answer's
      `through`, never a clock, and shows each granted one. The floor then
@@ -48,8 +50,9 @@
      click writes a message, an item or a read state. A click opens the
      Inbox (openInbox).
 
-   It holds the floor, the keys of the last answer it handled (at most
-   FEED.events), the newest answer that arrived while a call ran, the last
+   It holds the floor, the keys of the last answer it handled and of its
+   baseline (at most FEED.events each), the newest answer that arrived
+   while a call ran, the last
    connection count and whether a resume waits: no event log. Each time
    the floor or the keys move after a fresh start's baseline it tells the
    leader (moved), which posts them for a tab that may take over; before
@@ -118,11 +121,8 @@ export type FeedDeps = {
 }
 
 /** How the feed starts: fresh, with a baseline; as a takeover from the
-    floor and keys the tab that led before posted; or with the resume order. */
-export type FeedStart =
-  | { kind: 'fresh' }
-  | { kind: 'takeover'; after: number; keys: readonly string[] }
-  | { kind: 'resume' }
+    state the tab that led before posted; or with the resume order. */
+export type FeedStart = { kind: 'fresh' } | ({ kind: 'takeover' } & FeedState) | { kind: 'resume' }
 
 /** What the leader lends the feed while it leads: its beat, which every
     beat the feed needs goes through, and where the feed's floor and keys
@@ -132,10 +132,11 @@ export type FeedLink = {
   moved: (state: FeedState) => void
 }
 
-/** The floor the feed is watched with and the keys of the last answer it
-    handled, which a takeover starts from. The feed tells them only once a
-    fresh start's baseline is taken. */
-export type FeedState = { after: number; keys: string[] }
+/** The floor the feed is watched with, the keys of the last answer it
+    handled and the keys of its fresh start's baseline, which a takeover
+    starts from. The feed tells them only once a fresh start's baseline is
+    taken. */
+export type FeedState = { after: number; keys: readonly string[]; baselined: readonly string[] }
 
 /** One answer of the feed, or why it failed. */
 export type FeedNews = { value: Feed } | { error: unknown }
@@ -207,6 +208,9 @@ export function createNotificationFeed(deps: FeedDeps) {
   let baseline = false
   // the keys of the last answer handled
   let lastKeys = new Set<string>()
+  // the keys of the fresh start's baseline, which it never offers, since
+  // the baseline recorded none of them and one may come back into the feed
+  let baselined = new Set<string>()
   // the newest answer not handled yet
   let waiting: Feed | null = null
   let lastConnection = 0
@@ -236,7 +240,8 @@ export function createNotificationFeed(deps: FeedDeps) {
      while a fresh start's baseline waits, so a tab that takes over then
      takes the baseline itself. */
   function moved() {
-    if (link && watched !== null && !baseline) link.moved({ after: watched, keys: [...lastKeys] })
+    if (link && watched !== null && !baseline)
+      link.moved({ after: watched, keys: [...lastKeys], baselined: [...baselined] })
   }
 
   function watchFeed() {
@@ -329,11 +334,16 @@ export function createNotificationFeed(deps: FeedDeps) {
     if (baseline) {
       // a fresh start's first answer, whose events it never offers
       await claimEvents(mine, [], feed.through)
-      baseline = false
+      if (mine === epoch) {
+        baseline = false
+        baselined = new Set(feed.events.map((e) => e.key))
+      }
     } else {
       // a burst larger than one answer becomes one summary
       if (feed.more) await summarize(mine)
-      const offered = feed.events.filter((e) => !lastKeys.has(e.key)).reverse()
+      const offered = feed.events
+        .filter((e) => !lastKeys.has(e.key) && !baselined.has(e.key))
+        .reverse()
       if (offered.length > 0) await claimEvents(mine, offered, feed.through)
     }
     if (mine !== epoch) return
@@ -408,6 +418,7 @@ export function createNotificationFeed(deps: FeedDeps) {
     watched = null
     baseline = false
     lastKeys = new Set()
+    baselined = new Set()
     waiting = null
     resumePending = false
     freshBeat = null
@@ -440,6 +451,7 @@ export function createNotificationFeed(deps: FeedDeps) {
       } else {
         after = Math.max(start.after, first.now - ALERT_WINDOW_MS)
         lastKeys = new Set(start.keys)
+        baselined = new Set(start.baselined)
       }
       watchFeed()
     },
@@ -480,8 +492,8 @@ export function createNotificationFeed(deps: FeedDeps) {
       while (current !== null) await current
     },
     /** What the client holds, for tests: the keys of the last answer and
-        whether an answer waits. */
-    held: () => ({ keys: lastKeys.size, waiting: waiting !== null }),
+        of the baseline, and whether an answer waits. */
+    held: () => ({ keys: lastKeys.size, baselined: baselined.size, waiting: waiting !== null }),
     /** Stops leading: forgets the floor, the answer and its keys, stops the
         watch, and lets no run in progress show or move anything. */
     stop() {

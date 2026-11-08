@@ -64,6 +64,8 @@ type FeedDouble = {
   link: FeedLink | null
   /** the keys it posts once it leads, as its first watch does */
   keys: string[]
+  /** the baseline's keys it posts with them */
+  baselined: string[]
   lead(start: FeedStart, link: FeedLink, first: Beat): void
   stop(): void
   resume(): void
@@ -115,10 +117,11 @@ function openTab(p: Profile, { can = true, locks }: { can?: boolean; locks?: Lea
     ticks: 0,
     link: null,
     keys: ['m1'],
+    baselined: ['b1'],
     lead(start, link, first) {
       feed.leads.push(start)
       feed.link = link
-      link.moved({ after: first.now - 10 * MINUTE, keys: feed.keys })
+      link.moved({ after: first.now - 10 * MINUTE, keys: feed.keys, baselined: feed.baselined })
     },
     stop() {
       feed.stops += 1
@@ -282,7 +285,9 @@ describe('takeover and end', () => {
       name: 'notifications:beat',
       args: { instance: `tab-${b.number}`, can_notify: true },
     })
-    expect(b.feed.leads).toEqual([{ kind: 'takeover', after: expect.any(Number), keys: ['m1'] }])
+    expect(b.feed.leads).toEqual([
+      { kind: 'takeover', after: expect.any(Number), keys: ['m1'], baselined: ['b1'] },
+    ])
     // a tab waited, so the old leader sent no end
     expect(a.ends()).toEqual([])
     expect(a.feed.stops).toBe(1)
@@ -450,7 +455,9 @@ describe('takeover and end', () => {
     await flush()
     b.page.win.fire('pagehide', { persisted: false })
     await flush()
-    expect(c.feed.leads).toEqual([{ kind: 'takeover', after: expect.any(Number), keys: ['m1'] }])
+    expect(c.feed.leads).toEqual([
+      { kind: 'takeover', after: expect.any(Number), keys: ['m1'], baselined: ['b1'] },
+    ])
   })
 
   it('runs the resume order when the capability turns on again after a takeover', async () => {

@@ -49,7 +49,7 @@ import {
   uuid,
   withReadingAdmin,
 } from './helpers.setup'
-import { archiveRaw, grant, post } from './inboxItems.setup'
+import { archiveRaw, grant, markRead, markUnread, post } from './inboxItems.setup'
 
 const MINUTE = 60_000
 const DAY = 86_400_000
@@ -574,6 +574,43 @@ describe('the leader tab', () => {
     const next = await news(t, f, task)
     await settle([b], true)
     expect(b.notes.map((n) => n.tag)).toEqual([next?.id])
+  })
+
+  it('never offers a baselined message read and marked unread again, here or after a takeover, and alerts a late one', async () => {
+    const t = newT()
+    const { f, s, task } = await fixture(t)
+    // a message stored before either tab opened, which the baseline holds
+    const stored = await news(t, f, task)
+    if (!stored) throw new Error('no message')
+    const locks = createLockManager()
+    const a = openTab(s, true, locks)
+    const b = openTab(s, true, locks)
+    await startTabs([a, b])
+    expect(a.leader?.role()).toBe('leader')
+    /** The person opens the task, then marks it unread, inside the minute
+        the feed reads back. */
+    const readAndUnread = async (tab: Tab) => {
+      jump(0.1)
+      await markRead(t, f.guest, [stored.id])
+      await settle([tab], true)
+      await markUnread(t, f.guest, [stored.id])
+      await settle([tab], true)
+    }
+    await readAndUnread(a)
+    expect(a.notes).toEqual([])
+    // the next tab takes the baseline's keys over with the floor
+    a.leader?.stop()
+    await vi.advanceTimersByTimeAsync(0)
+    await settle([b], true)
+    expect(b.leader?.role()).toBe('leader')
+    await readAndUnread(b)
+    expect(b.notes).toEqual([])
+    // a notice stored late, with a time before the baseline, still alerts
+    const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'Late' })
+    const late = await post(t, f, { to: f.guest, task: other, minute: -0.5 })
+    await settle([b], true)
+    expect(b.notes.map((n) => n.tag)).toEqual([late?.id])
+    expect(b.client.held().baselined).toBe(1)
   })
 
   it('runs the resume order in a takeover whose last heard beat is stale', async () => {
