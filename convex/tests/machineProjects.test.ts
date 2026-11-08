@@ -62,6 +62,7 @@ import {
   mcpPage,
   oracleRead,
   oracleRows,
+  oracleSight,
   type ProjectRow,
   restPage,
 } from './machineProjects.setup'
@@ -863,45 +864,143 @@ describe('refusals', () => {
 
 /* ------------------------------------------- the single read and the writes */
 
+/* What a route answered: its rows, or the code and sentence it refused the
+ * call with. */
+const outcome = (call: Promise<unknown>) =>
+  call.then(
+    (out) => ({ out }),
+    (e: unknown) => {
+      if (!(e instanceof ConvexError)) throw e
+      const { code, message } = e.data as Refusal
+      return { code, message }
+    },
+  )
+
+/* REST's one 404 for a project the caller may not name. */
+const REST_MISSING = { code: 'not_found', message: 'project not found' }
+
+/* How many of the calls answered, were refused, and answered a project the
+ * caller manages without reading it. */
+type Shown = { answered: number; refused: number; managedOnly: number }
+
+/* For `me` on each of `projects`, by key: REST GET /v1/projects/{ref} and
+ * get_project answer what the catalogue answered, and so do the grant
+ * lists (GET /access/users and /access/teams, list_project_related's
+ * grants), where the catalogue showed the project as read or managed
+ * (oracleSight), and refuse it as an unknown project exactly where it did
+ * not; the milestone lists and the project users routes answer only where
+ * the caller reads it. The organization's names are keyed, which the grant
+ * lists and the users read. */
+async function sameSight(
+  t: T,
+  me: Doc<'profiles'>,
+  projects: readonly Doc<'projects'>[],
+  shown: Shown,
+) {
+  const ask = { callerId: me.id, access: 'write' as const }
+  for (const p of projects) {
+    const label = `${me.name} (${me.org_role}) on ${p.key}`
+    const { reads, manages } = await t.run((ctx) => oracleSight(ctx, me, p))
+    const MCP_MISSING = {
+      code: 'not_found',
+      message: `project "${p.key}" not found (or not visible to you)`,
+    }
+    const related = (list: 'milestones' | 'user_grants' | 'team_grants') =>
+      outcome(
+        t.query(internal.machine.projects.mcpProjectRelated, { ...ask, project: p.key, list }),
+      )
+    const rest = await outcome(t.query(internal.machine.rest.getProject, { ...ask, ref: p.key }))
+    const mcp = await outcome(
+      t.query(internal.machine.projects.mcpGetProject, { ...ask, project: p.key }),
+    )
+    const routes = {
+      userGrants: await outcome(
+        t.query(internal.machine.projects.restListUserGrants, { ...ask, ref: p.key }),
+      ),
+      teamGrants: await outcome(
+        t.query(internal.machine.projects.restListTeamGrants, { ...ask, ref: p.key }),
+      ),
+      milestones: await outcome(
+        t.query(internal.machine.projects.restListMilestones, { ...ask, ref: p.key }),
+      ),
+      users: await outcome(t.query(internal.machine.rest.listProjectUsers, { ...ask, ref: p.key })),
+      mcpUserGrants: await related('user_grants'),
+      mcpTeamGrants: await related('team_grants'),
+      mcpMilestones: await related('milestones'),
+      mcpUsers: await outcome(
+        t.query(internal.machine.mcp.listProjectUsers, { ...ask, project: p.key }),
+      ),
+    }
+    // each route answers where `answers`, else refuses as REST or MCP does
+    const expectRoutes = (names: (keyof typeof routes)[], answers: boolean) => {
+      for (const name of names) {
+        const missing = name.startsWith('mcp') ? MCP_MISSING : REST_MISSING
+        if (answers) expect(routes[name], `${label}: ${name}`).not.toHaveProperty('code')
+        else expect(routes[name], `${label}: ${name}`).toEqual(missing)
+      }
+    }
+    expectRoutes(['userGrants', 'teamGrants', 'mcpUserGrants', 'mcpTeamGrants'], reads || manages)
+    expectRoutes(['milestones', 'users', 'mcpMilestones', 'mcpUsers'], reads)
+    if (!(reads || manages)) {
+      shown.refused += 1
+      expect(rest, label).toEqual(REST_MISSING)
+      expect(mcp, label).toEqual(MCP_MISSING)
+      continue
+    }
+    shown.answered += 1
+    if (!reads) shown.managedOnly += 1
+    expect(rest, label).toEqual({ out: await t.run((ctx) => oracleRead(ctx, me, p, 'write')) })
+    expect(JSON.parse((mcp as { out: string }).out), label).toEqual((rest as { out: unknown }).out)
+  }
+}
+
 describe('the single read and the write answers', () => {
   it('answer what the catalogue answered, flags and completion included', async () => {
     const t = newT()
     const { profiles } = await plantNorthstar(t)
     await withReach(t)
     await countOrg(t, profiles[0].org_id)
+    await keyOrg(t, profiles[0].org_id)
     const projects = await t.run((ctx) =>
       ctx.db
         .query('projects')
         .withIndex('by_org', (q) => q.eq('org_id', profiles[0].org_id))
         .collect(),
     )
-    let answered = 0
-    for (const me of profiles) {
-      for (const p of projects) {
-        const rest = await t
-          .query(internal.machine.rest.getProject, { callerId: me.id, access: 'write', ref: p.key })
-          .catch((e: unknown) => e)
-        if (rest instanceof ConvexError) {
-          expect((rest.data as Refusal).code).toBe('not_found')
-          continue
-        }
-        answered += 1
-        expect(rest, `${me.name} on ${p.key}`).toEqual(
-          await t.run((ctx) => oracleRead(ctx, me, p, 'write')),
-        )
-        expect(
-          JSON.parse(
-            await t.query(internal.machine.projects.mcpGetProject, {
-              callerId: me.id,
-              access: 'write',
-              project: p.key,
-            }),
-          ),
-        ).toEqual(rest)
-      }
-    }
-    expect(answered).toBeGreaterThan(profiles.length)
+    const shown = { answered: 0, refused: 0, managedOnly: 0 }
+    for (const me of profiles) await sameSight(t, me, projects, shown)
+    console.log(`the single read over Northstar: ${JSON.stringify(shown)}`)
+    expect(shown.answered).toBeGreaterThan(profiles.length)
   })
+
+  it('refuse a project exactly where the catalogue did not answer it, for every grant shape and role', async () => {
+    const shown = { answered: 0, refused: 0, managedOnly: 0 }
+    for (const [name, plant] of SHAPES) {
+      const t = newT()
+      const f = await withOrg(t)
+      const subject = await plantSeat(t, { org_id: f.org.id, name: `Subject, ${name}` })
+      await t.run((ctx) => plant(ctx, f, subject))
+      await withReach(t)
+      await countOrg(t, f.org.id)
+      await keyOrg(t, f.org.id)
+      const projects = await t.run(
+        async (ctx) =>
+          await ctx.db
+            .query('projects')
+            .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+            .collect(),
+      )
+      for (const org_role of ORG_ROLES) {
+        await t.run((ctx) => ctx.db.patch(subject._id, { org_role }))
+        await sameSight(t, { ...subject, org_role }, projects, shown)
+      }
+      for (const me of [f.admin, f.guest, f.agent]) await sameSight(t, me, projects, shown)
+    }
+    // every outcome came up: answered, refused, and managed without reading
+    console.log(`the single read over the grant shapes: ${JSON.stringify(shown)}`)
+    expect(shown.refused).toBeGreaterThan(0)
+    expect(shown.managedOnly).toBeGreaterThan(0)
+  }, 60_000)
 
   it('counts a top-level project’s sub-projects the caller reads in part, and a sub-project itself', async () => {
     const t = newT()

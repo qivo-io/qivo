@@ -11,6 +11,7 @@
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
+import { managesIn } from '../lib/access'
 import {
   accessFlags,
   type Caller,
@@ -115,6 +116,26 @@ export async function oracleRead(
     flags.get(project.id) ?? { read: false, write: false },
     () => oracleCompletion(ctx, cat, readable, project),
   )
+}
+
+/** Who may name `project` on the project routes, as the catalogue decided
+ * it before they read one project's access: `reads` for the routes that
+ * read the project (the milestone lists and the project users), and
+ * `reads || manages` for the single read, its grant lists and the
+ * management routes, as REST GET /v1/projects/{ref} asked the catalogue's
+ * readable flag or lib/access.ts managesIn over its rows. */
+export async function oracleSight(
+  ctx: QueryCtx,
+  me: Caller,
+  project: Doc<'projects'>,
+): Promise<{ reads: boolean; manages: boolean }> {
+  const cat = await loadCatalogue(ctx, me)
+  const flags = await accessFlags(ctx, me, cat, 'read')
+  const root = project.parent_id === undefined ? project : cat.byUuid.get(project.parent_id)
+  return {
+    reads: flags.get(project.id)?.read === true,
+    manages: root !== undefined && managesIn(me, project, root),
+  }
 }
 
 /** What one list call is asked on both surfaces. */
