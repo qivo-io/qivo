@@ -65,6 +65,7 @@ import {
   type ProjectRow,
   restPage,
 } from './machineProjects.setup'
+import { keyOrg } from './nameKeys.setup'
 import { plantNorthstar } from './northstar.setup'
 import { countOrg } from './overviewCounts.setup'
 import {
@@ -1062,12 +1063,14 @@ describe('the single read and the write answers', () => {
         ),
       ).toBe(`project "${ref}" not found (or not visible to you)`)
     }
-    const rows = await t.query(internal.machine.rest.listProjectUsers, {
+    // the list walks the roster in name order, which every deployment keys
+    await keyOrg(t, f.org.id)
+    const { users } = await t.query(internal.machine.rest.listProjectUsers, {
       callerId: pia.id,
       access: 'read',
       ref: 'FW',
     })
-    expect(rows.map((r) => r.id)).toContain(pia.id)
+    expect(users.map((r) => r.id)).toContain(pia.id)
   })
 })
 

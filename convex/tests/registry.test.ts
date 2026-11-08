@@ -378,6 +378,19 @@ describe('REST route matching', () => {
       ref: 'FW',
       milestone: 'm1',
     })
+    // a project's related lists, beside the writes on the same paths
+    expect(match('GET', 'projects/FW/milestones')).toEqual({
+      route: 'GET projects/:ref/milestones',
+      ref: 'FW',
+    })
+    expect(match('GET', 'projects/FW/access/users')).toEqual({
+      route: 'GET projects/:ref/access/users',
+      ref: 'FW',
+    })
+    expect(match('GET', 'projects/FW/access/teams')).toEqual({
+      route: 'GET projects/:ref/access/teams',
+      ref: 'FW',
+    })
   })
 
   it('answers null (the unknown-route 404) for every other method or shape', () => {
@@ -395,7 +408,8 @@ describe('REST route matching', () => {
       ['GET', 'projects/FW/other'],
       ['PUT', 'projects/FW'],
       ['PUT', 'projects/FW/access/groups/g1'],
-      ['GET', 'projects/FW/milestones'],
+      ['GET', 'projects/FW/access'],
+      ['GET', 'projects/FW/access/groups'],
       ['GET', '%70rojects'],
       ['GET', 'issues'],
       ['PATCH', 'tasks/QN-1/attachments/abc'],

@@ -575,15 +575,21 @@ describe('write trip (modern leg, qva key — creates only what it deletes)', ()
 
     // Agents discover only valid destination-project users, with the
     // assignment-specific restriction stated separately.
-    const projectUsers = JSON.parse(
+    // Northstar's eight people fit one page, so its cursor is null
+    const projectPage = JSON.parse(
       await callTool('list_project_users', { project: 'SENS' }, 8),
-    ) as Array<{
-      id: string
-      name: string
-      active: boolean
-      org_role: string
-      assignable: boolean
-    }>
+    ) as {
+      next_cursor: string | null
+      users: Array<{
+        id: string
+        name: string
+        active: boolean
+        org_role: string
+        assignable: boolean
+      }>
+    }
+    expect(projectPage.next_cursor).toBeNull()
+    const projectUsers = projectPage.users
     expect(projectUsers.length).toBeGreaterThan(1)
     expect(Object.fromEntries(projectUsers.map((user) => [user.name, user.assignable]))).toEqual({
       'Nora Berg': true,

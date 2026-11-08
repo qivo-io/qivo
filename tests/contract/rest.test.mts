@@ -152,7 +152,13 @@ describe('routing and mount', () => {
   test('GET /v1/projects/{ref}/users returns the project-scoped reporter roster', async () => {
     const res = await call('GET', '/v1/projects/ELEC/users')
     expect(res.status).toBe(200)
-    const rows = (await res.json()) as Record<string, unknown>[]
+    // a page, which Northstar's eight people fill to its end
+    const page = (await res.json()) as {
+      next_cursor: string | null
+      users: Record<string, unknown>[]
+    }
+    expect(page.next_cursor).toBeNull()
+    const rows = page.users
     expect(Object.fromEntries(rows.map((user) => [user.name, user.assignable]))).toEqual({
       'Nora Berg': true,
       'Leo Martins': true,

@@ -137,8 +137,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = 'b836ddd0b6f519254462956190da37b1c80b63d51fe6299cfed3236c3eaab4f9'
-const SHA_TOOLS_MODERN = '71637a8f4cb5ee05f51d043879b13d171769668830b48daf114e31cda8d289f9'
+const SHA_TOOLS_LEGACY = '95a307d27959b668e91ffcf1e5c0127b78954b43228194e00f3a94b898217d37'
+const SHA_TOOLS_MODERN = '12f63ccd701604bde3d0377eebd77abc260d062d50f9b9495beadf6f9261d0dc'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -497,6 +497,7 @@ describe('body shape and leg selection', () => {
       'update_inbox',
       'set_following',
       'get_project',
+      'list_project_related',
       'create_project',
       'update_project',
       'set_project_access',
@@ -1140,14 +1141,19 @@ describe('read tools', () => {
     })
     const noAccess = await plantSeat(fx.t, { org_id: fx.org.id, name: 'No access' })
     await grant(fx.t, fx.meta.id, inactive.id, 'viewer')
+    // the list walks the roster in name order, which every deployment keys
+    await keyOrg(fx.t, fx.org.id)
 
-    const rows = JSON.parse(
+    const page = JSON.parse(
       await fx.t.query(internal.machine.mcp.listProjectUsers, {
         callerId: fx.agent.id,
         access: 'read',
         project: 'FW',
       }),
-    ) as Record<string, unknown>[]
+    ) as { next_cursor: string | null; users: Record<string, unknown>[] }
+    expect(Object.keys(page)).toEqual(['next_cursor', 'users'])
+    expect(page.next_cursor).toBeNull()
+    const rows = page.users
     expect(rows.map((row) => row.name)).toEqual([
       'admin',
       'guest',

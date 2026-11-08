@@ -243,6 +243,9 @@ const REQUESTS: Record<
   'GET projects': () => ({ path: '/v1/projects' }),
   'GET projects/:ref': () => ({ path: '/v1/projects/FW' }),
   'GET projects/:ref/users': () => ({ path: '/v1/projects/FW/users' }),
+  'GET projects/:ref/milestones': () => ({ path: '/v1/projects/FW/milestones' }),
+  'GET projects/:ref/access/users': () => ({ path: '/v1/projects/FW/access/users' }),
+  'GET projects/:ref/access/teams': () => ({ path: '/v1/projects/FW/access/teams' }),
   'GET users': () => ({ path: '/v1/users' }),
   'GET users/:ref': (fx) => ({ path: `/v1/users/${fx.f.user.id}` }),
   'PATCH users/:ref': (fx) => ({

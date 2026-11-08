@@ -78,6 +78,9 @@ async function setup(): Promise<Fx> {
   })
   await grant(t, f.sub.id, pia.id, 'user')
   await grant(t, f.meta.id, f.agent.id, 'user')
+  // the details' grant pages read in name order, which every deployment
+  // keys; a case that plants a grant or share later keys it again
+  await keyOrg(t, f.org.id)
   return { ...f, t, pia }
 }
 
@@ -253,7 +256,10 @@ describe('creating projects and sub-projects', () => {
       effective_review_hours: 2,
       track_delay: true,
       completion: { status: 'ok', done: 0, total: 0, percent: 0 },
+      milestones_next_cursor: null,
       milestones: [],
+      user_grants_next_cursor: null,
+      team_grants_next_cursor: null,
       grants: { users: [], teams: [] },
     })
     // one past Skunkworks at 4, the later of both existing top-level projects
@@ -1027,7 +1033,10 @@ describe('changing a project', () => {
       review_hours: null,
       effective_review_hours: 2,
       track_delay: false,
+      milestones_next_cursor: null,
       milestones: [],
+      user_grants_next_cursor: null,
+      team_grants_next_cursor: null,
       grants: {
         users: [
           { id: fx.guest.id, name: 'guest', level: 'user' },
@@ -1887,6 +1896,7 @@ describe('reading one project', () => {
         created_at: NOW,
       })
     })
+    await keyOrg(fx.t, fx.org.id)
     const out = await parsed(
       fx.t.query(internal.machine.projects.mcpGetProject, { ...as_(fx.agent), project: 'fw' }),
     )

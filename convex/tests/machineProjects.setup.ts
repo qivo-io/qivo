@@ -110,6 +110,7 @@ export async function oracleRead(
   const readable = (id: string) => flags.get(id)?.read === true
   return await projectDetailJson(
     ctx,
+    me,
     project,
     flags.get(project.id) ?? { read: false, write: false },
     () => oracleCompletion(ctx, cat, readable, project),

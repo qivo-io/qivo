@@ -498,12 +498,16 @@ describe('GET /v1/projects/{ref}/users', () => {
     await t.run(async (ctx) => {
       await ctx.db.patch(inactive._id, { active: false })
     })
+    // the list walks the roster in name order, which every deployment keys
+    await keyOrg(t, f.org.id)
 
-    const rows = await t.query(internal.machine.rest.listProjectUsers, {
+    const page = await t.query(internal.machine.rest.listProjectUsers, {
       callerId: f.agent.id,
       access: 'read',
       ref: 'fw',
     })
+    expect(page.next_cursor).toBeNull()
+    const rows = page.users
     expect(rows.some((u) => u.id === inaccessible.id)).toBe(false)
     expect(rows.map((u) => u.id).sort()).toEqual(
       [f.admin.id, f.user.id, f.viewer.id, f.guest.id, f.agent.id, inactive.id].sort(),
@@ -2593,8 +2597,11 @@ describe('a navigation-only parent hides its other sub-projects', () => {
         level: 'user',
       })
     })
+    await keyOrg(t, f.org.id)
     const rest = async (callerId: string, ref: string) =>
-      (await t.query(internal.machine.rest.listProjectUsers, { callerId, access: 'read', ref }))
+      (
+        await t.query(internal.machine.rest.listProjectUsers, { callerId, access: 'read', ref })
+      ).users
         .map((u) => u.id)
         .sort()
     const mcp = async (callerId: string, project: string) =>
@@ -2605,10 +2612,8 @@ describe('a navigation-only parent hides its other sub-projects', () => {
             access: 'read',
             project,
           }),
-        ) as {
-          id: string
-        }[]
-      )
+        ) as { users: { id: string }[] }
+      ).users
         .map((u) => u.id)
         .sort()
     const parentPeople = [f.admin.id, f.user.id, f.guest.id, f.viewer.id, f.agent.id].sort()

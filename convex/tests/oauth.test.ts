@@ -874,6 +874,7 @@ describe('OAuth provider and MCP integration', () => {
     const args: Record<string, Json> = {
       list_project_users: { project: f.sub.id },
       get_project: { project: f.sub.id },
+      list_project_related: { project: f.sub.id, list: 'milestones' },
       get_task: { ref: task.id },
       list_task_related: { ref: task.id, list: 'subtasks' },
       list_comments: { ref: task.id },

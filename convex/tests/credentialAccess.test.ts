@@ -1521,13 +1521,22 @@ describe('read-only credentials over HTTP', () => {
     const args: Record<string, Record<string, unknown>> = {
       list_project_users: { project: c.f.sub.key },
       get_project: { project: c.f.sub.key },
+      list_project_related: { project: c.f.sub.key, list: 'milestones' },
       get_task: { ref: MISSING_TASK },
       list_task_related: { ref: MISSING_TASK, list: 'subtasks' },
       list_comments: { ref: MISSING_TASK },
       list_team_members: { team_id: c.f.team.id },
     }
     // the lists every seat reads answer a page, not a refusal
-    const pages = ['list_users', 'list_labels', 'list_teams', 'list_team_members', 'list_projects']
+    const pages = [
+      'list_users',
+      'list_labels',
+      'list_teams',
+      'list_team_members',
+      'list_projects',
+      'list_project_users',
+      'list_project_related',
+    ]
     for (const secret of [c.readToken, c.viewerKey, readGrant]) {
       for (const tool of READ_TOOLS) {
         const res = await callTool(c.t, secret, tool.def.name, args[tool.def.name] ?? {})
