@@ -63,10 +63,11 @@ export function DesktopSettingsPage({
     setSaving(true)
     setError(null)
     try {
-      setValues(await settings.update(patch))
+      const saved = await settings.update(patch)
+      setValues(saved)
       // Show notifications decides whether this app can show alerts, which
       // the notification leader reports to the server at once
-      noteCapabilityChange()
+      noteCapabilityChange(saved)
     } catch {
       setError("Couldn't save desktop settings. Try again.")
       try {

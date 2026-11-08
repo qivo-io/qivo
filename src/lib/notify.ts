@@ -59,17 +59,35 @@ export function pageAlertsWork(): boolean {
   }
 }
 
+/* Show notifications as the last desktop settings save of this page
+   answered it (noteCapabilityChange), or null before one, for a shell
+   built before currentPermission. */
+let savedShow: boolean | null = null
+
+/* The desktop app's permission now: the bridge's fresh read, or in a shell
+   built before it, the value the bridge copied at the page's load, which a
+   settings save this page made since then overrides, as the shell answers
+   from Show notifications where the platform supports alerts. */
+function desktopPermission(desktop: QivoDesktopBridge): QivoDesktopNotificationPermission {
+  const { notifications } = desktop
+  if (typeof notifications.currentPermission === 'function')
+    return notifications.currentPermission()
+  if (notifications.permission === 'unsupported' || savedShow === null)
+    return notifications.permission
+  return savedShow ? 'granted' : 'denied'
+}
+
 /** Whether this page can show desktop alerts now, which the leader tab
     reports to the server as `can_notify`: in the desktop app, its bridge's
-    answer alone, read afresh, from Show notifications and the platform; in a browser, a
-    granted permission on a platform whose pages can show alerts
-    (pageAlertsWork). Anything it cannot read answers false. */
+    answer alone, read afresh, from Show notifications and the platform
+    (in a shell built before that read, the value at the page's load and
+    the settings this page saved since); in a browser, a granted
+    permission on a platform whose pages can show alerts (pageAlertsWork).
+    Anything it cannot read answers false. */
 export function canNotify(): boolean {
   try {
     if (typeof window === 'undefined') return false
-    // the bridge's `permission` is the value at the page's load
-    if (window.qivoDesktop)
-      return window.qivoDesktop.notifications.currentPermission() === 'granted'
+    if (window.qivoDesktop) return desktopPermission(window.qivoDesktop) === 'granted'
     return 'Notification' in window && Notification.permission === 'granted' && pageAlertsWork()
   } catch {
     return false
@@ -84,10 +102,12 @@ function capabilityMayHaveChanged() {
   for (const read of capabilityReaders) read()
 }
 
-/** Tells the capability watchers that a desktop settings save answered, so
-    the leader reads Show notifications again at once
-    (panels/settings/DesktopSettings.tsx). */
-export function noteCapabilityChange(): void {
+/** Tells the capability watchers that a desktop settings save answered
+    with `saved`, so the leader reads Show notifications again at once
+    (panels/settings/DesktopSettings.tsx); a shell built before the bridge's
+    fresh read is read from `saved`. */
+export function noteCapabilityChange(saved?: Pick<QivoDesktopSettings, 'showNotifications'>): void {
+  if (saved) savedShow = saved.showNotifications
   capabilityMayHaveChanged()
 }
 

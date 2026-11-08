@@ -94,6 +94,28 @@ describe('canNotify', () => {
     stop()
   })
 
+  it('reads a shell built before the fresh read from its load-time value and each settings save', async () => {
+    const { canNotify, noteCapabilityChange, watchCapability } = await import('./notify')
+    // the bridge of an installed shell from before currentPermission and power
+    const old = (permission: QivoDesktopNotificationPermission) =>
+      ({ notifications: { supported: true, permission } }) as unknown as QivoDesktopBridge
+    PageNotification.permission = 'denied'
+    window.qivoDesktop = old('granted')
+    expect(canNotify()).toBe(true)
+    const heard: boolean[] = []
+    const stop = watchCapability((can) => heard.push(can))
+    // Show notifications turned off and on in Settings, whose save answers
+    noteCapabilityChange({ showNotifications: false })
+    expect(canNotify()).toBe(false)
+    noteCapabilityChange({ showNotifications: true })
+    expect(canNotify()).toBe(true)
+    expect(heard).toEqual([false, true])
+    stop()
+    // a platform without alerts stays without them whatever is saved
+    window.qivoDesktop = old('unsupported')
+    expect(canNotify()).toBe(false)
+  })
+
   it('takes the desktop app’s bridge alone, whatever the web permission says', async () => {
     const { canNotify } = await import('./notify')
     // `permission` is the value at the page's load, and only the fresh read

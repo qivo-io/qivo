@@ -227,6 +227,31 @@ describe('desktop alerts in the store', () => {
     expect(sentNames.slice(before)).toEqual([])
   })
 
+  it('alerts in a desktop shell built before the fresh permission read and the wake', async () => {
+    // an installed test build's bridge: no currentPermission and no power
+    const show = vi.fn(async (_note: { tag: string; title: string; body: string }) => true)
+    globalThis.window.qivoDesktop = {
+      isElectron: true,
+      platform: 'linux',
+      notifications: {
+        supported: true,
+        permission: 'granted',
+        requestPermission: async () => 'granted',
+        show,
+        onClick: () => () => {},
+      },
+    } as unknown as QivoDesktopBridge
+    await boot()
+    expect(stand.calls[0]).toMatchObject({
+      name: 'notifications:beat',
+      args: { can_notify: true },
+    })
+    snapshot.messages.push(message('new', 'a', 0))
+    publish(snapshot)
+    await settle()
+    expect(show.mock.calls.map(([note]) => note.tag)).toEqual(['new'])
+  })
+
   it('raises nothing for the stored messages of a task that comes back into view, and one for a new mention', async () => {
     // task b is out of view, its message stored long before
     snapshot.messages.push(message('stored', 'b', 30 * MINUTE))
