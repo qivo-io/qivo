@@ -861,8 +861,8 @@ describe('inside Convex’s limits', () => {
   it('cuts 200 sub-projects’ new groups at 50, each with its own actor', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
-    // the person figure, 200 sub-projects the guest reads, 3 under each of
-    // 67 granted projects, a new group in each from one of 50 actors
+    // the person figure, 200 sub-projects the guest reads, at most 3 under
+    // each of 67 granted projects, a new group in each from one of 50 actors
     const subs = await grantedSpread(t, f, 200)
     expect(new Set(subs.map((s) => s.parent_id)).size).toBe(67)
     const actors: Doc<'profiles'>[] = []
