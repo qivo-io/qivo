@@ -567,19 +567,20 @@ describe('reads at the design size', () => {
       await plantTeam(t, f.org.id, 'Mine 1', [pia]),
       await plantTeam(t, f.org.id, 'Mine 2', [pia]),
     ]
-    const others = [
-      await plantTeam(t, f.org.id, 'Other 0'),
-      await plantTeam(t, f.org.id, 'Other 1'),
-      await plantTeam(t, f.org.id, 'Other 2'),
-      await plantTeam(t, f.org.id, 'Other 3'),
-    ]
     for (let i = 0; i < 3; i++)
       await plantShares(
         t,
         mine[i],
         shared.filter((_, n) => n % 3 === i),
       )
-    for (const team of others) await plantShares(t, team, shared)
+    // the other four shares of each project, from 20 teams of 20 projects
+    // each, an everyday figure, so no team passes the design size of 50
+    for (let i = 0; i < 20; i++)
+      await plantShares(
+        t,
+        await plantTeam(t, f.org.id, `Other ${i}`),
+        shared.slice((i % 5) * 20, (i % 5) * 20 + 20),
+      )
     await ready(t, f)
     const { out } = await call(
       t,

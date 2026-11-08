@@ -1426,7 +1426,8 @@ export const BY_IDS_LIMIT = `ids must name at most ${BY_IDS_MAX} projects`
  * - the 100 sub-projects 5 of the person's teams share, 20 each, with
  *   their parents: 211 ranges and 270 documents;
  * - 100 projects each shared with 5 teams, the person in 3 teams reaching
- *   each through one: 178 ranges and 365 documents;
+ *   each through one and the other shares from teams of 20 projects each:
+ *   182 ranges and 365 documents;
  * - 50 live projects one of the person's teams shares and 50 of its 150
  *   archived shares, which it leaves out: 168 ranges and 335 documents;
  * - 100 projects the person does not see, each with other people's child
