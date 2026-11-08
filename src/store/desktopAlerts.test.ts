@@ -1,4 +1,5 @@
 import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
@@ -291,6 +292,32 @@ describe('desktop alerts in the store', () => {
     ])
     expect(tags()).toEqual(['qivo:catch-up'])
     expect(PageNotification.shown[0].title).toBe('New unread activity')
+  })
+
+  it('starts the alerts afresh at the boot after the server refused the session', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let refuse = true
+    network.mutation.mockImplementation(async (ref, args) => {
+      const name = getFunctionName(ref)
+      sentNames.push(name)
+      if (refuse && name === 'notifications:beat') throw new ConvexError('Unauthenticated')
+      if (stand.answers(name)) return stand.answer(name, args)
+      return null
+    })
+    const beats = () => sentNames.filter((n) => n === 'notifications:beat').length
+    await boot()
+    expect(beats()).toBe(1)
+    expect(globalThis.window.__qivoNotify).toMatchObject({ role: 'stopped', beats: 0 })
+    // a sign-in in this page boots the store again, and a new leader beats
+    refuse = false
+    await store.initStore()
+    await settle()
+    expect(beats()).toBe(2)
+    expect(globalThis.window.__qivoNotify).toMatchObject({ role: 'alone', beats: 1 })
+    snapshot.messages.push(message('after', 'a', 0))
+    publish(snapshot)
+    await settle()
+    expect(tags()).toEqual(['after'])
   })
 
   it('sends no call while the socket is down, and stops at the demo’s disposal', async () => {

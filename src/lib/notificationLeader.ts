@@ -32,9 +32,14 @@
      feed, the watch and the timers. A leader that cannot notify calls
      nothing. A beat while the socket is down is not sent; the reconnect
      runs the feed's resume order, a beat first. A failed beat tries again
-     after NOTIFY_CLIENT.retry_ms in turn. A refusal of the session (it
-     ended, the login was banned, no sign-in) stops the leader until the
-     store starts it again, and a bad request is a defect it reports.
+     after NOTIFY_CLIENT.retry_ms in turn, and so does a beat refused for
+     a missing sign-in, which the Convex client sends while it arms the
+     socket again after it dropped the sign-in (lib/authSession.ts
+     recover). A refusal of the session (it ended, the login was banned, a
+     demo that is not active) stops the leader and lets go of the lock, so
+     another tab, such as one loaded after a new sign-in, may lead; it
+     stays stopped until the store starts a new one (refused). A bad
+     request does the same and is a defect it reports.
    - Use. The first trusted pointer, key, touch or wheel input
      (lib/inputIdle.ts INPUTS, which the store passes) in a visible page of the profile, a pointer
      move only when it moved, NOTIFY_CLIENT.report_ms or more after the
@@ -255,15 +260,19 @@ function randomInstance(): string {
 }
 
 /* How the server refused the session, if it did: 'stop' for a session
-   that ended, a ban or no sign-in, 'defect' for a bad request, else null
-   for a failure worth trying again. */
+   that ended or a ban (Better Auth's 'Unauthenticated'), another login's
+   session row and a demo that is not active, 'defect' for a bad request,
+   else null for a failure worth trying again. A call without a sign-in
+   (convex/lib/functions.ts loadSession's forbidden 'not signed in') is one
+   to try again: the Convex client sends calls without one while it arms
+   the socket again, and the beat goes on once it is armed. */
 function refusalOf(e: unknown): 'stop' | 'defect' | null {
   if (!(e instanceof ConvexError)) return null
   const data: unknown = e.data
   if (data === 'Unauthenticated') return 'stop'
   if (typeof data === 'object' && data !== null) {
-    const code = (data as { code?: unknown }).code
-    if (code === 'forbidden') return 'stop'
+    const { code, message } = data as { code?: unknown; message?: unknown }
+    if (code === 'forbidden') return message === 'not signed in' ? null : 'stop'
     if (code === 'bad_request') return 'defect'
   }
   return null
@@ -279,7 +288,9 @@ const clamp = (ms: number) =>
 /**
  * Starts this tab's part in its profile's alerts: it leads, follows, or
  * leads alone. Answers the stop, which the store calls at its reset and at
- * a sign-out, and which sends no `end`.
+ * a sign-out, and which sends no `end`, and whether the server refused the
+ * session (refused), after which the store starts a new leader at its
+ * next boot.
  */
 export function startNotificationLeader(deps: LeaderDeps) {
   const { convex, feed, name } = deps
@@ -289,7 +300,7 @@ export function startNotificationLeader(deps: LeaderDeps) {
 
   let role: LeaderRole = 'stopped'
   let stopped = false
-  // set by a refusal of the session, which stops the beat for good
+  // set by a refusal of the session, which stops this leader for good
   let refused = false
   let channel: LeaderChannel | null = null
   // the lock this tab holds, resolved to let it go
@@ -384,14 +395,16 @@ export function startNotificationLeader(deps: LeaderDeps) {
     }, ms)
   }
 
-  /* Stops the beat for good after the server refused the session. The tab
-     keeps the lock, so no other tab of the same session takes over to be
-     refused in turn. */
+  /* Stops this leader for good after the server refused the session, and
+     lets go of the lock, so another tab of the profile may lead: one
+     loaded after a new sign-in leads, and one of the same ended session is
+     refused once in turn. */
   function refuse(kind: 'stop' | 'defect', e: unknown) {
     refused = true
     if (kind === 'defect') console.error('[qivo] the notification beat was refused:', e)
     else console.warn('[qivo] the notification session ended:', e)
-    stopLeading(true)
+    stopLeading()
+    role = 'stopped'
     mirror()
   }
 
@@ -574,19 +587,16 @@ export function startNotificationLeader(deps: LeaderDeps) {
     mirror()
   }
 
-  /* Stops leading: the feed, the watch, the timers, and the lock unless
-     `keep`. */
-  function stopLeading(keep: boolean) {
+  /* Stops leading: the feed, the watch, the timers and the lock. */
+  function stopLeading() {
     leadership += 1
     halt()
     if (tick) clearInterval(tick)
     tick = null
     stopPower?.()
     stopPower = null
-    if (!keep) {
-      release?.()
-      release = null
-    }
+    release?.()
+    release = null
   }
 
   /* Holds the lock until it is let go, leading meanwhile. */
@@ -655,7 +665,7 @@ export function startNotificationLeader(deps: LeaderDeps) {
           convex.mutation(api.notifications.end, { instance: id }),
         ).catch(() => undefined)
       }
-      stopLeading(false)
+      stopLeading()
     } else {
       queued?.abort()
       queued = null
@@ -764,7 +774,7 @@ export function startNotificationLeader(deps: LeaderDeps) {
     stop() {
       if (stopped) return
       stopped = true
-      if (leading()) stopLeading(false)
+      if (leading()) stopLeading()
       queued?.abort()
       queued = null
       for (const stop of stops.splice(0)) stop()
@@ -775,6 +785,9 @@ export function startNotificationLeader(deps: LeaderDeps) {
     },
     /** What the tab is now, for tests. */
     role: () => role,
+    /** Whether the server refused the session, which stopped this leader
+        for good; the store then starts a new one at its next boot. */
+    refused: () => refused,
   }
 }
 

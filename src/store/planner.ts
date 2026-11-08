@@ -3500,8 +3500,9 @@ function setInboxOpener(open: (() => void) | null) {
 
 /* The desktop alert client (lib/notificationFeed.ts) and this tab's part
    in its browser profile's alerts (lib/notificationLeader.ts), made at the
-   first boot with a seat on a page that can notify, and stopped at
-   disposal and at a sign-out. */
+   first boot with a seat on a page with the Notification API
+   (notificationsSupported), made again at the next boot after the server
+   refused the session, and stopped at disposal and at a sign-out. */
 let alerts: NotificationFeed | null = null
 let leader: NotificationLeader | null = null
 
@@ -3512,8 +3513,11 @@ let leader: NotificationLeader | null = null
     capability, the mode's watch and the session's end. The feed is a side
     of every registry (watchFeed) and the mode a live watch, both outside
     the visibility gate, so they run while the tab is hidden. A follower
-    tab watches neither. */
+    tab watches neither. A leader the server refused stopped for good, so
+    the boot that follows, such as a sign-in in this page, starts them
+    afresh. */
 function startAlerts() {
+  if (leader?.refused()) stopAlerts()
   if (alerts !== null || !notificationsSupported()) return
   const feed = createNotificationFeed({
     convex,

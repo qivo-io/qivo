@@ -142,7 +142,7 @@ function openTab(p: Profile, { can = true, locks }: { can?: boolean; locks?: Lea
     feed,
     settings: { take: null, watching: 0 },
     mirror: null,
-    leader: { stop: () => {}, role: () => 'stopped' },
+    leader: { stop: () => {}, role: () => 'stopped', refused: () => false },
     beats: () => sent.filter((s) => s.name === 'notifications:beat'),
     ends: () => sent.filter((s) => s.name === 'notifications:end'),
     capabilityChanged: () => {
@@ -630,13 +630,18 @@ describe('failures', () => {
     expect(tab.mirror?.beats).toBe(2)
   })
 
-  it('stops for a session that ended, a missing sign-in and a bad request', async () => {
-    for (const refusal of [
-      () => new ConvexError('Unauthenticated'),
-      () => new ConvexError({ code: 'forbidden', message: 'not signed in' }),
-      () =>
-        new ConvexError({ code: 'bad_request', message: 'instance must be 1 to 64 characters' }),
-    ]) {
+  /* The refusals that stop a leader for good: a session that ended,
+     another login's session row, a demo that is not active and a bad
+     request. */
+  const REFUSALS = [
+    () => new ConvexError('Unauthenticated'),
+    () => new ConvexError({ code: 'forbidden', message: 'this session belongs to another login' }),
+    () => new ConvexError({ code: 'forbidden', message: 'Your demo has expired.' }),
+    () => new ConvexError({ code: 'bad_request', message: 'instance must be 1 to 64 characters' }),
+  ]
+
+  it('stops for a session that ended, another login’s row, an ended demo and a bad request', async () => {
+    for (const refusal of REFUSALS) {
       const tab = openTab(profile())
       vi.spyOn(console, 'error').mockImplementation(() => {})
       vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -646,9 +651,53 @@ describe('failures', () => {
       input(tab)
       await flush()
       expect(tab.beats()).toHaveLength(1)
+      expect(tab.leader.refused()).toBe(true)
       tab.page.win.fire('pagehide', { persisted: false })
+      tab.page.win.fire('pageshow', { persisted: true })
+      await flush()
+      expect(tab.beats()).toHaveLength(1)
       expect(tab.ends()).toEqual([])
     }
+  })
+
+  it('lets go of the lock at a refusal, so the next tab of the profile leads', async () => {
+    for (const refusal of REFUSALS) {
+      const p = profile()
+      const [a, b] = [openTab(p), openTab(p)]
+      await flush()
+      expect([a.leader.role(), b.leader.role()]).toEqual(['leader', 'follower'])
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      a.state.fail = refusal
+      await vi.advanceTimersByTimeAsync(MINUTE)
+      await flush()
+      expect([a.leader.role(), b.leader.role()]).toEqual(['stopped', 'leader'])
+      expect(a.leader.refused()).toBe(true)
+      expect(b.beats()).toHaveLength(1)
+      expect(b.feed.leads).toHaveLength(1)
+      a.leader.stop()
+      b.leader.stop()
+    }
+  })
+
+  it('tries a beat refused for a missing sign-in again, and beats on once the sign-in is back', async () => {
+    const tab = openTab(profile())
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // the Convex client arms the socket again and sends the beat without one
+    tab.state.fail = () => new ConvexError({ code: 'forbidden', message: 'not signed in' })
+    await flush()
+    expect(tab.beats()).toHaveLength(1)
+    expect(tab.leader.refused()).toBe(false)
+    expect(tab.feed.leads).toEqual([])
+    tab.state.fail = null
+    await vi.advanceTimersByTimeAsync(NOTIFY_CLIENT.retry_ms[0])
+    await flush()
+    expect(tab.beats()).toHaveLength(2)
+    expect(tab.leader.role()).toBe('leader')
+    expect(tab.mirror?.beats).toBe(1)
+    expect(tab.feed.leads).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    expect(tab.beats()).toHaveLength(3)
   })
 
   it('sends no beat while the socket is down, and the reconnect runs the resume order', async () => {
