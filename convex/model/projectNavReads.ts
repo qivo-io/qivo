@@ -1768,38 +1768,25 @@ export const TARGETS_LIST = 'projectNav.targets'
 const NOT_TARGETS_CURSOR =
   'after and through must be cursors from an earlier answer of projectNav.targets for the same organization and search; start again from the first batch'
 
-/* The separator of a target's position: below every character a name key
- * holds, so the parent's name key, the parent id and the sub-project's
- * name key order as three fields would. */
-const SEP = '\u0000'
+/* The tie of a target's position: its parent's id, its own name key and
+ * id, and its seat's organization. */
+type TargetTie = readonly [parent_id: string, child_key: string, child_id: string, org_id: string]
 
-/* A target's position: its parent's name key and id, then its own name
- * key, with its id and its seat's organization as the tie. */
+/* A target's position: its parent's name key, then the tie, so the four
+ * fields order as fields whatever characters a name holds. */
 const targetAt = (
   parent: Pick<Doc<'projects'>, 'id'>,
   parentKey: string,
   childKey: string,
   childId: string,
   orgId: string,
-): NamedAt<SeatTie> => ({
-  key: `${parentKey}${SEP}${parent.id}${SEP}${childKey}`,
-  tie: [childId, orgId],
-})
-
-/* A target position's parts, or null for any other shape. */
-function targetParts(
-  at: NamedAt,
-): { parentKey: string; parentId: string; childKey: string } | null {
-  const parts = at.key.split(SEP)
-  if (parts.length !== 3) return null
-  const [parentKey, parentId, childKey] = parts
-  return { parentKey, parentId, childKey }
-}
+): NamedAt<TargetTie> => ({ key: parentKey, tie: [parent.id, childKey, childId, orgId] })
 
 /* A targets position's tie, or null for any other shape. */
-const targetTieOf = (at: NamedAt): SeatTie | null => {
-  const tie = teamTieOf(at)
-  return tie !== null && targetParts(at) !== null ? tie : null
+const targetTieOf = ({ tie }: NamedAt): TargetTie | null => {
+  if (tie.length !== 4 || tie.some((part) => typeof part !== 'string')) return null
+  const [parentId, childKey, childId, orgId] = tie as readonly string[]
+  return [parentId, childKey, childId, orgId]
 }
 
 /**
@@ -1809,6 +1796,15 @@ const targetTieOf = (at: NamedAt): SeatTie | null => {
  * seat or only the seat in `org_id` (an org_id without the caller's seat
  * answers an empty last batch, as the search does), for the New task
  * dialog, the Move window and the task window's Link task offer.
+/* A target position's parts. */
+const targetParts = ({ key, tie: [parentId, childKey, childId, orgId] }: NamedAt<TargetTie>) => ({
+  parentKey: key,
+  parentId,
+  childKey,
+  childId,
+  orgId,
+})
+
  *
  * The order is the parent's name key, the parent's id, the sub-project's
  * name key and its id, the positions of page and children joined: the
@@ -1868,9 +1864,7 @@ export async function navTargetsOf(
     .sort((x, y) => (x.org_id < y.org_id ? -1 : x.org_id > y.org_id ? 1 : 0))
   for (const seat of seats) if (!(await navReady(ctx, seat.org_id))) return { state: 'not_ready' }
   const matches = term === '' ? null : allWordsMatcher(term)
-  const parts = ask.after === null ? null : targetParts(ask.after)
-  const resume =
-    ask.after === null || parts === null ? null : { ...parts, childId: String(ask.after.tie[0]) }
+  const resume = ask.after === null ? null : targetParts(ask.after)
   try {
     const sights = new Map<string, SeatSight>()
     const parents = new Map<string, Doc<'projects'>>()
@@ -1893,9 +1887,9 @@ export async function navTargetsOf(
       guard: ReadGuard,
       at: NamedAt,
     ): Promise<NavTargetRow | null> => {
-      const sight = sights.get(String(at.tie[1]))
-      const place = targetParts(at)
-      const parent = place === null ? undefined : parents.get(place.parentId)
+      const place = targetTieOf(at)
+      const sight = place === null ? undefined : sights.get(place[3])
+      const parent = place === null ? undefined : parents.get(place[0])
       if (sight === undefined || parent === undefined) return null
       const sub = 'grantee_kind' in row ? await rowProject(sight, parent, row) : row
       if (sub === null || kept.has(sub.id)) return null
@@ -1935,7 +1929,7 @@ type TargetRow = Doc<'projects'> | Doc<'project_reach'>
  * its and its teams' live root rows name that shows (rootShows), from
  * `parentAfter` on, each told to `found`, then its sub-projects, the
  * parent's own where the seat reaches it for a reason of its own, else the
- * child rows under it, each at its joined position, after `resume`'s
+ * child rows under it, each at its position (targetAt), after `resume`'s
  * sub-project under the parent the cursor stopped under. */
 function targetStream(
   ctx: QueryCtx,

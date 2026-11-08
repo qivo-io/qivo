@@ -187,6 +187,23 @@ describe('projectNav.targets', () => {
   })
 
   it("matches the sub-project's or the parent's name, and seals cursors with the organization, the search and the login", async () => {
+  it('lists every sub-project once in order across batches where a name holds a control character', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const pia = await person(t, f.org.id, 'Pia')
+    // two parents whose names differ by a trailing NUL, and under the first
+    // a sub-project with one in its name, the last row of the first batch
+    const [alpha, alphaNul] = await plantMetas(t, f.org.id, ['Alpha', 'Alpha\u0000'])
+    const subs = await plantSubs(t, alpha, [...names('Sub ', 24), 'Sub 023\u0000z', 'Sub 024'])
+    const [other] = await plantSubs(t, alphaNul, ['Other'])
+    await plantGrants(t, pia, [alpha, alphaNul])
+    await ready(t, f)
+    const walked = await walkTargets(t, [pia])
+    expect(walked.batches).toHaveLength(2)
+    expect(ok(walked.batches[0]).rows.at(-1)?.name).toBe('Sub 023\u0000z')
+    expect(walked.rows.map((r) => r.id)).toEqual([...subs.map((p) => p.id), other.id])
+  })
+
     const t = newT()
     const f = await withOrg(t)
     const pia = await person(t, f.org.id, 'Pia')
