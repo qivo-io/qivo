@@ -205,8 +205,8 @@ const noWrite = (me: Caller): ConvexError<Refusal> => forbidden(CALLER[me.kind].
 
 /* --------------------------------------------------------- shared plumbing */
 
-/* The org project catalogue + the caller's flags on every project — ONE
- * indexed by_org scan per request — which the task routes read: GET
+/* The org project catalogue and the caller's flags on every project, from
+ * ONE indexed by_org scan per request, which the task routes read: GET
  * /v1/tasks with its archived tasks, POST /v1/tasks and a task move in
  * PATCH /v1/tasks/{ref}, accepted at the design size's sum. It resolves
  * every ref in the org; nothing here grants anything, and every disclosed
@@ -457,7 +457,7 @@ function patchFrom(fields: Record<string, unknown>): IssuePatch {
 
 /* ------------------------------------------------------------- projects -- */
 
-/* GET /v1/projects?archived=&search=&limit=&cursor=&offset= — one page of
+/* GET /v1/projects?archived=&search=&limit=&cursor=&offset=, one page of
  * the projects the caller can see on ONE side of the archived axis, in tree
  * order, with the caller's access flags (machine/projects.ts projectPage,
  * shared with MCP's list_projects). Checked in the order the docs give:
@@ -507,7 +507,7 @@ export const getProject = internalQuery({
   },
 })
 
-/* GET /v1/projects/{ref}/users?limit=&cursor=&offset= — the project-scoped
+/* GET /v1/projects/{ref}/users?limit=&cursor=&offset=, the project-scoped
  * identity resolver for imports and user pickers, one page of the
  * project's people in name order, shared with MCP's list_project_users
  * (lib/core.ts projectUserPage). A caller may only enumerate a project it

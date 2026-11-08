@@ -172,7 +172,7 @@ export function pageLimit(range: Limit, raw: string | number | undefined): numbe
  * any text that reads as 0, such as `00`; anything else, text that is no
  * number included, is an offset sent. The task lists refuse such an offset
  * in lib/core.ts taskListRequest, REST GET /v1/workload and MCP
- * get_workload in machine/records.ts, and the lists in name order, a
+ * get_workload in machine/records.ts, and the lists that take a search, a
  * task's and a project's related lists and REST GET /v1/inbox and MCP
  * list_inbox in cursorPaging, with lib/listCursor.ts offsetRefusal. */
 export const offsetSent = (raw: string | number | undefined): boolean =>
@@ -180,13 +180,16 @@ export const offsetSent = (raw: string | number | undefined): boolean =>
 
 /** The paging of a REST or MCP list that pages with a cursor and takes no
  * search, such as a task's related lists (REST GET
- * /v1/tasks/{ref}/subtasks and MCP list_task_related) and the Inbox (REST
- * GET /v1/inbox and MCP list_inbox, machine/discussion.ts), checked in the
- * order both surfaces document: `limit` against `range`, the list's
- * registry entry (DEFAULT_PAGE_SIZE when absent), then any `offset` but 0,
- * refused with offsetRefusal(noun). An absent cursor is null. REST passes
- * an empty `cursor` as absent; MCP passes it as sent, so its empty cursor
- * is refused when the page opens it. namedPaging checks these first too. */
+ * /v1/tasks/{ref}/subtasks and MCP list_task_related), a project's lists
+ * (REST GET /v1/projects/{ref}/users, /milestones, /access/users and
+ * /access/teams, MCP list_project_users and list_project_related) and the
+ * Inbox (REST GET /v1/inbox and MCP list_inbox, machine/discussion.ts),
+ * checked in the order both surfaces document: `limit` against `range`,
+ * the list's registry entry (DEFAULT_PAGE_SIZE when absent), then any
+ * `offset` but 0, refused with offsetRefusal(noun). An absent cursor is
+ * null. REST passes an empty `cursor` as absent; MCP passes it as sent, so
+ * its empty cursor is refused when the page opens it. namedPaging checks
+ * these first too. */
 export function cursorPaging(
   range: Limit,
   noun: string,
@@ -197,15 +200,16 @@ export function cursorPaging(
   return { limit, cursor: a.cursor ?? null }
 }
 
-/** The paging of a REST or MCP list in name order that pages with
- * lib/listCursor.ts namedListPage, such as REST GET /v1/users and MCP
- * list_users, checked in the order both surfaces document: `limit` and
- * `offset` as cursorPaging checks them, then the search, trimmed and
- * refused past LIMITS.search with its sentence. An absent cursor or search
- * is null or blank. REST passes an empty `cursor` or `search` as absent;
- * MCP passes them as sent, so its empty cursor is refused when the page
- * opens it. Every later REST and MCP list in name order checks its paging
- * here. */
+/** The paging of a REST or MCP list that takes a search, such as REST GET
+ * /v1/users and MCP list_users in name order (lib/listCursor.ts
+ * namedListPage) and REST GET /v1/projects and MCP list_projects in tree
+ * order (machine/projects.ts projectPage), checked in the order both
+ * surfaces document: `limit` and `offset` as cursorPaging checks them,
+ * then the search, trimmed and refused past LIMITS.search with its
+ * sentence. An absent cursor or search is null or blank. REST passes an
+ * empty `cursor` or `search` as absent; MCP passes them as sent, so its
+ * empty cursor is refused when the page opens it. Every later REST and MCP
+ * list in name order checks its paging here. */
 export function namedPaging(
   range: Limit,
   noun: string,

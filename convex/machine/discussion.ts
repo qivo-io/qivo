@@ -664,10 +664,10 @@ export const restDeleteComment = internalMutation({
   },
 })
 
-/* GET /v1/inbox?unread_only=&include_snoozed=&limit=&cursor=&offset= —
- * one page of the caller's items (inboxPage), checked in the order the
- * docs give: `limit` and `offset` (cursorPaging), the two flags, then the
- * page's own refusals. An empty cursor is taken as absent. */
+/* GET /v1/inbox?unread_only=&include_snoozed=&limit=&cursor=&offset=, one
+ * page of the caller's items (inboxPage), checked in the order the docs
+ * give: `limit` and `offset` (cursorPaging), the two flags, then the page's
+ * own refusals. An empty cursor is taken as absent. */
 export const restListInbox = internalQuery({
   args: {
     callerId: v.string(),
