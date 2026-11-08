@@ -39,10 +39,10 @@ export const NOTIFY = {
   /** How often a session that can notify beats in 'all', where no target
    * is chosen, and the pace a beat answers a session that cannot notify.
    * It keeps a session's row from the expiry cron (session_keep_ms), so one
-   * left open for days keeps its own checkpoint. The app's session that
-   * cannot notify sends no beat at all (src/lib/notificationLeader.ts), so
-   * its row goes with the expiry cron session_keep_ms after its last
-   * beat. */
+   * left open for days keeps its own checkpoint. The app sends one beat
+   * with can_notify false as its capability turns off and none while it
+   * cannot notify (src/lib/notificationLeader.ts), so such a session's row
+   * goes with the expiry cron session_keep_ms after that beat. */
   idle_beat_ms: 6 * 3_600_000,
   /** A session is live while its last beat is less than this many beats
    * old, so a target that sleeps or loses its connection hands delivery on
