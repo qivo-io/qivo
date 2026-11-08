@@ -63,14 +63,15 @@
    - The feed. A leader that can notify starts the feed after its first
      beat: fresh, with a baseline, on the page's first leadership with
      nothing heard; as a takeover from the floor, the keys and the
-     baseline's keys the leader before posted (`state`, sent each time they move and after each beat, once a
-     fresh start took its baseline) when
-     that tab's last beat is under RESUME_GAP_MS old; else with the resume
-     order, as after a freeze, the back and forward cache, a capability
-     that turned on and a stale handover. A handover is taken once, and
-     one heard before this page left (pagehide or freeze) is dropped, so a
-     later start runs the resume order unless the page hears a newer one. A gap between its ticks past
-     RESUME_GAP_MS and the desktop app's wake go to the feed's resume(),
+     baseline's keys the leader before posted (`state`, sent each time
+     they move and after each beat, once a fresh start took its baseline)
+     when that tab's last beat is under RESUME_GAP_MS old; else with the
+     resume order, as after a freeze, the back and forward cache, a
+     capability that turned on and a stale handover. A handover is taken
+     once, and one heard before this page left (pagehide or freeze) is
+     dropped, so a later start runs the resume order unless the page hears
+     a newer one. A gap between its ticks past RESUME_GAP_MS and the
+     desktop app's wake go to the feed's resume(),
      and every other tick to the feed's tick(), which keeps its floor
      about eleven minutes back at most between beats hours apart.
    - The mode. The leader watches notifications.settings through
