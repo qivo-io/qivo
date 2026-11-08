@@ -568,6 +568,8 @@ describe('the Roadmap at the design size', () => {
               ...base,
               id: top,
               type: 'meta',
+              // a top-level project, whatever the base holds by then
+              parent_id: undefined,
               key: `T${s}`,
               num: 100 + s,
               name: `Top ${s / 3}`,
