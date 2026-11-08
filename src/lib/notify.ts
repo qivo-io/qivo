@@ -221,8 +221,11 @@ export function desktopNotify(tag: string, title: string, body: string, onClick?
   }
 }
 
-/** The most click handlers the desktop bridge keeps, one an alert shown,
-    so a long session holds a bounded map: the oldest goes first. */
+/** The most click handlers the desktop bridge keeps, one an alert tag
+    shown, so a long session holds a bounded map: the oldest goes first. A
+    click keeps its handler, since the shell lists alerts of one tag
+    together, as the generic summaries are, and each of them opens the
+    Inbox. */
 export const CLICK_HANDLERS = 100
 
 /* The desktop alerts' click handlers by tag, oldest first. */
@@ -247,8 +250,6 @@ export const keptClickHandlers = () => desktopClickHandlers.size
 function installDesktopClickBridge(desktop: QivoDesktopBridge) {
   if (desktopClickUnsubscribe) return
   desktopClickUnsubscribe = desktop.notifications.onClick((tag) => {
-    const handler = desktopClickHandlers.get(tag)
-    desktopClickHandlers.delete(tag)
-    handler?.()
+    desktopClickHandlers.get(tag)?.()
   })
 }

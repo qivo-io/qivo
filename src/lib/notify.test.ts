@@ -135,6 +135,42 @@ describe('canNotify', () => {
   })
 })
 
+describe('the desktop app’s alert clicks', () => {
+  it('keeps the newest 100 handlers, and opens the Inbox from each of two summaries', async () => {
+    const { CLICK_HANDLERS, desktopNotify, keptClickHandlers } = await import('./notify')
+    let click: (tag: string) => void = () => {}
+    window.qivoDesktop = {
+      notifications: {
+        supported: true,
+        permission: 'granted',
+        currentPermission: () => 'granted',
+        show: async () => true,
+        onClick: (listener: (tag: string) => void) => {
+          click = listener
+          return () => {}
+        },
+      },
+    } as unknown as QivoDesktopBridge
+    const opened: string[] = []
+    for (let i = 0; i <= CLICK_HANDLERS; i++)
+      desktopNotify(`m${i}`, 'Ada mentioned you, Board rev C', 'Look', () => opened.push(`m${i}`))
+    await Promise.resolve()
+    expect(keptClickHandlers()).toBe(CLICK_HANDLERS)
+    // the oldest went, the newest opens
+    click('m0')
+    click(`m${CLICK_HANDLERS}`)
+    expect(opened).toEqual([`m${CLICK_HANDLERS}`])
+    // two summaries share a tag, and the shell lists both
+    for (const n of [1, 2])
+      desktopNotify('qivo:catch-up', 'New unread activity', 'Open your Inbox.', () =>
+        opened.push(`summary ${n}`),
+      )
+    click('qivo:catch-up')
+    click('qivo:catch-up')
+    expect(opened.slice(1)).toEqual(['summary 2', 'summary 2'])
+  })
+})
+
 describe('watchCapability', () => {
   it('hears a change after a permission request, the status’s change, a desktop save and a return to view, and nothing else', async () => {
     const status = new EventTarget()
