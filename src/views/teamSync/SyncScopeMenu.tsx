@@ -23,7 +23,8 @@
    answers, the page's sentence for a team it cannot show, and a failed
    read with Try again, never "Choose a scope" for a team it has not named
    yet. A refresh that fails after the team was named keeps its name, with
-   Try again beside it. */
+   Try again beside it. A team that teams.get answers unavailable shows the
+   page's sentence, also after the trigger named it. */
 
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { Icon, Popover } from '@/components/qivo'
@@ -86,8 +87,8 @@ function scopeName(
   const icon = <Icon name="people" size={14} />
   const own = P.teamById(scope.id)
   if (own && own.org === P.homeOrg) return { label: own.name, icon, failed: false }
-  if (team.answer) return { label: team.answer.team.name, icon, failed: team.state === 'failed' }
   if (team.state === 'unavailable') return { label: SCOPE_WORDS.unavailable, icon, failed: false }
+  if (team.answer) return { label: team.answer.team.name, icon, failed: team.state === 'failed' }
   if (team.state === 'failed') return { label: SCOPE_WORDS.failed, icon, failed: true }
   return { label: SCOPE_WORDS.loading, icon, failed: false }
 }

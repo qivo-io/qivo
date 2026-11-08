@@ -264,4 +264,15 @@ describe("Team sync's scope menu", () => {
     expect(trigger()?.dataset.syncScopeTrigger).toBe('Team 31')
     expect(retry()).toBeNull()
   })
+
+  it('says the team is not available once teams.get answers so, also after it named the team', async () => {
+    await render({ kind: 'team', id: team(31) })
+    expect(trigger()?.dataset.syncScopeTrigger).toBe('Team 31')
+    // someone deletes the team while the page shows the scope
+    snap.teams = snap.teams.filter((t) => t.id !== team(31))
+    await act(async () => reads.rerun())
+    await settle()
+    expect(trigger()?.dataset.syncScopeTrigger).toBe('Team not available')
+    expect(document.querySelector('[data-sync-scope-retry]')).toBeNull()
+  })
 })
