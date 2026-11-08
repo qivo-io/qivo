@@ -557,6 +557,15 @@ describe('resumes', () => {
     tab.connection = 2
     await settle([tab], true)
     expect(names(tab, from).filter((n) => n === 'notifications:claimSummary')).toHaveLength(1)
+    // a reconnect while a resume runs adds no second one
+    jump(1)
+    const value = await tab.s.as.query(api.inbox.feed, { after: tab.after ?? 0 })
+    const during = tab.calls.length
+    tab.client.resume()
+    tab.connection = 3
+    tab.client.receive({ value }, tab.connection)
+    await settle([tab], true)
+    expect(names(tab, during).filter((n) => n === 'notifications:claimSummary')).toHaveLength(1)
     expect(tab.notes.filter((n) => n.tag === SUMMARY_TAG)).toHaveLength(1)
   })
 

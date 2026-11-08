@@ -200,8 +200,9 @@ export function createNotificationFeed(deps: FeedDeps) {
   // a beat the leader just sent, which the next summary takes instead of
   // beating again
   let freshBeat: Beat | null = null
-  // the local time the last resume answered
+  // the local time the last resume answered, and whether one runs now
   let resumedAt = -Infinity
+  let resuming = false
   let running = false
   // the run in progress, which idle() waits for
   let current: Promise<void> | null = null
@@ -328,7 +329,12 @@ export function createNotificationFeed(deps: FeedDeps) {
       while (mine === epoch) {
         if (resumePending) {
           resumePending = false
-          await summarize(mine)
+          resuming = true
+          try {
+            await summarize(mine)
+          } finally {
+            resuming = false
+          }
           resumedAt = Date.now()
           continue
         }
@@ -355,7 +361,7 @@ export function createNotificationFeed(deps: FeedDeps) {
       Marks while one waits or runs, or within RESUME_QUIET_MS after one
       answered, run nothing more. */
   function resume() {
-    if (!link) return
+    if (!link || resuming) return
     if (Date.now() - resumedAt < RESUME_QUIET_MS) return
     resumePending = true
     void pump()
