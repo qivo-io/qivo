@@ -85,6 +85,8 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => root.unmount())
+  const { TASKS } = await import('../store/liveParts')
+  TASKS.atBoot = true
   container.remove()
   document.body.innerHTML = ''
   history.replaceState(null, '', '/')
@@ -184,6 +186,10 @@ async function app(snap: Snapshot, path: string) {
     sent.push({ name: getFunctionName(ref), args })
     return getFunctionName(ref) === 'roadmap:change' ? { count: 1 } : null
   })
+  // the app's boot, which asks for no task, so the store holds none and
+  // only the views name projects (the test default holds every task)
+  const { TASKS } = await import('../store/liveParts')
+  TASKS.atBoot = false
   const store = await import('../store/planner')
   await store.initStore()
   const { syncStatus } = await import('../lib/syncStatus')
@@ -267,10 +273,11 @@ describe('a Roadmap flag of a project only the project cache holds', { timeout: 
   })
 
   it('releases the project once no view or scope names it', async () => {
-    const { P } = await app(world({ planLevel: 'user' }), '/app/~/roadmap/p/2')
+    // Plan's task is no one's, so My view shows nothing of Plan
+    const snap = world({ planLevel: 'user' })
+    for (const task of snap.issues) if (task.id === 't-plan') task.assignee_id = undefined
+    const { P } = await app(snap, '/app/~/roadmap/p/2')
     await waitFor(() => P.canWrite('plan'), 'the cache answering Plan')
-    // My view lists no project the part does not hold, so its Roadmap
-    // names none
     await act(async () => {
       history.pushState(null, '', '/app/~/roadmap/mine')
       window.dispatchEvent(new PopStateEvent('popstate'))
@@ -318,10 +325,8 @@ describe("My view's Overview rows and milestones of a program only the cache hol
 }, () => {
   it("name it from the Overview's own answers, show its names, and stop reading it on leaving My view", async () => {
     const snap = world({ planLevel: 'user' })
-    // the whole program is out of the projects part, so no scope names it,
-    // and a held project of the person's with a sub-project, which My view
-    // needs for its lists while its notes read the held projects, to go
-    // to after My view
+    // no scope names the program, and Home, a project the person leads with
+    // a sub-project, is the scope to go to after My view
     const me = snap.profiles[0].id
     snap.projects.push(
       {
@@ -365,13 +370,17 @@ describe("My view's Overview rows and milestones of a program only the cache hol
     // section's `mine` answer the program itself
     expect(byIds.some((ids) => ids.includes('plan-a'))).toBe(true)
     expect(byIds.some((ids) => ids.includes('plan'))).toBe(true)
-    // Home's Overview names neither, so the reads stop
+    // Home's Overview names neither, so the reads name only Home's own
+    // projects: the scope and the sub-project its health table lists
     await act(async () => {
       history.pushState(null, '', '/app/~/overview/p/5')
       window.dispatchEvent(new PopStateEvent('popstate'))
     })
     await settle()
-    await waitFor(() => P.cacheStats().reads.length === 0, 'the reads stopped')
+    const read = () => P.cacheStats().reads.flat()
+    await waitFor(() => !read().includes('plan') && !read().includes('plan-a'), 'the reads stopped')
+    await waitFor(() => read().includes('home'), "Home's read")
+    expect(read().sort()).toEqual(['home', 'home-a'])
     expect(P.projectState('plan-a')).toBe('loading')
   })
 })
