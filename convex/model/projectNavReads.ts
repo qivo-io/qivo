@@ -1699,11 +1699,14 @@ export async function navHoldsOf(
         const index = rootIndex(ctx, g, seat.org_id)
         for await (const row of index.all()) {
           if (!(await guard.document(row))) return { state: 'stopped' }
-          if (judged.has(row.project_id)) continue
-          judged.add(row.project_id)
+          // each row is judged at its own position, as the page judges it,
+          // so a stale row of one grantee never hides a fresh row of
+          // another on the same project; the seat's sight keeps each
+          // project's verdict, so a repeat costs little
           const project = await rootShows(sight, row)
           if (!(await guard.settle())) return { state: 'stopped' }
-          if (project === null) continue
+          if (project === null || judged.has(project.id)) continue
+          judged.add(project.id)
           top = true
           if (!sub) sub = await holdsSub(ctx, sight, grantees, project)
           if (!(await guard.settle())) return { state: 'stopped' }
@@ -1835,9 +1838,9 @@ const targetTieOf = (at: NamedAt): SeatTie | null => {
  * share with Edit, 180 and 237 for the first batch; the sub-projects of 50
  * live projects a team of the person's shares beside its 150 archived
  * shares, 89 and 257; 30 sub-projects each shared with 5 teams, 162 and
- * 255; the first batch beside 200 top-level projects with grants, 67 of
- * them with 3 sub-projects, 91 and 90. Every batch answers inside
- * NAMED_READ.
+ * 255; the first batch beside 200 top-level projects with grants, 66 of
+ * them with 3 sub-projects, so the person reads 200 sub-projects, 91 and
+ * 90. Every batch answers inside NAMED_READ.
  */
 export async function navTargetsOf(
   ctx: QueryCtx,

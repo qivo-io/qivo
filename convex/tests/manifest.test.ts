@@ -1270,11 +1270,15 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // read a person's projects across every active seat, and a project named
   // by id, or by its organization and number, judged with the caller's seat
   // in its organization, by ordinary access, and up to 100 projects by id,
-  // each judged with the caller's seat in its organization. The name search
-  // reads every seat, or the one in the organization it is given, and an
-  // organization without the caller's seat answers an empty list. A star is the seat's
-  // own preference, refused like following a task while the organization
-  // is read-only.
+  // each judged with the caller's seat in its organization; the live
+  // sub-projects the caller may add tasks to (targets) and whether they see
+  // any project (holds), across every seat or one, each judged with the
+  // caller's seat in its organization; and the page of one organization or
+  // of one team's own shares. The name search reads every seat, or the one
+  // in the organization it is given, and an organization without the
+  // caller's seat answers an empty list. A star is the seat's own
+  // preference, refused like following a task while the organization is
+  // read-only.
   projectNav: {
     byIds: 'authedQuery',
     holds: 'authedQuery',

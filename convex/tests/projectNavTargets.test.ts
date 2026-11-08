@@ -25,6 +25,7 @@ import {
   measured,
   names,
   ok,
+  page,
   person,
   plantGrants,
   plantMetas,
@@ -299,6 +300,31 @@ describe('projectNav.holds', () => {
     expect(await holds(t, [granted], { org_id: f.org.id })).toEqual(answer(true, true))
   })
 
+  it("judges each root row at its own place, so a stale row of the seat never hides its team's fresh row", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const pia = await person(t, f.org.id, 'Pia')
+    const [shared] = await plantMetas(t, f.org.id, ['Shared'])
+    await plantGrants(t, pia, [shared])
+    await plantShares(t, await plantTeam(t, f.org.id, 'Red', [pia]), [shared])
+    await ready(t, f)
+    // the seat's own root row keeps a name key from before a rename, which
+    // a recompute has not caught up with yet
+    await t.run(async (ctx) => {
+      const own = await ctx.db
+        .query('project_reach')
+        .withIndex('by_project_grantee', (q) =>
+          q.eq('project_id', shared.id).eq('grantee_kind', 'profile').eq('grantee_id', pia.id),
+        )
+        .unique()
+      if (own === null) throw new Error("no root row of Pia's seat")
+      await ctx.db.patch(own._id, { name_key: 'an older name' })
+    })
+    // the page lists the project from the team's row, and holds agrees
+    expect(names_(ok(await page(t, [pia])).rows)).toEqual(['Shared'])
+    expect(await holds(t, [pia])).toEqual({ state: 'ok', top: true, sub: false })
+  })
+
   it('answers not_ready, the refusal and stopped apart from no project', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -468,12 +494,14 @@ describe('reads at the design size', () => {
     expect(answer).toEqual({ state: 'ok', top: true, sub: true })
   })
 
-  it('lists the first batch beside 200 top-level projects with grants, 67 of them with 3 sub-projects', async () => {
+  it('lists the first batch beside 200 top-level projects with grants, 66 of them with 3 sub-projects', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const pia = await person(t, f.org.id, 'Pia')
     const tops = await plantMetas(t, f.org.id, names('Top ', 198))
-    for (const p of tops.slice(0, 67)) await plantSubs(t, p, names(`${p.name} sub `, 3))
+    // 198 sub-projects beside the fixture's two under its own project, so
+    // the person reads 200, the design size
+    for (const p of tops.slice(0, 66)) await plantSubs(t, p, names(`${p.name} sub `, 3))
     await plantGrants(t, pia, [f.meta, f.hidden, ...tops])
     await ready(t, f)
     const seats = mapOf([pia])

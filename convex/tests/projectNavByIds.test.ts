@@ -13,6 +13,7 @@ import { ACCESS_UNCHECKED, accessOf, accessUnchecked, OWN_READS } from '../lib/a
 import { newWindowKey } from '../lib/db'
 import { BY_IDS_MAX } from '../lib/limits'
 import { NAMED_READ } from '../lib/namedPages'
+import { DEFAULT_REVIEW_HOURS } from '../lib/review'
 import { insertTask } from '../model/descriptions'
 import { BY_IDS_LIMIT, type NavByIds, navByIdsOf, PROJECT_NAV } from '../model/projectNavReads'
 import { as, NOW, newT, plantSeat, type T, uuid, withOrg } from './helpers.setup'
@@ -146,6 +147,28 @@ describe('access', () => {
     expect(
       await byIds(t, [f.admin], [f.meta.id, f.sub.id, f.hidden.id, shared.id, f.otherProject.id]),
     ).toEqual(NOTHING)
+  })
+
+  it("answers each row's review time: its own, else its parent's, else the default, and a parent row's own", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const pia = await person(t, f.org.id, 'Pia')
+    const [timed, plain] = await plantMetas(t, f.org.id, ['Timed', 'Plain'])
+    await t.run((ctx) => ctx.db.patch(timed._id, { review_hours: 7 }))
+    const [own] = await plantSubs(t, timed, ['Own time'], { review_hours: 5 })
+    const [inherits] = await plantSubs(t, timed, ['Inherits'])
+    const [neither] = await plantSubs(t, plain, ['Neither'])
+    await plantGrants(t, pia, [own, inherits, neither])
+    await ready(t, f)
+    const answer = await byIds(t, [pia], [own.id, inherits.id, neither.id])
+    const hours = Object.fromEntries(answer.rows.map((r) => [r.id, r.review_hours]))
+    expect(hours).toEqual({
+      [own.id]: 5,
+      [inherits.id]: 7,
+      [neither.id]: DEFAULT_REVIEW_HOURS,
+      [timed.id]: 7,
+      [plain.id]: DEFAULT_REVIEW_HOURS,
+    })
   })
 
   it('leaves out alike an archived project, one under an archived parent, one in Deleted items, an unknown id and one of an organization without the seat', async () => {
