@@ -221,6 +221,18 @@ describe('the project lookups', () => {
     expect(P.projectTag(w.granted.id)).toBeNull()
   })
 
+  it("paints a cached project's Review time from its row, which byIds resolved", async () => {
+    const w = world()
+    // Unheld's own Review time, which its sub-project Edits inherits
+    const program = w.snap.projects.find((p) => p.id === w.unheld.id)
+    if (!program) throw new Error('no Unheld program')
+    program.review_hours = 5
+    const { P } = await start(w.snap)
+    P.nameProjects('test', [w.edits.id])
+    await vi.waitFor(() => expect(P.projectState(w.edits.id)).toBe('ok'))
+    expect(P.reviewHoursFor(w.edits.id)).toBe(5)
+  })
+
   it('answers gone only where the answer leaves the project out', async () => {
     const w = world()
     const { P } = await start(w.snap)

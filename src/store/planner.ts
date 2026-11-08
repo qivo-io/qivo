@@ -10187,11 +10187,15 @@ function subtaskListPaint(parent: string, kid: ShortRow | null, gone: string, at
 
 /* The remaining time a task in this sub-project gets on entering Review: its
    own review_hours, else its parent project's, else the default. The same
-   resolver the server's reviewHoursFor uses, so the paint never flickers. */
+   resolver the server's reviewHoursFor uses, so the paint never flickers.
+   For a project the projects part does not hold, the time the project
+   cache's row carries, which projectNav.byIds resolved the same way, while
+   the cache keeps that row, else the default. */
 function reviewHoursForProject(projectId: string): number {
   const p = rows.projects.get(projectId)
-  const parent = p?.parent_id ? rows.projects.get(p.parent_id) : undefined
-  return resolveReviewHours(p?.review_hours, parent?.review_hours)
+  if (!p) return resolveReviewHours(projectCache.look(projectId).row?.review_hours, undefined)
+  const parent = p.parent_id ? rows.projects.get(p.parent_id) : undefined
+  return resolveReviewHours(p.review_hours, parent?.review_hours)
 }
 
 /* The fields updateViewTask writes: the Board's drop and owner picker
