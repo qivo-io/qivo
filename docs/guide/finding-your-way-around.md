@@ -255,7 +255,10 @@ the same fragment-matching rule. The project list of **Search in** and
 also ignores accents, so “cafe” finds “Café”. Search matches whole words
 instead ([Search palette](#search-palette)).
 
-**Assignee** supports multiple people and stays open while you choose.
+**Assignee** supports multiple people and stays open while you choose. It
+lists the people of the project's organization 8 at a time, with a search
+over names, initials and email and **Load more**, and the people you chose
+first.
 **Me only** applies the same filter as **My tasks**; **Anyone** removes the
 people restriction. My tasks and selected assignees are mutually exclusive.
 Both match the reviewer while a task is In Review with one ([Task ownership](./how-work-is-organized.md#the-task)).

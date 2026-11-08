@@ -200,7 +200,8 @@ task for changes. An archived task's window has no eye button.
 
 Organization admins and the named project lead can remove other subscribers
 with **×** or use **+ Add** to subscribe an active person or Standard user
-agent who can access the task. Viewer agents receive no new messages and
+agent who can access the task. **+ Add** lists them 25 at a time, with a
+search over names and email addresses and **Load more**. Viewer agents receive no new messages and
 cannot be added. People who later lose access remain listed and can be
 removed. Managing subscribers does not give access to anyone's inbox.
 

@@ -240,7 +240,8 @@ Guests receive access to that project and its sub-projects, subject to their
 role.
 
 Guests can see the organization's name, people's names and email addresses,
-and shared labels needed for collaboration. A guest with User access can
+team names and shared labels needed for collaboration, where a list or
+picker they open shows them; Qivo no longer sends the whole list at once. A guest with User access can
 work on tasks, comments, attachments and plans, and apply labels. Qivo adds
 milestones to the top-level project, so changing them needs User access
 there, not only on a sub-project.

@@ -129,6 +129,10 @@ a scoped link without a step opens the team summary.
 - **A project** includes the project and its sub-projects. A link can also
   select one sub-project.
 
+The scope menu lists **All projects**, your organization's teams 25 at a
+time with a search and **Load more**, and its projects. The page's notes
+offer your own teams.
+
 The first time, and when a saved or linked team or project is no longer
 available to you, the page asks you to choose a team or project. **All
 projects** is one of the choices, and Qivo never chooses it for you.
