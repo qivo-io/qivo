@@ -80,11 +80,13 @@
  *   snooze return, with its key and time as the claims take them
  *   (notifications.ts), its kind, the task's live title, the actor's name
  *   in the seat's organization and the detail the Inbox shows. `through`
- *   is the newest event's time, or `after` with none, and `more` says
- *   that an event after `after` may be missing, past the cap, the budget
- *   or a check a bound stopped. A query cannot read the time, so the
- *   client sends the floor, and the read reaches one minute further back
- *   for notices stored late (NOTIFY.lag_ms). A seat that is not ready is
+ *   is the newest event's time, never below `after`, and `after` when it
+ *   holds none, so an answer whose events all lie in the minute read back
+ *   answers `after`; `more` says that an event after `after` may be
+ *   missing, past the cap, the budget or a check a bound stopped. A query
+ *   cannot read the time, so the client sends the floor, and the read
+ *   reaches one minute further back for notices stored late
+ *   (NOTIFY.lag_ms). A seat that is not ready is
  *   skipped. It answers no count, no project and no organization. It reads
  *   each seat's readiness and its unread items after that time, the task,
  *   project and access rows of each item its project lets through, each
