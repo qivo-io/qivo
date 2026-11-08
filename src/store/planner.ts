@@ -8848,8 +8848,10 @@ const visibleLevelOnProject = (p: ProjectVM | null | undefined): string | null =
     a page's lookup, which then sends nothing; P.nextIssueKey, the
     organization whose counter the preview reads, else the home one;
     P.unarchiveIssue, the organization a restore goes to when the caller
-    names none, else the home one; and P.addProject, a new sub-project's
-    organization from its parent's without a page's, else the home one. */
+    names none, else the home one; P.addProject, a new sub-project's
+    organization from its parent's without a page's, else the home one;
+    and P.projectAttachmentLimit, the organization whose file cap applies,
+    else the largest cap. */
 function orgOfProject(pid: string | null | undefined): string {
   if (!pid) return ''
   return rows.projects.get(pid)?.org_id ?? cachedFacts.get(pid)?.org ?? ''
@@ -15669,12 +15671,12 @@ export const PLANNER = {
 
   /* --- attachments ---------------------------------------------------------- */
   /** Per-file cap in bytes belongs to the project's organization, including
-      when the current user is working on a project shared by another org.
-      The demo stores at most DEMO_FILE_BYTES whatever the organization
+      when the current user is working on a project shared by another org,
+      from the projects part else the project cache (orgOfProject). The
+      demo stores at most DEMO_FILE_BYTES whatever the organization
       allows. */
   projectAttachmentLimit: (projectId: string) => {
-    const project = rows.projects.get(projectId)
-    const org = project ? rows.orgs.get(project.org_id) : null
+    const org = rows.orgs.get(orgOfProject(projectId))
     const cap = LIMITS.attachmentSize.max
     const limit = Math.min(org?.max_attachment_mb ?? cap, cap) * MIB
     return DEMO_MODE ? Math.min(limit, DEMO_FILE_BYTES) : limit

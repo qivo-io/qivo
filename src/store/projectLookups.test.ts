@@ -1,6 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BoardAnswer } from '../../convex/lib/board'
+import { MIB } from '../../convex/lib/limits'
 import type { RoadmapAnswer } from '../../convex/lib/roadmap'
 import type { ViewRow } from '../../convex/lib/viewReads'
 import type { Whole } from './guard/liveDouble.setup'
@@ -231,6 +232,18 @@ describe('the project lookups', () => {
     P.nameProjects('test', [w.edits.id])
     await vi.waitFor(() => expect(P.projectState(w.edits.id)).toBe('ok'))
     expect(P.reviewHoursFor(w.edits.id)).toBe(5)
+  })
+
+  it("checks a file for a cached project against its organization's cap", async () => {
+    const w = world()
+    // an organization cap below the largest one
+    w.snap.orgs[0].max_attachment_mb = 3
+    const { P } = await start(w.snap)
+    P.nameProjects('test', [w.edits.id])
+    await vi.waitFor(() => expect(P.orgOf(w.edits.id)).toBe(w.org))
+    expect(P.projectAttachmentLimit(w.edits.id)).toBe(3 * MIB)
+    // as for a project the part holds
+    expect(P.projectAttachmentLimit(w.heldSub.id)).toBe(3 * MIB)
   })
 
   it('answers gone only where the answer leaves the project out', async () => {
