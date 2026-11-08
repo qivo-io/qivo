@@ -509,6 +509,28 @@ describe('Settings › Teams', () => {
     expect(teamRows().map((r) => r.name)).toEqual(['Bench'])
   })
 
+  it('drops a created team past the loaded rows once its own read says someone deleted it', async () => {
+    await load()
+    server.force = { batch: 1 }
+    await teamsPage()
+    await type(find<HTMLInputElement>('input[placeholder="New team name"]'), 'Zed crew')
+    await click(button('Add team'))
+    const created = requests.find((r) => r.name === 'teams:create')?.args.id as string
+    team(server.snap, created, 'Zed crew')
+    await rerun()
+    await answer('teams:create', 'accept')
+    await rerun()
+    // Zed crew sorts past the one loaded batch, so the list cannot tell
+    expect(teamRows()[0]).toEqual({ id: created, name: 'Zed crew', count: 'Added' })
+    expect(open('teams:get').map((r) => r.args.id)).toEqual([created])
+    // someone deletes it elsewhere, and the kept row's read answers so
+    server.snap.teams = server.snap.teams.filter((t) => t.id !== created)
+    await rerun()
+    expect(document.querySelector('[data-team-kept]')).toBeNull()
+    expect(teamRows().map((r) => r.name)).toEqual(['Bench'])
+    expect(open('teams:get')).toEqual([])
+  })
+
   it('keeps a team created while the tab is hidden as Added until a batch after the return holds it', async () => {
     await load()
     // a batch holds two teams, so the list of Bench and Crew has ended
@@ -1060,6 +1082,40 @@ describe("a team's page", () => {
     await answer('teams:addMember', 'accept')
     expect(document.querySelector('[data-team-member-kept]')).toBeNull()
     expect(memberIds()).toEqual(['leo', 'off', 'bot', 'vic'])
+  })
+
+  it('sends an add again once the first went through, as after someone removed the member elsewhere', async () => {
+    await load()
+    await teamPage()
+    // the lists show one person a batch, so Oli sorts past the members the
+    // page loaded, and the picker finds her by a search
+    const add = async () => {
+      await click(find('[data-team-member-picker]'))
+      await type(find<HTMLInputElement>('[data-team-member-picker-search]'), 'oli')
+      await rest()
+      await click(document.querySelector('[data-team-member-choice="off"]'))
+      await click(find('[data-team-member-add]'))
+    }
+    server.force = { batch: 1 }
+    await rerun()
+    expect(memberIds()).toEqual(['leo'])
+    await add()
+    server.snap.teamMembers.push({ team_id: 'crew', profile_id: 'off', is_leader: false })
+    await rerun()
+    await answer('teams:addMember', 'accept')
+    expect(find('[data-settings-team-member="off"] [data-team-member-kept]').textContent).toBe(
+      'Added',
+    )
+    // another admin removes Oli, and the picker offers her again
+    server.snap.teamMembers = server.snap.teamMembers.filter((m) => m.profile_id !== 'off')
+    await rerun()
+    await add()
+    expect(requests.map((r) => [r.name, r.args.profile_id])).toEqual([['teams:addMember', 'off']])
+    // a refusal keeps the row of the add the server took before
+    await answer('teams:addMember', 'refuse')
+    expect(find('[data-settings-team-member="off"] [data-team-member-kept]').textContent).toBe(
+      'Added',
+    )
   })
 
   it('keeps an added member while the page is hidden, since the answers it holds are from before the add', async () => {
