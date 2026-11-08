@@ -313,7 +313,16 @@ a subtasks cursor sent to the links route, a cursor of another task and an
 unknown query parameter are refused with their sentences. The run reads
 every task's files a page at a time. Against a backend from before the
 paged task details that step fails, and so do the run's reads of a task's
-files. In the
+files. Its `machine/project-lists` step pages `GET /v1/projects` and
+`list_projects` with the Standard agent's key and the run's tag at limit 1
+to their ends, finds the run's project first and its tagged sub-projects
+after it in key order, the same rows on both surfaces, carries a REST
+cursor into MCP, finds a project by the words of its name and by its key,
+and checks that `offset=1`, `limit=0`, an active list's cursor sent with
+`archived=true`, a users cursor and an unknown query parameter are refused
+with their sentences. The run reads every project list a page at a time.
+Against a backend from before the paged project lists that step fails, and
+so do the run's reads of the project lists. In the
 browser it then opens the Board of the project it made, waits for the
 deployment's answer for it (`tasks.board`)
 and checks that the cards of its two fixture tasks show, which it makes in
@@ -2155,6 +2164,21 @@ alone to a release before it; roll forward instead. Every earlier
 statement here that returning the app alone to an earlier release is safe
 holds only against a backend from before this release. There is no schema
 change, no backfill and no release step.
+
+From the release after v0.1.161, REST `GET /v1/projects` and MCP
+`list_projects` answer one page of projects at a time as `{next_cursor,
+projects}`, each top-level project by key followed by its sub-projects by
+key, and take `search`, `limit`, `cursor` and `offset`, and the REST and
+MCP project reads and the answers of project creates and updates read the
+named project and the caller's access to it instead of every project of
+the organization. This release is the backend floor for REST and MCP
+callers that page these lists. Returning the backend below it makes both
+project lists answer every project as one array in key order and refuse
+the new arguments as unknown, and drops the indexes
+`projects.by_org_parent_state_key` and `project_reach.by_grantee_root_key`,
+which a deploy forward builds again with no change to data. It sets no
+floor for the app, which calls none of them, and has no backfill and no
+release step.
 
 ## Node.js version
 
