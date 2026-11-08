@@ -88,6 +88,8 @@ const project = (id: string, extra: Partial<NavByIdRow> = {}): NavByIdRow => ({
   parent_id: null,
   level: 'user',
   track_delay: true,
+  lead_id: null,
+  review_hours: 2,
   ...extra,
 })
 

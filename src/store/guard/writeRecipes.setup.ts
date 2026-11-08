@@ -632,6 +632,7 @@ export const recipes: Recipe[] = [
               description: '',
               labels: [],
               level: 'lead',
+              project_archived: false,
             }
           : windowAnswer(),
     },

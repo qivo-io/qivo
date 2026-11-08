@@ -45,9 +45,11 @@ import {
   type NavRefusal,
   navByIdsOf,
   navChildrenOf,
+  navHoldsOf,
   navPageOf,
   navResolveOf,
   navSearchOf,
+  navTargetsOf,
   RESOLVE_FORM,
 } from '../../convex/model/projectNavReads'
 import { SHAPES } from '../../convex/tests/accessShapes.setup'
@@ -229,6 +231,40 @@ async function compareStandIn(
       ),
     )
   }
+  // the page of the one seat, each team's own shares, the targets with and
+  // without a search, and whether the seat holds a project
+  const one = (a: ProjectNavArgs) =>
+    mine('projectNav:page', { ...a, org_id: profile.org_id }) as Promise<
+      NavBatch<unknown> | NavRefusal
+    >
+  expect(await batchesOf((after) => one({ after })), `${label}: page of the seat`).toEqual(
+    await batchesOf((after) =>
+      t.run((ctx) => navPageOf(ctx, seats, { org_id: profile.org_id, after })),
+    ),
+  )
+  for (const team of snap.teams.filter((x) => x.org_id === profile.org_id)) {
+    const ofTeam = (after?: string) =>
+      mine('projectNav:page', { org_id: profile.org_id, team_id: team.id, after }) as Promise<
+        NavBatch<unknown> | NavRefusal
+      >
+    expect(await batchesOf(ofTeam), `${label}: shares of ${team.name}`).toEqual(
+      await batchesOf((after) =>
+        t.run((ctx) => navPageOf(ctx, seats, { org_id: profile.org_id, team_id: team.id, after })),
+      ),
+    )
+  }
+  for (const search of [undefined, ...terms]) {
+    const writable = (after?: string) =>
+      mine('projectNav:targets', { search, after }) as Promise<NavBatch<unknown> | NavRefusal>
+    expect(await batchesOf(writable), `${label}: targets ${search ?? ''}`).toEqual(
+      await batchesOf((after) =>
+        t.run((ctx) => navTargetsOf(ctx, login, seats, { search, after })),
+      ),
+    )
+  }
+  expect(await mine('projectNav:holds', {}), `${label}: holds`).toEqual(
+    await t.run((ctx) => navHoldsOf(ctx, seats, {})),
+  )
   // byIds of every project of the organization and an unknown id, in
   // chunks the server takes, the rows compared as sets
   const ids = [...projects.map((p) => p.id), crypto.randomUUID()]
