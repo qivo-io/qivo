@@ -1090,31 +1090,6 @@ describe('what the Board says in place of its columns', { timeout: BOARD_TEST_TI
     expect(board.card('a')).not.toBeNull()
   })
 
-  it('asks to choose a project in All projects, and asks the server nothing', async () => {
-    const board = await loadBoard(network, plan, { scope: 'all' })
-    await board.render(root)
-    expect(state()).toBe('choose')
-    expect(board.server.asked).toEqual([])
-    expect(document.querySelector('[data-empty-state]')).not.toBeNull()
-    const choices = [...document.querySelectorAll<HTMLButtonElement>('[data-board-choice]')]
-    expect(choices.map((b) => b.dataset.boardChoice)).toEqual(
-      board.P.visibleProjects().map((p) => p.id),
-    )
-    await act(async () => choices[0].click())
-    expect(board.actions.setScope).toHaveBeenCalledWith(choices[0].dataset.boardChoice)
-  })
-
-  it('opens a project from the phone chooser and keeps the tools row', async () => {
-    const board = await loadBoard(network, plan, { scope: 'all', phone: true })
-    await board.render(root)
-    expect(state()).toBe('choose')
-    expect(document.querySelector('.mobile-task-tools')).not.toBeNull()
-    const choice = document.querySelector<HTMLButtonElement>('[data-board-choice]')
-    await act(async () => choice?.click())
-    expect(board.actions.openProject).toHaveBeenCalledWith(choice?.dataset.boardChoice)
-    expect(board.actions.setScope).not.toHaveBeenCalled()
-  })
-
   it('shows the narrowing message on the phone in place of its sections', async () => {
     const board = await loadBoard(network, plan, { scope: 'plan', phone: true })
     await board.render(root)

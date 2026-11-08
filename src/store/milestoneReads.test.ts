@@ -448,7 +448,7 @@ describe('the writes', () => {
     expect(P).not.toHaveProperty('milestones')
     expect(P).not.toHaveProperty('milestonesIn')
     expect(P.scopeInfo('plan')).not.toHaveProperty('milestones')
-    expect(P.scopeInfo('all')).not.toHaveProperty('milestones')
+    expect(P.scopeInfo('mine')).not.toHaveProperty('milestones')
     expect(JSON.stringify(store.__layerProbe?.rows())).not.toContain('Alpha')
   })
 

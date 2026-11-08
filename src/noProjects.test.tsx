@@ -14,7 +14,7 @@ import { answerRoadmap } from './store/roadmapStandIn.setup'
 /* The pages of a person who can see no active project, on the real store
    and App: with nothing remembered they land on the project chooser, whose
    empty state says they have no active projects and who can give access,
-   never All projects, and every other page says why it is empty without a
+   and every other page says why it is empty without a
    word about projects they cannot see. New project shows only to a person
    who may create one. A person with a project and nothing remembered lands
    on the chooser too, never on their first project, and one who loses the
@@ -26,7 +26,8 @@ import { answerRoadmap } from './store/roadmapStandIn.setup'
    timeline with the milestones of its window behind the note, and the
    phone's agenda lists the scope's milestones under it, as the Overview
    does under its own note; My view's flags sit on its rows, so it shows
-   none, and All projects shows its note alone. The Roadmap's flags and
+   none, and an address that once named all projects opens the chooser.
+   The Roadmap's flags and
    the Milestones window a flag opens read the milestone stand-in
    (store/milestoneStandIn.setup.ts). */
 
@@ -251,13 +252,14 @@ describe('a person who can see no project', () => {
 
   it('on the phone, says why its task list and roadmap are empty', async () => {
     phone = true
-    await app(noProjects('user'), '/app/~/board/all')
+    // My tasks and My view's Roadmap, which need no project
+    await app(noProjects('user'), '/app/~/board/mine')
     await shows(MEMBER)
     expect(document.body.textContent).not.toContain('Create a task to get started.')
     expect(newProject()).toBeDefined()
     await act(async () => root.unmount())
     root = createRoot(container)
-    await app(noProjects('user'), '/app/~/roadmap/all')
+    await app(noProjects('user'), '/app/~/roadmap/mine')
     await shows('Nothing to schedule yet')
     expect(document.body.textContent).toContain(MEMBER)
     // the agenda has no milestone or task to plan
@@ -302,21 +304,31 @@ describe('a person with a project', () => {
     expect(document.querySelector('[data-workspace-view]')).toBeNull()
   })
 
-  it('keeps All projects when the person opened it, whatever they see', async () => {
+  it('keeps My view when the person opened it, whatever they see', async () => {
     const snap = member()
-    const publish = await app(snap, '/app/~/overview/all')
-    await shows('Choose a project')
+    const publish = await app(snap, '/app/~/overview/mine')
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-workspace-view="overview"]')).not.toBeNull(),
+    )
     await publish({ ...snap, access: [], delivered_at: '2026-09-15T09:00:00.000Z' })
     await shows(MEMBER)
     await publish({ ...snap, delivered_at: '2026-09-15T10:00:00.000Z' })
     await vi.waitFor(() => expect(document.body.textContent).not.toContain(MEMBER))
-    expect(location.pathname).toBe('/app/~/overview/all')
-    // All projects is never remembered
+    expect(location.pathname).toBe('/app/~/overview/mine')
+    // My view is never remembered
     expect(remembered(snap)).toBeUndefined()
-    await reload()
+  })
+
+  it('opens an address that once named all projects as the startup rule does, on the chooser', async () => {
+    const snap = member()
     await app(snap, '/app/~/roadmap/all')
-    await shows('Choose a project')
-    expect(location.pathname).toBe('/app/~/roadmap/all')
+    await chooser('choose')
+    // the front door, in place, with no view and nothing remembered
+    expect(location.pathname).toBe('/app/testbed')
+    expect(document.querySelector('[data-workspace-view]')).toBeNull()
+    expect(document.querySelector('[data-project-chooser]')?.textContent).toContain(
+      'The project you choose opens on the Roadmap.',
+    )
     expect(remembered(snap)).toBeUndefined()
   })
 })
@@ -352,7 +364,8 @@ describe('Team sync, which covers the home organization', () => {
   })
 
   it('leaves the other pages to the projects of every organization', async () => {
-    await app(guestElsewhere('user'), '/app/~/overview/all')
+    // the chooser at the front door lists them
+    await app(guestElsewhere('user'), '/app/testbed')
     await shows('Away')
     expect(document.body.textContent).not.toContain('Team sync covers')
     expect(document.body.textContent).not.toContain(MEMBER)
@@ -411,7 +424,7 @@ function withMilestone(snap: Snapshot, project: string, name: string): Snapshot 
 }
 
 describe('the Roadmap of a scope with nothing to schedule', () => {
-  it("keeps a project's timeline and flags behind the note on a computer, and no flag in My view or All projects", async () => {
+  it("keeps a project's timeline and flags behind the note on a computer, and no flag in My view or on the chooser", async () => {
     const header = () => document.querySelector('[data-workspace-view] [data-roadmap-header]')
     await app(bare(), '/app/testbed/roadmap/p/3')
     await shows('Tasks live in sub-projects.')
@@ -436,18 +449,17 @@ describe('the Roadmap of a scope with nothing to schedule', () => {
     expect(header()).not.toBeNull()
     expect(document.querySelector('[data-msflag]')).toBeNull()
     expect(milestoneReads).not.toContain('milestones:between')
-    // All projects, when no project the person sees has a sub-project
+    // an address that once named all projects, when no project the person
+    // sees has a sub-project: the chooser, with no frame, flag or read
     await reload()
     milestoneReads = []
     const only = withMilestone(bare(), 'bare', 'Bare launch')
     only.access = only.access.filter((grant) => grant.project_id === 'bare')
     await app(only, '/app/~/roadmap/all')
-    await shows('Tasks live in sub-projects.')
-    // the note alone, with no frame, no flag and no read
+    await chooser('choose')
     expect(header()).toBeNull()
     expect(document.querySelector('[data-msflag]')).toBeNull()
     expect(milestoneReads).not.toContain('milestones:between')
-    // and no empty heading for that project above the note
     expect(document.querySelector('[data-track]')).toBeNull()
   })
 
@@ -517,23 +529,23 @@ describe('the Overview of a scope with nothing to summarize', () => {
     await shows('Nothing assigned to you')
     expect(milestoneRows()).toHaveLength(0)
     expect(document.querySelector('[data-overview-milestones]')).toBeNull()
-    // All projects asks to choose a project and lists no milestone
-    // (coordinator, 7 November 2026)
+    // an address that once named all projects opens the chooser, which
+    // lists no milestone
     await reload()
     await app(plan, '/app/~/overview/all')
-    await shows('Choose a project')
+    await chooser('choose')
     expect(milestoneRows()).toHaveLength(0)
     await reload()
     await app(plan, '/app/testbed/overview/p/2')
     await shows('No tasks yet')
     expect(button('New task')).toBeDefined()
     expect(milestoneRows()).toHaveLength(1)
-    // All projects, also when no project the person sees has a sub-project
+    // and so does it when no project the person sees has a sub-project
     await reload()
     const only = withMilestone(bare(), 'bare', 'Bare launch')
     only.access = only.access.filter((grant) => grant.project_id === 'bare')
     await app(only, '/app/~/overview/all')
-    await shows('Choose a project')
+    await chooser('choose')
     expect(milestoneRows()).toHaveLength(0)
   })
 

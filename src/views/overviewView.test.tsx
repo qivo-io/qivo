@@ -486,39 +486,7 @@ describe('the root states', { timeout: BOARD_TEST_TIMEOUT }, () => {
   })
 })
 
-describe('All projects and My view', { timeout: BOARD_TEST_TIMEOUT }, () => {
-  it('asks to choose a project in All projects, with no read of its own', async () => {
-    const { board, actions } = await overview(work(), { scope: 'all' })
-    expect(state()).toBe('choose')
-    expect(message()).toBe('Choose a project')
-    expect(document.body.textContent).toContain(
-      'The Overview shows one project at a time. Pick one to see its summary.',
-    )
-    expect(board.server.overview.asked).toEqual([])
-    expect(document.querySelector('[data-board-choice]')).toBeNull()
-    // with no milestone to show, the chooser is the whole page
-    expect([...document.querySelectorAll('h2')].map((h) => h.textContent)).not.toContain(
-      'Milestones',
-    )
-    await click(document.querySelector('[data-ov-choice="plan"]'))
-    expect(actions.setScope).toHaveBeenCalledWith('plan')
-  })
-
-  it("lets go of a project's reads and rows when the page moves to All projects", async () => {
-    const { board, Overview, actions, render } = await overview(work())
-    const { __layerProbe } = await import('../store/planner')
-    if (!__layerProbe) throw new Error('the layer probe is test-only')
-    const slots = () =>
-      Object.keys(__layerProbe.rows()).filter((section) => section.startsWith('view:overview:'))
-    expect(slots().length).toBeGreaterThan(0)
-    // App mounts the page anew for All projects, which asks for no read
-    const all = board.P.scopeInfo('all') as ScopeInfo
-    await render(() => <Overview key="all" info={all} actions={actions} />)
-    expect(state()).toBe('choose')
-    expect(board.server.overview.open.size).toBe(0)
-    expect(slots()).toEqual([])
-  })
-
+describe('My view', { timeout: BOARD_TEST_TIMEOUT }, () => {
   it("shows My view's own tasks, with their projects, and its notes once the answer decides them", async () => {
     await overview(
       (snap) => {

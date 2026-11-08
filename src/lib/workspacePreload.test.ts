@@ -75,7 +75,11 @@ describe('workspace route preloading', () => {
       'loadTeamSync',
       'loadIssueDetail',
     ])
-    expectPreload('/app', '#/all/tasks/qn-42', ['loadIssueDetail'])
+    expectPreload('/app', '#/mine/tasks/qn-42', ['loadIssueDetail'])
+    // an address that once named all projects names no task, as the router
+    // reads it
+    expectPreload('/app', '#/all/tasks/qn-42', [])
+    expectPreload('/app/northstar/board/all/tasks/qn-42', '', ['loadKanban'])
     expectPreload('/app/northstar/inbox/t%61sks/QN-42', '', ['loadInbox', 'loadIssueDetail'])
   })
 

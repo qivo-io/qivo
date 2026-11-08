@@ -82,13 +82,12 @@ import {
   projectPagesRev,
   type Route,
   sameTask,
-  scopeForIssueOn,
+  scopeForIssue,
   scopeTaskOf,
   subscribeProjectPages,
   syncPlaceOf,
   taskFacts,
   type UiState,
-  viewBehindTask,
 } from './lib/router'
 import { isTaskRef } from './lib/taskReference'
 import { type Toast, toastLook, withToast } from './lib/toasts'
@@ -177,15 +176,14 @@ function Sidebar({
   onFocusRowDone: (n: number) => void
 }) {
   // "My view" is a scope and lights up like a project row. "All projects"
-  // opens the project directory, a page, and lights while it shows; it also
-  // lights for the All projects scope the old paths still reach (Team
-  // sync's person jumps and addresses ending in /all), so the rail always
-  // names where the person is. The inbox, which owns the screen, outranks every
-  // one of them. Team sync is a page with a row of its own: while it is open
-  // that row is the only lit one, and the scope underneath waits unlit for
-  // its return, as it does under the directory. A row of the project tree
-  // (components/SidebarProjects.tsx) lights by scopeOn.
-  const allOn = !inboxOpen && !syncOpen && (projectsOpen || P.isAllScope(scope))
+  // opens the project directory, a page, and lights while it shows, and
+  // only then: no view shows a scope over all projects. The inbox, which
+  // owns the screen, outranks every one of them. Team sync is a page with a
+  // row of its own: while it is open that row is the only lit one, and the
+  // scope underneath waits unlit for its return, as it does under the
+  // directory. A row of the project tree (components/SidebarProjects.tsx)
+  // lights by scopeOn.
+  const allOn = !inboxOpen && !syncOpen && projectsOpen
   const mineOn = !inboxOpen && !syncOpen && !projectsOpen && P.isMineScope(scope)
   const scopeOn = (id: string) => !syncOpen && !projectsOpen && scope === id
   /* No rule down the rail's right edge (deviation #63): --chrome is darker
@@ -752,9 +750,9 @@ function App() {
      opens the remembered project once the server checked it, else the
      project chooser (opening). */
   const r0 = parsePath(location.pathname) || parseHash(location.hash)
-  // a scope is either a project row or one of the two sentinels (All projects,
-  // My view) — those resolve to no row on purpose, so every check has to admit
-  // them explicitly, or a #/board/mine deep link would boot into no scope
+  // a scope is either a project row or My view's sentinel, which resolves to
+  // no row on purpose, so every check has to admit it explicitly, or a
+  // #/board/mine deep link would boot into no scope
   const liveScope = (s) => !!s && (P.isWideScope(s) || !!P.project(s))
   // the remembered project (UIPrefs.lastProject) where the workspace holds
   // it, which a task address prefers when it holds the task; nothing else
@@ -768,17 +766,16 @@ function App() {
   // issue URLs carry no scope segment (the issue names its own project):
   // keep the remembered project when the issue lives inside it, else jump
   // to the issue's sub-project — link recipients land on a board that
-  // shows it (scopeForIssueOn). A task over Team sync is the exception, as
+  // shows it (scopeForIssue). A task over Team sync is the exception, as
   // that page names its own scope. A task the workspace does not hold boots
   // with no scope, and its answer names its project (pendingTask).
   const task0 = r0?.issue ? scopeTaskOf(r0.issue) : undefined
   const r0Scope =
     r0 && !r0.sync
-      ? r0.scope ||
-        (task0 ? scopeForIssueOn(viewBehindTask(r0, uiView), task0, heldRemembered) : undefined)
+      ? r0.scope || (task0 ? scopeForIssue(task0, heldRemembered) : undefined)
       : undefined
   // the address's scope, or none: the boot never falls back to the first
-  // project, My view or All projects (opening below)
+  // project or My view (opening below)
   const [scope, setScope] = useState<string | undefined>(() =>
     liveScope(r0Scope) ? r0Scope : undefined,
   )
@@ -898,7 +895,7 @@ function App() {
     const nowhere = !active || active === document.body || !active.isConnected
     if (nowhere || active.closest(OUT_OF_USE)) restoreFocus(target())
   })
-  const [settingsPage, setSettingsPage] = useState(r0?.settings || null) // null | "account" | "org-*" | "team:<id>" | "project:<id>"
+  const [settingsPage, setSettingsPage] = useState(r0?.settings || null) // null | "account" | "org-*" | "team:<id>" | "project:<id>" | "project:<org>/<num>"
   // the tree's focus request while the desktop's rail shows the scope it
   // was made in; once not, it ends, so it never comes back
   const focusRowLive =
@@ -1267,11 +1264,41 @@ function App() {
      it, however the person got there, sent at once, so a reload right
      after a pick opens it. A scope that changes under the Inbox, Team sync,
      the directory or Settings writes nothing until a view of it shows, and
-     neither do My view, All projects, no scope, and a scope a task's
+     neither do My view, no scope, and a scope a task's
      address chose (taskScope). A loss never clears it. */
   const viewShown = !!shownPage && showsScope(shownPage)
   // the views' place shows the project chooser while no scope is chosen
   const chooserShown = viewShown && scope === undefined
+  /* The person a Team sync jump over all projects or a team opened the
+     chooser for (showPersonOn), while the filters hold exactly what the
+     jump set, one person and nothing else. The chooser then says whose
+     tasks a pick will show (jumpLine), also after Back to Team sync and
+     Forward to the chooser, and a Back or Forward onto the front door
+     shows the chooser rather than the startup rule (onPop). Any filter
+     change and any chosen scope end it. */
+  const [personJump, setPersonJump] = useState<{ id: string; first: string } | null>(null)
+  const jumpHolds =
+    personJump !== null &&
+    scope === undefined &&
+    filters.search === '' &&
+    !filters.mine &&
+    filters.priority === null &&
+    !filters.stale &&
+    filters.assignees.length === 1 &&
+    filters.assignees[0] === personJump.id
+  if (personJump !== null && !jumpHolds) setPersonJump(null)
+  const jumpHoldsRef = useRef(jumpHolds)
+  jumpHoldsRef.current = jumpHolds
+  /* What the chooser says a pick will show after a person jump: that
+     person's tasks on the Board or the Roadmap, which show the person
+     filter, or on a phone in the project's task list, which a pick opens
+     (ProjectChooser's line). None on the Overview, which has no filter. */
+  const jumpLine =
+    jumpHolds && chooserShown && personJump && (view === 'kanban' || view === 'roadmap')
+      ? mobile
+        ? `Choose a project to see ${personJump.first}'s tasks in its task list.`
+        : `Choose a project to see ${personJump.first}'s tasks on the ${view === 'kanban' ? 'Board' : 'Roadmap'}.`
+      : null
   useEffect(() => {
     if (!viewShown || !scope || P.isWideScope(scope) || taskScope.current === scope) return
     const p = P.project(scope)
@@ -1371,10 +1398,7 @@ function App() {
       return
     }
     // the scope Back or Forward gives a task address (onPop)
-    const route = parsePath(pending.pathname) || parseHash(pending.hash) || {}
-    const sc = liveScope(pending.scope)
-      ? pending.scope
-      : scopeForIssueOn(viewBehindTask(route, view), task, pending.preferred)
+    const sc = liveScope(pending.scope) ? pending.scope : scopeForIssue(task, pending.preferred)
     // the entry names the task, which takes it over in place
     replaceNextHistory.current = true
     if (liveScope(sc) && sc !== scope) {
@@ -1423,8 +1447,8 @@ function App() {
          inside it, else re-scope to the issue's own sub-project. One case
          must NOT keep it — `/app/<org>/<view>/tasks/<task>` IS the project-scope form
          (it omits the segment because the issue names its own project), so
-         going Back to it from a sentinel scope is a request to LEAVE the mode.
-         Carrying 'all'/'mine' through instead would leave the pane in a state
+         going Back to it from My view is a request to LEAVE the mode.
+         Carrying 'mine' through instead would leave the pane in a state
          the address doesn't describe, and the url-sync effect would then push
          a forward entry over the one just popped — a Back that can't get out.
          No UI path reaches such an entry today (entering the mode needs the
@@ -1448,7 +1472,7 @@ function App() {
         : liveScope(r.scope)
           ? r.scope
           : task
-            ? scopeForIssueOn(viewBehindTask(r, was.view), task, preferred)
+            ? scopeForIssue(task, preferred)
             : undefined
       /* A project address the workspace does not hold (Route.unheld) shows
          no scope while startup checks it through projectNav.resolve, as on
@@ -1549,7 +1573,15 @@ function App() {
             : { kind: 'choose', n, note: ADDRESS_UNAVAILABLE, lost: null },
         )
       }
-      if (door) showOpening(startupOpening)
+      /* A person jump's chooser (personJump) shows the chooser again,
+         with its line, as the filters still hold the person, so its entry
+         never opens a project the person did not pick. */
+      if (door)
+        showOpening(
+          jumpHoldsRef.current
+            ? (n) => ({ kind: 'choose', n, note: null, lost: null })
+            : startupOpening,
+        )
       // a task the workspace does not hold, reached with no scope, waits
       // for its answer to name its project, as on a boot, never for a
       // check the move dropped
@@ -1578,15 +1610,15 @@ function App() {
   }, [])
 
   /* The access guard keeps the scope within what the current user can see.
-     Both sentinels ARE "what the user can see", so neither needs rescuing,
-     and each resolves to no project row, which would otherwise bounce it
-     away one commit after it was entered. No scope is the chooser's. A
+     My view IS "what the user can see", so it needs no rescuing, and it
+     resolves to no project row, which would otherwise bounce it away one
+     commit after it was entered. No scope is the chooser's. A
      project scope stays while the workspace holds it and its top-level
      project and the person sees both (P.canSee), so a sub-project they lost
      under a parent they still see goes too. A lost one leaves no scope and
      the chooser with "<name> is no longer available to you.", never another
-     project, My view or All projects: someone else's change must not choose
-     for the person. Its address gives way to the front door in place. */
+     project or My view: someone else's change must not choose for the
+     person. Its address gives way to the front door in place. */
   useEffect(() => {
     if (!scope || P.isWideScope(scope)) return
     const p = P.project(scope)
@@ -1617,8 +1649,7 @@ function App() {
      no newer opening started: ok opens the project once the workspace
      holds it (openResolved); unavailable shows the chooser with its note;
      the access_unchecked refusal and a failed read show their sentence
-     with Retry, never the chooser, another project, My view or All
-     projects. */
+     with Retry, never the chooser, another project or My view. */
   const askedCheck = useRef(-1)
   const stopCheck = useRef<(() => void) | null>(null)
   useEffect(() => () => stopCheck.current?.(), [])
@@ -1724,20 +1755,20 @@ function App() {
   const openTask = (id: string | null) => move({ openIssue: id }, () => setOpenIssue(id))
 
   const openNewIssue = (init) => {
-    /* Desktop creates normally name a project. The phone's My tasks and
-       All projects actions can open without one: the dialog offers only
-       writable projects and asks for the project/sub-project there. */
+    /* Desktop creates normally name a project. The phone's My tasks action
+       can open without one: the dialog offers only writable projects and
+       asks for the project/sub-project there. */
     const target = init.project || (P.isWideScope(scope) ? null : scope)
     const proj = target ? P.project(target) : null
     // "tasks live in sub-projects": a project with none can't receive one.
-    // The rule follows the TARGET, not just the scope — a sentinel scope gives
-    // every project a lane and a track, and their + buttons name them.
+    // The rule follows the TARGET, not just the scope — My view gives every
+    // project a lane and a track, and their + buttons name them.
     if (proj && proj.type === 'meta' && proj.children.length === 0) {
       window.showToast?.('Create a sub-project first. Tasks live in sub-projects.', 'info')
       openNewProject({ parent: proj.id })
       return
     }
-    // …and with no target at all (a sentinel scope, nothing to put a task in
+    // …and with no target at all (My view, nothing to put a task in
     // anywhere) there is no project to parent a sub-project to either. The
     // TopBar button already disables here; the palette's doesn't, so say why
     // rather than opening a dialog that could never be submitted.
@@ -1757,11 +1788,11 @@ function App() {
       focus: f.focus,
     }))
 
-  /* A milestone lands on exactly ONE project's roadmap (0078), so a sentinel
-     scope has none to offer: the three surfaces that create one (the Overview
+  /* A milestone lands on exactly ONE project's roadmap (0078), so My view
+     has none to offer: the three surfaces that create one (the Overview
      section's +, the Roadmap toolbar, the palette) all hide there. This is the
      single closure behind them — the two copies it replaces had already
-     drifted apart once — and it never lets a sentinel reach the dialog. */
+     drifted apart once — and it never lets My view reach the dialog. */
   const openNewMilestone = (init) =>
     setModal({
       kind: 'milestone',
@@ -1833,10 +1864,9 @@ function App() {
     const meta = P.metaOf(it.project)
     if (!meta) return
     const place = taskPlaceOf(it)
-    /* All projects has no Roadmap of its own (it asks to choose a
-       project), so planning from there opens the task's top-level
-       project. A Roadmap that holds the task's sub-project, that
-       sub-project's or its top-level project's, stays. My view carries it
+    /* A Roadmap that holds the task's sub-project, that sub-project's or
+       its top-level project's, stays; from anywhere else planning opens
+       the task's top-level project. My view carries it
        only when it IS mine: spotlighting somebody else's task from there
        would open a planning session over a bar the view doesn't render.
        The jump passes the scope it shows through move, also one it keeps,
@@ -1980,8 +2010,8 @@ function App() {
     })
   }
   /* A row's Board or Roadmap jump: leave the page for that view, scoped so
-     the task is on it: the task's own sub-project, as neither view has an
-     All projects selection. Filters left from before the sync are
+     the task is on it: the task's own sub-project. Filters left from
+     before the sync are
      cleared, Focus kept, since nothing on the sync could show why the task
      is missing. The Board opens the task window over it, as showOnBoard
      does, and reveals its card behind it; the Roadmap reveals its bar
@@ -2005,14 +2035,17 @@ function App() {
   }
   /* A person header's Board or Roadmap jump: leave the page for that view
      filtered to the person (the filters match the task's owner, the rule
-     the sync's rows follow) over the view scope nearest the sync's: one
-     project stays that project; all projects and a team (views have no team
-     scope) become All projects, never My view, which drops the filter. There
-     the Board and the Roadmap ask to choose a project, and then show that
-     person's tasks. */
-  const showPersonOn = (v: 'kanban' | 'roadmap', profileId: string) => {
+     the sync's rows follow). A project sync whose project the workspace
+     holds opens that project. All projects and a team, which no view has
+     a scope for, open the view with no project chosen, which shows the
+     chooser with the filter kept and a line that names the person
+     (jumpLine), never My view, which drops the filter, nor a project the
+     person did not pick. A pick opens that project's view filtered to the
+     person, in place of the chooser's entry. `first` is the person's
+     first name, from Team sync's agenda. */
+  const showPersonOn = (v: 'kanban' | 'roadmap', profileId: string, first: string) => {
     const place = parseSyncScope(sync?.scope)
-    const to = place.kind === 'project' && P.project(place.id) ? place.id : P.ALL_SCOPE
+    const to = place.kind === 'project' && P.project(place.id) ? place.id : undefined
     move({ sync: null, scope: to, view: v, openIssue: null }, () => {
       setFilters((f) => ({
         search: '',
@@ -2026,6 +2059,11 @@ function App() {
       setScope(to)
       setView(v)
       setOpenIssue(null)
+      if (to === undefined) {
+        setPersonJump({ id: profileId, first })
+        // the chooser itself, never the startup rule's remembered project
+        showOpening((n) => ({ kind: 'choose', n, note: null, lost: null }))
+      }
     })
   }
   /* A sub-project's Board, from Team sync's note for one past its limits:
@@ -2192,10 +2230,8 @@ function App() {
     setModal(null)
     window.showToast?.(`Created ${P.keyOfOpen(open)}`)
     const curProj = P.project(scope)
-    /* All projects shows the task on no view, as the Board, the Overview
-       and the Roadmap each ask to choose a project there, so a create from
-       it moves to the task's sub-project, as from a project that does not
-       hold it. My view shows it only if it landed on me, by P.isMine's
+    /* A create from a project that does not hold the task moves to the
+       task's sub-project. My view shows it only if it landed on me, by P.isMine's
        rule read from what was typed, since the workspace holds no task:
        its assignee, or its reviewer for a task born In Review. A task
        created from a side-board's + is unassigned, so that one still
@@ -2426,10 +2462,10 @@ function App() {
   const settingsView = settingsPage
     ? (() => {
         // the scope's top-level project, which Archived tasks opens on once
-        // the server resolves it for this person; null from either sentinel
-        // scope, on purpose, so All projects or My view opens it on no
-        // choice rather than on an arbitrary project or on All projects
-        // (P.project() is undefined for both)
+        // the server resolves it for this person; null from My view, on
+        // purpose, so My view opens it on no choice rather than on an
+        // arbitrary project or on all of an organization's projects
+        // (P.project() is undefined for it)
         const p = P.project(scope)
         const scopeMeta = p ? (p.type === 'meta' ? p.id : (p.parent ?? null)) : null
         /** Leaves Settings for the page that opened it. */
@@ -2490,7 +2526,7 @@ function App() {
                        to `parent`, where they were working, while the
                        workspace holds it and they see it, else to no
                        scope and the chooser, with no note and the
-                       guard's dropped. Both sentinels survive it. */
+                       guard's dropped. My view survives it. */
                     if (P.isWideScope(scope)) return
                     const at = scope
                       ? scopePlace.current?.id === scope
@@ -2813,6 +2849,7 @@ function App() {
                 shows={chooserShows(opening)}
                 view={view}
                 mobile={mobile}
+                purpose={jumpLine}
                 onOpen={mobile ? actions.openProject : navScope}
                 onRetry={() => {
                   if (opening.kind === 'retry')

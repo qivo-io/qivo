@@ -683,13 +683,13 @@ function KanbanBoard({
     }
   }, [dragId, endDrag])
 
-  // `wide` = a scope that names no project (All projects, My view); `mine` is
-  // the one that also narrows to my own tasks
+  // `wide` = the scope that names no project, My view; `mine` is the same
+  // scope, the one that narrows to my own tasks
   const wide = info.wide
   const mine = info.mine
-  // Scopes that hold project groups worth labelling: one project's sub-projects, or —
-  // across all projects (deviation #47) — the projects themselves. A lone sub-project
-  // is its own project group, which pools unless assignee grouping is selected.
+  // Scopes that hold project groups worth labelling: one project's sub-projects, or,
+  // in My view, the projects themselves. A lone sub-project is its own project
+  // group, which pools unless assignee grouping is selected.
   const grouped = wide || info.isMeta
   const byAssignee = tweaks.metaViz === 'assignees'
   const subIds = info.subIds
@@ -1105,17 +1105,17 @@ function KanbanBoard({
     },
   })
   const defaultProject = subIds[0] || null
-  // null in either sentinel scope: a create needs a project, and a status
-  // column across every project names none — ColHeaderRow drops the + rather
-  // than opening a dialog with nothing chosen
+  // null in My view: a create needs a project, and a status column across
+  // every project names none — ColHeaderRow drops the + rather than opening
+  // a dialog with nothing chosen
   const addTo =
     wide || !P.canWrite(info.id)
       ? null
       : (statusId) => actions.newIssue({ status: statusId, project: defaultProject })
 
   /* ---------- empty states ---------- */
-  // a message in place of the columns: the chooser of All projects, a
-  // selection past the Board's limits, a Board that did not load
+  // a message in place of the columns: a selection past the Board's
+  // limits, a Board that did not load
   if (!view.shows) return <BoardNote view={view} info={info} actions={actions} variant="desktop" />
   if (subIds.length === 0) {
     if (wide) {
@@ -1147,10 +1147,6 @@ function KanbanBoard({
     // mean nobody has created anything, only that none of it landed on me
     if (mine) {
       return <EmptyState icon="user" title="Nothing assigned to you" />
-    }
-    // no action across all projects: the task would have nowhere named to go
-    if (wide) {
-      return <EmptyState icon="board" title="No tasks yet" />
     }
     return (
       <EmptyState

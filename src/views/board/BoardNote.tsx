@@ -1,6 +1,6 @@
 /* What the Board says in place of its columns or its phone sections when it
-   cannot show a selection's tasks (useBoardView): the chooser of All
-   projects, the narrowing message of a selection past the Board's limits,
+   cannot show a selection's tasks (useBoardView): the narrowing message of
+   a selection past the Board's limits,
    a Board that is not available or did not load, a text filter past its
    limit and a wait too large to show tasks during. Each is an empty state
    (components/ViewNote.tsx), where focus goes once a task window closes
@@ -10,7 +10,6 @@
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { LIMITS } from '../../../convex/lib/limits'
-import { NoProjects } from '../../components/NoProjects'
 import { ViewNote } from '../../components/ViewNote'
 import { limitSentence } from '../../lib/fieldLimits'
 import type { ScopeInfo } from '../../store/planner'
@@ -53,28 +52,6 @@ export function BoardNote({
     return { hint: 'Narrow your filters.' }
   }
   switch (view.state) {
-    case 'choose':
-      // the phone's own empty card says why no project shows
-      if (info.metas.length === 0 && phone) return null
-      if (info.metas.length === 0)
-        return (
-          <NoProjects
-            icon="layers"
-            title="Nothing to show yet"
-            onNewProject={() => actions.newProject({ kind: 'program' })}
-          />
-        )
-      return (
-        <ViewNote
-          hooks="board"
-          phone={phone}
-          icon="layers"
-          title="Choose a project"
-          hint="The Board shows one project at a time. Pick one to see its tasks."
-          projects={info.metas}
-          onProject={open}
-        />
-      )
     case 'over_ceiling': {
       const { hint, projects } = narrowing()
       return (

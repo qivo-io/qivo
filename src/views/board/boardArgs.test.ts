@@ -15,7 +15,6 @@ const NONE: IssueFilters = {
 }
 const project = { wide: false, mine: false, id: 'sub', proj: { org: 'org' } }
 const MINE = { wide: true, mine: true, id: 'mine', proj: null }
-const ALL = { wide: true, mine: false, id: 'all', proj: null }
 const CUTOFF = '2026-07-01T10:00:00.000Z'
 
 /** The arguments a request sends, which must be one. */
@@ -83,8 +82,9 @@ describe('the Board request', () => {
     expect(sent(project, {}).args.filters.stale_before).toBeNull()
   })
 
-  it('asks to choose a project in All projects, and sends My view as the mine scope', () => {
-    expect(boardRequest(ALL, NONE, CUTOFF)).toEqual({ kind: 'choose' })
+  it('sends My view as the mine scope and a project as itself, and never asks to choose', () => {
+    // no view has a selection over all projects any more
+    expect(boardRequest(MINE, NONE, CUTOFF).kind).toBe('ask')
     expect(sent(MINE, {}).args.scope).toEqual({ kind: 'mine' })
     expect(sent(project, {}).args.scope).toEqual({
       kind: 'project',

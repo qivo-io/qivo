@@ -5,7 +5,7 @@
      <view>/tasks/<ref>        task over that view
      tasks/<ref>               task using saved view/scope
      [<view>/]p/<n>            project/sub-project scope
-     <view>/all|mine           sentinel scope, optionally /tasks/<ref>
+     <view>/mine               My view, optionally /tasks/<ref>
      settings/<page>           account, org-*, projects-* or team:<uuid>
      settings/project/<n>      project settings, by number or uuid
      projects                  the All projects directory, no task over it
@@ -33,14 +33,17 @@
    A task the workspace holds resolves to its handle, and one it does not
    to a reference (lib/taskReference.ts) that the task window reads from
    the server, in the organization the address names. Tasks resolve their
-   own project scope except under all/mine or inbox, a reference's once
-   its answer names its project (App pendingTask).
+   own project scope except under mine or inbox, a reference's once its
+   answer names its project (App pendingTask). A segment the grammar does
+   not know names nothing, so an address that once named all projects
+   (<view>/all, optionally /tasks/<ref>) reads as its view with no scope,
+   which the startup rule serves.
    Legacy #/ links share parseSegments and are replaced by path routes;
    unrelated hashes, including auth fragments, are ignored. */
 
 import { parseIssueRef, UUID } from '../../convex/lib/taskRefs'
 import type { AddressedTask } from '../store/liveParts'
-import { ALL_SCOPE, ISSUE_PREFIX, MINE_SCOPE, P, type ProjectAsk } from '../store/planner'
+import { ISSUE_PREFIX, MINE_SCOPE, P, type ProjectAsk } from '../store/planner'
 import type { IssueVM } from '../store/viewModels'
 import { refParts, taskRef } from './taskReference'
 
@@ -82,13 +85,12 @@ export const ORG_NONE = '~'
     Archived tasks. */
 export const ARCHIVED_TASKS_PAGE = 'projects-archived-tasks'
 
-/* The scope tokens that name no project row. Both sit where a project number
-   would and share the whole URL grammar, so the parser and the builder ask
-   this rather than testing one sentinel — but they are NOT interchangeable:
-   the answer is the token itself, so callers compare identity (moving between
-   them changes the pane, and that earns a history entry). */
-const sentinelOf = (s?: string | null): string | null =>
-  s === ALL_SCOPE || s === MINE_SCOPE ? s : null
+/* The scope token that names no project row, My view's. It sits where a
+   project number would and shares the whole URL grammar, so the parser and
+   the builder ask this. The answer is the token itself, so callers compare
+   identity: moving in or out of it changes the pane, and that earns a
+   history entry. */
+const sentinelOf = (s?: string | null): string | null => (s === MINE_SCOPE ? s : null)
 
 // "split" and "resources" were folded into the roadmap — old links still parse
 const URL_TO_VIEW: Record<string, string> = {
@@ -272,9 +274,6 @@ export const scopeForIssue = (
   preferred?: string | null,
 ): string | undefined => {
   if (!it) return preferred || undefined
-  // All projects already holds every issue this login can open — nothing to
-  // narrow to, and narrowing would drop the mode on a short issue link
-  if (preferred === ALL_SCOPE) return ALL_SCOPE
   /* My view does NOT hold every issue — only mine. A short link to somebody
      else's task therefore narrows to its own sub-project, keeping the promise
      that a link always lands you on a board that actually shows the task. The
@@ -292,30 +291,6 @@ export const scopeForIssue = (
       return preferred
   }
   return it.project
-}
-
-/* The view a task address `r` shows behind its task window, `view` being
-   the one that stays where the address names none: null under the Inbox,
-   which covers every view. */
-export const viewBehindTask = (r: Route, view: string): string | null =>
-  r.inbox ? null : r.view || view
-
-/* The scope to show behind a task link on `view` (viewBehindTask). The
-   Board, the Overview and the Roadmap have no All projects selection
-   (convex/tasks.ts board and roadmap, convex/overview.ts), so on All
-   projects each asks to choose a project. Where scopeForIssue keeps All
-   projects, they show the task's own sub-project instead, so its card, its
-   figures or its bar can be shown. The Inbox, which shows no view, keeps
-   All projects. */
-export const scopeForIssueOn = (
-  view: string | null,
-  it: ScopeTask | undefined,
-  preferred?: string | null,
-): string | undefined => {
-  const scope = scopeForIssue(it, preferred)
-  return (view === 'kanban' || view === 'overview' || view === 'roadmap') && scope === ALL_SCOPE
-    ? (it?.project ?? scope)
-    : scope
 }
 
 /* ---------------------------------------------------------------------------
@@ -390,10 +365,10 @@ function parseSegments(seg: string[], org: string | undefined, orgUnknown: boole
     r.view = URL_TO_VIEW[seg[0]]
     i = 1
   }
-  /* "all" and "mine" sit where a project number would: the token IS the
-     scope. Both span every organization, so the org segment in front of this
-     form pins only how the issue reference behind it is read — never which
-     projects are shown. */
+  /* "mine" sits where a project number would: the token IS the scope. It
+     spans every organization, so the org segment in front of this form pins
+     only how the issue reference behind it is read, never which projects
+     are shown. Any other segment there names nothing, as "all" does now. */
   const sen = sentinelOf(seg[i])
   if (sen) {
     r.scope = sen
@@ -801,7 +776,7 @@ export function buildPath(state: UiState): string {
   // were, so the address names only the page (and a task over it)
   if (s.sync) return syncPath(s.sync, s.openIssue)
   const viewUrl = VIEW_TO_URL[s.view || ''] || 'overview'
-  /* A sentinel scope is one an issue link must NAME: there is no project to
+  /* My view is a scope an issue link must NAME: there is no project to
      restore it from on the way back (scopeForIssue would land the reload on
      the issue's own sub-project and silently leave the mode). */
   if (sentinelOf(s.scope)) {
@@ -885,16 +860,13 @@ export function pathMatchesState(path: string, s: UiState): boolean {
   if (r.sync || s.sync) return !!r.sync === !!s.sync && issue === (s.openIssue || null)
   if (issue !== (s.openIssue || null)) return false
   if (s.openIssue) {
-    /* Entering or leaving a sentinel scope with the window open changes the
-       pane behind the task, so it earns a history entry. Reading "no scope
+    /* Entering or leaving My view with the window open changes the pane
+       behind the task, so it earns a history entry. Reading "no scope
        segment" as "a different scope" takes a view: the PROJECT form omits the
-       segment too, so an address that names a view but no scope was that form
-       — while a viewless short link names neither and must still normalize in
-       place, or every such boot under a saved sentinel scope would push a junk
-       entry.
-       Compared by IDENTITY, not by "is it a sentinel": All projects → My view
-       swaps the pane exactly as project → All projects does, and a boolean
-       test would call those two the same page. */
+       segment too, so an address that names a view but no scope was that form,
+       while a viewless short link names neither and must still normalize in
+       place, or every such boot under My view would push a junk entry.
+       Compared by identity, as the token is the scope. */
     if ((r.view || r.scope) && sentinelOf(r.scope) !== sentinelOf(s.scope)) return false
     // a viewless short link matches whatever view the state has — the URL
     // normalizes in place to the canonical view-prefixed form

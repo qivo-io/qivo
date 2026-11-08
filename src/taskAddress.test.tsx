@@ -211,7 +211,7 @@ const note = () => document.querySelector('[data-task-gone] [role="status"]')?.t
 
 describe('a boot on a task address', { timeout: 30_000 }, () => {
   it('reads the task with the first parts, shows it from that answer while tasks load, and turns editable in place once the workspace holds it', async () => {
-    const { store, snap, arrive } = await bootAt('/app/testbed/board/all/tasks/qn-2')
+    const { store, snap, arrive } = await bootAt('/app/testbed/board/mine/tasks/qn-2')
     const org = snap.orgs[0].id
     // the read the boot subscribed with its first parts
     expect(reads.map((read) => read.args)).toEqual([{ org_id: org, ref: 'QN-2' }])
@@ -230,7 +230,7 @@ describe('a boot on a task address', { timeout: 30_000 }, () => {
     await arrive()
     await waitFor(() => dialog()?.dataset.taskSource === 'workspace', "the workspace's task")
     expect(dialog()).toBe(window)
-    expect(location.pathname).toBe('/app/testbed/board/all/tasks/qn-2')
+    expect(location.pathname).toBe('/app/testbed/board/mine/tasks/qn-2')
   })
 
   it("moves the page behind it to the task's own project once its answer names it", async () => {
@@ -379,7 +379,7 @@ describe('a boot on a task address, as the app boots', { timeout: 30_000 }, () =
 
   it('reads a number under ~ only once the store knows the home organization, and asks for no task', async () => {
     let early: unknown[] = []
-    const { store, snap } = await bootAt('/app/~/board/all/tasks/qn-2', {
+    const { store, snap } = await bootAt('/app/~/board/mine/tasks/qn-2', {
       // the store holds the workspace, App has not rendered: the address
       // names no organization, so the boot read nothing for it
       before: () => {
@@ -400,7 +400,7 @@ describe('a boot on a task address, as the app boots', { timeout: 30_000 }, () =
   })
 
   it('shows the task from the read the boot started, editable from that answer, and asks for no task', async () => {
-    const { store, snap } = await bootAt('/app/testbed/board/all/tasks/qn-2')
+    const { store, snap } = await bootAt('/app/testbed/board/mine/tasks/qn-2')
     const org = snap.orgs[0].id
     expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
     // the read the boot subscribed with the first parts, the only ones

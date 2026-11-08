@@ -14,14 +14,12 @@ import {
 } from '../../store/overviewLists'
 import { P, type ScopeInfo } from '../../store/planner'
 
-/** The Overview's scope for `info`: null for All projects, which the
-    queries do not answer, My view, or a top-level project or one
+/** The Overview's scope for `info`: My view, or a top-level project or one
     sub-project, as views/board/boardArgs.ts boardRequest builds the
     Board's. */
 export function overviewScope(
-  info: Pick<ScopeInfo, 'wide' | 'mine' | 'id'> & { proj: { org: string } | null },
-): OverviewScope | null {
-  if (info.wide && !info.mine) return null
+  info: Pick<ScopeInfo, 'mine' | 'id'> & { proj: { org: string } | null },
+): OverviewScope {
   if (info.mine) return { kind: 'mine' }
   return { kind: 'project', org_id: info.proj?.org ?? '', project_id: info.id }
 }
@@ -42,20 +40,15 @@ export function overviewClock(): OverviewClock {
   }
 }
 
-/** What the Overview of `info` asks for. */
-export type OverviewRequest =
-  /** All projects, where the Overview asks to choose a project */
-  | { kind: 'choose' }
-  /** the scope and the clock, and their key (store/overviewLists.ts
-      overviewKey) */
-  | { kind: 'ask'; base: OverviewBase; key: string }
+/** What the Overview of `info` asks for: the scope and the clock, and
+    their key (store/overviewLists.ts overviewKey). */
+export type OverviewRequest = { kind: 'ask'; base: OverviewBase; key: string }
 
 /** The Overview's request for the scope `info`, on the clock now. */
 export function overviewRequest(
-  info: Pick<ScopeInfo, 'wide' | 'mine' | 'id'> & { proj: { org: string } | null },
+  info: Pick<ScopeInfo, 'mine' | 'id'> & { proj: { org: string } | null },
 ): OverviewRequest {
   const scope = overviewScope(info)
-  if (scope === null) return { kind: 'choose' }
   const base = { scope, clock: overviewClock() }
   return { kind: 'ask', base, key: overviewKey(base) }
 }

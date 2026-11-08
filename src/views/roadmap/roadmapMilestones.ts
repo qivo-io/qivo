@@ -12,8 +12,7 @@
      the top-level projects that hold a sub-project its Roadmap's answer
      names, before the toolbar's filters prune them, so typing a filter
      never asks again, and the last answer's projects hold while the
-     Roadmap's answer reloads for the same scope. All projects names none,
-     as it asks to choose a project.
+     Roadmap's answer reloads for the same scope.
    - A read lives under one of two fixed slots. A new window or a new set
      of projects asks under the other slot while the shown answer stays
      live, and its flags show for the weeks both windows cover. Once the
@@ -84,7 +83,7 @@ type MarkerTrack = { proj: { id: string }; subIds: readonly string[] }
  * that hold a sub-project of `held`, the sub-projects its Roadmap's answer
  * names, before the toolbar's filters prune them; while its Roadmap's
  * answer reloads (`held` null) it names `kept`, the projects it named last
- * for the same scope, if any. All projects names none.
+ * for the same scope, if any.
  */
 export function markerProjects(
   scope: MarkerScope,
@@ -93,7 +92,6 @@ export function markerProjects(
   kept: readonly string[] | null = null,
 ): string[] | null {
   if (!scope.wide) return [scope.metas[0]?.id ?? scope.id]
-  if (!scope.mine) return null
   if (!held) return kept && kept.length > 0 ? [...kept] : null
   const named = new Set<string>()
   for (const track of tracks) if (track.subIds.some((id) => held.has(id))) named.add(track.proj.id)
@@ -164,7 +162,7 @@ export function answerOf<R extends Marker>(read: MarkerRead<R> | null): MarkerAn
 
 /** Where the Roadmap's flags stand, as its root's data-roadmap-milestones
     names it:
-    - `none`, nothing asked: All projects, or My view without tracks;
+    - `none`, nothing asked: My view without tracks;
     - `loading`, no answer to show yet;
     - `refreshing`, the answer shown is kept, or a new window's or set of
       projects' read is on its way;

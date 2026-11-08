@@ -12,8 +12,7 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
    nothing until it opens, 25 at a time with its search on the server, the
    Next milestone cell in each state, a kept answer's included, the Retry
    of its one-row read, the empty lines and My view's own sentences, My
-   view's `mine` read, All projects
-   reading none, the note pages, the section staying under a note while
+   view's `mine` read, the note pages, the section staying under a note while
    Retry and Show from the start read again, another person's rename, move
    and delete arriving while the page shows, a hidden tab, a kept page, a
    scope switch, P.releaseOverview and a new week. The reads answer through the milestone
@@ -478,7 +477,7 @@ describe('the Next milestone cell and the section states', { timeout: BOARD_TEST
   })
 })
 
-describe('My view and All projects', { timeout: BOARD_TEST_TIMEOUT }, () => {
+describe('My view', { timeout: BOARD_TEST_TIMEOUT }, () => {
   it("reads My view with mine and no projects, names each row's project, and leaves out a project without own work", async () => {
     const { board } = await overview(plan({ up: 2 }), { scope: 'mine' })
     const asks = sectionAsks(board)
@@ -532,13 +531,6 @@ describe('My view and All projects', { timeout: BOARD_TEST_TIMEOUT }, () => {
     root = createRoot(container)
     await overview(plan({ up: 0 }), { scope: 'mine' })
     expect(noteOf('upcoming')).toEqual(['empty: No milestones in any of your projects yet.'])
-  })
-
-  it('asks nothing in All projects, whose chooser is the whole page', async () => {
-    const { board } = await overview(plan({ up: 2 }), { scope: 'all' })
-    expect(sectionAsks(board)).toEqual([])
-    expect(q('[data-overview-milestones]')).toBeNull()
-    expect(q('[data-overview-milestone]')).toBeNull()
   })
 })
 

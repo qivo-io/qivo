@@ -253,8 +253,8 @@ function Roadmap({
   const onOpenIssue = useLatest((id: string) => actions.openIssue(P.openTarget(id)))
   const onScope = useLatest(actions.setScope)
   const { visible } = useViewVisibility()
-  // `wide` = a scope that names no project (All projects, My view); `mine` is
-  // the one that also narrows to my own tasks
+  // `wide` = the scope that names no project, My view; `mine` is the same
+  // scope, the one that narrows to my own tasks
   const wide = info.wide
   const mine = info.mine
 
@@ -862,8 +862,7 @@ function Roadmap({
      hold, so the read neither drops nor asks again. The read stops, keeping
      its flags, while the page or the tab hides, while the phone's agenda
      shows in place of the timeline, and while Team fills My view's panel,
-     whose rows the flags sit on; it reads nothing in All projects, which
-     asks to choose a project. */
+     whose rows the flags sit on. */
   const lastNamed = useRefR<{ scope: string; projects: string[] } | null>(null)
   const markerScope = markerProjects(
     info,
@@ -1586,8 +1585,8 @@ function Roadmap({
 
   /* The frame an empty roadmap keeps: the toolbar, everything that still has
      something to do when there is no grid under it. The window controls are
-     NOT here: they live in the timeline's header, which All projects and a
-     person with no project do without (emptyNote below). The phone shows
+     NOT here: they live in the timeline's header, which a person with no
+     project does without in My view (emptyNote below). The phone shows
      its agenda in place of the timeline (showMobileAgenda above). */
   const mobileAgenda = (
     corrections: number,
@@ -1704,9 +1703,9 @@ function Roadmap({
      "Nothing matches your filters", with its week header and window
      controls, and in a project with its header's flags of the window. The
      empty state says why there are no rows, not that the scope plans
-     nothing. My view has no flags then, as they sit on the rows. All
-     projects, which asks to choose a project, and a person with no
-     project show the note alone (emptyFrame). The phone's agenda lists
+     nothing. My view has no flags then, as they sit on the rows. A person
+     with no project shows the note alone in My view (emptyFrame). The
+     phone's agenda lists
      the scope's milestones under its note. */
   const note = <RoadmapNote view={view} info={info} actions={actions} phone={mobile} />
   let emptyNote: React.ReactNode = null
@@ -1733,8 +1732,8 @@ function Roadmap({
       />
     )
   } else if (!showing) {
-    // All projects' chooser, or the answer's state: a wait, a limit, a
-    // failure, never part of a Roadmap
+    // the answer's state: a wait, a limit, a failure, never part of a
+    // Roadmap
     emptyNote = note
   } else if (mine && view.state === 'ok' && held && held.size === 0) {
     /* My view empties for a reason of its own, and the test above can't see
@@ -1761,7 +1760,7 @@ function Roadmap({
     AGENDA_MILESTONE_SLOTS,
     showMobileAgenda && (!!emptyNote || mobileAgendaSection === 'milestones'),
   )
-  if (emptyNote && wide && (!mine || info.metas.length === 0))
+  if (emptyNote && mine && info.metas.length === 0)
     return (
       <RoadmapRoot view={view} milestones={markers.view.state}>
         {emptyFrame(emptyNote)}

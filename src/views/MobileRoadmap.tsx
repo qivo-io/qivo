@@ -117,7 +117,7 @@ const MobileRoadmapRow = memo(function MobileRoadmapRow({
  * from the server: Upcoming 10 at a time and a collapsed Past, the
  * Overview's sections on slots of the Roadmap page's own
  * (views/useScopeMilestones.ts). My view lists those of the projects that
- * hold the person's own work, and All projects lists none.
+ * hold the person's own work.
  * With `empty`, the agenda keeps what the desktop's empty roadmap keeps in its
  * toolbar (Undo, Auto-move and New milestone) and shows the note in
  * place of the timeline button, the section switch and the task schedule. The
@@ -239,7 +239,6 @@ export function MobileRoadmap({
   const canAddMilestone = !info.wide && P.canAddMilestone(info.id)
   const hint = info.mine ? MINE_MILESTONES_HINT : undefined
   const tooMany = info.mine ? MINE_TOO_MANY : undefined
-  // All projects reads no milestone and lists none (ms.base null)
   const milestoneSection = ms.base && (
     <section className="mobile-roadmap-section" data-agenda-milestones>
       <div className="mobile-roadmap-section-heading">

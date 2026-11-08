@@ -887,12 +887,9 @@ describe('the line about the flags', { timeout: 30_000 }, () => {
 })
 
 describe('where the Roadmap reads no flags', { timeout: 30_000 }, () => {
-  it('reads none in All projects, which shows its note alone', async () => {
+  it('reads none at an address that once named all projects, where the startup rule shows the chooser', async () => {
     await app(world(), '/app/~/roadmap/all')
-    await waitFor(
-      () => document.querySelector('[data-workspace-view] [data-roadmap-state="choose"]'),
-      "All projects' chooser",
-    )
+    await waitFor(() => document.querySelector('[data-project-chooser]'), 'the chooser')
     await settle()
     expect(ranges()).toHaveLength(0)
     expect(document.querySelector('[data-workspace-view] [data-roadmap-header]')).toBeNull()

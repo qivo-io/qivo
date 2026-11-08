@@ -61,7 +61,6 @@ const store = {} as {
 
 vi.mock('../store/planner', () => ({
   ISSUE_PREFIX: 'QN',
-  ALL_SCOPE: 'all',
   MINE_SCOPE: 'mine',
   P: new Proxy({}, { get: (_t, k) => store[k as keyof typeof store] }),
 }))
@@ -78,11 +77,9 @@ import {
   projectPagesRev,
   sameTask,
   scopeForIssue,
-  scopeForIssueOn,
   syncPlaceOf,
   taskSegmentOf,
   type UiState,
-  viewBehindTask,
 } from './router'
 import { refParts, taskRef } from './taskReference'
 
@@ -210,7 +207,7 @@ describe('parsePath — the org segment', () => {
     for (const path of [
       '/app/home/i/qn-9',
       '/app/home/board/i/qn-9',
-      '/app/home/board/all/i/qn-9',
+      '/app/home/board/mine/i/qn-9',
       '/app/home/board/mine/i/qn-9',
       '/app/home/inbox/i/qn-9',
       '/app/home/board/p/7/i/qn-9',
@@ -251,17 +248,32 @@ describe('parsePath — the org segment', () => {
 })
 
 describe('parsePath — scopes and pages', () => {
-  it('reads the sentinel scopes with and without a view', () => {
-    expect(parsePath('/app/~/all')).toEqual({ scope: 'all' })
-    expect(parsePath('/app/~/board/all')).toEqual({ view: 'kanban', scope: 'all' })
+  it('reads My view with and without a view', () => {
     expect(parsePath('/app/~/mine')).toEqual({ scope: 'mine' })
     expect(parsePath('/app/~/roadmap/mine')).toEqual({ view: 'roadmap', scope: 'mine' })
+    expect(parseHash('#/board/mine')).toEqual({ view: 'kanban', scope: 'mine' })
   })
 
-  it('reads a task window open over a sentinel — the org pins only the task', () => {
-    expect(parsePath('/app/home/board/all/tasks/qn-9')).toEqual({
+  it('reads an address that once named all projects as its view with no scope, and drops a task after it', () => {
+    expect(parsePath('/app/~/all')).toEqual({})
+    expect(parsePath('/app/~/board/all')).toEqual({ view: 'kanban' })
+    expect(parsePath('/app/home/overview/all')).toEqual({ view: 'overview' })
+    expect(parsePath('/app/acme/roadmap/all')).toEqual({ view: 'roadmap' })
+    expect(parsePath('/app/home/board/all/tasks/qn-9')).toEqual({ view: 'kanban' })
+    expect(parsePath('/app/~/board/all/tasks/qn-9')).toEqual({ view: 'kanban' })
+    expect(parseHash('#/board/all')).toEqual({ view: 'kanban' })
+    expect(parseHash('#/o/acme/roadmap/all/tasks/qn-5')).toEqual({ view: 'roadmap' })
+    // `all` is no project either
+    expect(parsePath('/app/home/board/p/all')).toEqual({ view: 'kanban', unheld: null })
+    // and the view's bare address, which the startup rule serves, is what
+    // the app writes for it
+    expect(buildPath({ view: 'kanban' })).toBe('/app/home')
+  })
+
+  it('reads a task window open over My view — the org pins only the task', () => {
+    expect(parsePath('/app/home/board/mine/tasks/qn-9')).toEqual({
       view: 'kanban',
-      scope: 'all',
+      scope: 'mine',
       issue: 'QN-9',
     })
     expect(parsePath('/app/acme/board/mine/tasks/qn-5')).toEqual({
@@ -364,7 +376,7 @@ describe('buildPath', () => {
   it('names NO organization for the addresses that are about none', () => {
     // both sentinels span every org; the inbox does too; an account page is
     // about a person
-    expect(buildPath({ scope: 'all', view: 'kanban' })).toBe('/app/~/board/all')
+    expect(buildPath({ scope: 'mine', view: 'kanban' })).toBe('/app/~/board/mine')
     expect(buildPath({ scope: 'mine', view: 'overview' })).toBe('/app/~/overview/mine')
     expect(buildPath({ inboxOpen: true })).toBe('/app/~/inbox')
     expect(buildPath({ settingsPage: 'account' })).toBe('/app/~/settings/account')
@@ -446,11 +458,11 @@ describe('buildPath', () => {
   })
 
   it("a task open over a sentinel names the TASK's org, keeping the mode", () => {
-    expect(buildPath({ scope: 'all', view: 'kanban', openIssue: 'QN-9' })).toBe(
-      '/app/home/board/all/tasks/qn-9',
+    expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: 'QN-9' })).toBe(
+      '/app/home/board/mine/tasks/qn-9',
     )
-    expect(buildPath({ scope: 'all', view: 'kanban', openIssue: 'uuid-acme-5' })).toBe(
-      '/app/acme/board/all/tasks/qn-5',
+    expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: 'uuid-acme-5' })).toBe(
+      '/app/acme/board/mine/tasks/qn-5',
     )
     expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: 'uuid-acme-5' })).toBe(
       '/app/acme/board/mine/tasks/qn-5',
@@ -459,15 +471,15 @@ describe('buildPath', () => {
 
   it('keeps naming a task that left the store, in its organization, while its window shows', () => {
     expect(buildPath({ inboxOpen: true, openIssue: 'QN-9' })).toBe('/app/home/inbox/tasks/qn-9')
-    expect(buildPath({ scope: 'all', view: 'kanban', openIssue: 'uuid-acme-5' })).toBe(
-      '/app/acme/board/all/tasks/qn-5',
+    expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: 'uuid-acme-5' })).toBe(
+      '/app/acme/board/mine/tasks/qn-5',
     )
     // someone else archives or deletes them while their windows are open
     delete store.issueById['QN-9']
     delete store.issueById['uuid-acme-5']
     expect(buildPath({ inboxOpen: true, openIssue: 'QN-9' })).toBe('/app/home/inbox/tasks/qn-9')
-    expect(buildPath({ scope: 'all', view: 'kanban', openIssue: 'uuid-acme-5' })).toBe(
-      '/app/acme/board/all/tasks/qn-5',
+    expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: 'uuid-acme-5' })).toBe(
+      '/app/acme/board/mine/tasks/qn-5',
     )
     // so the address the window had stays, without a new entry
     expect(
@@ -482,8 +494,8 @@ describe('buildPath', () => {
     const home40 = taskRef({ org: HOME, num: 40, uuid: 'uuid-home-40' })
     const acme8 = taskRef({ org: ACME, num: 8, uuid: 'uuid-acme-8' })
     expect(buildPath({ view: 'kanban', openIssue: home40 })).toBe('/app/home/board/tasks/qn-40')
-    expect(buildPath({ scope: 'all', view: 'kanban', openIssue: acme8 })).toBe(
-      '/app/acme/board/all/tasks/qn-8',
+    expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: acme8 })).toBe(
+      '/app/acme/board/mine/tasks/qn-8',
     )
     // never under ~, where QN-8 would read as the home organization's task
     expect(buildPath({ inboxOpen: true, openIssue: acme8 })).toBe('/app/acme/inbox/tasks/qn-8')
@@ -502,16 +514,16 @@ describe('buildPath', () => {
       pathMatchesState(`/app/acme/inbox/tasks/${FAR}`, { inboxOpen: true, openIssue: row }),
     ).toBe(true)
     // a handle nothing names still names no organization
-    expect(buildPath({ scope: 'all', view: 'kanban', openIssue: 'uuid-acme-9' })).toBe(
-      '/app/~/board/all/tasks/uuid-acme-9',
+    expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: 'uuid-acme-9' })).toBe(
+      '/app/~/board/mine/tasks/uuid-acme-9',
     )
   })
 
   it('reads the address of a task the store does not hold as a reference, in its own organization only', () => {
     const home41 = taskRef({ org: HOME, num: 41 })
     const acme41 = taskRef({ org: ACME, num: 41 })
-    expect(parsePath('/app/home/board/all/tasks/qn-41')?.issue).toBe(home41)
-    expect(parsePath('/app/acme/board/all/tasks/qn-41')?.issue).toBe(acme41)
+    expect(parsePath('/app/home/board/mine/tasks/qn-41')?.issue).toBe(home41)
+    expect(parsePath('/app/acme/board/mine/tasks/qn-41')?.issue).toBe(acme41)
     // `~` reads a number in the home organization
     expect(parsePath('/app/~/board/tasks/41')?.issue).toBe(home41)
     // a uuid names a task anywhere, read first in the organization named
@@ -528,21 +540,21 @@ describe('buildPath', () => {
     // page's is not
     const opened = taskRef({ org: ACME, num: 41, uuid: 'uuid-acme-41' })
     expect(
-      pathMatchesState('/app/acme/board/all/tasks/qn-41', {
-        scope: 'all',
+      pathMatchesState('/app/acme/board/mine/tasks/qn-41', {
+        scope: 'mine',
         view: 'kanban',
         openIssue: opened,
       }),
     ).toBe(true)
     expect(
-      pathMatchesState('/app/acme/board/all/tasks/qn-41', {
-        scope: 'all',
+      pathMatchesState('/app/acme/board/mine/tasks/qn-41', {
+        scope: 'mine',
         view: 'kanban',
         openIssue: null,
       }),
     ).toBe(false)
     // another organization's task with that number is another task
-    expect(sameTask(parsePath('/app/home/board/all/tasks/qn-41')?.issue, opened)).toBe(false)
+    expect(sameTask(parsePath('/app/home/board/mine/tasks/qn-41')?.issue, opened)).toBe(false)
   })
 
   it('reads a pinned number in its own organization only, never as the home task of that number', () => {
@@ -577,7 +589,7 @@ describe('buildPath', () => {
 
   it('pins a reference to its organization through a change of the home organization', () => {
     const home43 = taskRef({ org: HOME, num: 43 })
-    expect(parsePath('/app/home/board/all/tasks/qn-43')?.issue).toBe(home43)
+    expect(parsePath('/app/home/board/mine/tasks/qn-43')?.issue).toBe(home43)
     // Home becomes a guest seat and Acme the home organization, where an
     // active QN-43 exists
     store.homeOrg = ACME
@@ -594,14 +606,14 @@ describe('buildPath', () => {
     store.issueRefIn = (org: string, key: string) =>
       store.issues.find((i) => i.org === org && i.key === key)?.id ?? null
     // Home's address still names Home's task, never Acme's QN-43
-    expect(parsePath('/app/home/board/all/tasks/qn-43')?.issue).toBe(home43)
+    expect(parsePath('/app/home/board/mine/tasks/qn-43')?.issue).toBe(home43)
     expect(sameTask(home43, 'QN-43')).toBe(false)
     // Acme's address, and `~`, now read the home organization's live QN-43
-    expect(parsePath('/app/acme/board/all/tasks/qn-43')?.issue).toBe('QN-43')
+    expect(parsePath('/app/acme/board/mine/tasks/qn-43')?.issue).toBe('QN-43')
     expect(parsePath('/app/~/board/tasks/43')?.issue).toBe('QN-43')
     // and the window on Home's task names Home's address, by its key
-    expect(buildPath({ scope: 'all', view: 'kanban', openIssue: home43 })).toBe(
-      '/app/home/board/all/tasks/qn-43',
+    expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: home43 })).toBe(
+      '/app/home/board/mine/tasks/qn-43',
     )
   })
 
@@ -666,13 +678,13 @@ describe('buildPath', () => {
     delete store.issueById[open]
     const paths = [
       buildPath({ inboxOpen: true, openIssue: open }),
-      buildPath({ scope: 'all', view: 'kanban', openIssue: open }),
+      buildPath({ scope: 'mine', view: 'kanban', openIssue: open }),
       buildPath({ view: 'kanban', openIssue: open }),
       buildPath({ sync, openIssue: open }),
     ]
     expect(paths).toEqual([
       '/app/~/inbox/tasks/uuid-acme-5',
-      '/app/~/board/all/tasks/uuid-acme-5',
+      '/app/~/board/mine/tasks/uuid-acme-5',
       '/app/~/board/tasks/uuid-acme-5',
       '/app/home/sync/all/tasks/uuid-acme-5',
     ])
@@ -683,8 +695,8 @@ describe('buildPath', () => {
       pathMatchesState('/app/acme/inbox/tasks/qn-5', { inboxOpen: true, openIssue: open }),
     ).toBe(true)
     expect(
-      pathMatchesState('/app/acme/board/all/tasks/qn-5', {
-        scope: 'all',
+      pathMatchesState('/app/acme/board/mine/tasks/qn-5', {
+        scope: 'mine',
         view: 'kanban',
         openIssue: open,
       }),
@@ -705,7 +717,7 @@ describe('buildPath', () => {
       pathMatchesState('/app/acme/inbox/tasks/qn-6', { inboxOpen: true, openIssue: open }),
     ).toBe(false)
     expect(
-      pathMatchesState('/app/acme/board/all/tasks/qn-5', { inboxOpen: true, openIssue: open }),
+      pathMatchesState('/app/acme/board/mine/tasks/qn-5', { inboxOpen: true, openIssue: open }),
     ).toBe(false)
   })
 
@@ -718,14 +730,14 @@ describe('buildPath', () => {
     store.orgs = store.orgs.filter((o) => o.id !== ACME)
     const paths = [
       buildPath({ inboxOpen: true, openIssue: acme5 }),
-      buildPath({ scope: 'all', view: 'kanban', openIssue: acme5 }),
+      buildPath({ scope: 'mine', view: 'kanban', openIssue: acme5 }),
       buildPath({ scope: 'p-home-7', view: 'kanban', openIssue: acme5 }),
       buildPath({ sync, openIssue: acme5 }),
       issueLink(acme5),
     ]
     expect(paths).toEqual([
       '/app/~/inbox',
-      '/app/~/board/all',
+      '/app/~/board/mine',
       '/app/home/board/p/7',
       '/app/home/sync/all',
       '/app/~',
@@ -738,8 +750,8 @@ describe('buildPath', () => {
   })
 
   it('full-screen pages still outrank the scope', () => {
-    expect(buildPath({ scope: 'all', view: 'kanban', inboxOpen: true })).toBe('/app/~/inbox')
-    expect(buildPath({ scope: 'all', view: 'kanban', settingsPage: 'account' })).toBe(
+    expect(buildPath({ scope: 'mine', view: 'kanban', inboxOpen: true })).toBe('/app/~/inbox')
+    expect(buildPath({ scope: 'mine', view: 'kanban', settingsPage: 'account' })).toBe(
       '/app/~/settings/account',
     )
   })
@@ -753,10 +765,10 @@ describe('buildPath', () => {
 
   it('round-trips every emitted form', () => {
     for (const s of [
-      { scope: 'all', view: 'overview' },
-      { scope: 'all', view: 'kanban' },
-      { scope: 'all', view: 'roadmap' },
-      { scope: 'all', view: 'kanban', openIssue: 'QN-9' },
+      { scope: 'mine', view: 'overview' },
+      { scope: 'mine', view: 'kanban' },
+      { scope: 'mine', view: 'roadmap' },
+      { scope: 'mine', view: 'kanban', openIssue: 'QN-9' },
       { scope: 'mine', view: 'overview' },
       { scope: 'mine', view: 'kanban' },
       { scope: 'mine', view: 'kanban', openIssue: 'QN-9' },
@@ -774,7 +786,7 @@ describe('buildPath', () => {
       taskRef({ org: HOME, num: 40 }),
       taskRef({ org: ACME, num: 8, uuid: FAR }),
     ]) {
-      const r = parsePath(buildPath({ scope: 'all', view: 'kanban', openIssue: open }))!
+      const r = parsePath(buildPath({ scope: 'mine', view: 'kanban', openIssue: open }))!
       expect(sameTask(r.issue, open)).toBe(true)
     }
   })
@@ -871,7 +883,7 @@ describe('parseHash — shared route grammar', () => {
   })
 
   it('reads sentinel and page forms', () => {
-    expect(parseHash('#/board/all')).toEqual({ view: 'kanban', scope: 'all' })
+    expect(parseHash('#/board/mine')).toEqual({ view: 'kanban', scope: 'mine' })
     expect(parseHash('#/board/mine/tasks/qn-9')).toEqual({
       view: 'kanban',
       scope: 'mine',
@@ -910,9 +922,9 @@ describe('scopeForIssue', () => {
     expect(scopeForIssue(scopeTask('QN-5'), null)).toBe('p-home-1a')
   })
 
-  it('All projects already holds every issue, so it is never narrowed away', () => {
-    expect(scopeForIssue(scopeTask('QN-5'), 'all')).toBe('all')
-    expect(scopeForIssue(scopeTask('uuid-acme-5'), 'all')).toBe('all')
+  it('keeps no scope over all projects: such a token narrows to the task like any other', () => {
+    expect(scopeForIssue(scopeTask('QN-5'), 'all')).toBe('p-home-1a')
+    expect(scopeForIssue(scopeTask('uuid-acme-5'), 'all')).toBe('p-acme-1')
   })
 
   it("My view holds only MY tasks, so a short link to someone else's narrows", () => {
@@ -930,49 +942,17 @@ describe('scopeForIssue', () => {
   })
 })
 
-describe('scopeForIssueOn', () => {
-  it("opens the issue's sub-project on the Board, the Overview and the Roadmap, which have no All projects", () => {
-    expect(scopeForIssueOn('kanban', scopeTask('QN-5'), 'all')).toBe('p-home-1a')
-    expect(scopeForIssueOn('kanban', scopeTask('uuid-acme-5'), 'all')).toBe(
-      scopeForIssue(scopeTask('uuid-acme-5'), null),
-    )
-    expect(scopeForIssueOn('overview', scopeTask('QN-5'), 'all')).toBe('p-home-1a')
-    // the Roadmap asks to choose a project on All projects
-    expect(scopeForIssueOn('roadmap', scopeTask('QN-5'), 'all')).toBe('p-home-1a')
-  })
-
-  it('keeps All projects under an Inbox task address, which shows no Board', () => {
-    const inbox = parsePath('/app/home/inbox/tasks/qn-5')
-    expect(inbox).toMatchObject({ inbox: true, issue: 'QN-5' })
-    expect(viewBehindTask(inbox ?? {}, 'kanban')).toBeNull()
-    expect(scopeForIssueOn(viewBehindTask(inbox ?? {}, 'kanban'), scopeTask('QN-5'), 'all')).toBe(
-      'all',
-    )
-    // a task address that names no view stays on the view that shows
-    expect(viewBehindTask({ issue: 'QN-5' }, 'kanban')).toBe('kanban')
-    expect(viewBehindTask({ view: 'roadmap', issue: 'QN-5' }, 'kanban')).toBe('roadmap')
-  })
-
-  it('answers as scopeForIssue everywhere else', () => {
-    expect(scopeForIssueOn('kanban', scopeTask('QN-5'), 'p-home-1')).toBe('p-home-1')
-    expect(scopeForIssueOn('kanban', scopeTask('QN-5'), 'mine')).toBe('mine')
-    expect(scopeForIssueOn('kanban', scopeTask('QN-9'), 'mine')).toBe('p-home-7')
-    // a task the store does not hold keeps what was preferred
-    expect(scopeForIssueOn('kanban', scopeTask('QN-404'), 'all')).toBe('all')
-  })
-})
-
 describe('pathMatchesState — replace in place vs. a new history entry', () => {
   it('the front door and a foreign path are overwritten in place', () => {
-    expect(pathMatchesState('/app/home', { scope: 'all', view: 'kanban' })).toBe(true)
-    expect(pathMatchesState('/', { scope: 'all', view: 'kanban' })).toBe(true)
+    expect(pathMatchesState('/app/home', { scope: 'mine', view: 'kanban' })).toBe(true)
+    expect(pathMatchesState('/', { scope: 'mine', view: 'kanban' })).toBe(true)
   })
 
   it('the canonical path for a state matches it', () => {
-    expect(pathMatchesState('/app/~/board/all', { scope: 'all', view: 'kanban' })).toBe(true)
+    expect(pathMatchesState('/app/~/board/mine', { scope: 'mine', view: 'kanban' })).toBe(true)
     expect(
-      pathMatchesState('/app/home/board/all/tasks/qn-9', {
-        scope: 'all',
+      pathMatchesState('/app/home/board/mine/tasks/qn-9', {
+        scope: 'mine',
         view: 'kanban',
         openIssue: 'QN-9',
       }),
@@ -983,8 +963,8 @@ describe('pathMatchesState — replace in place vs. a new history entry', () => 
   })
 
   it('changing scope is a navigation, not a normalization', () => {
-    expect(pathMatchesState('/app/home/board/p/7', { scope: 'all', view: 'kanban' })).toBe(false)
-    expect(pathMatchesState('/app/~/board/all', { scope: 'p-home-7', view: 'kanban' })).toBe(false)
+    expect(pathMatchesState('/app/home/board/p/7', { scope: 'mine', view: 'kanban' })).toBe(false)
+    expect(pathMatchesState('/app/~/board/mine', { scope: 'p-home-7', view: 'kanban' })).toBe(false)
   })
 
   it('entering or leaving a sentinel scope with a task open earns an entry', () => {
@@ -992,13 +972,13 @@ describe('pathMatchesState — replace in place vs. a new history entry', () => 
     // because the issue names its own project
     expect(
       pathMatchesState('/app/home/board/tasks/qn-9', {
-        scope: 'all',
+        scope: 'mine',
         view: 'kanban',
         openIssue: 'QN-9',
       }),
     ).toBe(false)
     expect(
-      pathMatchesState('/app/home/board/all/tasks/qn-9', {
+      pathMatchesState('/app/home/board/mine/tasks/qn-9', {
         scope: 'p-home-7',
         view: 'kanban',
         openIssue: 'QN-9',
@@ -1013,25 +993,25 @@ describe('pathMatchesState — replace in place vs. a new history entry', () => 
     ).toBe(false)
   })
 
-  it('moving BETWEEN the two sentinels earns one too — they are different panes', () => {
-    // the rule compares sentinel identity, not "is it a sentinel": a boolean
-    // XOR would call these the same page and Back would skip straight past it
+  it('moving between My view and a project earns one too — they are different panes', () => {
+    // the rule compares the sentinel by identity: entering or leaving My
+    // view with the window open changes the pane behind the task
     expect(
       pathMatchesState('/app/home/board/mine/tasks/qn-9', {
-        scope: 'all',
+        scope: 'p-home-7',
         view: 'kanban',
         openIssue: 'QN-9',
       }),
     ).toBe(false)
     expect(
-      pathMatchesState('/app/home/board/all/tasks/qn-9', {
+      pathMatchesState('/app/home/board/tasks/qn-9', {
         scope: 'mine',
         view: 'kanban',
         openIssue: 'QN-9',
       }),
     ).toBe(false)
-    expect(pathMatchesState('/app/~/board/mine', { scope: 'all', view: 'kanban' })).toBe(false)
-    expect(pathMatchesState('/app/~/board/all', { scope: 'mine', view: 'kanban' })).toBe(false)
+    expect(pathMatchesState('/app/~/board/mine', { scope: 'p-home-7', view: 'kanban' })).toBe(false)
+    expect(pathMatchesState('/app/home/board/p/7', { scope: 'mine', view: 'kanban' })).toBe(false)
   })
 
   it('a viewless short link still normalizes in place — including into a sentinel scope', () => {
@@ -1039,7 +1019,11 @@ describe('pathMatchesState — replace in place vs. a new history entry', () => 
     // names neither view nor scope, which is "not yet canonical", not
     // "somewhere else" — pushing here would leave a junk entry on every boot
     expect(
-      pathMatchesState('/app/home/tasks/qn-9', { scope: 'all', view: 'kanban', openIssue: 'QN-9' }),
+      pathMatchesState('/app/home/tasks/qn-9', {
+        scope: 'mine',
+        view: 'kanban',
+        openIssue: 'QN-9',
+      }),
     ).toBe(true)
     expect(
       pathMatchesState('/app/home/tasks/qn-9', {
@@ -1067,8 +1051,8 @@ describe('pathMatchesState — replace in place vs. a new history entry', () => 
       true,
     )
     expect(
-      pathMatchesState('/app/oldname/board/all/tasks/qn-9', {
-        scope: 'all',
+      pathMatchesState('/app/oldname/board/mine/tasks/qn-9', {
+        scope: 'mine',
         view: 'kanban',
         openIssue: 'QN-9',
       }),
@@ -1102,7 +1086,7 @@ describe('pathMatchesState — replace in place vs. a new history entry', () => 
     const ref = taskRef({ org: HOME, num: 404 })
     // a viewless short link moved into a sentinel scope still normalizes in place
     expect(
-      pathMatchesState('/app/home/tasks/qn-404', { scope: 'all', view: 'kanban', openIssue: ref }),
+      pathMatchesState('/app/home/tasks/qn-404', { scope: 'mine', view: 'kanban', openIssue: ref }),
     ).toBe(true)
     // so does a new step of Team sync under it
     const sync = { scope: 'all', step: 'agents' }
@@ -1110,7 +1094,7 @@ describe('pathMatchesState — replace in place vs. a new history entry', () => 
     // a project's task address moved into All projects earns an entry
     expect(
       pathMatchesState('/app/home/board/tasks/qn-404', {
-        scope: 'all',
+        scope: 'mine',
         view: 'kanban',
         openIssue: ref,
       }),
@@ -1311,7 +1295,9 @@ describe('Team sync addresses', () => {
   it('entering, leaving and opening a task over it are navigations', () => {
     const sync = { scope: 'all', step: 'team' }
     expect(pathMatchesState('/app/home/sync/all', { scope: 'all', view: 'kanban' })).toBe(false)
-    expect(pathMatchesState('/app/~/board/all', { scope: 'all', view: 'kanban', sync })).toBe(false)
+    expect(pathMatchesState('/app/~/board/mine', { scope: 'all', view: 'kanban', sync })).toBe(
+      false,
+    )
     expect(pathMatchesState('/app/~/inbox', { sync })).toBe(false)
     expect(pathMatchesState('/app/home/sync/all', { inboxOpen: true })).toBe(false)
     expect(pathMatchesState('/app/home/sync/all', { settingsPage: 'account', sync })).toBe(false)

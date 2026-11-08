@@ -389,10 +389,4 @@ describe("the phone agenda's milestones", { timeout: BOARD_TEST_TIMEOUT }, () =>
       Object.assign(section.OVERVIEW_MILESTONES.upcoming, { batch: 10, rows: 100 })
     }
   })
-
-  it('lists none in All projects', async () => {
-    const { board } = await agenda('all')
-    expect(asks(board, 'milestones:section')).toEqual([])
-    expect(q('[data-agenda-milestones]')).toBeNull()
-  })
 })

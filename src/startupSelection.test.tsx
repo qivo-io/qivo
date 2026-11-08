@@ -554,9 +554,12 @@ describe('opening the remembered project', { timeout: 60_000 }, () => {
     await until(() => shown() === 'kanban', 'My view’s Board')
     expect(location.pathname).toBe('/app/~/board/mine')
     await leave()
+    // an address that once named all projects names no scope, so the
+    // startup rule checks the remembered project and opens it in place
     await app(structuredClone(snap), '/app/~/board/all', remembering(LUMA))
-    await until(() => shown() === 'kanban', 'All projects’ Board')
-    expect(location.pathname).toBe('/app/~/board/all')
+    await until(() => shown() === 'kanban', 'Luma Sensor’s Board')
+    expect(location.pathname).toBe('/app/testbed/board/p/10')
+    expect(asks.map((a) => a.args)).toEqual([{ project_id: LUMA }])
     await leave()
     // a held project's address opens it, with no check, and is remembered
     await app(structuredClone(snap), '/app/partner/roadmap/p/13', remembering(LUMA))
@@ -696,17 +699,19 @@ describe('the chooser', { timeout: 60_000 }, () => {
 })
 
 describe('what is remembered', { timeout: 60_000 }, () => {
-  it('is written by a project address, a sidebar row and a directory row, and never by My view, the directory, All projects or Team sync', async () => {
+  it('is written by a project address, a sidebar row and a directory row, and never by My view, the directory, an old All projects address or Team sync', async () => {
     const snap = world()
     await app(snap, '/app/testbed/overview/p/10')
     await until(() => lastSent() === LUMA, 'the address remembered')
-    // My view, the directory, an All projects address and Team sync leave it
+    // My view, the directory, an address that once named all projects,
+    // which opens the remembered project by the startup rule, and Team sync
+    // leave it
     await click(q('aside [data-mine-nav]'))
     await until(() => location.pathname === '/app/~/overview/mine', 'My view')
     await click(q('aside [data-all-nav]'))
     await until(() => location.pathname === '/app/~/projects', 'the directory')
     await go('/app/~/board/all')
-    await until(() => shown() === 'kanban', 'All projects')
+    await until(() => shown() === 'kanban', 'the remembered project')
     await click(q('aside [data-sync-nav]'))
     await until(() => location.pathname.includes('/sync'), 'Team sync')
     await settle()
@@ -840,7 +845,7 @@ describe('the empty end', { timeout: 60_000 }, () => {
 })
 
 describe('the access guard and Settings', { timeout: 60_000 }, () => {
-  it('shows the chooser with a note when the scope goes, its sub-project too, and leaves My view and All projects', async () => {
+  it('shows the chooser with a note when the scope goes, its sub-project too, and leaves My view', async () => {
     const snap = world()
     // the project removed from the workspace
     await app(structuredClone(snap), '/app/testbed/board/p/10')
@@ -899,8 +904,8 @@ describe('the access guard and Settings', { timeout: 60_000 }, () => {
     expect(store.P.canSee(LUMA)).toBe(true)
     expect(note()).toBe('Firmware is no longer available to you.')
     await leave()
-    // My view and the All projects address stay as they are
-    for (const address of ['/app/~/board/mine', '/app/~/board/all']) {
+    // My view stays as it is
+    for (const address of ['/app/~/board/mine']) {
       await app(structuredClone(snap), address)
       await until(() => shown() === 'kanban', 'the Board')
       publish({ ...server, access: [], delivered_at: '2026-09-15T09:00:00.000Z' })

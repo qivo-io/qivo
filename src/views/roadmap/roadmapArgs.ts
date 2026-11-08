@@ -21,9 +21,6 @@ import { BOARD_SEARCH_DELAY_MS } from '../board/boardArgs'
 
 /** What the Roadmap asks for. */
 export type RoadmapRequest =
-  /** All projects, which the server has no selection for. The Roadmap
-      asks to choose a project. */
-  | { kind: 'choose' }
   /** a text filter past LIMITS.search, which the server refuses */
   | { kind: 'search_limit' }
   /** the Roadmap read's arguments as their key (JSON in a fixed key
@@ -56,7 +53,6 @@ export function roadmapRequest(
   planned: PlannedTask | null,
   search: string = filters.search,
 ): RoadmapRequest {
-  if (info.wide && !info.mine) return { kind: 'choose' }
   const text = search.trim()
   if (overLimit(LIMITS.search, text)) return { kind: 'search_limit' }
   const scope: RoadmapScope = info.mine

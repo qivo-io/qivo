@@ -77,8 +77,6 @@ import { type BoardVariant, boardFilters, useBoardRequest } from './boardArgs'
 
 /** Where the Board stands, as its root's data-board-state names it. */
 export type BoardState =
-  /** All projects, where the Board asks to choose a project */
-  | 'choose'
   /** the first answer for this Board is on its way, or a task it names has
       no model to show yet (`missing` in useBoardView) */
   | 'loading'
@@ -447,7 +445,6 @@ export function useBoardView(
     const own = P.ownPaintedTasks()
     return a.rows.every((row) => own.has(row.id) && !P.ownOnScreen(slot, row.id))
   }
-  if (want.kind === 'choose') return message('choose')
   if (want.kind === 'search_limit') return message('search_limit')
   if (current?.error !== undefined) return message('error')
   if (answer === null && (kept ?? narrowed) && joined) {

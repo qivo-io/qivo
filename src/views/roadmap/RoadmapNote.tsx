@@ -1,6 +1,6 @@
 /* What the Roadmap says in place of its rows when it cannot show a
-   selection's tasks (useRoadmapView): the chooser of All projects, the
-   narrowing message of a selection past the Roadmap's limits, a Roadmap
+   selection's tasks (useRoadmapView): the narrowing message of a
+   selection past the Roadmap's limits, a Roadmap
    that is not available or did not load, a text filter past its limit, a
    wait, and a row source that did not bring a task. Each is an empty state
    (components/ViewNote.tsx). The Roadmap keeps its toolbar beside every
@@ -13,7 +13,6 @@
 
 import type { ReactNode } from 'react'
 import { LIMITS } from '../../../convex/lib/limits'
-import { NoProjects } from '../../components/NoProjects'
 import { ViewNote } from '../../components/ViewNote'
 import { limitSentence } from '../../lib/fieldLimits'
 import type { ScopeInfo } from '../../store/planner'
@@ -58,26 +57,6 @@ export function RoadmapNote({
 }): ReactNode {
   const open = (id: string) => actions.setScope(id)
   switch (view.state) {
-    case 'choose':
-      if (info.metas.length === 0)
-        return (
-          <NoProjects
-            icon="timeline"
-            title="Nothing to schedule yet"
-            onNewProject={() => actions.newProject({ kind: 'program' })}
-          />
-        )
-      return (
-        <ViewNote
-          hooks="roadmap"
-          phone={phone}
-          icon="timeline"
-          title="Choose a project"
-          hint="The Roadmap shows one project at a time. Pick one to see its timeline."
-          projects={info.metas}
-          onProject={open}
-        />
-      )
     case 'over_ceiling': {
       const { hint, projects } = narrowing(view, info, phone)
       return (

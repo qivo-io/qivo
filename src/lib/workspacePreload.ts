@@ -35,7 +35,7 @@ function hasTask(segments: string[]): boolean {
     if (segments[at] === 'agents') at++
     else if (segments[at] === 'people' && segments[at + 1]) at += 2
   } else if (page !== 'inbox') {
-    if (segments[at] === 'all' || segments[at] === 'mine') at++
+    if (segments[at] === 'mine') at++
     else if (segments[at] === 'p') at += 2
   }
   return segments[at] === 'tasks' && !!segments[at + 1]
