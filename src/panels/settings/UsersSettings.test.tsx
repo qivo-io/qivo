@@ -653,6 +653,67 @@ describe('kept rows', () => {
     expect(keptRows()).toEqual([])
   })
 
+  it("shows a kept added person's accepted role and deactivation, so the change back goes out", async () => {
+    await load((s) => s.profiles.push(...people(30)))
+    await show()
+    await type(find<HTMLInputElement>('input[aria-label="New person name"]'), 'Zed New')
+    await type(find<HTMLInputElement>('[data-add-email]'), 'zed@example.test')
+    await click(find('[data-add-user]'))
+    const create = pending.find((p) => p.name === 'profiles:create')
+    const id = String(create?.args.id)
+    // the server holds them past the first page
+    snap.profiles.push(person(id, 'Zed New', { auth_user_id: undefined }))
+    await act(async () => server.rerun())
+    await act(async () => create?.resolve(null))
+    await settle()
+    expect(keptRows()).toEqual([[id, 'added']])
+    const zed = () => snap.profiles.find((p) => p.id === id)
+    const role = () => find<HTMLSelectElement>(`[data-user-role="${id}"]`)
+    const choose = async (value: string) => {
+      await act(async () => {
+        role().value = value
+        role().dispatchEvent(new Event('change', { bubbles: true }))
+      })
+      await settle()
+    }
+    /* The server stores the write, then answers it. */
+    const accept = async (change: Partial<Profile>) => {
+      const write = pending.at(-1)
+      Object.assign(zed() ?? {}, change)
+      await act(async () => server.rerun())
+      await act(async () => write?.resolve(null))
+      await settle()
+    }
+    await choose('viewer')
+    expect(pending.at(-1)).toMatchObject({
+      name: 'profiles:update',
+      args: { id, patch: { org_role: 'viewer' }, expected: { org_role: 'user' } },
+    })
+    await accept({ org_role: 'viewer' })
+    // the kept row shows what the server accepted, which no page holds
+    expect(keptRows()).toEqual([[id, 'added']])
+    expect(role().value).toBe('viewer')
+    expect(has(`[data-user-row="${id}"] [data-viewer-chip]`)).toBe(true)
+    // the change back goes out, from the role the row shows
+    await choose('user')
+    expect(pending.at(-1)).toMatchObject({
+      name: 'profiles:update',
+      args: { id, patch: { org_role: 'user' }, expected: { org_role: 'viewer' } },
+    })
+    await accept({ org_role: 'user' })
+    expect(role().value).toBe('user')
+    // a deactivation the server accepted shows, and the reactivation goes out
+    await choose('inactive')
+    expect(pending.at(-1)).toMatchObject({ name: 'profiles:deactivate', args: { id } })
+    await accept({ active: false })
+    expect(role().value).toBe('inactive')
+    await choose('user')
+    expect(pending.at(-1)).toMatchObject({
+      name: 'profiles:update',
+      args: { id, patch: { active: true }, expected: { active: false } },
+    })
+  })
+
   it('keeps a drafted name, address and hours through a search and a page move, and lets them go once settled', async () => {
     await load((s) => s.profiles.push(...people(30)))
     await show()

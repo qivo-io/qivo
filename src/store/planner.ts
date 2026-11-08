@@ -18115,7 +18115,8 @@ export const PLANNER = {
     for (const key of ['org_role', 'active', 'email', 'can_create_projects'] as const)
       if (key in wire && (wire[key] ?? null) === (shownRow[key] ?? null)) delete wire[key]
     const deactivateOnly = wire.active === false && Object.keys(wire).length === 1
-    if (deactivateOnly) void send(api.profiles.deactivate, { org_id: shown.orgId, id }, view)
+    if (deactivateOnly)
+      void send(api.profiles.deactivate, { org_id: shown.orgId, id }, view, fieldSendOptions(save))
     else if (Object.keys(wire).length) {
       // teams is a list the server diffs, not a field the check compares
       const checked = Object.keys(wire).filter((key) => key !== 'teams')
