@@ -16,3 +16,13 @@ export const AVATAR_COLORS = [
   '#A16207',
   '#0E7490',
 ] as const
+
+/** The gray a read sends in place of a stored color that breaks the rule. */
+const FALLBACK_AVATAR_COLOR = '#8A8F98'
+
+/** The color to send a client. Seats created before the `#rrggbb` rule may
+ * hold any text, so every read that hands a profile to a client uses this and
+ * sends gray instead. The stored value stays as it is. */
+export function shownAvatarColor(stored: string): string {
+  return /^#[0-9a-f]{6}$/i.test(stored) ? stored : FALLBACK_AVATAR_COLOR
+}

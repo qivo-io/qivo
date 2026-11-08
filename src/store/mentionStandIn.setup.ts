@@ -26,6 +26,7 @@
    the real query. It imports nothing the benchmark's worker cannot load. */
 
 import { ConvexError, compareValues } from 'convex/values'
+import { shownAvatarColor } from '../../convex/lib/avatarColors'
 import { LIMITS, MENTION_BATCH, overText } from '../../convex/lib/limits'
 import { nameKey } from '../../convex/lib/nameKey'
 import { allWordsMatcher, searchWords } from '../../convex/lib/search'
@@ -49,10 +50,6 @@ const LIST = 'pickers.mentions'
 const NOT_A_CURSOR =
   'after and through must be cursors from an earlier answer of these suggestions, with the same search; start again from the first batch'
 
-/* The gray a legacy color is sent as (convex/model/people.ts
-   shownAvatarColor), which the stand-in cannot import. */
-const FALLBACK_COLOR = '#8A8F98'
-
 /* -1, 0 or 1 as position `a` sorts before, with or after `b`. */
 function compare(a: Position, b: Position): number {
   const byKey = compareValues(a.key, b.key)
@@ -67,7 +64,8 @@ const rowOf = (profile: Profile): MentionRow => ({
   id: profile.id,
   name: profile.name,
   initials: profile.initials,
-  color: /^#[0-9a-f]{6}$/i.test(profile.color) ? profile.color : FALLBACK_COLOR,
+  // gray for an older color, as the server sends it
+  color: shownAvatarColor(profile.color),
   email: profile.email ?? null,
 })
 

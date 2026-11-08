@@ -58,15 +58,9 @@ export function avatarColor(raw: string): string {
   return raw
 }
 
-/** The gray a new guest seat gets, sent in place of a color that breaks the rule. */
-const FALLBACK_AVATAR_COLOR = '#8A8F98'
-
-/** The color to send a client. Seats created before the `#rrggbb` rule may
- * hold any text, so every read that hands a profile to a client uses this and
- * sends gray instead. The stored value stays as it is. */
-export function shownAvatarColor(stored: string): string {
-  return isLabelColor(stored) ? stored : FALLBACK_AVATAR_COLOR
-}
+/* What a read sends for a stored color (lib/avatarColors.ts), here beside the
+ * rule a write checks, for the reads that import the seat rules. */
+export { shownAvatarColor } from '../lib/avatarColors'
 
 export const byCreated = (a: Doc<'profiles'>, b: Doc<'profiles'>) =>
   a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0

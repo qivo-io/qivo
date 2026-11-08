@@ -17,6 +17,7 @@
    nothing the benchmark's worker cannot load. */
 
 import { ConvexError, compareValues } from 'convex/values'
+import { shownAvatarColor } from '../../convex/lib/avatarColors'
 import { LIMITS, LIST_BATCH, overText } from '../../convex/lib/limits'
 import { nameKey } from '../../convex/lib/nameKey'
 import { allWordsMatcher } from '../../convex/lib/search'
@@ -48,7 +49,8 @@ const rowOf = (p: Profile): FollowerRow => ({
   id: p.id,
   name: p.name,
   initials: p.initials,
-  color: p.color,
+  // gray for an older color, as the server sends it (model/pickers.ts followerRow)
+  color: shownAvatarColor(p.color),
   active: p.active,
 })
 

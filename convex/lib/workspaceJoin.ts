@@ -15,6 +15,7 @@
  * id or a batch at a time). */
 
 import { joinLists } from './arrayLimit.ts'
+import { shownAvatarColor } from './avatarColors.ts'
 import { type IdWindow, idWindows, inIdWindow, piecesAfter, startWindows } from './idWindows.ts'
 import { blendInbox } from './inbox.ts'
 import { INBOX_LIMIT } from './limits.ts'
@@ -160,8 +161,9 @@ type ServerRows = Pick<
  * stand-ins of the server (tests, the browser benchmark): the seats of
  * `myProfileIds` in that order, every membership of each, and the teams
  * those name of the profile's own organization, each once, as
- * lib/workspaceParts.ts readRoot answers them. A stand-in's whole holds
- * no stamp on the root's rows, which carry none. */
+ * lib/workspaceParts.ts readRoot answers them, an older color as gray
+ * (avatarColors.ts shownAvatarColor). A stand-in's whole holds no stamp on
+ * the root's rows, which carry none. */
 export function rootOf(whole: ServerRows): RootSeats {
   const byId = new Map(whole.profiles.map((p) => [p.id, p]))
   const orgs = new Set(whole.orgs.map((org) => org.id))
@@ -176,7 +178,7 @@ export function rootOf(whole: ServerRows): RootSeats {
       sync_at?: string
       sync_since?: string
     }
-    return [row]
+    return [{ ...row, color: shownAvatarColor(row.color) }]
   })
   const teamsById = new Map(whole.teams.map((team) => [team.id, team]))
   const teamMembers: Workspace['teamMembers'] = []
