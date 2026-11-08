@@ -10,10 +10,9 @@
    count of the organization's active tasks that carry the label, archived
    projects included, and never a count the server did not give.
 
-   A row's name and color come from the store's catalogue while it holds
-   the label, which paints this session's writes at once, else from the
-   page's answers with what the server accepted from the page over them,
-   so a refused rename or recolor never shows as saved. Every write sends
+   A row's name and color come from the page's answers, with what the
+   server accepted from the page over them, so a refused rename or recolor
+   never shows as saved; the store holds no label. Every write sends
    what the row showed (store/planner.ts LabelShown) to the page's
    organization with its `expected` from it, so no control waits for the
    store. A name is a draft against the saved name it began from
@@ -29,7 +28,9 @@
    unsaved name, above the list while no loaded batch holds them under the
    name the page saved, each with the name and color of the answer the
    page last held for it or that it was created with, so a label made past
-   the loaded rows shows, and a search never drops typed text. */
+   the loaded rows shows, and a search never drops typed text. The kept
+   rows are read by id (labels.byIds) while they show, so a label deleted
+   here or elsewhere, which no batch lists, leaves them. */
 import type { FunctionReturnType } from 'convex/server'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
@@ -586,8 +587,7 @@ export function OrgLabelsPage() {
       if (!ok) return
       wrote()
       known.current.set(created.id, { name: v, color: created.color })
-      // its chip names it at once on any task, whether or not the
-      // catalogue holds it
+      // its chip names it at once on any task
       keepNamed(org, { id: created.id, name: v, color: created.color })
       setMade((s) => toggled(s, created.id, true))
       window.showToast?.(`Label “${v}” created`)
