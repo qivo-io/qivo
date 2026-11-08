@@ -155,7 +155,7 @@ export function notesOf(
   if (page.legacy)
     notes.push({
       key: 'legacy',
-      text: 'Tasks deleted before 5 November 2026 are found by their key only, and Assigned to may miss them.',
+      text: 'Tasks deleted on or before 5 November 2026 are found by their key only, and Assigned to may miss them.',
     })
   return notes
 }

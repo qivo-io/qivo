@@ -259,8 +259,8 @@ they deleted, in the app, through a personal token or through a connected
 app. **Assigned to** lists the tasks assigned to one person and needs
 projects chosen. In a login with seats in several organizations, **Deleted
 by** needs projects chosen too. A search always notes that matching tasks
-might not be listed. Tasks deleted before 5 November 2026 are found by their
-key only, and **Assigned to** may miss them, which a note says while such
+might not be listed. Tasks deleted on or before 5 November 2026 are found by
+their key only, and **Assigned to** may miss them, which a note says while such
 tasks may be in Deleted items. A task inside a deleted project can only come back
 with its project, and a subtask deleted with its task only with that task and
 its other subtasks. When search finds such a task, it shows on a line of its

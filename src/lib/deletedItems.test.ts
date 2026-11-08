@@ -266,7 +266,7 @@ describe('what the page says from the server’s answers', () => {
       { key: 'matches', text: 'Some matching tasks might not be listed.' },
       {
         key: 'legacy',
-        text: 'Tasks deleted before 5 November 2026 are found by their key only, and Assigned to may miss them.',
+        text: 'Tasks deleted on or before 5 November 2026 are found by their key only, and Assigned to may miss them.',
       },
     ])
     expect(notesOf(page, true)).toEqual([])
