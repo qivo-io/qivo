@@ -11,10 +11,7 @@ that the client needs:
   Qivo and opens the Inbox. The shell also tells the page when the computer
   wakes from sleep ([power.ts](power.ts)), so the app checks for missed Inbox
   activity at once, and answers Show notifications afresh on each read
-  (`notifications.currentPermission`). An installed shell built before
-  those two still shows alerts: the app reads Show notifications from the
-  value the shell gave when the page loaded and from each save in Settings,
-  and finds a sleep by its own clock.
+  (`notifications.currentPermission`).
 - A packaged Windows build with a release feed built into it checks that
   feed, downloads updates in the background and shows a native “update
   ready” notification. Qivo waits for active edits and asks before restarting
