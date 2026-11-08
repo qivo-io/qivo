@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { getFunctionName } from 'convex/server'
-import { act, useEffect, useState } from 'react'
+import { act, type ReactNode, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MENTION_BATCH } from '../../convex/lib/limits'
@@ -87,7 +87,9 @@ const settle = () =>
   })
 const rest = () => act(() => new Promise((resolve) => setTimeout(resolve, 300)))
 
-async function render(initial: Partial<IssueFilters> = {}) {
+/** Renders the filters with `initial`, after `beside`, another open view
+    whose effects run first. */
+async function render(initial: Partial<IssueFilters> = {}, beside?: ReactNode) {
   const info = store.P.scopeInfo(snap.projects[0].id)
   if (!info) throw new Error('no scope')
   function Host() {
@@ -115,6 +117,7 @@ async function render(initial: Partial<IssueFilters> = {}) {
   await act(async () =>
     root.render(
       <TooltipProvider>
+        {beside}
         <Host />
       </TooltipProvider>,
     ),
@@ -230,32 +233,31 @@ describe("the view filter's Assignee menu among 1,000 people", { timeout: 30_000
 
 describe("the view filter's Assignee menu for a login in two organizations", () => {
   const PARTNER = 'org-partner'
+  /** A partner organization where the login holds a seat and Pia works. */
+  const twoOrgs = (snap: Snapshot) => {
+    const me = snap.profiles[0]
+    snap.orgs.push({ ...snap.orgs[0], id: PARTNER, name: 'Partner Co', slug: 'partner' })
+    snap.profiles.push(
+      { ...me, id: 'seat-partner', org_id: PARTNER },
+      {
+        ...me,
+        id: 'pia',
+        org_id: PARTNER,
+        auth_user_id: 'account-pia',
+        name: 'Pia Partner',
+        initials: 'PP',
+        email: 'pia@partner.test',
+      },
+    )
+    snap.myProfileIds.push('seat-partner')
+  }
+  const trigger = () => document.querySelector('[data-filter-assignee-menu]')?.textContent
 
   it('names a chosen person of the other organization a filter carried here, never Unknown user', async () => {
-    await load({
-      people: 30,
-      extra: (snap) => {
-        const me = snap.profiles[0]
-        snap.orgs.push({ ...snap.orgs[0], id: PARTNER, name: 'Partner Co', slug: 'partner' })
-        snap.profiles.push(
-          { ...me, id: 'seat-partner', org_id: PARTNER },
-          {
-            ...me,
-            id: 'pia',
-            org_id: PARTNER,
-            auth_user_id: 'account-pia',
-            name: 'Pia Partner',
-            initials: 'PP',
-            email: 'pia@partner.test',
-          },
-        )
-        snap.myProfileIds.push('seat-partner')
-      },
-    })
+    await load({ people: 30, extra: twoOrgs })
     // the scope is a project of the home organization; Pia was chosen in a
     // project of the partner organization, and the filter came along
     await render({ assignees: ['pia'] })
-    const trigger = () => document.querySelector('[data-filter-assignee-menu]')?.textContent
     await vi.waitFor(() => expect(trigger()).toContain('Pia'))
     expect(trigger()).not.toContain('Unknown user')
     await openMenu()
@@ -265,6 +267,22 @@ describe("the view filter's Assignee menu for a login in two organizations", () 
           ?.textContent,
       ).toContain('Pia Partner'),
     )
+    expect(shown.assignees).toEqual(['pia'])
+  })
+
+  it('names a chosen person in the organization where another open view already names them', async () => {
+    await load({ people: 30, extra: twoOrgs })
+    const { usePeople } = await import('./usePeople')
+    // another open view, such as Team sync or a task window, names Pia in
+    // her own organization first, so the profile cache reads her there and
+    // a read of the home organization would never answer for her
+    function Elsewhere() {
+      usePeople([{ org: PARTNER, id: 'pia' }])
+      return null
+    }
+    await render({ assignees: ['pia'] }, <Elsewhere />)
+    await vi.waitFor(() => expect(trigger()).toContain('Pia'))
+    expect(trigger()).not.toContain('Loading')
     expect(shown.assignees).toEqual(['pia'])
   })
 })

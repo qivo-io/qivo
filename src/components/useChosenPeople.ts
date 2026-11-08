@@ -2,10 +2,13 @@
    organizations of the login (components/viewFilters.tsx). The App keeps
    one set of filters across scopes, so a person chosen in a project of one
    organization can come along to a project of another, where the filter
-   still applies to them. The profile cache names a person in one
-   organization at a time (store/profileCache.ts), so each chosen person is
-   asked in the scope's organization first and, once its answer leaves them
-   out, in the login's other organizations one by one. */
+   still applies to them. The profile cache reads a person in one
+   organization at a time, the one the view that named them first asked
+   (store/profileCache.ts), so a chosen person the cache already names in
+   one of the login's organizations, as another open view such as Team
+   sync, the Inbox list or a task window does, is asked there. Anyone else
+   is asked in the scope's organization first and, once its answer leaves
+   them out, in the login's other organizations one by one. */
 
 import { useEffect, useState } from 'react'
 import { P, type PersonView } from '@/store/planner'
@@ -43,14 +46,19 @@ function keepOutside(id: string, org: string) {
 }
 
 /**
- * The chosen people `ids`, named while they show (usePeople): each in
- * organization `org`, the scope's, else in the first of the login's other
- * organizations whose answer has not left them out, and `gone` once every
- * organization's answer did.
+ * The chosen people `ids`, named while they show (usePeople): each in the
+ * first of the login's organizations in which the store already names them,
+ * else in organization `org`, the scope's, else in the first of the
+ * login's other organizations whose answer has not left them out, and
+ * `gone` once every organization's answer did.
  */
 export function useChosenPeople(ids: readonly string[], org: string): PersonView[] {
   const orgs = [org, ...P.orgs.map((o) => o.id).filter((id) => id !== org)]
-  const asked = ids.map((id) => ({ id, org: orgs.find((o) => !outsideOf(id)?.has(o)) }))
+  const asked = ids.map((id) => ({
+    id,
+    org:
+      orgs.find((o) => P.person(id, o)?.state === 'ok') ?? orgs.find((o) => !outsideOf(id)?.has(o)),
+  }))
   usePeople(asked.flatMap((a) => (a.org === undefined ? [] : [{ org: a.org, id: a.id }])))
   const views = asked.map(
     (a): PersonView =>
