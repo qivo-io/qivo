@@ -2350,7 +2350,6 @@ describe('the task window on a task whose project the workspace does not hold', 
       },
     )
     next.access.push({ project_id: 'lab-work', profile_id: 'mira', level: 'user' })
-    next.unheldProjects = ['lab', 'lab-work']
   }
   const inLab = () => far({ project_id: 'lab-work' })
   /* projectNav.byIds' answer of Lab work, which Mira edits, with Lab, which

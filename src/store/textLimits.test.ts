@@ -172,8 +172,9 @@ describe('the limits in the store', () => {
     // the milestone's window reads it, which gives its writes their row
     P.watchMilestones('limits', { kind: 'get', id: 'milestone-a' })
     await vi.waitFor(() => expect(P.milestoneRead('limits').state).toBe('ok'))
-    const project = P.projects[0].id
-    expect(await P.updateProject(project, { name: NAME_OVER })).toBe(false)
+    const project = 'limits-project'
+    const shown = { orgId: P.homeOrg }
+    expect(await P.updateProject(project, { name: NAME_OVER }, {}, shown)).toBe(false)
     expect(
       await P.updateTeam(
         'team-a',

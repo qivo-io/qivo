@@ -13,12 +13,13 @@ import { type IssueFilters, type IssueVM, P, type ScopeInfo } from '../store/pla
 import type { StoreVersion } from '../store/updates'
 import { usePlannerVersion } from '../store/usePlannerVersion'
 import { BoardFrame, BoardNote, IncompleteNote } from '../views/board/BoardNote'
-import { type BoardView, useBoardView } from '../views/board/useBoardView'
+import { BOARD_SLOTS, type BoardView, useBoardView } from '../views/board/useBoardView'
 import { DeferredList } from './DeferredList'
 import { Avatar, Icon, MenuItem, PausedMark, Popover, PriorityIcon, Seg, StatusDot } from './qivo'
 import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog'
 import { NativeSelect } from './ui/native-select'
+import { useHolds } from './useHolds'
 import { usePeople } from './usePeople'
 import { ViewFilters } from './viewFilters'
 
@@ -39,9 +40,10 @@ export function MobileHeader({
   syncOpen: boolean
   actions: Actions
 }) {
-  const info = P.scopeInfo(scope)
-  // Team sync is always about the home organization
-  const project = syncOpen ? undefined : P.heldProject(scope)
+  const info = scope ? P.scopeInfo(scope) : null
+  // Team sync is always about the home organization; a project scope's
+  // facts come from the project cache, which App names the scope with
+  const project = syncOpen || !scope ? undefined : P.project(scope)
   const organization = P.orgs.find((org) => org.id === project?.org)?.name || P.org.name
   const title = inboxOpen
     ? 'Inbox'
@@ -52,7 +54,15 @@ export function MobileHeader({
         : info?.mine
           ? 'My tasks'
           : info?.name || 'Projects'
-  const canCreate = info?.subIds.some((id) => P.canWrite(id))
+  // New task where the cache says the scope, or a sub-project the phone
+  // list's answer names, is writable, and in My view always: the dialog's
+  // targets (projectNav.targets) decide
+  const listed = P.boardRead(BOARD_SLOTS.phone).value
+  const canCreate =
+    !!info &&
+    (info.mine ||
+      P.canWrite(info.id) ||
+      (listed?.state === 'ok' && (listed.projects ?? []).some((id) => P.canWrite(id))))
   return (
     <header className="mobile-workspace-header">
       <div className="mobile-title-row">
@@ -408,11 +418,13 @@ function MobileTaskBoard({
         ),
     }))
   const count = groups.reduce((sum, group) => sum + group.tasks.length, 0)
-  // a scope across every project, with none to show (components/NoProjects)
-  const noProjects = info.wide && info.metas.length === 0
   // the list waits while the Board's answer is on its way; an answer's rows
   // are all there
   const waiting = view.busy
+  // My view with no project to show (components/NoProjects), which the
+  // server confirms (useHolds), asked only while its empty note could show
+  const noProjects =
+    useHolds(info.mine && count === 0 && view.shows && !waiting && view.empty()) === 'none'
   // Focus stays on a task's row when a change moves it to another section.
   const listRef = useRef<HTMLDivElement>(null)
   const followFocus = useFollowTaskFocus(listRef)
@@ -505,7 +517,7 @@ function MobileTaskBoard({
         >
           <Icon name="filter" size={16} /> Filters{activeFilters > 0 ? `, ${activeFilters}` : ''}
         </Button>
-        {info.wide && info.subIds.some((id) => P.canWrite(id)) && (
+        {info.mine && (
           <Button
             size="icon"
             aria-label="New task"

@@ -221,7 +221,17 @@ describe('memoized task rows', () => {
       dispose: noop,
     }
     await mount(({ P, TimelineRow }) => {
-      const proj = P.projects[0]
+      const proj = {
+        id: P.issues[0]?.project ?? 'p',
+        org: P.homeOrg,
+        name: 'Project',
+        num: 1,
+        parent: undefined,
+        type: 'project' as const,
+        trackDelay: true,
+        lead: undefined,
+        reviewHours: undefined,
+      }
       return P.issues.map((issue, n) => (
         <TimelineRow
           key={issue.uuid}
@@ -267,7 +277,17 @@ describe('memoized task rows', () => {
     const drawn: string[] = []
     const observer = { setRoot: noop, observe: () => noop, dispose: noop }
     await mount(({ P, TimelineRow }) => {
-      const proj = P.projects[0]
+      const proj = {
+        id: P.issues[0]?.project ?? 'p',
+        org: P.homeOrg,
+        name: 'Project',
+        num: 1,
+        parent: undefined,
+        type: 'project' as const,
+        trackDelay: true,
+        lead: undefined,
+        reviewHours: undefined,
+      }
       return (
         <TimelineRow
           row={{ kind: 'track', pid: proj.id, proj }}
@@ -351,6 +371,7 @@ describe('memoized task rows', () => {
         onShowTask: noop,
         cards: new Map(),
         frozen: page.frozen,
+        editable: () => true,
       }
       return P.issues.map((it) => (
         <SyncCard
@@ -414,7 +435,7 @@ describe('memoized task rows', () => {
           rows={P.issues}
           tasks={P.issues}
           humans={[]}
-          subIds={new Set(P.projects.map((p) => p.id))}
+          subIds={new Set(P.issues.map((it) => it.project))}
           metaIds={new Set()}
           day={syncDay(now)}
           now={now}

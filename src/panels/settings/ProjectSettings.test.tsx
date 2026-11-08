@@ -1280,7 +1280,6 @@ describe('a project the workspace does not hold', () => {
     expect(rows('user')).toEqual(['Mira Holm', 'Leo Berg', 'Vic Viewer'])
     // the workspace still holds none of it
     expect(P.project('plan')).toBeUndefined()
-    expect(P.projects.some((p) => p.id === 'plan')).toBe(false)
     await click(find('[data-remove-project]'))
     expect(reads('projects:removalSummary')).toEqual([{ org_id: org, id: 'plan' }])
   })

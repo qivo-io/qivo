@@ -23,7 +23,7 @@ import {
    (P.projectState). */
 const projectKnown = (id: string) => {
   const state = P.projectState(id)
-  return state === 'held' || state === 'ok' || state === 'gone'
+  return state === 'ok' || state === 'gone'
 }
 
 export const BAR_RING = 4

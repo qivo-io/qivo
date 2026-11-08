@@ -87,6 +87,11 @@ export type PageCtx = {
       sends, while an owner list, the status menu or the reviewer prompt
       open before it closes and writes nothing */
   frozen: string | null
+  /** whether the person may edit tasks of project `id`, from the agenda's
+      `editable` of the answer the meeting shows (convex/lib/teamSyncAgenda.ts),
+      which reruns on access changes, so the cards' rights follow it and
+      never the store */
+  editable: (id: string) => boolean
 }
 
 /** The scope of the text typed in one card, inside the page's, registered
@@ -329,7 +334,13 @@ function ReviewerPrompt({
   return (
     <AnchoredPop x={at.x} y={at.y} width={260} align="right" gap={6} onClose={() => skip()}>
       <div ref={body} data-sync-reviewer-prompt={it.id} className="p-1">
-        <OwnerPickList issue={it} field="reviewer" onClose={skip} onPick={() => ctx.touched(it)} />
+        <OwnerPickList
+          issue={it}
+          field="reviewer"
+          onClose={skip}
+          onPick={() => ctx.touched(it)}
+          editable={ctx.editable(it.project)}
+        />
       </div>
     </AnchoredPop>
   )
@@ -500,10 +511,14 @@ export function MentionCtl({
   it,
   initial,
   onSent,
+  editable,
 }: {
   it: IssueVM
   initial: string | null
   onSent: () => void
+  /** whether the person may edit the task, from the agenda's `editable`
+      (PageCtx editable) */
+  editable: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [who, setWho] = useState<Recipient | null>(null)
@@ -563,7 +578,7 @@ export function MentionCtl({
   // the lock the window last showed, which it keeps while it fades out.
   // Handlers read `sending`.
   const locked = useClosingWords(open, sending)
-  const canWrite = P.canWrite(it.project)
+  const canWrite = editable
   const person = who
   // the note is saved as a comment, so a comment's cap holds it
   const ready = !!person && text.trim() !== '' && !overLimit(LIMITS.comment, text) && !sending
@@ -821,7 +836,7 @@ function SyncCardView({ it, ctx, later, verdict, blockedBy }: SyncCardProps) {
   const ownerRef = useRef<HTMLSpanElement>(null)
   // the project's level decides (the projects part holds every level a
   // card reads), and a stale meeting turns the task controls off
-  const canWrite = P.canWrite(it.project)
+  const canWrite = ctx.editable(it.project)
   const editable = canWrite && ctx.frozen === null
   const offTitle = canWrite ? (ctx.frozen ?? READ_ONLY) : READ_ONLY
   const marks = rowMarks(it, {
@@ -950,12 +965,18 @@ function SyncCardView({ it, ctx, later, verdict, blockedBy }: SyncCardProps) {
                   variant="chevron"
                   backLayer
                   offTitle={ctx.frozen ?? undefined}
+                  editable={canWrite}
                   onPick={() => ctx.touched(it)}
                 />
               </span>
             </span>
             <span className="ml-auto inline-flex shrink-0 items-center">
-              <MentionCtl it={it} initial={marks.reviewFor} onSent={() => ctx.touched(it)} />
+              <MentionCtl
+                it={it}
+                initial={marks.reviewFor}
+                onSent={() => ctx.touched(it)}
+                editable={canWrite}
+              />
               <RowJumps it={it} ctx={ctx} />
               {!ctx.mobile && <span className="ml-2 inline-flex">{tick}</span>}
             </span>
@@ -1080,7 +1101,12 @@ function WaitingItemView({
             {waitingLabel(since, ctx.now)}
           </span>
         )}
-        <MentionCtl it={it} initial={reviewer} onSent={ctx.stamp} />
+        <MentionCtl
+          it={it}
+          initial={reviewer}
+          onSent={ctx.stamp}
+          editable={ctx.editable(it.project)}
+        />
       </div>
     </UnsentScopeContext.Provider>
   )

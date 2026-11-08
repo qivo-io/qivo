@@ -14,8 +14,11 @@
      answer's row (P.syncTask). Either is painted with the person's pending
      writes, so the page's rules (lib/teamSync.ts) move a task between its
      sections at once, while nothing the answer does not name appears. A
-     task whose project the projects part no longer shows (P.canSee) drops
-     at once, which only narrows. A task the answer names with no model yet
+     live meeting follows access through the agenda, which reruns on access
+     changes; a stale one, which shows its last fitted answer, drops a task
+     whose project the project cache answers gone (the store names the
+     answer's projects with it, store/planner.ts SYNC_QUERY), which only
+     narrows, and keeps one whose project loads. A task the answer names with no model yet
      keeps the page loading, the meeting shown without its counts, and
      STALL.ms later a note above it says some tasks have not arrived, so a
      meeting with tasks left out never shows as whole.
@@ -269,9 +272,10 @@ export function useSyncMeeting(scopeKey: string, now: number): SyncMeeting {
         if (!own.has(uuid)) missing++
         continue
       }
-      // the projects part follows access live: a task whose project the
-      // person no longer sees goes at once
-      if (P.canSee(it.project)) tasks.push(it)
+      // a stale meeting's answer no longer follows access, so a task whose
+      // project the project cache answers gone goes at once; a live
+      // meeting's agenda reruns on access changes and needs no filter
+      if (!stale || P.projectState(it.project) !== 'gone') tasks.push(it)
     }
   }
   const stalled = useStall(!!okAnswer && missing > 0, key ?? '')

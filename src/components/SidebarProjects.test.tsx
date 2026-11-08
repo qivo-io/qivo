@@ -457,13 +457,11 @@ describe('the order', { timeout: 60_000 }, () => {
     // does, and only the management rule knows it
     const managed = top(next0, 'Managed only', { grant: false })
     await load(next0)
-    const visible = vi.spyOn(store.P, 'visibleProjects')
     await render(mine)
     expect(store.P.project(managed)).toBeDefined()
     expect(store.P.levelOn(managed)).toBeNull()
     expect(store.P.canManageOwnProjectAccess(managed)).toBe(true)
     expect(rowIds()).toEqual([led, mine])
-    expect(visible).not.toHaveBeenCalled()
     // the row menu of a project they see by a grant offers New sub-project…,
     // as they manage every project
     await click(find('[aria-label="Project actions"]', row(mine)))

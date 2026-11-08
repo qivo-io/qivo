@@ -79,8 +79,6 @@ export type TaskSources = {
   issueSubs: readonly Row<'issue_subscriptions'>[]
   /** the load rows of tasks this person is not shown */
   orgLoad: readonly LoadRow[]
-  /** the projects, to tell which are live */
-  projects: RowMap<Row<'projects'>>
   /** what the store knows of owner `id` now (OwnerFacts) */
   ownerFacts: (id: string) => OwnerFacts
   /** turns whenever ownerFacts may answer otherwise */
@@ -93,14 +91,13 @@ export type TaskSources = {
   mine: ReadonlySet<string>
 }
 
-/** What changed since the last build: the task, link, attachment and
-    project ids ('all' for every one), and whether the label and follow
-    lists, the load rows and the hidden flags changed. */
+/** What changed since the last build: the task, link and attachment ids
+    ('all' for every one), and whether the label and follow lists, the load
+    rows and the hidden flags changed. */
 export type TaskChanges = {
   issues: ReadonlySet<string> | 'all'
   links: ReadonlySet<string> | 'all'
   attachments: ReadonlySet<string> | 'all'
-  projects: ReadonlySet<string> | 'all'
   issueLabels: boolean
   issueSubs: boolean
   orgLoad: boolean
@@ -155,9 +152,7 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
   // task and by owner
   const shownPaused = new Map<string, { owner: string; item: OwnerItem }>()
   const shownPausedOf = new Map<string, Set<string>>()
-  // the live projects, as the fence reads them, and the facts of each
-  // owner the index asked about, as of `factsVersion`
-  const liveProjects = new Set<string>()
+  // the facts of each owner the index asked about, as of `factsVersion`
   const factsOf = new Map<string, OwnerFacts>()
   let factsVersion: number | null = null
   let issues: IssueVM[] = []
@@ -319,12 +314,6 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
     return out
   }
 
-  /** Whether project `id` is live (exists, not archived) as the rows show it. */
-  const isLive = (id: string) => {
-    const project = sources().projects.peek(id)
-    return project !== undefined && !project.archived_at
-  }
-
   /** What the store knows of owner `id`, asked once a facts version. */
   function facts(id: string): OwnerFacts {
     let known = factsOf.get(id)
@@ -354,7 +343,9 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
       row && it
         ? loadRowFor(row, {
             isGroup: isIssueGroup(it),
-            projectLive: liveProjects.has(row.project_id),
+            // the tasks part sends only tasks of live projects
+            // (convex/lib/access.ts holds), so every held task's is live
+            projectLive: true,
             ownerInOrg: (id) => inOrg(id, row.org_id),
             visible: true,
             staff: false,
@@ -399,7 +390,6 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
       row.status === 'done' ||
       owner === undefined ||
       !inOrg(owner, row.org_id) ||
-      !liveProjects.has(row.project_id) ||
       row.start_week === undefined ||
       row.end_week === undefined
     )
@@ -685,8 +675,6 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
       const byId: Record<string, IssueVM> = {}
       for (const it of byUuid.values()) byId[it.id] = it
       for (const it of byUuid.values()) span(it, byId)
-      liveProjects.clear()
-      for (const id of from.projects.keys()) if (isLive(id)) liveProjects.add(id)
       hiddenLoad = hiddenIndex()
       shownLoad.clear()
       shownLoadOf.clear()
@@ -853,17 +841,6 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
           if (!sameData(hiddenLoad.get(owner), next.get(owner))) loadOwners.add(owner)
         hiddenLoad = next
       }
-      // a project that turned live or stopped being so moves its tasks' load
-      const projectIds = changes.projects === 'all' ? from.projects.keys() : changes.projects
-      const turned = new Set<string>()
-      for (const id of [...projectIds, ...(changes.projects === 'all' ? liveProjects : [])]) {
-        if (isLive(id) === liveProjects.has(id)) continue
-        turned.add(id)
-        if (liveProjects.has(id)) liveProjects.delete(id)
-        else liveProjects.add(id)
-      }
-      if (turned.size)
-        for (const [uuid, row] of from.issues) if (turned.has(row.project_id)) recheck.add(uuid)
       // the owners whose delays move with their load or capacity, and the
       // tasks of an owner whose organization the store now places otherwise
       const owners = new Set<string>()
@@ -1013,7 +990,6 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
         map.clear()
       unknownDelay.clear()
       factsVersion = null
-      liveProjects.clear()
       labelsByIssue = new Map()
       subscribed = new Set()
       subtaskParents = new Set()

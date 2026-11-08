@@ -42,11 +42,11 @@ export function BoardNote({
           : 'Narrow your filters, such as Focus, Priority, Stale or the text filter, or open a project.',
       }
     if (info.isMeta) {
-      // the answer's sub-projects the store knows, in the Board's lane order
-      const offered = new Set(view.answer && 'projects' in view.answer ? view.answer.projects : [])
+      // the answer's sub-projects the project cache names, in the Board's
+      // lane order (useBoardView groups)
       return {
         hint: 'Choose a sub-project or narrow your filters.',
-        projects: info.groups.filter((g) => offered.has(g.proj.id)).map((g) => g.proj),
+        projects: view.groups.flatMap((g) => (g.proj ? [g.proj] : [])),
       }
     }
     return { hint: 'Narrow your filters.' }
@@ -69,7 +69,7 @@ export function BoardNote({
     case 'over_budget': {
       // one sub-project offers nothing smaller to choose, so Search finds
       // its tasks instead
-      const sub = !info.wide && !info.isMeta
+      const sub = !info.mine && !info.isMeta
       const { hint, projects } = narrowing()
       return (
         <ViewNote

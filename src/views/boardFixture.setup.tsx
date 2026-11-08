@@ -490,6 +490,10 @@ export async function loadBoard(
   )
   const store = await import('../store/planner')
   await store.initStore()
+  // the scope opens as App opens it from a row, its facts seeded and
+  // named with the project cache, which answers from the whole
+  const { openScope } = await import('../store/oracleScope.setup')
+  openScope(store.P, snapshot, scopeId || snapshot.projects[0].id)
   lastProbe = store.__layerProbe
   sees = (id) => store.P.canSee(id)
   writes = (id) => store.P.canWrite(id)
@@ -536,7 +540,6 @@ export async function loadBoard(
     }, [])
     const filters = { ...row, search }
     const info = P.scopeInfo(scope)
-    if (!info) throw new Error('missing the scope')
     const actions = { ...board, openIssue: setOpened as (...args: unknown[]) => void }
     return (
       <TooltipProvider>
@@ -573,7 +576,6 @@ export async function loadBoard(
   function View({ view }: { view: (info: ScopeInfo) => ReactNode }) {
     usePlannerVersion()
     const info = P.scopeInfo(scope)
-    if (!info) throw new Error('missing the scope')
     return <TooltipProvider>{view(info)}</TooltipProvider>
   }
   return {

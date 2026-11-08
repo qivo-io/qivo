@@ -18,6 +18,11 @@ import {
   type PageArgs,
 } from '../inboxStandIn.setup'
 import type { MilestoneRow } from '../milestoneRows'
+import {
+  answerProjectNav,
+  type ForcedProjectNav,
+  type ProjectNavRead,
+} from '../projectNavStandIn.setup'
 import type { Row } from '../rows'
 
 /* The live transport (lib/liveQueries.ts) for store tests, over a Convex
@@ -28,13 +33,15 @@ import type { Row } from '../rows'
    SEATS_DELETING when an organization deletion holds the seats, or fails
    it), and the double answers every workspace part from it as the server
    would: the root with the caller's own profiles, memberships and teams
-   alone (convex/lib/workspaceJoin.ts rootOf), and each window with the
-   rows whose ids fall in it, and tells the store of the parts whose answer
-   changed in one transition, as Convex would. So the store holds nobody
-   but the caller, and every other person, team and label reaches it only
-   through the stand-ins that answer the reads by id and the pickers from
-   the same whole (peopleSettingsStandIn, teamSettingsStandIn,
-   labelPagesStandIn, mentionStandIn, teamSyncStandIn). A test can hold back one task window (holdWindow). Any other
+   alone (convex/lib/workspaceJoin.ts rootOf), and each task window with
+   the rows whose ids fall in it, and tells the store of the parts whose
+   answer changed in one transition, as Convex would. So the store holds
+   nobody but the caller and no project, and every other person, team and
+   label and every project reaches it only through the stand-ins that
+   answer the reads by id and the pickers from the same whole
+   (peopleSettingsStandIn, teamSettingsStandIn, labelPagesStandIn,
+   mentionStandIn, teamSyncStandIn, projectNavStandIn). A test can hold
+   back one task window (holdWindow). Any other
    query, such as a task's thread or the Board's, is watched through the
    client's own onUpdate, each result a transition of its own, and no
    other watch shares its subscription, so a view's `fresh` watch
@@ -52,12 +59,17 @@ import type { Row } from '../rows'
    the milestone reads from them (store/milestoneStandIn.setup.ts), and
    the store never receives them otherwise.
 
-   It may name projects the projects part leaves out (`unheldProjects`):
-   the part sends neither them nor their grants and team shares, while
-   every stand-in that reads the whole, the navigation reads' byIds among
-   them (store/projectNavStandIn.setup.ts), answers them as the server
-   does, so a view, the task window and the store's project cache
-   (store/projectCache.ts) meet a project the workspace does not hold.
+   The whole holds the server's projects with every grant and team grant
+   (`projects`, `access`, `teamAccess`), which no part sends: the store's
+   project cache (store/projectCache.ts) reads every project it shows
+   through projectNav.byIds, which this double answers from the whole on
+   the parts' path, as the server does (store/projectNavStandIn.setup.ts),
+   so each publish answers it again, as the server reruns it after an
+   access change. A test forces its states (forceProjectNav: a read that
+   never answers, the refusal, a failure), lists the reads it opened
+   (byIdsReads), or leaves it to the client's own onUpdate
+   (forceProjectNav('client')) to answer it by hand. The other
+   navigation reads go to the client like any other query.
 
    The inbox reads every store watches beside the parts, the unread
    summary and the open task's item (convex/inbox.ts summary and item), the
@@ -101,21 +113,23 @@ type Client = {
     `create`, which the root then answers as 'now', and holds the messages
     the server stores for the caller's seats (`messages`, none when left
     out), which no part sends and the inbox reads count, list and feed,
-    tasks and projects the server holds that the parts do not send
-    (`unheld`), which the page names its rows by, such as another
-    organization's task of the same id as one the workspace holds, the
-    server's milestones (`milestones`), which no part sends and the
-    milestone stand-in answers from, and the projects the projects part
-    leaves out with their grants and team shares (`unheldProjects`, by id),
-    which the stand-ins answer from `projects`. */
+    tasks and projects the server holds that the page names its rows by
+    (`unheld`), such as another organization's task of the same id as one
+    the workspace holds, the server's milestones (`milestones`), which no
+    part sends and the milestone stand-in answers from, and the server's
+    projects with every grant and team grant on them (`projects`, `access`,
+    `teamAccess`), which no part sends and every stand-in of a read that
+    judges projects answers from. */
 export type Whole = Omit<Workspace, 'profiles' | 'create'> & {
   profiles: (Workspace['profiles'][number] & { sync_at?: string; sync_since?: string })[]
   labels: Row<'labels'>[]
+  projects: Row<'projects'>[]
+  access: Row<'project_access'>[]
+  teamAccess: Row<'project_team_access'>[]
   create?: Workspace['create']
   messages?: Row<'messages'>[]
-  unheld?: Partial<Pick<Workspace, 'issues' | 'projects'>>
+  unheld?: { issues?: Workspace['issues']; projects?: Row<'projects'>[] }
   milestones?: MilestoneRow[]
-  unheldProjects?: readonly string[]
 }
 
 /** What a test publishes for a login whose seats a running organization
@@ -136,14 +150,46 @@ const SHARED = new Set([
   'taskWindow:attachments',
 ])
 
-const KINDS = ['tasks', 'projects'] as const
 const PARTS: Record<string, string> = {
   'workspace:tasks': 'tasks',
-  'workspace:projects': 'projects',
 }
 
 /* The inbox reads answered from the whole, beside the parts. */
 const INBOX_READS = new Set(['inbox:summary', 'inbox:item', 'inbox:page', 'inbox:feed'])
+
+/* The project cache's read, answered from the whole beside the parts
+   unless a test leaves it to the client (forceProjectNav('client')). */
+const BY_IDS: ProjectNavRead = 'projectNav:byIds'
+
+/* What a byIds read that never answers holds back. */
+const NO_ANSWER = Symbol('no answer')
+
+/** What projectNav.byIds with `args` answers while the server holds
+    `whole`, NO_ANSWER for a read `force` keeps from answering; throws a
+    failure or a refusal. A login with no seat holds no project. */
+function byIdsAnswerOf(
+  whole: Published,
+  args: Record<string, unknown>,
+  force: ForcedProjectNav | undefined,
+): unknown {
+  if (whole === null || seatless(whole)) return { rows: [], unchecked: [], message: null }
+  let answer: unknown = NO_ANSWER
+  let failure: unknown
+  answerProjectNav(
+    whole,
+    BY_IDS,
+    args,
+    (value) => {
+      answer = value
+    },
+    (error) => {
+      failure = error
+    },
+    force ? { force } : undefined,
+  )
+  if (failure !== undefined) throw failure
+  return answer
+}
 
 /** The inbox reads a test may force alone (forceInbox). */
 export type InboxRead = 'inbox:summary' | 'inbox:item' | 'inbox:page' | 'inbox:feed'
@@ -191,19 +237,13 @@ function answerOf(whole: Published, name: string, args: Record<string, unknown>)
     from: typeof args.from === 'string' ? args.from : '',
     to: typeof args.to === 'string' ? args.to : null,
   }
-  // the projects the part leaves out go before the split, with their
-  // grants and team shares, which the split sends only for its projects
-  const left = whole?.unheldProjects ? new Set(whole.unheldProjects) : null
-  const sent =
-    whole && left ? { ...whole, projects: whole.projects.filter((p) => !left.has(p.id)) } : whole
-  const org = sent
-    ? splitWorkspace(sent, () => [window]).find((o) => o.org_id === args.org_id)
+  const org = whole
+    ? splitWorkspace(whole, () => [window]).find((o) => o.org_id === args.org_id)
     : undefined
   if (!org) return { state: 'gone' }
-  const kind = PARTS[name] as (typeof KINDS)[number]
-  const rows = org[kind][0]
+  const rows = org.tasks[0]
   // the hidden load rows ride with the first task window only
-  if (kind === 'tasks' && window.from !== '') return { state: 'ok', ...rows, orgLoad: [] }
+  if (window.from !== '') return { state: 'ok', ...rows, orgLoad: [] }
   return { state: 'ok', ...rows }
 }
 
@@ -217,6 +257,8 @@ export function liveOver(client: Client): LiveQueries & {
   failWindow(from: string | null, error?: unknown, later?: boolean): void
   reconnect(only?: readonly string[]): void
   forceInbox(force: ForcedInbox | null, only?: InboxRead): void
+  forceProjectNav(force: ForcedProjectNav | 'client' | null): void
+  byIdsReads(): string[][]
   /** the bounds of the stand-in this double answers the inbox reads with
       (store/inboxStandIn.setup.ts INBOX_STAND_IN), which a test lowers
       here, since vi.resetModules keeps this double and the module it
@@ -250,8 +292,16 @@ export function liveOver(client: Client): LiveQueries & {
   // handler starts a generation, and only the newest one's watches count
   let generation = 0
 
+  // what the project cache's read answers whatever the whole says, or
+  // 'client' to leave it to the client's own onUpdate, until null
+  let navForce: ForcedProjectNav | 'client' | null = null
+  // the ids of every byIds read a store opened, in order
+  const byIdsOpened: string[][] = []
   const isPart = (name: string) =>
-    name === 'workspace:root' || name in PARTS || INBOX_READS.has(name)
+    name === 'workspace:root' ||
+    name in PARTS ||
+    INBOX_READS.has(name) ||
+    (name === BY_IDS && navForce !== 'client')
   // the state the inbox reads answer whatever the whole says, and which of
   // them, until forceInbox(null)
   let inboxForce: { force: ForcedInbox; only?: string } | null = null
@@ -317,6 +367,21 @@ export function liveOver(client: Client): LiveQueries & {
         // a read that never answers holds what it had, which is nothing
         // when the stand-in is told to wait from its first answer
         if (value === INBOX_NO_ANSWER) continue
+      } else if (w.name === BY_IDS) {
+        try {
+          value = byIdsAnswerOf(
+            whole.value,
+            w.args,
+            navForce === 'client' ? undefined : (navForce ?? undefined),
+          )
+        } catch (error) {
+          if (w.error !== undefined && w.json === `error:${String(error)}`) continue
+          w.error = error
+          w.json = `error:${String(error)}`
+          changed.add(token)
+          continue
+        }
+        if (value === NO_ANSWER) continue
       } else value = answerOf(whole.value, w.name, w.args)
       const json = JSON.stringify(value)
       if (json === w.json && w.error === undefined) continue
@@ -363,6 +428,7 @@ export function liveOver(client: Client): LiveQueries & {
   return {
     watch(ref, args) {
       const name = getFunctionName(ref)
+      if (name === BY_IDS) byIdsOpened.push([...((args as { ids?: string[] }).ids ?? [])])
       // A store starts with the root part, so each store, also one a test
       // starts after vi.resetModules, which keeps this double, subscribes to
       // the whole workspace afresh and gets the test's own.
@@ -525,6 +591,18 @@ export function liveOver(client: Client): LiveQueries & {
         new Set([...watched].flatMap(([token, w]) => (!names || names.has(w.name) ? [token] : []))),
       )
     },
+    /** Makes the project cache's read (projectNav.byIds) answer with
+        `force` whatever the whole says (store/projectNavStandIn.setup.ts:
+        `byIdsLoading` never answers, `unchecked` lists every asked id
+        apart, `fail` fails), from now on and at once for the reads watched,
+        or, with 'client', leaves the reads watched from now on to the
+        client's own onUpdate, and with null answers from the whole again. */
+    forceProjectNav(force) {
+      navForce = force
+      fire(refresh())
+    },
+    /** The ids of every projectNav.byIds read a store opened, in order. */
+    byIdsReads: () => byIdsOpened.map((ids) => [...ids]),
     inboxStandIn: INBOX_STAND_IN,
     batch(step) {
       batching = new Set()

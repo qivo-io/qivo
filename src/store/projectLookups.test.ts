@@ -83,7 +83,6 @@ function world() {
     { project_id: views.id, profile_id: me, level: 'viewer' },
     { project_id: granted.id, profile_id: me, level: 'user' },
   ]
-  snap.unheldProjects = [unheld, edits, views, granted, led, hidden, twin].map((p) => p.id)
   return { snap, org, held, heldSub, unheld, edits, views, granted, led, hidden, twin }
 }
 
@@ -106,6 +105,10 @@ async function start(
 ) {
   vi.resetModules()
   vi.stubGlobal('window', { showToast: vi.fn() })
+  // the cases answer the cache's reads themselves, with `force`
+  ;(double.live as { forceProjectNav?: (f: 'client' | null) => void } | null)?.forceProjectNav?.(
+    'client',
+  )
   const byIds: string[][] = []
   const open = new Set<() => void>()
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
@@ -159,14 +162,15 @@ const viewRow = (snap: Whole, id: string, project: string): ViewRow => ({
 })
 
 describe('the project lookups', () => {
-  it('answers a project the part holds from the part, never reading it by id', async () => {
+  it('answers every project from the cache once named, as the workspace holds none', async () => {
     const w = world()
     const { P, byIds } = await start(w.snap)
+    // must fail: no project answers before an owner names it
+    expect(P.project(w.heldSub.id)).toBeUndefined()
     P.nameProjects('test', [w.held.id, w.heldSub.id])
-    expect(P.projectState(w.heldSub.id)).toBe('held')
-    expect(P.heldProject(w.heldSub.id)?.key).toBe(w.heldSub.key)
+    expect(byIds).toEqual([[w.held.id, w.heldSub.id]])
+    await vi.waitFor(() => expect(P.projectState(w.heldSub.id)).toBe('ok'))
     expect(P.levelOn(w.heldSub.id)).toBe('lead')
-    expect(byIds).toEqual([])
   })
 
   it('answers a project the part leaves out from the cache once named, loading until then, and never as held', async () => {
@@ -182,8 +186,6 @@ describe('the project lookups', () => {
     await vi.waitFor(() => expect(P.project(w.edits.id)?.name).toBe('Edits'))
     expect(P.contextVersion).not.toBe(before)
     expect(P.projectState(w.edits.id)).toBe('ok')
-    expect(P.heldProject(w.edits.id)).toBeUndefined()
-    expect(P.heldMeta(w.edits.id)).toBeNull()
     expect(P.project(w.edits.id)).toMatchObject({
       org: w.org,
       parent: w.unheld.id,
@@ -241,9 +243,10 @@ describe('the project lookups', () => {
     const { P } = await start(w.snap)
     P.nameProjects('test', [w.edits.id])
     await vi.waitFor(() => expect(P.orgOf(w.edits.id)).toBe(w.org))
-    expect(P.projectAttachmentLimit(w.edits.id)).toBe(3 * MIB)
-    // as for a project the part holds
-    expect(P.projectAttachmentLimit(w.heldSub.id)).toBe(3 * MIB)
+    // the cap of the task's organization, which the window passes
+    expect(P.orgAttachmentLimit(w.org)).toBe(3 * MIB)
+    // must fail: an organization the root does not name takes the largest
+    expect(P.orgAttachmentLimit('elsewhere')).not.toBe(3 * MIB)
   })
 
   it('answers gone only where the answer leaves the project out', async () => {
@@ -454,7 +457,6 @@ describe('the project lookups', () => {
     w.snap.access.push(
       ...tops.map((p) => ({ project_id: p.id, profile_id: me, level: 'user' as const })),
     )
-    w.snap.unheldProjects = [...(w.snap.unheldProjects ?? []), ...tops.map((p) => p.id)]
     const { P, byIds, PROJECT_CACHE } = await start(w.snap)
     const unheld = w.snap.projects.filter((p) => !p.parent_id && p.id !== w.held.id)
     expect(unheld).toHaveLength(199)

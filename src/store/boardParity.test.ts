@@ -59,6 +59,7 @@ import { groupSpan } from '../lib/issueGroups'
 import { DEFAULT_PLANNABLE_HOURS, plannableHoursOf } from '../lib/workload'
 import { boardStandIn } from './boardStandIn.setup'
 import type { Whole as Snapshot } from './guard/liveDouble.setup'
+import { oracleScope, oracleStore } from './oracleScope.setup'
 import type { OwnerLoad } from './ownerLoadCache'
 import { ownerLoadsStandIn } from './ownerLoadsStandIn.setup'
 import { peopleSettingsStandIn } from './peopleSettingsStandIn.setup'
@@ -150,7 +151,7 @@ function expectParity(
   filters: BoardFilters,
   label: string,
 ) {
-  const info = P.scopeInfo(scopeId)
+  const info = oracleScope(P.snapshot, scopeId)
   // a selection the store does not hold is one the server does not either
   if (info === null) {
     expect(answer, `${label}: unavailable`).toEqual({ state: 'unavailable' })
@@ -521,7 +522,7 @@ async function compareAll(
  * shows, each of their sub-projects and My view. */
 function selectionsOf(P: Store, profile: Doc<'profiles'>) {
   const out: [string, BoardScope, string][] = []
-  for (const meta of P.visibleProjects()) {
+  for (const meta of oracleStore(P.snapshot).visibleProjects()) {
     out.push([meta.name, projectScope(profile, meta.id), meta.id])
     for (const id of meta.children ?? [])
       if (P.canSee(id)) out.push([P.project(id)?.name ?? id, projectScope(profile, id), id])

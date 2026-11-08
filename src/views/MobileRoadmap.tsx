@@ -17,6 +17,10 @@ import type { ScopeMilestones } from './useScopeMilestones'
 
 type MobileRoadmapProps = {
   info: ScopeInfo
+  /** the scope's sub-projects as the Roadmap's answer names them
+      (useRoadmapView selection), for the agenda's New task and New
+      sub-project; null in My view and before an answer */
+  selection?: readonly string[] | null
   /** the tasks the Roadmap shows (views/roadmap/useRoadmapView.ts), in its
       answer's order, checked on screen against the window and the filters */
   tasks: readonly IssueVM[]
@@ -53,7 +57,7 @@ type MobileRoadmapProps = {
 function milestoneVerb(projectId: string): 'Edit' | 'View' | 'Open' {
   if (P.canWrite(projectId)) return 'Edit'
   const state = P.projectState(projectId)
-  return state === 'held' || state === 'ok' || state === 'gone' ? 'View' : 'Open'
+  return state === 'ok' || state === 'gone' ? 'View' : 'Open'
 }
 
 /* A task row's height before it renders (a two-line title), and the least
@@ -136,6 +140,7 @@ const MobileRoadmapRow = memo(function MobileRoadmapRow({
  * flags. */
 export function MobileRoadmap({
   info,
+  selection = null,
   tasks: shown,
   settled = true,
   filterControls,
@@ -185,7 +190,7 @@ export function MobileRoadmap({
     <MobileRoadmapRow
       key={it.id}
       task={it}
-      wide={info.wide}
+      wide={info.mine}
       context={P.contextVersion}
       onOpen={openIssue}
     />
@@ -246,7 +251,7 @@ export function MobileRoadmap({
       </Button>
     </div>
   )
-  const canAddMilestone = !info.wide && P.canAddMilestone(info.id)
+  const canAddMilestone = !info.mine && P.canAddMilestone(info.id)
   const hint = info.mine ? MINE_MILESTONES_HINT : undefined
   const tooMany = info.mine ? MINE_TOO_MANY : undefined
   const milestoneSection = ms.base && (
@@ -421,18 +426,21 @@ export function MobileRoadmap({
           {tasks.length === 0 && settled && (
             <p className="mobile-roadmap-note">No tasks match these filters.</p>
           )}
-          {!info.wide && P.canWrite(info.id) && info.subIds.length > 0 && (
-            <Button type="button" onClick={() => actions.newIssue({ project: info.subIds[0] })}>
+          {!info.mine && P.canWrite(info.id) && !!selection && selection.length > 0 && (
+            <Button type="button" onClick={() => actions.newIssue({ project: selection[0] })}>
               <Icon name="plus" size={16} />
               New task
             </Button>
           )}
-          {!info.wide && P.canManageOwnProjectAccess(info.id) && info.subIds.length === 0 && (
-            <Button type="button" onClick={() => actions.newProject({ parent: info.id })}>
-              <Icon name="plus" size={16} />
-              New sub-project
-            </Button>
-          )}
+          {!info.mine &&
+            P.canManageOwnProjectAccess(info.id) &&
+            !!selection &&
+            selection.length === 0 && (
+              <Button type="button" onClick={() => actions.newProject({ parent: info.id })}>
+                <Icon name="plus" size={16} />
+                New sub-project
+              </Button>
+            )}
         </section>
       )}
     </div>

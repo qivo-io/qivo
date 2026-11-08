@@ -104,8 +104,16 @@ import {
 } from './projectNavRows'
 import { Icon, MenuItem, Popover } from './qivo'
 import { Button } from './ui/button'
+import { useProjects } from './useProjects'
 
 type Actions = Record<string, (...args: unknown[]) => void>
+
+/** Names project `id` with the project cache while a row's open menu
+    shows, so its New sub-project offer reads the person's level. */
+function RowNamed({ id }: { id: string }) {
+  useProjects([id])
+  return null
+}
 
 /** App's request to focus row `id` once the tree shows it; `n` tells two
     requests apart, and the tree hands it back to App's onFocusRowDone. */
@@ -197,8 +205,9 @@ export function SidebarProjects({
   })
   const end = listEnd(list, false)
 
-  // the scope's top-level project, its own id or its parent's
-  const scopeProject = P.heldProject(scope)
+  // the scope's top-level project, its own id or its parent's, from the
+  // project cache, which App names the scope with
+  const scopeProject = scope ? P.project(scope) : undefined
   const owner = scopeProject
     ? scopeProject.type === 'meta'
       ? scopeProject.id
@@ -317,13 +326,8 @@ export function SidebarProjects({
   )
   const open = (row: NavProject) => nav.open(row)
   /* A press on a row opens it. A pick in its menu, portaled out of the
-     row, reaches the row too, and moves the scope as it always has, only
-     where the workspace holds the project, reading nothing and saying
-     nothing for one it does not hold. */
-  const pressRow = (e: MouseEvent<HTMLElement>, row: NavProject) => {
-    if (e.target instanceof Node && e.currentTarget.contains(e.target)) open(row)
-    else if (P.heldProject(row.id)) actions.openProject(row.id)
-  }
+     row, reaches the row too, and moves the scope by the same open rule. */
+  const pressRow = (_e: MouseEvent<HTMLElement>, row: NavProject) => open(row)
 
   const topRow = (row: NavPageRow) => {
     const org = foreignOrg(row.org_id)
@@ -399,6 +403,7 @@ export function SidebarProjects({
           >
             {(close) => (
               <>
+                <RowNamed id={row.id} />
                 {P.canManageOwnProjectAccess(row.id) && (
                   <MenuItem
                     onClick={(e) => {
@@ -713,8 +718,11 @@ function SidebarChildren({
   })
   const end = listEnd(list, false)
 
+  // the expanded parent, named while its list shows, so its New sub-project
+  // offer reads its level from the project cache
+  useProjects([parent.id])
   // the scoped sub-project, when the scope is one of this project's
-  const scoped = P.heldProject(scope)
+  const scoped = scope ? P.project(scope) : undefined
   const target = scoped && scoped.type !== 'meta' && scoped.parent === parent.id ? scoped : null
   // as the tree's own list, Load more's focus rule acts only for the batch
   // a press asked for

@@ -14,7 +14,8 @@
 import { compareValues, type Value } from 'convex/values'
 import { nameKey } from '../../convex/lib/nameKey'
 import type { HealthSort } from '../../convex/lib/overview'
-import { type IssueVM, P, type ScopeInfo } from './planner'
+import type { OracleScope } from './oracleScope.setup'
+import { type IssueVM, P } from './planner'
 
 type Only = ((it: IssueVM) => boolean) | null | undefined
 
@@ -60,7 +61,7 @@ export function progressByGroups(groups: string[][], only?: Only) {
  * tasks not done and due before today, and the Overdue & at risk list, the
  * overdue ones and, in projects that track delay, those projected late,
  * by due date. */
-export function overviewFigures(info: ScopeInfo, scoped: IssueVM[]) {
+export function overviewFigures(info: OracleScope, scoped: IssueVM[]) {
   const prog = progressIn(info.subIds, info.only)
   const inProgress = scoped.filter((i) => !P.isGroup(i) && i.status === 'progress').length
   const inReview = scoped.filter((i) => !P.isGroup(i) && i.status === 'review').length
@@ -97,7 +98,7 @@ export function statusCounts(items: IssueVM[]): Record<string, number> {
  * tasks among `scoped`, unsorted: Completion, Left, Delayed, Slipping and
  * Paused. In My view a project holding none of the person's tasks has no
  * row. */
-export function healthRows(info: ScopeInfo, scoped: IssueVM[], mine: boolean) {
+export function healthRows(info: OracleScope, scoped: IssueVM[], mine: boolean) {
   /* A row per group, over the group's issues as this scope sees them.
      In My view a project I have nothing in gets no row at all. An
      all-zero health row would say "this project is stalled" when it

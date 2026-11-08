@@ -214,10 +214,8 @@ describe("a project's writes with what its Settings page showed", () => {
       level: 'viewer',
       expected: { level: null },
     })
-    expect(P.projects.some((p) => p.id === 'away')).toBe(false)
-    // a held project paints the team's level at once
-    void P.setProjectTeamAccess(plan, 'crew', 'user', { orgId: org, level: null })
-    expect(P.heldProject(plan)?.teamAccess?.crew).toBe('user')
+    // the workspace holds no project, so a share paints nothing
+    expect(P.project('away')).toBeUndefined()
     // without `shown` a project the workspace does not hold sends nothing
     expect(await P.setProjectTeamAccess('away', 'crew', 'user')).toBe(false)
   })

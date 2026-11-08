@@ -25,10 +25,12 @@ import { answerRoadmap } from '../store/roadmapStandIn.setup'
    project a view names, no view reads one by id. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', async () => ({
-  convex: network,
-  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
-}))
+vi.mock('../lib/convex', async () => {
+  const live = (await import('../store/guard/liveDouble.setup')).liveOver(network)
+  // the cases answer the project cache's reads themselves, with their force
+  live.forceProjectNav('client')
+  return { convex: network, live }
+})
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -156,7 +158,6 @@ function world({
     week: mondayIn(1),
     created_at: AT,
   })
-  if (unheld) snap.unheldProjects = ['plan']
   return snap
 }
 
@@ -248,7 +249,6 @@ describe('a Roadmap flag of a project only the project cache holds', { timeout: 
     const { P } = await app(snap, '/app/~/roadmap/p/2')
     await waitFor(() => flag('m-plan'), "Plan's flag")
     await waitFor(() => P.canWrite('plan'), 'the cache answering Plan')
-    expect(P.heldProject('plan')).toBeUndefined()
     await settle()
     await drag('m-plan', 2)
     // a move goes out only once milestoneOrg found an organization, here
@@ -324,7 +324,6 @@ describe("My view's Overview rows and milestones of a program only the cache hol
     // and a held project of the person's with a sub-project, which My view
     // needs for its lists while its notes read the held projects, to go
     // to after My view
-    snap.unheldProjects = ['plan', 'plan-a']
     const me = snap.profiles[0].id
     snap.projects.push(
       {
@@ -368,7 +367,6 @@ describe("My view's Overview rows and milestones of a program only the cache hol
     // section's `mine` answer the program itself
     expect(byIds.some((ids) => ids.includes('plan-a'))).toBe(true)
     expect(byIds.some((ids) => ids.includes('plan'))).toBe(true)
-    expect(P.heldProject('plan-a')).toBeUndefined()
     // Home's Overview names neither, so the reads stop
     await act(async () => {
       history.pushState(null, '', '/app/~/overview/p/5')

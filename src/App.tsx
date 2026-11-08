@@ -109,7 +109,9 @@ import {
   type NewProjectInput,
   P,
   type ProjectAsk,
+  type ProjectCreated,
   type ProjectShown,
+  type ScopeInfo,
   TASKS_FAILED_TEXT,
 } from './store/planner'
 import { usePlannerVersion } from './store/usePlannerVersion'
@@ -400,8 +402,10 @@ function TopBar({
   setTweak,
   actions,
 }) {
-  // Assignee lanes also arrange tasks inside a single sub-project.
-  const showGrouping = info?.subIds.length > 0
+  // Assignee lanes also arrange tasks inside a single sub-project; every
+  // scope that shows a view offers them, as the store holds no list of a
+  // scope's sub-projects to ask
+  const showGrouping = !!info
   // View switching and task creation share the first row across all views.
   // Board filters/grouping sit below; Roadmap owns its own toolbar.
   const showFilters = !inboxOpen && !syncOpen && !!info && view === 'kanban'
@@ -646,18 +650,23 @@ const pageKey = (s: Omit<UiState, 'openIssue'>) =>
     s.sync ?? null,
   ])
 
-/** A check startup runs before it opens a project: what projectNav.resolve
-    is asked (`ask`), the project's name where the workspace holds it,
-    whether it is the remembered project (UIPrefs.lastProject) or one an
-    address names that the workspace does not hold (`of`), and for an
-    address, the address the check holds while it runs, with the page it
-    was reached on, as pendingTask holds a task's. */
+/** A check startup runs before it opens a project an address names by its
+    organization and number: what projectNav.resolve is asked (`ask`), and
+    the address the check holds while it runs, with the page it was
+    reached on, as pendingTask holds a task's. An address by uuid and the
+    remembered project open as the scope at once (ScopeOpened). */
 type StartupCheck = {
   ask: ProjectAsk
   name: string | null
-  of: 'remembered' | 'address'
+  of: 'address'
   address: { pathname: string; hash: string; page: string } | null
 }
+
+/** How the scope's project was opened, for what App says while the
+    project cache checks it (scopeShows) and when it answers the project
+    gone: the remembered project (UIPrefs.lastProject), an address, or a
+    row, a jump or a move that names it (`name` where the opener knew it). */
+type ScopeOpened = { id: string; of: 'remembered' | 'address' | 'row' }
 
 /** What the main pane shows in place of the views while no project is
     chosen, as App holds it beside an empty scope: a check on its way, one
@@ -683,13 +692,47 @@ type Opening =
 const ADDRESS_UNAVAILABLE = 'That project is not available to you.'
 const REMEMBERED_UNAVAILABLE = 'The project you opened last is no longer available to you.'
 
-/** The startup rule where the address names no scope: the remembered
-    project, checked first, else the chooser. */
-function startupOpening(n: number): Opening {
-  const id = P.loadUI().lastProject?.project_id
-  if (!id) return { kind: 'choose', n, note: null, lost: null }
-  const name = P.project(id)?.name ?? null
-  return { kind: 'checking', n, check: { ask: id, name, of: 'remembered', address: null } }
+/** The remembered project (UIPrefs.lastProject), which the startup rule
+    opens as the scope where the address names none, or undefined. */
+const rememberedScope = (): string | undefined => P.loadUI().lastProject?.project_id || undefined
+
+/** What the chooser shows for project scope `info` while the views wait
+    for its project cache answer (App's scopeShows): "Opening <name>…"
+    while it loads, the failure's sentence with Retry. */
+function scopeOpeningShows(info: ScopeInfo, opened: ScopeOpened | null): ChooserShows {
+  const name = info.name
+  const of = opened?.id === info.id ? opened.of : 'row'
+  if (info.state === 'unchecked')
+    return { kind: 'retry', line: P.writeNote(info.id) ?? "Couldn't open the project." }
+  if (info.state === 'failed')
+    return {
+      kind: 'retry',
+      line: name
+        ? `Couldn't open ${name}.`
+        : of === 'remembered'
+          ? "Couldn't check the project you opened last."
+          : of === 'address'
+            ? "Couldn't check that project."
+            : "Couldn't open the project.",
+    }
+  return {
+    kind: 'checking',
+    line: name
+      ? `Opening ${name}…`
+      : of === 'remembered'
+        ? 'Opening the project you opened last…'
+        : of === 'address'
+          ? 'Opening that project…'
+          : 'Opening the project…',
+  }
+}
+
+/** The note of the chooser for project scope `id` that the project cache
+    answered gone (App's guard), with the name the scope showed. */
+function lostNote(id: string, opened: ScopeOpened | null, name: string | null): string {
+  if (opened?.id === id && opened.of === 'remembered') return REMEMBERED_UNAVAILABLE
+  if (opened?.id === id && opened.of === 'address' && !name) return ADDRESS_UNAVAILABLE
+  return `${name ?? 'That project'} is no longer available to you.`
 }
 
 /** The person a Team sync jump opened the chooser for (App showPersonOn):
@@ -751,14 +794,7 @@ function withJumpMark(state: unknown, mark: JumpMark | null): unknown {
 function chooserShows(opening: Exclude<Opening, { kind: 'task' }>): ChooserShows {
   if (opening.kind === 'choose') return { kind: 'choose', note: opening.note }
   if (opening.kind === 'retry') return { kind: 'retry', line: opening.line }
-  const { check } = opening
-  const line =
-    check.of === 'address'
-      ? 'Opening that project…'
-      : check.name
-        ? `Opening ${check.name}…`
-        : 'Opening the project you opened last…'
-  return { kind: 'checking', line }
+  return { kind: 'checking', line: 'Opening that project…' }
 }
 
 /** The project address `opening` checks on page `page` (pageKey), or
@@ -806,15 +842,12 @@ function App() {
      opens the remembered project once the server checked it, else the
      project chooser (opening). */
   const r0 = parsePath(location.pathname) || parseHash(location.hash)
-  // a scope is either a project row or My view's sentinel, which resolves to
-  // no row on purpose, so every check has to admit it explicitly, or a
-  // #/board/mine deep link would boot into no scope
-  const liveScope = (s) => !!s && (P.isWideScope(s) || !!P.heldProject(s))
-  // the remembered project (UIPrefs.lastProject) where the workspace holds
-  // it, which a task address prefers when it holds the task; nothing else
-  // opens it before the server checked it
-  const remembered = ui0.lastProject?.project_id
-  const heldRemembered = remembered && P.heldProject(remembered) ? remembered : null
+  // a scope is either a project's id or My view's sentinel; a project scope
+  // opens at once and the project cache checks it (scopeShows)
+  const liveScope = (s: string | null | undefined): s is string => !!s
+  // the remembered project (UIPrefs.lastProject), which a task address
+  // prefers when the project cache names it as the task's
+  const remembered = rememberedScope() ?? null
   // prefs saved before the merge may still say "split"/"resources" — both
   // collapsed into the roadmap (which now always docks the resource strip)
   const uiView0 = ui0.view === 'split' || ui0.view === 'resources' ? 'roadmap' : ui0.view
@@ -827,13 +860,19 @@ function App() {
   // with no scope, and its answer names its project (pendingTask).
   const task0 = r0?.issue ? scopeTaskOf(r0.issue) : undefined
   const r0Scope =
-    r0 && !r0.sync
-      ? r0.scope || (task0 ? scopeForIssue(task0, heldRemembered) : undefined)
-      : undefined
-  // the address's scope, or none: the boot never falls back to the first
-  // project or My view (opening below)
-  const [scope, setScope] = useState<string | undefined>(() =>
-    liveScope(r0Scope) ? r0Scope : undefined,
+    r0 && !r0.sync ? r0.scope || (task0 ? scopeForIssue(task0, remembered) : undefined) : undefined
+  // the address's scope, else for an address that names nothing the
+  // remembered project (the startup rule), or none: the boot never falls
+  // back to the first project or My view (opening below)
+  const bootScope = liveScope(r0Scope) ? r0Scope : !r0 ? rememberedScope() : undefined
+  const [scope, setScope] = useState<string | undefined>(bootScope)
+  /* How the scope's project was opened (ScopeOpened), for the chooser's
+     line while the project cache checks it and its note once it answers
+     the project gone. */
+  const scopeOpened = useRef<ScopeOpened | null>(
+    bootScope && !P.isMineScope(bootScope)
+      ? { id: bootScope, of: r0 ? 'address' : 'remembered' }
+      : null,
   )
   /* The scope a task's address chose at the boot, on Back or Forward, or
      by the answer of a task the workspace did not hold, which the save
@@ -968,13 +1007,13 @@ function App() {
     r0?.sync && P.homeOrg ? syncPlaceFor(r0.sync, mobile) : null,
   )
   /* What the main pane shows while the scope is empty (Opening,
-     ProjectChooser). A project address the workspace does not hold
-     (Route.unheld) is checked through projectNav.resolve by the form it
-     names, holding its address, and one no read can ask about, under a
-     slug this login cannot resolve, shows the chooser with a note. A task
-     address the workspace does not hold waits for the task's answer. Any
-     other address that names no scope takes the startup rule: the
-     remembered project once the server checked it, else the chooser. */
+     ProjectChooser). A project address by number (Route.unheld) is
+     checked through projectNav.resolve, holding its address, and one no
+     read can ask about, under a slug this login cannot resolve, shows the
+     chooser with a note. A task address the workspace does not hold waits
+     for the task's answer. Any other address that names no scope takes the
+     startup rule: the remembered project as the scope at once (bootScope),
+     which the project cache checks, else the chooser. */
   const openingN = useRef(0)
   const [opening, setOpening] = useState<Opening>(() => {
     if (r0 && !r0.sync && r0.issue && !task0) return { kind: 'task', n: 0 }
@@ -989,34 +1028,57 @@ function App() {
         check: { ask: r0.unheld, name: null, of: 'address', address },
       }
     }
-    return startupOpening(0)
+    return { kind: 'choose', n: 0, note: null, lost: null }
   })
   /** Shows `next`, made with the next opening number, in the main pane. */
   const showOpening = (next: (n: number) => Opening) => {
     openingN.current += 1
     setOpening(next(openingN.current))
   }
+  /** The startup rule where nothing names a scope: the remembered project
+      as the scope at once, which the project cache checks, else the
+      chooser. */
+  const openStartup = () => {
+    const id = rememberedScope()
+    showOpening((n) => ({ kind: 'choose', n, note: null, lost: null }))
+    if (!id) return
+    scopeOpened.current = { id, of: 'remembered' }
+    setScope(id)
+  }
   // the opening on screen, for the popstate handler and startup's check
   const openingRef = useRef(opening)
   openingRef.current = opening
-  // The scope row can vanish mid-session (deleted by another member, or over
-  // REST/MCP). The access guard below re-scopes one commit later, but THIS
-  // render still runs with the dead id — and an uncaught render error would
-  // unmount the tree for good, so the guard never gets its chance. Skip the
-  // scoped pane for that frame; the sidebar (already null-safe) stays up.
-  // scopeInfo returns null for exactly that dead scope, and a full description
-  // for the live ones (both sentinels included).
-  const scopeInfo = P.scopeInfo(scope)
-  /* The scope's project as the workspace held it last: its id, its name
-     and its top-level project's id, for the access guard's note and
-     Settings' onProjectGone once it has left the workspace. */
+  /* The scope as the project cache answers for it (P.scopeInfo): My view,
+     or a project with its facts and where it and its top-level project
+     stand there. A project scope is set at once, so its views mount only
+     once they can ask about it (scopeShows): while the cache knows no
+     facts of it before its first ok, the main pane shows the chooser's
+     "Opening <name>…", and its failure's sentence with Retry. A navigation
+     row seeds the facts (P.seedProjects), so the views ask at once while
+     the cache reads it. After the scope's first ok the views stay mounted
+     through a reread, a failure, a hidden tab or a reconnect, with their
+     own notes; only the cache's gone moves the scope to the chooser's lost
+     note (the access guard). */
+  const scopeInfo = scope ? P.scopeInfo(scope) : null
+  const everOk = useRef<string | null>(null)
+  if (scopeInfo && !scopeInfo.mine && scopeInfo.state === 'ok') everOk.current = scopeInfo.id
+  const scopeShows =
+    !!scopeInfo &&
+    (scopeInfo.mine ||
+      scopeInfo.state === 'ok' ||
+      (scopeInfo.state !== 'gone' && everOk.current === scopeInfo.id) ||
+      (scopeInfo.state === 'loading' && !!scopeInfo.proj))
+  // the scope the views show, null while they wait for it
+  const viewInfo = scopeShows ? scopeInfo : null
+  /* The scope's project as the project cache named it last: its id, its
+     name and its top-level project's id, for the access guard's note and
+     Settings' onProjectGone once the cache answers it gone. */
   const scopePlace = useRef<{ id: string; top: string | null; name: string } | null>(null)
-  const scopeProject = scope ? P.heldProject(scope) : undefined
-  if (scopeProject)
+  if (scopeInfo?.proj)
     scopePlace.current = {
-      id: scopeProject.id,
-      top: scopeProject.parent ?? scopeProject.id,
-      name: scopeProject.name,
+      id: scopeInfo.proj.id,
+      top: scopeInfo.topId,
+      name: scopeInfo.proj.name,
     }
   /** The main page on screen, none while Settings shows. */
   const shownPage: MainPage | null = settingsPage
@@ -1045,7 +1107,7 @@ function App() {
   const keep = keptPages({
     kept: syncGoes ? withoutPage(kept, 'sync') : kept,
     scope,
-    scopeLive: !!scopeInfo,
+    scopeLive: !!viewInfo,
     shown: shownPage,
   })
   if (keep !== kept) setKept(keep)
@@ -1182,7 +1244,7 @@ function App() {
           ref: r0.issue,
           page: pageKey({ scope, view, settingsPage, inboxOpen, projectsOpen, sync }),
           scope: r0.scope,
-          preferred: heldRemembered,
+          preferred: remembered,
         }
       : null,
   )
@@ -1304,7 +1366,11 @@ function App() {
     () =>
       preloadInBackground(() =>
         workspaceModules({
-          editor: P.projects.some((project) => P.canWrite(project.id)),
+          // a seat of the login that is not an organization Viewer may
+          // hold Edit somewhere, a guest seat included
+          editor: P.users.some(
+            (u) => P.myProfileIds.includes(u.id) && u.active && u.orgRole !== 'viewer',
+          ),
           admin: P.isAdmin(),
         }),
       ),
@@ -1315,16 +1381,17 @@ function App() {
   useEffect(() => {
     P.saveUI({ view })
   }, [view])
-  /* The remembered project (UIPrefs.lastProject): a project or sub-project
-     the workspace holds, once the Overview, the Board or the Roadmap shows
-     it, however the person got there, sent at once, so a reload right
+  /* The remembered project (UIPrefs.lastProject): a project scope whose
+     project cache state is ok while the Overview, the Board or the Roadmap
+     shows it, however the person got there, sent at once, so a reload right
      after a pick opens it. A scope that changes under the Inbox, Team sync,
      the directory or Settings writes nothing until a view of it shows, and
      neither do My view, no scope, and a scope a task's
      address chose (taskScope). A loss never clears it. */
   const viewShown = !!shownPage && showsScope(shownPage)
-  // the views' place shows the project chooser while no scope is chosen
-  const chooserShown = viewShown && scope === undefined
+  // the views' place shows the project chooser while no scope is chosen,
+  // and while a project scope waits for the project cache (scopeShows)
+  const chooserShown = viewShown && !viewInfo
   /* The person a Team sync jump over all projects or a team opened the
      chooser for (showPersonOn), while the filters hold exactly what the
      jump set, one person and nothing else (holdsPerson). The chooser then
@@ -1353,9 +1420,9 @@ function App() {
         : `Choose a project to see ${personJump.first}'s tasks on the ${view === 'kanban' ? 'Board' : 'Roadmap'}.`
       : null
   useEffect(() => {
-    if (!viewShown || !scope || P.isWideScope(scope) || taskScope.current === scope) return
-    const p = P.heldProject(scope)
-    if (!p) return
+    if (!viewShown || !scope || P.isMineScope(scope) || taskScope.current === scope) return
+    const p = P.project(scope)
+    if (!p || P.projectState(scope) !== 'ok') return
     const was = P.loadUI().lastProject
     if (was?.project_id === p.id && was.org_id === p.org) return
     P.saveUINow({ lastProject: { org_id: p.org, project_id: p.id } })
@@ -1398,6 +1465,10 @@ function App() {
       held.page === pageKey(state)
     )
       return
+    // and so does the address that opened a project scope while the project
+    // cache knows none of its facts, as the path names the project by its
+    // number, which only the cache's answer gives
+    if (scope && !P.isMineScope(scope) && !P.project(scope)) return
     const p = buildPath(state)
     /* A person jump's chooser marks its entry, the front door, with the
        person and the view it shows on, which the front door does not name,
@@ -1452,7 +1523,7 @@ function App() {
     const waiting = opening.kind === 'task' && scope === undefined
     if (!pending || !sameTask(openIssue, pending.ref)) {
       pendingTask.current = null
-      if (waiting) showOpening(startupOpening)
+      if (waiting) openStartup()
       return
     }
     // only the project of an ok or archived answer moves the scope
@@ -1460,13 +1531,13 @@ function App() {
     if (!task) {
       const read = P.reference
       const ended = read?.state === 'unavailable' || read?.state === 'failed'
-      if (waiting && ended && sameTask(read.ref, pending.ref)) showOpening(startupOpening)
+      if (waiting && ended && sameTask(read.ref, pending.ref)) openStartup()
       return
     }
     pendingTask.current = null
     const here = { scope, view, settingsPage, inboxOpen, projectsOpen, sync }
     if (pending.page !== pageKey(here) || sync) {
-      if (waiting) showOpening(startupOpening)
+      if (waiting) openStartup()
       return
     }
     // the scope Back or Forward gives a task address (onPop)
@@ -1476,7 +1547,7 @@ function App() {
     if (liveScope(sc) && sc !== scope) {
       if (!pending.scope) taskScope.current = sc
       setScope(sc)
-    } else if (waiting) showOpening(startupOpening)
+    } else if (waiting) openStartup()
   }, [openIssue, rev, refRev, scope, view, settingsPage, inboxOpen, projectsOpen, sync, opening])
   /* Remember what each address opened, so the gate can tell a MOVED address
      from one this login has simply never followed. Deliberately after the
@@ -1534,7 +1605,7 @@ function App() {
          A Team sync address names its own scope, so the one underneath stays
          put, task or not. A task the workspace does not hold keeps the
          scope until its answer names its project (pendingTask). */
-      const preferred = r.view && !r.scope && P.isWideScope(was.scope) ? null : was.scope
+      const preferred = r.view && !r.scope && P.isMineScope(was.scope) ? null : was.scope
       /* The address names the open task when it names the same task
          (sameTask), as the address of a task opened by a reference does,
          which reads back as another string: the open task stays, so the
@@ -1557,7 +1628,15 @@ function App() {
          in place; one no read can ask about shows the chooser with a note. */
       const unheld = !r.sync && !r.issue && !liveScope(r.scope) && r.unheld !== undefined
       const next = {
-        scope: door || unheld ? undefined : liveScope(sc) ? sc : was.scope,
+        scope: door
+          ? jump
+            ? undefined
+            : rememberedScope()
+          : unheld
+            ? undefined
+            : liveScope(sc)
+              ? sc
+              : was.scope,
         // viewless issue links keep the current view; Settings, #/inbox and
         // Team sync sit over/instead of the current view, so they must not
         // reset it either, and the front door keeps it as a boot keeps the
@@ -1660,7 +1739,8 @@ function App() {
          startup rule, and no line. */
       if (door) {
         setPersonJump(jump)
-        showOpening(jump ? (n) => ({ kind: 'choose', n, note: null, lost: null }) : startupOpening)
+        showOpening((n) => ({ kind: 'choose', n, note: null, lost: null }))
+        if (next.scope) scopeOpened.current = { id: next.scope, of: 'remembered' }
       }
       // a task the workspace does not hold, reached with no scope, waits
       // for its answer to name its project, as on a boot, never for a
@@ -1690,48 +1770,40 @@ function App() {
   }, [])
 
   /* The access guard keeps the scope within what the current user can see.
-     My view IS "what the user can see", so it needs no rescuing, and it
-     resolves to no project row, which would otherwise bounce it away one
-     commit after it was entered. No scope is the chooser's. A
-     project scope stays while the workspace holds it and its top-level
-     project and the person sees both (P.canSee), so a sub-project they lost
-     under a parent they still see goes too. A lost one leaves no scope and
-     the chooser with "<name> is no longer available to you.", never another
-     project or My view: someone else's change must not choose for the
-     person. Its address gives way to the front door in place. The scope
-     itself must be the workspace's (P.heldProject), as every view reads its
-     sub-projects there (P.scopeInfo). Its top-level project, which the
-     projects part holds wherever it holds the sub-project, is judged by
-     the project cache where the part does not hold it (named under
-     `scope`): it stays while the cache loads it, failed or did not check
-     it, and only the cache's `gone` loses it, so loading never reads as
-     lost. */
+     My view IS "what the user can see", so it needs no rescuing. No scope
+     is the chooser's. A project scope names its project and its top-level
+     project with the project cache (under `scope`), and stays while the
+     cache loads, rereads, failed or did not check them: only the cache's
+     current answer that leaves one of them out (P.scopeInfo `gone`) loses
+     it, so a sub-project lost under a parent the person still sees goes
+     too and loading never reads as lost. A lost one leaves no scope and the
+     chooser with "<name> is no longer available to you." (lostNote), never
+     another project or My view: someone else's change must not choose for
+     the person. Its address gives way to the front door in place. */
   useEffect(() => {
-    if (!scope || P.isWideScope(scope)) {
+    if (!scope || P.isMineScope(scope)) {
       P.nameProjects('scope', [])
       return
     }
-    const p = P.heldProject(scope)
-    const topId = p ? (p.parent ?? p.id) : null
-    const topHeld = !!topId && !!P.heldProject(topId)
-    P.nameProjects('scope', topId && !topHeld ? [topId] : [])
-    const topState = topId && !topHeld ? P.projectState(topId) : null
-    if (topState === 'loading' || topState === 'failed' || topState === 'unchecked') return
-    if (p && topId && (topHeld || topState === 'ok') && P.canSee(topId) && P.canSee(p.id)) return
+    const info = P.scopeInfo(scope)
+    P.nameProjects('scope', info.topId && info.topId !== scope ? [scope, info.topId] : [scope])
+    if (info.state !== 'gone') return
     const was = scopePlace.current?.id === scope ? scopePlace.current : null
+    const note = lostNote(scope, scopeOpened.current, was?.name ?? null)
+    scopeOpened.current = null
     setScope(undefined)
     showOpening((n) => ({
       kind: 'choose',
       n,
-      note: `${was?.name ?? 'That project'} is no longer available to you.`,
+      note,
       lost: { id: scope, top: was?.top ?? null },
     }))
   }, [scope, rev])
 
   /* Startup's check (Opening `checking`): one projectNav.resolve read of
-     the remembered project, or of the project an address names, once a
-     view would show it, so no view mounts and nothing of the project is
-     read before the server said the person may open it. Under a page that
+     the project an address names by its organization and number, once a
+     view would show it, as only the server can say which project that
+     number names for the person. Under a page that
      covers the views, as the phone's Inbox at a bare address, it waits
      until a view shows, as no tab there leads to the scope beneath. Every
      navigation the person makes while it is on its way drops it
@@ -1740,10 +1812,10 @@ function App() {
      answer changes nothing and the chooser takes its line's place, unless
      Back or Forward reached an address that names its own opening.
      Otherwise its answer counts only while the scope is still empty and
-     no newer opening started: ok opens the project once the workspace
-     holds it (openResolved); unavailable shows the chooser with its note;
-     the access_unchecked refusal and a failed read show their sentence
-     with Retry, never the chooser, another project or My view. */
+     no newer opening started: ok opens the project as the scope at once,
+     its facts seeded (openResolved); unavailable shows the chooser with
+     its note; the access_unchecked refusal and a failed read show their
+     sentence with Retry, never the chooser, another project or My view. */
   const askedCheck = useRef(-1)
   const stopCheck = useRef<(() => void) | null>(null)
   useEffect(() => () => stopCheck.current?.(), [])
@@ -1768,30 +1840,24 @@ function App() {
       stopCheck.current = null
       if (openingRef.current.n !== n || scopeRef.current !== undefined) return
       const retry = (line: string) => showOpening((m) => ({ kind: 'retry', n: m, check, line }))
-      const remembered = check.of === 'remembered'
       switch (answer.state) {
         case 'open':
           // the address the check held takes the project's in place
           if (check.address) replaceNextHistory.current = true
+          scopeOpened.current = { id: answer.id, of: 'address' }
           setScope(answer.id)
           return
-        case 'not_loaded':
-          return retry(`Couldn't open ${answer.name}.`)
         case 'unavailable':
           return showOpening((m) => ({
             kind: 'choose',
             n: m,
-            note: remembered ? REMEMBERED_UNAVAILABLE : ADDRESS_UNAVAILABLE,
+            note: ADDRESS_UNAVAILABLE,
             lost: null,
           }))
         case 'unchecked':
           return retry(answer.message)
         case 'failed':
-          return retry(
-            remembered
-              ? "Couldn't check the project you opened last."
-              : "Couldn't check that project.",
-          )
+          return retry("Couldn't check that project.")
       }
     })
   }, [opening, scope, viewShown])
@@ -1848,29 +1914,39 @@ function App() {
   // another task in the open window, or none (the Inbox pane, Team sync)
   const openTask = (id: string | null) => move({ openIssue: id }, () => setOpenIssue(id))
 
+  // the newest New task opener, so an answer for an older one opens nothing
+  const newIssueAsk = useRef(0)
   const openNewIssue = (init) => {
-    /* Desktop creates normally name a project. The phone's My tasks action
-       can open without one: the dialog offers only writable projects and
-       asks for the project/sub-project there. */
-    const target = init.project || (P.isWideScope(scope) ? null : scope)
-    const proj = target ? P.heldProject(target) : null
-    // "tasks live in sub-projects": a project with none can't receive one.
+    /* Desktop creates normally name a project. My view and the phone's My
+       tasks action open without one: the dialog lists the sub-projects the
+       person may add tasks to (projectNav.targets) and says so at a
+       confirmed empty end. */
+    const target = init.project || (P.isMineScope(scope) ? null : scope)
+    const proj = target ? P.project(target) : null
+    const ask = ++newIssueAsk.current
+    const open = () => {
+      if (newIssueAsk.current === ask)
+        setModal({ kind: 'issue', init: { ...init, project: target } })
+    }
+    // "tasks live in sub-projects": a top-level project with none can't
+    // receive one, which the first batch of its sub-projects the person
+    // sees (projectNav.children) says once it answers an empty last batch.
     // The rule follows the TARGET, not just the scope. My view gives every
-    // project a lane and a track, and their + buttons name them.
-    if (proj && proj.type === 'meta' && proj.children.length === 0) {
-      window.showToast?.('Create a sub-project first. Tasks live in sub-projects.', 'info')
-      openNewProject({ parent: proj.id })
+    // project a lane and a track, and their + buttons name them. Any other
+    // answer opens the dialog, which lists what the person may write.
+    if (proj && proj.type === 'meta') {
+      void P.hasSubProjects(proj.id).then((has) => {
+        if (newIssueAsk.current !== ask) return
+        if (has === false) {
+          window.showToast?.('Create a sub-project first. Tasks live in sub-projects.', 'info')
+          openNewProject({ parent: proj.id })
+          return
+        }
+        open()
+      })
       return
     }
-    // …and with no target at all (My view, nothing to put a task in
-    // anywhere) there is no project to parent a sub-project to either. The
-    // TopBar button already disables here; the palette's doesn't, so say why
-    // rather than opening a dialog that could never be submitted.
-    if (!target && !(P.scopeInfo(scope) || { subIds: [] }).subIds.length) {
-      window.showToast?.('Create a sub-project first. Tasks live in sub-projects.', 'error')
-      return
-    }
-    setModal({ kind: 'issue', init: { ...init, project: target } })
+    open()
   }
   const clearFilters = () =>
     setFilters((f) => ({
@@ -1890,7 +1966,7 @@ function App() {
   const openNewMilestone = (init) =>
     setModal({
       kind: 'milestone',
-      init: { project: P.isWideScope(scope) ? null : scope, ...init },
+      init: { project: P.isMineScope(scope) ? null : scope, ...init },
     })
 
   // "New project" and "New sub-project" are separate dialogs; kind:"program"
@@ -1902,7 +1978,7 @@ function App() {
   const openNewProject = (
     init,
     focusAfterClose?: () => HTMLElement | null,
-    onCreated?: (id: string, saved: Promise<boolean>) => void,
+    onCreated?: (id: string, saved: Promise<{ num: number } | null>, name: string) => void,
   ) => {
     createdProject.current = null
     setModal({
@@ -1955,7 +2031,9 @@ function App() {
       window.showToast?.('Move this task out of Backlog before planning it on the roadmap', 'error')
       return
     }
-    const meta = P.heldMeta(it.project)
+    // the task's top-level project from the project cache, which the task
+    // window names; the Roadmap then opens as any scope does, at once
+    const meta = P.topLevelOf(it.project)
     if (!meta) return
     const place = taskPlaceOf(it)
     /* A Roadmap that holds the task's sub-project, that sub-project's or
@@ -1970,8 +2048,8 @@ function App() {
     const cur = scopeRef.current
     const stays =
       cur !== undefined &&
-      (cur === it.project || cur === meta.id || (P.isMineScope(cur) && P.isMine(it)))
-    const to = stays ? cur : meta.id
+      (cur === it.project || cur === meta || (P.isMineScope(cur) && P.isMine(it)))
+    const to = stays ? cur : meta
     move(
       {
         scope: to,
@@ -2010,8 +2088,7 @@ function App() {
   // the window and reveals the card at once (the crumb on a phone, whose
   // window covers the list).
   const showOnBoard = (projectId: string, issueKey?: string, keepOpen = true) => {
-    const p = P.heldProject(projectId)
-    if (!p) return
+    if (!projectId) return
     const revealed = issueKey || null
     const target = keepOpen ? revealed : null
     move(
@@ -2129,8 +2206,8 @@ function App() {
   }
   /* A person header's Board or Roadmap jump: leave the page for that view
      filtered to the person (the filters match the task's owner, the rule
-     the sync's rows follow). A project sync whose project the workspace
-     holds opens that project. All projects and a team, which no view has
+     the sync's rows follow). A project sync opens that project, as any
+     scope opens. All projects and a team, which no view has
      a scope for, open the view with no project chosen, which shows the
      chooser with the filter kept and a line that names the person
      (jumpLine), never My view, which drops the filter, nor a project the
@@ -2139,7 +2216,7 @@ function App() {
      first name, from Team sync's agenda. */
   const showPersonOn = (v: 'kanban' | 'roadmap', profileId: string, first: string) => {
     const place = parseSyncScope(sync?.scope)
-    const to = place.kind === 'project' && P.heldProject(place.id) ? place.id : undefined
+    const to = place.kind === 'project' ? place.id : undefined
     move({ sync: null, scope: to, view: v, openIssue: null }, () => {
       setFilters((f) => ({
         search: '',
@@ -2163,7 +2240,7 @@ function App() {
   /* A sub-project's Board, from Team sync's note for one past its limits:
      leave the page for the Board of that sub-project. */
   const showBoardOf = (projectId: string) => {
-    if (!P.heldProject(projectId)) return
+    if (!projectId) return
     move({ sync: null, scope: projectId, view: 'kanban', openIssue: null }, () => {
       setSync(null)
       setScope(projectId)
@@ -2315,26 +2392,24 @@ function App() {
       setOpenIssue((cur) => (sameTask(cur, last) ? null : cur))
       if (lost) window.showToast?.(lost, 'error')
     })
-    if (!open) {
-      window.showToast?.('That sub-project is gone, so the task was not created.', 'error')
-      return false
-    }
+    // a create the store refused says why itself (P.addIssue's toast, the
+    // project cache's sentence for a project it has not answered)
+    if (!open) return false
     // The create dialog's phone marker, a spare once it closes in this
     // commit, takes the task's address (lib/pageHistory pushPage).
     setModal(null)
     window.showToast?.(`Created ${P.keyOfOpen(open)}`)
-    const curProj = P.heldProject(scope)
     /* A create from a project that does not hold the task moves to the
-       task's sub-project. My view shows it only if it landed on me, by P.isMine's
-       rule read from what was typed, since the workspace holds no task:
-       its assignee, or its reviewer for a task born In Review. A task
-       created from a side-board's + is unassigned, so that one still
-       jumps to its sub-project. */
+       task's sub-project, whose parent the project cache names (the
+       create refused unless the cache answered it). My view shows it only
+       if it landed on me, by P.isMine's rule read from what was typed,
+       since the workspace holds no task: its assignee, or its reviewer for
+       a task born In Review. A task created from a side-board's + is
+       unassigned, so that one still jumps to its sub-project. */
     const owner = issue.status === 'review' && issue.reviewer ? issue.reviewer : issue.assignee
     const inScope =
       (P.isMineScope(scope) && !!owner && P.myProfileIds.includes(owner)) ||
-      (curProj &&
-        (curProj.id === issue.project || (curProj.children || []).includes(issue.project)))
+      (!!scope && (scope === issue.project || P.project(issue.project)?.parent === scope))
     // Keep the task visible underneath its editor when creation changes scope.
     if (!inScope) setScope(issue.project)
     navOpenIssue(open)
@@ -2345,17 +2420,16 @@ function App() {
   // starter task and the move into the project wait for the server too. A
   // refused create must not leave the user inside a project that then
   // disappears. `shown` is the organization New sub-project's parent check
-  // named, which the create goes to (P.addProject); under a parent the
-  // workspace does not hold nothing paints. App moves into a new
-  // sub-project, and makes its starter task, only once the workspace holds
-  // it and the server's navigation read confirms that the creator sees it
-  // (P.resolveProject), since the paint under a held parent shows it
-  // either way and an organization admin manages parents they cannot see.
-  // `sees` false, the dialog's own knowledge that they will not, skips the
-  // read and says so. The starter task also needs the workspace's level
-  // rule to give the creator Edit there (P.canWrite), as the server's task
-  // create does, so a Viewer of the parent, who sees the sub-project, gets
-  // the plain toast and no task, also where the dialog offered one.
+  // named, which the create goes to (P.addProject). App moves into a new
+  // sub-project, and makes its starter task, only once one projectNav.byIds
+  // read of it (P.projectsByIds) answers that the creator opens it, since
+  // an organization admin manages parents they cannot see, and the
+  // project cache, which the starter task's create reads, holds it. `sees`
+  // false, the dialog's own knowledge that they will not, skips the read
+  // and says so. The starter task also needs that answer to give the
+  // creator Edit there, as the server's task create does, so a Viewer of
+  // the parent, who sees the sub-project, gets the plain toast and no
+  // task, also where the dialog offered one.
   const createProject = (
     p: NewProjectInput,
     {
@@ -2369,23 +2443,21 @@ function App() {
     // Projects and sub-projects are led by people and shared through explicit grants.
     if (p.type === 'meta') p.access = p.access || {}
     const placeAtCreate = placeRef.current
-    // whether the server stored it, for the dialog's opener (onCreated)
-    let answered: (stored: boolean) => void = () => {}
-    const saved = new Promise<boolean>((resolve) => {
+    // the create's answer once the server stored it, null for a refusal,
+    // for the dialog's opener (onCreated)
+    let answered: (stored: { num: number } | null) => void = () => {}
+    const saved = new Promise<{ num: number } | null>((resolve) => {
       answered = resolve
     })
     const id = P.addProject(
       p,
-      () => {
-        answered(true)
-        // whether the workspace holds the new project now, which it does
-        // once the live transport has delivered what the create made
-        // visible, or while a paint under a held parent stays
-        const held = !!id && !!P.heldProject(id)
+      (created: ProjectCreated) => {
+        answered({ num: created.num })
         /* What follows once whether the creator sees the project is known:
-           true, false or null for unknown. */
-        const follow = (seen: boolean | null) => {
-          if (withStarter && held && seen === true && P.canWrite(id)) {
+           true, false or null for unknown, with whether they may add tasks
+           to it. */
+        const follow = (seen: boolean | null, writes = false) => {
+          if (withStarter && seen === true && writes && id) {
             P.addIssue({
               title: p.name,
               project: id,
@@ -2396,14 +2468,12 @@ function App() {
             })
           }
           // A top-level project's visibility comes from the draft by the
-          // rule the dialog's warning used, not from the rows, which hold
-          // the project only until the delivery that holds it arrives when
-          // the creator cannot see it. A sub-project opens once the
-          // workspace holds it and the creator is confirmed to see it.
+          // rule the dialog's warning used. A sub-project opens once the
+          // server's read confirmed that the creator sees it.
           const saved = afterProjectSaved({
             type: p.type,
             name: p.name,
-            visible: p.type === 'meta' ? P.seesNewProject(p) : held,
+            visible: p.type === 'meta' ? P.seesNewProject(p) : seen === true,
             sees: seen,
           })
           window.showToast?.(saved.message)
@@ -2419,21 +2489,35 @@ function App() {
         }
         if (p.type === 'meta' || !id) follow(true)
         else if (sees === false) follow(false)
-        else
-          void P.resolveProject(id).then((answer) =>
-            follow(
-              answer === null
-                ? null
-                : answer.state === 'ok'
-                  ? true
-                  : answer.reason === undefined
-                    ? false
-                    : null,
-            ),
-          )
+        else {
+          // the new sub-project, named while its starter task may need it,
+          // so the project cache reads it beside this one-shot answer
+          P.nameProjects(`created:${id}`, [id])
+          void P.projectsByIds([id]).then((answer) => {
+            const row = answer?.rows.find((r) => r.id === id)
+            const seen = answer === null || answer.unchecked.includes(id) ? null : row !== undefined
+            const done = () => {
+              follow(seen, row?.level === 'lead' || row?.level === 'user')
+              P.nameProjects(`created:${id}`, [])
+            }
+            // the starter task's create reads the project cache, which the
+            // live read fills a moment after this answer
+            if (!withStarter || !row || P.projectState(id) === 'ok') return done()
+            const off = P.updates.workspace.subscribe(() => {
+              if (P.projectState(id) !== 'ok') return
+              off()
+              clearTimeout(bound)
+              done()
+            })
+            const bound = setTimeout(() => {
+              off()
+              done()
+            }, 10_000)
+          })
+        }
       },
       () => {
-        answered(false)
+        answered(null)
         // a refusal leaves the dialog's opener in place, which keeps focus;
         // where the opener went, focus that is nowhere goes to the parent's
         // row
@@ -2446,7 +2530,7 @@ function App() {
       shown,
     )
     createdProject.current = id ?? null
-    if (id) modal?.onCreated?.(id, saved)
+    if (id) modal?.onCreated?.(id, saved, p.name)
     setModal(null)
   }
 
@@ -2560,8 +2644,7 @@ function App() {
         // purpose, so My view opens it on no choice rather than on an
         // arbitrary project or on all of an organization's projects
         // (P.project() is undefined for it)
-        const p = P.heldProject(scope)
-        const scopeMeta = p ? (p.type === 'meta' ? p.id : (p.parent ?? null)) : null
+        const scopeMeta = scopeInfo?.topId ?? null
         /** Leaves Settings for the page that opened it. */
         const exitSettings = () => {
           const back = settingsReturn.current
@@ -2616,12 +2699,12 @@ function App() {
                     /* The person archived or deleted project `id` here.
                        It moves the scope only when the scope is that
                        project or one of its sub-projects, also after the
-                       access guard took it as its delivery landed first:
+                       access guard took it as its answer landed first:
                        to `parent`, where they were working, while the
-                       workspace holds it and they see it, else to no
-                       scope and the chooser, with no note and the
-                       guard's dropped. My view survives it. */
-                    if (P.isWideScope(scope)) return
+                       project cache answers it ok, else to no scope and
+                       the chooser, with no note and the guard's dropped.
+                       My view survives it. */
+                    if (P.isMineScope(scope)) return
                     const at = scope
                       ? scopePlace.current?.id === scope
                         ? scopePlace.current
@@ -2630,7 +2713,8 @@ function App() {
                         ? opening.lost
                         : null
                     if (!at || (at.id !== id && at.top !== id)) return
-                    if (parent && P.heldProject(parent) && P.canSee(parent)) setScope(parent)
+                    if (parent && P.projectState(parent) === 'ok' && P.canSee(parent))
+                      setScope(parent)
                     else {
                       setScope(undefined)
                       showOpening((n) => ({ kind: 'choose', n, note: null, lost: null }))
@@ -2711,10 +2795,10 @@ function App() {
         )
       case 'overview':
         // its figures, lists and health table come from the server
-        if (!scopeInfo) return null
-        return <Overview info={scopeInfo} actions={actions} />
+        if (!viewInfo) return null
+        return <Overview info={viewInfo} actions={actions} />
       case 'roadmap':
-        if (!scopeInfo) return null
+        if (!viewInfo) return null
         // its tasks, arrows and Team's loads come from the server
         return (
           /* The roadmap's toolbar row is its own — the window controls and
@@ -2734,12 +2818,12 @@ function App() {
              `filters` (not effFilters) on purpose — the controls edit the raw
              object for the same reason TopBar does. */
           <Roadmap
-            info={scopeInfo}
+            info={viewInfo}
             filters={roadmapFilters}
             actions={actions}
             filterControls={(phone) => (
               <ViewFilters
-                info={scopeInfo}
+                info={viewInfo}
                 filters={filters}
                 setFilters={setFilters}
                 actions={actions}
@@ -2755,10 +2839,10 @@ function App() {
           />
         )
       case 'kanban':
-        if (!scopeInfo) return null
+        if (!viewInfo) return null
         return mobile ? (
           <MobileTaskList
-            info={scopeInfo}
+            info={viewInfo}
             filters={filters}
             setFilters={setFilters}
             actions={actions}
@@ -2767,7 +2851,7 @@ function App() {
           />
         ) : (
           <Kanban
-            info={scopeInfo}
+            info={viewInfo}
             filters={effFilters}
             tweaks={tweaks}
             actions={actions}
@@ -2820,16 +2904,14 @@ function App() {
                 // lacks gets nothing
                 const it = P.taskShown(id)
                 const acts =
-                  it && P.heldMeta(it.project) && (P.isGroup(it) || it.status !== 'backlog')
+                  it && P.topLevelOf(it.project) && (P.isGroup(it) || it.status !== 'backlog')
                 if (acts) leaveSettingsFor(() => planOnRoadmap(id))
                 else planOnRoadmap(id)
               }}
               unread={undefined}
               onPopOut={undefined}
               onShowOnBoard={(projectId, issueKey, keepOpen) =>
-                P.heldProject(projectId)
-                  ? leaveSettingsFor(() => showOnBoard(projectId, issueKey, keepOpen))
-                  : undefined
+                leaveSettingsFor(() => showOnBoard(projectId, issueKey, keepOpen))
               }
             />
           </UnsentScopeContext.Provider>
@@ -2854,9 +2936,9 @@ function App() {
             <WorkspacePageHeader label="All projects" icon="layers" />
           ) : (
             // up over the chooser too, for the Inbox tab and the view pills
-            (inboxOpen || sync || scopeInfo || chooserShown) && (
+            (inboxOpen || sync || viewInfo || chooserShown) && (
               <TopBar
-                info={scopeInfo}
+                info={viewInfo}
                 view={view}
                 inboxOpen={inboxOpen}
                 syncOpen={!!sync}
@@ -2935,7 +3017,19 @@ function App() {
              task address the workspace does not hold waits for the task's
              answer instead, which names its project (opening). */}
           {chooserShown &&
-            (opening.kind === 'task' ? (
+            (scopeInfo && !scopeInfo.mine ? (
+              // a project scope the project cache has not answered yet
+              <ProjectChooser
+                key={`scope:${scopeInfo.id}`}
+                shows={scopeOpeningShows(scopeInfo, scopeOpened.current)}
+                view={view}
+                mobile={mobile}
+                purpose={jumpLine}
+                onOpen={mobile ? actions.openProject : navScope}
+                onRetry={() => P.retryProjects('scope')}
+                onNewProject={() => openNewProject({ kind: 'program' })}
+              />
+            ) : opening.kind === 'task' ? (
               <ViewLoading />
             ) : (
               <ProjectChooser

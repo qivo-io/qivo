@@ -19,9 +19,9 @@ import { sampleAvatarUrl } from '../lib/demoAvatars'
 import type { InboxPageRow } from '../lib/inboxPage'
 import { nameInitials } from '../lib/initials'
 import { DEFAULT_PLANNABLE_HOURS } from '../lib/workload'
+import type { ProjectSeed } from './projectCache'
 import type { Row } from './rows'
 
-type TeamAccessLevel = Row<'project_team_access'>['level']
 
 export const shapeUser = (
   u: Row<'profiles'>,
@@ -262,66 +262,23 @@ export const shapeLabel = (l: Row<'labels'>) => ({
 })
 export type LabelVM = ReturnType<typeof shapeLabel>
 
-/* projects — children / access are derived. The lead is projects.lead_id —
-   grant rows never store 'lead' — but access surfaces them as one map. */
-const withLead = (acc: Record<string, string> | undefined, lead: string | null | undefined) => {
-  const m = Object.assign({}, acc || {})
-  if (lead) m[lead] = 'lead'
-  return m
+/** What the store knows of a project: the project cache's row
+    (store/projectCache.ts, projectNav.byIds), the store's only source of
+    projects. `lead` is the project's own lead and `reviewHours` the time a
+    task gets on entering Review there, resolved through its parent, both
+    absent for a project a navigation row seeded until the cache answers
+    (P.seedProjects). */
+export type ProjectFacts = {
+  id: string
+  org: string
+  name: string
+  num: number
+  parent: string | undefined
+  type: 'meta' | 'project'
+  trackDelay: boolean
+  lead: string | undefined
+  reviewHours: number | undefined
 }
-/** Projects by their sort order, then creation time and id. */
-export const byOrder = (a: Row<'projects'>, b: Row<'projects'>) =>
-  a.sort_order - b.sort_order ||
-  (a.created_at < b.created_at
-    ? -1
-    : a.created_at > b.created_at
-      ? 1
-      : a.id < b.id
-        ? -1
-        : a.id > b.id
-          ? 1
-          : 0)
-/** Active and archived projects stay in separate lists, including their children. */
-export const shapeProject = (
-  p: Row<'projects'>,
-  childrenOf: Map<string, Row<'projects'>[]>,
-  accByProject: Map<string, Record<string, string>>,
-  teamAccByProject: Map<string, Record<string, TeamAccessLevel>>,
-) => ({
-  id: p.id,
-  key: p.key,
-  num: p.num,
-  name: p.name,
-  type: p.type,
-  org: p.org_id, // 0081: the sidebar groups foreign projects by org
-  parent: p.parent_id || undefined,
-  trackDelay: p.track_delay !== false,
-  // the row's OWN review time; undefined inherits (P.reviewHoursFor resolves)
-  reviewHours: p.review_hours,
-  lead: p.lead_id || undefined,
-  description: p.description || undefined,
-  archivedAt: p.archived_at ? new Date(p.archived_at).getTime() : null,
-  children:
-    p.type === 'meta'
-      ? (childrenOf.get(p.id) || [])
-          .filter((c) => !!c.archived_at === !!p.archived_at)
-          .sort(byOrder)
-          .map((c) => c.id)
-      : undefined,
-  access: withLead(accByProject.get(p.id), p.lead_id),
-  teamAccess: teamAccByProject.get(p.id) || {},
-})
-export type ProjectVM = ReturnType<typeof shapeProject>
-
-/** What the store knows of a project a view names, from the workspace's
-    projects part where it holds the project, else from the project cache
-    (store/projectCache.ts): what both give, so a reader of anything else
-    (the key, the lead, the grants, the sub-projects, the review time) reads
-    the part's whole project through P.heldProject. */
-export type ProjectFacts = Pick<
-  ProjectVM,
-  'id' | 'org' | 'name' | 'num' | 'parent' | 'type' | 'trackDelay'
->
 
 /** A projectNav.byIds row as the facts the store answers for it. */
 export const shapeCachedProject = (row: NavByIdRow): ProjectFacts => ({
@@ -332,30 +289,31 @@ export const shapeCachedProject = (row: NavByIdRow): ProjectFacts => ({
   parent: row.parent_id ?? undefined,
   type: row.parent_id === null ? 'meta' : 'project',
   trackDelay: row.track_delay,
+  lead: row.lead_id ?? undefined,
+  reviewHours: row.review_hours,
 })
 
-/* the archived ones, for the single surface that names them (Settings ›
-   Projects › Archived projects) — each row answers on its own the two
-   questions that page asks: may I see it, may I act on it. */
-export const shapeArchivedProject = (
-  s: ProjectVM,
-  meta: ProjectVM | undefined,
-  manage: boolean,
-) => ({
-  ...s,
-  parentName: s.type === 'meta' ? null : meta ? meta.name : null,
-  parentArchived: !!(meta && meta.id !== s.id && meta.archivedAt != null),
-  withParent: !!(meta && meta.id !== s.id && meta.archivedAt === s.archivedAt),
-  manage,
+/** A navigation row's seed as the facts the store answers until the
+    project cache's row comes: tracking delays, as a project nothing says
+    otherwise of, with no lead and no Review time known. */
+export const shapeSeededProject = (seed: ProjectSeed): ProjectFacts => ({
+  id: seed.id,
+  org: seed.org_id,
+  name: seed.name,
+  num: seed.num,
+  parent: seed.parent_id ?? undefined,
+  type: seed.parent_id === null ? 'meta' : 'project',
+  trackDelay: true,
+  lead: undefined,
+  reviewHours: undefined,
 })
-export type ArchivedProjectVM = ReturnType<typeof shapeArchivedProject>
 
 /* Projects shown together under one name get their number as a tag
    ("Test #1", "Test #4"), the number their address already uses. Names
    compare with runs of whitespace collapsed (as HTML renders them) and
    case-insensitively, independent of the browser's locale, among projects of one organization with the same parent. Each list
    is compared on its own: active and archived projects never share a list. */
-export type TaggableProject = Pick<ProjectVM, 'id' | 'org' | 'parent' | 'name' | 'num'>
+export type TaggableProject = Pick<ProjectFacts, 'id' | 'org' | 'parent' | 'name' | 'num'>
 export function duplicateNameTags(...lists: readonly TaggableProject[][]): Map<string, string> {
   const tags = new Map<string, string>()
   for (const list of lists) {

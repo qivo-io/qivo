@@ -6,7 +6,7 @@
 
 import { Icon, ProjectName } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
-import type { ProjectVM } from '../store/planner'
+import type { ProjectRef } from './rowElements'
 
 /** One message in place of a view: an icon, a title, a hint, the projects
     it offers and one action. `hooks` names the choices' data attributes,
@@ -28,7 +28,7 @@ export function ViewNote({
   icon: string
   title: string
   hint: string
-  projects?: readonly ProjectVM[]
+  projects?: readonly ProjectRef[]
   onProject?: (id: string) => void
   action?: { label: string; onClick: () => void }
 }) {

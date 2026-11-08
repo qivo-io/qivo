@@ -68,6 +68,7 @@ import {
   expectedSubProjects,
 } from '../../convex/tests/projectSettingsLists.setup'
 import type { Whole as Snapshot } from './guard/liveDouble.setup'
+import { oracleStore } from './oracleScope.setup'
 import { projectListsStandIn } from './projectSettingsListsStandIn.setup'
 
 vi.hoisted(() => {
@@ -112,7 +113,10 @@ async function start(snap: Snapshot) {
 async function storeOf(t: T, profile: Doc<'profiles'>) {
   const snap = await wholeOf(t, profile)
   if (snap === null) throw new Error(`no workspace for ${profile.name}`)
-  return await start(snap)
+  await start(snap)
+  // the store holds no project, so its old view of them comes from the
+  // server's whole (oracleStore)
+  return oracleStore(snap)
 }
 
 const sorted = <V>(values: Iterable<V>) => [...values].map((v) => JSON.stringify(v)).sort()
@@ -160,7 +164,7 @@ async function compare(t: T, profile: Doc<'profiles'>, label: string, terms: rea
     expect(
       sorted(projects.map((r) => [r.id, r.can_create_sub_project])),
       `${label}: projects`,
-    ).toEqual(sorted(shown.map((p) => [p.id, P.canManageOwnProjectAccess(p.id)])))
+    ).toEqual(sorted(shown.map((p) => [p.id, P.canManage(p.id)])))
   // Settings shows each project's live children P.canSee keeps
   for (const p of storeLists ? shown : []) {
     const kids = await rowsOf((after) =>
@@ -181,27 +185,13 @@ async function compare(t: T, profile: Doc<'profiles'>, label: string, terms: rea
   // archived parent, newest first
   const archived = await rowsOf((after) => t.run((ctx) => settingsArchivedOf(ctx, me, { after })))
   expect(archived, `${label}: archived by the rule`).toEqual(await expectedArchived(t, me))
-  const all = P.archivedProjects.filter((r) => r.org === org)
-  const entries = storeLists ? all.filter((r) => !r.parentArchived) : []
-  if (storeLists)
-    expect(
-      sorted(archived.map((r) => [r.id, r.parent?.id ?? null, r.can_restore, r.can_delete])),
-      `${label}: archived`,
-    ).toEqual(sorted(entries.map((r) => [r.id, r.parent ?? null, r.manage, r.manage])))
-  if (storeLists)
-    expect(
-      archived.map((r) => Date.parse(r.archived_at)),
-      `${label}: archived order`,
-    ).toEqual(entries.map((r) => r.archivedAt))
-  for (const entry of entries.filter((r) => r.type === 'meta')) {
+  // the store holds no archived project any more, so the rule's own
+  // expectations above are the comparison (expectedArchived, expectedChips)
+  for (const entry of archived.filter((r) => r.parent === null)) {
     const chips = await rowsOf((after) =>
       t.run((ctx) => settingsArchivedChildrenOf(ctx, me, { project_id: entry.id, after })),
     )
-    expect(
-      sorted(chips.map((c) => [c.id, c.with_parent])),
-      `${label}: chips of ${entry.key}`,
-    ).toEqual(sorted(all.filter((c) => c.parent === entry.id).map((c) => [c.id, c.withParent])))
-    expect(chips, `${label}: chips of ${entry.key} by the rule`).toEqual(
+    expect(chips, `${label}: chips of ${entry.id} by the rule`).toEqual(
       await expectedChips(t, me, await projectOf(t, entry.id)),
     )
   }
@@ -234,11 +224,6 @@ async function compare(t: T, profile: Doc<'profiles'>, label: string, terms: rea
     expect(foundOld, `${label}: archived search ${term} by the rule`).toEqual(
       await expectedArchived(t, me, term),
     )
-    if (storeLists)
-      expect(
-        sorted(foundOld.map((r) => [r.id, r.under])),
-        `${label}: archived search ${term}`,
-      ).toEqual(sorted(all.filter(named).map((r) => [r.id, r.parentArchived])))
     seen += found.length + foundOld.length
   }
   await compareStandIn(t, profile, label, terms)

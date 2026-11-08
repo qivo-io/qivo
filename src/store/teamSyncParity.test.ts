@@ -52,6 +52,7 @@ import { withReach } from '../../convex/tests/projectReach.setup'
 import { plantBlocks, plantStamp, plantTeam } from '../../convex/tests/teamSyncAgenda.setup'
 import type { SyncScope } from '../lib/teamSync'
 import type { Whole as Snapshot } from './guard/liveDouble.setup'
+import { oracleStore } from './oracleScope.setup'
 import { peopleSettingsStandIn } from './peopleSettingsStandIn.setup'
 import { nameEveryone } from './personShown.setup'
 import {
@@ -167,7 +168,9 @@ function scopesOf(P: Store): [label: string, server: AgendaScope, page: SyncScop
       { kind: 'team', team_id: team.id },
       { kind: 'team', id: team.id },
     ])
-  for (const meta of P.visibleProjects().filter((p) => p.org === P.homeOrg)) {
+  for (const meta of oracleStore(P.snap)
+    .visibleProjects()
+    .filter((p) => p.org === P.homeOrg)) {
     out.push([
       meta.name,
       { kind: 'project', project_id: meta.id },

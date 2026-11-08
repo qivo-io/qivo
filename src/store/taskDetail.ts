@@ -40,7 +40,7 @@ type TaskArchived = Extract<TaskAnswer, { state: 'archived' }>
 /** An archived answer as it may arrive: a backend from before this release
     answers the page row alone (convex/lib/taskWindow.ts readWindowTask). */
 type ArchivedAnswer = Pick<TaskArchived, 'state' | 'task'> &
-  Partial<Pick<TaskArchived, 'description' | 'labels' | 'level'>>
+  Partial<Pick<TaskArchived, 'description' | 'labels' | 'level' | 'project_archived'>>
 type LinksOk = Extract<FunctionReturnType<typeof api.taskWindow.links>, { state: 'ok' }>
 type AttachmentsOk = Extract<FunctionReturnType<typeof api.taskWindow.attachments>, { state: 'ok' }>
 
@@ -70,6 +70,10 @@ export type TaskDetailVM = {
   parent: RelatedTaskVM | null
   /** when it was archived (ms), null for an active task */
   archivedAt: number | null
+  /** for an archived task, whether its project or that project's parent
+      is archived too (taskWindow.task's archived answer), so the window
+      says to restore the project first; false otherwise */
+  projectArchived: boolean
   /** its number, which names its handle when the home organization
       changes (store/planner.ts withUnheldMoves), null without a view */
   num: number | null
@@ -248,6 +252,7 @@ function archivedView(answer: ArchivedAnswer, inputs: DetailInputs) {
     parent: null,
     level: answer.level ?? null,
     archivedAt: Date.parse(answer.task.archived_at),
+    projectArchived: answer.project_archived === true,
     num: row.num,
     textless: answer.description === undefined,
   }
@@ -315,6 +320,7 @@ export function shapeTaskDetail(inputs: DetailInputs): TaskDetailVM {
     state,
     textless: false,
     archivedAt: null,
+    projectArchived: false,
     num: null,
     saving: !!inputs.saving && answer?.state === 'ok',
   }

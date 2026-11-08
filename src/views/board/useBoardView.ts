@@ -12,6 +12,14 @@
      names with its project cache (store/planner.ts BOARD_QUERY `projects`),
      so a card's place and rights read a project the workspace's projects
      part does not hold from the cache.
+   - The answer decides the Board's groups and their order (`groups`,
+     store/scopeGroups.ts): a project selection's sub-projects as the
+     answer's `projects` names them, in its order, and My view's top-level
+     projects from its held lanes and the cards' sub-projects folded
+     through the project cache, home organization first, then by
+     organization name and number. Before an answer there are none, and the
+     loading frame shows its columns with no groups. A group whose project
+     the cache has not answered shows under a loading heading.
    - The answer decides which tasks a Board shows. Each shows as the
      workspace's view model where the workspace holds the task, else as the
      model the store shaped from the answer's row (store/viewRows.ts), so a
@@ -19,8 +27,9 @@
      painted with the person's pending writes, so a card follows every edit
      at once and a drag never snaps back.
    - On top of the answer, the app checks each task again against the
-     filter row on screen and the selection, so an edit or a new filter
-     hides a card at once. That only narrows. A task shaped from a row has
+     filter row on screen and the answer's own selection (a project
+     selection's `projects`, My view's `only`), so an edit, a move out of
+     the selection or a new filter hides a card at once. That only narrows. A task shaped from a row has
      no text or labels, and a group's newest activity is the server's, so
      for those the text filter and a group's Stale are the answer's alone.
      A task the person's own pending writes changed, or a parent they moved
@@ -75,6 +84,7 @@ import {
   P,
   type ScopeInfo,
 } from '../../store/planner'
+import { type ScopeGroup, scopeGroups } from '../../store/scopeGroups'
 import { useViewsNews } from '../useViewsNews'
 import { type BoardVariant, boardFilters, useBoardRequest } from './boardArgs'
 
@@ -111,10 +121,17 @@ export type BoardView = {
   /** whether the Board waits for an answer (its root's aria-busy) */
   busy: boolean
   /** whether the Board shows its loading frame: no answer for these
-      arguments yet, so no card, the columns standing, and the lanes or
-      side-boards of every group of a project's selection (`holds`), none of
-      which a clearable filter drops, and no "Nothing matches" */
+      arguments yet, so no card and no group, the columns standing, and no
+      "Nothing matches" */
   frame: boolean
+  /** the Board's groups, from the answer it shows (scopeGroups): a project
+      selection's sub-projects, My view's top-level projects, none before
+      an answer */
+  groups: readonly ScopeGroup[]
+  /** a project selection's sub-projects as the answer on screen names
+      them, also on a refusal past the Board's limits; null in My view and
+      before an answer */
+  selection: readonly string[] | null
   /** whether a filter the Clear button clears is on: My tasks outside My
       view, people, priority, Stale or a text filter (trimmed, as the
       server trims it). The scope's own narrowing and Focus are not. */
@@ -134,17 +151,52 @@ export type BoardView = {
   retry: () => void
 }
 
-/** Whether a task shows in the Board of `info` with `filters` on screen.
-    The text filter is the answer's for every task, held or not: the server
-    matched the whole text, label and assignee names included, which the
-    store cannot read. A group only the answer brings has no newest activity
-    of its subtasks, so the answer decides Stale for it. */
-function passes(info: ScopeInfo, filters: IssueFilters, it: IssueVM) {
+/** Whether a task shows in the Board of `info` with `filters` on screen,
+    within `selection`, the answer's own project selection (null in My
+    view, which narrows by `info.only`). The text filter is the answer's
+    for every task, held or not: the server matched the whole text, label
+    and assignee names included, which the store cannot read. A group only
+    the answer brings has no newest activity of its subtasks, so the answer
+    decides Stale for it. */
+function passes(
+  info: ScopeInfo,
+  selection: ReadonlySet<string> | null,
+  filters: IssueFilters,
+  it: IssueVM,
+) {
   const shaped = P.handleOf(it.uuid) === null
   const local = { ...filters, search: '', stale: filters.stale && !(shaped && it.isGroup) }
   return (
-    info.subIdSet.has(it.project) && (!info.only || info.only(it)) && P.passesFilters(it, local)
+    (selection === null || selection.has(it.project)) &&
+    (!info.only || info.only(it)) &&
+    P.passesFilters(it, local)
   )
+}
+
+/** The Board's group order: a project selection's in the answer's order,
+    My view's top-level projects with the home organization first, then by
+    organization name and project number, groups whose project loads last. */
+export function boardGroups(
+  info: ScopeInfo,
+  source: {
+    projects?: readonly string[]
+    tops?: readonly string[]
+    subs?: readonly string[]
+  } | null,
+): ScopeGroup[] {
+  const groups = scopeGroups(info, source, P.project)
+  if (!info.mine) return groups
+  const orgName = (org: string) => P.orgs.find((o) => o.id === org)?.name ?? ''
+  const rank = (g: ScopeGroup) => (g.proj === null ? 2 : g.proj.org === P.homeOrg ? 0 : 1)
+  return groups
+    .slice()
+    .sort(
+      (a, b) =>
+        rank(a) - rank(b) ||
+        (a.proj && b.proj
+          ? orgName(a.proj.org).localeCompare(orgName(b.proj.org)) || a.proj.num - b.proj.num
+          : 0),
+    )
 }
 
 /* The search text of task `key` (convex/lib/search.ts taskSearchText)
@@ -322,6 +374,12 @@ export function useBoardView(
       ? read.value
       : null
   const shownAnswer = answer?.state === 'ok' ? answer : (kept ?? narrowed)
+  // a project selection's sub-projects, from the answer on screen, also a
+  // refusal's, which names them; null in My view
+  const selectionList = info.mine
+    ? null
+    : (shownAnswer?.projects ?? (answer && 'projects' in answer ? (answer.projects ?? null) : null))
+  const selection = selectionList ? new Set(selectionList) : null
   // a filter the Clear button clears; trimmed, as the server trims the text
   const clearable =
     (!info.mine && filters.mine) ||
@@ -373,7 +431,7 @@ export function useBoardView(
         P.viewTask(slot, row.parent_id)
       )
         missing++
-      if (passes(info, filters, it) && textOk(it)) {
+      if (passes(info, selection, filters, it) && textOk(it)) {
         shown.add(it.uuid)
         tasks.push(it)
       }
@@ -387,7 +445,7 @@ export function useBoardView(
     const answered = filters.search ? new Map(shownAnswer.rows.map((row) => [row.id, row])) : null
     for (const uuid of own) {
       const it = P.ownOnScreen(slot, uuid)
-      if (!it || shown.has(uuid) || !passes(info, filters, it) || !textOk(it)) continue
+      if (!it || shown.has(uuid) || !passes(info, selection, filters, it) || !textOk(it)) continue
       // the person's new task on its way, by its whole text as the screen
       // shows it, the writes sent behind its create included
       const created = filters.search ? P.createText(uuid) : null
@@ -412,12 +470,30 @@ export function useBoardView(
     wantKey ?? '',
   )
 
+  // the groups of the answer on screen: a project selection's sub-projects,
+  // My view's held lanes and the cards' sub-projects folded through the
+  // project cache
+  const groups = boardGroups(
+    info,
+    info.mine
+      ? shownAnswer
+        ? {
+            tops: shownAnswer.held_projects,
+            subs: (joined?.tasks ?? []).map((it) => it.project),
+          }
+        : null
+      : selectionList
+        ? { projects: selectionList }
+        : null,
+  )
   const base = {
     filters,
     clearable,
     counted: false,
     busy: false,
     frame: false,
+    groups,
+    selection: selectionList,
     answer: null,
     retry: read.retry,
     holds: () => false,
@@ -468,9 +544,8 @@ export function useBoardView(
     }
   }
   if (answer === null) {
-    // the loading frame: the columns, and in a project's selection a lane
-    // or side-board for every group, whose lanes My view and the lanes by
-    // owner take from the answer, so they show the one unlabeled lane
+    // the loading frame: the columns with no group, as the groups come
+    // from the answer, so it shows the one unlabeled lane
     return {
       ...base,
       state: read.answered ? 'refreshing' : 'loading',
@@ -478,7 +553,7 @@ export function useBoardView(
       frame: true,
       tasks: [],
       shows: true,
-      holds: info.mine ? () => false : () => true,
+      holds: () => false,
     }
   }
   if (answer.state !== 'ok') return message(answer.state, { answer })

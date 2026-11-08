@@ -76,7 +76,7 @@ export function createEstimateCache() {
       members: IssueVM[]
       width: number
       kind: string
-      projects: typeof P.projects
+      context: typeof P.contextVersion
       dates: string
       value: number
     }
@@ -95,7 +95,7 @@ export function createEstimateCache() {
       entry &&
       entry.width === cardWidth &&
       entry.kind === kind &&
-      entry.projects === P.projects &&
+      entry.context === P.contextVersion &&
       entry.dates === dateFormatInUse() &&
       entry.members.length === members.length &&
       entry.members.every((it, i) => it === members[i])
@@ -106,7 +106,7 @@ export function createEstimateCache() {
       members,
       width: cardWidth,
       kind,
-      projects: P.projects,
+      context: P.contextVersion,
       dates: dateFormatInUse(),
       value,
     })

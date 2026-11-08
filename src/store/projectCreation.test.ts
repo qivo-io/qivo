@@ -65,14 +65,15 @@ describe('project creation through the client store', () => {
 
   const settled = () => vi.waitFor(() => expect(P.roadmapUndo.busy).toBe(false))
 
-  it('adopts the key the server chose in place of a taken preview', async () => {
-    const id = P.addProject({ type: 'meta', key: 'TES', name: 'Test' })!
-    expect(P.heldProject(id)?.key).toBe('TES')
+  it("sends the name's first key, paints nothing, and hands on the key and number the server chose", async () => {
+    const onSaved = vi.fn()
+    const id = P.addProject({ type: 'meta', key: 'TES', name: 'Test' }, onSaved)!
+    // the workspace holds no project, so nothing paints
+    expect(P.project(id)).toBeUndefined()
     expect(requests[0]).toMatchObject({ name: 'projects:create', args: { id, key: 'TES' } })
-
-    requests[0].resolve({ id, num: snap.orgs[0].next_project_num + 1, key: 'TES2' })
+    requests[0].resolve({ id, num: 7, key: 'TES2' })
     await settled()
-    expect(P.heldProject(id)?.key).toBe('TES2')
+    await vi.waitFor(() => expect(onSaved).toHaveBeenCalledWith({ id, num: 7, key: 'TES2' }))
     expect(showToast).not.toHaveBeenCalled()
   })
 
@@ -83,7 +84,7 @@ describe('project creation through the client store', () => {
     expect(P.project(id)?.name).toBe('New')
     expect(onSaved).not.toHaveBeenCalled()
 
-    requests[0].resolve({ id, num: snap.orgs[0].next_project_num + 1, key: 'NEW' })
+    requests[0].resolve({ id, num: 2, key: 'NEW' })
     await settled()
     expect(onSaved).toHaveBeenCalledOnce()
     expect(onRefused).not.toHaveBeenCalled()
@@ -130,11 +131,9 @@ describe('project creation through the client store', () => {
        holds Beacon plan at 40, led by my guest seat, with its sub-project
        Pier at 6. */
     const NOW = '2026-09-14T08:00:00.000Z'
-    let homeOrg: string
     let beacon: string
 
     beforeEach(() => {
-      homeOrg = snap.orgs[0].id
       beacon = crypto.randomUUID()
       snap.orgs.push({ ...snap.orgs[0], id: beacon, name: 'Beacon', slug: 'beacon' })
       snap.myProfileIds.push('guest-me')
@@ -178,50 +177,6 @@ describe('project creation through the client store', () => {
       deliver(structuredClone(snap))
     })
 
-    /* The live projects in the store's place order, every organization's
-       together (store/viewModels.ts byOrder). */
-    const order = () => P.projects.map((p) => p.id)
-
-    it('sends no place, and paints a top-level project one past its own organization’s held projects, archived ones included', () => {
-      const fixture = snap.projects[0].id
-      const top = P.addProject({ type: 'meta', key: 'NEW', name: 'New' })!
-      expect(requests.at(-1)?.args).toMatchObject({ org_id: homeOrg, lead_id: snap.profiles[0].id })
-      expect(requests.at(-1)?.args).not.toHaveProperty('sort_order')
-      // at 9, one past Old at 8, which is archived, and before Beacon plan
-      // at 40, of the other seat
-      expect(order()).toEqual([fixture, 'alpha', 'pier', top, 'plan-b'])
-    })
-
-    it('paints a top-level project past the finite places alone when a held sibling has none', () => {
-      const fixture = snap.projects[0].id
-      // a project an older backend stored with NaN as its place, created
-      // before every other, so the order puts it first
-      snap.projects.push({
-        ...snap.projects[0],
-        id: 'nan',
-        type: 'meta',
-        parent_id: undefined,
-        key: 'NAN',
-        num: 4,
-        name: 'No place',
-        sort_order: Number.NaN,
-        created_at: '2020-01-01T00:00:00.000Z',
-      })
-      deliver(structuredClone(snap))
-      const top = P.addProject({ type: 'meta', key: 'NEW', name: 'New' })!
-      // at 9, one past Old at 8, and before Beacon plan at 40
-      expect(order()).toEqual(['nan', fixture, 'alpha', 'pier', top, 'plan-b'])
-    })
-
-    it('sends a sub-project of a held parent to the parent’s organization, led by my seat there, and paints it after its siblings', () => {
-      const fixture = snap.projects[0].id
-      const sub = P.addProject({ type: 'project', key: 'SUB', name: 'Sub', parent: 'plan-b' })!
-      expect(requests.at(-1)?.args).toMatchObject({ org_id: beacon, lead_id: 'guest-me' })
-      expect(requests.at(-1)?.args).not.toHaveProperty('sort_order')
-      // at 7, one past Pier at 6
-      expect(order()).toEqual([fixture, 'alpha', 'pier', sub, 'plan-b'])
-    })
-
     it('sends a create with `shown` to that organization, with my seat there as lead, and paints nothing for a parent it does not hold', async () => {
       const onSaved = vi.fn()
       const onRefused = vi.fn()
@@ -244,26 +199,6 @@ describe('project creation through the client store', () => {
       expect(P.project(id)).toBeUndefined()
     })
 
-    it('paints a create with `shown` under a held parent, and a refusal takes it away', async () => {
-      const onRefused = vi.fn()
-      const id = P.addProject(
-        { type: 'project', key: 'DOCS', name: 'Docs', parent: 'plan-b' },
-        undefined,
-        onRefused,
-        { orgId: beacon },
-      )!
-      expect(P.project(id)?.org).toBe(beacon)
-      requests
-        .at(-1)
-        ?.reject(new ConvexError({ code: 'rule', message: 'requires lead access to this project' }))
-      await vi.waitFor(() => expect(onRefused).toHaveBeenCalledOnce())
-      expect(showToast).toHaveBeenCalledWith(
-        "Couldn't create sub-project “Docs”. Requires lead access to this project.",
-        'error',
-      )
-      expect(P.project(id)).toBeUndefined()
-    })
-
     it('sends nothing and says so for an organization the workspace has no row for', () => {
       const id = P.addProject(
         { type: 'project', key: 'DOCS', name: 'Docs', parent: 'unheld' },
@@ -278,13 +213,6 @@ describe('project creation through the client store', () => {
         'error',
       )
     })
-  })
-
-  it('keeps a free preview key unchanged', async () => {
-    const id = P.addProject({ type: 'meta', key: 'NEW', name: 'New' })!
-    requests[0].resolve({ id, num: snap.orgs[0].next_project_num + 1, key: 'NEW' })
-    await settled()
-    expect(P.heldProject(id)?.key).toBe('NEW')
   })
 
   describe('canCreateProject', () => {

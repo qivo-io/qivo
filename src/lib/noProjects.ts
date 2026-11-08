@@ -1,12 +1,8 @@
 import { P } from '../store/planner'
 
-/** Whether the user can see no project at all, not even a sub-project, or
-    with `org` none of that organization's, by the workspace, for the
-    Inbox's and Team sync's notes. Startup and the access guard do not
-    read it: they open a project only on the server's check, else the
-    project chooser (App.tsx). */
-export const seesNoProject = (org?: string): boolean =>
-  !P.projects.some((p) => (org === undefined || p.org === org) && P.canSee(p.id))
+/* Whether the person sees no project at all is the server's answer
+   (components/useHolds.ts, projectNav.holds), since the store holds no
+   project. These are the sentences the pages say once it confirmed it. */
 
 /** Why a page is empty for a person who can see no active project, and
     what they can do about it. An organization admin sees, like anyone, the
@@ -21,7 +17,7 @@ export function noProjectsHint(): string {
 }
 
 /** noProjectsHint for Team sync, which covers the home organization only
-    (seesNoProject(P.homeOrg)). A person with seats in more than one
+    (useHolds with P.homeOrg). A person with seats in more than one
     organization is told which one that is. */
 export function syncNoProjectsHint(): string {
   const home = P.orgs.length > 1 ? P.orgs.find((o) => o.id === P.homeOrg) : undefined

@@ -25,7 +25,6 @@ describe('the task index', () => {
       issueLabels: rows.list('issueLabels'),
       issueSubs: rows.list('issueSubs'),
       orgLoad: rows.list('orgLoad'),
-      projects: rows.projects,
       // an owner the rows hold, else one the index cannot place, whose
       // capacity is the 40 hours the cases plan with
       ownerFacts: (id) => ({ org: rows.profiles.peek(id)?.org_id, capacity: 40, waits: false }),
@@ -44,7 +43,6 @@ describe('the task index', () => {
         issues: dirty.keys.get('issues') ?? new Set<string>(),
         links: dirty.keys.get('links') ?? new Set<string>(),
         attachments: dirty.keys.get('attachments') ?? new Set<string>(),
-        projects: dirty.keys.get('projects') ?? new Set<string>(),
         issueLabels: dirty.lists.has('issueLabels'),
         issueSubs: dirty.lists.has('issueSubs'),
         orgLoad: dirty.lists.has('orgLoad'),

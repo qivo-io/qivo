@@ -7,8 +7,9 @@
 
    The profiles, teams and team memberships are the signed-in person's own,
    which the root part sends (convex/lib/workspaceJoin.ts joinParts); no
-   section holds another person or a label, which the views read by id or a
-   batch at a time.
+   section holds another person, a label or a project, which the views
+   read by id or a batch at a time (the store's project cache,
+   store/projectCache.ts, holds every project the app shows).
 
    A delivery is staged when it arrives and applied at the start of the next
    workspace paint (store/rowMap.ts), so the rows on screen stay exactly what
@@ -27,7 +28,6 @@ const KEYED = {
   orgs: (r: Snapshot['orgs'][number]) => r.id,
   teams: (r: Snapshot['teams'][number]) => r.id,
   profiles: (r: Snapshot['profiles'][number]) => r.id,
-  projects: (r: Snapshot['projects'][number]) => r.id,
   issues: (r: Snapshot['issues'][number]) => r.id,
   links: (r: Snapshot['links'][number]) => r.id,
   attachments: (r: Snapshot['attachments'][number]) => r.id,
@@ -38,8 +38,6 @@ const KEYED = {
     are kept (hiddenLoad). */
 const LISTED = {
   teamMembers: (r: Snapshot['teamMembers'][number]) => `${r.team_id}:${r.profile_id}`,
-  access: (r: Snapshot['access'][number]) => `${r.project_id}:${r.profile_id}`,
-  teamAccess: (r: Snapshot['teamAccess'][number]) => `${r.project_id}:${r.team_id}`,
   issueLabels: (r: Snapshot['issueLabels'][number]) => `${r.issue_id}:${r.label_id}`,
   issueSubs: (r: Snapshot['issueSubs'][number]) => `${r.issue_id}:${r.profile_id}`,
   orgLoad: (r: Snapshot['orgLoad'][number]) =>
@@ -55,16 +53,11 @@ const SAME_KEY: Record<keyof typeof KEYED | keyof typeof LISTED, (a: never, b: n
     orgs: byId,
     teams: byId,
     profiles: byId,
-    projects: byId,
     issues: byId,
     links: byId,
     attachments: byId,
     teamMembers: (a: RowOf<'teamMembers'>, b: RowOf<'teamMembers'>) =>
       a.team_id === b.team_id && a.profile_id === b.profile_id,
-    access: (a: RowOf<'access'>, b: RowOf<'access'>) =>
-      a.project_id === b.project_id && a.profile_id === b.profile_id,
-    teamAccess: (a: RowOf<'teamAccess'>, b: RowOf<'teamAccess'>) =>
-      a.project_id === b.project_id && a.team_id === b.team_id,
     issueLabels: (a: RowOf<'issueLabels'>, b: RowOf<'issueLabels'>) =>
       a.issue_id === b.issue_id && a.label_id === b.label_id,
     issueSubs: (a: RowOf<'issueSubs'>, b: RowOf<'issueSubs'>) =>

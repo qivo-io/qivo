@@ -5,16 +5,32 @@
    that stopped fitting or failed to read, and the note of one some of
    whose tasks have not reached the page. Each full note is an
    empty state (data-empty-state), where focus goes once a task window
-   closes over it (lib/taskFocus.ts). Its choices come from the person's
-   own lists and widen nothing, as the server answers every scope; none
-   shows a 0, a count or a person the answer did not give. */
+   closes over it (lib/taskFocus.ts). Its smaller scopes come from the
+   server: a meeting that stopped fitting offers what its last fitted
+   answer named (its top-level projects for All projects, its sub-projects
+   for a project), and a fresh one past its limits, and a team's either
+   way, the first batch of the navigation reads (projectNav.page with the
+   home organization, with the team's id, and projectNav.children), with
+   the person's own teams for All projects. They widen nothing, as the
+   server answers every scope; none shows a 0, a count or a person the
+   answer did not give. */
 
+import { navCursors } from '@/components/projectNavRows'
 import { Icon } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
+import { useProjects } from '@/components/useProjects'
 import { ViewNote } from '@/components/ViewNote'
+import { api } from '../../../convex/_generated/api'
 import { LIMITS } from '../../../convex/lib/limits'
+import type {
+  NavChildRow,
+  NavChildren,
+  NavPage,
+  NavPageRow,
+} from '../../../convex/model/projectNavReads'
 import { fmtTime } from '../../lib/dates'
 import { limitSentence } from '../../lib/fieldLimits'
+import { usePagedList } from '../../lib/pagedList'
 import { parseSyncScope } from '../../lib/teamSync'
 import { P } from '../../store/planner'
 import type { SyncMeeting } from './useSyncMeeting'
@@ -36,38 +52,122 @@ function pickerChoices(): SyncChoice[] {
   ]
 }
 
-/** The smaller scopes a meeting past its limits can narrow to, from the
-    browser's own lists: for All projects the person's teams and the
-    top-level projects they see, for a team the projects shared with it
-    that they see, for a top-level project its sub-projects they see. A
-    sub-project has nothing smaller (null). */
-function narrowerChoices(scopeKey: string): SyncChoice[] | null {
+/** The smaller scopes a meeting past its limits offers (useNarrower):
+    the choices, null for a sub-project, which has nothing smaller, and a
+    line that says the list is loading, could not load, or goes on in the
+    scope menu past its first batch. */
+type Narrower = { choices: SyncChoice[] | null; line: string | null }
+
+/* What a note's choices say past their first batch, and while they come. */
+const MORE_IN_MENU = 'More teams and projects are in the menu above.'
+const CHOICES_LOADING = 'Loading the smaller teams and projects…'
+const CHOICES_FAILED = "Couldn't load the smaller teams and projects. Use the menu above."
+
+/** A project of the home organization as a choice, its name through the
+    project cache where it knows the project, else the row's own. */
+const projectChoice = (p: { id: string; name: string }): SyncChoice => ({
+  key: `project:${p.id}`,
+  label: P.projectLabel(p),
+  icon: 'board',
+})
+
+/**
+ * The smaller scopes a meeting of `scopeKey` past its limits can narrow to,
+ * read only while `active`: for All projects the person's teams and the
+ * top-level projects they see, for a team the projects and sub-projects
+ * shared with it that they see, for a top-level project its sub-projects
+ * they see, and null for a sub-project. A meeting that stopped fitting
+ * (`stale`) offers its last fitted answer's top-level projects and
+ * sub-projects, named through the project cache; a fresh one, and a team
+ * either way, the first batch of projectNav.page (with the home
+ * organization, and the team's id) or projectNav.children, with a line
+ * pointing to the scope menu where the list goes on.
+ */
+function useNarrower(scopeKey: string, meeting: SyncMeeting, active: boolean): Narrower {
   const scope = parseSyncScope(scopeKey)
-  const home = P.visibleProjects().filter((p) => p.org === P.homeOrg)
-  const project = (p: (typeof home)[number]) => ({
-    key: `project:${p.id}`,
-    label: P.projectLabel(p),
-    icon: 'board',
+  const home = P.homeOrg
+  const answer = meeting.state === 'stale' ? meeting.answer : null
+  const scopeId = scope.kind === 'project' ? scope.id : null
+  // the scope's project and the fitted answer's projects, named while the
+  // note shows, so the cache answers whether the scope is a top-level
+  // project and what each choice is called
+  useProjects(
+    active ? [scopeId, ...(answer?.top_projects ?? []), ...(answer?.sub_projects ?? [])] : [],
+  )
+  const facts = scopeId ? P.project(scopeId) : undefined
+  const fromAnswer =
+    answer !== null && (scope.kind === 'all' || (scope.kind === 'project' && !!facts))
+  // the list a fresh meeting reads, and a team's either way
+  const read: { key: string; kind: 'page' | 'team' | 'children' } | null =
+    !active || fromAnswer || !home
+      ? null
+      : scope.kind === 'all'
+        ? { key: JSON.stringify(['sync-note', home]), kind: 'page' }
+        : scope.kind === 'team'
+          ? { key: JSON.stringify(['sync-note', home, scope.id]), kind: 'team' }
+          : scope.kind === 'project' && facts?.type === 'meta'
+            ? { key: JSON.stringify(['sync-note', scope.id]), kind: 'children' }
+            : null
+  const pages = usePagedList<NavPage, NavPageRow | (NavPageRow & { parent_id: string | null })>({
+    key: read && read.kind !== 'children' ? read.key : null,
+    source: {
+      kind: 'live',
+      query: api.projectNav.page,
+      args: (at) => ({
+        org_id: home,
+        ...(scope.kind === 'team' ? { team_id: scope.id } : {}),
+        ...navCursors(at),
+      }),
+    },
+    batch: (a) => (a.state === 'ok' ? a : null),
+    id: (row) => row.id,
+    most: LIMITS_FIRST_BATCH,
   })
-  if (scope.kind === 'all')
-    return [
-      ...pickerChoices().filter((c) => c.key !== 'all'),
-      ...home.filter((p) => p.type === 'meta').map(project),
-    ]
-  if (scope.kind === 'team')
-    return P.projects
-      .filter((p) => p.org === P.homeOrg && p.teamAccess[scope.id] !== undefined && P.canSee(p.id))
-      .map(project)
-  if (scope.kind !== 'project') return []
-  const it = P.heldProject(scope.id)
-  if (it?.type !== 'meta') return null
-  return (it.children ?? [])
-    .filter((id) => P.canSee(id))
-    .flatMap((id) => {
-      const sub = P.heldProject(id)
-      return sub ? [project(sub)] : []
+  const children = usePagedList<NavChildren, NavChildRow>({
+    key: read?.kind === 'children' ? read.key : null,
+    source: {
+      kind: 'live',
+      query: api.projectNav.children,
+      args: (at) => ({ project_id: scopeId ?? '', ...navCursors(at) }),
+    },
+    batch: (a) => (a.state === 'ok' ? a : null),
+    id: (row) => row.id,
+    most: LIMITS_FIRST_BATCH,
+  })
+  if (!active) return { choices: [], line: null }
+  const own = scope.kind === 'all' ? pickerChoices().filter((c) => c.key !== 'all') : []
+  if (scope.kind === 'project') {
+    if (!facts) return { choices: [], line: CHOICES_LOADING }
+    if (facts.type !== 'meta') return { choices: null, line: null }
+  }
+  if (scope.kind !== 'all' && scope.kind !== 'team' && scope.kind !== 'project')
+    return { choices: [], line: null }
+  if (fromAnswer && answer) {
+    const ids = scope.kind === 'all' ? answer.top_projects : answer.sub_projects
+    const named = ids.flatMap((id) => {
+      const p = P.project(id)
+      return p ? [projectChoice(p)] : []
     })
+    return {
+      choices: [...own, ...named],
+      line: named.length < ids.length ? CHOICES_LOADING : null,
+    }
+  }
+  const list = read?.kind === 'children' ? children : pages
+  const rows = list.rows.map((row) => projectChoice(row))
+  const line =
+    list.phase === 'first'
+      ? CHOICES_LOADING
+      : list.phase === 'failed' || list.phase === 'held'
+        ? CHOICES_FAILED
+        : list.next || list.stopped
+          ? MORE_IN_MENU
+          : null
+  return { choices: [...own, ...rows], line }
 }
+
+/* A note reads one batch of its list: the first, 25 rows. */
+const LIMITS_FIRST_BATCH = 25
 
 /** The choices of a note, as buttons. */
 function Choices({
@@ -137,23 +237,24 @@ function ChoiceNote({
   )
 }
 
-/** The title and hint of a meeting past its limits, `state`, for the scope
-    `scopeKey`. */
-function overText(state: 'over_ceiling' | 'over_budget', scopeKey: string) {
+/** The title and hint of a meeting past its limits, `state`, with the
+    smaller scopes `smaller` it offers (useNarrower). */
+function overText(state: 'over_ceiling' | 'over_budget', smaller: Narrower) {
   const title =
     state === 'over_ceiling'
       ? limitSentence(LIMITS.teamSyncTasks)
       : "This selection could not be loaded within Team sync's limits."
-  const smaller = narrowerChoices(scopeKey)
   return {
     title,
-    choices: smaller ?? [],
+    choices: smaller.choices ?? [],
     // a sub-project offers nothing smaller: its Board shows its tasks
     hint:
-      smaller === null
+      smaller.choices === null
         ? 'Team sync cannot show this sub-project. Its Board shows its tasks.'
-        : 'Choose a smaller team or project.',
-    board: smaller === null,
+        : smaller.line
+          ? `Choose a smaller team or project. ${smaller.line}`
+          : 'Choose a smaller team or project.',
+    board: smaller.choices === null,
   }
 }
 
@@ -174,6 +275,8 @@ export function SyncNote({
   const board = () => {
     if (sub.kind === 'project') onShowBoard(sub.id)
   }
+  const past = meeting.state === 'over_ceiling' || meeting.state === 'over_budget'
+  const smaller = useNarrower(scopeKey, meeting, past)
   switch (meeting.state) {
     case 'choose':
       if (meeting.why === 'none')
@@ -210,7 +313,7 @@ export function SyncNote({
       )
     case 'over_ceiling':
     case 'over_budget': {
-      const text = overText(meeting.state, scopeKey)
+      const text = overText(meeting.state, smaller)
       return (
         <ChoiceNote
           state={meeting.state}
@@ -292,11 +395,13 @@ export function StaleNote({
   onPick: (key: string) => void
   onShowBoard: (projectId: string) => void
 }) {
-  if (meeting.state !== 'stale' || !meeting.note || meeting.stoppedAt === null) return null
+  const shows = meeting.state === 'stale' && !!meeting.note && meeting.stoppedAt !== null
+  const smaller = useNarrower(scopeKey, meeting, shows && meeting.note !== 'error')
+  if (!shows || !meeting.note || meeting.stoppedAt === null) return null
   const at = fmtTime(new Date(meeting.stoppedAt))
   const stopped = `The meeting below stopped updating at ${at}.`
   const failed = meeting.note === 'error'
-  const text = failed ? null : overText(meeting.note as 'over_ceiling' | 'over_budget', scopeKey)
+  const text = failed ? null : overText(meeting.note as 'over_ceiling' | 'over_budget', smaller)
   const sub = parseSyncScope(scopeKey)
   return (
     <div

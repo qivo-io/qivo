@@ -3,11 +3,14 @@
 
    The registry subscribes to the root part, which carries the caller's
    seats, organizations and own profiles, team memberships and teams, and
-   for each organization it names to the windows of its projects
-   (convex/lib/idWindows.ts), as many as its counts of projects say it
-   fills (startWindows), chosen once when it adds the organization. No part
-   sends another person, a team the caller is not in or a label; the views
-   read those by id or a batch at a time. After
+   and nothing per organization until tasks are asked (below). No part
+   sends another person, a team the caller is not in, a label, a message or
+   a project; the views read people and labels by id or a batch at a time,
+   the Inbox through convex/inbox.ts, and every project the app shows
+   through the navigation reads, the store's project cache
+   (store/projectCache.ts, projectNav.byIds) and the views' own answers.
+   So until tasks are asked the root's answer alone completes the
+   workspace. After
    each transition it tells the store (report) whether every part it needs
    holds a current answer. Only then is the workspace complete, joined from
    them (convex/lib/workspaceJoin.ts); otherwise the store keeps what it
@@ -19,26 +22,19 @@
    task asks (askTasks), or from the start for a registry created with
    `ask`. Until then a complete report holds no task (`tasks:
    'not_asked'`), and the views show the server's own answers. The ask
-   sizes each organization's task windows from the root part's current
-   answer and subscribes all of them at once, never while another part
-   waits for its answer, so no window queues behind running project
-   windows. From the ask until every task window answered, a transition
-   with every other part current reports `partial` with no task at all and
-   the share of task windows that answered, so the projects and the Inbox
-   stay live during the load while the store never holds part of the
-   tasks. The first transition in which every task window answered reports
+   sizes each organization's task windows (convex/lib/idWindows.ts
+   startWindows) from the root part's current answer and subscribes all of
+   them at once, never while another part waits for its answer. From the
+   ask until every task window answered, a transition with every other part
+   current reports `partial` with no task at all and the share of task
+   windows that answered, so the Inbox stays live during the load while the
+   store never holds part of the tasks. The first transition in which every task window answered reports
    `complete` with `tasks: 'all'`, and the registry is never partial again.
    A partial transition holds no write for certain, since the window a
    write changed may not have arrived.
 
    One socket runs one update at a time, and every part subscribed before
-   an update starts arrives with it. An organization added once tasks were
-   asked subscribes its task windows before its project windows: a
-   deployment runs a limited number of queries at once (16 on a
-   local backend) and refuses one that waits too long for a turn, closing
-   the socket with 1013 TooManyConcurrentRequests, and the project windows
-   of a workspace with thousands of projects run long enough that a part
-   queued behind them can wait that long.
+   an update starts arrives with it.
 
    - A window that answers `split` keeps serving while its two halves load,
      and gives way to them in the first complete transition that holds both.
@@ -64,9 +60,7 @@
    - A workspace that stays incomplete while online, with no part answering
      for STALL.ms, from the start on, fails, so a part that never answers
      shows instead of a frozen screen. Where only task windows are silent,
-     only the task load fails. Convex sends the first answers of parts
-     subscribed together in one transition, so a large organization on a
-     busy backend can take many seconds before anything arrives.
+     only the task load fails.
 
    Named side queries ride along (SideName): the open task's comment thread
    and, while a window shows All, its history, and while a window shows the
@@ -118,7 +112,6 @@ import {
 import {
   joinParts,
   type OrgParts,
-  type ProjectsPart,
   partRows,
   type RootAnswer,
   rootOrgs,
@@ -234,15 +227,6 @@ export type PartsReport = {
   sides?: Partial<Record<SideName, SideNews>>
 }
 
-type Kind = 'tasks' | 'projects'
-const KINDS: readonly Kind[] = ['tasks', 'projects']
-/* The kinds whose windows every workspace needs, asked or not. */
-const PART_KINDS: readonly Kind[] = ['projects']
-const WINDOWED = {
-  tasks: api.workspace.tasks,
-  projects: api.workspace.projects,
-} as const
-
 /* One subscription and what the transitions brought it. */
 type Slot = {
   token: string
@@ -260,15 +244,15 @@ type Slot = {
   task?: true
 }
 
-/* A window of one kind, its own part, and the pieces it gives way to once
-   it asked to be cut. */
+/* A task window, its own part, and the pieces it gives way to once it
+   asked to be cut. */
 type Node = IdWindow & { slot: Slot; pieces: Node[] | null }
 
 /* What the registry holds for one organization. */
 type Org = {
   id: string
-  /** the windows of each kind */
-  kinds: Record<Kind, Node[]>
+  /** its task windows */
+  tasks: Node[]
   /** whether its task windows were subscribed, which they are once tasks
       were asked */
   tasksStarted: boolean
@@ -340,13 +324,12 @@ export function createLiveParts(
     if (slots.get(slot.token) === slot) slots.delete(slot.token)
   }
 
-  const node = (orgId: string, kind: Kind, w: IdWindow): Node => {
-    const slot = watch(WINDOWED[kind], { org_id: orgId, from: w.from, to: w.to })
-    if (kind === 'tasks') slot.task = true
+  const node = (orgId: string, w: IdWindow): Node => {
+    const slot = watch(api.workspace.tasks, { org_id: orgId, from: w.from, to: w.to })
+    slot.task = true
     return { ...w, slot, pieces: null }
   }
-  const windows = (orgId: string, kind: Kind, list: IdWindow[]) =>
-    list.map((w) => node(orgId, kind, w))
+  const windows = (orgId: string, list: IdWindow[]) => list.map((w) => node(orgId, w))
 
   /** The root part's current answer, or undefined while it has none. */
   const rootAnswer = (): RootAnswer | undefined =>
@@ -359,7 +342,7 @@ export function createLiveParts(
     for (const row of rootOrgs(answer)) {
       const org = orgs.get(row.id)
       if (!org || org.tasksStarted) continue
-      org.kinds.tasks = windows(row.id, 'tasks', idWindows(startWindows(row).tasks))
+      org.tasks = windows(row.id, idWindows(startWindows(row).tasks))
       org.tasksStarted = true
       tasksDirty = true
     }
@@ -385,45 +368,28 @@ export function createLiveParts(
       orgs.delete(id)
       moved = true
     }
-    // as many windows as each new organization's counts say it fills, its
-    // task windows only once tasks were asked and the ask no longer waits
+    // each new organization's task windows, as many as its counts say it
+    // fills, only once tasks were asked and the ask no longer waits
     const tasksNow = asked && !askWaits
-    const added = rootOrgs(answer)
-      .filter((row) => !orgs.has(row.id))
-      .map((row) => {
-        const start = startWindows(row)
-        return {
-          row,
-          tasks: tasksNow ? idWindows(start.tasks) : [],
-          projects: idWindows(start.projects),
-        }
-      })
-    for (const { row, tasks } of added) {
+    for (const row of rootOrgs(answer)) {
+      if (orgs.has(row.id)) continue
       orgs.set(row.id, {
         id: row.id,
-        kinds: { tasks: windows(row.id, 'tasks', tasks), projects: [] },
+        tasks: tasksNow ? windows(row.id, idWindows(startWindows(row).tasks)) : [],
         tasksStarted: tasksNow,
       })
       moved = true
     }
-    // Projects subscribe after the task windows, so the backend, which runs
-    // the parts in the order they came, runs the slow project windows last,
-    // with nothing waiting behind them
-    for (const { row, projects } of added) {
-      const org = orgs.get(row.id) as Org
-      org.kinds.projects = windows(row.id, 'projects', projects)
-    }
     // a window that asked to be cut gets its pieces
     for (const org of orgs.values())
-      for (const kind of KINDS)
-        for (const n of nodesOf(org.kinds[kind]))
-          if (n.pieces === null && n.slot.fresh && isAnswer(n.slot.value)) {
-            const pieces = piecesAfter(n, n.slot.value)
-            if (pieces) {
-              n.pieces = pieces.map((w) => node(org.id, kind, w))
-              moved = true
-            }
+      for (const n of nodesOf(org.tasks))
+        if (n.pieces === null && n.slot.fresh && isAnswer(n.slot.value)) {
+          const pieces = piecesAfter(n, n.slot.value)
+          if (pieces) {
+            n.pieces = pieces.map((w) => node(org.id, w))
+            moved = true
           }
+        }
     return moved
   }
 
@@ -435,7 +401,7 @@ export function createLiveParts(
     }
   }
   function* orgSlots(org: Org): Generator<Slot> {
-    for (const kind of KINDS) for (const n of nodesOf(org.kinds[kind])) yield n.slot
+    for (const n of nodesOf(org.tasks)) yield n.slot
   }
 
   /** Whether the root part or a part watched has no answer since the
@@ -490,19 +456,15 @@ export function createLiveParts(
   }
 
   /** The slots complete() needs an answer from other than task windows:
-      the root, and each project window that
-      shows its rows neither itself nor through its pieces (rowsOf), or,
-      when it has pieces, the pieces that cannot. */
+      the root. */
   function* neededParts(): Generator<Slot> {
     if (root) yield root
-    for (const org of orgs.values()) {
-      for (const kind of PART_KINDS) for (const n of org.kinds[kind]) yield* neededIn(n)
-    }
   }
-  /** The task window slots complete() needs an answer from, as
-      neededParts. */
+  /** The task window slots complete() needs an answer from: each window
+      that shows its rows neither itself nor through its pieces (rowsOf),
+      or, when it has pieces, the pieces that cannot. */
   function* neededTasks(): Generator<Slot> {
-    for (const org of orgs.values()) for (const n of org.kinds.tasks) yield* neededIn(n)
+    for (const org of orgs.values()) for (const n of org.tasks) yield* neededIn(n)
   }
   function* neededIn(n: Node): Generator<Slot> {
     if (rowsOf(n) !== null) return
@@ -558,22 +520,21 @@ export function createLiveParts(
       const org = orgs.get(row.id)
       if (!org) return null
       if (withTasks && asked && !org.tasksStarted) return null
-      /** Every window of `kind` in order, or null while one is not ready. */
-      const windowsOf = <P>(kind: Kind): P[] | null => {
-        const rows: P[] = []
-        for (const n of org.kinds[kind]) {
-          const got = rowsOf<P>(n)
+      /** Every task window in order, or null while one is not ready. */
+      const taskRows = (): TasksPart[] | null => {
+        const rows: TasksPart[] = []
+        for (const n of org.tasks) {
+          const got = rowsOf<TasksPart>(n)
           if (got === null) return null
           rows.push(...got)
         }
         return rows
       }
-      for (const n of org.kinds.tasks)
+      for (const n of org.tasks)
         if (rowsOf(n) !== null) loaded += (idShare(n) * weight(row)) / allTasks
-      const tasks = withTasks ? windowsOf<TasksPart>('tasks') : []
-      const projects = windowsOf<ProjectsPart>('projects')
-      if (!tasks || !projects) return null
-      parts.push({ tasks, projects })
+      const tasks = withTasks ? taskRows() : []
+      if (!tasks) return null
+      parts.push({ tasks })
     }
     return { value: joinParts(answer, parts, new Date(lastAt).toISOString()), loaded }
   }
@@ -630,12 +591,9 @@ export function createLiveParts(
           completed = true
           tasksStalled = false
         }
+        // the pieces hold the rows the window held, so nothing changes
         for (const org of orgs.values())
-          for (const kind of KINDS) {
-            const list = org.kinds[kind]
-            // the pieces hold the rows the window held, so nothing changes
-            if (list.some((n) => n.pieces)) org.kinds[kind] = adoptPieces(list)
-          }
+          if (org.tasks.some((n) => n.pieces)) org.tasks = adoptPieces(org.tasks)
       } else workspace = (transition && arriving()) || { state: 'held' }
     }
     watchStall(
@@ -791,8 +749,8 @@ export function createLiveParts(
   return {
     /** Subscribes every organization's task windows, once: at once when no
         part waits for its answer, else at the first settle in which none
-        does, so no window queues behind running project windows. Each
-        organization's windows are sized from the root part's current
+        does. Each organization's windows are sized from the root part's
+        current
         answer. The stall check runs from here, so windows that never answer
         stop the task load STALL.ms later. */
     askTasks() {

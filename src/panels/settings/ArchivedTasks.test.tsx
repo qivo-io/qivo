@@ -1103,7 +1103,7 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
 
   it('reads none of the workspace’s projects', async () => {
     await open({ initial: 'none', partner: true })
-    const spies = [vi.spyOn(store.P, 'visibleProjects'), vi.spyOn(store.P, 'canSee')]
+    const spies = [vi.spyOn(store.P, 'canSee')]
     await add(FW)
     await last().answer([task(1)])
     await choose(`all:${PARTNER}`)

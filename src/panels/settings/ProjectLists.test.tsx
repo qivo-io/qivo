@@ -895,21 +895,8 @@ describe('Settings › Projects', () => {
   })
 
   it('reads nothing of the store’s catalogue, no level and no task', async () => {
-    const shown = vi.spyOn(P, 'visibleProjects')
     const sees = vi.spyOn(P, 'canSee')
     const level = vi.spyOn(P, 'levelOn')
-    let archivedReads = 0
-    let held = P.archivedProjects
-    Object.defineProperty(P, 'archivedProjects', {
-      configurable: true,
-      get: () => {
-        archivedReads++
-        return held
-      },
-      set: (value) => {
-        held = value
-      },
-    })
     watched = []
     await projects()
     await click(find('[data-project-row="plan"] button'))
@@ -917,11 +904,9 @@ describe('Settings › Projects', () => {
     await type(find('[data-archived-projects-search]'), 'old')
     await rest()
     await click(find('[data-archived-subs-toggle="old"]'))
-    expect(shown).not.toHaveBeenCalled()
     expect(sees).not.toHaveBeenCalled()
     // New sub-project… follows the row's own right
     expect(level).not.toHaveBeenCalled()
-    expect(archivedReads).toBe(0)
     expect(new Set(watched)).toEqual(
       new Set([
         'projectSettings:projects',

@@ -1,21 +1,19 @@
-/* The projects the open views name that the workspace's projects part does
-   not hold, read by id from the server (convex/projectNav.ts byIds) and kept
-   in one bounded cache, so every project lookup of the store
-   (store/planner.ts P.project, P.levelOn and the rest) answers a project a
-   view shows without the store holding every project.
+/* The projects the app shows, read by id from the server
+   (convex/projectNav.ts byIds) and kept in one bounded cache, the store's
+   only source of project facts and of the caller's levels: the workspace
+   holds no project, so every project lookup of the store
+   (store/planner.ts P.project, P.levelOn and the rest) answers from here.
 
-   - An owner (a view slot, the task window) names the projects it shows
-     (`name`), in its order, under its own key, replacing what it named
-     before, and releases them when it closes or a kept page hides. Owners
-     only name ids; the cache owns the reads.
-   - For the named projects the part does not hold (`held`, archived ones
-     included), the cache keeps live projectNav.byIds reads, `chunk` ids a
-     read, in the order the owners first named them. A new id joins the last
-     chunk, or a new one when that is full, so a list that loads more
-     changes only its last chunk, and each id sits in one chunk at a time
-     whatever the number of owners naming it. An id no owner names any more,
-     or one the part now holds, leaves its chunk, and one the part stops
-     holding, as when access goes, is read from then on. A chunk whose ids
+   - An owner (a view slot, the scope, a dialog, the task window) names
+     the projects it shows (`name`), in its order, under its own key,
+     replacing what it named before, and releases them when it closes or a
+     kept page hides. Owners only name ids; the cache owns the reads.
+   - For the named projects the cache keeps live projectNav.byIds reads,
+     `chunk` ids a read, in the order the owners first named them. A new id
+     joins the last chunk, or a new one when that is full, so a list that
+     loads more changes only its last chunk, and each id sits in one chunk
+     at a time whatever the number of owners naming it. An id no owner
+     names any more leaves its chunk. A chunk whose ids
      change keeps its answered read until the read of its new ids answers,
      so the ids it kept keep their state, levels included, meanwhile, and an
      id that joined reads as `loading`. Every read stops while the page is
@@ -46,6 +44,12 @@
    - A project no owner names stays `loading` until one names it: the cache
      has no safety net for an unnamed miss, so every reader's host names
      what it shows.
+   - A navigation row that opens a project seeds its facts (`seed`): its
+     organization, name, number and parent, never a level, so a scope
+     opened from the row names its project and its views ask at once while
+     the cache reads it. A seed reads as `loading` and gives way to the
+     first row an answer brings, and an answer that makes the project `gone`
+     drops it. It never replaces a row the cache keeps.
    - "Shown" means named by an open owner. A released entry keeps the
      moment its last owner let it go, and the parent of a named sub-project
      counts as named. Past PROJECT_CACHE.most entries the cache drops the
@@ -66,12 +70,13 @@ import type { LiveQueries } from '../lib/liveQueries'
 import type { Visibility } from '../lib/viewVisibility'
 
 /** The cache's bounds, an object tests lower. `most`: the entries it keeps,
-    the named ones among them; past it only entries an open view names
-    stay. The design size's live and archived projects and sub-projects
-    together are 2,000 (200 and 300 projects, 500 and 1,000 sub-projects),
-    and the cache holds live projects only, so an organization at the design
-    size needs at most 700 entries and 2,000 also covers a login with seats
-    in several organizations. An entry is a few hundred bytes, so 2,000 cost
+    the named ones among them, and as many seeds; past it only entries an
+    open view names stay. The design size's live and archived projects and
+    sub-projects together are 2,000 (200 and 300 projects, 500 and 1,000
+    sub-projects), and the cache holds live projects only, so an
+    organization at the design size names at most 700 live projects (200
+    top-level and 500 sub-projects) and 2,000 also covers a login with
+    seats in several organizations. An entry is a few hundred bytes, so 2,000 cost
     well under a megabyte. `chunk`: the ids one live read asks for, the
     server's BY_IDS_MAX (100), since every design-size case of 100 ids
     answers whole (convex/tests/projectNavByIds.test.ts). */
@@ -93,12 +98,13 @@ export type CachedProject = {
   message: string | null
 }
 
+/** The facts a navigation row gives of a project it shows
+    (projectNav.page, children, search and resolve rows): no level. */
+export type ProjectSeed = Pick<NavByIdRow, 'id' | 'org_id' | 'name' | 'num' | 'parent_id'>
+
 /** What the cache needs from the store and the transport. */
 export type ProjectCacheDeps = {
   live: Pick<LiveQueries, 'watch' | 'read' | 'onTransition'>
-  /** Whether the workspace's projects part holds project `id`, archived
-      ones included. */
-  held: (id: string) => boolean
   /** Called once after a transition or a registration that changed an
       entry or a state, so the store repaints. */
   changed: () => void
@@ -154,6 +160,9 @@ export function createProjectCache(deps: ProjectCacheDeps) {
   // the entries only answers as a parent brought, never a read that asked
   // for them, which go once nothing keeps them (take)
   const parentOnly = new Set<string>()
+  // the facts navigation rows seeded for projects with no row yet, oldest
+  // first (seed)
+  const seeds = new Map<string, ProjectSeed>()
   // the chunks, oldest first, and the chunk of each id
   let chunks: Chunk[] = []
   const chunkOf = new Map<string, Chunk>()
@@ -180,10 +189,11 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     deps.changed()
   }
 
-  /** Drops project `id`'s row. */
+  /** Drops project `id`'s row and seed. */
   function forget(id: string) {
     entries.delete(id)
     parentOnly.delete(id)
+    seeds.delete(id)
   }
 
   /** Whether an owner names `id`, or it is one of `parents` (namedParents,
@@ -212,6 +222,12 @@ export function createProjectCache(deps: ProjectCacheDeps) {
   /** Drops the entries past PROJECT_CACHE.most, the least recently shown
       first, never one an owner names or the parent of one. */
   function bound() {
+    for (const id of seeds.keys()) {
+      if (seeds.size <= PROJECT_CACHE.most) break
+      if (namedCount.has(id)) continue
+      seeds.delete(id)
+      touch()
+    }
     if (entries.size <= PROJECT_CACHE.most) return
     const parents = namedParents()
     for (const id of entries.keys()) {
@@ -243,6 +259,7 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     for (const row of answer.rows) {
       if (asked.has(row.id)) parentOnly.delete(row.id)
       else if (!entries.has(row.id)) parentOnly.add(row.id)
+      if (seeds.delete(row.id)) touch()
       const was = entries.get(row.id)
       if (was && JSON.stringify(was) === JSON.stringify(row)) continue
       entries.set(row.id, row)
@@ -271,9 +288,9 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     const parentsOfGone: string[] = []
     for (const id of new Set([...asked, ...dropped])) {
       const row = entries.get(id)
-      if (!row || lookUp(id).state !== 'gone') continue
+      if ((!row && !seeds.has(id)) || lookUp(id).state !== 'gone') continue
       forget(id)
-      if (row.parent_id) parentsOfGone.push(row.parent_id)
+      if (row?.parent_id) parentsOfGone.push(row.parent_id)
     }
     // and so does a parent row it stopped bringing, or the parent of a
     // project it made gone, that only answers as a parent ever brought,
@@ -390,14 +407,12 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     if (joined) promote(chunk)
   }
 
-  /** Brings the chunks in line with the projects the owners name now and
-      the projects the part holds. */
+  /** Brings the chunks in line with the projects the owners name now. */
   function sync() {
     const wanted = new Set<string>()
-    for (const ids of owners.values())
-      for (const id of ids) if (!wanted.has(id) && !deps.held(id)) wanted.add(id)
+    for (const ids of owners.values()) for (const id of ids) wanted.add(id)
     const changed = new Set<Chunk>()
-    // an id no owner names, or one the part holds now, leaves its chunk
+    // an id no owner names leaves its chunk
     for (const [id, chunk] of chunkOf) {
       if (wanted.has(id)) continue
       chunk.ids = chunk.ids.filter((x) => x !== id)
@@ -524,6 +539,40 @@ export function createProjectCache(deps: ProjectCacheDeps) {
       bound()
       flush()
     },
+    /** Brings the reads in line with the projects the owners name, as after
+        clear, whose registrations stay while their views stay mounted, so
+        the store's next rebuild reads them again for the new session. */
+    sync() {
+      if (owners.size === 0) return
+      sync()
+      flush()
+    },
+    /** Reads owner `owner`'s projects again from fresh subscriptions where
+        their chunk's read failed or listed one of them apart, as a Retry
+        asks: Convex keeps no failed run, and a check a bound stopped may
+        finish now. */
+    retry(owner: string) {
+      const ids = owners.get(owner)
+      if (!ids) return
+      const again = new Set<Chunk>()
+      for (const id of ids) {
+        const chunk = chunkOf.get(id)
+        if (!chunk) continue
+        const result = chunk.result
+        if (result === 'failed' || result?.unchecked.has(id)) again.add(chunk)
+      }
+      for (const chunk of again) {
+        chunk.sub?.stop()
+        chunk.next?.stop()
+        chunk.sub = null
+        chunk.next = null
+        chunk.result = null
+        chunk.fresh = false
+        touch()
+        follow(chunk)
+      }
+      flush()
+    },
     /** Whether an owner names project `id`. */
     isNamed: (id: string) => namedCount.has(id),
     /** What the cache knows of project `id`, marking nothing, so a render,
@@ -542,15 +591,35 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     rows(): NavByIdRow[] {
       return [...entries.values()]
     },
-    /** Turns on every change of an entry or a state. */
-    version: () => revision,
-    /** Follows a change of the projects the part holds: an id it holds now
-        leaves its chunk, and one it no longer holds is read. */
-    sync() {
-      if (owners.size === 0) return
-      sync()
+    /** The seeds of projects the cache keeps no row for yet. */
+    seeds(): ProjectSeed[] {
+      return [...seeds.values()]
+    },
+    /** Seeds the facts of `list`, projects a navigation row showed, where
+        the cache keeps no row for them, a later seed replacing an earlier
+        one. A seed reads as `loading` until an answer brings the
+        project's row or leaves it out. */
+    seed(list: readonly ProjectSeed[]) {
+      for (const s of list) {
+        if (entries.has(s.id)) continue
+        const was = seeds.get(s.id)
+        if (
+          was &&
+          was.org_id === s.org_id &&
+          was.name === s.name &&
+          was.num === s.num &&
+          was.parent_id === s.parent_id
+        )
+          continue
+        seeds.delete(s.id)
+        seeds.set(s.id, { ...s })
+        touch()
+      }
+      bound()
       flush()
     },
+    /** Turns on every change of an entry or a state. */
+    version: () => revision,
     /** The live reads now, each chunk's ids in order, for the tests and the
         measurement. */
     reads(): string[][] {
@@ -573,6 +642,7 @@ export function createProjectCache(deps: ProjectCacheDeps) {
       chunkOf.clear()
       entries.clear()
       parentOnly.clear()
+      seeds.clear()
       looks.clear()
       stopTransitions?.()
       stopTransitions = null

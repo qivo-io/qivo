@@ -527,11 +527,7 @@ describe('the Search palette', { timeout: 20_000 }, () => {
 
   it('closes only the picker on Escape, and reads none of the workspace’s projects', async () => {
     await open()
-    const spies = [
-      vi.spyOn(store.P, 'visibleProjects'),
-      vi.spyOn(store.P, 'canSee'),
-      vi.spyOn(store.P, 'projectLabel'),
-    ]
+    const spies = [vi.spyOn(store.P, 'canSee'), vi.spyOn(store.P, 'projectLabel')]
     await click(find('[data-palette-scope]'))
     const field = find<HTMLInputElement>('[data-project-picker-search]')
     await act(async () => {

@@ -163,20 +163,20 @@ const CRUMB_TOAST = 'task-crumb-open'
 
 /** Whether the store's level agrees that the caller writes in project
     `id`, for a control a task's answer gives Edit: the store's level where
-    the projects part holds the project or the project cache answered it,
-    the answer's alone while the cache loads, failed or did not check it,
+    the project cache answered the project, the answer's alone while the
+    cache loads, failed or did not check it,
     since that level is the server's and the server checks every write
     again, and no where the cache answered it gone. */
 const storeWrites = (id: string) => {
   const state = P.projectState(id)
-  if (state === 'held' || state === 'ok') return P.canWrite(id)
+  if (state === 'ok') return P.canWrite(id)
   return state !== 'gone' && state !== null
 }
 
 /** storeWrites for Lead. */
 const storeLeads = (id: string) => {
   const state = P.projectState(id)
-  if (state === 'held' || state === 'ok') return P.levelOn(id) === 'lead'
+  if (state === 'ok') return P.levelOn(id) === 'lead'
   return state !== 'gone' && state !== null
 }
 
@@ -1892,12 +1892,9 @@ function IssueDetail({
             : undefined
   // an archived task whose project is archived too, which Archived tasks
   // lists only once the project is restored, and which no one restores
-  // from the window
+  // from the window: the archived answer says so (project_archived)
   const projectArchived =
-    !!goneAnswer &&
-    typeof goneAnswer === 'object' &&
-    !P.heldProject(goneAnswer.project) &&
-    P.archivedProjects.some((project) => project.id === goneAnswer.project)
+    !!goneAnswer && typeof goneAnswer === 'object' && !!detail?.projectArchived
   // the caller's level on a task shown from its answer, which decides the
   // controls offered there, together with the workspace's (canComment);
   // an archived answer of an older backend holds none, and the workspace's
@@ -2453,21 +2450,12 @@ function IssueDetail({
       title={saving ? WAITS_FOR_SAVE : roTip}
     />
   )
-  // user-level and up can move the issue to any sub-project they can write in — but
-  // only offer the menu item when some target OTHER than the current
-  // sub-project exists (else the dialog could never enable its Move button)
-  // …in the task's OWN organization: a move never crosses one (0081), so a
-  // writable project elsewhere must not light the menu item up
-  // …and a task shown from its answer offers it to its editor in any
-  // state of its read, saying why it waits
-  const canMove =
-    (canLabel || answerEditorOn) &&
-    P.projects.some(
-      (m) =>
-        m.type === 'meta' &&
-        m.org === it.org &&
-        (m.children || []).some((cid: string) => cid !== it.project && P.canWrite(cid)),
-    )
+  // the task's editor gets Move, whose window lists the sub-projects of the
+  // task's own organization they may write in (projectNav.targets), a move
+  // never crossing one (0081), and says so at a confirmed empty end; a task
+  // shown from its answer offers it to its editor in any state of its
+  // read, saying why it waits
+  const canMove = canLabel || answerEditorOn
   // Archive or delete, likewise
   const canFate = canLabel || answerEditorOn
   // Move and Archive or delete act on the task's whole subtask list and its
@@ -2533,8 +2521,15 @@ function IssueDetail({
     (row.level === 'lead' || row.level === 'user') && storeWrites(row.project)
   // a link needs Edit on either task (convex/model/issues.ts linkAccess),
   // so someone who only views this task links it to a task they can edit
+  // the first batch of the sub-projects the person may write in the task's
+  // organization, asked while a window shows a task they only view
+  const asksEdits = !!it && current && !archived && !saving && !canRelate
+  useEffectID(() => {
+    if (!asksEdits || !it) return
+    return P.watchEditsSomeProject(it.org)
+  }, [asksEdits, it?.org])
   const canLinkAny =
-    !!it && current && !archived && !saving && (canRelate || P.editsSomeProject(it.org))
+    !!it && current && !archived && !saving && (canRelate || P.editsSomeProject(it.org) === true)
   // A row's removal sends what its list showed as the expected values (a
   // link's kind, a subtask's parent), so it waits while that list failed
   // or reads again.
@@ -3248,7 +3243,13 @@ function IssueDetail({
                         )
                           return
                         e.preventDefault()
-                        crumbOpen.open(p)
+                        crumbOpen.open({
+                          id: p.id,
+                          org_id: p.org,
+                          name: p.name,
+                          num: p.num,
+                          parent_id: p.parent ?? null,
+                        })
                       }}
                       className="max-w-60 overflow-hidden text-ellipsis whitespace-nowrap rounded-sm px-1 py-0.5 text-sm text-text-3 no-underline hover:bg-hover hover:text-text-1 focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
                     >
@@ -3634,22 +3635,19 @@ function IssueDetail({
                             held or from its answer, whose project the store
                             holds, which the Board needs; App reveals the card
                             the Board's answer names it by */}
-                          {embedded &&
-                            onShowOnBoard &&
-                            !archived &&
-                            !!P.heldProject(it.project) && (
-                              <MenuItem
-                                data-task-open-board
-                                onClick={() => {
-                                  close()
-                                  const num = Number(it.key.slice(P.ISSUE_PREFIX.length + 1))
-                                  onShowOnBoard(it.project, P.openTask(it.uuid, it.org, num))
-                                }}
-                              >
-                                <Icon name="board" size={14} />
-                                Open task in board
-                              </MenuItem>
-                            )}
+                          {embedded && onShowOnBoard && !archived && !!P.project(it.project) && (
+                            <MenuItem
+                              data-task-open-board
+                              onClick={() => {
+                                close()
+                                const num = Number(it.key.slice(P.ISSUE_PREFIX.length + 1))
+                                onShowOnBoard(it.project, P.openTask(it.uuid, it.org, num))
+                              }}
+                            >
+                              <Icon name="board" size={14} />
+                              Open task in board
+                            </MenuItem>
+                          )}
                           <MenuItem
                             onClick={() => {
                               copyId()
@@ -4748,10 +4746,10 @@ function IssueDetail({
           }
           createLabel="Create new subtask:"
           // a new subtask goes into this task's project, which P.addIssue
-          // needs the workspace to hold, so a project only the project
-          // cache holds offers no create row
+          // needs the project cache to have answered, so a project it has
+          // not answered offers no create row yet
           onCreate={
-            noSubtask || !canRelate || !P.heldProject(it.project)
+            noSubtask || !canRelate || P.projectState(it.project) !== 'ok'
               ? undefined
               : (title) => {
                   P.addIssue({ project: it.project, title, parent: it.id })

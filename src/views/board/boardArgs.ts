@@ -60,7 +60,7 @@ export type BoardRequest =
  * matches each id exactly; the text trimmed, as the server trims it.
  */
 export function boardRequest(
-  info: Pick<ScopeInfo, 'wide' | 'mine' | 'id'> & { proj: { org: string } | null },
+  info: Pick<ScopeInfo, 'mine' | 'id'> & { proj: { org: string } | null },
   filters: IssueFilters,
   cutoff: string,
   search: string = filters.search,
@@ -110,7 +110,7 @@ function useStaleCutoff(): string {
  * LIMITS.search sends nothing.
  */
 export function useBoardRequest(
-  info: Pick<ScopeInfo, 'wide' | 'mine' | 'id'> & { proj: { org: string } | null },
+  info: Pick<ScopeInfo, 'mine' | 'id'> & { proj: { org: string } | null },
   filters: IssueFilters,
 ): { want: BoardRequest; send: BoardRequest } {
   const cutoff = useStaleCutoff()

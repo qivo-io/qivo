@@ -178,7 +178,8 @@ async function openNewTask(path = '/app/testbed/overview/p/1') {
     title.dispatchEvent(new Event('input', { bubbles: true }))
   })
   // the key the new task takes, which the dialog's create previews
-  const key = store.P.nextIssueKey('work')
+  // the fixture's organization has handed out no task number yet
+  const key = `${store.P.ISSUE_PREFIX}-1`
   const create = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Create')
   await act(async () => create?.click())
   await waitFor(

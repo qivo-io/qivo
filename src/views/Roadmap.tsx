@@ -33,6 +33,7 @@ import type { PlannedTask } from '../../convex/lib/roadmap'
 import { NoProjects } from '../components/NoProjects'
 import { EmptyState, Icon } from '../components/qivo'
 import { RoadmapUndo } from '../components/RoadmapUndo'
+import { useHolds } from '../components/useHolds'
 import { sortName, usePeople } from '../components/usePeople'
 import { WorkspaceToolbar } from '../components/WorkspaceShell'
 import { isoToWeek, winWeeks } from '../lib/dates'
@@ -46,6 +47,7 @@ import {
   type IssueVM,
   type MilestoneVM,
   P,
+  type ProjectFacts,
   ROADMAP_SLOT,
   type ScopeInfo,
 } from '../store/planner'
@@ -84,6 +86,21 @@ import { WinMenu, WinRangePicker } from './roadmap/WindowControls'
 import { useScopeMilestones } from './useScopeMilestones'
 import '../styles/mobile-views.css'
 import './Roadmap.css'
+
+/** The facts a track shows under a heading while the project cache has
+    not answered for its project (store/scopeGroups.ts): it says it is
+    loading, never a wrong name, and keeps its rows. */
+const loadingTrack = (id: string): ProjectFacts => ({
+  id,
+  org: '',
+  name: 'Loading…',
+  num: 0,
+  parent: undefined,
+  type: 'meta',
+  trackDelay: true,
+  lead: undefined,
+  reviewHours: undefined,
+})
 
 const BASE_WEEK_W = 36
 // Below this width the grid scrolls; wider weeks fill the selected window.
@@ -255,7 +272,7 @@ function Roadmap({
   const { visible } = useViewVisibility()
   // `wide` = the scope that names no project, My view; `mine` is the same
   // scope, the one that narrows to my own tasks
-  const wide = info.wide
+  const wide = info.mine
   const mine = info.mine
 
   /* The active "Plan on roadmap" session (spotlight + card + auto-fit); a ref
@@ -407,7 +424,9 @@ function Roadmap({
      project, one per PROJECT across all of them (deviation #47) — a track per
      sub-project of every project would bury the timeline. Alphabetical either
      way; the sort lives here (not in the store) because it is this view's. */
-  const allTracks = info.groups.slice().sort((a, b) => a.proj.name.localeCompare(b.proj.name))
+  const allTracks = view.groups
+    .map((g) => ({ proj: g.proj ?? loadingTrack(g.id), subIds: g.subIds }))
+    .sort((a, b) => a.proj.name.localeCompare(b.proj.name))
 
   /* One pass to bucket the shown tasks by sub-project; everything below
      reads the buckets. Two questions, and they are NOT the same question:
@@ -419,6 +438,9 @@ function Roadmap({
      · `bucket`, which of them hold a task the answer shows that also passes
        the TOOLBAR filters on screen, and which tasks those are. */
   const held = view.held
+  // whether the person sees any project or sub-project, which the server
+  // answers (useHolds) only while My view's empty note could show
+  const holds = useHolds(mine && view.state === 'ok' && !!held && held.size === 0)
   // the rows show while an answer for this scope is on screen; any note
   // takes their place
   const showing = view.state === 'ok' || view.state === 'refreshing'
@@ -453,7 +475,7 @@ function Roadmap({
      Its rail stays bare, like the rail of a project without sub-projects. */
   const pruning = !!held || clearable
   const tracks =
-    info.subIds.length === 0 || !showing
+    allTracks.length === 0 || !showing
       ? []
       : pruning
         ? allTracks.filter((tr) => tr.subIds.some(shows))
@@ -866,7 +888,7 @@ function Roadmap({
   const lastNamed = useRefR<{ scope: string; projects: string[] } | null>(null)
   const markerScope = markerProjects(
     info,
-    allTracks,
+    view.groups,
     held,
     view.state === 'loading' && lastNamed.current?.scope === info.id
       ? lastNamed.current.projects
@@ -1595,6 +1617,7 @@ function Roadmap({
   ) => (
     <MobileRoadmap
       info={info}
+      selection={view.selection}
       tasks={empty ? [] : view.tasks}
       settled={view.current}
       filterControls={filterControls}
@@ -1709,8 +1732,11 @@ function Roadmap({
      the scope's milestones under its note. */
   const note = <RoadmapNote view={view} info={info} actions={actions} phone={mobile} />
   let emptyNote: React.ReactNode = null
-  if (info.subIds.length === 0) {
-    emptyNote = !wide ? (
+  // My view holds nothing of mine: whether the person sees any project or
+  // sub-project at all is the server's word (useHolds)
+  const mineEmpty = mine && view.state === 'ok' && !!held && held.size === 0
+  if (!mine && info.isMeta && view.selection !== null && view.selection.length === 0) {
+    emptyNote = (
       <EmptyState
         icon="timeline"
         title="Nothing to schedule yet"
@@ -1718,13 +1744,17 @@ function Roadmap({
         actionLabel={P.canManageOwnProjectAccess(info.id) ? 'New sub-project' : undefined}
         onAction={() => actions.newProject({ parent: info.id })}
       />
-    ) : info.metas.length === 0 ? (
+    )
+  } else if (mineEmpty && holds === 'none') {
+    emptyNote = (
       <NoProjects
         icon="timeline"
         title="Nothing to schedule yet"
         onNewProject={() => actions.newProject({ kind: 'program' })}
       />
-    ) : (
+    )
+  } else if (mineEmpty && holds === 'no_sub') {
+    emptyNote = (
       <EmptyState
         icon="timeline"
         title="Nothing to schedule yet"
@@ -1760,7 +1790,7 @@ function Roadmap({
     AGENDA_MILESTONE_SLOTS,
     showMobileAgenda && (!!emptyNote || mobileAgendaSection === 'milestones'),
   )
-  if (emptyNote && mine && info.metas.length === 0)
+  if (emptyNote && mineEmpty && holds === 'none')
     return (
       <RoadmapRoot view={view} milestones={markers.view.state}>
         {emptyFrame(emptyNote)}
@@ -2775,6 +2805,7 @@ function Roadmap({
             gutter={GUTTER_W}
             height={stripMode === 'max' ? '100%' : stripH}
             info={info}
+            selection={view.selection}
             panelRef={stripPanelRef}
             bodyRef={stripBodyRefBox.current}
             livePositions={liveByUuid}

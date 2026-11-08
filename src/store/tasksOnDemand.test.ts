@@ -128,8 +128,9 @@ describe('tasks on demand', () => {
     // a wait that reads the share keeps waiting
     expect(store.P.stillLoading()).toBe(0)
     expect(held('01000000-a')).toBe(false)
-    // the projects and people are there
-    expect(store.P.projects).toHaveLength(1)
+    // the organization and the person are there; the workspace holds no
+    // project, which the views read by id
+    expect(store.P.orgs).toHaveLength(1)
     store.P.askTasks('script')
     expect(store.P.taskLoad()).toEqual({ state: 'arriving' })
     expect(store.P.tasksArriving()).toBe(true)

@@ -16,14 +16,16 @@
      sync[/all|/p/<n>|/team/<uuid>][/people/<uuid>|/agents][/tasks/<ref>]
 
    Team sync uses the home organization. Bare /app or /app/<org> returns null
-   so App opens the remembered project once the server checked it, else
-   the project chooser, instead of persisting a default view. A project
-   segment the workspace does not hold names no scope but the project the
-   address names (Route.unheld), which App checks through
-   projectNav.resolve: by its organization and number, a `~` number in the
-   home organization, or by its uuid; one that names no project a read can
-   ask about, under a slug this login cannot resolve or by a ref no project
-   can have, is unheld as null, which shows the chooser with a note.
+   so App opens the remembered project, which the project cache checks,
+   else the project chooser, instead of persisting a default view. The
+   store holds no project, so a project segment by uuid names the scope at
+   once, which App opens and the project cache checks, and one by number
+   names no scope but the project the address names (Route.unheld), which
+   App checks through projectNav.resolve by its organization and number, a
+   `~` number in the home organization; one that names no project a read
+   can ask about, under a slug this login cannot resolve or by a ref no
+   project can have, is unheld as null, which shows the chooser with a
+   note.
    Task refs accept qn-<num> (any case), bare numbers or immutable uuids;
    project refs accept numbers or uuids. Emission is lowercase. Numbers are
    org-scoped and survive moves; renamed project keys are display-only.
@@ -69,13 +71,13 @@ export type Route = {
      it cannot honour as unavailable and the page asks to choose, and a step
      that resolves to nothing falls back to the opening. */
   sync?: { scope?: string; step?: string }
-  /* A project segment the workspace does not hold: how P.resolveProject
-     asks about the project, by its organization and number or by its id,
-     or null where no read can ask, under a slug this login cannot resolve,
-     a `~` number for a login without a home organization, or a ref no
-     project can have. Absent where the segment names a held project
-     (`scope`) or the address has none. Team sync's `p/<n>` keeps its own
-     `unresolved:` form. */
+  /* A project segment by number: how P.resolveProject asks about the
+     project, by its organization and number, or null where no read can
+     ask, under a slug this login cannot resolve, a `~` number for a login
+     without a home organization, or a ref no project can have. Absent
+     where the segment names a project by its uuid (`scope`) or the address
+     has none. Team sync's `p/<n>` keeps its own `unresolved:` form, which
+     the page resolves. */
   unheld?: ProjectAsk | null
 }
 
@@ -117,27 +119,9 @@ const VIEW_TO_URL: Record<string, string> = {
 /* The organization a project number of an address reads in: the one the
    address pins, or, unpinned (`~` and a legacy hash without one), the home
    organization, never another organization's; none for a login without a
-   home organization. The held project of that number (findProject),
-   Route.unheld and a numbered project page all read a number here, so
-   they cannot drift. */
+   home organization. Route.unheld, a numbered project page and Team
+   sync's `p/<n>` all read a number here, so they cannot drift. */
 const numberOrgOf = (org: string | undefined): string | undefined => org ?? (P.homeOrg || undefined)
-
-/* The project the workspace holds that segment `s` names: by its uuid, or
-   by its number in the organization numberOrgOf reads it in (`org`, a
-   uuid resolved from the address's org segment, pins it). A number never
-   names another organization's project, so a guest's colliding number
-   cannot take over an unpinned link, which is what `~` and every legacy
-   hash rely on, and a login without a home organization holds no project
-   by an unpinned number, as findIssueKey reads a task number. */
-const findProject = (s: string | undefined, org?: string) => {
-  if (!s) return undefined
-  if (/^\d+$/.test(s)) {
-    const n = Number(s)
-    const at = numberOrgOf(org)
-    return at ? P.projects.find((p) => p.num === n && p.org === at) : undefined
-  }
-  return P.projects.find((p) => p.id === s.toLowerCase())
-}
 
 /* The project number segment `s` names: a whole number from 1 to
    Number.MAX_SAFE_INTEGER in digits, else null. */
@@ -147,19 +131,16 @@ const projectNumberOf = (s: string): number | null => {
   return n >= 1 && n <= Number.MAX_SAFE_INTEGER ? n : null
 }
 
-/* How P.resolveProject asks about the project a segment `s` names that
-   the workspace does not hold (Route.unheld): a number in the
-   organization numberOrgOf reads it in, and a uuid alone. Null where no
-   read can ask: under a slug the login cannot resolve, a number with no
-   organization to read it in, or a ref no project can have. */
+/* How P.resolveProject asks about the project a numbered segment `s`
+   names (Route.unheld): a number in the organization numberOrgOf reads it
+   in. Null where no read can ask: under a slug the login cannot resolve,
+   a number with no organization to read it in, or a ref no project can
+   have. A uuid names the scope itself (parseSegments). */
 const unheldProject = (s: string | undefined, org: string | undefined, orgUnknown: boolean) => {
-  if (orgUnknown || !s) return null
-  if (/^\d+$/.test(s)) {
-    const num = projectNumberOf(s)
-    const at = numberOrgOf(org)
-    return num !== null && at ? { org_id: at, num } : null
-  }
-  return UUID.test(s) ? s.toLowerCase() : null
+  if (orgUnknown || !s || !/^\d+$/.test(s)) return null
+  const num = projectNumberOf(s)
+  const at = numberOrgOf(org)
+  return num !== null && at ? { org_id: at, num } : null
 }
 
 /** How a project settings page names its project: `{ id }`, or a
@@ -330,14 +311,10 @@ export const scopeForIssue = (
      keeps the mode. */
   if (preferred === MINE_SCOPE)
     return it.owner && P.myProfileIds.includes(it.owner) ? MINE_SCOPE : it.project
-  if (preferred) {
-    const p = P.heldProject(preferred)
-    if (
-      p &&
-      (p.id === it.project || (p.type === 'meta' && (p.children || []).includes(it.project)))
-    )
-      return preferred
-  }
+  // the preferred project where it is the task's or, as the project cache
+  // names the task's project, its parent
+  if (preferred && (preferred === it.project || P.project(it.project)?.parent === preferred))
+    return preferred
   return it.project
 }
 
@@ -348,33 +325,27 @@ export const scopeForIssue = (
 function parseSegments(seg: string[], org: string | undefined, orgUnknown: boolean): Route | null {
   if (!seg.length) return null // the org's front door — fall back to saved UI state
   const r: Route = {}
-  const proj = (s: string | undefined) => (orgUnknown ? undefined : findProject(s, org))
   const issue = (s: string | undefined) => (orgUnknown ? undefined : findIssueKey(s, org))
   if (seg[0] === 'settings') {
     if (seg[1] === 'project') {
-      /* A uuid names the page whether the workspace holds the project or
-         not, and the page's own read decides what it shows. A number reads
-         in the organization numberOrgOf names first: it names the project
-         the workspace holds there (findProject), and otherwise a numbered
-         page of that organization, which the page reads by organization
-         and number, never another organization's project. A number outside
-         1 to Number.MAX_SAFE_INTEGER, one with no organization to read it
-         in and any other segment name the account page. Under a slug this
+      /* A uuid names the page, and the page's own read decides what it
+         shows. A number names a numbered page of the organization
+         numberOrgOf reads it in, which the page reads by organization and
+         number, never another organization's project. A number outside 1
+         to Number.MAX_SAFE_INTEGER, one with no organization to read it in
+         and any other segment name the account page. Under a slug this
          login cannot resolve, nothing does, as for every segment past the
          page. */
       const s = seg[2] ?? ''
-      const p = UUID.test(s) ? null : proj(s)
       const num = projectNumberOf(s)
       const at = numberOrgOf(org)
       r.settings = orgUnknown
         ? 'account'
         : UUID.test(s)
           ? `project:${s.toLowerCase()}`
-          : p
-            ? `project:${p.id}`
-            : num !== null && at
-              ? numberedProjectPage(at, num)
-              : 'account'
+          : num !== null && at
+            ? numberedProjectPage(at, num)
+            : 'account'
     } else r.settings = seg[1] || 'account'
     return r
   }
@@ -392,10 +363,11 @@ function parseSegments(seg: string[], org: string | undefined, orgUnknown: boole
   if (seg[0] === 'sync') {
     /* Team sync: scope, then step, then a task. Under a slug this login
        cannot resolve, nothing past the page resolves, uuids included (the
-       rule proj() and issue() follow, applied to the whole address). A
-       project the app cannot resolve stays a scope the page cannot honour
-       (`unresolved:<segment>`, as typed), which asks to choose, never the
-       saved scope or All projects. */
+       rule issue() follows, applied to the whole address). A project by
+       uuid is the scope `project:<uuid>`; one by number stays
+       `unresolved:<segment>`, as typed, which the page resolves through
+       projectNav.resolve into `project:<id>`, and which asks to choose
+       where no project answers, never the saved scope or All projects. */
     r.sync = {}
     if (orgUnknown) return r
     let i = 1
@@ -404,8 +376,8 @@ function parseSegments(seg: string[], org: string | undefined, orgUnknown: boole
       i = 2
     } else if (seg[1] === 'p' || seg[1] === 'team') {
       if (seg[1] === 'p') {
-        const p = proj(seg[2])
-        r.sync.scope = p ? `project:${p.id}` : `unresolved:${seg[2] ?? ''}`
+        const s = seg[2] ?? ''
+        r.sync.scope = UUID.test(s) ? `project:${s.toLowerCase()}` : `unresolved:${s}`
       } else if (seg[2]) r.sync.scope = `team:${seg[2].toLowerCase()}`
       i = 3
     }
@@ -435,9 +407,9 @@ function parseSegments(seg: string[], org: string | undefined, orgUnknown: boole
     return r
   }
   if (seg[i] === 'p') {
-    const p = proj(seg[i + 1])
-    if (p) r.scope = p.id
-    else r.unheld = unheldProject(seg[i + 1], org, orgUnknown)
+    const s = seg[i + 1]
+    if (!orgUnknown && s && UUID.test(s)) r.scope = s.toLowerCase()
+    else r.unheld = unheldProject(s, org, orgUnknown)
     // tolerated combined form (never emitted): <view>/p/<n>/tasks/<task>
     if (seg[i + 2] === 'tasks') r.issue = issue(seg[i + 3])
     return r

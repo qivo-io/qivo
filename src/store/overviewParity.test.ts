@@ -61,6 +61,7 @@ import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { countOrg } from '../../convex/tests/overviewCounts.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
 import type { Whole as Snapshot } from './guard/liveDouble.setup'
+import { oracleScope, oracleStore } from './oracleScope.setup'
 import { OVERVIEW_BATCH, OVERVIEW_SPLIT, OVERVIEW_WEEKS } from './overviewLists'
 import {
   type ForcedOverview,
@@ -266,7 +267,7 @@ async function expectParity(
   label: string,
   orders = false,
 ): Promise<number> {
-  const info = P.scopeInfo(scopeId)
+  const info = oracleScope(P.snapshot, scopeId)
   const days = clientDays(P)
   const caller = as(t, profile)
   const summary = await caller.query(api.overview.summary, { scope, day: days.day })
@@ -485,10 +486,13 @@ const order = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
  * each of their sub-projects and My view. */
 function scopesOf(P: Store, profile: Doc<'profiles'>) {
   const out: [string, OverviewScope, string][] = []
-  for (const meta of P.visibleProjects()) {
+  // the store holds no project, so its old view comes from the server's
+  // whole (oracleStore)
+  const S = oracleStore(P.snapshot)
+  for (const meta of S.visibleProjects()) {
     out.push([meta.name, projectScope(profile, meta.id), meta.id])
     for (const id of meta.children ?? [])
-      if (P.canSee(id)) out.push([P.project(id)?.name ?? id, projectScope(profile, id), id])
+      if (S.canSee(id)) out.push([S.project(id)?.name ?? id, projectScope(profile, id), id])
   }
   out.push(['My view', { kind: 'mine' }, P.MINE_SCOPE])
   return out
@@ -719,7 +723,7 @@ describe('rules a drift would break', () => {
     const f = await withReadingAdmin(t)
     await plantCase(t, f, f.admin)
     const P = await storeOf(t, f.admin, NOW_CASE)
-    const info = P.scopeInfo(f.meta.id)
+    const info = oracleScope(P.snapshot, f.meta.id)
     if (info === null) throw new Error('the admin sees no TBED')
     const scope = projectScope(f.admin, f.meta.id)
     const summary = await as(t, f.admin).query(api.overview.summary, { scope, day: P.TODAY_ISO })
@@ -741,7 +745,7 @@ describe('rules a drift would break', () => {
 
   it('differs from a rule that counts Delayed in a sub-project that does not track delay', async () => {
     const { t, f, P, scope } = await adminCase()
-    const info = P.scopeInfo(f.meta.id)
+    const info = oracleScope(P.snapshot, f.meta.id)
     if (info === null) throw new Error('no TBED')
     const days = clientDays(P)
     const got = await as(t, f.admin).query(api.overview.health, {
@@ -790,7 +794,7 @@ describe('rules a drift would break', () => {
       throw new Error(JSON.stringify(view))
     const left = view.rows[0].counts.left_tenths / 10
     expect(left).toBe(0.3)
-    const info = P.scopeInfo(P.MINE_SCOPE)
+    const info = oracleScope(P.snapshot, P.MINE_SCOPE)
     const group = info?.groups.find((g) => g.proj.id === f.meta.id)
     if (!info || !group) throw new Error('no TBED in My view')
     // the oracle rounds once, as the server does; hours added up a

@@ -70,6 +70,7 @@ import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { expectedPage, expectedSearch, navSees } from '../../convex/tests/projectNav.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
 import type { Whole as Snapshot } from './guard/liveDouble.setup'
+import { oracleStore } from './oracleScope.setup'
 import { plannerFixture } from './plannerFixture.setup'
 import {
   NAV_BLANK_SEARCH,
@@ -126,7 +127,10 @@ async function start(snap: Snapshot) {
 async function storeOf(t: T, profile: Doc<'profiles'>) {
   const snap = await wholeOf(t, profile)
   if (snap === null) throw new Error(`no workspace for ${profile.name}`)
-  return await start(snap)
+  await start(snap)
+  // the store holds no project, so its old view of them comes from the
+  // server's whole (oracleStore)
+  return oracleStore(snap)
 }
 
 const sorted = (ids: Iterable<string>) => [...ids].sort()

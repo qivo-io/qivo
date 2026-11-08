@@ -16,12 +16,12 @@ type Sub = {
   answered: boolean
 }
 
-/** A transport whose reads the test answers, a projects part that holds
-    the projects in `held`, and a page whose visibility the test sets. With
+/** A transport whose reads the test answers and a page whose visibility the
+    test sets. With
     `share`, watches of the same ids share one read and its token, as
     Convex shares them, and a watch is `joined` once a transition named
     that token, on any connection, as lib/liveQueries.ts says. */
-function setup(held: Set<string> = new Set(), { share = false } = {}) {
+function setup({ share = false } = {}) {
   const subs = new Map<string, Sub>()
   const handlers = new Set<(t: LiveTransition) => void>()
   const visibility = new Set<(v: Visibility) => void>()
@@ -58,7 +58,6 @@ function setup(held: Set<string> = new Set(), { share = false } = {}) {
         return () => handlers.delete(fn)
       },
     },
-    held: (id) => held.has(id),
     changed: () => changes++,
     watchVisibility: (listener) => {
       visibility.add(listener)
@@ -81,7 +80,6 @@ function setup(held: Set<string> = new Set(), { share = false } = {}) {
   }
   return {
     cache,
-    held,
     reads,
     changes: () => changes,
     /** Answers read `token` with `rows` (every id's row by default), and
@@ -291,22 +289,6 @@ describe('the project cache', () => {
     expect(s.reads()).toHaveLength(2)
   })
 
-  it('answers a project the part stops holding as loading, with no level, until its read answers', () => {
-    const s = setup(new Set(['p1']))
-    s.cache.name('board', ['p1', 'p2'])
-    const [first] = s.reads()
-    s.answer(first.token)
-    // the part's access went, so the part leaves p1 out from now on
-    s.held.delete('p1')
-    s.cache.sync()
-    expect(s.cache.look('p1')).toEqual({ state: 'loading', row: null, message: null })
-    expect(s.cache.look('p2').state).toBe('ok')
-    const second = s.reads().find((r) => r.ids.includes('p1'))
-    if (!second) throw new Error('no read of p1')
-    s.answer(second.token, [project('p1', { level: 'viewer' }), project('p2')])
-    expect(s.cache.look('p1')).toMatchObject({ state: 'ok', row: { level: 'viewer' } })
-  })
-
   it("gives no level after a reconnect until each chunk's read answers again, a parent row another chunk brought included, keeping the names", () => {
     const s = setup()
     PROJECT_CACHE.chunk = 1
@@ -330,7 +312,7 @@ describe('the project cache', () => {
   })
 
   it('takes no state from a read a chunk joins that answered before a reconnect, until it answers on the new connection', () => {
-    const s = setup(new Set(), { share: true })
+    const s = setup({ share: true })
     PROJECT_CACHE.chunk = 2
     s.cache.name('board', ['p0', 'p1'])
     const [first] = s.reads()
@@ -449,17 +431,50 @@ describe('the project cache', () => {
     expect(s.cache.look('meta')).toMatchObject({ state: 'ok', row: { level: 'viewer' } })
   })
 
-  it('never reads a project the part holds, and reads one once the part stops holding it', () => {
-    const s = setup(new Set(['p1']))
+  it('reads every project an owner names, as the workspace holds none', () => {
+    const s = setup()
     s.cache.name('board', ['p1', 'p2'])
-    expect(s.reads().map((r) => r.ids)).toEqual([['p2']])
-    s.held.delete('p1')
-    s.cache.sync()
-    expect(s.reads().map((r) => r.ids)).toEqual([['p2', 'p1']])
-    // a held one leaves its chunk again
-    s.held.add('p2')
-    s.cache.sync()
-    expect(s.reads().map((r) => r.ids)).toEqual([['p1']])
+    expect(s.reads().map((r) => r.ids)).toEqual([['p1', 'p2']])
+  })
+
+  it('opens a seeded project with its facts and no level until its read answers, and drops the seed once an answer leaves it out', () => {
+    const s = setup()
+    s.cache.seed([{ id: 'p1', org_id: 'org', name: 'Plan', num: 3, parent_id: null }])
+    s.cache.name('scope', ['p1'])
+    expect(s.cache.seeds().map((x) => x.id)).toEqual(['p1'])
+    expect(s.cache.look('p1').state).toBe('loading')
+    // must fail: a seed gives no row and so no level
+    expect(s.cache.look('p1').row).toBeNull()
+    s.answer(s.reads()[0].token, [])
+    expect(s.cache.look('p1').state).toBe('gone')
+    expect(s.cache.seeds()).toEqual([])
+  })
+
+  it('gives a seed way to the row an answer brings, and never replaces a row with a seed', () => {
+    const s = setup()
+    s.cache.seed([{ id: 'p1', org_id: 'org', name: 'Seeded', num: 3, parent_id: null }])
+    s.cache.name('scope', ['p1'])
+    s.answer(s.reads()[0].token)
+    expect(s.cache.seeds()).toEqual([])
+    expect(s.cache.look('p1').state).toBe('ok')
+    s.cache.seed([{ id: 'p1', org_id: 'org', name: 'Seeded again', num: 3, parent_id: null }])
+    expect(s.cache.seeds()).toEqual([])
+  })
+
+  it('reads a failed chunk again from a fresh read on retry, and leaves an answered one alone', () => {
+    const s = setup()
+    s.cache.name('scope', ['p1'])
+    const [first] = s.reads()
+    s.fail(first.token)
+    expect(s.cache.look('p1').state).toBe('failed')
+    s.cache.retry('scope')
+    const [again] = s.reads()
+    expect(again.token).not.toBe(first.token)
+    expect(s.cache.look('p1').state).toBe('loading')
+    s.answer(again.token)
+    expect(s.cache.look('p1').state).toBe('ok')
+    s.cache.retry('scope')
+    expect(s.reads()[0].token).toBe(again.token)
   })
 
   it('reads in chunks in the order first named, a list that loads more changing only its last chunk', () => {

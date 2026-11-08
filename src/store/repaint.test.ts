@@ -352,7 +352,6 @@ describe('view model identity across repaints', () => {
       snap.orgs[0].next_issue_num = 40
     })
     expect(emits).toBe(shown + 1)
-    expect(P().nextIssueKey(snapshot.projects[0].id)).toContain('41')
   })
 
   it('notifies for a delivery that changes a task', () => {

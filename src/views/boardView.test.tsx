@@ -1015,9 +1015,8 @@ describe('what the Board says in place of its columns', { timeout: BOARD_TEST_TI
     expect(document.querySelector('[data-status-count]')).toBeNull()
     expect(document.querySelector('[data-card]')).toBeNull()
     const choices = [...document.querySelectorAll<HTMLButtonElement>('[data-board-choice]')]
-    expect(choices.map((b) => b.dataset.boardChoice)).toEqual(
-      board.P.scopeInfo('plan')?.groups.map((g) => g.proj.id),
-    )
+    // the answer's sub-projects as the project cache names them
+    expect(choices.map((b) => b.dataset.boardChoice)).toEqual(['one', 'two'])
     await act(async () => choices[1].click())
     expect(board.actions.setScope).toHaveBeenCalledWith('two')
   })

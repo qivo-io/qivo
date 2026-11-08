@@ -56,7 +56,7 @@ function SettingsScreen({
   onNewSubProject: (
     parent: string,
     focusAfterClose?: () => HTMLElement | null,
-    onCreated?: (id: string, saved: Promise<boolean>) => void,
+    onCreated?: (id: string, saved: Promise<{ num: number } | null>, name: string) => void,
   ) => void
   /** the project Archived tasks opens on, or null for the current scope's */
   archivedTasksProject?: string | null

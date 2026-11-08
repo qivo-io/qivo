@@ -55,8 +55,8 @@ import {
   isProjectCreators,
   projectRightAfterUpdate,
 } from '../../convex/lib/projectCreators'
-import { creatorGrant, grantsAfterHandover } from '../../convex/lib/projectGrants'
-import { resolveReviewHours, reviewStamp, taskOwnerId } from '../../convex/lib/review'
+import { creatorGrant } from '../../convex/lib/projectGrants'
+import { reviewStamp, taskOwnerId } from '../../convex/lib/review'
 import type { DependencyAnswer, DependencyRow, RoadmapAnswer } from '../../convex/lib/roadmap'
 import { firstSittingDay, SYNC_OWNERS_MAX } from '../../convex/lib/teamSync'
 import type { AgendaAnswer } from '../../convex/lib/teamSyncAgenda'
@@ -228,7 +228,7 @@ import {
 import { createOwnerLoadCache, type OwnerLoad, type OwnerNeed } from './ownerLoadCache'
 import { createPreferences } from './preferences'
 import { createProfileCache, type NamedPerson } from './profileCache'
-import { type CachedState, createProjectCache } from './projectCache'
+import { type CachedState, createProjectCache, type ProjectSeed } from './projectCache'
 import { createWorkspaceRows, RowMap, rowCopies } from './rowMap'
 import { keep, keepItems, sameData } from './stable'
 import {
@@ -280,9 +280,7 @@ import {
   type ActivityVM,
   type ArchivedIssueVM,
   type ArchivedListRowVM,
-  type ArchivedProjectVM,
   type AttachmentVM,
-  byOrder,
   type CommentVM,
   duplicateNameTags,
   type InboxMark,
@@ -296,20 +294,18 @@ import {
   type PersonShown,
   type PersonView,
   type ProjectFacts,
-  type ProjectVM,
   personOfFace,
   personOfName,
   personOfUser,
   shapeActivity,
   shapeArchivedListRow,
-  shapeArchivedProject,
   shapeAttachment,
   shapeCachedProject,
   shapeComment,
   shapeMilestone,
   shapeOrg,
   shapeOrgRef,
-  shapeProject,
+  shapeSeededProject,
   shapeTeam,
   shapeUser,
   type TeamVM,
@@ -324,7 +320,6 @@ export type {
   ActivityVM,
   ArchivedIssueVM,
   ArchivedListRowVM,
-  ArchivedProjectVM,
   AttachmentVM,
   CommentVM,
   IssueSubscribers,
@@ -336,7 +331,7 @@ export type {
   PersonOk,
   PersonShown,
   PersonView,
-  ProjectVM,
+  ProjectFacts,
   TeamVM,
   UserVM,
 } from './viewModels'
@@ -383,19 +378,6 @@ const rows = {
   },
   set teamMembers(value) {
     workspaceRows.setList('teamMembers', value)
-  },
-  projects: workspaceRows.projects,
-  get access() {
-    return workspaceRows.list('access')
-  },
-  set access(value) {
-    workspaceRows.setList('access', value)
-  },
-  get teamAccess() {
-    return workspaceRows.list('teamAccess')
-  },
-  set teamAccess(value) {
-    workspaceRows.setList('teamAccess', value)
   },
   issues: workspaceRows.issues,
   get hiddenSubtaskParents() {
@@ -3340,15 +3322,14 @@ function detailAttachment(attId: string): { org: string } | null {
 /* The server time of the workspace delivery the store took last, which
    snapshot trouble says what it shows as of (beginTrouble). */
 let lastDeliveryAt: string | null = null
-/* Whether the newest workspace report was a delivery the store took: a
-   complete one or, while every task loads, a partial one, which holds
-   every part but the tasks (tookDelivery). P.workspaceCurrent reads it. */
-let deliveryCurrent = false
+/* The first projectNav.targets batch of each organization the task window
+   asks about for Link task's offer (P.watchEditsSomeProject): whether it
+   holds a row, or 'asked' while it has no answer that says. */
+const editsSome = new Map<string, boolean | 'asked'>()
 
 /** Notes a live delivery the store took, at server time `at`. */
 function tookDelivery(at: string) {
   lastDeliveryAt = at
-  deliveryCurrent = true
 }
 /* Draft-only uploads a discarded draft let go of while edits were paused
    (removeAttachment's deferWhilePaused), with the task each belongs to
@@ -3447,29 +3428,6 @@ function archivePaint(rootId: string, keepSubtasks: boolean, at: string, org: st
     }
     purgeIssueRows(new Set([rootId]))
   }
-}
-
-/* The paint of an accepted project delete. The server hides the project and
-   its sub-projects in one transaction and moves their tasks to Deleted
-   items in steps, so the next delivery already lacks all of them. */
-function dropProjectRows(id: string) {
-  const row = rows.projects.get(id)
-  if (!row) return
-  const ids =
-    row.type === 'meta' ? [id, ...rows.projects.keysWhere((x) => x.parent_id === id)] : [id]
-  for (const key of rows.issues.keysWhere((i) => ids.includes(i.project_id)))
-    rows.issues.delete(key)
-  for (const key of rows.links.keysWhere(
-    (l) => !rows.issues.has(l.source_id) || !rows.issues.has(l.target_id),
-  ))
-    rows.links.delete(key)
-  workspaceRows.keepList('issueLabels', (il) => rows.issues.has(il.issue_id))
-  workspaceRows.keepList('issueSubs', (s) => rows.issues.has(s.issue_id))
-  workspaceRows.keepList('access', (a) => !ids.includes(a.project_id))
-  workspaceRows.keepList('teamAccess', (a) => !ids.includes(a.project_id))
-  ids.forEach((pid) => {
-    rows.projects.delete(pid)
-  })
 }
 
 /* The paint of a task delete in organization `org` at `at`: the tasks in
@@ -3596,7 +3554,7 @@ export const ISSUE_PREFIX = 'QN'
    app's `scope` state as this sentinel, routes as <view>/mine and switches
    views like any project scope. It names no project, so it has no lead, no
    settings page, no archive and nowhere to create, which is what
-   `P.isWideScope` asks; `P.project('mine')` stays undefined, and every
+   `P.isMineScope` asks; `P.project('mine')` stays undefined, and every
    consumer goes through `P.scopeInfo`. It is the only such sentinel: the
    views have no scope over all projects, which the All projects directory
    (components/ProjectDirectory.tsx) and main Search serve instead. */
@@ -3751,8 +3709,6 @@ function shownWorkspace() {
       P.orgs,
       P.myProfileIds,
       P.teams,
-      P.projects,
-      P.archivedProjects,
       P.projectTags,
       // the list P.issues shows, read past its test-build guard
       tasks.issues(),
@@ -4283,10 +4239,10 @@ type ViewQuery = {
       (P.ownOnScreen): the Board's and the Roadmap's */
   takesNew?: true
   /** the projects a value names, which the store names with the project
-      cache under the slot (nameSlotProjects), so a row, a flag or a label
-      of a project the workspace's projects part does not hold reads its
-      name and the caller's level from the cache; none for a value that
-      names none. A slot whose read stops, as a kept page's that hides,
+      cache under the slot (nameSlotProjects), so a row, a flag, a label or
+      a group heading reads its name and the caller's level from the cache,
+      the store's only source of projects; none for a value that names
+      none. A slot whose read stops, as a kept page's that hides,
       releases them and names them again from its kept answer when it
       reads again (watchView) */
   projects?: (value: unknown) => readonly string[] | null
@@ -4440,6 +4396,17 @@ const SYNC_QUERY: ViewQuery = {
         ...answer.parents,
       ]
     return answer.state === 'unavailable' ? null : KEEP_ROWS
+  },
+  // an ok agenda's rows, its sub-projects and their top-level projects,
+  // which the notes' smaller scopes, a stale meeting's filter and the
+  // cards' names read through the project cache
+  projects: (value) => {
+    const answer = value as AgendaAnswer
+    if (answer.state !== 'ok') return null
+    return projectsOf(
+      [...answer.rows, ...answer.asks, ...answer.done, ...answer.parents],
+      [...answer.sub_projects, ...answer.top_projects],
+    )
   },
 }
 
@@ -4951,7 +4918,10 @@ function milestonePaint(marks: MilestoneMarks, paint: Paint): Paint {
    own answers tell which rows a read is known to lack
    (store/milestoneRows.ts coversRow). */
 const milestoneRows = createMilestoneRows({
-  topOf: (id) => rows.projects.get(id)?.parent_id ?? id,
+  // a sub-project whose parent the project cache has not answered stands
+  // for itself, so a paint reaches that read once the cache answers, never
+  // a wrong read
+  topOf: (id) => PLANNER.project(id)?.parent ?? id,
   live: viewLive,
 })
 
@@ -7157,10 +7127,10 @@ const fieldLookup = {
         return name ? `milestone “${name}”` : 'a milestone'
       }
       case 'project':
-        return named(rows.projects.get(change.id)?.name, 'a project')
+        return named(PLANNER.project(change.id)?.name, 'a project')
       case 'grant': {
         const who = knownName(change.of) ?? rows.teams.get(change.of ?? '')?.name
-        const where = rows.projects.get(change.id)?.name
+        const where = PLANNER.project(change.id)?.name
         return who && where ? `${who}'s access to ${where}` : 'an access level'
       }
       case 'team':
@@ -8257,29 +8227,30 @@ const profileCache = createProfileCache({
   watchVisibility,
 })
 
-/* The projects the open views name that the workspace's projects part does
-   not hold, read by id and kept within PROJECT_CACHE.most
-   (store/projectCache.ts). A change of an entry or a state repaints once a
-   frame as a picture does: a rebuild, which shapes the cached facts, the
-   number tags and P.contextVersion, then a workspace emit. P.project,
-   P.levelOn and the lookups built on them answer from it where the part
-   does not hold the project; P.heldProject never does. */
+/* The projects the open views, the scope, the dialogs and the task window
+   name, read by id and kept within PROJECT_CACHE.most
+   (store/projectCache.ts), the store's only source of project facts and
+   of the caller's levels, as the workspace holds no project. A change of
+   an entry or a state repaints once a frame as a picture does: a rebuild,
+   which shapes the cached facts, the number tags and P.contextVersion,
+   then a workspace emit. P.project, P.levelOn and the lookups built on
+   them answer from it. */
 const projectCache = createProjectCache({
   live: {
     watch: (ref, args) => live.watch(ref, args),
     read: (token) => live.read(token),
     onTransition: (fn, options) => live.onTransition(fn, options),
   },
-  // archived ones included, so a task window of an archived project's task
-  // reads nothing
-  held: (id) => rows.projects.has(id),
   changed: () => showPortraits(),
   watchVisibility,
 })
-/* The facts of the cache's rows the part does not hold, by id, shaped in
-   rebuild, each the same object while its row is unchanged. */
+/* The facts of the cache's rows, by id, shaped in rebuild, each the same
+   object while its row is unchanged. */
 let cachedFacts: ReadonlyMap<string, ProjectFacts> = new Map()
+/* The held task list whose projects the cache was last told of (rebuild). */
+let heldTasksNamed: readonly IssueVM[] | null = null
 const factsOfRow = new WeakMap<NavByIdRow, ProjectFacts>()
+const factsOfSeed = new WeakMap<ProjectSeed, ProjectFacts>()
 
 /* The person views P.person answers, by id, shaped in rebuild beside
    P.users from the signed-in person's own profiles and the cache, each
@@ -8654,11 +8625,16 @@ const higherLevel = (a: string | null, b: string | null): string | null => {
     level === 'lead' ? 3 : level === 'user' ? 2 : level === 'viewer' ? 1 : 0
   return rank(a) >= rank(b) ? a : b
 }
-/* The parts of a project its levels are read from, so a draft that does not
-   exist yet can be asked too (P.seesNewProject). */
-type ProjectGrants = Pick<ProjectVM, 'org' | 'parent' | 'lead' | 'access' | 'teamAccess'>
-/* Each person's teams as a set, so a project's few team shares are checked
-   against them instead of walking hundreds of teams for every project. */
+/* The parts of a draft project its level is read from (P.seesNewProject):
+   its organization, its grants by person with the lead among them, and
+   its team shares. */
+type DraftGrants = {
+  org: string
+  access: Record<string, string>
+  teamAccess: Record<string, TeamAccessLevel>
+}
+/* Each person's teams as a set, so a draft's few team shares are checked
+   against them. */
 const teamSets = new WeakMap<UserVM, Set<string>>()
 const teamSetOf = (user: UserVM): Set<string> => {
   let teams = teamSets.get(user)
@@ -8668,64 +8644,40 @@ const teamSetOf = (user: UserVM): Set<string> => {
   }
   return teams
 }
-const grantOnProject = (p: ProjectGrants, user: UserVM): string | null => {
-  let level = p.access?.[user.id] || null
+/* The signed-in person's level on draft top-level project `p` by ordinary
+   access, the rule of convex/lib/access.ts levelUnder for a project with
+   no parent: their own grant, the lead among them, and their teams' shares,
+   capped at Viewer for an organization Viewer. It reads only the draft and
+   the caller's own seat and teams, which the root part sends. Every level
+   on a stored project is the server's, through the project cache
+   (P.levelOn). */
+const levelOnDraft = (p: DraftGrants): string | null => {
+  const user = actorIn(p.org)
+  if (!user?.active) return null
+  let level = p.access[user.id] || null
   if (user.orgRole === 'admin' || user.orgRole === 'user' || user.orgRole === 'viewer') {
     const teams = teamSetOf(user)
-    for (const [teamId, teamLevel] of Object.entries(p.teamAccess ?? {})) {
+    for (const [teamId, teamLevel] of Object.entries(p.teamAccess)) {
       if (teams.has(teamId) && rows.teams.get(teamId)?.org_id === p.org) {
         level = higherLevel(level, teamLevel || null)
       }
     }
   }
-  return level
-}
-/* The signed-in person's level on `p` by ordinary access, through their
-   seat in its organization, the rule of convex/lib/access.ts levelUnder: the
-   lead role, their own grant and their teams' shares on the project and its
-   parent. An organization admin is judged by their own rows like anyone;
-   only the management rule (P.canManageOwnProjectAccess) knows the role.
-   The store holds nobody else's grants or memberships, so it asks of no
-   one else; the server checks another person's sight of a task at full
-   scope and refuses with its sentence. */
-const levelOnProject = (
-  p: ProjectGrants | null | undefined,
-  projectById: (id: string) => ProjectVM | undefined = (id) => PLANNER.heldProject(id),
-): string | null => {
-  if (!p) return null
-  const user = actorIn(p.org)
-  if (!user?.active) return null
-  const parent = p.parent ? projectById(p.parent) : null
-  let level = grantOnProject(p, user)
-  if (parent?.org === p.org) {
-    const inherited = grantOnProject(parent, user)
-    level = higherLevel(level, inherited === 'lead' && p.lead ? 'user' : inherited)
-  }
   return user.orgRole === 'viewer' && level ? 'viewer' : level
 }
-const visibleLevelOnProject = (p: ProjectVM | null | undefined): string | null => {
-  const own = levelOnProject(p)
-  if (own || !p || p.type !== 'meta') return own
-  return PLANNER.projects.some((child) => child.parent === p.id && levelOnProject(child))
-    ? 'viewer'
-    : null
-}
 
-/** The organization a project belongs to, from the projects part else the
-    project cache (P.project), or '' where neither knows it. Its callers,
-    and what each does with '': milestoneOrg, a milestone's organization
-    when the milestone rows hold none, where a milestone write then sends
-    nothing; P.inviteToProject, the organization an invite goes to without
-    a page's lookup, which then sends nothing; P.nextIssueKey, the
-    organization whose counter the preview reads, else the home one;
-    P.unarchiveIssue, the organization a restore goes to when the caller
-    names none, else the home one; P.addProject, a new sub-project's
-    organization from its parent's without a page's, else the home one;
-    and P.projectAttachmentLimit, the organization whose file cap applies,
-    else the largest cap. */
+/** The organization a project belongs to, from the project cache
+    (P.project), or '' where it does not know it. Its callers, and what
+    each does with '': milestoneOrg, a milestone's organization when the
+    milestone rows hold none, where a milestone write then sends nothing;
+    P.inviteToProject, the organization an invite goes to without a page's
+    lookup, which then sends nothing; P.unarchiveIssue, the organization a
+    restore goes to when the caller names none, else the home one; and
+    P.addProject, a new sub-project's organization from its parent's
+    without a page's, else the home one. */
 function orgOfProject(pid: string | null | undefined): string {
   if (!pid) return ''
-  return rows.projects.get(pid)?.org_id ?? cachedFacts.get(pid)?.org ?? ''
+  return cachedFacts.get(pid)?.org ?? ''
 }
 
 /** What an off control says while its project loads, has failed, or is
@@ -8737,7 +8689,6 @@ export const READ_ONLY_PROJECT = 'Read-only project access'
 
 /* --- derived snapshot -------------------------------------------------------- */
 
-const findProject = createEntityLookup<ProjectVM>()
 const findUser = createEntityLookup<UserVM>()
 const findTeam = createEntityLookup<TeamVM>()
 
@@ -8832,8 +8783,9 @@ function rebuild(now = new Date(), full = false) {
   const P = PLANNER
   const gridBefore = P.TIMELINE_START?.getTime()
   const todayBefore = P.TODAY_ISO
-  // the people and projects the workspace holds now are read by id no more,
-  // and those it stopped holding are
+  // the people the workspace holds now are read by id no more, and those
+  // it stopped holding are; the project cache reads its owners' projects
+  // again after a clear
   profileCache.sync()
   projectCache.sync()
   syncPictureKeys()
@@ -8937,70 +8889,10 @@ function rebuild(now = new Date(), full = false) {
       .map(shapeTeam),
   )
 
-  // projects (+ children / access derived) — see shapeProject
-  const accByProject = new Map<string, Record<string, string>>()
-  rows.access.forEach((a) => {
-    const m = accByProject.get(a.project_id) || {}
-    m[a.profile_id] = a.level
-    accByProject.set(a.project_id, m)
-  })
-  const teamAccByProject = new Map<string, Record<string, TeamAccessLevel>>()
-  rows.teamAccess.forEach((a) => {
-    const m = teamAccByProject.get(a.project_id) || {}
-    m[a.team_id] = a.level
-    teamAccByProject.set(a.project_id, m)
-  })
-  const childrenOf = new Map<string, Row<'projects'>[]>()
-  rows.projects.forEach((p) => {
-    if (p.parent_id) {
-      const l = childrenOf.get(p.parent_id) || []
-      l.push(p)
-      childrenOf.set(p.parent_id, l)
-    }
-  })
-  const allShapes = [...rows.projects.values()]
-    .sort(byOrder)
-    .map((p) => shapeProject(p, childrenOf, accByProject, teamAccByProject))
-  const shapeById = new Map(allShapes.map((s) => [s.id, s]))
-  P.projects = keepItems(
-    P.projects,
-    allShapes.filter((s) => s.archivedAt == null),
-  )
-  /* …and the archived ones. Each row answers its page's two questions itself
-     because the ordinary route (metaOf → levelOn) resolves through
-     P.projects, which by construction no longer holds these. `withParent` is
-     the sub-project rule the server's cascade states in timestamps: a sub
-     archived along with its project comes back with it, one archived earlier
-     on its own does not. Newest archived first: this is a list you scan for
-     what you just put in it, or for the oldest thing to delete. A project
-     shared with you only through one of its sub-projects is listed as a
-     viewer, the server's navigation-only rule (projectLevelsForOrg), so that
-     sub-project has a row to sit under. */
-  const shapeOf = (id: string) => shapeById.get(id)
-  const viaSubProject = (s: ProjectVM) =>
-    s.type === 'meta' &&
-    (childrenOf.get(s.id) || []).some((c) => levelOnProject(shapeOf(c.id), shapeOf))
-  P.archivedProjects = keepItems(
-    P.archivedProjects,
-    allShapes
-      .filter((s) => s.archivedAt != null)
-      .flatMap((s) => {
-        const meta = s.type === 'meta' ? s : s.parent ? shapeOf(s.parent) : undefined
-        const level = levelOnProject(s, shapeOf) ?? (viaSubProject(s) ? 'viewer' : null)
-        return level ? [shapeArchivedProject(s, meta, level === 'lead')] : []
-      })
-      .sort(
-        (a, b) =>
-          (b.archivedAt || 0) - (a.archivedAt || 0) ||
-          a.name.localeCompare(b.name) ||
-          byStamp('', a.id, '', b.id),
-      ),
-  )
-  // the cache's rows the part does not hold, which a lookup answers once
-  // the part holds no such project; a row the part also sends counts once
+  // projects: the cache's rows, which every project lookup answers from,
+  // and the seeds of projects a navigation row opened before their row came
   const facts = new Map<string, ProjectFacts>()
   for (const row of projectCache.rows()) {
-    if (rows.projects.has(row.id)) continue
     let shaped = factsOfRow.get(row)
     if (!shaped) {
       shaped = shapeCachedProject(row)
@@ -9008,12 +8900,18 @@ function rebuild(now = new Date(), full = false) {
     }
     facts.set(row.id, shaped)
   }
+  for (const seed of projectCache.seeds()) {
+    if (facts.has(seed.id)) continue
+    let shaped = factsOfSeed.get(seed)
+    if (!shaped) {
+      shaped = shapeSeededProject(seed)
+      factsOfSeed.set(seed, shaped)
+    }
+    facts.set(seed.id, shaped)
+  }
   if (facts.size !== cachedFacts.size || [...facts].some(([id, f]) => cachedFacts.get(id) !== f))
     cachedFacts = facts
-  P.projectTags = keep(
-    P.projectTags,
-    duplicateNameTags([...P.projects, ...cachedFacts.values()], P.archivedProjects),
-  )
+  P.projectTags = keep(P.projectTags, duplicateNameTags([...cachedFacts.values()]))
 
   // tasks — their handles, view models, delays and load, reshaped only where
   // a change reaches them (store/taskIndex.ts). Numbers are per ORG (0050),
@@ -9035,13 +8933,7 @@ function rebuild(now = new Date(), full = false) {
   const changes = taskChangesOf(dirty)
   // who can open what, which a uuid every seat said unavailable for is
   // read again after (syncRefRead)
-  refAccessMoved ||=
-    whole ||
-    dirty.keys.has('projects') ||
-    dirty.keys.has('profiles') ||
-    dirty.lists.has('access') ||
-    dirty.lists.has('teamAccess') ||
-    dirty.lists.has('teamMembers')
+  refAccessMoved ||= whole || dirty.keys.has('profiles') || dirty.lists.has('teamMembers')
   // the tasks taken for groups with subtasks to come, and for subtasks of
   // parents to come, change while loading
   if (
@@ -9069,6 +8961,15 @@ function rebuild(now = new Date(), full = false) {
   rebuiltLoading = !tasksAll
   P.issues = tasks.issues()
   P.issueById = tasks.issueById()
+  // the projects of the tasks the workspace holds, which it holds only
+  // after something asked for every task: named with the project cache, so
+  // every held task's place, delay rule and rights read their project. They
+  // are the person's live projects, within PROJECT_CACHE.most at the design
+  // size (700 of one organization)
+  if (P.issues !== heldTasksNamed) {
+    heldTasksNamed = P.issues
+    projectCache.name('held tasks', [...new Set(P.issues.map((it) => it.project))])
+  }
   if (STRICT_LAYERS && !unchecked) checkTasks(sources)
 
   // comments — the watched issue's only (oldest first, like its history; the
@@ -9090,8 +8991,6 @@ function rebuild(now = new Date(), full = false) {
     P.myProfileIds,
     P.users,
     P.teams,
-    P.projects,
-    P.archivedProjects,
     P.projectTags,
     P.CURRENT_USER,
     P.homeOrg,
@@ -9234,7 +9133,6 @@ function taskSources(): TaskSources {
     issueLabels: rows.issueLabels,
     issueSubs: rows.issueSubs,
     orgLoad: rows.orgLoad,
-    projects: rows.projects,
     ownerFacts,
     factsVersion: factsVersionNow(),
     hiddenSubtaskParents: subtaskParentsNow(),
@@ -9284,13 +9182,11 @@ function hiddenParentsNow(): ReadonlySet<string> {
 /** What the rows say changed since the last rebuild, as the task index
     reads it. */
 function taskChangesOf(dirty: ReturnType<typeof workspaceRows.takeDirty>): TaskChanges {
-  const keys = (name: 'issues' | 'links' | 'attachments' | 'projects') =>
-    dirty.keys.get(name) ?? new Set()
+  const keys = (name: 'issues' | 'links' | 'attachments') => dirty.keys.get(name) ?? new Set()
   return {
     issues: keys('issues'),
     links: keys('links'),
     attachments: keys('attachments'),
-    projects: keys('projects'),
     issueLabels: dirty.lists.has('issueLabels'),
     issueSubs: dirty.lists.has('issueSubs'),
     orgLoad: dirty.lists.has('orgLoad'),
@@ -9650,21 +9546,13 @@ export const REMOVAL_UNCHECKED =
     preview (panels/useAccessRemoval.tsx). */
 export const REMOVAL_CHECKING = 'Checking which tasks this affects…'
 
-/* The direct grant rows on a project, without the lead (projects.lead_id). */
-function grantsOn(projectId: string): Record<string, GrantLevel> {
-  const access: Record<string, GrantLevel> = {}
-  rows.access.forEach((a) => {
-    if (a.project_id === projectId) access[a.profile_id] = a.level
-  })
-  return access
-}
 /* The organization whose project or team a removal changes: the one the
-   page showed for a grant that names it (AccessRemoval orgId), else the
-   workspace's. */
+   page showed (AccessRemoval orgId), else for a team the store's own team,
+   else the project cache's project. */
 const removalOrg = (change: AccessRemoval) =>
   change.orgId ??
   ('projectId' in change
-    ? rows.projects.get(change.projectId)?.org_id
+    ? PLANNER.project(change.projectId)?.org
     : rows.teams.get(change.teamId)?.org_id)
 
 /* The removals whose write is on its way, by removalKey, for
@@ -9749,47 +9637,22 @@ function sendRemoval(
           ),
         }))
       : []
-  // the server's Viewer grants on the project whose grant goes
-  const grants: Row<'project_access'>[] =
-    held === 'keep_as_viewer' && shown && 'projectId' in change
-      ? shown.people.map((p) => ({
-          project_id: change.projectId,
-          profile_id: p.id,
-          level: 'viewer' as const,
-        }))
-      : []
   const view: View = {
     workspace: () => {
       // the server settles only the tasks the person still holds at commit
       for (const { uuid, uid, field, db } of patches)
         if (rows.issues.get(uuid)?.[field] === uid) patchIssueRow(uuid, db, at)
-      if (change.kind === 'userGrant') {
-        workspaceRows.keepList(
-          'access',
-          (a) => !(a.project_id === change.projectId && a.profile_id === change.userId),
-        )
-      } else if (change.kind === 'teamGrant') {
-        workspaceRows.keepList(
-          'teamAccess',
-          (a) => !(a.project_id === change.projectId && a.team_id === change.teamId),
-        )
-      } else if (change.kind === 'teamMember') {
+      // the workspace holds no grant, so a grant's removal paints only the
+      // reassigned tasks; the project cache's next answer follows the access
+      if (change.kind === 'teamMember') {
         workspaceRows.keepList(
           'teamMembers',
           (m) => !(m.team_id === change.teamId && m.profile_id === change.userId),
         )
-      } else {
-        // the team's memberships and grants go with it; projects and work stay
+      } else if (change.kind === 'deleteTeam') {
+        // the team's memberships go with it; projects and work stay
         workspaceRows.keepList('teamMembers', (m) => m.team_id !== change.teamId)
-        workspaceRows.keepList('teamAccess', (a) => a.team_id !== change.teamId)
         rows.teams.delete(change.teamId)
-      }
-      for (const grant of grants) {
-        const has = workspaceRows
-          .peekList('access')
-          .some((a) => a.project_id === grant.project_id && a.profile_id === grant.profile_id)
-        const there = rows.projects.has(grant.project_id) && rows.profiles.has(grant.profile_id)
-        if (!has && there) rows.access.push({ ...grant })
       }
     },
   }
@@ -10020,17 +9883,15 @@ function subtaskListPaint(parent: string, kid: ShortRow | null, gone: string, at
   }
 }
 
-/* The remaining time a task in this sub-project gets on entering Review: its
-   own review_hours, else its parent project's, else the default. The same
-   resolver the server's reviewHoursFor uses, so the paint never flickers.
-   For a project the projects part does not hold, the time the project
-   cache's row carries, which projectNav.byIds resolved the same way, while
-   the cache keeps that row, else the default. */
-function reviewHoursForProject(projectId: string): number {
-  const p = rows.projects.get(projectId)
-  if (!p) return resolveReviewHours(projectCache.look(projectId).row?.review_hours, undefined)
-  const parent = p.parent_id ? rows.projects.get(p.parent_id) : undefined
-  return resolveReviewHours(p.review_hours, parent?.review_hours)
+/* The remaining time a task in this sub-project gets on entering Review:
+   its own review_hours, else its parent project's, else the default, as
+   projectNav.byIds resolves it with the server's resolver, from the project
+   cache's current answer, so the paint never flickers; null while the
+   cache has not answered for the project, when a paint leaves Remaining as
+   it is rather than paint a value the server will not store. */
+function reviewHoursForProject(projectId: string): number | null {
+  const known = projectCache.look(projectId)
+  return known.state === 'ok' && known.row ? known.row.review_hours : null
 }
 
 /* The fields updateViewTask writes: the Board's drop and owner picker
@@ -10411,9 +10272,12 @@ function moveAnswerTask(
   projectId: string,
   onSaved?: (saved: boolean) => void,
 ): string | null {
-  const target = rows.projects.get(projectId)
+  // the target from the project cache, a sub-project the Move window
+  // named and seeded from its targets row, never one it does not know yet
+  const target = PLANNER.project(projectId)
   const row = a.answer.task
-  if (target?.type !== 'project' || row.project_id === projectId) return null
+  if (target?.type !== 'project' || PLANNER.projectState(projectId) === 'gone') return null
+  if (row.project_id === projectId) return null
   const family = PLANNER.familyOf(a.model)
   if (!family || refusePausedEdit()) return null
   const { leavesParent, carried } = PLANNER.moveFamily(a.model, projectId, family)
@@ -10960,8 +10824,12 @@ function stampTaskPatch(row: PatchedTask, db: IssueWirePatch, at: string) {
   // project's review time with a fresh stamp unless the same patch states
   // hours (explicit hours win). Groups never get here: updateIssue deletes
   // status from a group's paint patch. The wire patch is never touched.
-  if (db.status === 'review' && prevStatus !== 'review' && db.remaining_hours == null) {
-    row.remaining_hours = reviewHoursForProject(row.project_id)
+  const reviewHours =
+    db.status === 'review' && prevStatus !== 'review' && db.remaining_hours == null
+      ? reviewHoursForProject(row.project_id)
+      : null
+  if (reviewHours !== null) {
+    row.remaining_hours = reviewHours
     row.remaining_set_at = row.updated_at
   }
   // the server's review hand-off stamp, by the same shared rule
@@ -10996,7 +10864,7 @@ function paintDescriptionImages(uuid: string, before: string, after: string, at:
 function newTaskPaint(row: Row<'issues'>, created: { num: number | null }): Paint {
   return () => {
     const org = rows.orgs.get(row.org_id)
-    if (rows.issues.has(row.id) || !org || !rows.projects.has(row.project_id)) return
+    if (rows.issues.has(row.id) || !org) return
     const num = created.num ?? Math.max(row.num, (org.next_issue_num || 0) + 1)
     org.next_issue_num = Math.max(org.next_issue_num || 0, num)
     rows.issues.set(row.id, { ...row, num })
@@ -11554,7 +11422,6 @@ function shownOf(over: Over | undefined): unknown {
     comments: rows.comments,
     organizations: rows.orgs,
     teams: rows.teams,
-    projects: rows.projects,
     profiles: rows.profiles,
   }
   const unheld = () => {
@@ -11714,6 +11581,11 @@ export type FieldSave = {
     (projectSettings.get), for a write the workspace may not hold the
     project for: its organization. */
 export type ProjectShown = { orgId: string }
+
+/** What a project create's answer says (P.addProject `onSaved`): the new
+    project's id, its number in its organization and the key the server
+    kept or chose. */
+export type ProjectCreated = { id: string; num: number; key: string }
 
 /** A team as a page that read it from the server showed it (teams.get), for
     a write the workspace may not hold the team for: its organization and
@@ -11928,12 +11800,9 @@ export const PLANNER = {
   orgs: [] as OrgRefVM[],
   myProfileIds: [] as string[],
   teams: [] as TeamVM[],
-  projects: [] as ProjectVM[],
-  // the archived ones (0106) — kept apart from `projects` on purpose, so that
-  // everything which asks P.project(id) treats an archived project as gone
-  archivedProjects: [] as ArchivedProjectVM[],
-  // project id → "#num" for projects sharing a name with another one shown
-  // alongside it (duplicateNameTags); absent for every unique name
+  // project id → "#num" for projects the project cache holds sharing a name
+  // with another one it holds (duplicateNameTags); absent for every unique
+  // name
   projectTags: new Map<string, string>(),
   STATUSES,
   PRIORITIES,
@@ -12024,52 +11893,20 @@ export const PLANNER = {
   deletedWaiting: new Set<string>() as ReadonlySet<string>,
   loaded: false,
 
-  /** Whether the newest workspace delivery brought the projects, a
-      complete one or a partial one while every task loads, and no paint
-      of the workspace is owed, so what the workspace holds is what the
-      server held then. For a reader that waits for the workspace to hold
-      a project a server read named, such as the open rule after
-      projectNav.resolve (components/projectNavRows.tsx), which stops
-      waiting when this holds and the project is still missing. */
-  workspaceCurrent: (): boolean => deliveryCurrent && !owed.workspace,
-
-  /** The facts of project `id` a view names (store/viewModels.ts
-      ProjectFacts): the workspace's live project where its projects part
-      holds it, else the row the project cache (store/projectCache.ts) keeps
-      for it, in every state but `gone`, else undefined. It never means "the
-      workspace holds it": a reader that sets the scope, creates, opens
-      Settings or reads the part's lead, grants, review time, key or
-      sub-projects reads P.heldProject. An archived project answers
+  /** The facts of project `id` (store/viewModels.ts ProjectFacts) from the
+      project cache (store/projectCache.ts), the store's only source of
+      projects: the row the cache keeps for it in every state but `gone`,
+      or the facts a navigation row seeded (P.seedProjects) until the cache
+      answers, else undefined. A project no owner names stays undefined
+      until one names it (P.nameProjects). An archived project answers
       undefined, as the cache never holds one. */
   project: (id: string | null | undefined): ProjectFacts | undefined =>
-    findProject(PLANNER.projects, id) ?? (id ? cachedFacts.get(id) : undefined),
-  /** The workspace's whole live project `id` from its projects part, or
-      undefined where the part does not hold it, for the readers whose next
-      step needs the workspace to hold the project: App's boot, guard, moves
-      and Settings exits, the open rule, the sidebar's scope owner, the
-      Inbox's Open task in board, the task window's Move offer and crumb
-      press, the dialogs and the Move window, the router's address parsing,
-      Settings' kept rows and parent moves, the phone's header, Team sync,
-      P.scopeInfo and the creates. t3/limits-projects-part retires it with
-      the part. */
-  heldProject: (id: string | null | undefined): ProjectVM | undefined =>
-    findProject(PLANNER.projects, id),
-  /** The held top-level project of held project `pid` (P.heldProject), for
-      the readers that set the scope to it, such as Plan on Roadmap. */
-  heldMeta: (pid: string | null | undefined): ProjectVM | null => {
-    const p = PLANNER.heldProject(pid)
-    if (!p) return null
-    return p.type === 'meta' ? p : PLANNER.heldProject(p.parent) || null
-  },
-  /** Where project `id` stands: `held` where the projects part holds it
-      live, `gone` where it holds it archived, else the project cache's state
-      (`ok`, `loading`, `failed`, `unchecked`, `gone`), and null for no id. A
-      project no open view names reads `loading` until one names it. */
-  projectState: (id: string | null | undefined): 'held' | CachedState | null => {
-    if (!id) return null
-    if (rows.projects.has(id)) return findProject(PLANNER.projects, id) ? 'held' : 'gone'
-    return projectCache.look(id).state
-  },
+    id ? cachedFacts.get(id) : undefined,
+  /** Where project `id` stands in the project cache (`ok`, `loading`,
+      `failed`, `unchecked`, `gone`), or null for no id. A project no open
+      view names reads `loading` until one names it. */
+  projectState: (id: string | null | undefined): CachedState | null =>
+    id ? projectCache.look(id).state : null,
   /** Why project `pid`'s write controls are off, or null where the caller
       may write there: "Loading this project…" until the project cache
       answers, "Couldn't load this project." after its read failed, the
@@ -12087,8 +11924,18 @@ export const PLANNER = {
   },
   /** Names project `ids` under owner `owner`, in its order, replacing what
       it named before; an empty list releases them. The project cache reads
-      the ones the workspace does not hold (store/projectCache.ts). */
+      them (store/projectCache.ts). */
   nameProjects: (owner: string, ids: readonly string[]) => projectCache.name(owner, ids),
+  /** Reads the projects owner `owner` names again where the project
+      cache's read of them failed or was not checked, for a Retry (App's
+      scope check). */
+  retryProjects: (owner: string) => projectCache.retry(owner),
+  /** Seeds the facts of projects a navigation row showed (projectNav.page,
+      children, search or resolve) into the project cache, so a scope
+      opened from the row names its project and asks its views at once
+      while the cache reads it (store/projectCache.ts seed). A seed gives no
+      level and never replaces a row the cache answered. */
+  seedProjects: (seeds: readonly ProjectSeed[]) => projectCache.seed(seeds),
   /** One projectNav.byIds read of `ids`, never subscribed, or null when it
       failed, for the staging check and the drives. */
   projectsByIds: async (ids: readonly string[]): Promise<NavByIds | null> => {
@@ -12203,17 +12050,13 @@ export const PLANNER = {
     return !u.isAgent && u.teamLeads.includes(teamId)
   },
   /* My effective rights on a project, its explicit grants with inherited
-     parent grants, through my seat in its organization: from the part's
-     grants where its projects part holds the project, else the level of the
-     project cache's current answer, else none while the project loads,
+     parent grants, through my seat in its organization, as the server
+     judges them by ordinary access: the level of the project cache's
+     current answer (projectNav.byIds), else none while the project loads,
      failed, was not checked or is gone, so a project not yet answered gives
      no right. Organization viewers remain read-only. They answer for the
-     signed-in person alone: the store holds no one else's grants or
-     memberships. */
+     signed-in person alone. */
   levelOn: (pid: string): string | null => {
-    const held = PLANNER.heldProject(pid)
-    if (held) return visibleLevelOnProject(held)
-    if (rows.projects.has(pid)) return null
     const known = projectCache.look(pid)
     return known.state === 'ok' ? (known.row?.level ?? null) : null
   },
@@ -12243,7 +12086,7 @@ export const PLANNER = {
     )
     if (lead) access[lead] = 'lead'
     const teamAccess = draft.teamAccess || {}
-    return levelOnProject({ org: HOME_ORG, parent: undefined, lead, access, teamAccess }) !== null
+    return levelOnDraft({ org: HOME_ORG, access, teamAccess }) !== null
   },
   /* Milestones sit on the meta project (addMilestone folds a sub-project up
      to it), so adding one needs edit access there. A sub-project grant alone
@@ -12267,95 +12110,49 @@ export const PLANNER = {
     if (!u?.active) return false
     return u.orgRole === 'admin' || PLANNER.levelOn(pid) === 'lead'
   },
-  /* Every top-level project this user can see in the workspace, in one
-     list (0078 retired the per-workspace silo and its switcher), blended
-     across organizations since 0081: home-org projects first, then each
-     foreign org's granted ones, each in sort order. The sidebar's tree no
-     longer reads it, as it lists the server's navigation reads
-     (components/SidebarProjects.tsx), nor does App, which opens a project
-     only once the server checked it (App.tsx startup). Its readers are
-     scopeInfo's wide scopes, Team sync's scope menu and notes, and the
-     smoke drive's startup block and phone check (scripts/smoke.mjs). */
-  visibleProjects: () =>
-    PLANNER.projects
-      .filter((p) => p.type === 'meta' && PLANNER.canSee(p.id))
-      .sort((a, b) => {
-        const ah = a.org === PLANNER.homeOrg ? 0 : 1
-        const bh = b.org === PLANNER.homeOrg ? 0 : 1
-        if (ah !== bh) return ah - bh
-        if (a.org !== b.org) {
-          const an = PLANNER.orgs.find((o) => o.id === a.org)?.name || ''
-          const bn = PLANNER.orgs.find((o) => o.id === b.org)?.name || ''
-          return an.localeCompare(bn)
-        }
-        return 0 // inside one org the projects keep their sort_order
-      }),
-
   MINE_SCOPE,
   isMineScope: (id: string | null | undefined) => id === MINE_SCOPE,
-  /* The scope that names no projects row, which is My view (MINE_SCOPE):
-     `P.project(id)` is undefined for it, so there is no lead, no settings
-     page, no archive and nowhere to create. isMineScope asks the same now
-     that My view is the only sentinel; the rules that mean "names no
-     project" ask this one. */
-  isWideScope: (id: string | null | undefined) => id === MINE_SCOPE,
-  /* Shared scope for Overview, Board and Roadmap; null means it disappeared,
-     or that the projects part does not hold the scope's project (P.heldProject).
-     subIds names task-holding sub-projects. Groups are sub-projects within a
-     project, top-level projects in My view, or the single selected sub.
-     Its milestones are the milestone reads' (P.watchMilestones), not here.
-     wide is the scope that names no project row, My view, and mine narrows
-     its tasks to me. Rollups use the only predicate but ignore transient
-     toolbar filters. */
-  scopeInfo: (scopeId: string) => {
-    if (scopeId === MINE_SCOPE) {
-      const mine = true
-      const metas = PLANNER.visibleProjects()
-      const groups = metas.map((m) => ({
-        proj: m,
-        subIds: (m.children || []).filter((id) => PLANNER.canSee(id)),
-      }))
-      const subIds = groups.flatMap((g) => g.subIds)
+  /** The scope shared by the Overview, the Board and the Roadmap, its
+      identity and where it stands, never its sub-projects: each view takes
+      them from its own answer (store/scopeGroups.ts scopeGroups). My view
+      (MINE_SCOPE) names no project row, so `mine` narrows its tasks to me
+      (`only`), with no project and `state` ok. A project scope answers its
+      facts and its top-level project's (`meta`, itself for a top-level
+      project) from the project cache, `topId` the top-level project's id
+      once the scope's facts name it, and `state` the worse of the two
+      projects' cache states: `gone` before `unchecked`, `failed` and
+      `loading`, so only a current answer that leaves one of them out loses
+      the scope (App's guard). The name is the cache's, '' while it knows
+      none. Rollups use the `only` predicate but ignore transient toolbar
+      filters. Its milestones are the milestone reads' (P.watchMilestones). */
+  scopeInfo: (scopeId: string): ScopeInfo => {
+    if (scopeId === MINE_SCOPE)
       return {
-        wide: true,
-        mine,
+        mine: true,
         only: PLANNER.isMine,
         id: scopeId,
         name: 'My view',
-        proj: null as ProjectVM | null,
+        proj: null,
         isMeta: false,
-        metas,
-        groups,
-        subIds,
-        subIdSet: new Set(subIds),
+        meta: null,
+        topId: null,
+        state: 'ok',
       }
-    }
-    // a scope's sub-projects are a list the project cache cannot give, so
-    // a project scope stays on the projects part (P.heldProject) until
-    // t3/limits-projects-part takes them from each view's own answer
-    const p = PLANNER.heldProject(scopeId)
-    if (!p) return null
-    const isMeta = p.type === 'meta'
-    const meta = isMeta ? p : PLANNER.heldProject(p.parent)
-    const groups = isMeta
-      ? (p.children || [])
-          .map((id) => PLANNER.heldProject(id))
-          .filter((sp): sp is ProjectVM => !!sp && PLANNER.canSee(sp.id))
-          .map((sp) => ({ proj: sp, subIds: [sp.id] }))
-      : [{ proj: p, subIds: [p.id] }]
-    const subIds = groups.flatMap((g) => g.subIds)
+    const p = PLANNER.project(scopeId) ?? null
+    const topId = p ? (p.parent ?? p.id) : null
+    const meta = p && topId !== p.id ? (PLANNER.project(topId) ?? null) : p
+    const own = projectCache.look(scopeId).state
+    const top = topId && topId !== scopeId ? projectCache.look(topId).state : own
     return {
-      wide: false,
       mine: false,
       only: null,
-      id: p.id,
-      name: p.name,
-      proj: p as ProjectVM | null,
-      isMeta,
-      metas: meta ? [meta] : [],
-      groups,
-      subIds,
-      subIdSet: new Set(subIds),
+      id: scopeId,
+      name: p?.name ?? '',
+      proj: p,
+      isMeta: p?.type === 'meta',
+      meta,
+      topId,
+      state: worseState(own, top),
     }
   },
   /** The tasks a scope holds, its sub-projects', narrowed by the scope's
@@ -12978,15 +12775,14 @@ export const PLANNER = {
     if (h < 24) return `${h}h ago`
     return `${Math.round(h / 24)}d ago`
   },
+  /** The lead of project `id`: its own, else its top-level project's, from
+      the project cache (projectNav.byIds lead_id), or null where neither
+      the project nor its parent has one known. */
   leadOf: (id: string) => {
-    const p = PLANNER.projects.find((x) => x.id === id)
+    const p = PLANNER.project(id)
     if (!p) return null
     if (p.lead) return p.lead
-    if (p.parent) {
-      const m = PLANNER.projects.find((x) => x.id === p.parent)
-      if (m?.lead) return m.lead
-    }
-    return null
+    return (p.parent ? PLANNER.project(p.parent)?.lead : undefined) ?? null
   },
   statusOf: (id: string) => STATUSES.find((s) => s.id === id),
   /* stale — no activity (updated_at) for the organization's standard
@@ -13087,8 +12883,9 @@ export const PLANNER = {
     return !!p && p.trackDelay !== false
   },
   /* The remaining time a task in this project gets on entering Review: the
-     project's own value, else its parent's, else DEFAULT_REVIEW_HOURS. */
-  reviewHoursFor: (projectId: string) => reviewHoursForProject(projectId),
+     project's own value, else its parent's, else DEFAULT_REVIEW_HOURS, as
+     the project cache's current answer gives it, null while it has none. */
+  reviewHoursFor: (projectId: string): number | null => reviewHoursForProject(projectId),
   /* Hours a person is committed to in `week` ORG-WIDE, spread the way the
      delay projection spreads it: the rows of the tasks on screen through
      the server's fence (convex/lib/loadRows.ts, paused, Done, unscheduled
@@ -14027,16 +13824,6 @@ export const PLANNER = {
      it). The awaited exceptions carry their own error mapping (§ header). */
   ISSUE_PREFIX,
 
-  /** The server assigns issue numbers from the org counter (0050; never
-      reused after deletes) — the snapshot has that counter, so the preview is
-      exact unless someone else creates concurrently. The projectId parameter
-      is kept for prototype API parity but no longer matters. */
-  nextIssueKey: (projectId?: string) => {
-    // the counter lives on the TARGET project's organization (0050/0081)
-    const o = rows.orgs.get(orgOfProject(projectId) || HOME_ORG)
-    return o ? `${ISSUE_PREFIX}-${(o.next_issue_num || 0) + 1}` : ''
-  },
-
   /** Creates a task from the New task dialog, a window's subtask create or
       a new sub-project's starter task, and answers what opening it passes
       on (P.openTask): its handle where the workspace holds it, which only
@@ -14061,11 +13848,19 @@ export const PLANNER = {
       for an invalid target or a refused parent (callers take their
       no-create path). */
   addIssue: (it: NewIssueInput, onRefused?: (open: string) => void) => {
-    const proj = rows.projects.get(it.project)
     // Numbering, org and reporter all follow the TARGET project's organization
-    // (0081): creating in a foreign project is attributed to my guest profile
-    const orgRow = proj ? rows.orgs.get(proj.org_id) : null
-    if (proj?.type !== 'project' || !orgRow) return null
+    // (0081): creating in a foreign project is attributed to my guest
+    // profile. The project comes from the project cache's current answer; a
+    // create into a project it has not answered refuses with its sentence
+    // and sends nothing.
+    const proj = PLANNER.project(it.project)
+    const state = PLANNER.projectState(it.project)
+    if (state !== 'ok' || !proj) {
+      toast(PLANNER.writeNote(it.project) ?? PROJECT_LOADING, 'error')
+      return null
+    }
+    const orgRow = rows.orgs.get(proj.org)
+    if (proj.type !== 'project' || !orgRow) return null
     if (refuseOver(LIMITS.title, cleanTitle(it.title)) || refusePausedEdit()) return null
     // a parent the workspace does not hold is the task the window shows
     // from a current answer; any other is refused rather than created as a
@@ -14107,7 +13902,7 @@ export const PLANNER = {
       remaining_hours: hasRemaining
         ? roundTenths(Number(it.remaining))
         : reviewStart
-          ? reviewHoursForProject(it.project)
+          ? (reviewHoursForProject(it.project) ?? undefined)
           : undefined,
       remaining_set_at: hasRemaining || reviewStart ? now : undefined, // mirror the 0072 stamp
       paused: !!it.paused,
@@ -14614,7 +14409,8 @@ export const PLANNER = {
       const shown = answerTaskOf(id)
       return shown ? moveAnswerTask(shown, projectId, onSaved) : null
     }
-    const target = rows.projects.get(projectId)
+    // the target from the project cache, as moveAnswerTask reads it
+    const target = PLANNER.project(projectId)
     const it = PLANNER.issueById[id]
     if (
       !row ||
@@ -14622,6 +14418,7 @@ export const PLANNER = {
       !it ||
       !target ||
       target.type !== 'project' ||
+      PLANNER.projectState(projectId) === 'gone' ||
       row.project_id === projectId ||
       refusePausedEdit()
     )
@@ -14885,10 +14682,10 @@ export const PLANNER = {
       answers `unavailable` with reason access_unchecked and its sentence,
       apart from a project the person cannot open. Null for a failed read.
       One read, never subscribed to and never part of the snapshot. Its
-      callers are startup's check of the remembered project and of a
-      project address the workspace does not hold (App.tsx), the open rule
-      of the lists on the navigation reads (components/projectNavRows.tsx
-      useNavOpen), Search's Search in and Settings › Archived tasks. */
+      callers are startup's check of a project address by number (App.tsx
+      through components/projectNavRows.tsx openResolved), App's check
+      that the creator sees a new sub-project, Search's Search in and
+      Settings › Archived tasks. */
   resolveProject: async (ask: ProjectAsk): Promise<ProjectResolved | null> => {
     try {
       return await convex.query(
@@ -14897,6 +14694,23 @@ export const PLANNER = {
       )
     } catch (e) {
       console.error('[qivo] project resolve failed:', e)
+      return null
+    }
+  },
+  /** Whether top-level project `id` has a sub-project the person sees
+      (projectNav.children's first batch): true once it holds a row, false
+      at an empty last batch, null for a failed read, a stopped batch or an
+      answer that is not a batch, which the caller never reads as none. One
+      read, never subscribed, for New task's "Create a sub-project first"
+      redirect (App.tsx openNewIssue). */
+  hasSubProjects: async (id: string): Promise<boolean | null> => {
+    try {
+      const batch = await convex.query(api.projectNav.children, { project_id: id })
+      if (batch.state !== 'ok') return null
+      if (batch.rows.length > 0) return true
+      return batch.next === null && !batch.stopped ? false : null
+    } catch (e) {
+      console.error('[qivo] sub-project check failed:', e)
       return null
     }
   },
@@ -15257,10 +15071,55 @@ export const PLANNER = {
   /** Whether the person may edit some live sub-project of organization
       `org`, for Link task on a task they only view: a link needs Edit on
       either task (convex/model/issues.ts linkAccess), and the Linked tasks
-      picker then lists the projects they can edit. Reads the workspace's
-      projects, never its tasks. */
-  editsSomeProject: (org: string): boolean =>
-    PLANNER.projects.some((p) => p.type === 'project' && p.org === org && PLANNER.canWrite(p.id)),
+      picker then lists the projects they can edit. True once the first
+      batch of projectNav.targets in that organization holds a row, false
+      once it answers an empty last batch, and null while it is asked or
+      could not answer (a stopped batch, a refusal or a failure), when the
+      offer waits. The task window asks it while it shows a task the person
+      only views (P.watchEditsSomeProject). */
+  editsSomeProject: (org: string): boolean | null => {
+    const answer = editsSome.get(org)
+    if (!answer || answer === 'asked') return null
+    return answer
+  },
+  /** Keeps one projectNav.targets read of organization `org`'s first batch
+      while the task window shows a task the person only views, for
+      P.editsSomeProject, and answers its release. */
+  watchEditsSomeProject: (org: string): (() => void) => {
+    const { token, stop } = live.watch(api.projectNav.targets, { org_id: org })
+    editsSome.set(org, 'asked')
+    const off = live.onTransition(
+      (transition) => {
+        if (!transition.tokens.has(token)) return
+        let value: unknown
+        try {
+          value = live.read(token)
+        } catch {
+          value = undefined
+        }
+        const batch = value as { state?: string; rows?: unknown[]; next?: unknown } | undefined
+        const was = editsSome.get(org)
+        const now =
+          batch?.state === 'ok' && Array.isArray(batch.rows)
+            ? batch.rows.length > 0
+              ? true
+              : batch.next === null
+                ? false
+                : 'asked'
+            : 'asked'
+        if (was === now) return
+        editsSome.set(org, now)
+        emit()
+      },
+      { view: true },
+    )
+    return () => {
+      off()
+      stop()
+      editsSome.delete(org)
+      emit()
+    }
+  },
 
   /** Makes task `child` a subtask of the window's task `open` with `on`,
       or takes it off `open`, for a pick in the Subtasks picker and a
@@ -15418,13 +15277,13 @@ export const PLANNER = {
   },
 
   /* --- attachments ---------------------------------------------------------- */
-  /** Per-file cap in bytes belongs to the project's organization, including
-      when the current user is working on a project shared by another org,
-      from the projects part else the project cache (orgOfProject). The
-      demo stores at most DEMO_FILE_BYTES whatever the organization
-      allows. */
-  projectAttachmentLimit: (projectId: string) => {
-    const org = rows.orgs.get(orgOfProject(projectId))
+  /** Per-file cap in bytes belongs to the task's organization `orgId`,
+      including when the current user is working on a project shared by
+      another org, from the root part's organizations, the largest cap for
+      one it does not name. The demo stores at most DEMO_FILE_BYTES
+      whatever the organization allows. */
+  orgAttachmentLimit: (orgId: string) => {
+    const org = rows.orgs.get(orgId)
     const cap = LIMITS.attachmentSize.max
     const limit = Math.min(org?.max_attachment_mb ?? cap, cap) * MIB
     return DEMO_MODE ? Math.min(limit, DEMO_FILE_BYTES) : limit
@@ -15438,7 +15297,7 @@ export const PLANNER = {
       PLANNER.issueById[issueKey] ??
       PLANNER.issueById[uuidToKey.get(issueKey) ?? ''] ??
       PLANNER.taskShown(issueKey)
-    return PLANNER.projectAttachmentLimit(it?.project ?? '')
+    return PLANNER.orgAttachmentLimit(it?.org ?? '')
   },
 
   /** Upload + register one file: files.uploadUrl → POST the bytes →
@@ -15518,7 +15377,7 @@ export const PLANNER = {
         toast(`Couldn't upload "${file.name}". ${full}`)
         return null
       }
-      const limit = PLANNER.projectAttachmentLimit(target.project)
+      const limit = PLANNER.orgAttachmentLimit(org)
       if (file.size > limit) {
         toast(attachmentTooLarge(file.name, limit))
         return null
@@ -17175,22 +17034,24 @@ export const PLANNER = {
     }
   },
 
-  /** Paints the project at once and returns its uuid. `onSaved` runs once the
-      server has stored it. `onRefused` runs after the refusal toast, just
-      before the refusal takes the project away. `shown` is the organization
-      a dialog that read the parent from the server showed it in
-      (ProjectShown). The create then goes to that organization, with the
-      caller's seat there as lead when `p.lead` names none, and paints only
-      where the workspace holds the parent. Without it the create goes to the
-      organization of the parent the workspace holds, else the home
-      organization. It sends no sort_order, so the server places the project
-      after every sibling (convex/model/projects.ts nextSiblingPlace), and
-      the paint places it by the same rule over the siblings the workspace
-      holds in that organization. An organization the workspace has no row
-      for sends nothing and says so in a toast. */
+  /** Creates a project or sub-project and returns its uuid. It paints
+      nothing, since the workspace holds no project: the sidebar, Settings
+      and the views show it once their reads hold it. `onSaved` runs once
+      the server has stored it, with the create's answer (its id, number
+      and key: the server keeps `p.key` while it is free, else the first
+      free candidate of the name, model/projects.ts allocateKey). `onRefused`
+      runs after the refusal toast. `shown` is the organization the dialog
+      that read the parent from the server showed it in (ProjectShown), or
+      for a top-level project the home organization's; without it a
+      sub-project's organization is the project cache's parent's, else the
+      home organization. The caller's seat there is the lead when `p.lead`
+      names none. It sends no sort_order, so the server places the project
+      after every sibling (convex/model/projects.ts nextSiblingPlace). An
+      organization the workspace has no row for sends nothing and says so
+      in a toast. */
   addProject: (
     p: NewProjectInput,
-    onSaved?: () => void,
+    onSaved?: (created: ProjectCreated) => void,
     onRefused?: () => void,
     shown?: ProjectShown,
   ) => {
@@ -17206,56 +17067,8 @@ export const PLANNER = {
     }
     if (refusePausedEdit()) return
     const uuid = crypto.randomUUID()
-    // the siblings the workspace holds in that organization, archived ones
-    // included: the parent's sub-projects, or its top-level projects
-    const siblings = [...rows.projects.values()].filter((x) =>
-      p.parent
-        ? x.parent_id === p.parent && x.type === 'project'
-        : x.org_id === orgId && x.parent_id === undefined && x.type === 'meta',
-    )
-    // projects.num is a per-org durable number used only in links (0050);
-    // preview it like addIssue previews issue numbers, fixed by the answer
-    const previewNum = (orgRow.next_project_num || 0) + 1
-    const row: Row<'projects'> = {
-      id: uuid,
-      org_id: orgId,
-      type: p.type,
-      parent_id: p.parent || undefined,
-      key: p.key,
-      num: previewNum,
-      name: p.name,
-      lead_id: p.lead || profileIn(orgId),
-      description: p.description || '',
-      // one past the largest place, as the server places it, skipping a
-      // place that is not a finite number as the server does
-      sort_order: siblings.reduce(
-        (place, x) => (Number.isFinite(x.sort_order) ? Math.max(place, x.sort_order + 1) : place),
-        0,
-      ),
-      track_delay: true,
-      created_at: new Date().toISOString(),
-    }
-    // the grant rows the server stores: the caller's map ('lead' entries are
-    // carried by lead_id, null ones name no grant) and the creator's own
-    const grants = newProjectGrants(p, profileIn(orgId), row.lead_id || '')
-    const teamAccess = { ...p.teamAccess }
-    // the server replaces a key held by an archived or hidden project
-    let saved: { num: number; key: string } | null = null
-    const projectPaint = () => {
-      const org = rows.orgs.get(orgId)
-      if (rows.projects.has(uuid) || !org) return
-      if (row.parent_id && !rows.projects.has(row.parent_id)) return
-      const num = saved?.num ?? Math.max(previewNum, (org.next_project_num || 0) + 1)
-      org.next_project_num = Math.max(org.next_project_num || 0, num)
-      rows.projects.set(uuid, { ...row, num, key: saved?.key ?? row.key })
-      Object.entries(grants).forEach(([uid, level]) => {
-        if (rows.profiles.has(uid)) rows.access.push({ project_id: uuid, profile_id: uid, level })
-      })
-      Object.entries(teamAccess).forEach(([teamId, level]) => {
-        if (rows.teams.has(teamId))
-          rows.teamAccess.push({ project_id: uuid, team_id: teamId, level })
-      })
-    }
+    const lead = p.lead || profileIn(orgId)
+    let created: ProjectCreated | null = null
     // ONE mutation carries row + access map; the follow-up grant upsert died
     const sent = send(
       api.projects.create,
@@ -17266,17 +17079,17 @@ export const PLANNER = {
         parent_id: p.type === 'meta' ? null : p.parent,
         key: p.key,
         name: p.name,
-        lead_id: row.lead_id,
+        lead_id: lead,
         description: p.description || '',
-        track_delay: row.track_delay,
+        track_delay: true,
         access: p.access || {},
         team_access: p.teamAccess,
       },
-      { workspace: projectPaint },
+      {},
       {
-        keep: (created) => {
-          saved = { num: created.num, key: created.key }
-          return { workspace: projectPaint }
+        keep: (answer) => {
+          created = { id: uuid, num: answer.num, key: answer.key }
+          return {}
         },
         onError: (error) => {
           toastCreateProjectError(error, what)
@@ -17284,29 +17097,36 @@ export const PLANNER = {
         },
       },
     )
-    // once the accepted project shows with its final number and key
-    if (onSaved) void sent.then((ok) => ok && onSaved())
+    // once the server stored it, with its number and key
+    if (onSaved)
+      void sent.then((ok) => {
+        if (ok && created) onSaved(created)
+      })
     return uuid
   },
 
-  /* Paints the change at once and sends it. Resolves true when the server
-     accepts it or nothing needed sending, false when it is missing here or
-     refused by the server (toasted). Access changes one grant at a time
-     (setProjectAccess, setProjectTeamAccess, removeAccess). `save` is a
-     settings field's draft (FieldSave). `shown` is the project as a page
-     that read it from the server showed it (ProjectShown): the write then
-     goes to its organization with `expected` from `save.seen`, which must
-     hold every field the patch changes, and paints only where the
-     workspace holds the project. Without it a project the workspace does
-     not hold is missing here. */
+  /* Sends a change of a project's settings. Resolves true when the server
+     accepts it or nothing needed sending, false when there is no page to
+     send it for or the server refused it (toasted). Access changes one
+     grant at a time (setProjectAccess, setProjectTeamAccess, removeAccess).
+     `save` is a settings field's draft (FieldSave). `shown` is the project
+     as a page that read it from the server showed it (ProjectShown): the
+     write goes to its organization with `expected` from `save.seen`, which
+     must hold every field the patch changes. It paints nothing, since the
+     workspace holds no project; the page's own read and the project
+     cache's next answer show the change. Without `shown` it sends nothing
+     and resolves false. */
   updateProject: (
     id: string,
     patch: ProjectPatch,
     save: FieldSave = {},
     shown?: ProjectShown,
   ): Promise<boolean> => {
-    const row = rows.projects.get(id)
-    if ((!row && !shown) || refusePausedEdit()) return Promise.resolve(false)
+    if (!shown) {
+      console.error('[qivo] a project change needs the page that showed the project')
+      return Promise.resolve(false)
+    }
+    if (refusePausedEdit()) return Promise.resolve(false)
     if ('name' in patch && refuseOver(LIMITS.projectName, patch.name ?? ''))
       return Promise.resolve(false)
     if ('description' in patch && refuseOver(LIMITS.projectDescription, patch.description ?? ''))
@@ -17319,106 +17139,47 @@ export const PLANNER = {
     if ('trackDelay' in patch) wire.track_delay = !!patch.trackDelay
     if ('reviewHours' in patch) wire.review_hours = patch.reviewHours ?? null
     if (!Object.keys(wire).length) return Promise.resolve(true)
-    const db: Partial<Row<'projects'>> = {}
-    if ('name' in patch) db.name = patch.name
-    if ('lead' in patch) db.lead_id = patch.lead || undefined
-    if ('description' in patch) db.description = patch.description || ''
-    if ('key' in patch) db.key = patch.key
-    if ('trackDelay' in patch) db.track_delay = !!patch.trackDelay
-    if ('reviewHours' in patch) db.review_hours = patch.reviewHours ?? undefined
-    const lead = patch.lead || null
-    const view: View = {
-      workspace: () => {
-        const live = rows.projects.get(id)
-        if (!live) return
-        // a lead handover: the server keeps the outgoing lead as User and
-        // drops the incoming lead's own grant
-        if (lead && lead !== live.lead_id) {
-          const after = grantsAfterHandover(grantsOn(id), live.lead_id, lead)
-          workspaceRows.keepList('access', (a) => a.project_id !== id)
-          Object.entries(after).forEach(([uid, level]) => {
-            rows.access.push({ project_id: id, profile_id: uid, level })
-          })
-        }
-        Object.assign(live, db)
-      },
-    }
-    const fields = Object.keys(db)
-    // a project the workspace does not hold paints nothing, and checks the
-    // values the page showed
-    const over = row
-      ? overOf('projects', row, fields, save.seen)
-      : overOf('projects', { id }, fields, save.seen)
+    const fields: string[] = []
+    if ('name' in patch) fields.push('name')
+    if ('lead' in patch) fields.push('lead_id')
+    if ('description' in patch) fields.push('description')
+    if ('key' in patch) fields.push('key')
+    if ('trackDelay' in patch) fields.push('track_delay')
+    if ('reviewHours' in patch) fields.push('review_hours')
+    // the values the page showed are the write's expected values
+    const over = overOf('projects', { id }, fields, save.seen)
     return send(
       api.projects.update,
-      { org_id: shown?.orgId ?? row?.org_id ?? '', id, patch: wire },
-      row ? view : {},
+      { org_id: shown.orgId, id, patch: wire },
+      {},
       { over, ...fieldSendOptions(save) },
     )
   },
 
-  /* Archive a project (0106). The row stays — that is the difference between
-     archiving and deleting — but everything it holds leaves the working
-     snapshot on the spot. The server cascade carries the active subs on the
-     parent's own stamp; painted here on one timestamp so the optimistic
-     snapshot and the delivery agree about which of them came along. */
+  /* Archive a project (0106) in the organization the page that showed it
+     named (ProjectShown). The server cascade carries the active subs on the
+     parent's own stamp. The workspace holds no project, so it paints only
+     the milestone reads, which hide the project's milestones at once, and
+     the tasks of the project leave the views with their next answers.
+     Without `shown` it sends nothing. */
   archiveProject: (id: string, shown?: ProjectShown) => {
-    const row = rows.projects.get(id)
-    // a project the workspace does not hold goes to the organization the
-    // page showed, and paints nothing
-    if (!row && shown && !refusePausedEdit()) {
-      void send(api.projects.archive, { org_id: shown.orgId, id }, {})
-      return
-    }
-    if (!row || row.archived_at || refusePausedEdit()) return
-    const stamp = new Date().toISOString()
+    if (!shown || refusePausedEdit()) return
     const view: View = {
-      workspace: () => {
-        const live = rows.projects.get(id)
-        if (!live) return
-        const ids =
-          live.type === 'meta' ? [id, ...rows.projects.keysWhere((x) => x.parent_id === id)] : [id]
-        // an already archived sub-project keeps its own stamp
-        ids.forEach((pid) => {
-          const r = rows.projects.get(pid)
-          if (r && !r.archived_at) r.archived_at = stamp
-        })
-        const issueIds = new Set(rows.issues.keysWhere((i) => ids.includes(i.project_id)))
-        // A project archive hides its tasks; it does not archive the tasks. A
-        // subtask in an archived project no longer makes a task in an active
-        // one a group (convex/lib/liveTasks.ts countsAsSubtask), so a parent
-        // left in another project keeps only its other subtasks, as the next
-        // delivery says.
-        for (const iid of issueIds) rows.issues.delete(iid)
-        // and a child left in another project now has its parent outside this
-        // view, as the next delivery says
-        for (const r of rows.issues.where((i) => !!i.parent_id && issueIds.has(i.parent_id))) {
-          r.parent_id = undefined
-          rows.hiddenParentTasks.add(r.id)
-        }
-        for (const key of rows.links.keysWhere(
-          (l) => !rows.issues.has(l.source_id) || !rows.issues.has(l.target_id),
-        ))
-          rows.links.delete(key)
-        workspaceRows.keepList('issueLabels', (il) => rows.issues.has(il.issue_id))
-      },
       // milestones sit on top-level projects, so a sub-project's archive
       // takes none from the milestone reads
       milestones: hideProjectMilestones(id),
     }
-    void send(api.projects.archive, { org_id: row.org_id, id }, view)
+    void send(api.projects.archive, { org_id: shown.orgId, id }, view)
   },
 
   /** Restore an archived project. Awaited rather than optimistic: its tasks
       are not in this client at all, and the snapshot pulls them back in
       reactively. Resolves false when the write was refused (toasted).
       `shown` names the organization a page that read the project from the
-      server showed it in (ProjectShown, as Archived projects reads it), so
-      a project the workspace does not hold restores too; the workspace's
-      own row decides where it holds one. Without either it sends nothing
-      and resolves false. */
+      server showed it in (ProjectShown, as Archived projects reads it).
+      Without it it sends nothing and resolves false. */
   unarchiveProject: async (id: string, shown?: ProjectShown): Promise<boolean> => {
-    const org = rows.projects.get(id)?.org_id ?? shown?.orgId
+    const org = shown?.orgId
     if (!org) return false
     try {
       await sendAwaited(api.projects.unarchive, { org_id: org, id }, 'none')
@@ -17435,13 +17196,13 @@ export const PLANNER = {
       of the whole tree, archived ones included (the server stops counting
       past 5,000 and says so with `more`). Asked only when the window opens,
       because only the project's lead may read it. Null when refused or
-      unreachable. `shown` names the organization of a project the
-      workspace does not hold (ProjectShown). */
+      unreachable, and without `shown`, the organization the page that
+      showed the project named (ProjectShown). */
   projectRemovalSummary: async (
     id: string,
     shown?: ProjectShown,
   ): Promise<ProjectRemovalSummary | null> => {
-    const org = rows.projects.get(id)?.org_id ?? shown?.orgId
+    const org = shown?.orgId
     if (!org) return null
     try {
       return await convex.query(api.projects.removalSummary, { org_id: org, id })
@@ -17479,12 +17240,13 @@ export const PLANNER = {
      items. Awaited, as the Archive or delete window asks. Nothing changes
      here until the server accepts, so a refusal (toasted) leaves the project
      and the window in place. `reason` is shown in Deleted items. Resolves
-     whether the server deleted it. `shown` names the organization of a
-     project the workspace does not hold (ProjectShown), which then paints
-     nothing. */
+     whether the server deleted it. `shown` names the organization the page
+     that showed the project named (ProjectShown); without it it sends
+     nothing and resolves false. Once accepted it hides the project's
+     milestones from the milestone reads; the views drop its tasks with
+     their next answers. */
   removeProject: (id: string, reason?: string, shown?: ProjectShown): Promise<boolean> => {
-    const row = rows.projects.get(id)
-    const org = row?.org_id ?? shown?.orgId
+    const org = shown?.orgId
     if (!org || refusePausedEdit()) return Promise.resolve(false)
     const text = (reason || '').trim()
     const epoch = storeEpoch
@@ -17492,15 +17254,7 @@ export const PLANNER = {
       api.projects.deleteDeep,
       { org_id: org, id, ...(text ? { reason: text } : {}) },
       'none',
-      // the delivery may already hold the result; nothing paints then
-      row
-        ? {
-            keep: () => ({
-              workspace: () => dropProjectRows(id),
-              milestones: hideProjectMilestones(id),
-            }),
-          }
-        : {},
+      { keep: () => ({ milestones: hideProjectMilestones(id) }) },
     ).then(
       () => true,
       (error) => {
@@ -18128,8 +17882,6 @@ export const PLANNER = {
           i.updated_at = at
         }
         workspaceRows.keepList('teamMembers', (m) => m.profile_id !== id)
-        workspaceRows.keepList('access', (a) => a.profile_id !== id)
-        for (const p of rows.projects.where((x) => x.lead_id === id)) p.lead_id = undefined
         rows.profiles.delete(id)
       },
     }
@@ -18147,52 +17899,38 @@ export const PLANNER = {
      change. Removing access goes through the removal window
      (PLANNER.removeAccess). `shown` is what a page that read the project
      from the server showed (GrantShown): the person's grant level there
-     and the project's own lead. The write then decides and checks from it,
-     never from the workspace, goes to its organization, and paints only
-     where the workspace holds the project. */
+     and the project's own lead. The write decides and checks from it, goes
+     to its organization and paints nothing, since the workspace holds no
+     grant; without `shown` it sends nothing and resolves false. */
   setProjectAccess: (
     metaId: string,
     userId: string,
     role: AccessLevel,
     shown?: GrantShown,
   ): Promise<boolean> => {
-    const m = PLANNER.projects.find((p) => p.id === metaId)
-    const row = rows.projects.get(metaId)
-    if (!shown && (!m || !row)) return Promise.resolve(false)
-    const lead = shown ? shown.leadId : (m?.lead ?? null)
+    if (!shown) return Promise.resolve(false)
+    const lead = shown.leadId
     // a handover: the server keeps the outgoing lead as User
     // (convex/lib/projectGrants.ts grantsAfterHandover)
     if (role === 'lead') {
       if (lead === userId) return Promise.resolve(true)
-      return shown
-        ? PLANNER.updateProject(metaId, { lead: userId }, { seen: { lead_id: lead } }, shown)
-        : PLANNER.updateProject(metaId, { lead: userId })
+      return PLANNER.updateProject(metaId, { lead: userId }, { seen: { lead_id: lead } }, shown)
     }
     // the lead's access is the Lead field: hand it over first
     if (lead === userId || refusePausedEdit()) return Promise.resolve(false)
-    const level = shown
-      ? shown.level
-      : (rows.access.find((a) => a.project_id === metaId && a.profile_id === userId)?.level ?? null)
+    const level = shown.level
     if (level === role) return Promise.resolve(true)
-    const view: View = {
-      workspace: () => {
-        if (!rows.projects.has(metaId) || !rows.profiles.has(userId)) return
-        const live = rows.access.find((a) => a.project_id === metaId && a.profile_id === userId)
-        if (live) live.level = role
-        else rows.access.push({ project_id: metaId, profile_id: userId, level: role })
-      },
-    }
     // the level on screen, none included, so a change made meanwhile refuses
     return send(
       api.projects.setAccess,
       {
-        org_id: shown?.orgId ?? row?.org_id ?? '',
+        org_id: shown.orgId,
         id: metaId,
         user_id: userId,
         level: role,
         expected: { level },
       },
-      row ? view : {},
+      {},
     )
   },
 
@@ -18204,34 +17942,19 @@ export const PLANNER = {
     role: TeamAccessLevel,
     shown?: Omit<GrantShown, 'leadId'>,
   ): Promise<boolean> => {
-    const row = rows.projects.get(metaId)
-    if ((!row && !shown) || refusePausedEdit()) return Promise.resolve(false)
-    const level = shown
-      ? shown.level
-      : (rows.teamAccess.find((a) => a.project_id === metaId && a.team_id === teamId)?.level ??
-        null)
+    if (!shown || refusePausedEdit()) return Promise.resolve(false)
+    const level = shown.level
     if (level === role) return Promise.resolve(true)
-    const view: View = {
-      workspace: () => {
-        // the projects part sends every team's share of a project, so a
-        // share paints whether or not the store holds the team, which it
-        // does only for the signed-in person's own teams
-        if (!rows.projects.has(metaId)) return
-        const live = rows.teamAccess.find((a) => a.project_id === metaId && a.team_id === teamId)
-        if (live) live.level = role
-        else rows.teamAccess.push({ project_id: metaId, team_id: teamId, level: role })
-      },
-    }
     return send(
       api.projects.setAccess,
       {
-        org_id: shown?.orgId ?? row?.org_id ?? '',
+        org_id: shown.orgId,
         id: metaId,
         team_id: teamId,
         level: role,
         expected: { level },
       },
-      row ? view : {},
+      {},
     )
   },
 
@@ -18931,7 +18654,6 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
   // writes accepted meanwhile stay saved until a complete transition.
   if (ws.state === 'held') {
     snapshotCurrent = false
-    deliveryCurrent = false
     return
   }
   // While the task windows an ask subscribed are on their way, the report
@@ -18943,7 +18665,6 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
   if (ws.state === 'partial') {
     snapshotCurrent = false
     if (stillLoading === null) {
-      deliveryCurrent = false
       return
     }
     stillLoading = ws.loaded
@@ -18967,7 +18688,6 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
     if (demoEnded) notifyDemoEnded(ws.error)
     console.error('[qivo] workspace part failed:', ws.error)
     snapshotCurrent = false
-    deliveryCurrent = false
     if (!demoEnded) snapshotFailed(ws.error)
     return
   }
@@ -18977,7 +18697,6 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
   // recovering delivery not painted yet ends no trouble now.
   if (ws.value === null) {
     snapshotCurrent = false
-    deliveryCurrent = false
     if (DEMO_MODE) {
       recoveryHeld = false
       notifyDemoEnded()
@@ -19023,7 +18742,6 @@ function retrySnapshot() {
   }, RETRY_GAP_MS)
   // the parts run again have delivered nothing yet
   snapshotCurrent = false
-  deliveryCurrent = false
   if (parts?.retry()) return
   // nothing failed any more, such as a stall: start every part afresh
   const epoch = storeEpoch
@@ -19184,7 +18902,6 @@ export function disposeDemoStore() {
   syncPaused = false
   PLANNER.lastComments = new Map()
   PLANNER.lastCommentsCut = []
-  deliveryCurrent = false
   tookCreates.clear()
   pendingCreates.clear()
   refusedCreates.clear()
@@ -19351,7 +19068,6 @@ export async function initStore(
   // the new parts have delivered nothing yet; what shows stays partial, if
   // it is, until their first delivery paints
   snapshotCurrent = false
-  deliveryCurrent = false
   // New parts start from a clean state; their first complete transition
   // settles the boot, so it never reports recovery from earlier trouble.
   if (snapshotTrouble) {
@@ -19496,7 +19212,42 @@ export const P = PLANNER
 /* The scope description P.scopeInfo answers with (null aside) — the shape
    App threads to every view. Derived after the store so the type can name
    the method's own return. */
-export type ScopeInfo = NonNullable<ReturnType<typeof PLANNER.scopeInfo>>
+/** The scope the Overview, the Board and the Roadmap share (P.scopeInfo):
+    My view, or one project with its facts and its top-level project's from
+    the project cache, and where the two stand there. */
+export type ScopeInfo = {
+  /** My view, the scope that names no project and narrows to my tasks */
+  mine: boolean
+  /** the scope's own narrowing, My view's P.isMine */
+  only: ((it: IssueVM) => boolean) | null
+  id: string
+  /** the project's name from the cache, '' while it knows none */
+  name: string
+  /** the project's facts, null in My view and while the cache knows none */
+  proj: ProjectFacts | null
+  /** whether the project is a top-level project */
+  isMeta: boolean
+  /** the top-level project's facts, the project itself for a top-level
+      one, null in My view and while the cache knows none */
+  meta: ProjectFacts | null
+  /** the top-level project's id once the scope's facts name it */
+  topId: string | null
+  /** the worse of the project's and its top-level project's cache states,
+      ok for My view */
+  state: CachedState
+}
+
+/* How bad each cache state is for a scope (P.scopeInfo), gone the worst. */
+const STATE_RANK: Record<CachedState, number> = {
+  ok: 0,
+  loading: 1,
+  failed: 2,
+  unchecked: 3,
+  gone: 4,
+}
+/** The worse of two cache states. */
+const worseState = (a: CachedState, b: CachedState): CachedState =>
+  STATE_RANK[a] >= STATE_RANK[b] ? a : b
 
 // the design prototype exposed the store as window.PLANNER; keep that hook —
 // verify drives (scripts/verify-*.mjs) reach mutations through it directly

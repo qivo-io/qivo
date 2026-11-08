@@ -47,7 +47,7 @@ type RoadmapArgs = {
  * grid that moves (P.gridEpoch) asks afresh.
  */
 export function roadmapRequest(
-  info: Pick<ScopeInfo, 'wide' | 'mine' | 'id'> & { proj: { org: string } | null },
+  info: Pick<ScopeInfo, 'mine' | 'id'> & { proj: { org: string } | null },
   filters: IssueFilters,
   win: { w0: number; w1: number },
   planned: PlannedTask | null,
@@ -132,7 +132,7 @@ export function textChanged(from: string, to: string): boolean {
  * has no text filter, so it sends none.
  */
 export function useRoadmapRequest(
-  info: Pick<ScopeInfo, 'wide' | 'mine' | 'id'> & { proj: { org: string } | null },
+  info: Pick<ScopeInfo, 'mine' | 'id'> & { proj: { org: string } | null },
   filters: IssueFilters,
   win: { w0: number; w1: number },
   planned: PlannedTask | null,
