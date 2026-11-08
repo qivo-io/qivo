@@ -57,7 +57,8 @@
    - The feed. A leader that can notify starts the feed after its first
      beat: fresh, with a baseline, on the page's first leadership with
      nothing heard; as a takeover from the floor and keys the leader before
-     posted (`state`, sent each time they move and after each beat) when
+     posted (`state`, sent each time they move and after each beat, once a
+     fresh start took its baseline) when
      that tab's last beat is under RESUME_GAP_MS old; else with the resume
      order, as after a freeze, the back and forward cache, a capability
      that turned on and a stale handover. A handover is taken once, and

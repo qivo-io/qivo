@@ -51,8 +51,10 @@
    It holds the floor, the keys of the last answer it handled (at most
    FEED.events), the newest answer that arrived while a call ran, the last
    connection count and whether a resume waits: no event log. Each time
-   the floor or the keys move it tells the leader (moved), which posts them
-   for a tab that may take over. Every call goes through
+   the floor or the keys move after a fresh start's baseline it tells the
+   leader (moved), which posts them for a tab that may take over; before
+   it, nothing, so a tab that takes over then takes the baseline itself
+   rather than offering stored history. Every call goes through
    trackNotificationCall(), which counts the calls in flight for the close
    guard (notificationCallsInFlight) and sends none while the socket is
    down; a call that comes due then fails, and the reconnect runs the
@@ -131,7 +133,8 @@ export type FeedLink = {
 }
 
 /** The floor the feed is watched with and the keys of the last answer it
-    handled, which a takeover starts from. */
+    handled, which a takeover starts from. The feed tells them only once a
+    fresh start's baseline is taken. */
 export type FeedState = { after: number; keys: string[] }
 
 /** One answer of the feed, or why it failed. */
@@ -229,9 +232,11 @@ export function createNotificationFeed(deps: FeedDeps) {
     return trackNotificationCall(convex, send)
   }
 
-  /* Tells the leader where the floor and the keys stand. */
+  /* Tells the leader where the floor and the keys stand, and nothing
+     while a fresh start's baseline waits, so a tab that takes over then
+     takes the baseline itself. */
   function moved() {
-    if (link && watched !== null) link.moved({ after: watched, keys: [...lastKeys] })
+    if (link && watched !== null && !baseline) link.moved({ after: watched, keys: [...lastKeys] })
   }
 
   function watchFeed() {

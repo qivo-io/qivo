@@ -546,6 +546,36 @@ describe('the leader tab', () => {
     ])
   })
 
+  it('hands on no floor before its fresh start’s baseline, so the next tab takes the baseline', async () => {
+    const t = newT()
+    const { f, s, task } = await fixture(t)
+    // a message stored before either tab opened
+    await news(t, f, task)
+    const locks = createLockManager()
+    const a = openTab(s, true, locks)
+    const b = openTab(s, true, locks)
+    startLeader(a)
+    startLeader(b)
+    await vi.advanceTimersByTimeAsync(0)
+    await quiet(a)
+    await quiet(b)
+    // a beat and watches, and closes before its first answer arrives
+    expect(names(a)).toEqual(['notifications:beat'])
+    expect(a.after).not.toBeNull()
+    a.leader?.stop()
+    await vi.advanceTimersByTimeAsync(0)
+    await settle([b])
+    expect(b.leader?.role()).toBe('leader')
+    // b takes the baseline a never took, and offers nothing stored
+    expect(names(b)).toEqual(['notifications:beat', 'notifications:claimAlerts'])
+    expect(b.calls[1].args.events).toEqual([])
+    expect(b.notes).toEqual([])
+    jump(1)
+    const next = await news(t, f, task)
+    await settle([b], true)
+    expect(b.notes.map((n) => n.tag)).toEqual([next?.id])
+  })
+
   it('runs the resume order in a takeover whose last heard beat is stale', async () => {
     const t = newT()
     const { f, s, task } = await fixture(t)
