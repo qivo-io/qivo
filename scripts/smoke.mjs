@@ -1255,9 +1255,11 @@ try {
     if (clipped.length)
       await fail(`Phone task sections clip their contents: ${JSON.stringify(clipped)}`)
   }
+  // My tasks reads its own selection after the project's Board, so its
+  // sections show once that answer is in
+  await pageA.locator('.mobile-task-list [data-card]').first().waitFor({ state: 'visible' })
   await checkPhoneTaskSections()
   await noPhonePageSearch('My tasks')
-  await pageA.locator('.mobile-task-list [data-card]').first().waitFor({ state: 'visible' })
   const filterLabelWithDesktopQuery = await pageA
     .locator('.mobile-task-tools')
     .getByRole('button', { name: /^Filters(?:, \d+)?$/ })
@@ -1300,10 +1302,10 @@ try {
       await fail('Dismissing phone Search changed the underlying My tasks view')
   }
   const checkNoSearchHistoryStep = async () => {
-    // My tasks was entered from All tasks. A leftover same-URL search entry
-    // would swallow this Back and leave the user on My tasks again.
+    // My tasks was entered from Luma Sensor's Board. A leftover same-URL
+    // search entry would swallow this Back and leave the user on My tasks again.
     await pageA.goBack()
-    await pageA.waitForURL(allTasksURL)
+    await pageA.waitForURL(lumaBoard)
     await pageA.locator(PHONE_LIST).waitFor({ state: 'visible' })
     if (await palette.count()) await fail('Native Back reopened a dismissed phone Search')
     await myTasks.click()
@@ -1848,7 +1850,10 @@ try {
       await settle()
       const bodyRect = body.getBoundingClientRect()
       let crossing = null
-      for (const heading of body.querySelectorAll('[data-subtrack][data-roadmap-heading-top]')) {
+      // A project's Roadmap heads each of its sub-projects with a track
+      // heading; only My view nests them under their project (data-subtrack).
+      // Both kinds pin by the same rule, so either kind of heading serves.
+      for (const heading of body.querySelectorAll('[data-roadmap-heading-top]')) {
         const naturalTop = Number(heading.dataset.roadmapHeadingTop)
         const stickyTop = Number.parseFloat(getComputedStyle(heading).top)
         const dock = naturalTop - stickyTop
@@ -2289,9 +2294,12 @@ try {
     .waitFor({ state: 'attached' })
   log('A: on the Luma Sensor board')
 
-  // ---- 2. context B signs in as Leo on the All-projects board
+  // ---- 2. context B signs in as Leo, who leads Luma Sensor, and opens its
+  // Board, where A's new task arrives
   await signInDemo(pageB, demo, 'leo')
-  log('B: Leo signed in — All-projects board renders')
+  await pageB.goto(await lumaPath(pageA), { waitUntil: 'domcontentloaded' })
+  await pageB.waitForSelector('[data-card]', { timeout: 30000 })
+  log('B: Leo signed in — the Luma Sensor board renders')
 
   // ---- 3. create through the real UI in A — the column supplies status,
   // while the short dialog asks only where the task goes and its title.
