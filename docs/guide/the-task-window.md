@@ -126,8 +126,7 @@ activity. Under **Comments** it adds that changes show only under **All** when
 your unread inbox updates include a change or a mention in the description.
 
 You can edit or delete your own comments. Project leads can moderate other
-people's comments. The edit indicator shows when and by whom a comment changed,
-including a **(project lead)** label when someone other than the author edited it.
+people's comments. The edit indicator shows when and by whom a comment changed.
 
 Use the pop-out beside **Description** or **Activity** to read that section
 in a separate window. It keeps the task's breadcrumb, title and ID, and the
