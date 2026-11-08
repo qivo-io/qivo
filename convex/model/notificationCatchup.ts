@@ -325,11 +325,11 @@ export async function missedActivity(
  * events and `more` after 157 documents in 109 ranges, 61 KiB, and the same
  * 300 before the floor answer none after 2 documents in 4 ranges; one
  * task's 50 unread messages and its wake answer 50 events and `more` after
- * 58 documents in 11 ranges; 200 sub-projects the person reads with a new
- * group each from 50 actors answer 50 events and `more` after 257
- * documents in 237 ranges, 92 KiB; and 10 new items beside 1,000 other
- * people's 10,000 read exactly what they read alone, 36 documents in 29
- * ranges. Tests lower these. */
+ * 58 documents in 11 ranges; 200 sub-projects the person reads, 3 under
+ * each of 67 granted projects, with a new group each from 50 actors answer
+ * 50 events and `more` after 320 documents in 289 ranges, 105 KiB; and 10
+ * new items beside 1,000 other people's 10,000 read exactly what they read
+ * alone, 36 documents in 29 ranges. Tests lower these. */
 export const FEED = { events: 50, items: 2_000, batch: 16, room: 0.5 }
 
 /** One event of the feed: a new unread message, or a snooze return. */

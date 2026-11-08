@@ -769,6 +769,16 @@ async function grantedProject(t: T, f: OrgFixture, n: number) {
   return { subs, revoke: await grant(t, f.guest, top.id) }
 }
 
+/** `n` sub-projects the guest reads, at most 3 under each new top-level
+ * project the guest is granted, the everyday count, so a case raises only
+ * the person's figure. */
+async function grantedSpread(t: T, f: OrgFixture, n: number) {
+  const subs: Doc<'projects'>[] = []
+  while (subs.length < n)
+    subs.push(...(await grantedProject(t, f, Math.min(3, n - subs.length))).subs)
+  return subs
+}
+
 describe('inside Convex’s limits', () => {
   it('answers the everyday Inbox’s new activity whole: 60 groups over 3 sub-projects, 10 new', async () => {
     const t = newT()
@@ -851,9 +861,10 @@ describe('inside Convex’s limits', () => {
   it('cuts 200 sub-projects’ new groups at 50, each with its own actor', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
-    // the person figure, 200 sub-projects the guest reads, a new group in
-    // each from one of 50 actors
-    const { subs } = await grantedProject(t, f, 200)
+    // the person figure, 200 sub-projects the guest reads, 3 under each of
+    // 67 granted projects, a new group in each from one of 50 actors
+    const subs = await grantedSpread(t, f, 200)
+    expect(new Set(subs.map((s) => s.parent_id)).size).toBe(67)
     const actors: Doc<'profiles'>[] = []
     for (let i = 0; i < 50; i++)
       actors.push(await plantSeat(t, { org_id: f.org.id, name: `Actor ${i}` }))
