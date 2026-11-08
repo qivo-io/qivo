@@ -374,6 +374,29 @@ describe('resumes', () => {
     for (const m of missed) expect(tab.notes.map((n) => n.tag)).not.toContain(m?.id)
   })
 
+  it('claims through the answer’s newest time, never a clock or a beat’s, so a notice stored late reaches the summary', async () => {
+    const t = newT()
+    const { f, s, task } = await fixture(t)
+    const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'Late' })
+    const tab = openTab(s)
+    await startTabs([tab])
+    // two minutes of beats, then a mention stored half a minute back
+    await wait([tab], 2 * MINUTE)
+    const mention = await post(t, f, { to: f.guest, task, minute: 1.5, kind: 'mention' })
+    await settle([tab], true)
+    expect(tab.notes.map((n) => n.tag)).toEqual([mention?.id])
+    const claim = tab.calls.filter((c) => c.name === 'notifications:claimAlerts').at(-1)
+    expect(claim?.args.through).toBe(Date.parse(mention?.created_at as string))
+    // offline, a notice stored late with a time between the mention and the claim
+    tab.online = false
+    await post(t, f, { to: f.guest, task: other, minute: 1.75 })
+    await settle([tab], true)
+    tab.online = true
+    tab.connection = 2
+    await settle([tab], true)
+    expect(answers(tab, 'notifications:claimSummary')).toEqual([{ state: 'summary' }])
+  })
+
   it('takes a ten-minute gap between ticks for a resume, and a throttled minute for none', async () => {
     const t = newT()
     const { f, s, task } = await fixture(t)
@@ -497,6 +520,17 @@ describe('bursts and limits', () => {
     // the next answer starts after the burst and asks nothing more
     await settle([tab], true)
     expect(answers(tab, 'notifications:claimSummary')).toHaveLength(1)
+  })
+
+  it('takes a fresh start’s first answer with more as its baseline, with no summary', async () => {
+    const t = newT()
+    const { f, s } = await fixture(t)
+    await burst(t, f, 60, 30_000)
+    const tab = openTab(s)
+    await startTabs([tab])
+    await wait([tab], 2 * TICK_MS)
+    expect(names(tab)).not.toContain('notifications:claimSummary')
+    expect(tab.notes).toEqual([])
   })
 
   it('asks claimSummary once for a burst inside the minute before the beat', async () => {

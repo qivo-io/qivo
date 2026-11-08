@@ -551,6 +551,53 @@ describe('the cap, the budgets and more', () => {
     expect((await feedOf(t, f.guest, minute(1.05))).more).toBe(true)
   })
 
+  it('says more at a pass or a stop only for an item newer than the floor', async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    // 52 items with one message each, all in the minute before the floor
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 52; i++) {
+        const id = uuid()
+        await insertTask(
+          ctx.db,
+          {
+            id,
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            num: 80_000 + i,
+            title: `Read back ${i}`,
+            description: '',
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+            window_key: newWindowKey(),
+          },
+          'restore',
+        )
+        await postMessage(ctx, {
+          org_id: f.org.id,
+          recipient_id: f.guest.id,
+          issue_id: id,
+          kind: 'comment',
+          body: `Read back ${i}`,
+          actor_id: f.admin.id,
+          now: new Date(minute(1.1) + i * 1_000).toISOString(),
+        })
+      }
+    })
+    // the cap passes the two oldest items, which only the minute read back holds
+    expect(await feedOf(t, f.guest, minute(2))).toMatchObject({ more: false })
+    expect((await feedOf(t, f.guest, minute(2))).events).toHaveLength(50)
+    // a floor before them says more for the items the cap passed
+    expect(await feedOf(t, f.guest, minute(1))).toMatchObject({ more: true })
+    // a stop at an item the minute read back holds asks for nothing
+    FEED.items = 10
+    expect(await feedOf(t, f.guest, minute(2))).toMatchObject({ more: false })
+    expect(await feedOf(t, f.guest, minute(1))).toMatchObject({ more: true })
+  })
+
   it('stops at FEED.items, at the budget and before a seat it did not reach, saying more', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
