@@ -576,7 +576,9 @@ server once chosen, a mention of Nora from the Standard agent must reach the
 leader's alerts alone, tagged with its message or with the generic
 summary's tag, and the other page must lead once the leader's page closes.
 The step puts Nora's mode back, removes t0's item from her Inbox and signs
-its context out. Against a backend from before v0.1.154 that step fails.
+its context out. Against a backend from before the release after v0.1.161
+that step fails, since the leader's alerts come from `inbox.feed`; v0.1.154
+first shipped only its session calls.
 After that it checks
 the
 search on **Settings → Projects → Archived tasks** and main Search, where an
@@ -2254,25 +2256,21 @@ person's newest unread Inbox events under ordinary access, instead of the
 workspace inbox part, and asks `notifications.beat`, `claimAlerts` and
 `claimSummary`, which v0.1.154 (`2898c8c8`) first shipped, which session
 shows each one; after a sleep or a lost connection it shows one
-notification that new unread activity arrived. The release removes the
-workspace inbox part (`workspace.inbox`), and `messages.markRead`,
-`markUnread`, `remove` and `snooze`. So it is the backend's floor for its
-app's desktop notifications. Against an earlier backend the app loses only
+notification that new unread activity arrived. In the same release one tab
+of each browser profile leads its desktop notifications and calls
+`notifications.beat`, with real `active` reports, and `end`, and
+**Settings → Your preferences → Notifications** reads
+`notifications.settings` and calls `setDelivery`, all first shipped in
+v0.1.154. The release removes the workspace inbox part
+(`workspace.inbox`), and `messages.markRead`, `markUnread`, `remove` and
+`snooze`. So it is the backend's floor for its app's desktop
+notifications. Against an earlier backend the app loses only
 its feed, a side whose failure holds nothing else, so it shows no desktop
 notification. Its backend serves no app before it, whose workspace needs
 the removed part and fails to load as a whole. From it on, never return
 the backend to a commit before it, and never return the app alone to a
 release before it; roll forward instead. There is no schema change, no
 backfill and no release step.
-
-From the release after v0.1.161, one tab of each browser profile leads its
-desktop notifications and calls `notifications.beat`, with real `active`
-reports, and `end`, and **Settings → Your preferences → Notifications**
-reads `notifications.settings` and calls `setDelivery`. v0.1.154
-(`2898c8c8`) first shipped all four, which the floors above already hold,
-and the floor the paragraph above sets for `inbox.feed` still holds. The
-release changes no server function and sets no new rollback floor. There
-is no schema change, no backfill and no release step.
 
 ## Node.js version
 

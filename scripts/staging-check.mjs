@@ -7091,7 +7091,9 @@ export const NOTIFICATION_DELIVERY_MARKS = {
  *  leader page closes and the other must lead. A finally sets the mode back
  *  to the one it noted through the control, removes t0's item from Nora's
  *  Inbox, signs the context out, so no session or notification row stays
- *  behind, and closes the context. It needs a backend from v0.1.154 on. */
+ *  behind, and closes the context. It needs a backend from the release
+ *  after v0.1.161 on, since the leader's note comes from inbox.feed;
+ *  v0.1.154 first shipped only the session calls it makes. */
 async function notificationDeliveryCheck() {
   const s = run.creds.stdKey
   const { t0, nora } = run
