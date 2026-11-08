@@ -2719,9 +2719,19 @@ try {
     async ({ id, agent, name, title, project }) => {
       const P = window.PLANNER
       const { convex } = await import('/src/lib/convex.ts')
-      const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
-        (name, args) => convex.query(name, args),
-      )
+      // the store holds only the signed-in person's own teams, so the home
+      // organization's teams come from Team sync's scope menu's read
+      // (teams.picker), batch by batch
+      const teams = []
+      for (let cursor = null, batches = 0; ; batches++) {
+        const batch = await P.teamChoices({ org: P.org.id, search: '', cursor })
+        if (batch?.state !== 'ready')
+          throw new Error(`The team picker answered ${batch?.state ?? 'nothing'}`)
+        teams.push(...batch.rows.map((row) => row.id))
+        if (batch.next === null) break
+        if (batches >= 40) throw new Error('The team picker did not end within 40 batches')
+        cursor = batch.next
+      }
       await convex.mutation('profiles:create', {
         org_id: P.org.id,
         id: agent,
@@ -2730,7 +2740,7 @@ try {
         org_role: 'user',
         kind: 'agent',
         color: '#475569',
-        teams: snapshot.teams.filter((t) => t.org_id === P.org.id).map((t) => t.id),
+        teams,
       })
       await convex.mutation('issues:create', {
         org_id: P.org.id,
@@ -2741,8 +2751,14 @@ try {
         priority: 'low',
         assignee_id: agent,
       })
+      // every walker's stamp, from the agenda Team sync reads for All
+      // projects (teamSync.agenda), as the store holds nobody else
+      const { syncRequest } = await import('/src/views/teamSync/syncArgs.ts')
+      const agenda = await convex.query('teamSync:agenda', JSON.parse(syncRequest('all').key))
+      if (agenda?.state !== 'ok')
+        throw new Error(`The agenda answered ${agenda?.state ?? 'nothing'}`)
       return Object.fromEntries(
-        snapshot.profiles.map((row) => [row.id, `${row.sync_at ?? ''}|${row.sync_since ?? ''}`]),
+        agenda.people.map((p) => [p.id, `${p.stamp?.at ?? ''}|${p.stamp?.since ?? ''}`]),
       )
     },
     { id: syncTaskId, agent: syncAgentId, name: SYNC_AGENT, title: TITLE, project: subProj },
@@ -2805,22 +2821,26 @@ try {
   const synced = await pageA.evaluate(
     async ({ id, agent, before }) => {
       const { convex } = await import('/src/lib/convex.ts')
+      const { syncRequest } = await import('/src/views/teamSync/syncArgs.ts')
+      const stampOf = (p) => `${p.stamp?.at ?? ''}|${p.stamp?.since ?? ''}`
       const deadline = Date.now() + 15000
       for (;;) {
         const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
           (name, args) => convex.query(name, args),
         )
         const task = snapshot.issues.find((row) => row.id === id)
-        const stamp = snapshot.profiles.find((row) => row.id === agent)
-        if (task?.remaining_hours === 4 && task.remaining_set_at && stamp?.sync_at) {
-          if (!/^\d{4}-\d{2}-\d{2}$/.test(stamp.sync_since ?? ''))
+        // the stamps are the agenda's walkers' (SyncPerson.stamp), as the
+        // store holds nobody but the signed-in person
+        const agenda = await convex.query('teamSync:agenda', JSON.parse(syncRequest('all').key))
+        if (agenda?.state !== 'ok') return `The agenda answered ${agenda?.state ?? 'nothing'}`
+        const stamp = agenda.people.find((p) => p.id === agent)?.stamp
+        if (task?.remaining_hours === 4 && task.remaining_set_at && stamp?.at) {
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(stamp.since ?? ''))
             return "The agent's first stamp does not carry its reading day"
-          const moved = snapshot.profiles.filter(
-            (row) =>
-              row.id !== agent &&
-              (before[row.id] ?? '|') !== `${row.sync_at ?? ''}|${row.sync_since ?? ''}`,
+          const moved = agenda.people.filter(
+            (p) => p.id !== agent && p.id in before && before[p.id] !== stampOf(p),
           )
-          return moved.length ? `The sync row edit stamped ${moved.map((row) => row.name)}` : ''
+          return moved.length ? `The sync row edit stamped ${moved.map((p) => p.name)}` : ''
         }
         if (Date.now() > deadline)
           return 'The sync row edit did not save Remaining 4 h and stamp the agent'
@@ -2843,32 +2863,45 @@ try {
   await pageA.evaluate((k) => window.PLANNER.deleteIssue(k), syncKey)
   await syncCard.waitFor({ state: 'detached', timeout: 15000 })
   const syncGone = await pageA.evaluate(
-    async ({ id, agent }) => {
+    async ({ id, agent, agentName }) => {
       const P = window.PLANNER
       const { convex } = await import('/src/lib/convex.ts')
-      const saved = async (test) => {
+      const until = async (test) => {
         const deadline = Date.now() + 15000
         for (;;) {
-          if (
-            test(
-              await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace((name, args) =>
-                convex.query(name, args),
-              ),
-            )
-          )
-            return true
+          if (await test()) return true
           if (Date.now() > deadline) return false
           await new Promise((resolve) => setTimeout(resolve, 250))
         }
       }
-      if (!(await saved((s) => !s.issues.some((row) => row.id === id))))
+      const { readWorkspace } = await import('/convex/lib/workspaceJoin.ts')
+      const taskGone = async () => {
+        const snapshot = await readWorkspace((name, args) => convex.query(name, args))
+        return !snapshot.issues.some((row) => row.id === id)
+      }
+      // the store holds nobody but the signed-in person, so the agent is
+      // looked for through the mention popup's read (pickers.mentions) by
+      // its run-unique name, every batch of it
+      const agentListed = async () => {
+        for (let cursor = null, batches = 0; ; batches++) {
+          const found = await P.mentionChoices(P.org.id, agentName, cursor)
+          if (found?.state !== 'ready')
+            throw new Error(`The mention read answered ${found?.state ?? 'nothing'}`)
+          if (found.rows.some((row) => row.id === agent)) return true
+          if (found.next === null) return false
+          if (batches >= 40) throw new Error('The mention read did not end within 40 batches')
+          cursor = found.next
+        }
+      }
+      if (!(await until(taskGone)))
         return 'The temporary Team sync task is still saved after its delete'
+      if (!(await agentListed())) return 'The temporary Team sync agent was never listed'
       await convex.mutation('profiles:remove', { org_id: P.org.id, id: agent })
-      if (!(await saved((s) => !s.profiles.some((row) => row.id === agent))))
+      if (!(await until(async () => !(await agentListed()))))
         return 'The temporary Team sync agent is still saved after its removal'
       return ''
     },
-    { id: syncTaskId, agent: syncAgentId },
+    { id: syncTaskId, agent: syncAgentId, agentName: SYNC_AGENT },
   )
   if (syncGone) await fail(syncGone)
   await syncAgent.waitFor({ state: 'detached', timeout: 15000 })
