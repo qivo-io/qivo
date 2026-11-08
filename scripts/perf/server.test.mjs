@@ -2680,6 +2680,64 @@ describe('the benchmark server', () => {
     expect((await read('notify=summary')).summary).toEqual({ state: 'summary' })
   })
 
+  it('answers Notification delivery and the leader’s calls in the states the page asks for', async () => {
+    /** What settings, setDelivery, beat and end answer on a page with
+        `params`, and the settings a watch held after the change. */
+    const read = async (params) => {
+      const { posted, send } = await server(`tasks=20&latency=0&mbps=100000&${params}`)
+      await send({ type: 'query', id: 'settings', name: 'notifications:settings', args: {} })
+      const got = posted.find((m) => m.to === 'settings')
+      const settings =
+        got === undefined ? undefined : got.error ? { error: got.error } : JSON.parse(got.text)
+      await send({ type: 'watch', id: 'watched', name: 'notifications:settings', args: {} })
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      const call = async (name, args) => {
+        await send({ type: 'mutation', id: name, name, args })
+        const answer = posted.find((m) => m.id === name)
+        return answer?.error ? { error: answer.error } : answer?.value
+      }
+      const beat = await call('notifications:beat', {
+        instance: 'tab',
+        can_notify: true,
+        active: true,
+      })
+      const set = await call('notifications:setDelivery', { delivery: 'all' })
+      const watched = posted
+        .filter((m) => m.type === 'transition')
+        .flatMap((m) => m.results)
+        .filter((r) => r.to === 'watched' && r.text)
+        .map((r) => JSON.parse(r.text))
+      return {
+        settings,
+        beat,
+        set,
+        watched,
+        end: await call('notifications:end', { instance: 'tab' }),
+      }
+    }
+    const plain = await read('')
+    expect(plain.settings).toEqual({ delivery: 'recent' })
+    expect(plain.beat).toMatchObject({ every_ms: 60_000, live_ms: 180_000 })
+    expect(plain.set).toEqual({ delivery: 'all' })
+    // the watch heard the mode before and after the change
+    expect(plain.watched).toEqual([{ delivery: 'recent' }, { delivery: 'all' }])
+    expect(plain.end).toBeNull()
+    const all = await read('notify=all')
+    expect(all.settings).toEqual({ delivery: 'all' })
+    expect(all.beat).toMatchObject({ every_ms: 21_600_000 })
+    expect((await read('notify=loading')).settings).toBeUndefined()
+    expect((await read('notify=error')).settings.error).toContain('fails')
+    const limited = await read('notify=demo-limit')
+    expect(limited.set).toEqual({
+      error: {
+        code: 'forbidden',
+        message: 'Your demo has reached its change limit. Try again later.',
+        reason: 'demo_limit',
+      },
+    })
+    expect(limited.watched).toEqual([{ delivery: 'recent' }])
+  })
+
   it('serves the workspace in parts and re-sends only the window a remote rename changed, in one transition', async () => {
     const { posted, send } = await server('tasks=500&latency=0&mbps=100000')
     await send({ type: 'query', id: 'root', name: 'workspace:root', args: {} })

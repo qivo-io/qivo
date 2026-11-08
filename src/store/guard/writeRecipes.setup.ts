@@ -1290,6 +1290,13 @@ export const recipes: Recipe[] = [
     act: (P) => P.setAppearance({ mode: 'dark', image_source: 'none' }).catch(() => {}),
   },
   {
+    mutation: 'notifications:setDelivery',
+    mutator: 'setNotificationDelivery',
+    what: 'a notification delivery',
+    pause: 'U-all',
+    act: (P) => P.setNotificationDelivery('all').catch(() => {}),
+  },
+  {
     mutation: 'appearance:removeCustom',
     mutator: 'removeAppearanceImage',
     what: 'a removed background',

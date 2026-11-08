@@ -524,7 +524,11 @@
 //                        (src/store/notificationsStandIn.setup.ts), several
 //                        joined by commas: summary (the first claimSummary
 //                        answers summary, so a page granted notifications
-//                        shows the generic summary after its first resume)
+//                        shows the generic summary after its first resume),
+//                        all (the Notification delivery mode starts as All
+//                        enabled sessions), loading (notifications:settings
+//                        never answers), error (it fails) or demo-limit
+//                        (setDelivery refuses with the demo's change limit)
 //   thread (0)           comments of ordinary text, a few sentences each,
 //                        some with a list, a link or a mention, every tenth
 //                        the signed-in person's, on the task the benchmark
@@ -639,10 +643,12 @@
 // item's unread messages up to its `through` read and prunes the item;
 // unreadItem marks every message of the item unread, removeItem removes
 // those up to `through`, and snoozeItem stamps every message of the item,
-// unread, with the snooze or wakes it. The desktop alert client's calls
-// (notifications:beat, claimAlerts and claimSummary) answer through the
-// session stand-in the jsdom tests use (src/store/notificationsStandIn.
-// setup.ts), which grants each key once.
+// unread, with the snooze or wakes it. The notification session calls
+// (notifications:settings, setDelivery, beat, end, claimAlerts and
+// claimSummary) answer through the session stand-in the jsdom tests use
+// (src/store/notificationsStandIn.setup.ts), which holds the mode, sends
+// settings again after a setDelivery that changed it, and grants each
+// key once.
 // So is Team sync's agenda (teamSync:agenda), through the stand-in the
 // jsdom tests use (src/store/teamSyncStandIn.setup.ts): the agenda's rules
 // over the workspace held here, with no access rule or read budget, and the
@@ -955,8 +961,19 @@ const forcedInboxFeed = ['more', 'failed', 'loading'].includes(parameters.get('i
 /* The notification session calls' states (the `notify` parameter), and the
    stand-in that answers them. */
 const notifyStates = new Set((parameters.get('notify') ?? '').split(',').filter(Boolean))
-const notifications = createNotificationsStandIn()
+const notifications = createNotificationsStandIn(
+  undefined,
+  notifyStates.has('all') ? 'all' : 'recent',
+)
 if (notifyStates.has('summary')) notifications.summaryNext()
+const forcedNotifications = {
+  ...(notifyStates.has('loading')
+    ? { settings: 'loading' }
+    : notifyStates.has('error')
+      ? { settings: 'failed' }
+      : {}),
+  ...(notifyStates.has('demo-limit') ? { setDelivery: 'demo-limit' } : {}),
+}
 /* The milestone reads' forced states (the `milestones` parameter), as the
    stand-in's `force` takes them; sync-too-many and roadmap-too-many are
    the page's (scripts/perf/entry.tsx). The roadmap-* states force the
@@ -2437,6 +2454,12 @@ const read = (name, args = {}) => {
     const answer = inboxPageStandIn(snapshot, args, forcedInboxPage)
     return answer === INBOX_NO_ANSWER ? NO_ANSWER : answer
   }
+  // Notification delivery's mode, which answers nothing under notify=loading
+  // and fails under notify=error
+  if (name === 'notifications:settings') {
+    const answer = notifications.settings(forcedNotifications)
+    return answer === 'loading' ? NO_ANSWER : answer
+  }
   // the feed the desktop alert client watches, which answers nothing under
   // inboxfeed=loading
   if (name === 'inbox:feed') {
@@ -2818,7 +2841,16 @@ async function mutate(name, args) {
     await Promise.all(DELETED_READS.map((read) => emit(read)))
     return answer
   }
-  // the desktop alert client's bookkeeping, which changes no row here
+  // a change of Notification delivery, then the settings watches it
+  // changed, before its answer as Convex sends them; refused under
+  // notify=demo-limit
+  if (name === 'notifications:setDelivery') {
+    const answer = notifications.answer(name, args, forcedNotifications)
+    writes++
+    await transition()
+    return answer
+  }
+  // the desktop alerts' bookkeeping, which changes no row here
   if (notifications.answers(name)) return notifications.answer(name, args)
   if (name === 'messages:readItem') {
     // as convex/messages.ts readItem does, it marks the unread messages of
@@ -3321,7 +3353,8 @@ async function write(data, turn) {
     const refusal =
       data.name.startsWith('deletedItems:') ||
       data.name === 'projectNav:setFavorite' ||
-      data.name === 'issues:create'
+      data.name === 'issues:create' ||
+      data.name === 'notifications:setDelivery'
         ? refusalOf(error).data
         : undefined
     post(

@@ -62,7 +62,7 @@ import { firstSittingDay, SYNC_OWNERS_MAX } from '../../convex/lib/teamSync'
 import type { AgendaAnswer } from '../../convex/lib/teamSyncAgenda'
 import type { NavByIdRow, NavByIds } from '../../convex/model/projectNavReads'
 import type { PersonRow } from '../../convex/model/projectSettings'
-import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
+import { AUTH_STORAGE_PREFIX, armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
 import { NO_QUERY, SignOutFailed } from '../lib/authSession'
 import { avatarCacheScope, createAvatarImageCache } from '../lib/avatarImageCache'
 import { createAvatarSources } from '../lib/avatarSources'
@@ -16791,6 +16791,13 @@ export const PLANNER = {
     sendAwaited(api.appearance.save, preferences, 'none', {
       onError: (e) => toastWriteError(e, false),
     }),
+  /** Saves where the account's desktop alerts appear
+      (notifications.setDelivery), which spends one change on the demo. It
+      changes no local switch and asks for no permission, and the server's
+      settings watch, not its answer, owns what the Notification delivery
+      field shows. A refusal rejects for the field to word, with no toast. */
+  setNotificationDelivery: (delivery: Delivery) =>
+    sendAwaited(api.notifications.setDelivery, { delivery }, 'none'),
   removeAppearanceImage: () =>
     sendAwaited(api.appearance.removeCustom, {}, 'none', {
       onError: (e) => toastWriteError(e, false),
