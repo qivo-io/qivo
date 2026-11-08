@@ -43,12 +43,14 @@ let container: HTMLDivElement
 let root: Root
 let server: Snapshot
 let navForce: ForcedProjectNav = {}
+let phone = false
 // the byIds reads asked, and every write App sent
 let byIds: string[][] = []
 let sent: { name: string; args: Record<string, unknown> }[] = []
 
 beforeEach(() => {
   navForce = {}
+  phone = false
   byIds = []
   sent = []
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
@@ -60,7 +62,11 @@ beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal(
     'matchMedia',
-    vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+    vi.fn((query: string) => ({
+      matches: phone && query === '(max-width: 760px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
   )
   vi.stubGlobal(
     'ResizeObserver',
@@ -274,6 +280,38 @@ describe('a Roadmap flag of a project only the project cache holds', { timeout: 
     await settle()
     await waitFor(() => P.cacheStats().reads.length === 0, 'the reads stopped')
     expect(P.canWrite('plan')).toBe(false)
+  })
+})
+
+describe("the phone agenda's milestone rows of a project only the cache holds", {
+  timeout: 30_000,
+}, () => {
+  /** The label of the agenda's row of milestone `id`. */
+  const label = (id: string) =>
+    document
+      .querySelector<HTMLElement>(`[data-agenda-milestone="${id}"]`)
+      ?.getAttribute('aria-label')
+
+  it('say Open while the cache loads the project', async () => {
+    phone = true
+    navForce = { byIdsLoading: true }
+    await app(world({ planLevel: 'user', unheld: true }), '/app/~/roadmap/p/2')
+    await waitFor(() => label('m-plan'), "Plan's agenda row")
+    expect(label('m-plan')).toBe('Open milestone Plan launch')
+  })
+
+  it('say Edit once the cache answers Edit', async () => {
+    phone = true
+    const { P } = await app(world({ planLevel: 'user', unheld: true }), '/app/~/roadmap/p/2')
+    await waitFor(() => P.canWrite('plan'), 'the cache answering Plan')
+    await waitFor(() => label('m-plan') === 'Edit milestone Plan launch', 'the Edit label')
+  })
+
+  it('say View for a project seen only for navigation', async () => {
+    phone = true
+    const { P } = await app(world({ planLevel: null, unheld: true }), '/app/~/roadmap/p/2')
+    await waitFor(() => P.projectState('plan') === 'ok', 'the cache answering Plan')
+    await waitFor(() => label('m-plan') === 'View milestone Plan launch', 'the View label')
   })
 })
 
