@@ -3,12 +3,13 @@
    one set of filters across scopes, so a person chosen in a project of one
    organization can come along to a project of another, where the filter
    still applies to them. The profile cache reads a person in one
-   organization at a time, the one the view that named them first asked
-   (store/profileCache.ts), so a chosen person the cache already names in
-   one of the login's organizations, as another open view such as Team
-   sync, the Inbox list or a task window does, is asked there. Anyone else
-   is asked in the scope's organization first and, once its answer leaves
-   them out, in the login's other organizations one by one. */
+   organization at a time, the one asked by the earliest registered of the
+   views that name them (store/profileCache.ts sync), so a chosen person
+   the cache already names in one of the login's organizations, as another
+   open view such as Team sync, the Inbox list or a task window does, is
+   asked there. Anyone else is asked in the scope's organization first and,
+   once its answer leaves them out, in the login's other organizations one
+   by one. */
 
 import { useEffect, useState } from 'react'
 import { P, type PersonView } from '@/store/planner'
