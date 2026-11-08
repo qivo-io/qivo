@@ -314,6 +314,13 @@ describe('staging check REST contract', () => {
     expect(grant).toBeGreaterThan(-1)
     expect(grant).toBeLessThan(step.indexOf(`'[data-task-subscriber-search]'`))
     expect(step.slice(grant, grant + 120)).toContain("level: 'viewer'")
+    // his address comes from the app's mention read, as a REST user row
+    // carries none, and is what the Add list's search is given
+    expect(step).not.toContain('leo.email')
+    const address = step.indexOf('window.PLANNER.mentionChoices(o, search, after)')
+    expect(address).toBeGreaterThan(step.indexOf(`'[data-filter-x="assignee"]'`))
+    expect(address).toBeLessThan(grant)
+    expect(step).toContain(`.fill(address)`)
     expect(
       step.indexOf(`rest(w, 'DELETE', \`/projects/\${A.id}/access/users/\${leo.id}\`)`),
     ).toBeGreaterThan(step.indexOf('} finally {'))

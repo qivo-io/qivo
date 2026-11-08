@@ -7014,8 +7014,9 @@ export const ROSTER_READS = {
  *  The follower Add list offers only people who see the task's project,
  *  so the step gives him Viewer on Alpha, run.t0's sub-project, which the
  *  run otherwise shares with its agents alone, and run.t0's follower
- *  popover finds him by his address under + Add through
- *  pickers.taskFollowers and closes without adding anyone. A failure
+ *  popover finds him by his address, from the mention read as a REST user
+ *  row carries none, under + Add through pickers.taskFollowers and closes
+ *  without adding anyone. A failure
  *  clears the filter and Team sync's scope, and the grant goes, in a
  *  `finally`. It writes no record. It runs after ui/settings-teams and
  *  before the run archives M, and needs a backend from this release on. */
@@ -7028,7 +7029,7 @@ async function rosterPartsCheck() {
     const leo = (await restRows(w, '/users', 'users', { search: OWNER_PICKERS_PERSON })).find(
       (u) => u.name === OWNER_PICKERS_PERSON,
     )
-    expect(leo?.email, `the organization has no ${OWNER_PICKERS_PERSON} with an address`)
+    expect(leo, `the organization has no ${OWNER_PICKERS_PERSON}`)
     const team = await restOk(w, 'GET', `/teams/${run.team.id}`)
     const sent = []
     const record = (ws) => ws.on('framesent', (frame) => sent.push(String(frame.payload)))
@@ -7075,7 +7076,18 @@ async function rosterPartsCheck() {
       await app.locator('[data-filter-x="assignee"]').first().waitFor({ state: 'detached' })
 
       // run.t0's follower popover finds Leo by his address under + Add,
-      // once he sees Alpha
+      // once he sees Alpha. A REST user row carries no address, so it comes
+      // from the mention read the Assignee menu lists people from.
+      const org = await evaluate(app, () => window.PLANNER.homeOrg)
+      const people = await appBatches('people', (cursor) =>
+        evaluate(app, ([o, search, after]) => window.PLANNER.mentionChoices(o, search, after), [
+          org,
+          OWNER_PICKERS_PERSON,
+          cursor,
+        ]),
+      )
+      const address = people.find((p) => p.id === leo.id)?.email
+      expect(address, `the mention read gives ${leo.name} no address`)
       const grant = await restOk(w, 'PUT', `/projects/${A.id}/access/users/${leo.id}`, {
         level: 'viewer',
       })
@@ -7087,7 +7099,7 @@ async function rosterPartsCheck() {
       await app.locator('[role="dialog"] [data-task-title]').waitFor({ timeout: 60_000 })
       await app.locator('[data-task-subscribe]').first().click()
       await app.locator('[data-task-subscriber-add-open]').first().click()
-      await app.locator('[data-task-subscriber-search]').first().fill(leo.email)
+      await app.locator('[data-task-subscriber-search]').first().fill(address)
       await app
         .locator(`[data-task-subscriber-add="${leo.id}"]`)
         .first()
