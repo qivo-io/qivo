@@ -346,7 +346,14 @@ describe('create forms', () => {
     await render(() => (
       <pages.modals.MilestoneModal init={{ project: 'sensor' }} onClose={vi.fn()} />
     ))
-    const field = input('[data-milestone-new]')
+    // the add row shows once the project cache answers the window's project
+    const field = await act(async () =>
+      vi.waitFor(() => {
+        const found = input('[data-milestone-new]')
+        if (!found) throw new Error('no add row yet')
+        return found
+      }),
+    )
     await type(field, 'Launch')
     await act(async () => button('Add')?.click())
     expect(requests.map((r) => r.name)).toEqual(['projects:addMilestone'])

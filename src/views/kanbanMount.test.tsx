@@ -312,9 +312,10 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
     const before = waiting()
     expect(before).toBeGreaterThan(0)
     // the tasks keep their objects, and each card gains its delay banner
+    // once the project cache answers the projects' new rule, a frame later
     for (const project of board.snapshot.projects) project.track_delay = true
     await board.deliver()
-    expect(waiting()).toBeGreaterThan(before)
+    await act(async () => vi.waitFor(() => expect(waiting()).toBeGreaterThan(before)))
   })
 
   it('sizes the waiting cards again when the date format changes', async () => {
@@ -336,6 +337,15 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
   it('keeps the cards it sized when a change moves only the store context', async () => {
     const board = await loadBoard(network, tasks(500))
     await board.render(root)
+    // the project cache's answers of the Board's projects land first
+    await act(async () =>
+      vi.waitFor(() =>
+        expect(board.snapshot.projects.every((p) => board.P.projectState(p.id) !== 'loading')).toBe(
+          true,
+        ),
+      ),
+    )
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)))
     const delay = vi.spyOn(board.P, 'delayColor')
     // a person's new name renders every mounted card again, and sizes none
     board.snapshot.profiles[0].name = 'Planner Renamed'

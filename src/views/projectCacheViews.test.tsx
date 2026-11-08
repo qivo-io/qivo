@@ -12,6 +12,7 @@ import {
   answerProjectNav,
   type ForcedProjectNav,
   isProjectNavRead,
+  projectNavStandIn,
 } from '../store/projectNavStandIn.setup'
 import { answerRoadmap } from '../store/roadmapStandIn.setup'
 
@@ -173,7 +174,12 @@ async function app(snap: Snapshot, path: string) {
     }
     return () => {}
   })
-  network.query.mockResolvedValue(null)
+  // a numbered project address resolves through projectNav.resolve
+  network.query.mockImplementation(async (ref, args) =>
+    getFunctionName(ref) === 'projectNav:resolve'
+      ? projectNavStandIn(server, 'projectNav:resolve', args)
+      : null,
+  )
   network.mutation.mockImplementation(async (ref, args) => {
     sent.push({ name: getFunctionName(ref), args })
     return getFunctionName(ref) === 'roadmap:change' ? { count: 1 } : null

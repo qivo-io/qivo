@@ -917,14 +917,9 @@ describe('opening and the menu', { timeout: 60_000 }, () => {
     await load(next0)
     // a project the server lists that the workspace has not delivered yet
     const late = top(snap, 'Late arrival')
-    // the server's check of it waits until the test lets it answer
-    let release = () => {}
-    network.query.mockImplementation(async (ref, args) => {
-      await new Promise<void>((resolve) => {
-        release = resolve
-      })
-      return queryProjectNav(snap, getFunctionName(ref) as never, args)
-    })
+    network.query.mockImplementation(async (ref, args) =>
+      queryProjectNav(snap, getFunctionName(ref) as never, args),
+    )
     // the checks the directory asked the server for, by their arguments
     const resolves = () =>
       network.query.mock.calls
@@ -934,24 +929,13 @@ describe('opening and the menu', { timeout: 60_000 }, () => {
     await click(find('[data-directory-open]', row(plan)))
     expect(actions.openProject).toHaveBeenCalledWith(plan)
     expect(resolves()).toEqual([])
+    // a project the workspace has not delivered opens at once too, by the
+    // open rule, with no check of the server's first: the scope's own read
+    // by id decides (App)
     await click(find('[data-directory-open]', row(late)))
     const status = () => find('[data-directory-status]').textContent
-    expect(status()).toBe('Opening Late arrival…')
-    expect(resolves()).toEqual([{ project_id: late }])
-    // the server's ok, while the workspace is current without it
-    await act(async () => release())
-    await settle()
-    expect(actions.openProject).toHaveBeenCalledTimes(1)
-    expect(status()).toBe('Late arrival has not loaded yet. Try again in a moment.')
-    // with the delivery that brings it beside the answer, it opens
-    await click(find('[data-directory-open]', row(late)))
-    await act(async () => {
-      snap.delivered_at = '2026-09-15T09:00:00.000Z'
-      whole?.next(structuredClone(snap))
-      release()
-    })
-    await settle()
     expect(actions.openProject).toHaveBeenLastCalledWith(late)
+    expect(resolves()).toEqual([])
     expect(status()).toBe('')
     // People & settings names the project
     const people = [...row(plan).querySelectorAll('button')].find((b) =>
@@ -961,35 +945,24 @@ describe('opening and the menu', { timeout: 60_000 }, () => {
     expect(actions.openSettings).toHaveBeenCalledWith(`project:${plan}`)
   })
 
-  it('clears its note and goes back to the top on a page move', async () => {
+  it('opens a row at once and goes back to the top on a page move', async () => {
     const next0 = base()
     for (let n = 0; n < 12; n++) top(next0, named(n))
     await load(next0)
     // first by name, and not yet in the workspace
     const late = top(snap, 'Late arrival')
     force.batch = 5
-    let release = () => {}
-    network.query.mockImplementation(async (ref, args) => {
-      await new Promise<void>((resolve) => {
-        release = resolve
-      })
-      return queryProjectNav(snap, getFunctionName(ref) as never, args)
-    })
     await render()
     await click(find('[data-directory-open]', row(late)))
     const status = () => find('[data-directory-status]').textContent
-    expect(status()).toBe('Opening Late arrival…')
+    expect(actions.openProject).toHaveBeenLastCalledWith(late)
+    expect(status()).toBe('')
     const list = find('[data-project-directory]')
     list.scrollTop = 400
     await next()
     expect(rowIds()).not.toContain(late)
     expect(status()).toBe('')
     expect(list.scrollTop).toBe(0)
-    // the move dropped the open that waited, so its answer says nothing
-    await act(async () => release())
-    await settle()
-    expect(status()).toBe('')
-    expect(actions.openProject).not.toHaveBeenCalled()
   })
 
   it('offers New sub-project… after Archived tasks once the project’s settings allow it', async () => {

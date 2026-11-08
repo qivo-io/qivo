@@ -453,9 +453,10 @@ describe('people the workspace does not hold, on each page', () => {
       await board.renderView(root, (info) => <Overview info={info} actions={actions} />)
       await repaint()
       expect(document.querySelector('[data-ovcard="elsewhere"]')).not.toBeNull()
-      // the placed row's lead is named in its organization, and Hal not at
-      // all, since a read in another organization would answer him gone
-      expect(names.named().has(GINA)).toBe(true)
+      // the placed row's lead is named in its organization once the project
+      // cache places the row, and Hal not at all, since a read in another
+      // organization would answer him gone
+      await act(async () => vi.waitFor(() => expect(names.named().has(GINA)).toBe(true)))
       expect(names.named().has(HAL)).toBe(false)
     },
     BOARD_TEST_TIMEOUT,
