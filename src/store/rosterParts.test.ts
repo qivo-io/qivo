@@ -13,8 +13,9 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
    raises one figure to its design size and keeps the others at everyday
    values. Everyone else is named through the profile cache's people.byIds
    reads, which answer from the server's data
-   (store/peopleSettingsStandIn.setup.ts), and a delay waits for its owner's
-   face, whose hours it is judged by. */
+   (store/peopleSettingsStandIn.setup.ts), a delay waits for its owner's
+   face, whose hours it is judged by, and a desktop notification names its
+   actor from those reads. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -27,6 +28,12 @@ vi.mock('../lib/auth', () => ({
     getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }),
   },
   signOut: vi.fn(),
+}))
+// the desktop notifications the store raises, by their title
+const notes = vi.hoisted(() => ({ titles: [] as string[] }))
+vi.mock('../lib/notify', async (original) => ({
+  ...(await original<typeof import('../lib/notify')>()),
+  desktopNotify: (_tag: string, title: string) => notes.titles.push(title),
 }))
 
 const AT = '2026-09-14T08:00:00.000Z'
@@ -106,18 +113,27 @@ function withOwner(extra: (snap: Snapshot) => void): Snapshot {
 
 describe('the store without the people and catalog parts', () => {
   let store: typeof import('./planner')
-  let byIds: { args: { org_id: string; ids: string[] }; next: (value: unknown) => void }[]
+  let byIds: {
+    args: { org_id: string; ids: string[] }
+    next: (value: unknown) => void
+    fail: (error: unknown) => void
+  }[]
+  /** publishes the server's data again, as a new delivery */
+  let deliver: (snap: Snapshot) => void
   const P = () => store.P
 
   async function boot(snap: Snapshot, { faces = true } = {}) {
     byIds = []
-    network.onUpdate.mockImplementation((ref, args, next) => {
+    network.onUpdate.mockImplementation((ref, args, next, fail) => {
       const name = getFunctionName(ref)
       if (name === 'people:byIds') {
-        const read = { args, next }
+        const read = { args, next, fail }
         byIds.push(read)
         if (faces) next(peopleSettingsStandIn(snap, name, args))
-      } else next(structuredClone(snap))
+      } else {
+        if (name === 'workspace:whole') deliver = (value) => next(structuredClone(value))
+        next(structuredClone(snap))
+      }
       return () => {}
     })
     store = await import('./planner')
@@ -247,6 +263,44 @@ describe('the store without the people and catalog parts', () => {
       // 30 of 40 hours fit the week
       await vi.waitFor(() => expect(P().delayOf(key)?.status).toBe('ok'))
       expect(P().delayOf(key)).not.toBe(DELAY_UNKNOWN)
+    })
+  })
+
+  describe('a desktop notification', () => {
+    /** A new mention of the signed-in person by `actor` on task 1. */
+    const mention = (snap: Snapshot, id: string, actor: string) => ({
+      id,
+      org_id: snap.orgs[0].id,
+      recipient_id: snap.profiles[0].id,
+      actor_id: actor,
+      issue_id: 'task-1',
+      issue_title: 'Calibrate the sensor',
+      kind: 'mention' as const,
+      detail: 'Mentioned you',
+      created_at: '2026-09-14T10:00:00.000Z',
+    })
+
+    it('names an actor a view named from the profile cache, and says Someone for one it did not', async () => {
+      const snap = withOwner(() => {})
+      snap.profiles.push(personOf(snap.profiles[0], 2))
+      snap.delivered_at = '2026-09-14T09:00:00.000Z'
+      notes.titles.length = 0
+      await boot(snap)
+      const org = snap.orgs[0].id
+      // the Inbox list named Person 0001, whose face the cache holds
+      P().namePeople('the inbox', [{ org, id: 'person-0001' }])
+      await vi.waitFor(() => expect(P().person('person-0001', org)?.state).toBe('ok'))
+      snap.messages.push(mention(snap, 'm1', 'person-0001'), {
+        ...mention(snap, 'm2', 'person-0002'),
+        created_at: '2026-09-14T10:01:00.000Z',
+      })
+      snap.delivered_at = '2026-09-14T10:30:00.000Z'
+      deliver(snap)
+      await vi.waitFor(() => expect(notes.titles).toHaveLength(2))
+      expect(notes.titles).toEqual([
+        'Person 0001 mentioned you, Calibrate the sensor',
+        'Someone mentioned you, Calibrate the sensor',
+      ])
     })
   })
 })

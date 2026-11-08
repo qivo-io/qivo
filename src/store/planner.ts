@@ -3588,14 +3588,16 @@ function announceNewMessages(snap: Snapshot) {
   fresh
     .sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
     .forEach((m) => {
-      const actor = m.actor_id && profiles.get(m.actor_id)
       // null actor = an agent-less API write OR a since-deleted user (the FK
       // set-null cascade) — same neutral fallback the feed and comments use.
       // The workspace holds only the signed-in person's own profiles, so
-      // every other actor is "Someone" until the Inbox feed names actors
-      // itself (t3/limits-inbox-feed), an accepted gap while nobody uses
-      // the app
-      const who = actor ? actor.name : 'Someone'
+      // another actor is named from the profile cache where an open view,
+      // such as the Inbox list, named them in the message's organization
+      // (P.person), and is "Someone" otherwise, until the Inbox feed names
+      // actors itself (t3/limits-inbox-feed)
+      const own = m.actor_id ? profiles.get(m.actor_id) : undefined
+      const cached = own ? null : PLANNER.person(m.actor_id, m.org_id)
+      const who = own ? own.name : cached?.state === 'ok' ? cached.name : 'Someone'
       const title = titleOf(m)
       desktopNotify(
         m.id,
