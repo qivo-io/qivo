@@ -418,8 +418,9 @@ type InboxChangeJson = {
  * With `all`, a batch of INBOX_BATCH messages on as many tasks in as many
  * sub-projects the caller reads by grant read 1,108 index ranges and 1,499
  * documents for `read` and 787 and 1,338 for `remove`, all 160 named, and
- * the same with 90 more top-level projects in the organization, 200 live in
- * all (convex/tests/machineInbox.test.ts, "reads at the design size").
+ * a reader of everyday reach reads the same in an organization of 200 live
+ * top-level projects as in an everyday one (convex/tests/machineInbox.test.ts,
+ * "reads at the design size").
  */
 async function changeInbox(
   ctx: MutationCtx,

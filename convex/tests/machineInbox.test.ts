@@ -1072,6 +1072,26 @@ const plantPeople = (t: T, orgId: string, n: number) =>
     return out
   })
 
+/** MCP update_inbox with `all` for `me` in one transaction, with what it
+ * read. */
+const bulkChange = (t: T, me: Doc<'profiles'>, action: 'read' | 'remove') =>
+  t.run(async (ctx) => {
+    const answer = JSON.parse(
+      await (
+        mcpUpdateInbox as unknown as {
+          _handler: (ctx: MutationCtx, args: Record<string, unknown>) => Promise<string>
+        }
+      )._handler(ctx, { callerId: me.id, access: 'write', action, all: true }),
+    ) as { tasks: string[]; has_more: boolean }
+    const m = await ctx.meta.getTransactionMetrics()
+    return {
+      answer,
+      ranges: m.databaseQueries.used,
+      documents: m.documentsRead.used,
+      bytes: m.bytesRead.used,
+    }
+  })
+
 describe('reads at the design size', () => {
   it('1. the everyday Inbox, 60 groups over 3 sub-projects, at limits 50 and 200 with each filter', async () => {
     const t = newT()
@@ -1255,72 +1275,54 @@ describe('reads at the design size', () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     let num = 5000
-    // 160 sub-projects under 54 top-level ones, each sub-project granted to `me`
-    const granted = (me: Doc<'profiles'>) =>
-      t.run(async (ctx) => {
-        const out: Doc<'projects'>[] = []
-        const project = async (parent: Doc<'projects'> | null, name: string) => {
-          const _id = await ctx.db.insert('projects', {
-            id: uuid(),
-            org_id: f.org.id,
-            type: parent === null ? 'meta' : 'project',
-            ...(parent === null ? {} : { parent_id: parent.id }),
-            key: `G${num}`,
-            name,
-            description: '',
-            sort_order: num,
-            num: num++,
-            track_delay: false,
-            created_at: NOW,
-            window_key: newWindowKey(),
-          })
-          return (await ctx.db.get(_id)) as Doc<'projects'>
-        }
-        for (let i = 0; i < 54; i++) {
-          const parent = await project(null, `Product line ${i}`)
-          for (const name of ['Firmware', 'Hardware', 'Validation']) {
-            if (out.length === 160) break
-            const sub = await project(parent, `${name} ${i}`)
-            await ctx.db.insert('project_access', {
-              project_id: sub.id,
-              profile_id: me.id,
-              level: 'user',
-            })
-            out.push(sub)
-          }
-        }
-        return out
-      })
+    // a batch of INBOX_BATCH messages, each about a task of its own in a
+    // sub-project of its own, the most projects one change asks about, in
+    // an organization of the reader's 54 top-level projects and withOrg's
+    // 2: 160 sub-projects under 54 top-level ones, each granted to `me`
     const me = await reader(t, f, [], 'user')
-    const twin = await reader(t, f, [], 'user')
-    for (const who of [me, twin]) {
-      const subs = await granted(who)
-      expect(subs).toHaveLength(160)
-      await plantGroups(t, who, 160, (i) => subs[i].id, { title })
-    }
-    const change = (me: Doc<'profiles'>, action: 'read' | 'remove') =>
-      t.run(async (ctx) => {
-        const answer = JSON.parse(
-          await (
-            mcpUpdateInbox as unknown as {
-              _handler: (ctx: MutationCtx, args: Record<string, unknown>) => Promise<string>
-            }
-          )._handler(ctx, { callerId: me.id, access: 'write', action, all: true }),
-        ) as { tasks: string[]; has_more: boolean }
-        const m = await ctx.meta.getTransactionMetrics()
-        return {
-          answer,
-          ranges: m.databaseQueries.used,
-          documents: m.documentsRead.used,
-          bytes: m.bytesRead.used,
+    const subs = await t.run(async (ctx) => {
+      const out: Doc<'projects'>[] = []
+      const project = async (parent: Doc<'projects'> | null, name: string) => {
+        const _id = await ctx.db.insert('projects', {
+          id: uuid(),
+          org_id: f.org.id,
+          type: parent === null ? 'meta' : 'project',
+          ...(parent === null ? {} : { parent_id: parent.id }),
+          key: `G${num}`,
+          name,
+          description: '',
+          sort_order: num,
+          num: num++,
+          track_delay: false,
+          created_at: NOW,
+          window_key: newWindowKey(),
+        })
+        return (await ctx.db.get(_id)) as Doc<'projects'>
+      }
+      for (let i = 0; i < 54; i++) {
+        const parent = await project(null, `Product line ${i}`)
+        for (const name of ['Firmware', 'Hardware', 'Validation']) {
+          if (out.length === 160) break
+          const sub = await project(parent, `${name} ${i}`)
+          await ctx.db.insert('project_access', {
+            project_id: sub.id,
+            profile_id: me.id,
+            level: 'user',
+          })
+          out.push(sub)
         }
-      })
-    const read = await change(me, 'read')
+      }
+      return out
+    })
+    expect(subs).toHaveLength(160)
+    expect(await readableLiveSubProjects(t, me)).toBe(160)
+    await plantGroups(t, me, 160, (i) => subs[i].id, { title })
+    const read = await bulkChange(t, me, 'read')
     console.log(
       `bulk read over 160 sub-projects: ${read.answer.tasks.length} named, ${read.ranges} ranges, ${read.documents} documents, ${Math.round(read.bytes / 1024)} KB read`,
     )
     expect(read.answer.tasks).toHaveLength(160)
-    const remove = await change(me, 'remove')
+    const remove = await bulkChange(t, me, 'remove')
     console.log(
       `bulk remove over 160 sub-projects: ${remove.answer.tasks.length} named, ${remove.ranges} ranges, ${remove.documents} documents, ${Math.round(remove.bytes / 1024)} KB read`,
     )
@@ -1329,28 +1331,53 @@ describe('reads at the design size', () => {
       expect(r.ranges).toBeLessThan(4096)
       expect(r.documents).toBeLessThan(32_000)
     }
-    // 90 more live top-level projects of the organization, none of them the
-    // twin's, bring its live top-level projects from 110 to the design
-    // size's 200 and leave the twin's change reading what the first one read
-    await t.run(async (ctx) => {
-      for (let i = 0; i < 90; i++)
-        await ctx.db.insert('projects', {
-          id: uuid(),
-          org_id: f.org.id,
-          type: 'meta',
-          key: `X${i}`,
-          name: `Unrelated line ${i}`,
-          description: '',
-          sort_order: 9000 + i,
-          num: 9000 + i,
-          track_delay: false,
-          created_at: NOW,
-          window_key: newWindowKey(),
+  })
+
+  it('10. the bulk change with all reads the same for a reader of everyday reach whatever the organization holds', async () => {
+    // the same reader and Inbox, in an everyday organization and in one
+    // grown to the design size's 200 live top-level projects
+    const reads = async (big: boolean) => {
+      const t = newT()
+      const f = await withReadingAdmin(t)
+      const { me, subs } = await everyday(t, f)
+      await plantGroups(t, me, 60, (i) => subs[i].id, { title })
+      if (big)
+        await t.run(async (ctx) => {
+          for (let i = 0; i < 177; i++)
+            await ctx.db.insert('projects', {
+              id: uuid(),
+              org_id: f.org.id,
+              type: 'meta',
+              key: `X${i}`,
+              name: `Unrelated line ${i}`,
+              description: '',
+              sort_order: 9000 + i,
+              num: 9000 + i,
+              track_delay: false,
+              created_at: NOW,
+              window_key: newWindowKey(),
+            })
         })
-    })
-    const twinRead = await change(twin, 'read')
-    expect(twinRead.answer.tasks).toHaveLength(160)
-    expect([twinRead.ranges, twinRead.documents]).toEqual([read.ranges, read.documents])
+      // withOrg's 2 and the reader's 21, and with `big` 177 more
+      const tops = await t.run(async (ctx) =>
+        (
+          await ctx.db
+            .query('projects')
+            .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+            .collect()
+        ).filter((p) => p.parent_id === undefined && p.archived_at === undefined),
+      )
+      expect(tops).toHaveLength(big ? 200 : 23)
+      const change = await bulkChange(t, me, 'read')
+      expect(change.answer.tasks).toHaveLength(60)
+      return [change.ranges, change.documents]
+    }
+    const everydayOrg = await reads(false)
+    const grown = await reads(true)
+    console.log(
+      `bulk read of an everyday reader: ${JSON.stringify(everydayOrg)} everyday, ${JSON.stringify(grown)} at 200 live top-level projects`,
+    )
+    expect(grown).toEqual(everydayOrg)
   })
 
   it('reads one task for each group of an archived task it passes: 2,000 in one sub-project newer than an everyday Inbox, one page', async () => {
