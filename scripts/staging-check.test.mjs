@@ -96,10 +96,12 @@ import {
   PEOPLE_REFUSALS,
   PICKER_EXPECTED,
   PICKER_STEP,
+  PROJECT_DETAIL_REFUSALS,
   PROJECT_DIALOGS_EXPECTED,
   PROJECT_DIALOGS_STEP,
   PROJECT_DIRECTORY_MARKS,
   PROJECT_DIRECTORY_STEP,
+  PROJECT_LISTS,
   PROJECT_REFUSALS,
   PROJECT_SETTINGS_EXPECTED,
   PROJECT_SETTINGS_STEP,
@@ -1725,6 +1727,25 @@ describe('staging check REST contract', () => {
     expect(PROJECTS_MAX).toBe(2000)
     expect(projectPagesMax(200)).toBe(12)
     expect(projectPagesMax(1)).toBe(2002)
+  })
+  it("expects the server's sentences and lists for a project's details", () => {
+    expect(PROJECT_DETAIL_REFUSALS).toEqual({
+      offset: offsetRefusal('milestones'),
+      limit: LIMITS.listMilestones.refusal,
+      usersOffset: offsetRefusal('project users'),
+      usersLimit: LIMITS.listProjectUsers.refusal,
+      cursor: CURSOR_REFUSAL,
+      unknown: 'unknown query parameter "page"; this request takes limit, cursor, offset',
+    })
+    // the lists MCP list_project_related takes, in the details' order, with
+    // the REST routes that page them
+    const projects = readFileSync(new URL('../convex/machine/projects.ts', import.meta.url), 'utf8')
+    const lists = projects.match(/export const PROJECT_RELATED_LISTS = \[([^\]]*)\] as const/)
+    expect(lists?.[1].split(',').map((name) => name.trim().replaceAll("'", ''))).toEqual(
+      PROJECT_LISTS.map((l) => l.list),
+    )
+    for (const { path } of PROJECT_LISTS)
+      expect(projects).toContain(`path: 'projects/:ref/${path}',`)
   })
   it('names the tools that answer a placeholder sent alone as the server does', () => {
     const mcp = readFileSync(new URL('../convex/machine/mcp.ts', import.meta.url), 'utf8')
