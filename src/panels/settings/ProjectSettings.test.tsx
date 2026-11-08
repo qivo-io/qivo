@@ -282,7 +282,7 @@ async function open(projectId = 'plan') {
   await act(async () =>
     root.render(
       <TooltipProvider>
-        <Live page={() => <settings.ProjectPage projectId={projectId} setPage={setPage} />} />
+        <Live page={() => <settings.ProjectPage project={projectId} setPage={setPage} />} />
       </TooltipProvider>,
     ),
   )

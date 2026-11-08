@@ -69,11 +69,14 @@ import {
   addressedTask,
   buildPath,
   issueLink,
+  namesProjectPage,
   noteProjectPage,
+  numberedProjectPage,
   ORG_NONE,
   parseHash,
   parsePath,
   pathMatchesState,
+  projectPageRef,
   projectPagesRev,
   sameTask,
   scopeForIssue,
@@ -326,7 +329,7 @@ describe('parsePath — scopes and pages', () => {
     })
   })
 
-  it('reads a project page’s uuid without the workspace, and a number or other segment through it', () => {
+  it('reads a project page’s uuid without the workspace, a held number through it, and any other segment as the account page', () => {
     const far = '7E1C2A4E-0000-4000-8000-0000000000AA'
     // the page's own read decides what a uuid shows, held or not
     expect(parsePath(`/app/home/settings/project/${far}`)).toEqual({
@@ -337,12 +340,78 @@ describe('parsePath — scopes and pages', () => {
     })
     // under a slug this login cannot resolve, nothing past the page
     expect(parsePath(`/app/nowhere/settings/project/${far}`)).toEqual({ settings: 'account' })
-    // a number the workspace lacks, and a segment that is neither
-    expect(parsePath('/app/home/settings/project/99')).toEqual({ settings: 'account' })
+    // a segment that is neither
     expect(parsePath('/app/home/settings/project/not-a-project')).toEqual({ settings: 'account' })
     expect(parseHash(`#/o/home/settings/project/${far}`)).toEqual({
       settings: `project:${far.toLowerCase()}`,
     })
+  })
+
+  it('reads a number the workspace does not hold as a numbered page in the organization the address names, never another', () => {
+    // a held number is the page by id, in the organization the address pins
+    expect(parsePath('/app/home/settings/project/1')).toEqual({ settings: 'project:p-home-1' })
+    expect(parsePath('/app/acme/settings/project/1')).toEqual({ settings: 'project:p-acme-1' })
+    // an unheld one is the numbered page of that organization
+    expect(parsePath('/app/home/settings/project/99')).toEqual({
+      settings: numberedProjectPage(HOME, 99),
+    })
+    expect(parsePath('/app/acme/settings/project/7')).toEqual({
+      settings: numberedProjectPage(ACME, 7),
+    })
+    expect(parseHash('#/o/acme/settings/project/7')).toEqual({
+      settings: numberedProjectPage(ACME, 7),
+    })
+    // `~` reads it in the home organization only
+    expect(parsePath('/app/~/settings/project/99')).toEqual({
+      settings: numberedProjectPage(HOME, 99),
+    })
+    expect(parseHash('#/settings/project/99')).toEqual({ settings: numberedProjectPage(HOME, 99) })
+    // the key names the number by itself, which no uuid page can be
+    expect(numberedProjectPage(HOME, 99)).toBe(`project:${HOME}/99`)
+    expect(projectPageRef(numberedProjectPage(ACME, 7))).toEqual({ org_id: ACME, num: 7 })
+    expect(projectPageRef('project:p-home-7')).toEqual({ id: 'p-home-7' })
+    expect(projectPageRef('account')).toBeNull()
+    expect(projectPageRef(`project:${HOME}/0`)).toBeNull()
+    // a login without a home organization reads no number under `~`
+    store.homeOrg = ''
+    expect(parsePath('/app/~/settings/project/99')).toEqual({ settings: 'account' })
+    expect(parsePath('/app/acme/settings/project/7')).toEqual({
+      settings: numberedProjectPage(ACME, 7),
+    })
+    store.homeOrg = HOME
+    // a slug this login cannot resolve names nothing past the page
+    expect(parsePath('/app/nowhere/settings/project/7')).toEqual({ settings: 'account' })
+    // a number outside 1 to Number.MAX_SAFE_INTEGER is the account page
+    for (const n of ['0', '00', String(Number.MAX_SAFE_INTEGER + 1), '1e3', '-3', '1.5'])
+      expect(parsePath(`/app/home/settings/project/${n}`), n).toEqual({ settings: 'account' })
+    expect(parsePath(`/app/home/settings/project/${Number.MAX_SAFE_INTEGER}`)).toEqual({
+      settings: numberedProjectPage(HOME, Number.MAX_SAFE_INTEGER),
+    })
+  })
+
+  it('names a numbered page by the number it was opened by, through a reload, Back and Forward', () => {
+    const page = { settingsPage: numberedProjectPage(ACME, 7) }
+    expect(buildPath(page)).toBe('/app/acme/settings/project/7')
+    expect(parsePath(buildPath(page))).toEqual({ settings: page.settingsPage })
+    expect(pathMatchesState('/app/acme/settings/project/7', page)).toBe(true)
+    // `~` reads in the home organization, and the address names its slug
+    const home = { settingsPage: numberedProjectPage(HOME, 99) }
+    expect(buildPath(home)).toBe('/app/home/settings/project/99')
+    expect(pathMatchesState('/app/~/settings/project/99', home)).toBe(true)
+    // another number, or another page, is another page
+    expect(pathMatchesState('/app/acme/settings/project/8', page)).toBe(false)
+    expect(pathMatchesState('/app/acme/settings/account', page)).toBe(false)
+    // once the workspace holds the project, its address parses to the page
+    // by id, and still names this numbered page in place
+    store.projects = [...store.projects, project('p-acme-7', 7, ACME)]
+    expect(parsePath('/app/acme/settings/project/7')).toEqual({ settings: 'project:p-acme-7' })
+    expect(namesProjectPage('/app/acme/settings/project/7', page.settingsPage)).toBe(true)
+    expect(namesProjectPage('/app/home/settings/project/7', page.settingsPage)).toBe(false)
+    expect(pathMatchesState('/app/acme/settings/project/7', page)).toBe(true)
+    // an organization that left can no longer be named, and `~` would read
+    // the number at home, so the address names the account page instead
+    store.orgs = store.orgs.filter((o) => o.id !== ACME)
+    expect(buildPath(page)).toBe('/app/~/settings/account')
   })
 
   it('opens Settings › Archived tasks at the old Archive address, rewritten in place', () => {

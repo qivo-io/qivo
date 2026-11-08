@@ -5,6 +5,7 @@ import { Icon } from '../components/qivo'
 import { WorkspacePageHeader, WorkspaceShell } from '../components/WorkspaceShell'
 import type { ApiAccessEntry } from '../lib/apiAccess'
 import { restoreFocus } from '../lib/focusVisibility'
+import { projectPageRef } from '../lib/router'
 import { useMobile } from '../lib/useMobile'
 import { P } from '../store/planner'
 import { BillingSettings } from './BillingSettings'
@@ -82,8 +83,12 @@ function SettingsScreen({
   const myTeams = P.teams.filter((t) => t.org === P.homeOrg && P.isTeamLeader(t.id))
   /* A project page's read of its settings, for the check below, the
      phone's Back and the page itself, which takes it as a prop rather than
-     watching it a second time, so the check and the page follow one read. */
-  const projectRead = useProjectSettings(page.startsWith('project:') ? page.slice(8) : null)
+     watching it a second time, so the check and the page follow one read.
+     The page names its project by id, or a numbered page by its
+     organization and number (lib/router.ts projectPageRef), never an id
+     made of the key's text. */
+  const projectPage = projectPageRef(page)
+  const projectRead = useProjectSettings(projectPage)
   /* A team page's read of the team and the caller's rights, for the check
      below and the page itself, as the project page's. */
   const teamRead = useTeamSettings(page.startsWith('team:') ? page.slice(5) : null)
@@ -152,9 +157,12 @@ function SettingsScreen({
       resetPage('account')
     } else if (page.indexOf('project:') === 0) {
       // the server's answer decides, whether or not the workspace holds the
-      // project; nothing moves while it loads, refreshes or failed
+      // project; nothing moves while it loads, refreshes or failed. The
+      // window holds the project its answer named, by that project's id,
+      // whichever form the page names it by
       const gone = projectRead.state === 'unavailable' || projectRead.state === 'archived'
-      if (gone && holdingProject !== page.slice(8)) resetPage('account')
+      const held = holdingProject !== null && holdingProject === projectRead.answer?.project.id
+      if (projectPage === null || (gone && !held)) resetPage('account')
     } else if (page.indexOf('team:') === 0) {
       // the server's answer decides, whether or not the workspace holds the
       // team; nothing moves while it loads, refreshes or failed
@@ -278,7 +286,7 @@ function SettingsScreen({
   else if (page.indexOf('project:') === 0)
     content = (
       <ProjectPage
-        projectId={page.slice(8)}
+        project={projectPage ?? page.slice(8)}
         read={projectRead}
         setPage={setPage}
         onBackPage={onBackPage}

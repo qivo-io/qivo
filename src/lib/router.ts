@@ -7,7 +7,9 @@
      [<view>/]p/<n>            project/sub-project scope
      <view>/mine               My view, optionally /tasks/<ref>
      settings/<page>           account, org-*, projects-* or team:<uuid>
-     settings/project/<n>      project settings, by number or uuid
+     settings/project/<n>      project settings, by number or uuid; a number
+                               the workspace does not hold is a numbered
+                               page (numberedProjectPage)
      projects                  the All projects directory, no task over it
      archive                   old Archive address; opens settings/projects-archived-tasks
      inbox[/tasks/<ref>]       inbox, optionally with a task open
@@ -29,7 +31,10 @@
    number, and one it does not hold by its uuid under the organization the
    page's own read named (noteProjectPage), which parses back to the page
    without the workspace: the page's read (projectSettings.get) decides
-   what it shows, so a reload, Back and Forward open it again.
+   what it shows, so a reload, Back and Forward open it again. A numbered
+   address of a project the workspace does not hold opens a numbered page,
+   which the page reads by its organization and number and which keeps
+   the address it was opened by.
    A task the workspace holds resolves to its handle, and one it does not
    to a reference (lib/taskReference.ts) that the task window reads from
    the server, in the organization the address names. Tasks resolve their
@@ -121,20 +126,58 @@ const findProject = (s: string | undefined, org?: string) => {
   }
   return P.projects.find((p) => p.id === s.toLowerCase())
 }
+/* The organization a project number of an address reads in, where the
+   workspace does not hold the project: the one the address pins, or,
+   unpinned (`~` and a legacy hash without one), the home organization,
+   never another organization's; none for a login without a home
+   organization. Route.unheld and a numbered project page both read a
+   number here, so the two cannot drift. */
+const numberOrgOf = (org: string | undefined): string | undefined => org ?? (P.homeOrg || undefined)
+
+/* The project number segment `s` names: a whole number from 1 to
+   Number.MAX_SAFE_INTEGER in digits, else null. */
+const projectNumberOf = (s: string): number | null => {
+  if (!/^\d+$/.test(s)) return null
+  const n = Number(s)
+  return n >= 1 && n <= Number.MAX_SAFE_INTEGER ? n : null
+}
+
 /* How P.resolveProject asks about the project a segment `s` names that
    the workspace does not hold (Route.unheld): a number in the
-   organization the address pins, or unpinned in the home organization,
-   as findProject reads it, and a uuid alone. Null where no read can ask:
-   under a slug the login cannot resolve, a number with no organization to
-   read it in, or a ref no project can have. */
+   organization numberOrgOf reads it in, and a uuid alone. Null where no
+   read can ask: under a slug the login cannot resolve, a number with no
+   organization to read it in, or a ref no project can have. */
 const unheldProject = (s: string | undefined, org: string | undefined, orgUnknown: boolean) => {
   if (orgUnknown || !s) return null
   if (/^\d+$/.test(s)) {
-    const num = Number(s)
-    const at = org ?? P.homeOrg
-    return num >= 1 && at ? { org_id: at, num } : null
+    const num = projectNumberOf(s)
+    const at = numberOrgOf(org)
+    return num !== null && at ? { org_id: at, num } : null
   }
   return UUID.test(s) ? s.toLowerCase() : null
+}
+
+/** How a project settings page names its project: `{ id }`, or a
+    numbered page's `{ org_id, num }` (numberedProjectPage). */
+export type ProjectPageRef = { id: string } | { org_id: string; num: number }
+
+/** The page key of the settings page of project number `num` in
+    organization `org`, for a numbered address the workspace does not hold:
+    `project:<org>/<num>`, which no project id can be, since ids are uuids.
+    The page reads it by its organization and number (projectSettings.get),
+    and buildPath names it by that number again. */
+export const numberedProjectPage = (org: string, num: number): string => `project:${org}/${num}`
+
+/** The project the settings page `page` names (projectPageRef): its id,
+    or a numbered page's organization and number; null for any other
+    page. */
+export function projectPageRef(page: string | null | undefined): ProjectPageRef | null {
+  if (!page?.startsWith('project:')) return null
+  const rest = page.slice(8)
+  const at = rest.indexOf('/')
+  if (at === -1) return { id: rest }
+  const num = projectNumberOf(rest.slice(at + 1))
+  return num === null ? null : { org_id: rest.slice(0, at), num }
 }
 /* The task an address's task segment `s` names: its handle when the
    workspace holds it, else a reference (lib/taskReference.ts), which the
@@ -305,17 +348,28 @@ function parseSegments(seg: string[], org: string | undefined, orgUnknown: boole
   if (seg[0] === 'settings') {
     if (seg[1] === 'project') {
       /* A uuid names the page whether the workspace holds the project or
-         not, and the page's own read decides what it shows; a number reads
-         through the workspace. Under a slug this login cannot resolve,
-         neither does, as for every segment past the page. */
+         not, and the page's own read decides what it shows. A number names
+         the project the workspace holds, as findProject reads it, and
+         otherwise a numbered page in the organization numberOrgOf reads
+         the number in, which the page reads by organization and number,
+         never another organization's project. A number outside 1 to
+         Number.MAX_SAFE_INTEGER, one with no organization to read it in
+         and any other segment name the account page. Under a slug this
+         login cannot resolve, nothing does, as for every segment past the
+         page. */
       const s = seg[2] ?? ''
       const p = UUID.test(s) ? null : proj(s)
-      r.settings =
-        !orgUnknown && UUID.test(s)
+      const num = projectNumberOf(s)
+      const at = numberOrgOf(org)
+      r.settings = orgUnknown
+        ? 'account'
+        : UUID.test(s)
           ? `project:${s.toLowerCase()}`
           : p
             ? `project:${p.id}`
-            : 'account'
+            : num !== null && at
+              ? numberedProjectPage(at, num)
+              : 'account'
     } else r.settings = seg[1] || 'account'
     return r
   }
@@ -616,9 +670,17 @@ export function noteProjectPage(id: string, at: { org: string } | null): void {
 /** Whether `path` names the settings page of the project `page` names by
     the organization and number it was last named by: the page's own
     address, also once its project left the store while the page is held
-    (App onPop keeps the page then). */
+    (App onPop keeps the page then), and a numbered page's own number
+    under its organization, also once the workspace has come to hold the
+    project, whose address then parses to the page by id. */
 export function namesProjectPage(path: string, page: string | null | undefined) {
-  const was = page?.startsWith('project:') ? namedProjects.get(page.slice(8)) : undefined
+  const ref = projectPageRef(page)
+  const was =
+    ref === null
+      ? undefined
+      : 'id' in ref
+        ? namedProjects.get(ref.id)
+        : { seg: orgSegment(ref.org_id), num: ref.num }
   const seg = path.split('/').filter(Boolean)
   return (
     !!was &&
@@ -737,6 +799,14 @@ export function buildPath(state: UiState): string {
   // same precedence as the render: full-screen pages first, then the inbox
   if (s.settingsPage) {
     const page = s.settingsPage
+    const ref = projectPageRef(page)
+    // a numbered page keeps the number it was opened by, under its
+    // organization; once that organization cannot be named, `~` would read
+    // the number in the home organization, so it names the account page
+    if (ref !== null && 'num' in ref)
+      return orgSegment(ref.org_id) === ORG_NONE && ref.org_id !== P.homeOrg
+        ? at(null, '/settings/account')
+        : at(ref.org_id, `/settings/project/${String(ref.num)}`)
     if (page.indexOf('project:') === 0) {
       const id = page.slice(8)
       const p = P.project(id)

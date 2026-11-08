@@ -5,12 +5,16 @@
    sub-projects as Settings › Projects lists them (ProjectLists.tsx), and
    sends every write with what it showed, so it works the same for a
    project the workspace does not hold, whose address then names it by its
-   uuid (lib/router.ts noteProjectPage). A removal names its person or team
-   as the page showed them (the change's label). It reads the workspace
-   only to know whether it holds the project, for the address and the page
-   a delete returns to, and for the names the Archive or delete window
-   gives. Its portraits come from P.person, which the access editor names
-   its people for (components/usePeople.ts). */
+   project the workspace does not hold, whose address then names it under
+   its organization by the number it was last opened by in this visit, on
+   a numbered page or on its page by id afterwards, and otherwise by its
+   uuid (lib/router.ts noteProjectPage). A numbered page reads it by its
+   organization and number (lib/router.ts numberedProjectPage). A removal
+   names its person or team as the page showed them (the change's label).
+   It reads the workspace only to know whether it holds the project, for
+   the address and the page a delete returns to, and for the names the
+   Archive or delete window gives. Its portraits come from P.person, which
+   the access editor names its people for (components/usePeople.ts). */
 import React, { useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -33,7 +37,7 @@ import { focusAround } from '../../lib/focusWhenGone'
 import { useUnsaved } from '../../lib/leaveGuard'
 import { useLoadMore } from '../../lib/loadMore'
 import { listEnd } from '../../lib/pagedList'
-import { noteProjectPage } from '../../lib/router'
+import { noteProjectPage, type ProjectPageRef } from '../../lib/router'
 import { REVIEW_HOURS, useSavedDraft } from '../../lib/savedDraft'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import type { AccessLevel } from '../../store/planner'
@@ -57,14 +61,17 @@ type RemovalShown = {
 }
 
 export function ProjectPage({
-  projectId,
+  project,
   read: given,
   setPage,
   onBackPage = setPage,
   onProjectGone,
   onHolding,
 }: {
-  projectId: string
+  /** the project the page shows, by id or as Settings' page reference
+      (lib/router.ts projectPageRef), which only a page rendered on its own
+      reads; every move inside the page uses its answer's ids */
+  project: string | ProjectPageRef
   /** the read of the project's settings that Settings holds for this page
       (useProjectSettings), so Settings' check and the page follow one
       read; a page rendered on its own reads its own */
@@ -89,7 +96,7 @@ export function ProjectPage({
      (useProjectSettings). It takes Settings' read when Settings passes
      one and watches its own only when rendered on its own, so Settings'
      check and the page follow one read. */
-  const own = useProjectSettings(given ? null : projectId)
+  const own = useProjectSettings(given ? null : project)
   const read = given ?? own
   /* The Archive or delete window, from the section at the end of the page.
      It holds the project as it was when the window opened, so it stays up

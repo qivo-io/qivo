@@ -16,7 +16,9 @@ import { isProjectSettingsRead, projectSettingsServer } from './store/projectSet
    access split. Its page reads from the server
    (projectSettings.get) and names it by its uuid under its organization,
    so a reload, Back and Forward open it again, and the server's
-   `unavailable` sends the page to Your preferences. */
+   `unavailable` sends the page to Your preferences. A numbered address of
+   it opens a numbered page, which reads projectSettings.get by its
+   organization and number and keeps the address it was opened by. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => ({
@@ -38,6 +40,8 @@ let root: Root
 /* What the server holds, and the way to answer its open reads again. */
 let server: Snapshot
 let rerun: () => void
+// the arguments of every projectSettings.get the page asked
+let gets: unknown[]
 
 beforeEach(() => {
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
@@ -105,12 +109,14 @@ async function boot(address: string) {
   })
   const settings = projectSettingsServer(() => server)
   const lists = projectListsServer(() => server)
+  gets = []
   rerun = () => {
     settings.rerun()
     lists.rerun()
   }
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
+    if (name === 'projectSettings:get') gets.push(args)
     if (isProjectSettingsRead(name)) return settings.watch(name, args, next, fail)
     if (isProjectListRead(name)) return lists.watch(name, args, next, fail)
     if (name === 'workspace:whole') next(structuredClone(snap))
@@ -210,5 +216,91 @@ describe('the address of a project page the workspace does not hold', { timeout:
     await boot(`/app/elsewhere/settings/project/${AWAY}`)
     await waitFor(() => location.pathname === '/app/~/settings/account' || null, 'the reset')
     expect(heading()).not.toContain('Away')
+  })
+})
+
+describe('the numbered address of a project page the workspace does not hold', {
+  timeout: 30_000,
+}, () => {
+  it('opens the page of a project an admin only manages by its organization and number, keeping its numbered address through a reload, Back and Forward', async () => {
+    let P = await boot('/app/testbed/settings/project/7')
+    expect(P.project(AWAY)).toBeUndefined()
+    await waitFor(() => heading().includes('Away'), 'the page')
+    const org = P.homeOrg
+    expect(gets).toEqual([{ org_id: org, num: 7 }])
+    expect(location.pathname).toBe('/app/testbed/settings/project/7')
+    expect(
+      document
+        .querySelector('[data-project-settings-state]')
+        ?.getAttribute('data-project-settings-state'),
+    ).toBe('ok')
+    // a reload opens it again by its number, in the fixture's organization
+    // of this boot
+    P = await boot('/app/testbed/settings/project/7')
+    await waitFor(() => heading().includes('Away'), 'the page after a reload')
+    const home = P.homeOrg
+    expect(gets).toEqual([{ org_id: home, num: 7 }])
+    expect(location.pathname).toBe('/app/testbed/settings/project/7')
+    // to Settings › Projects, and Back and Forward
+    const all = await waitFor(
+      () => document.querySelector<HTMLElement>('[data-settings-item="projects"]'),
+      'All projects',
+    )
+    await act(async () => all.click())
+    await waitFor(() => document.querySelector(`[data-project-row="${AWAY}"]`), 'Away’s row')
+    expect(location.pathname).toBe('/app/testbed/settings/projects')
+    await go(-1)
+    await waitFor(() => heading().includes('Away'), 'the page again')
+    expect(location.pathname).toBe('/app/testbed/settings/project/7')
+    await go(1)
+    await waitFor(() => document.querySelector('[data-settings-projects]'), 'the list again')
+    await go(-1)
+    await waitFor(() => heading().includes('Away'), 'the page once more')
+    expect(location.pathname).toBe('/app/testbed/settings/project/7')
+    expect(gets.every((a) => JSON.stringify(a) === JSON.stringify({ org_id: home, num: 7 }))).toBe(
+      true,
+    )
+  })
+
+  it('keeps the page while its Archive or delete window holds it after the project leaves, and then goes to Your preferences', async () => {
+    await boot('/app/testbed/settings/project/7')
+    await waitFor(() => heading().includes('Away'), 'the page')
+    const remove = await waitFor(
+      () => document.querySelector<HTMLButtonElement>(`[data-remove-project="${AWAY}"]`),
+      'Archive or delete…',
+    )
+    await act(async () => remove.click())
+    await settle()
+    const shell = await waitFor(() => document.querySelector('[data-modal-shell]'), 'the window')
+    // someone else deletes Away while the window is open
+    server.projects = server.projects.filter((p) => p.id !== AWAY)
+    await act(async () => rerun())
+    await settle()
+    expect(document.querySelector('[data-modal-shell]')).not.toBeNull()
+    expect(heading()).toContain('Away')
+    expect(location.pathname).toBe('/app/testbed/settings/project/7')
+    // the window says the project went, and closes on Close
+    const close = await waitFor(
+      () =>
+        [...shell.querySelectorAll<HTMLButtonElement>('button')].find(
+          (b) => b.textContent?.trim() === 'Close',
+        ),
+      "the window's Close",
+    )
+    await act(async () => close.click())
+    await settle()
+    await waitFor(() => location.pathname === '/app/~/settings/account' || null, 'the reset')
+  })
+
+  it('goes to Your preferences for a number no project holds, and reads nothing for one outside the numbers a project can have', async () => {
+    await boot('/app/testbed/settings/project/99')
+    await waitFor(() => location.pathname === '/app/~/settings/account' || null, 'the reset')
+    expect(heading()).not.toContain('Away')
+    expect(gets.length).toBeGreaterThan(0)
+    for (const n of ['0', String(Number.MAX_SAFE_INTEGER + 1)]) {
+      await boot(`/app/testbed/settings/project/${n}`)
+      await waitFor(() => location.pathname === '/app/~/settings/account' || null, `the reset ${n}`)
+      expect(gets, n).toEqual([])
+    }
   })
 })
