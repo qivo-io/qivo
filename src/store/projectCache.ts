@@ -38,8 +38,11 @@
      never with a right, so stale rights are never kept. An answer that
      makes a project `gone` drops its row, so nothing the cache keeps names
      it any more, and with it the row of a parent it stopped bringing, or
-     of the gone project's parent, that no owner names, no chunk reads and
-     no current answer holds.
+     of the gone project's parent, that only answers as a parent ever
+     brought, while no owner names it, no chunk reads it, no kept row names
+     it as its parent and no current answer holds it. A project a read
+     asked for keeps its row once its owners let it go, as its parent
+     does, until the bound drops it or an answer makes it gone.
    - A project no owner names stays `loading` until one names it: the cache
      has no safety net for an unnamed miss, so every reader's host names
      what it shows.
@@ -148,6 +151,9 @@ export function createProjectCache(deps: ProjectCacheDeps) {
   let namedCount = new Map<string, number>()
   // the rows the answers brought, the least recently shown first (Map order)
   const entries = new Map<string, NavByIdRow>()
+  // the entries only answers as a parent brought, never a read that asked
+  // for them, which go once nothing keeps them (take)
+  const parentOnly = new Set<string>()
   // the chunks, oldest first, and the chunk of each id
   let chunks: Chunk[] = []
   const chunkOf = new Map<string, Chunk>()
@@ -174,7 +180,14 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     deps.changed()
   }
 
-  /** Whether an owner names `id`, or names a sub-project whose parent it is. */
+  /** Drops project `id`'s row. */
+  function forget(id: string) {
+    entries.delete(id)
+    parentOnly.delete(id)
+  }
+
+  /** Whether an owner names `id`, or it is one of `parents` (namedParents,
+      keptParents). */
   function isNamed(id: string, parents: ReadonlySet<string>) {
     return namedCount.has(id) || parents.has(id)
   }
@@ -189,6 +202,13 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     return out
   }
 
+  /** The parents of every row the cache keeps. */
+  function keptParents(): Set<string> {
+    const out = new Set<string>()
+    for (const row of entries.values()) if (row.parent_id) out.add(row.parent_id)
+    return out
+  }
+
   /** Drops the entries past PROJECT_CACHE.most, the least recently shown
       first, never one an owner names or the parent of one. */
   function bound() {
@@ -197,7 +217,7 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     for (const id of entries.keys()) {
       if (entries.size <= PROJECT_CACHE.most) return
       if (isNamed(id, parents)) continue
-      entries.delete(id)
+      forget(id)
       touch()
     }
   }
@@ -221,6 +241,8 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     const asked = new Set(sub.ids)
     const unchecked = new Map(answer.unchecked.map((id) => [id, answer.message ?? '']))
     for (const row of answer.rows) {
+      if (asked.has(row.id)) parentOnly.delete(row.id)
+      else if (!entries.has(row.id)) parentOnly.add(row.id)
       const was = entries.get(row.id)
       if (was && JSON.stringify(was) === JSON.stringify(row)) continue
       entries.set(row.id, row)
@@ -250,21 +272,24 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     for (const id of new Set([...asked, ...dropped])) {
       const row = entries.get(id)
       if (!row || lookUp(id).state !== 'gone') continue
-      entries.delete(id)
+      forget(id)
       if (row.parent_id) parentsOfGone.push(row.parent_id)
     }
     // and so does a parent row it stopped bringing, or the parent of a
-    // project it made gone, that no owner names, no chunk reads and no
-    // current answer holds, since no read would ever answer it again
-    const parents = namedParents()
+    // project it made gone, that only answers as a parent ever brought,
+    // while no owner names it, no chunk reads it, no kept row names it as
+    // its parent and no current answer holds it, since nothing the cache
+    // keeps would bring it again. A project a read asked for keeps its row
+    // for the bound once its owners let it go, and so does its parent.
+    const parents = keptParents()
     for (const id of new Set([...dropped, ...parentsOfGone]))
       if (
-        entries.has(id) &&
+        parentOnly.has(id) &&
         !chunkOf.has(id) &&
         !isNamed(id, parents) &&
         currentRow(id) === undefined
       )
-        entries.delete(id)
+        forget(id)
     bound()
   }
 
@@ -547,6 +572,7 @@ export function createProjectCache(deps: ProjectCacheDeps) {
       chunks = []
       chunkOf.clear()
       entries.clear()
+      parentOnly.clear()
       looks.clear()
       stopTransitions?.()
       stopTransitions = null

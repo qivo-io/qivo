@@ -383,6 +383,56 @@ describe('the project cache', () => {
     expect(s.cache.rows()).toEqual([])
   })
 
+  it("keeps the rows of a sub-project an owner let go and of its parent when its chunk's next answer speaks for another owner's alone", () => {
+    const s = setup()
+    s.cache.name('board', ['a'])
+    s.cache.name('task', ['b'])
+    const [read] = s.reads()
+    expect(read.ids).toEqual(['a', 'b'])
+    const rowA = project('a', { parent_id: 'pa' })
+    const parentA = project('pa', { level: 'viewer' })
+    const rowB = project('b', { parent_id: 'pb' })
+    const parentB = project('pb', { level: 'viewer' })
+    s.answer(read.token, [rowA, parentA, rowB, parentB])
+    // the Board's kept page hides and lets a go, and the read of b alone
+    // answers
+    s.cache.name('board', [])
+    const next = s.reads().find((r) => r.token !== read.token)
+    if (!next) throw new Error('no read of b')
+    expect(next.ids).toEqual(['b'])
+    s.answer(next.token, [rowB, parentB])
+    expect(s.reads().map((r) => r.ids)).toEqual([['b']])
+    // no answer made a gone, so its row and its parent's stay for the bound
+    expect(s.cache.look('a')).toEqual({ state: 'loading', row: rowA, message: null })
+    expect(s.cache.look('pa')).toEqual({ state: 'loading', row: parentA, message: null })
+    // the Board shows again and names a by its kept row at once
+    s.cache.name('board', ['a'])
+    expect(s.cache.look('a')).toEqual({ state: 'loading', row: rowA, message: null })
+    const again = s.reads().find((r) => r.ids.includes('a'))
+    if (!again) throw new Error('no read of a')
+    s.answer(again.token, [rowB, parentB, rowA, parentA])
+    expect(s.cache.look('a')).toMatchObject({ state: 'ok', row: { level: 'user' } })
+  })
+
+  it('keeps the row of a parent its own read answered once its owner lets it go and its sub-project goes', () => {
+    const s = setup()
+    PROJECT_CACHE.chunk = 1
+    s.cache.name('board', ['sub'])
+    const [subRead] = s.reads()
+    const parent = project('meta', { level: 'viewer' })
+    s.answer(subRead.token, [project('sub', { parent_id: 'meta' }), parent])
+    // the task window opens on meta, whose own read answers it, and closes
+    s.cache.name('task', ['meta'])
+    const own = s.reads().find((r) => r.ids.includes('meta'))
+    if (!own) throw new Error('no read of meta')
+    s.answer(own.token, [parent])
+    s.cache.name('task', [])
+    // the person's access to sub went, and its answer leaves it out
+    s.answer(subRead.token, [])
+    expect(s.cache.look('sub')).toEqual({ state: 'gone', row: null, message: null })
+    expect(s.cache.look('meta')).toEqual({ state: 'loading', row: parent, message: null })
+  })
+
   it("answers a parent a sub-project brought ok, also when the parent's own chunk left it out", () => {
     const s = setup()
     PROJECT_CACHE.chunk = 1
