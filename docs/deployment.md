@@ -398,7 +398,10 @@ only people who see the task's project), closes it without adding him and
 takes the grant away again, and finds the run's team by its tag in
 Team sync's scope menu (`teams.picker`), whose pick names it on the
 trigger and reads the team's agenda (`ui/roster-parts`). Against a backend
-from before the release after v0.1.160 that step fails. It then searches **Settings → Users** for its
+from before the release after v0.1.160 that step fails. When it fails after
+it sent Leo's grant, it removes the grant once more as a check of its own
+(`ui/roster-parts/revoke`), so a grant it could not remove is among the
+run's failures. It then searches **Settings → Users** for its
 Standard agent by its
 full name, which the deployment's page (`people.settingsPage`) lists alone
 with the fingerprint of its named key from a one-shot key read

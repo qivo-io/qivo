@@ -335,9 +335,18 @@ describe('staging check REST contract', () => {
     )
     expect(removal).toBeGreaterThan(step.indexOf(`'[data-task-subscriber-search]'`))
     expect(removal).toBeLessThan(step.indexOf(`'[data-sync-scope-trigger]'`))
-    expect(
-      step.indexOf(`rest(w, 'DELETE', \`/projects/\${A.id}/access/users/\${leo.id}\`)`),
-    ).toBeGreaterThan(step.indexOf('} finally {'))
+    // after a failure the finally removes the grant as a check of its own,
+    // so the run counts a removal refused there too among its failures
+    // instead of swallowing it
+    const cleanup = step.slice(step.indexOf('} finally {'))
+    expect(cleanup).toContain(
+      [
+        'if (granted)',
+        `        await check(\`\${ROSTER_PARTS_STEP}/revoke\`, async () => {`,
+        `          const r = await restOk(w, 'DELETE', \`/projects/\${A.id}/access/users/\${leo.id}\`)`,
+      ].join('\n'),
+    )
+    expect(cleanup).not.toMatch(/\brest\(w, 'DELETE'/)
   })
   it("opens its own milestone in the Milestones window by the window's own marks, in a free week, and a past one in Past", () => {
     // the window and its section part, which the Overview and the phone

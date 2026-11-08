@@ -7017,9 +7017,12 @@ export const ROSTER_READS = {
  *  popover finds him by his address, from the mention read as a REST user
  *  row carries none, under + Add through pickers.taskFollowers and closes
  *  without adding anyone. The grant goes once the follower half is done,
- *  and a failure clears the filter, Team sync's scope and the grant in a
- *  `finally`. It writes no record. It runs after ui/settings-teams and
- *  before the run archives M, and needs a backend from this release on. */
+ *  and a failure clears the filter and Team sync's scope in a `finally`.
+ *  There a grant the step may have left goes as a check of its own
+ *  (`ui/roster-parts/revoke`), so the run counts a grant it could not
+ *  remove among its failures. It writes no record. It runs after
+ *  ui/settings-teams and before the run archives M, and needs a backend
+ *  from this release on. */
 async function rosterPartsCheck() {
   const w = run.creds.writeToken
   const { M, A } = run.projects
@@ -7160,9 +7163,17 @@ async function rosterPartsCheck() {
             waitUntil: 'domcontentloaded',
           })
           .catch(() => {})
-      if (granted)
-        await rest(w, 'DELETE', `/projects/${A.id}/access/users/${leo.id}`).catch(() => {})
       app.off('websocket', record)
+      // a grant the step may have left goes as a check of its own, so the
+      // run counts a grant it could not remove among its failures. A
+      // removal of a grant that is not there answers 200, removed false
+      if (granted)
+        await check(`${ROSTER_PARTS_STEP}/revoke`, async () => {
+          const r = await restOk(w, 'DELETE', `/projects/${A.id}/access/users/${leo.id}`)
+          return r.removed
+            ? `removed ${leo.name}'s Viewer grant on ${A.key} after the step failed`
+            : `${leo.name} held no grant on ${A.key} after the step failed`
+        })
     }
   })
 }
