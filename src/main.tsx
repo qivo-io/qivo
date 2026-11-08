@@ -34,8 +34,9 @@ const stopWatchingConnection = watchConnection(syncStatus, convex)
 import.meta.hot?.dispose(stopWatchingConnection)
 // a change waiting for the server, or typed text an editor has not sent; the
 // Convex count also covers panels that call a mutation directly, past the
-// desktop alerts' beats and claims, which are no change the person made
-// (lib/notificationFeed.ts)
+// desktop alerts' beats, claims, summaries and end, which are no change the
+// person made (lib/notificationFeed.ts trackNotificationCall, which the
+// leader's calls go through too)
 const removeLeaveGuard = installLeaveGuard(
   () => P.hasUnsavedWork() || othersInFlight(convex.connectionState().inflightMutations) > 0,
 )

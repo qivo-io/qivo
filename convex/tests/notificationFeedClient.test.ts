@@ -1,12 +1,15 @@
-/* The app's desktop alert client (src/lib/notificationFeed.ts) against the
- * real feed and session functions in convex-test: the fresh start's
- * baseline, the claims and their answers, the resume order after a
- * reconnect, a timer gap and a capability that turns on, the summary after
- * a cut or a rate limit, the floor kept within ten minutes, the stored
- * messages that come back into view, and what the client holds. Each tab
- * is a client whose mutations run as one planted Better Auth session,
- * whose feed watch runs inbox.feed again after each write the test makes,
- * and whose alerts go to a list. Time is fake and starts at
+/* The app's desktop alert client (src/lib/notificationFeed.ts) under its
+ * leader (src/lib/notificationLeader.ts) against the real feed and session
+ * functions in convex-test: the fresh start's baseline, the claims and
+ * their answers, the resume order after a reconnect, a timer gap and a
+ * capability that turns on, the summary after a cut or a rate limit, the
+ * floor kept within ten minutes, the stored messages that come back into
+ * view, what the client holds, and one leader for the tabs of a profile
+ * with a takeover from its floor. Each tab is a client and a leader whose
+ * mutations run as one planted Better Auth session, whose feed watch runs
+ * inbox.feed again after each write the test makes, and whose alerts go to
+ * a list. A tab leads alone unless a case gives it locks shared with other
+ * tabs (src/lib/notificationTabs.setup.ts). Time is fake and starts at
  * helpers.setup.ts NOW, the time the inbox fixtures post at. */
 /// <reference types="vite/client" />
 
@@ -18,8 +21,14 @@ import {
   type NotificationFeed,
   RESUME_GAP_MS,
   SUMMARY_TAG,
-  TICK_MS,
 } from '../../src/lib/notificationFeed'
+import {
+  type LeaderLocks,
+  NOTIFY_CLIENT,
+  type NotificationLeader,
+  startNotificationLeader,
+} from '../../src/lib/notificationLeader'
+import { createChannelHub, createLockManager } from '../../src/lib/notificationTabs.setup'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { newWindowKey } from '../lib/db'
@@ -83,10 +92,16 @@ async function signIn(t: T, authUserId: string): Promise<Session> {
 /** One call a tab sent, with what it answered. */
 type Call = { name: string; args: Record<string, unknown>; answer?: unknown; failed?: true }
 
-/** A tab: a client of one session, its calls and its alerts. */
+/** A tab: a feed client of one session under its leader, its calls and
+    its alerts. */
 type Tab = {
   client: NotificationFeed
+  leader: NotificationLeader | null
+  /** the Convex client double its feed and leader call */
+  convex: FeedConvex
   calls: Call[]
+  /** the calls that have not answered yet */
+  pending: Set<Promise<unknown>>
   notes: { tag: string; title: string; body: string }[]
   opened: number
   /** the floor its feed is watched with, null while not */
@@ -97,15 +112,28 @@ type Tab = {
   connection: number
   online: boolean
   can: boolean
+  /** tells the leader that the capability may have changed */
+  permissionChanged: () => void
   /** a mutation name the next call of fails once, for a failure case */
   failNext: string | null
   s: Session
+  /** the locks its leader shares with other tabs, none to lead alone */
+  locks: LeaderLocks | null
 }
 
-/** Opens a tab of session `s`, which can notify unless `can` is false. */
-function openTab(s: Session, can = true): Tab {
+/* The tabs a case opened, whose leaders stop after it. */
+const opened: Tab[] = []
+afterEach(() => {
+  for (const tab of opened.splice(0)) tab.leader?.stop()
+})
+
+/** Opens a tab of session `s`, which can notify unless `can` is false, and
+    leads alone unless it shares `locks` with other tabs. */
+function openTab(s: Session, can = true, locks: LeaderLocks | null = null): Tab {
   const tab = {
+    leader: null,
     calls: [],
+    pending: new Set(),
     notes: [],
     opened: 0,
     after: null,
@@ -113,23 +141,33 @@ function openTab(s: Session, can = true): Tab {
     connection: 1,
     online: true,
     can,
+    permissionChanged: () => {},
     failNext: null,
     s,
+    locks,
   } as unknown as Tab
   const convex = {
-    mutation: async (ref: FunctionReference<'mutation'>, args: Record<string, unknown>) => {
+    mutation: (ref: FunctionReference<'mutation'>, args: Record<string, unknown>) => {
       const name = getFunctionName(ref)
       const call: Call = { name, args }
       tab.calls.push(call)
-      if (tab.failNext === name) {
-        tab.failNext = null
-        call.failed = true
-        throw new Error('the network failed')
-      }
-      // convex-test's mutation, typed loosely as the client's is
-      const run = s.as.mutation as (ref: unknown, args: unknown) => Promise<unknown>
-      call.answer = await run(ref, args)
-      return call.answer
+      const run = (async () => {
+        if (tab.failNext === name) {
+          tab.failNext = null
+          call.failed = true
+          throw new Error('the network failed')
+        }
+        // convex-test's mutation, typed loosely as the client's is
+        const mutate = s.as.mutation as (ref: unknown, args: unknown) => Promise<unknown>
+        call.answer = await mutate(ref, args)
+        return call.answer
+      })()
+      tab.pending.add(run)
+      void run.then(
+        () => tab.pending.delete(run),
+        () => tab.pending.delete(run),
+      )
+      return run
     },
     connectionState: () => ({ isWebSocketConnected: tab.online }),
   } as unknown as FeedConvex
@@ -151,10 +189,53 @@ function openTab(s: Session, can = true): Tab {
     openInbox: () => {
       tab.opened += 1
     },
-    canNotify: () => tab.can,
-    supported: () => true,
   })
+  tab.convex = convex
+  opened.push(tab)
   return tab
+}
+
+/** Starts tab `tab`'s leader, as the store does at its boot. */
+function startLeader(tab: Tab) {
+  tab.leader = startNotificationLeader({
+    convex: tab.convex,
+    feed: tab.client,
+    canNotify: () => tab.can,
+    watchCapability: (listener) => {
+      tab.permissionChanged = () => listener(tab.can)
+      return () => {
+        tab.permissionChanged = () => {}
+      }
+    },
+    watchSettings: (take) => {
+      let stopped = false
+      void tab.s.as.query(api.notifications.settings, {}).then((answer) => {
+        if (!stopped) take(answer.delivery)
+      })
+      return () => {
+        stopped = true
+      }
+    },
+    name: 'qivo-notifications:test',
+    locks: tab.locks,
+    openChannel: tab.locks ? () => hub.open() : null,
+    newInstance: () => uuid(),
+  })
+}
+
+/* The tabs' channel, one for the whole file, as a browser profile's. */
+const hub = createChannelHub()
+
+/** Waits until tab `tab` has no call in flight and its feed is idle. */
+async function quiet(tab: Tab) {
+  for (let round = 0; round < 50; round++) {
+    await tab.client.idle()
+    if (tab.pending.size === 0) {
+      await Promise.resolve()
+      if (tab.pending.size === 0) return
+    }
+    await Promise.allSettled(tab.pending)
+  }
 }
 
 /** Hands each tab whose watch changed, or all with `all`, the feed's
@@ -164,7 +245,7 @@ async function settle(tabs: readonly Tab[], all = false) {
   for (let round = 0; round < 50; round++) {
     let moved = false
     for (const tab of tabs) {
-      await tab.client.idle()
+      await quiet(tab)
       if (tab.after === null || !(tab.dirty || every)) continue
       tab.dirty = false
       const value = await tab.s.as.query(api.inbox.feed, { after: tab.after })
@@ -173,16 +254,18 @@ async function settle(tabs: readonly Tab[], all = false) {
     }
     every = false
     if (!moved) {
-      for (const tab of tabs) await tab.client.idle()
+      for (const tab of tabs) await quiet(tab)
       return
     }
   }
   throw new Error('the tabs did not settle')
 }
 
-/** Starts the tabs and settles them. */
+/** Starts the tabs' leaders and settles them. */
 async function startTabs(tabs: readonly Tab[]) {
-  for (const tab of tabs) tab.client.start()
+  for (const tab of tabs) startLeader(tab)
+  // a shared lock grants on a later task
+  await vi.advanceTimersByTimeAsync(0)
   await settle(tabs)
 }
 
@@ -299,7 +382,7 @@ describe('tabs and sessions', () => {
     jump(1)
     await news(t, f, task)
     jump(10)
-    await wait([a, b], TICK_MS)
+    await wait([a, b], NOTIFY_CLIENT.tick_ms)
     const summaries = [...a.notes, ...b.notes].filter((n) => n.tag === SUMMARY_TAG)
     expect(summaries).toHaveLength(1)
   })
@@ -323,7 +406,7 @@ describe('tabs and sessions', () => {
     // the target's capability turns off: one beat that says so, no watch
     second.can = false
     const before = second.calls.length
-    second.client.permissionChanged()
+    second.permissionChanged()
     await settle([first, second])
     expect(second.calls.slice(before)).toEqual([
       expect.objectContaining({
@@ -344,6 +427,64 @@ describe('tabs and sessions', () => {
     await settle([first, second], true)
     expect(first.notes.map((n) => n.tag)).toEqual([SUMMARY_TAG, later?.id])
     expect(first.notes.map((n) => n.tag)).not.toContain(next?.id)
+  })
+})
+
+/* ---------------------------------------------------------- the leader */
+
+describe('the leader tab', () => {
+  it('lets one tab of a profile beat and claim, and the next take over from its floor with no baseline', async () => {
+    const t = newT()
+    const { f, s, task } = await fixture(t)
+    const locks = createLockManager()
+    const a = openTab(s, true, locks)
+    const b = openTab(s, true, locks)
+    await startTabs([a, b])
+    expect([a.leader?.role(), b.leader?.role()]).toEqual(['leader', 'follower'])
+    expect(b.calls).toEqual([])
+    expect(b.after).toBeNull()
+    jump(1)
+    const mention = await news(t, f, task)
+    await settle([a, b], true)
+    expect(a.notes.map((n) => n.tag)).toEqual([mention?.id])
+    expect(b.notes).toEqual([])
+    // the leader's tab goes: the other takes over, beats first and goes on
+    // from the floor and keys the leader posted, with no baseline
+    const floor = a.after
+    a.leader?.stop()
+    await vi.advanceTimersByTimeAsync(0)
+    await settle([b])
+    expect(b.leader?.role()).toBe('leader')
+    expect(names(b)[0]).toBe('notifications:beat')
+    expect(b.after).toBe(floor)
+    expect(names(b)).not.toContain('notifications:claimSummary')
+    jump(0.5)
+    const next = await news(t, f, task)
+    await settle([b], true)
+    expect(b.notes.map((n) => n.tag)).toEqual([next?.id])
+    const claims = b.calls.filter((c) => c.name === 'notifications:claimAlerts')
+    expect(claims.map((c) => (c.args.events as { key: string }[]).map((e) => e.key))).toEqual([
+      [next?.id],
+    ])
+  })
+
+  it('runs the resume order in a takeover whose last heard beat is stale', async () => {
+    const t = newT()
+    const { f, s, task } = await fixture(t)
+    const locks = createLockManager()
+    const a = openTab(s, true, locks)
+    const b = openTab(s, true, locks)
+    await startTabs([a, b])
+    // the leader froze two minutes ago and posted nothing since
+    a.online = false
+    jump(1)
+    await news(t, f, task)
+    jump(1.5)
+    a.leader?.stop()
+    await vi.advanceTimersByTimeAsync(0)
+    await settle([b], true)
+    expect(names(b).slice(0, 2)).toEqual(['notifications:beat', 'notifications:claimSummary'])
+    expect(answers(b, 'notifications:claimSummary')).toEqual([{ state: 'summary' }])
   })
 })
 
@@ -404,12 +545,12 @@ describe('resumes', () => {
     await startTabs([tab])
     // a hidden tab's timer running a minute late asks nothing
     jump(0.75)
-    await wait([tab], TICK_MS)
+    await wait([tab], NOTIFY_CLIENT.tick_ms)
     expect(names(tab)).not.toContain('notifications:claimSummary')
     // a sleep of ten minutes, with the feed's answers kept
     await news(t, f, task)
     jump(10)
-    await wait([tab], TICK_MS)
+    await wait([tab], NOTIFY_CLIENT.tick_ms)
     expect(answers(tab, 'notifications:claimSummary')).toEqual([{ state: 'summary' }])
     expect(tab.notes.map((n) => n.tag)).toEqual([SUMMARY_TAG])
     expect(RESUME_GAP_MS).toBeGreaterThan(MINUTE)
@@ -428,17 +569,17 @@ describe('resumes', () => {
     const tab = openTab(s)
     await startTabs([tab])
     tab.can = false
-    tab.client.permissionChanged()
+    tab.permissionChanged()
     await settle([tab])
     jump(1)
     await news(t, f, task)
     jump(1)
     tab.can = true
     const from = tab.calls.length
-    tab.client.permissionChanged()
+    tab.permissionChanged()
     await settle([tab])
-    expect(names(tab, from).slice(0, 3)).toEqual([
-      'notifications:beat',
+    // the leader's beat, which the summary takes rather than beating again
+    expect(names(tab, from).slice(0, 2)).toEqual([
       'notifications:beat',
       'notifications:claimSummary',
     ])
@@ -451,7 +592,7 @@ describe('resumes', () => {
     // off again: one beat that says so, and the watch stops
     tab.can = false
     const before = tab.calls.length
-    tab.client.permissionChanged()
+    tab.permissionChanged()
     await settle([tab])
     expect(tab.calls.slice(before).map((c) => [c.name, c.args.can_notify])).toEqual([
       ['notifications:beat', false],
@@ -471,7 +612,7 @@ describe('resumes', () => {
     await settle([tab], true)
     expect(tab.notes).toEqual([])
     // the next run, here the next tick's, summarizes before any claim
-    await wait([tab], TICK_MS)
+    await wait([tab], NOTIFY_CLIENT.tick_ms)
     const after = tab.calls.slice(from)
     const failed = after.findIndex((c) => c.failed)
     expect(after[failed].name).toBe('notifications:claimAlerts')
@@ -528,7 +669,7 @@ describe('bursts and limits', () => {
     await burst(t, f, 60, 30_000)
     const tab = openTab(s)
     await startTabs([tab])
-    await wait([tab], 2 * TICK_MS)
+    await wait([tab], 2 * NOTIFY_CLIENT.tick_ms)
     expect(names(tab)).not.toContain('notifications:claimSummary')
     expect(tab.notes).toEqual([])
   })
@@ -542,7 +683,7 @@ describe('bursts and limits', () => {
     await wait([tab], 5 * MINUTE)
     await burst(t, f, 60, 20_000)
     await settle([tab], true)
-    await wait([tab], 2 * TICK_MS)
+    await wait([tab], 2 * NOTIFY_CLIENT.tick_ms)
     expect(answers(tab, 'notifications:claimSummary')).toHaveLength(1)
   })
 
@@ -602,10 +743,11 @@ describe('the summary', () => {
     await startTabs([tab])
     await news(t, f, task)
     tab.can = true
-    tab.client.permissionChanged()
+    tab.permissionChanged()
     await settle([tab])
     expect(answers(tab, 'notifications:claimSummary')).toEqual([{ state: 'baseline' }])
-    // none
+    // none, past the quiet seconds after a resume
+    jump(0.1)
     tab.client.resume()
     await settle([tab])
     // unchecked: a budget with no room

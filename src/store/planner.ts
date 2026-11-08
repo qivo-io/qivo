@@ -141,6 +141,7 @@ import { frameBatch } from '../lib/frameBatch'
 import { AVATAR_TYPES, avatarImage, compressImage } from '../lib/images'
 import { nameInitials } from '../lib/initials'
 import { createInlineImages } from '../lib/inlineImages'
+import { INPUTS } from '../lib/inputIdle'
 import { groupProgress, groupSpan, isIssueDone, isIssueGroup } from '../lib/issueGroups'
 import { avatarColorFor, labelColorFor } from '../lib/labelColors'
 import { hasUnsaved, holdUnsaved, leaveDeliberately } from '../lib/leaveGuard'
@@ -155,11 +156,12 @@ import {
   type NotificationFeed,
 } from '../lib/notificationFeed'
 import {
-  desktopNotify,
-  notificationPermission,
-  notificationsSupported,
-  onNotificationPermission,
-} from '../lib/notify'
+  type Delivery,
+  leaderName,
+  type NotificationLeader,
+  startNotificationLeader,
+} from '../lib/notificationLeader'
+import { canNotify, desktopNotify, notificationsSupported, watchCapability } from '../lib/notify'
 import { reloadPage } from '../lib/pageHistory'
 import { taskSearchText } from '../lib/search'
 import { type OfflineWindow, type SavePause, syncStatus } from '../lib/syncStatus'
@@ -3496,35 +3498,60 @@ function setInboxOpener(open: (() => void) | null) {
   inboxOpener = open
 }
 
-/* The desktop alert client (lib/notificationFeed.ts), made at the first
-   boot with a seat on a page that can notify, and stopped at disposal. */
+/* The desktop alert client (lib/notificationFeed.ts) and this tab's part
+   in its browser profile's alerts (lib/notificationLeader.ts), made at the
+   first boot with a seat on a page that can notify, and stopped at
+   disposal and at a sign-out. */
 let alerts: NotificationFeed | null = null
-let stopPermissionWatch: (() => void) | null = null
+let leader: NotificationLeader | null = null
 
-/** Starts the desktop alert client once, with the store's feed watch,
-    App's way into the Inbox (setInboxOpener) and the Convex client itself,
-    which it calls by name. The feed is a side of every registry
-    (watchFeed), outside the visibility gate, so it runs while the tab is
-    hidden. */
+/** Starts the desktop alerts once: the feed client, with the store's feed
+    watch, App's way into the Inbox (setInboxOpener) and the Convex client
+    itself, which it calls by name, and the leader, which runs that client
+    only while this tab leads its browser profile and owns the beat, the
+    capability, the mode's watch and the session's end. The feed is a side
+    of every registry (watchFeed) and the mode a live watch, both outside
+    the visibility gate, so they run while the tab is hidden. A follower
+    tab watches neither. */
 function startAlerts() {
   if (alerts !== null || !notificationsSupported()) return
-  alerts = createNotificationFeed({
+  const feed = createNotificationFeed({
     convex,
     watch: (after) => parts?.watchSide('feed', api.inbox.feed, { after }),
     unwatch: () => parts?.stopSide('feed'),
     notify: desktopNotify,
     openInbox: () => inboxOpener?.(),
-    canNotify: () => notificationPermission() === 'granted',
-    supported: notificationsSupported,
   })
-  stopPermissionWatch = onNotificationPermission(() => alerts?.permissionChanged())
-  alerts.start()
+  alerts = feed
+  const page = typeof window === 'undefined' ? null : window
+  leader = startNotificationLeader({
+    convex,
+    feed,
+    canNotify,
+    watchCapability,
+    watchSettings: (take) =>
+      watchLive<{ delivery: Delivery }>(api.notifications.settings, {}, (result) =>
+        take('value' in result ? result.value.delivery : null),
+      ),
+    name: leaderName(configuredConvexDeploymentUrl(), AUTH_STORAGE_PREFIX),
+    locks: typeof navigator === 'undefined' ? null : (navigator.locks ?? null),
+    openChannel:
+      typeof BroadcastChannel === 'undefined' ? null : (name) => new BroadcastChannel(name),
+    win: page,
+    inputs: INPUTS,
+    doc: typeof document === 'undefined' ? null : document,
+    power: page?.qivoDesktop?.power ?? null,
+    mirror: (state) => {
+      if (page) page.__qivoNotify = state
+    },
+  })
 }
 
-/** Stops the desktop alert client, which sends nothing more. */
+/** Stops the desktop alerts, which send nothing more, the session's end
+    included. */
 function stopAlerts() {
-  stopPermissionWatch?.()
-  stopPermissionWatch = null
+  leader?.stop()
+  leader = null
   alerts?.stop()
   alerts = null
 }
@@ -18562,6 +18589,9 @@ export const PLANNER = {
     }
     if (signingOut) return
     signingOut = true
+    // a deliberate sign-out ends the session itself, so the leader sends no
+    // end at the page's close
+    stopAlerts()
     const leave = () => {
       unconfirmedNote.forgetAll()
       clearAvatarSources()
@@ -18570,8 +18600,11 @@ export const PLANNER = {
     }
     return authSignOut()
       .then(leave, (failure: unknown) => {
-        if (failure instanceof SignOutFailed) toast(failure.message)
-        else leave()
+        if (failure instanceof SignOutFailed) {
+          toast(failure.message)
+          // still signed in, so the desktop alerts go on
+          startAlerts()
+        } else leave()
       })
       .finally(() => {
         signingOut = false

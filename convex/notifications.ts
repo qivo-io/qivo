@@ -1,11 +1,13 @@
 /* Notification delivery across a person's sessions: the Notification
  * delivery setting, the signed-in sessions that can show alerts, the
  * records of the alerts granted, and the catch-up checkpoint
- * (model/notificationSessions.ts, model/notificationCatchup.ts). The app's
- * desktop alert client (src/lib/notificationFeed.ts) calls beat,
- * claimAlerts and claimSummary beside the Inbox feed (inbox.ts feed), from
- * every tab that can notify; settings, setDelivery and end wait for
- * t3/limits-notification-delivery's leader tab and Settings control.
+ * (model/notificationSessions.ts, model/notificationCatchup.ts). In the
+ * app, one tab of each browser profile leads (src/lib/notificationLeader.ts)
+ * and, while it can notify, calls beat and end and watches settings, and
+ * its desktop alert client (src/lib/notificationFeed.ts) calls claimAlerts
+ * and claimSummary beside the Inbox feed (inbox.ts feed). Settings › Your
+ * preferences › Notifications reads settings and calls setDelivery
+ * (src/panels/settings/NotificationDeliveryField.tsx).
  *
  * Every function needs a sign-in whose Better Auth session is live, and on
  * the demo an active demo (lib/functions.ts sessionQuery,
@@ -100,8 +102,11 @@
  * - It beats every `every_ms`, again at once when its capability or the
  *   mode changes or when a tab takes over beating for its browser profile,
  *   and again whenever a claim answers `not_registered`. It sends
- *   `active: true` on the first input after a quiet minute, never the
- *   input itself.
+ *   `active: true` on the first input a minute or more after its last
+ *   report, for input within that minute only and only in 'recent', never
+ *   the input itself. The app beats only while the session can notify,
+ *   once more as that turns off, so a session that cannot notify calls
+ *   nothing.
  * - It watches settings, so a mode change reaches a session that beats
  *   only every 6 hours.
  * - Each event's time is the time the item sorts by, a message's

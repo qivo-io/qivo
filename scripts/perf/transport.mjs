@@ -168,6 +168,9 @@ export const authClient = {
   }),
 }
 export const armConvexAuth = async () => true
+// the sign-in namespace the notification leader names its lock by
+// (src/lib/auth.ts AUTH_STORAGE_PREFIX)
+export const AUTH_STORAGE_PREFIX = 'better-auth'
 export const signOut = async () => {}
 export const clearLocalSession = () => {}
 export const handleOAuthReturn = async () => false

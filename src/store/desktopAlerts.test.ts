@@ -3,12 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 /* The desktop alerts on the real store over the live double
-   (store/planner.ts startAlerts, lib/notificationFeed.ts): the store watches
-   the Inbox feed only on a page that can notify, with the floor its client
-   holds, outside the visibility gate, and watches it again on a fresh
-   registry; it raises an alert only for what the session functions'
-   stand-in grants (store/notificationsStandIn.setup.ts), opens the Inbox
-   on a click and writes nothing for it, and stops at the demo's disposal.
+   (store/planner.ts startAlerts, lib/notificationFeed.ts under
+   lib/notificationLeader.ts): the store watches the Inbox feed only on a
+   page that can notify, with the floor its client holds, outside the
+   visibility gate, and watches it again on a fresh registry; it raises an
+   alert only for what the session functions' stand-in grants
+   (store/notificationsStandIn.setup.ts), opens the Inbox on a click and
+   writes nothing for it, and stops at the demo's disposal. The close
+   guard leaves the leader's and the feed's calls in flight out.
    The server's own rules, its floors, targets and handoffs, are
    convex/tests/notificationFeedClient.test.ts's. The feed's floor is the
    safeguard of the stored messages of a task that comes back into view or
@@ -37,6 +39,7 @@ vi.mock('../lib/convex', async () => {
   return { convex: network, live: double.live }
 })
 vi.mock('../lib/auth', () => ({
+  AUTH_STORAGE_PREFIX: 'better-auth',
   armConvexAuth: async () => true,
   authClient: { getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }) },
   signOut: vi.fn(),
@@ -137,6 +140,9 @@ describe('desktop alerts in the store', () => {
       Notification: PageNotification,
     })
     vi.stubGlobal('Notification', PageNotification)
+    // no Web Locks, so each store leads alone, as on a page outside a
+    // secure context (lib/notificationLeader.test.ts holds the election)
+    vi.stubGlobal('navigator', {})
     snapshot = plannerFixture()
     snapshot.issues.push(task('a'))
     network.query.mockResolvedValue(null)
@@ -312,58 +318,63 @@ describe('desktop alerts in the store', () => {
 })
 
 describe('the close guard', () => {
-  it('leaves the notification calls in flight out, and counts every other mutation', async () => {
-    const { createNotificationFeed, othersInFlight, notificationCallsInFlight } = await import(
-      '../lib/notificationFeed'
-    )
-    let answer: (value: unknown) => void = () => {}
-    const client = createNotificationFeed({
-      convex: {
-        mutation: () => new Promise((resolve) => (answer = resolve)),
-        connectionState: () => ({ isWebSocketConnected: true }),
-      } as never,
+  /** A leader and its feed over a Convex double whose calls answer only
+      when the test says, or throw at once. */
+  async function leaderOver(mutation: () => Promise<unknown>) {
+    const { createNotificationFeed } = await import('../lib/notificationFeed')
+    const { startNotificationLeader } = await import('../lib/notificationLeader')
+    const convex = {
+      mutation,
+      connectionState: () => ({ isWebSocketConnected: true }),
+    } as never
+    const feed = createNotificationFeed({
+      convex,
       watch: () => {},
       unwatch: () => {},
       notify: () => {},
       openInbox: () => {},
-      canNotify: () => true,
-      supported: () => true,
     })
-    client.start()
-    // the first beat waits
+    return startNotificationLeader({
+      convex,
+      feed,
+      canNotify: () => true,
+      watchCapability: () => () => {},
+      watchSettings: () => () => {},
+      name: 'qivo-notifications:guard',
+    })
+  }
+
+  it('leaves the notification calls in flight out, and counts every other mutation', async () => {
+    const { othersInFlight, notificationCallsInFlight } = await import('../lib/notificationFeed')
+    let answer: (value: unknown) => void = () => {}
+    const leader = await leaderOver(() => new Promise((resolve) => (answer = resolve)))
+    // the leader's first beat waits
     expect(notificationCallsInFlight()).toBe(1)
     expect(othersInFlight(1)).toBe(0)
     // a save in flight beside it still counts
     expect(othersInFlight(2)).toBe(1)
     answer({ every_ms: 60_000, live_ms: 180_000, now: Date.now() })
-    await client.idle()
+    await tick()
     expect(notificationCallsInFlight()).toBe(0)
     expect(othersInFlight(1)).toBe(1)
-    client.stop()
+    leader.stop()
   })
 
-  it('counts nothing for a call that throws at once', async () => {
-    const { createNotificationFeed, notificationCallsInFlight } = await import(
-      '../lib/notificationFeed'
-    )
-    const client = createNotificationFeed({
-      convex: {
-        mutation: () => {
-          throw new Error('the socket restarted')
-        },
-        connectionState: () => ({ isWebSocketConnected: true }),
-      } as never,
-      watch: () => {},
-      unwatch: () => {},
-      notify: () => {},
-      openInbox: () => {},
-      canNotify: () => true,
-      supported: () => true,
-    })
+  it('counts nothing for a call that throws at once, or that a socket restart fails', async () => {
+    const { notificationCallsInFlight } = await import('../lib/notificationFeed')
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    client.start()
-    await client.idle()
+    const thrown = await leaderOver(() => {
+      throw new Error('the socket restarted')
+    })
+    await tick()
     expect(notificationCallsInFlight()).toBe(0)
-    client.stop()
+    thrown.stop()
+    let fail: (error: unknown) => void = () => {}
+    const failed = await leaderOver(() => new Promise((_, reject) => (fail = reject)))
+    expect(notificationCallsInFlight()).toBe(1)
+    fail(new Error('the socket restarted'))
+    await tick()
+    expect(notificationCallsInFlight()).toBe(0)
+    failed.stop()
   })
 })

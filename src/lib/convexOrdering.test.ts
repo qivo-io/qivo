@@ -363,3 +363,92 @@ describe('live queries over the base client', () => {
     expect(asked().at(-1)).toEqual({ type: 'Remove', queryId: 2 })
   })
 })
+
+/* One path per query. A live watch (lib/liveQueries.ts) and a
+   ConvexClient.onUpdate listener of the same query and arguments share the
+   base client's one subscription, which a second subscriber joins without
+   asking the server, so the live watch hears nothing until the answer
+   changes. So the notification leader's watch of notifications.settings
+   (store/planner.ts startAlerts) goes through the live transport, as the
+   Notification delivery field's read does (lib/liveView.ts useLiveView),
+   and a field opened beside it reads the current value at once. Check
+   again on every Convex upgrade. */
+describe('one path per query', () => {
+  let client: ConvexClient | null = null
+
+  afterEach(async () => {
+    await client?.close()
+    client = null
+  })
+
+  /** A client whose socket the test answers as the server, with a way to
+      send a transition that moves to the newest query set. */
+  async function connect() {
+    client = new ConvexClient('https://happy-otter-123.convex.cloud', {
+      webSocketConstructor: ScriptedSocket as unknown as typeof WebSocket,
+      unsavedChangesWarning: false,
+    })
+    const live = createLiveQueries(client.client, (ref, args) => client!.query(ref, args))
+    await tick()
+    await tick()
+    const socket = ScriptedSocket.last!
+    const latest = () =>
+      Math.max(
+        0,
+        ...socket.sent.filter((m) => m.type === 'ModifyQuerySet').map((m) => m.newVersion!),
+      )
+    let ts = 0
+    let version = 0
+    const transition = (modifications: { queryId: number; value: unknown }[]) => {
+      const from = version
+      version = latest()
+      socket.receive({
+        type: 'Transition',
+        startVersion: { querySet: from, ts: u64(ts), identity: 0 },
+        endVersion: { querySet: version, ts: u64(++ts), identity: 0 },
+        modifications: modifications.map((m) => ({
+          type: 'QueryUpdated',
+          queryId: m.queryId,
+          value: m.value,
+          logLines: [],
+          journal: null,
+        })),
+      })
+    }
+    return { live, socket, transition }
+  }
+
+  it('leaves a live watch of a query an onUpdate listener holds unanswered until the answer changes', async () => {
+    const { live, transition } = await connect()
+    const held: unknown[] = []
+    client!.onUpdate(anyApi.notifications.settings, {}, (value) => held.push(value))
+    await tick()
+    transition([{ queryId: 0, value: { delivery: 'recent' } }])
+    expect(held).toEqual([{ delivery: 'recent' }])
+    const named: string[][] = []
+    live.onTransition((t) => named.push([...t.tokens]))
+    const watch = live.watch(anyApi.notifications.settings, {})
+    // it joined no answered live watch, and the client asked the server
+    // for nothing, so no transition brings it the current value
+    expect(watch.joined).toBe(false)
+    await tick()
+    transition([])
+    expect(named).toEqual([[]])
+    // only a change names it
+    transition([{ queryId: 0, value: { delivery: 'all' } }])
+    expect(named.at(-1)).toEqual([watch.token])
+    expect(live.read(watch.token)).toEqual({ delivery: 'all' })
+  })
+
+  it('joins a live watch beside the leader’s live watch with the current answer', async () => {
+    const { live, transition } = await connect()
+    // the leader's watch hears transitions, as watchLive does
+    live.onTransition(() => {})
+    const leader = live.watch(anyApi.notifications.settings, {})
+    await tick()
+    transition([{ queryId: 0, value: { delivery: 'recent' } }])
+    const field = live.watch(anyApi.notifications.settings, {})
+    expect(field).toMatchObject({ token: leader.token, joined: true })
+    expect(live.read(field.token)).toEqual({ delivery: 'recent' })
+  })
+})
