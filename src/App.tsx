@@ -868,17 +868,24 @@ function App() {
   const task0 = r0?.issue ? scopeTaskOf(r0.issue) : undefined
   const r0Scope =
     r0 && !r0.sync ? r0.scope || (task0 ? scopeForIssue(task0, remembered) : undefined) : undefined
-  // the address's scope, else for an address that names nothing the
-  // remembered project (the startup rule), or none: the boot never falls
-  // back to the first project or My view (opening below)
-  const bootScope = liveScope(r0Scope) ? r0Scope : !r0 ? rememberedScope() : undefined
+  // whether the address waits for a task the workspace does not hold, or
+  // for the check of a project it names by number or cannot name, either
+  // of which decides the scope itself (opening below)
+  const r0Waits =
+    !!r0 && !r0.sync && ((!!r0.issue && !task0) || (!r0.issue && r0.unheld !== undefined))
+  // the address's scope, else for any other address that names no scope,
+  // as the front door, a view's or a page's address, an address that once
+  // named all projects and Team sync's, the remembered project (the startup
+  // rule), or none: the boot never falls back to the first project or My
+  // view (opening below)
+  const bootScope = liveScope(r0Scope) ? r0Scope : r0Waits ? undefined : rememberedScope()
   const [scope, setScope] = useState<string | undefined>(bootScope)
   /* How the scope's project was opened (ScopeOpened), for the chooser's
      line while the project cache checks it and its note once it answers
      the project gone. */
   const scopeOpened = useRef<ScopeOpened | null>(
     bootScope && !P.isMineScope(bootScope)
-      ? { id: bootScope, of: r0 ? 'address' : 'remembered' }
+      ? { id: bootScope, of: liveScope(r0Scope) ? 'address' : 'remembered' }
       : null,
   )
   /* The scope a task's address chose at the boot, on Back or Forward, or
@@ -1426,14 +1433,17 @@ function App() {
         ? `Choose a project to see ${personJump.first}'s tasks in its task list.`
         : `Choose a project to see ${personJump.first}'s tasks on the ${view === 'kanban' ? 'Board' : 'Roadmap'}.`
       : null
+  // whether the scope's project cache state is ok, which a scope opened
+  // from a row reaches after it is set
+  const scopeOk = scopeInfo?.state === 'ok'
   useEffect(() => {
     if (!viewShown || !scope || P.isMineScope(scope) || taskScope.current === scope) return
     const p = P.project(scope)
-    if (!p || P.projectState(scope) !== 'ok') return
+    if (!p || !scopeOk) return
     const was = P.loadUI().lastProject
     if (was?.project_id === p.id && was.org_id === p.org) return
     P.saveUINow({ lastProject: { org_id: p.org, project_id: p.id } })
-  }, [scope, viewShown, picks])
+  }, [scope, viewShown, picks, scopeOk])
 
   // url sync — every "page" (scope/view/open issue/settings) gets its own
   // path. rev is a dependency on purpose: paths embed store-derived refs (the
