@@ -266,7 +266,8 @@ describe("Team sync's person jumps", { timeout: 60_000 }, () => {
       const entries = history.length
       await settle()
       expect(taskReads()).toHaveLength(before)
-      expect(asks).toEqual([])
+      // only the boot's address is checked, by its number
+      expect(asks).toEqual([{ org_id: ORG, num: 11 }])
       // a pick opens that project's Board filtered to the person, in place
       await click(q(`[data-project-chooser] [data-project-pick="${LUMA}"]`))
       await until(() => shown() === 'kanban', 'the Board of the pick')
@@ -301,8 +302,9 @@ describe("Team sync's person jumps", { timeout: 60_000 }, () => {
     expect(purpose()).toBe("Choose a project to see Planner's tasks on the Roadmap.")
     expect(location.pathname).toBe('/app/testbed')
     expect(history.length).toBe(entries)
-    // no check of the remembered project, and no task read
-    expect(asks).toEqual([])
+    // only the boot's address is checked, by its number, never the
+    // remembered project, and no task is read
+    expect(asks).toEqual([{ org_id: ORG, num: 10 }])
     expect(taskReads()).toHaveLength(reads)
   })
 
@@ -340,7 +342,8 @@ describe("Team sync's person jumps", { timeout: 60_000 }, () => {
     expect(q('[data-inbox-page-state]')).toBeNull()
     expect(location.pathname).toBe('/app/testbed')
     expect(history.length).toBe(entries)
-    expect(asks).toEqual([])
+    // only the boot's address is checked, by its number
+    expect(asks).toEqual([{ org_id: ORG, num: 11 }])
   })
 
   it("opens a project sync's own project, with no chooser and no line", async () => {
@@ -410,8 +413,12 @@ describe("Team sync's person jumps", { timeout: 60_000 }, () => {
       expect(shown()).toBeUndefined()
       expect(q('[data-inbox-page-state]')).toBeNull()
       expect(history.length).toBe(entries + 2)
-      // no check of the remembered project, and no task read
-      expect(asks).toEqual([])
+      // only the numbers of the addresses reached are checked, the boot's
+      // and Back's, never the remembered project, and no task is read
+      expect(asks).toEqual([
+        { org_id: ORG, num: 11 },
+        { org_id: ORG, num: 11 },
+      ])
       expect(taskReads()).toHaveLength(reads)
     })
 
@@ -474,7 +481,7 @@ describe("Team sync's person jumps", { timeout: 60_000 }, () => {
     await step(1)
     await until(() => location.pathname === `/app/testbed/sync/all/people/${ME}`, 'Team sync')
     await step(1)
-    // the remembered project, once the server checked it
+    // the remembered project, which the project cache checks
     await until(
       () => shown() === 'kanban' && location.pathname === '/app/testbed/board/p/11',
       'the remembered Board',
