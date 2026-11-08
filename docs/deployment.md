@@ -2211,11 +2211,9 @@ Inbox `{items, truncated}` paged with `offset`, refuses the new arguments
 as unknown, answers `404` for the three new routes, does not know
 `list_project_related`, and drops the indexes
 `projects.by_org_parent_state_key` and `project_reach.by_grantee_root_key`,
-which a deploy forward builds again with no change to data. Code written
-for the older Inbox answer keeps reading `items`, but a page can now hold
-fewer than `limit` items, or none, while `next_cursor` is set, so such code
-must follow `next_cursor`. It sets no floor for the app, which calls none of
-them, and has no backfill and no release step.
+which a deploy forward builds again with no change to data. It sets no
+floor for the app, which calls none of them, and has no backfill and no
+release step.
 
 ## Node.js version
 
