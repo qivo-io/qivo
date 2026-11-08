@@ -100,13 +100,16 @@ import {
   PROJECT_DIALOGS_STEP,
   PROJECT_DIRECTORY_MARKS,
   PROJECT_DIRECTORY_STEP,
+  PROJECT_REFUSALS,
   PROJECT_SETTINGS_EXPECTED,
   PROJECT_SETTINGS_STEP,
+  PROJECTS_MAX,
   pace,
   parseArgs,
   peoplePagesMax,
   pressSettled,
   projectDeleteRoute,
+  projectPagesMax,
   RATE_BUDGET,
   REGROUP_WAIT,
   RELATION_EXPECTED,
@@ -1706,6 +1709,22 @@ describe('staging check REST contract', () => {
     const core = readFileSync(new URL('../convex/lib/core.ts', import.meta.url), 'utf8')
     const lists = core.match(/export const TASK_RELATED_LISTS = \[([^\]]*)\] as const/)
     expect(lists?.[1].split(',').map((name) => name.trim().replaceAll("'", ''))).toEqual(TASK_LISTS)
+  })
+  it("expects the server's sentences for a projects page's offset, limit, cursor and unknown parameter", () => {
+    expect(PROJECT_REFUSALS).toEqual({
+      offset: offsetRefusal('projects'),
+      limit: LIMITS.listProjects.refusal,
+      cursor: CURSOR_REFUSAL,
+      unknown:
+        'unknown query parameter "page"; this request takes archived, search, limit, cursor, offset',
+    })
+    // the REST route's query parameters, in the order its refusal names them
+    const rest = readFileSync(new URL('../convex/machine/rest.ts', import.meta.url), 'utf8')
+    expect(rest).toContain("query: ['archived', 'search', 'limit', 'cursor', 'offset'],")
+    // the design size's projects, and two pages more at any limit
+    expect(PROJECTS_MAX).toBe(2000)
+    expect(projectPagesMax(200)).toBe(12)
+    expect(projectPagesMax(1)).toBe(2002)
   })
   it('names the tools that answer a placeholder sent alone as the server does', () => {
     const mcp = readFileSync(new URL('../convex/machine/mcp.ts', import.meta.url), 'utf8')

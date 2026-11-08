@@ -28,7 +28,9 @@
  * and member lists with their name search, with a label of its own that it
  * deletes in the app again (machine/people-lists), a task's details with the
  * first page of its subtasks, links, followers and files and those lists'
- * own pages over REST and MCP (machine/task-details), task progress, last
+ * own pages over REST and MCP (machine/task-details), the project lists a
+ * page at a time in tree order with their name and key search
+ * (machine/project-lists), task progress, last
  * comment times, delay and project completion, which it waits to read whole
  * again after an archive or a restore regroups its counts, and the live
  * group rule. It fills one task with a
@@ -392,6 +394,18 @@ export const TASK_LIST_REFUSALS = {
   offset: 'offset does not apply to subtasks; pass next_cursor as cursor',
   limit: LIMITS.listSubtasks.refusal,
   cursor: LIST_REFUSALS.cursor,
+}
+
+/** The sentences REST GET /v1/projects and MCP list_projects refuse a
+ *  page's `offset`, `limit` and `cursor` with (convex/lib/listCursor.ts and
+ *  the limits registry's listProjects), and REST's unknown query parameter,
+ *  which the script's tests pin. */
+export const PROJECT_REFUSALS = {
+  offset: 'offset does not apply to projects; pass next_cursor as cursor',
+  limit: LIMITS.listProjects.refusal,
+  cursor: LIST_REFUSALS.cursor,
+  unknown:
+    'unknown query parameter "page"; this request takes archived, search, limit, cursor, offset',
 }
 
 /** The MCP tools that took no arguments before November 2026 and still
@@ -977,15 +991,6 @@ async function readOk(cred, path) {
   }
 }
 
-/** readOk for a route that answers a whole list, as the project list does.
- *  The task, user, label, team and member lists answer pages instead
- *  (taskPages, restRows). */
-async function readList(cred, path) {
-  const rows = await readOk(cred, path)
-  expect(Array.isArray(rows), `GET ${path.split('?')[0]} answered no list`)
-  return rows
-}
-
 /** The most pages a check reads of one task list, so a next_cursor that
  *  never ends fails the check instead of holding up the run. */
 export const TASK_PAGES_MAX = 200
@@ -1065,6 +1070,18 @@ export const workloadPeople = (read, what) => movingPages(read, what, 'people', 
  *  the check. */
 export const peoplePagesMax = (limit) => Math.ceil(WORKLOAD_PEOPLE / limit) + 2
 
+/** The projects of an organization at the design size, live and archived,
+ *  top-level and sub-projects, which the project list checks page
+ *  through. */
+export const PROJECTS_MAX = 2000
+
+/** The most pages a check reads of a project list at `limit` rows a page,
+ *  the pages of PROJECTS_MAX projects and two more. Each page reads its
+ *  first row whatever its read budget says (convex/machine/projects.ts
+ *  projectPage), so a correct deployment never fails it and a next_cursor
+ *  that never ends still fails the check. */
+export const projectPagesMax = (limit) => Math.ceil(PROJECTS_MAX / limit) + 2
+
 /** `path` with the query parameters of `q` that are set, URL-encoded. */
 export const withQuery = (path, q) => {
   const set = Object.entries(q).filter(([, value]) => value !== undefined && value !== null)
@@ -1083,24 +1100,43 @@ const withCursor = (path, cursor) =>
   cursor === null ? path : `${path}&cursor=${encodeURIComponent(cursor)}`
 
 /** Every row under `field` of the REST list `path` (`/users`, `/labels`,
- *  `/teams` or `/teams/{id}/members`), with `search` when it is set, in
- *  pages of `limit`, each read with readOk, so a cleanup read never takes a
- *  failed answer for an empty list. */
-const restRows = (cred, path, field, { search, limit = 200 } = {}) =>
+ *  `/teams`, `/teams/{id}/members` or `/projects`), with `search` when it
+ *  is set, in pages of `limit`, each read with readOk, so a cleanup read
+ *  never takes a failed answer for an empty list, at most `most` pages. */
+const restRows = (cred, path, field, { search, limit = 200, most = peoplePagesMax(limit) } = {}) =>
   movingPages(
     (cursor) => readOk(cred, withQuery(path, { search, limit, cursor })),
     `GET /v1${path.split('?')[0]}`,
     field,
-    peoplePagesMax(limit),
+    most,
   )
 
-/** Every row under `field` of the MCP list tool `name` for `args`. */
-const mcpRows = (cred, name, field, args = {}) =>
+/** Every row under `field` of the MCP list tool `name` for `args`, at most
+ *  `most` pages. */
+const mcpRows = (cred, name, field, args = {}, most = peoplePagesMax(args.limit ?? 50)) =>
   movingPages(
     (cursor) => toolOk(cred, name, cursor === null ? args : { ...args, cursor }),
     name,
     field,
-    peoplePagesMax(args.limit ?? 50),
+    most,
+  )
+
+/** Every project of REST GET /v1/projects on one side of the archive,
+ *  with `search` when it is set, a page of 200 at a time. */
+const projectRows = (cred, { archived = false, search } = {}) =>
+  restRows(cred, archived ? '/projects?archived=true' : '/projects', 'projects', {
+    search,
+    most: projectPagesMax(200),
+  })
+
+/** projectRows over MCP list_projects. */
+const mcpProjectRows = (cred, { archived = false, search } = {}) =>
+  mcpRows(
+    cred,
+    'list_projects',
+    'projects',
+    { ...(archived ? { archived: true } : {}), ...(search ? { search } : {}), limit: 200 },
+    projectPagesMax(200),
   )
 
 /** Every file of `task` over REST, a page at a time
@@ -2219,9 +2255,10 @@ async function sweep(tag, label) {
   try {
     if (cleaner) {
       await step('projects', async () => {
+        const search = searchOf(tag)
         const projects = [
-          ...(await readList(cleaner, '/projects')),
-          ...(await readList(cleaner, '/projects?archived=true')),
+          ...(await projectRows(cleaner, { search })),
+          ...(await projectRows(cleaner, { archived: true, search })),
         ].filter((p) => matches(p.name))
         // the app deletes a top-level project with its sub-projects
         for (const p of projects.filter((p) => !projects.some((q) => q.id === p.parent_id)))
@@ -2329,12 +2366,12 @@ async function sweep(tag, label) {
     // what REST can see must be gone before the token goes
     if (cleaner)
       await step('the check for leftovers over REST', async () => {
+        const search = searchOf(tag)
         const projects = [
-          ...(await readList(cleaner, '/projects')),
-          ...(await readList(cleaner, '/projects?archived=true')),
+          ...(await projectRows(cleaner, { search })),
+          ...(await projectRows(cleaner, { archived: true, search })),
         ].filter((p) => matches(p.name))
         const tasks = await findTasks(cleaner, tag)
-        const search = searchOf(tag)
         const teams = (await restRows(cleaner, '/teams', 'teams', { search })).filter((t) =>
           matches(t.name),
         )
@@ -2445,10 +2482,10 @@ async function findTasks(cred, tag) {
   const readAll = async (path) =>
     take(await taskPages((cursor) => readOk(cred, withCursor(path, cursor)), 'GET /v1/tasks'))
   await readAll(`/tasks?search=${search}&limit=200`)
-  const archivedProjects = await readList(cred, '/projects?archived=true')
+  const archivedProjects = await projectRows(cred, { archived: true })
   for (const p of archivedProjects)
     await readAll(`/tasks?project=${p.id}&search=${search}&limit=200`)
-  const projects = [...(await readList(cred, '/projects')), ...archivedProjects].filter(
+  const projects = [...(await projectRows(cred)), ...archivedProjects].filter(
     (p) => p.parent_id === null,
   )
   for (const p of projects)
@@ -2534,7 +2571,7 @@ async function checkReads(cred) {
   }
   if (cred.kind !== 'oauth') {
     await check(`${cred.id}/rest/reads`, async () => {
-      flagsOk(await restOk(cred, 'GET', '/projects'), 'REST')
+      flagsOk(await projectRows(cred, { search: run.tag }), 'REST')
       const detail = await restOk(cred, 'GET', `/projects/${A.id}`)
       eq(detail.lead_name, run.nora.name, 'project lead')
       const tasks = await restTasks(cred, `/tasks?project=${M.id}&limit=200`)
@@ -2567,7 +2604,7 @@ async function checkReads(cred) {
     })
   }
   await check(`${cred.id}/mcp/reads`, async () => {
-    flagsOk(await toolOk(cred, 'list_projects'), 'MCP')
+    flagsOk(await mcpProjectRows(cred, { search: run.tag }), 'MCP')
     eq((await toolOk(cred, 'get_project', { project: A.id })).id, A.id, 'get_project')
     const tasks = await mcpTasks(cred, { project: M.id, limit: 200 })
     expect(
@@ -2933,6 +2970,128 @@ async function taskDetailChecks() {
       'unknown query parameter "page"; this request takes limit, cursor, offset',
     )
     return `a group with ${want.subtasks.length} subtasks, ${want.links.length} links, ${want.followers.length} followers and ${want.attachments.length} files, whole with null cursors on both surfaces, ${pages} pages of one over each, a REST cursor on MCP; offset, limit=0, another list's and another task's cursors and an unknown parameter refused`
+  })
+}
+
+/** machine/project-lists: REST GET /v1/projects and MCP list_projects page
+ *  the run's projects, found by the run's tag, at limit 1 to their ends
+ *  with the Standard agent's key, in tree order: M first, then its tagged
+ *  sub-projects in key order, Alpha and Zulu among them (the name caps
+ *  step leaves a tagged sub-project of M too), the same rows on both
+ *  surfaces, every page moving on, and a REST cursor goes on over MCP. A
+ *  search for the tag with `project` lists M alone, so a matching parent
+ *  brings none of its sub-projects, one with `Alpha` lists Alpha alone, and
+ *  Alpha's key finds Alpha. The agent's flags are the run's (writes). Then
+ *  the refusals: an offset, a limit of 0, an active list's cursor sent with
+ *  archived=true, a users cursor and an unknown query parameter, each with
+ *  its sentence. A backend before the paged lists answers an array, so the
+ *  step fails there. */
+async function projectListChecks() {
+  const s = run.creds.stdKey
+  await check('machine/project-lists', async () => {
+    const { M, A, Z } = run.projects
+    const search = run.tag
+    const ids = (rows) => rows.map((p) => p.id)
+    const most = projectPagesMax(1)
+    const viaRest = await movingPages(
+      (cursor) => readOk(s, withQuery('/projects', { search, limit: 1, cursor })),
+      'GET /v1/projects',
+      'projects',
+      most,
+    )
+    const viaMcp = await movingPages(
+      (cursor) =>
+        toolOk(
+          s,
+          'list_projects',
+          cursor === null ? { search, limit: 1 } : { search, limit: 1, cursor },
+        ),
+      'list_projects',
+      'projects',
+      most,
+    )
+    same(ids(viaMcp), ids(viaRest), 'the same pages on both surfaces')
+    eq(viaRest[0]?.id, M.id, 'M comes first')
+    const subs = viaRest.slice(1)
+    expect(
+      subs.every((p) => p.parent_id === M.id),
+      "a row after M is not one of M's sub-projects",
+    )
+    const keys = subs.map((p) => p.key)
+    same(
+      keys,
+      [...keys].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+      "M's sub-projects in key order",
+    )
+    for (const p of [A, Z])
+      expect(
+        subs.some((r) => r.id === p.id),
+        `the pages lack ${p.name}`,
+      )
+    for (const [key, p] of Object.entries({ M, A, Z }))
+      eq(
+        viaRest.find((r) => r.id === p.id)?.access.write,
+        writes(s, key),
+        `the Standard agent's write flag on ${key}`,
+      )
+    // a REST cursor goes on over MCP
+    const first = await readOk(s, withQuery('/projects', { search, limit: 1 }))
+    expect(typeof first?.next_cursor === 'string', 'a projects page of one ended the list')
+    const rest = await movingPages(
+      (cursor) =>
+        toolOk(s, 'list_projects', { search, limit: 1, cursor: cursor ?? first.next_cursor }),
+      'list_projects after GET /v1/projects',
+      'projects',
+      most,
+    )
+    same(ids([...first.projects, ...rest]), ids(viaRest), 'a REST cursor continued on MCP')
+    // a project's own name or its key
+    same(
+      ids(await restRows(s, '/projects', 'projects', { search: `${run.tag} project`, most })),
+      [M.id],
+      'a matching parent brings its sub-projects',
+    )
+    same(
+      ids(await mcpRows(s, 'list_projects', 'projects', { search: `${run.tag} Alpha` }, most)),
+      [A.id],
+      'a matching sub-project shows alone',
+    )
+    expect(
+      (await restRows(s, '/projects', 'projects', { search: A.key, most })).some(
+        (p) => p.id === A.id,
+      ),
+      "Alpha's key does not find Alpha",
+    )
+    // the refusals
+    await restRefusal(s, 'GET', '/projects?offset=1', undefined, 400, PROJECT_REFUSALS.offset)
+    await restRefusal(s, 'GET', '/projects?limit=0', undefined, 400, PROJECT_REFUSALS.limit)
+    eq(
+      await toolRefusal(s, 'list_projects', { offset: 1 }),
+      PROJECT_REFUSALS.offset,
+      'list_projects offset 1',
+    )
+    const active = await readOk(s, '/projects?limit=1')
+    expect(typeof active?.next_cursor === 'string', 'a projects page of one ended the list')
+    await restRefusal(
+      s,
+      'GET',
+      withQuery('/projects', { archived: 'true', cursor: active.next_cursor }),
+      undefined,
+      400,
+      PROJECT_REFUSALS.cursor,
+    )
+    const users = await readOk(s, '/users?limit=1')
+    expect(typeof users?.next_cursor === 'string', 'a users page of one ended the list')
+    await restRefusal(
+      s,
+      'GET',
+      withQuery('/projects', { cursor: users.next_cursor }),
+      undefined,
+      400,
+      PROJECT_REFUSALS.cursor,
+    )
+    await restRefusal(s, 'GET', '/projects?page=2', undefined, 400, PROJECT_REFUSALS.unknown)
+    return `${viaRest.length} tagged projects in ${viaRest.length} pages of one on both surfaces, M first and its sub-projects in key order, a REST cursor on MCP, the search by name and by key; offset, limit=0, the active list's cursor with archived=true, a users cursor and an unknown parameter refused`
   })
 }
 
@@ -7738,7 +7897,7 @@ async function projectDialogsCheck() {
     let project = null
     expect(
       await until(async () => {
-        project = (await readList(w, '/projects')).find((p) => p.name === name) ?? null
+        project = (await projectRows(w, { search: name })).find((p) => p.name === name) ?? null
         return project !== null
       }, 30_000),
       `${name} was not created`,
@@ -7794,7 +7953,7 @@ async function projectDialogsCheck() {
     let child = null
     expect(
       await until(async () => {
-        child = (await readList(w, '/projects')).find((p) => p.name === subName) ?? null
+        child = (await projectRows(w, { search: subName })).find((p) => p.name === subName) ?? null
         return child !== null
       }, 30_000),
       `${subName} was not created`,
@@ -8996,7 +9155,9 @@ async function oldPathsCheck() {
     await app.reload({ waitUntil: 'domcontentloaded' })
     await showsPage()
     // 3. a number no project holds opens the account page
-    const nums = (await readList(w, '/projects')).map((p) => p.num ?? 0)
+    const nums = [...(await projectRows(w)), ...(await projectRows(w, { archived: true }))].map(
+      (p) => p.num ?? 0,
+    )
     const free = Math.max(project.num, ...nums) + 100_000
     await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/project/${free}`, {
       waitUntil: 'domcontentloaded',
@@ -9565,10 +9726,24 @@ async function archiveChecks() {
   })
   for (const cred of [w, run.creds.stdKey]) {
     await check(`archived-projects/${cred.id}/listed`, async () => {
-      const active = await restOk(cred, 'GET', '/projects')
+      const search = run.tag
+      const active = await projectRows(cred, { search })
       expect(!active.some((p) => p.id === M.id), 'an archived project is in the active list')
-      const list = await restOk(cred, 'GET', '/projects?archived=true')
-      const viaMcp = await toolOk(cred, 'list_projects', { archived: true })
+      const list = await projectRows(cred, { archived: true, search })
+      const viaMcp = await mcpProjectRows(cred, { archived: true, search })
+      same(
+        viaMcp.map((p) => p.id),
+        list.map((p) => p.id),
+        'the archived pages on both surfaces',
+      )
+      // M first, then its sub-projects archived with it in key order
+      eq(list[0]?.id, M.id, 'M comes first in the archived pages')
+      const subKeys = list.filter((p) => p.parent_id === M.id).map((p) => p.key)
+      same(
+        subKeys,
+        [...subKeys].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+        "M's archived sub-projects in key order",
+      )
       for (const p of [M, A, Z]) {
         expect(
           list.some((r) => r.id === p.id && r.archived),
@@ -9876,7 +10051,7 @@ async function completionChecks(f) {
         `${p.name} in get_project`,
       )
     }
-    const row = (await restOk(w, 'GET', '/projects')).find((p) => p.id === N.id)
+    const row = (await projectRows(w, { search: N.name })).find((p) => p.id === N.id)
     expect(row && !('completion' in row), 'a list row carries completion')
     return `${wantN.done} of ${wantN.total} in the project, ${want1.done} of ${want1.total} in ${N1.name}`
   })
@@ -10684,6 +10859,7 @@ async function main() {
   await workloadPageChecks()
   await peopleListChecks()
   await taskDetailChecks()
+  await projectListChecks()
   await subtaskRuleChecks()
   // task and project facts, the live group rule and the billing pause
   await factChecks()
