@@ -233,20 +233,20 @@ type Profile = Doc<'profiles'>
  *
  * Timed on 8 November 2026 at 8e501d53 on a local backend on Boat (8 vCPU,
  * one call at a time), in one quiet session and one beside 8 busy loops,
- * with the title source gone, counted for the whole call with its sign-in.
- * Every search page says missing `matches`. On the project item of 30 live
- * and 40 archived sub-projects with 800 open tasks, its lead's search
- * reads 281 ranges, 358 documents and 0.26 MiB for 25 entries, and an
- * admin who reads none of it reads 279, 355 and 0.25 for none, in 35 to 66
- * ms of JavaScript quiet and at most 122 ms busy. On a sub-project item of
- * 300 tasks, its lead reads 284, 544 and 0.41 and an admin with a User
- * grant on its parent 283, 289 and 0.21, in at most 81 ms quiet and 93 ms
- * busy. A member who leads 200 live and 500 archived sub-projects one by
- * one, searching past `searches`, reads 419, 1,356 and 0.76 in 76 to 113
- * ms of JavaScript quiet and 134 to 161 ms busy, with a total of 245 to
- * 340 ms quiet and 524 to 611 ms busy. An everyday project item of 90
- * tasks, its lead's search and an admin's, reads 115 ranges, 240 to 244
- * documents and 0.12 MiB in at most 60 ms quiet and 109 ms busy. The
+ * with the search_title index of deleted_tasks gone, counted for the whole
+ * call with its sign-in. Every search page says missing `matches`. On the
+ * project item of 30 live and 40 archived sub-projects with 800 open tasks,
+ * its lead's search reads 281 ranges, 358 documents and 0.26 MiB for 25
+ * entries, and an admin who reads none of it reads 279, 355 and 0.25 for
+ * none, in 35 to 66 ms of JavaScript quiet and at most 122 ms busy. On a
+ * sub-project item of 300 tasks, its lead reads 284, 544 and 0.41 and an
+ * admin with a User grant on its parent 283, 289 and 0.21, in at most 81 ms
+ * quiet and 93 ms busy. A member who leads 200 live and 500 archived
+ * sub-projects one by one, searching past `searches`, reads 419, 1,356 and
+ * 0.76 in 76 to 113 ms of JavaScript quiet and 134 to 161 ms busy, with a
+ * total of 245 to 340 ms quiet and 524 to 611 ms busy. An everyday project
+ * item of 90 tasks, its lead's search and an admin's, reads 115 ranges, 240
+ * to 244 documents and 0.12 MiB in at most 60 ms quiet and 109 ms busy. The
  * admins' searches and the member's come within 10 ranges of the
  * convex-test counts above. The two leads' searches do not, against the
  * project item lead's 157 ranges and the sub-project item member's 368
