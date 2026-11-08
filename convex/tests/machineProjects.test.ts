@@ -484,16 +484,24 @@ describe('the order and the pages', () => {
 
   it('reads within NAMED_READ, ending pages short with a cursor that moves, every row once', async () => {
     const { t, mara, order } = await tree()
+    // a page always reads its first row, and here every row the walk
+    // hands out is listed, so every page but the last holds one, and there
+    // is at most one page more than there are rows
+    const short = (pages: ProjectsPageJson[]) => {
+      expect(pages.slice(0, -1).map((p) => p.projects.length > 0)).not.toContain(false)
+      expect(pages.length).toBeLessThanOrEqual(order.length + 1)
+    }
     Object.assign(NAMED_READ, { ranges: 3 })
-    const { rows, pages } = await restAll(t, mara, 'read', { limit: 50 })
-    expect(keys(rows)).toEqual(order)
-    expect(pages.length).toBeGreaterThan(3)
-    // a page always reads its first row
-    expect(pages.slice(0, -1).every((p) => p.projects.length >= 0 && p.next_cursor !== null)).toBe(
-      true,
-    )
+    const ranged = await restAll(t, mara, 'read', { limit: 50 })
+    short(ranged.pages)
+    expect(keys(ranged.rows)).toEqual(order)
+    expect(ranged.pages.length).toBeGreaterThan(3)
     Object.assign(NAMED_READ, { ranges: 1, documents: 1 })
-    expect(keys((await mcpAll(t, mara, 'read', { limit: 50 })).rows)).toEqual(order)
+    const least = await mcpAll(t, mara, 'read', { limit: 50 })
+    short(least.pages)
+    expect(keys(least.rows)).toEqual(order)
+    // one read a page leaves room for the first row alone
+    expect(least.pages.length).toBeGreaterThanOrEqual(order.length)
   })
 })
 
