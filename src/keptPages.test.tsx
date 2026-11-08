@@ -8,6 +8,7 @@ import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, underProgram } from './store/plannerFixture.setup'
+import { projectNavStandIn } from './store/projectNavStandIn.setup'
 import { answerRoadmap } from './store/roadmapStandIn.setup'
 import { type SyncArgs, teamSyncStandIn } from './store/teamSyncStandIn.setup'
 import { taskRow } from './views/boardFixture.setup'
@@ -154,6 +155,11 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
   for (let n = 1; n <= 3; n++) snap.issues.push(taskRow(snap, `t${n}`, 'todo', n))
   snap.issues[0].title = 'Write the release notes'
   prepare(snap)
+  // the fixture's project under a top-level project, as every writer stores
+  // one that holds tasks, so the navigation reads and the project cache
+  // answer it, where `prepare` did not place it
+  if (snap.projects[0].parent_id === undefined && snap.projects[0].type !== 'meta')
+    underProgram(snap)
   threads.length = 0
   milestoneWatches.length = 0
   holdMilestones = false
@@ -212,9 +218,18 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
         thread.stopped = true
       }
     }
+    // the navigation lists the views and pickers read, as the server
+    // answers them
+    if (name.startsWith('projectNav:') && name !== 'projectNav:byIds')
+      next(projectNavStandIn(snap, name, args))
     return () => {}
   })
-  network.query.mockResolvedValue(null)
+  // a numbered project address resolves through projectNav.resolve
+  network.query.mockImplementation(async (ref, args) =>
+    getFunctionName(ref) === 'projectNav:resolve'
+      ? projectNavStandIn(snap, 'projectNav:resolve', args)
+      : null,
+  )
   // the server holds an Inbox read and sends its rows before it answers, as
   // Convex does, so the inbox item a task window reads follows it
   network.mutation.mockImplementation(async (ref, args) => {

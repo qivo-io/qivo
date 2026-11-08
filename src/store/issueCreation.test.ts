@@ -73,6 +73,26 @@ describe('task creation through the client store', () => {
 
   const settled = () => vi.waitFor(() => expect(P.roadmapUndo.busy).toBe(false))
 
+  it('sends no create into a project the project cache has not answered, and says why', async () => {
+    // a sub-project the New task picker only seeded, which no read answered
+    P.seedProjects([
+      {
+        id: 'seeded-only',
+        org_id: snap.orgs[0].id,
+        name: 'Seeded',
+        num: 77,
+        parent_id: snap.projects[0].parent_id ?? null,
+      },
+    ])
+    expect(P.projectState('seeded-only')).toBe('loading')
+    expect(P.addIssue({ project: 'seeded-only', title: 'Too early' })).toBeNull()
+    expect(requests).toEqual([])
+    expect(showToast).toHaveBeenCalledWith('Loading this project…', 'error')
+    // an answered one creates
+    expect(P.addIssue({ project: snap.projects[0].id, title: 'In time' })).not.toBeNull()
+    expect(requests.map((r) => r.name)).toEqual(['issues:create'])
+  })
+
   it('keeps the handle when creation succeeds with the previewed number', async () => {
     const moved = vi.fn()
     P.watchHandles(moved)

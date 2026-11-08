@@ -7,6 +7,7 @@ import { TooltipProvider } from './components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixture.setup'
+import { projectNavStandIn } from './store/projectNavStandIn.setup'
 
 /* Archiving a task on a phone, on App and the real store: the task leaves
    the board while its Archive or delete dialog is open, and the window
@@ -133,10 +134,19 @@ async function openArchive() {
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name === 'tasks:board') next(boardStandIn(server, args as BoardArgs))
     else if (name.startsWith('overview:')) answerOverview(server, name, args, next, fail)
+    // the navigation lists the views and pickers read, as the server
+    // answers them
+    if (name.startsWith('projectNav:') && name !== 'projectNav:byIds')
+      next(projectNavStandIn(snap, name, args))
     return () => {}
   })
   let answer = () => {}
-  network.query.mockResolvedValue(null)
+  // a numbered project address resolves through projectNav.resolve
+  network.query.mockImplementation(async (ref, args) =>
+    getFunctionName(ref) === 'projectNav:resolve'
+      ? projectNavStandIn(snap, 'projectNav:resolve', args)
+      : null,
+  )
   network.mutation.mockImplementation((ref) =>
     getFunctionName(ref) === 'issues:archive'
       ? new Promise((resolve) => {
