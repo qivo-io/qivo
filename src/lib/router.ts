@@ -331,7 +331,7 @@ export const scopeForIssue = (
   if (preferred === MINE_SCOPE)
     return it.owner && P.myProfileIds.includes(it.owner) ? MINE_SCOPE : it.project
   if (preferred) {
-    const p = P.project(preferred)
+    const p = P.heldProject(preferred)
     if (
       p &&
       (p.id === it.project || (p.type === 'meta' && (p.children || []).includes(it.project)))

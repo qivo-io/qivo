@@ -4,12 +4,25 @@
  * - page: one batch of the top-level projects the caller sees for
  *   navigation across every active seat of their login, the favorites of
  *   every seat first and then the rest of every seat, each group in name
- *   order, 25 a batch with sealed `after` and `through` cursors.
+ *   order, 25 a batch with sealed `after` and `through` cursors; with
+ *   `org_id` only that seat's, meant for Team sync's scope menu, and with
+ *   `team_id` beside it that team's own shares the caller sees, projects
+ *   and sub-projects together, meant for Team sync's notes.
+ * - targets: one batch of the live sub-projects the caller may add tasks to
+ *   (Edit or Lead), across every seat or in one organization, grouped under
+ *   their top-level projects, with a search, meant for the New task dialog,
+ *   the Move window and the task window's Link task offer.
+ * - holds: whether the caller sees any top-level project and any
+ *   sub-project, meant for every "no project" and "no sub-project" note.
  * - children: one batch of a top-level project's live sub-projects the
  *   caller sees, 25 a batch, the same way.
  * - resolve: whether one project, named by id or by its organization and
  *   number, is open to the caller for navigation, with its parent and its
  *   favorite state; a check a bound stopped answers apart from a loss.
+ * - byIds: up to 100 projects by id, each one the caller opens for
+ *   navigation with the caller's level on it, every sub-project's
+ *   top-level project as a row of its own, each judged with the caller's
+ *   seat in its organization; a check a bound stopped answers that id apart.
  * - search: one batch of the projects and sub-projects the caller sees for
  *   navigation whose own name holds every word of a search, across every
  *   active seat or in one organization, the matching favorites first and
@@ -38,20 +51,32 @@
  * and children. resolve is also the check startup runs on the project the
  * person opened last and on a project address the workspace does not hold
  * (src/App.tsx), and the open rule's check of a listed project the
- * workspace does not hold (src/components/projectNavRows.tsx). */
+ * workspace does not hold (src/components/projectNavRows.tsx). byIds is
+ * the read of the store's project cache (src/store/projectCache.ts), which
+ * keeps the projects the open views name that the workspace does not hold,
+ * and of the staging check's ui/project-by-ids step. No app code reads
+ * targets, holds or page's org_id and team_id yet. Those readers still
+ * read the workspace's projects part, and t3/limits-projects-part moves
+ * them onto these reads. */
 
 import { v } from 'convex/values'
 import { authedQuery, orgMutation } from './lib/functions'
 import { setFavoriteCore } from './model/projectFavorites'
 import {
+  type NavByIds,
   type NavChildren,
+  type NavHolds,
   type NavPage,
   type NavResolve,
   type NavSearch,
+  type NavTargets,
+  navByIdsOf,
   navChildrenOf,
+  navHoldsOf,
   navPageOf,
   navResolveOf,
   navSearchOf,
+  navTargetsOf,
 } from './model/projectNavReads'
 
 /** The cursors of a navigation batch: its start (`after`, none for the
@@ -63,11 +88,15 @@ const vNavCursors = { after: v.optional(v.string()), through: v.optional(v.strin
  * favorites of every seat by the reader rule first, then the rest of every
  * seat, each group in name key order with the project id breaking ties,
  * rows of several organizations in one order. Rows are `{ id, org_id,
- * name, num, favorite }`. `not_ready` while an organization's reach rows
- * or name keys are not complete; `unavailable` with access_unchecked where
- * a check stopped. */
+ * name, num, favorite }`. With `org_id` only that seat's, an organization
+ * without the caller's seat answering an empty last batch; with `team_id`,
+ * which needs `org_id`, the projects and sub-projects that team holds a
+ * share on that the caller sees, with `parent_id` (navTeamOf). Each list
+ * seals its cursors with what it was asked for. `not_ready` while an
+ * organization's reach rows or name keys are not complete; `unavailable`
+ * with access_unchecked where a check stopped. */
 export const page = authedQuery({
-  args: vNavCursors,
+  args: { org_id: v.optional(v.string()), team_id: v.optional(v.string()), ...vNavCursors },
   handler: (ctx, a): Promise<NavPage> => navPageOf(ctx, ctx.myProfiles, a),
 })
 
@@ -93,6 +122,45 @@ export const resolve = authedQuery({
     num: v.optional(v.number()),
   },
   handler: (ctx, a): Promise<NavResolve> => navResolveOf(ctx, ctx.myProfiles, a),
+})
+
+/** One batch of the live sub-projects the caller may add tasks to, Edit or
+ * Lead (model/projectNavReads.ts navTargetsOf), across every active seat or
+ * only the seat in `org_id`, in the order of the parent's name, the
+ * parent's id, the sub-project's name and its id, 25 a batch, rows `{ id,
+ * org_id, name, num, parent_id, parent_name, parent_num }`. `search` keeps
+ * a row whose own or whose parent's name holds every word. An organization
+ * Viewer lists none. `not_ready`, `stopped` and the access_unchecked
+ * refusal answer as the other lists do. */
+export const targets = authedQuery({
+  args: { org_id: v.optional(v.string()), search: v.optional(v.string()), ...vNavCursors },
+  handler: (ctx, a): Promise<NavTargets> => navTargetsOf(ctx, ctx.authUserId, ctx.myProfiles, a),
+})
+
+/** Whether the caller sees any live top-level project (`top`) and any live
+ * sub-project (`sub`) for navigation (model/projectNavReads.ts
+ * navHoldsOf), across every seat or only the seat in `org_id`, both false
+ * for an organization without the caller's seat; `stopped` where the read
+ * share ended the walk, and `not_ready` or the access_unchecked refusal,
+ * none of which is ever an answer of no project. */
+export const holds = authedQuery({
+  args: { org_id: v.optional(v.string()) },
+  handler: (ctx, a): Promise<NavHolds> => navHoldsOf(ctx, ctx.myProfiles, a),
+})
+
+/** Up to 100 projects by id (model/projectNavReads.ts navByIdsOf), each
+ * judged with the caller's seat in its organization by ordinary access and
+ * the navigation rule of resolve, rows `{ id, org_id, name, num, parent_id,
+ * level, track_delay, lead_id, review_hours }` with the caller's level, the
+ * project's own lead and its resolved Review time, and the top-level project
+ * of every sub-project answered as a row of its own whatever the order of
+ * the ids. Every project the caller cannot open is left out alike, and an id
+ * whose check a bound stopped is listed in `unchecked` with `message`,
+ * never left out as no access. More than 100 ids, repeats included, is a
+ * bad_request before any project is read. */
+export const byIds = authedQuery({
+  args: { ids: v.array(v.string()) },
+  handler: (ctx, { ids }): Promise<NavByIds> => navByIdsOf(ctx, ctx.myProfiles, ids),
 })
 
 /** One batch of the projects and sub-projects the caller sees for

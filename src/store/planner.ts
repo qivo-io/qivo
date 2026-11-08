@@ -60,6 +60,7 @@ import { resolveReviewHours, reviewStamp, taskOwnerId } from '../../convex/lib/r
 import type { DependencyAnswer, DependencyRow, RoadmapAnswer } from '../../convex/lib/roadmap'
 import { firstSittingDay, SYNC_OWNERS_MAX } from '../../convex/lib/teamSync'
 import type { AgendaAnswer } from '../../convex/lib/teamSyncAgenda'
+import type { NavByIdRow, NavByIds } from '../../convex/model/projectNavReads'
 import type { PersonRow } from '../../convex/model/projectSettings'
 import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
 import { NO_QUERY, SignOutFailed } from '../lib/authSession'
@@ -209,6 +210,7 @@ import {
 import { createOwnerLoadCache, type OwnerLoad, type OwnerNeed } from './ownerLoadCache'
 import { createPreferences } from './preferences'
 import { createProfileCache, type NamedPerson } from './profileCache'
+import { type CachedState, createProjectCache } from './projectCache'
 import { createWorkspaceRows, RowMap, rowCopies } from './rowMap'
 import { keep, keepItems, sameData } from './stable'
 import {
@@ -278,6 +280,7 @@ import {
   type PersonOk,
   type PersonShown,
   type PersonView,
+  type ProjectFacts,
   type ProjectVM,
   personOfFace,
   personOfName,
@@ -286,6 +289,7 @@ import {
   shapeArchivedListRow,
   shapeArchivedProject,
   shapeAttachment,
+  shapeCachedProject,
   shapeComment,
   shapeMessage,
   shapeMessageGroup,
@@ -2304,6 +2308,7 @@ function stopSections() {
    task opens, and repaints. */
 function resetSections(issue: string | null = null) {
   sectionAnswers = { issue, task: null, links: null, attachments: null }
+  nameAnswerProjects(WINDOW_PROJECTS, [])
   for (const side of SECTION_SIDES) sectionFailure[side] = 'none'
 }
 
@@ -2370,6 +2375,7 @@ function receiveSection(side: SectionSide, news: SideNews): boolean {
     if (pending?.taken) pendingCreates.delete(watched.task)
   }
   if (side === 'task') refFromTaskSide(watched, news)
+  nameAnswerProjects(WINDOW_PROJECTS, windowProjects())
   // Move and Archive or delete of a task the workspace holds read its
   // family from this answer until every task is held (P.familyOf), also
   // where its lists show the same as before, as for the person's new task
@@ -4132,6 +4138,9 @@ function repaint(parts: {
       viewReadsChanged = false
     }
   }
+  // the projects the views' answers named, now that the rows show what the
+  // projects part holds
+  nameWaiting()
   // what the window's delay reads besides its task shows with the
   // comments, an owner load or a group's facts from a view's row
   if (windowSpanMoved()) windowLoadNews = true
@@ -4263,6 +4272,60 @@ function owe(part: keyof typeof owed) {
   else payTimer ??= setTimeout(pay, 0)
 }
 
+/* The projects each owner's answer names, waiting for the next repaint
+   (nameAnswerProjects), and the owners named with the project cache: a
+   view slot as `view:<slot>`, the task window as WINDOW_PROJECTS. */
+const waitingNames = new Map<string, readonly string[]>()
+const namedOwners = new Set<string>()
+const WINDOW_PROJECTS = 'window'
+
+/** Names the projects owner `owner`'s answer names with the project cache,
+    or releases them with an empty list. A release goes at once; a naming
+    waits for the next repaint (nameWaiting), which paints what the
+    projects part delivered in the same transition, so a project the part
+    is about to hold is never read by id. */
+function nameAnswerProjects(owner: string, ids: readonly string[]) {
+  if (ids.length === 0) {
+    waitingNames.delete(owner)
+    if (namedOwners.delete(owner)) projectCache.name(owner, [])
+    return
+  }
+  waitingNames.set(owner, ids)
+}
+
+/** Names the projects slot `slot`'s answer names (nameAnswerProjects). */
+const nameSlotProjects = (slot: ViewSlot, ids: readonly string[]) =>
+  nameAnswerProjects(`view:${slot}`, ids)
+
+/** Names the projects the answers named since the last repaint. */
+function nameWaiting() {
+  for (const [owner, ids] of waitingNames) {
+    namedOwners.add(owner)
+    projectCache.name(owner, ids)
+  }
+  waitingNames.clear()
+}
+
+/** The projects the task window's answers name: its task's, its parent's,
+    its subtasks' and its linked tasks', each once, so the crumb, the
+    related rows and the window's rights read a project the workspace's
+    projects part does not hold from the project cache. */
+function windowProjects(): string[] {
+  const ids: string[] = []
+  const task = sectionAnswers.task
+  if (task && task !== CREATING && (task.state === 'ok' || task.state === 'archived')) {
+    ids.push(task.task.project_id)
+    if (task.state === 'ok') {
+      if (task.parent) ids.push(task.parent.project_id)
+      for (const row of task.subtasks.rows) ids.push(row.project_id)
+    }
+  }
+  const links = sectionAnswers.links
+  if (links && links !== CREATING && links.state === 'ok')
+    for (const row of links.tasks) ids.push(row.project_id)
+  return [...new Set(ids)]
+}
+
 /** Paints the owed parts once. */
 function pay() {
   if (payTimer) clearTimeout(payTimer)
@@ -4328,15 +4391,39 @@ type ViewQuery = {
       the person's own changed tasks where its answer does not
       (P.ownOnScreen): the Board's and the Roadmap's */
   takesNew?: true
+  /** the projects a value names, which the store names with the project
+      cache under the slot (nameSlotProjects), so a row, a flag or a label
+      of a project the workspace's projects part does not hold reads its
+      name and the caller's level from the cache; none for a value that
+      names none. A slot whose read stops, as a kept page's that hides,
+      releases them and names them again from its kept answer when it
+      reads again (watchView) */
+  projects?: (value: unknown) => readonly string[] | null
 }
 
-/** The Board's read: an ok answer brings its rows and its parents. */
+/** The project ids of `rows`, each once, in order. */
+const projectsOf = (rows: readonly { project_id: string }[], more: readonly string[] = []) => [
+  ...new Set([...rows.map((row) => row.project_id), ...more]),
+]
+
+/** The Board's read: an ok answer brings its rows and its parents, and
+    names their projects, its held lanes and a project selection's
+    sub-projects, which a refusal names too. */
 const BOARD_QUERY: ViewQuery = {
   ref: api.tasks.board,
   takesNew: true,
   rows: (value) => {
     const answer = value as BoardAnswer
     return answer.state === 'ok' ? [...answer.rows, ...answer.parents] : null
+  },
+  projects: (value) => {
+    const answer = value as BoardAnswer
+    if (answer.state === 'ok')
+      return projectsOf(
+        [...answer.rows, ...answer.parents],
+        [...answer.held_projects, ...(answer.projects ?? [])],
+      )
+    return answer.state === 'unavailable' ? null : (answer.projects ?? null)
   },
 }
 
@@ -4353,6 +4440,10 @@ const listQuery = (ref: FunctionReference<'query'>): ViewQuery => ({
     const { cursor = null, end = null } = JSON.parse(key) as { cursor?: string; end?: string }
     if (splitAt(cursor, end, answer) !== null) return KEEP_ROWS
     return answer.rows.map(({ at_risk: _risk, ...row }) => row)
+  },
+  projects: (value) => {
+    const answer = value as ListAnswer
+    return answer.state === 'ok' ? projectsOf(answer.rows) : null
   },
 })
 
@@ -4371,6 +4462,15 @@ const ROADMAP_QUERY: ViewQuery = {
   judged: (value) => {
     const answer = value as RoadmapAnswer
     return answer.state === 'ok' ? new Set(answer.rows.map((row) => row.id)) : null
+  },
+  projects: (value) => {
+    const answer = value as RoadmapAnswer
+    if (answer.state === 'ok')
+      return projectsOf(
+        [...answer.rows, ...answer.parents, ...answer.subtasks],
+        [...(answer.projects ?? []), ...(answer.held_sub_projects ?? [])],
+      )
+    return answer.state === 'unavailable' ? null : (answer.projects ?? null)
   },
 }
 
@@ -4633,6 +4733,10 @@ function takeViewResult(slot: ViewSlot, read: ViewRead, key: string, token: stri
       read.behind = false
       dropHeldViewParts()
     }
+    // the projects an answer names, named once the repaint shows whether
+    // the projects part holds them; a failure keeps the last answer's
+    const named = read.query.projects
+    if (named && next.value !== undefined) nameSlotProjects(slot, named(next.value) ?? [])
     // a milestone read's answer is its anchor; a failure keeps the last
     // one, which the view shows under its note (P.milestoneRead)
     const milestones = read.query.milestones
@@ -4691,6 +4795,8 @@ function syncViewRead(slot: ViewSlot) {
 function releaseViewRows(slot: ViewSlot, keepMilestones = false) {
   const read = viewReads.get(slot)
   const held = !!read?.held
+  // a milestone read's Retry keeps its last answer, and with it its projects
+  if (!keepMilestones) nameSlotProjects(slot, [])
   if (read) {
     read.held = null
     read.behind = false
@@ -4792,6 +4898,24 @@ function watchView(
   const wasLive = read.live !== null
   read.want = key
   syncViewRead(slot)
+  // a view whose read stops, as a kept page that hides, lets its projects
+  // go with its read, so the project cache stops reading them, and names
+  // them again from the answer it kept as it reads again, so the cache
+  // reads them at once rather than after the view's next answer. A view
+  // effect's cleanup stops the read and its next run may start it again
+  // in the same pass, as a narrower Board filter or a Roadmap pan does, so
+  // the release waits for the pass and is dropped once the slot reads again
+  const named = read.query.projects
+  if (named && wasLive && read.live === null) {
+    const stopped = read
+    queueMicrotask(() => {
+      if (viewReads.get(slot) === stopped && stopped.live === null) nameSlotProjects(slot, [])
+    })
+  } else if (named && !wasLive && read.live !== null && read.held?.value !== undefined) {
+    nameSlotProjects(slot, named(read.held.value) ?? [])
+    // the part painted every delivery it took, so nothing waits for it
+    if (!owed.workspace) nameWaiting()
+  }
   // a view whose read stops keeps its owners' loads without reading them
   ownerLoads.setLive(slot, key !== null)
   // which view's copies of a task lead follows which reads are live
@@ -5126,6 +5250,10 @@ type MilestoneGetAnswer = {
 const MILESTONE_QUERIES: Record<MilestoneAsk['kind'], ViewQuery> = {
   get: {
     ref: api.milestones.get,
+    projects: (value) => {
+      const got = value as MilestoneGetAnswer
+      return got ? [got.project.id] : null
+    },
     milestones: (value, key) => {
       const got = value as MilestoneGetAnswer
       const { id } = JSON.parse(key) as { id: string }
@@ -5145,6 +5273,10 @@ const MILESTONE_QUERIES: Record<MilestoneAsk['kind'], ViewQuery> = {
   },
   section: {
     ref: api.milestones.section,
+    projects: (value) => {
+      const batch = value as MilestoneBatchAnswer
+      return projectsOf(batch.rows, batch.projects ?? [])
+    },
     milestones: (value, key) => {
       const batch = value as MilestoneBatchAnswer
       const args = JSON.parse(key) as Omit<Extract<MilestoneAsk, { kind: 'section' }>, 'kind'>
@@ -5163,6 +5295,7 @@ const MILESTONE_QUERIES: Record<MilestoneAsk['kind'], ViewQuery> = {
   },
   between: {
     ref: api.milestones.between,
+    projects: (value) => projectsOf((value as MilestoneBatchAnswer).rows),
     milestones: (value, key) => {
       const batch = value as MilestoneBatchAnswer
       const args = JSON.parse(key) as Omit<Extract<MilestoneAsk, { kind: 'between' }>, 'kind'>
@@ -5252,7 +5385,7 @@ const milestoneOnScreen = (id: string): MilestoneRow | undefined => milestoneRow
 
 /** The organization of milestone `row`: the one a `get` answer named for
     it, else its project's in the store (orgOfProject, from the projects
-    part until t3/limits-projects-part removes it), else none (''). */
+    part else the project cache), else none (''). */
 const milestoneOrg = (row: MilestoneRow): string =>
   milestoneRows.orgOf(row.id) ?? orgOfProject(row.project_id)
 
@@ -8260,6 +8393,30 @@ const profileCache = createProfileCache({
   watchVisibility,
 })
 
+/* The projects the open views name that the workspace's projects part does
+   not hold, read by id and kept within PROJECT_CACHE.most
+   (store/projectCache.ts). A change of an entry or a state repaints once a
+   frame as a picture does: a rebuild, which shapes the cached facts, the
+   number tags and P.contextVersion, then a workspace emit. P.project,
+   P.levelOn and the lookups built on them answer from it where the part
+   does not hold the project; P.heldProject never does. */
+const projectCache = createProjectCache({
+  live: {
+    watch: (ref, args) => live.watch(ref, args),
+    read: (token) => live.read(token),
+    onTransition: (fn, options) => live.onTransition(fn, options),
+  },
+  // archived ones included, so a task window of an archived project's task
+  // reads nothing
+  held: (id) => rows.projects.has(id),
+  changed: () => showPortraits(),
+  watchVisibility,
+})
+/* The facts of the cache's rows the part does not hold, by id, shaped in
+   rebuild, each the same object while its row is unchanged. */
+let cachedFacts: ReadonlyMap<string, ProjectFacts> = new Map()
+const factsOfRow = new WeakMap<NavByIdRow, ProjectFacts>()
+
 /* The person views P.person answers, by id, shaped in rebuild beside
    P.users from the signed-in person's own profiles and the cache, each
    keeping its identity while it is unchanged. */
@@ -8286,14 +8443,16 @@ const portraitFrame = frameBatch(() => {
 
 /* Clears every file URL and byte the store holds: the mint queue, the
    minted attachment leases, the inline images and the pictures, with the
-   people the profile cache read, for sign-out, a demo's end and
-   reinitialization. */
+   people the profile cache and the projects the project cache read, for
+   sign-out, a demo's end and reinitialization. */
 function clearAvatarSources() {
   mintQueue.clear()
   mintingKeys.clear()
   minted.clear()
   inlineImages.clear()
   profileCache.clear()
+  projectCache.clear()
+  cachedFacts = new Map()
   personViews = new Map()
   personStates.clear()
   namedPictures = []
@@ -8667,7 +8826,7 @@ const grantOnProject = (p: ProjectGrants, user: UserVM): string | null => {
    scope and refuses with its sentence. */
 const levelOnProject = (
   p: ProjectGrants | null | undefined,
-  projectById: (id: string) => ProjectVM | undefined = (id) => PLANNER.project(id),
+  projectById: (id: string) => ProjectVM | undefined = (id) => PLANNER.heldProject(id),
 ): string | null => {
   if (!p) return null
   const user = actorIn(p.org)
@@ -8688,11 +8847,29 @@ const visibleLevelOnProject = (p: ProjectVM | null | undefined): string | null =
     : null
 }
 
-/** The organization a project belongs to (sub-projects via their parent). */
+/** The organization a project belongs to, from the projects part else the
+    project cache (P.project), or '' where neither knows it. Its callers,
+    and what each does with '': milestoneOrg, a milestone's organization
+    when the milestone rows hold none, where a milestone write then sends
+    nothing; P.inviteToProject, the organization an invite goes to without
+    a page's lookup, which then sends nothing; P.nextIssueKey, the
+    organization whose counter the preview reads, else the home one;
+    P.unarchiveIssue, the organization a restore goes to when the caller
+    names none, else the home one; P.addProject, a new sub-project's
+    organization from its parent's without a page's, else the home one;
+    and P.projectAttachmentLimit, the organization whose file cap applies,
+    else the largest cap. */
 function orgOfProject(pid: string | null | undefined): string {
-  const p = pid ? rows.projects.get(pid) : null
-  return p ? p.org_id : ''
+  if (!pid) return ''
+  return rows.projects.get(pid)?.org_id ?? cachedFacts.get(pid)?.org ?? ''
 }
+
+/** What an off control says while its project loads, has failed, or is
+    gone (P.writeNote), and for a known level without Edit. */
+export const PROJECT_LOADING = 'Loading this project…'
+export const PROJECT_FAILED = "Couldn't load this project."
+export const PROJECT_GONE = "You can't open this project."
+export const READ_ONLY_PROJECT = 'Read-only project access'
 
 /* --- derived snapshot -------------------------------------------------------- */
 
@@ -8791,9 +8968,10 @@ function rebuild(now = new Date(), full = false) {
   const P = PLANNER
   const gridBefore = P.TIMELINE_START?.getTime()
   const todayBefore = P.TODAY_ISO
-  // the people the workspace holds now are read by id no more, and those
-  // it stopped holding are
+  // the people and projects the workspace holds now are read by id no more,
+  // and those it stopped holding are
   profileCache.sync()
+  projectCache.sync()
   syncPictureKeys()
 
   // week grid first: the org's week settings re-anchor TIMELINE_START, and
@@ -8954,7 +9132,24 @@ function rebuild(now = new Date(), full = false) {
           byStamp('', a.id, '', b.id),
       ),
   )
-  P.projectTags = keep(P.projectTags, duplicateNameTags(P.projects, P.archivedProjects))
+  // the cache's rows the part does not hold, which a lookup answers once
+  // the part holds no such project; a row the part also sends counts once
+  const facts = new Map<string, ProjectFacts>()
+  for (const row of projectCache.rows()) {
+    if (rows.projects.has(row.id)) continue
+    let shaped = factsOfRow.get(row)
+    if (!shaped) {
+      shaped = shapeCachedProject(row)
+      factsOfRow.set(row, shaped)
+    }
+    facts.set(row.id, shaped)
+  }
+  if (facts.size !== cachedFacts.size || [...facts].some(([id, f]) => cachedFacts.get(id) !== f))
+    cachedFacts = facts
+  P.projectTags = keep(
+    P.projectTags,
+    duplicateNameTags([...P.projects, ...cachedFacts.values()], P.archivedProjects),
+  )
 
   // tasks — their handles, view models, delays and load, reshaped only where
   // a change reaches them (store/taskIndex.ts). Numbers are per ORG (0050),
@@ -9083,6 +9278,9 @@ function rebuild(now = new Date(), full = false) {
     // them, but every memoized row that drew them loading draws them again
     personViews,
     profileCache.version(),
+    // the projects the cache answered and their states: a project that
+    // arrived, left or changed its level draws again
+    projectCache.version(),
   ]
   if (context.some((part, i) => part !== lastContext[i]))
     P.contextVersion = Object.freeze({ revision: P.contextVersion.revision + 1 })
@@ -9998,11 +10196,15 @@ function subtaskListPaint(parent: string, kid: ShortRow | null, gone: string, at
 
 /* The remaining time a task in this sub-project gets on entering Review: its
    own review_hours, else its parent project's, else the default. The same
-   resolver the server's reviewHoursFor uses, so the paint never flickers. */
+   resolver the server's reviewHoursFor uses, so the paint never flickers.
+   For a project the projects part does not hold, the time the project
+   cache's row carries, which projectNav.byIds resolved the same way, while
+   the cache keeps that row, else the default. */
 function reviewHoursForProject(projectId: string): number {
   const p = rows.projects.get(projectId)
-  const parent = p?.parent_id ? rows.projects.get(p.parent_id) : undefined
-  return resolveReviewHours(p?.review_hours, parent?.review_hours)
+  if (!p) return resolveReviewHours(projectCache.look(projectId).row?.review_hours, undefined)
+  const parent = p.parent_id ? rows.projects.get(p.parent_id) : undefined
+  return resolveReviewHours(p.review_hours, parent?.review_hours)
 }
 
 /* The fields updateViewTask writes: the Board's drop and owner picker
@@ -11639,7 +11841,7 @@ export type NewProjectInput = {
 }
 /** A project and the project that owns it, for labels such as "Website,
     Design". owner is null for a project shown alone (see P.projectPlace). */
-export type ProjectPlace = { project: ProjectVM; owner: ProjectVM | null }
+export type ProjectPlace = { project: ProjectFacts; owner: ProjectFacts | null }
 /** What the Archived tasks page reads (P.fetchArchivedPage): some projects
     of organization `org`, a top-level project standing for its
     sub-projects, or, chosen on purpose, every project of `org`. */
@@ -11819,6 +12021,10 @@ export const PLANNER = {
     },
     images: inlineImages.stats(),
   }),
+  /** What the project cache holds now (store/projectCache.ts): its
+      entries and the ids of each live projectNav.byIds read, for the
+      benchmark page's measurement, the tests and the closing review. */
+  cacheStats: () => ({ cached: projectCache.size(), reads: projectCache.reads() }),
   setInboxOpener,
   get roadmapUndo() {
     return {
@@ -12078,8 +12284,71 @@ export const PLANNER = {
       waiting when this holds and the project is still missing. */
   workspaceCurrent: (): boolean => inboxCurrent && !owed.workspace,
 
-  project: (id: string | null | undefined): ProjectVM | undefined =>
+  /** The facts of project `id` a view names (store/viewModels.ts
+      ProjectFacts): the workspace's live project where its projects part
+      holds it, else the row the project cache (store/projectCache.ts) keeps
+      for it, in every state but `gone`, else undefined. It never means "the
+      workspace holds it": a reader that sets the scope, creates, opens
+      Settings or reads the part's lead, grants, review time, key or
+      sub-projects reads P.heldProject. An archived project answers
+      undefined, as the cache never holds one. */
+  project: (id: string | null | undefined): ProjectFacts | undefined =>
+    findProject(PLANNER.projects, id) ?? (id ? cachedFacts.get(id) : undefined),
+  /** The workspace's whole live project `id` from its projects part, or
+      undefined where the part does not hold it, for the readers whose next
+      step needs the workspace to hold the project: App's boot, guard, moves
+      and Settings exits, the open rule, the sidebar's scope owner, the
+      Inbox's Open task in board, the task window's Move offer and crumb
+      press, the dialogs and the Move window, the router's address parsing,
+      Settings' kept rows and parent moves, the phone's header, Team sync,
+      P.scopeInfo and the creates. t3/limits-projects-part retires it with
+      the part. */
+  heldProject: (id: string | null | undefined): ProjectVM | undefined =>
     findProject(PLANNER.projects, id),
+  /** The held top-level project of held project `pid` (P.heldProject), for
+      the readers that set the scope to it, such as Plan on Roadmap. */
+  heldMeta: (pid: string | null | undefined): ProjectVM | null => {
+    const p = PLANNER.heldProject(pid)
+    if (!p) return null
+    return p.type === 'meta' ? p : PLANNER.heldProject(p.parent) || null
+  },
+  /** Where project `id` stands: `held` where the projects part holds it
+      live, `gone` where it holds it archived, else the project cache's state
+      (`ok`, `loading`, `failed`, `unchecked`, `gone`), and null for no id. A
+      project no open view names reads `loading` until one names it. */
+  projectState: (id: string | null | undefined): 'held' | CachedState | null => {
+    if (!id) return null
+    if (rows.projects.has(id)) return findProject(PLANNER.projects, id) ? 'held' : 'gone'
+    return projectCache.look(id).state
+  },
+  /** Why project `pid`'s write controls are off, or null where the caller
+      may write there: "Loading this project…" until the project cache
+      answers, "Couldn't load this project." after its read failed, the
+      server's sentence where the check was stopped, "You can't open this
+      project." where the answer left it out, and "Read-only project
+      access" for a known level without Edit. */
+  writeNote: (pid: string | null | undefined): string | null => {
+    if (pid && PLANNER.canWrite(pid)) return null
+    const state = PLANNER.projectState(pid)
+    if (state === 'loading') return PROJECT_LOADING
+    if (state === 'failed') return PROJECT_FAILED
+    if (state === 'unchecked') return (pid && projectCache.look(pid).message) || PROJECT_FAILED
+    if (state === 'gone') return PROJECT_GONE
+    return READ_ONLY_PROJECT
+  },
+  /** Names project `ids` under owner `owner`, in its order, replacing what
+      it named before; an empty list releases them. The project cache reads
+      the ones the workspace does not hold (store/projectCache.ts). */
+  nameProjects: (owner: string, ids: readonly string[]) => projectCache.name(owner, ids),
+  /** One projectNav.byIds read of `ids`, never subscribed, or null when it
+      failed, for the staging check and the drives. */
+  projectsByIds: async (ids: readonly string[]): Promise<NavByIds | null> => {
+    try {
+      return await convex.query(api.projectNav.byIds, { ids: [...ids] })
+    } catch {
+      return null
+    }
+  },
   /** "#4" when another project shown alongside this one has the same name. */
   projectTag: (id: string | null | undefined): string | null =>
     (id && PLANNER.projectTags.get(id)) || null,
@@ -12142,7 +12411,9 @@ export const PLANNER = {
       picks, as names the views show at once until a face arrives. */
   takePeople: (org: string, people: readonly PersonRow[]) => profileCache.take(org, people),
   teamById: (id: string | null | undefined): TeamVM | undefined => findTeam(PLANNER.teams, id),
-  metaOf: (pid: string | null | undefined): ProjectVM | null => {
+  /** The facts of the top-level project of project `pid`, from the part
+      else the project cache (P.project), or null where neither knows it. */
+  metaOf: (pid: string | null | undefined): ProjectFacts | null => {
     const p = PLANNER.project(pid)
     if (!p) return null
     return p.type === 'meta' ? p : PLANNER.project(p.parent) || null
@@ -12183,10 +12454,20 @@ export const PLANNER = {
     return !u.isAgent && u.teamLeads.includes(teamId)
   },
   /* My effective rights on a project, its explicit grants with inherited
-     parent grants, through my seat in its organization. Organization
-     viewers remain read-only. They answer for the signed-in person alone:
-     the store holds no one else's grants or memberships. */
-  levelOn: (pid: string) => visibleLevelOnProject(PLANNER.project(pid)),
+     parent grants, through my seat in its organization: from the part's
+     grants where its projects part holds the project, else the level of the
+     project cache's current answer, else none while the project loads,
+     failed, was not checked or is gone, so a project not yet answered gives
+     no right. Organization viewers remain read-only. They answer for the
+     signed-in person alone: the store holds no one else's grants or
+     memberships. */
+  levelOn: (pid: string): string | null => {
+    const held = PLANNER.heldProject(pid)
+    if (held) return visibleLevelOnProject(held)
+    if (rows.projects.has(pid)) return null
+    const known = projectCache.look(pid)
+    return known.state === 'ok' ? (known.row?.level ?? null) : null
+  },
   /* may I WRITE on this project — the one question every create/edit
      affordance asks. `viewer` and no level at all both answer no. */
   canWrite: (pid: string) => {
@@ -12235,7 +12516,7 @@ export const PLANNER = {
     if (!root || root.org !== p.org || root.parent || root.type !== 'meta') return false
     const u = actorIn(p.org)
     if (!u?.active) return false
-    return u.orgRole === 'admin' || levelOnProject(p) === 'lead'
+    return u.orgRole === 'admin' || PLANNER.levelOn(pid) === 'lead'
   },
   /* Every top-level project this user can see in the workspace, in one
      list (0078 retired the per-workspace silo and its switcher), blended
@@ -12269,7 +12550,8 @@ export const PLANNER = {
      that My view is the only sentinel; the rules that mean "names no
      project" ask this one. */
   isWideScope: (id: string | null | undefined) => id === MINE_SCOPE,
-  /* Shared scope for Overview, Board and Roadmap; null means it disappeared.
+  /* Shared scope for Overview, Board and Roadmap; null means it disappeared,
+     or that the projects part does not hold the scope's project (P.heldProject).
      subIds names task-holding sub-projects. Groups are sub-projects within a
      project, top-level projects in My view, or the single selected sub.
      Its milestones are the milestone reads' (P.watchMilestones), not here.
@@ -12299,13 +12581,16 @@ export const PLANNER = {
         subIdSet: new Set(subIds),
       }
     }
-    const p = PLANNER.project(scopeId)
+    // a scope's sub-projects are a list the project cache cannot give, so
+    // a project scope stays on the projects part (P.heldProject) until
+    // t3/limits-projects-part takes them from each view's own answer
+    const p = PLANNER.heldProject(scopeId)
     if (!p) return null
     const isMeta = p.type === 'meta'
-    const meta = isMeta ? p : PLANNER.project(p.parent)
+    const meta = isMeta ? p : PLANNER.heldProject(p.parent)
     const groups = isMeta
       ? (p.children || [])
-          .map((id) => PLANNER.project(id))
+          .map((id) => PLANNER.heldProject(id))
           .filter((sp): sp is ProjectVM => !!sp && PLANNER.canSee(sp.id))
           .map((sp) => ({ proj: sp, subIds: [sp.id] }))
       : [{ proj: p, subIds: [p.id] }]
@@ -15393,12 +15678,12 @@ export const PLANNER = {
 
   /* --- attachments ---------------------------------------------------------- */
   /** Per-file cap in bytes belongs to the project's organization, including
-      when the current user is working on a project shared by another org.
-      The demo stores at most DEMO_FILE_BYTES whatever the organization
+      when the current user is working on a project shared by another org,
+      from the projects part else the project cache (orgOfProject). The
+      demo stores at most DEMO_FILE_BYTES whatever the organization
       allows. */
   projectAttachmentLimit: (projectId: string) => {
-    const project = rows.projects.get(projectId)
-    const org = project ? rows.orgs.get(project.org_id) : null
+    const org = rows.orgs.get(orgOfProject(projectId))
     const cap = LIMITS.attachmentSize.max
     const limit = Math.min(org?.max_attachment_mb ?? cap, cap) * MIB
     return DEMO_MODE ? Math.min(limit, DEMO_FILE_BYTES) : limit

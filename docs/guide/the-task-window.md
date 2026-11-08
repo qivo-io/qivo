@@ -150,6 +150,8 @@ with the hint **Dates come from subtasks**. Its button reads
 **Show on roadmap**.
 
 Read-only access shows the values but disables editing ([Project access](./who-sees-what-the-access-model.md)).
+While Qivo is still loading a task's project, the task window takes your
+access from the task itself.
 **Assignee** and **Reviewer** open a list of the people who can take the
 task, 25 at a time with **Load more**, after **Unassigned** or
 **No reviewer** and the current assignee or reviewer, checked. Choose
@@ -282,7 +284,8 @@ the window has read the task on its own, which comes after the reads
 already on their way. Then, if you can edit its project, you can
 change it: its fields, its description and the images in it, its
 labels and its files, its parent, its subtasks and its links, and create
-a parent, subtask or linked task from its pickers. Each change shows at once and
+a parent, subtask or linked task from its pickers, a subtask once Qivo has
+loaded the task's project. Each change shows at once and
 is saved against the task as the window showed it, so a change someone else
 made meanwhile is not overwritten. You can also move, archive or delete it
 at once, once the window has read every subtask of it; while it cannot,

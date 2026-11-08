@@ -1,6 +1,11 @@
 /* The reads of project navigation (projectNav.ts): a person's top-level
  * projects across every seat of their login, the favorites of every seat
- * first and then the rest of every seat (navPageOf, projectNav.page); one
+ * first and then the rest of every seat, or of one seat, or a team's own
+ * shares (navPageOf and navTeamOf, projectNav.page); the sub-projects a
+ * person may add tasks to (navTargetsOf, projectNav.targets); whether they
+ * see any project and any sub-project (navHoldsOf, projectNav.holds); up
+ * to 100 projects by id with the caller's level (navByIdsOf,
+ * projectNav.byIds); one
  * top-level project's live sub-projects (navChildrenOf,
  * projectNav.children); one project resolved for navigation, by id or by
  * its organization and number (navResolveOf, projectNav.resolve); and the
@@ -112,10 +117,10 @@ import {
   receivesTeamAccess,
 } from '../lib/access'
 import { byId } from '../lib/db'
-import type { ArchiveState } from '../lib/enums'
+import type { AccessLevel, ArchiveState } from '../lib/enums'
 import { badRequest, type Refusal } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
-import { LIMITS, LIST_BATCH } from '../lib/limits'
+import { BY_IDS_MAX, LIMITS, LIST_BATCH } from '../lib/limits'
 import {
   type BatchAsk,
   compareNamed,
@@ -132,8 +137,11 @@ import {
   namedCeiling,
   openNamedCursor,
   type ReadGuard,
+  readGuard,
+  STOPPED,
 } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
+import { resolveReviewHours } from '../lib/review'
 import { allWordsMatcher } from '../lib/search'
 import { type IdTie, readyRow } from './nameKeys'
 import { type FavoriteSight, favoriteOf, favoriteShows, favoritesIndex } from './projectFavorites'
@@ -287,8 +295,23 @@ export type NavUnavailable = {
 export type NavRefusal = { state: 'not_ready' } | NavUnavailable
 
 /** What projectNav.page answers. Its unavailable answer always carries
- * access_unchecked, as the page names no project. */
-export type NavPage = NavBatch<NavPageRow> | NavRefusal
+ * access_unchecked, as the page names no project. With `team_id` its rows
+ * are the team's shares, top-level projects and sub-projects together,
+ * each with `parent_id` (null for a top-level project) and `favorite`
+ * false. */
+export type NavPage = NavBatch<NavPageRow & { parent_id?: string | null }> | NavRefusal
+
+/** What projectNav.page is asked for beside its cursors: `org_id`, the one
+ * seat to list, and with it `team_id`, a team of that organization whose
+ * own shares it lists. */
+export type NavPageArgs = NavCursorArgs & { org_id?: string; team_id?: string }
+
+/** The team list's name, which seals its cursors with the organization and
+ * the team. */
+export const TEAM_LIST = 'projectNav.page.team'
+
+/** The refusal of a team_id without the org_id of its organization. */
+export const TEAM_WITHOUT_ORG = 'team_id needs org_id, the organization of the team'
 
 /** What projectNav.children answers. */
 export type NavChildren = NavBatch<NavChildRow> | NavRefusal
@@ -348,6 +371,9 @@ export const REST = '1'
  * organization. */
 export type SeatTie = readonly [project_id: string, org_id: string]
 
+const NOT_TEAM_CURSOR =
+  'after and through must be cursors from an earlier answer of projectNav.page for the same organization and team; start again from the first batch'
+
 const NOT_PAGE_CURSOR =
   'after and through must be cursors from an earlier answer of projectNav.page; start again from the first batch'
 
@@ -385,6 +411,15 @@ const seatTieOf = ({ key, tie }: NamedAt): SeatTie | null => {
   const [projectId, orgId] = tie
   if (tie.length !== 2 || typeof projectId !== 'string' || typeof orgId !== 'string') return null
   return key.startsWith(FAVORITES) || key.startsWith(REST) ? [projectId, orgId] : null
+}
+
+/* A team list position's tie, the project id and the organization, or null
+ * for any other shape. */
+const teamTieOf = ({ tie }: NamedAt): SeatTie | null => {
+  const [projectId, orgId] = tie
+  return tie.length === 2 && typeof projectId === 'string' && typeof orgId === 'string'
+    ? [projectId, orgId]
+    : null
 }
 
 /* A children position's tie, or null for any other shape. */
@@ -1046,13 +1081,17 @@ const isReach = (row: PageRow): row is Doc<'project_reach'> => 'grantee_kind' in
 export async function navPageOf(
   ctx: QueryCtx,
   myProfiles: ReadonlyMap<string, Doc<'profiles'>>,
-  a: NavCursorArgs,
+  a: NavPageArgs,
 ): Promise<NavPage> {
-  const ask = await openAsk(PAGE_LIST, [], a, NOT_PAGE_CURSOR, seatTieOf)
+  if (a.team_id !== undefined) return await navTeamOf(ctx, myProfiles, a)
+  // the page of every seat seals its cursors with an empty scope, and the
+  // page of one organization with that organization
+  const scope = a.org_id === undefined ? [] : [a.org_id]
+  const ask = await openAsk(PAGE_LIST, scope, a, NOT_PAGE_CURSOR, seatTieOf)
   const ceiling = await namedCeiling(ctx)
-  const seats = [...myProfiles.values()].sort((x, y) =>
-    x.org_id < y.org_id ? -1 : x.org_id > y.org_id ? 1 : 0,
-  )
+  const seats = [...myProfiles.values()]
+    .filter((seat) => a.org_id === undefined || seat.org_id === a.org_id)
+    .sort((x, y) => (x.org_id < y.org_id ? -1 : x.org_id > y.org_id ? 1 : 0))
   for (const seat of seats) if (!(await navReady(ctx, seat.org_id))) return { state: 'not_ready' }
   try {
     const sights = new Map<string, SeatSight>()
@@ -1292,6 +1331,664 @@ export async function navResolveOf(
 /* Whether `n` is a whole number of at least 1. */
 const wholeNumber = (n: number | undefined): n is number =>
   n !== undefined && Number.isInteger(n) && n >= 1
+
+/* ------------------------------------------------------------ by id */
+
+/** A row of projectNav.byIds: a project the caller opens for navigation,
+ * with its top-level project's id (null for a top-level one), the caller's
+ * level on it, whether its tasks track delay, its own lead (`lead_id`,
+ * meant for the Board's lane heads and the Overview's Lead, which read the
+ * workspace's projects part until t3/limits-projects-part, so no app reads
+ * it yet) and the time a task gets on entering Review in it
+ * (`review_hours`: its own, else its parent's, else DEFAULT_REVIEW_HOURS,
+ * lib/review.ts resolveReviewHours, for the views' Review paint of a
+ * project the workspace does not hold, store/planner.ts
+ * reviewHoursForProject). A reader of the project's Settings page reads the
+ * same lead and Review time (model/projectSettings.ts settingsGate). */
+export type NavByIdRow = NavProject & {
+  parent_id: string | null
+  level: AccessLevel
+  track_delay: boolean
+  lead_id: string | null
+  review_hours: number
+}
+
+/** What projectNav.byIds answers: the rows of the projects asked that the
+ * caller opens, with the top-level project of each such sub-project, each
+ * project once; the asked ids whose check a bound stopped (`unchecked`),
+ * never left out as no access; and the refusal's sentence for them,
+ * `message`, null when `unchecked` is empty. */
+export type NavByIds = { rows: NavByIdRow[]; unchecked: string[]; message: string | null }
+
+/** The refusal of a byIds call that names more projects than it answers. */
+export const BY_IDS_LIMIT = `ids must name at most ${BY_IDS_MAX} projects`
+
+/**
+ * projectNav.byIds for the login whose active seats are `myProfiles`: the
+ * projects of `ids` the person opens for navigation, each with the
+ * caller's level on it, and the top-level project of every sub-project it
+ * answers as a row of its own. The project cache (src/store/projectCache.ts)
+ * reads it for the projects the open views name.
+ *
+ * It refuses more than BY_IDS_MAX (100) ids on the raw length, repeats
+ * included, with badRequest before it reads any project, as people.byIds
+ * and labels.byIds do. It reads each distinct id once (byId) and judges each
+ * project with the person's seat in its own organization
+ * (`myProfiles.get(project.org_id)`), one seatSight a seat a call, so the
+ * checks of one call share one access instance and its bounds. An id is
+ * answered when the seat opens its project for navigation (opened): a live
+ * project of that organization in a meta's tree, a top-level one the seat
+ * sees for a reason of its own or through a live sub-project it sees, a
+ * sub-project the seat sees under a live parent. An unknown id, a project in
+ * Deleted items, an archived project, one under an archived parent, one of
+ * an organization without the caller's seat, one the seat does not see and
+ * a top-level project seen only through an archived sub-project are left
+ * out alike, so an answer tells nothing of a project the person cannot open.
+ * The last of these lib/access.ts counts for navigation and the workspace's
+ * projects part sends; byIds leaves it out as the directory, the sidebar
+ * and resolve do.
+ *
+ * Every asked id is judged first, then the parent of each opened
+ * sub-project is added whatever its own verdict in the call, so the answer
+ * does not depend on the order of the ids, and a row wins over `unchecked`
+ * for the same id. A row's level is lib/access.ts level where the seat
+ * reaches the project for a reason of its own (accessible), which needs no
+ * walk of navigation, and else `viewer`, the level lib/access.ts gives a
+ * top-level project seen only for navigation and what resolve already
+ * discloses. A level of null where accessible holds cannot arise by the
+ * rules; such a row is left out, which fails closed.
+ *
+ * A check a bound stopped (OWN_READS and PROJECT_NAV, roomSpent included,
+ * and Unproven for a top-level project seen only for navigation while the
+ * organization's reach rows are not complete) lists the asked id in
+ * `unchecked` with the refusal's sentence, and the call goes on with the
+ * next id. Where the check of the parent a sub-project brings stops, the
+ * sub-project is listed, so `unchecked` names only ids the caller asked
+ * for. The call settles against NAMED_READ between ids (namedCeiling), and
+ * an id it reaches with no room left is listed the same way, so no call
+ * reads past that share; a single check that still passes Convex's limits
+ * fails the call, which the cache shows as failed. Any other error throws.
+ *
+ * It reads no task, no favorite and no list, and needs no readiness stamp
+ * except for a top-level project seen only for navigation, which waits for
+ * the organization's reach rows. As a live query it reruns on a rename, an
+ * archive, a move or an access change of the projects it names, never on
+ * a task write.
+ *
+ * What one call of 100 ids reads at the design size, one figure a case,
+ * measured in convex/tests/projectNavByIds.test.ts ("reads at the design
+ * size") under Convex's transaction limits, in index ranges and documents
+ * as Convex counts them, every answer whole with nothing in `unchecked`:
+ * - 100 of 200 sub-projects the person reads through grants under 67
+ *   parents, answered with their 34 parents: 303 ranges and 397 documents;
+ * - the 67 parents of those 200 sub-projects, each seen only for
+ *   navigation, with 33 of the sub-projects: 415 ranges and 608 documents,
+ *   the most of any case;
+ * - 100 of 200 top-level projects with grants: 234 ranges and 234
+ *   documents;
+ * - the 100 sub-projects 5 of the person's teams share, 20 each, with
+ *   their parents: 211 ranges and 270 documents;
+ * - 100 projects each shared with 5 teams, the person in 3 teams reaching
+ *   each through one and the other shares from teams of 20 projects each:
+ *   182 ranges and 365 documents;
+ * - 50 live projects one of the person's teams shares and 50 of its 150
+ *   archived shares, which it leaves out: 168 ranges and 335 documents;
+ * - 100 projects the person does not see, each with other people's child
+ *   reach rows: 266 ranges and 101 documents;
+ * - 100 of 167 live parents shown only through 500 archived sub-projects
+ *   with grants, all left out: 335 ranges and 134 documents; 100 of those
+ *   archived sub-projects: 101 ranges and 101 documents.
+ * Every case stays far inside NAMED_READ (2,000 ranges, 8,000 documents),
+ * so a chunk of 100 ids answers whole at the design size. Past it a call
+ * that reaches the share lists the rest apart; at PROJECT_NAV.teams teams a
+ * top-level project seen only for navigation can cost a range a grantee,
+ * and the settling between ids keeps such a call inside Convex's limits.
+ */
+export async function navByIdsOf(
+  ctx: QueryCtx,
+  myProfiles: ReadonlyMap<string, Doc<'profiles'>>,
+  ids: readonly string[],
+): Promise<NavByIds> {
+  if (ids.length > BY_IDS_MAX) throw badRequest(BY_IDS_LIMIT)
+  const asked = [...new Set(ids)]
+  if (asked.length === 0) return { rows: [], unchecked: [], message: null }
+  const guard = readGuard(ctx, await namedCeiling(ctx))
+  const found: Doc<'projects'>[] = []
+  for (const id of asked) {
+    const project = await byId(ctx, 'projects', id)
+    if (project !== null && myProfiles.has(project.org_id)) found.push(project)
+  }
+  const sights = new Map<string, SeatSight>()
+  const sightOf = async (seat: Doc<'profiles'>) => {
+    let sight = sights.get(seat.org_id)
+    if (sight === undefined) {
+      const ready = await readyRow(ctx, seat.org_id)
+      const read = found.filter((p) => p.org_id === seat.org_id)
+      sight = seatSight(ctx, seat, ready?.nav_at !== undefined, read)
+      sights.set(seat.org_id, sight)
+    }
+    return sight
+  }
+  const rows = new Map<string, NavByIdRow>()
+  const unchecked = new Map<string, string>()
+  // each opened sub-project with its parent, in the order asked
+  const brought: { sub: Doc<'projects'>; parent: Doc<'projects'>; sight: SeatSight }[] = []
+  const stop = (id: string, message: string) => {
+    if (!rows.has(id)) unchecked.set(id, message)
+  }
+  for (const project of found) {
+    const seat = myProfiles.get(project.org_id)
+    if (seat === undefined) continue
+    if (!(await guard.settle())) {
+      stop(project.id, accessUnchecked().data.message)
+      continue
+    }
+    try {
+      const sight = await sightOf(seat)
+      const open = await opened(sight, project)
+      if (open === null) continue
+      const row = await byIdRow(sight, project)
+      if (row === null) continue
+      rows.set(project.id, row)
+      if (open.parent !== null) brought.push({ sub: project, parent: open.parent, sight })
+    } catch (e) {
+      if (!isAccessUnchecked(e)) throw e
+      stop(project.id, e.data.message)
+    }
+  }
+  for (const { sub, parent, sight } of brought) {
+    if (rows.has(parent.id)) continue
+    const fail = (message: string) => {
+      rows.delete(sub.id)
+      stop(sub.id, message)
+    }
+    if (!(await guard.settle())) {
+      fail(accessUnchecked().data.message)
+      continue
+    }
+    try {
+      const row = await byIdRow(sight, parent)
+      if (row === null) {
+        // a parent a live sub-project the seat sees shows for navigation;
+        // without its row the sub-project is not answered either
+        rows.delete(sub.id)
+        continue
+      }
+      rows.set(parent.id, row)
+      unchecked.delete(parent.id)
+    } catch (e) {
+      if (!isAccessUnchecked(e)) throw e
+      fail(e.data.message)
+    }
+  }
+  const out: NavByIdRow[] = []
+  const given = new Set<string>()
+  const give = (id: string) => {
+    const row = rows.get(id)
+    if (row === undefined || given.has(id)) return
+    given.add(id)
+    out.push(row)
+  }
+  for (const project of found) {
+    give(project.id)
+    const parent = rows.get(project.id)?.parent_id
+    if (parent) give(parent)
+  }
+  const left = [...unchecked.keys()].filter((id) => !rows.has(id))
+  return {
+    rows: out,
+    unchecked: left,
+    message: left.length === 0 ? null : (unchecked.get(left[0]) ?? null),
+  }
+}
+
+/* The byIds row of `project`, which the seat opens: the caller's level
+ * where the seat reaches it for a reason of its own, else `viewer`, or null
+ * where that level is null (navByIdsOf). Rejects with accessUnchecked where
+ * a check stopped. */
+async function byIdRow(sight: SeatSight, project: Doc<'projects'>): Promise<NavByIdRow | null> {
+  const level: AccessLevel | null = (await sight.access.accessible(project.id))
+    ? await sight.access.level(project.id)
+    : 'viewer'
+  if (level === null) return null
+  // a sub-project's parent, which its check read already
+  const parent = project.parent_id === undefined ? null : await sight.project(project.parent_id)
+  return {
+    ...navProject(project),
+    parent_id: project.parent_id ?? null,
+    level,
+    track_delay: project.track_delay,
+    lead_id: project.lead_id ?? null,
+    review_hours: resolveReviewHours(project.review_hours, parent?.review_hours),
+  }
+}
+
+/* --------------------------------------------------------- a team's shares */
+
+/**
+ * projectNav.page with `team_id` (navPageOf): one batch of the projects and
+ * sub-projects team `team_id` of organization `org_id` holds a share on
+ * that the person sees for navigation with their seat there, in name key
+ * order with the project id breaking ties, meant for Team sync's notes,
+ * which offer a team meeting's smaller scopes and read the workspace's
+ * projects part until t3/limits-projects-part moves them here; no app
+ * reads it yet.
+ *
+ * Its candidates are the team's own shares: its live root reach rows that
+ * record a source on the top-level project (on_root) and its live child
+ * rows, each a share on that sub-project (project_reach by_grantee_list),
+ * so a top-level project the team only reaches through a share of one of
+ * its sub-projects is not listed, and the list says no more than the
+ * project's Settings team list says to the same person. Each is judged by
+ * `opened` on the shared project itself with the caller's seat, whether or
+ * not the caller is in the team; a reach row finds a candidate and grants
+ * nothing. A team of another organization, an unknown team and an org_id
+ * without the caller's seat answer an empty last batch; a team_id without
+ * org_id is a bad_request. Its cursors are sealed with TEAM_LIST, the
+ * organization and the team, so a cursor of one list opens only for its
+ * own. `not_ready`, `stopped` and the refusal answer as the page's do.
+ *
+ * At the design size, measured in convex/tests/projectNavPageScope.test.ts
+ * under Convex's transaction limits: one team sharing 50 live and 150
+ * archived projects, for a caller in another team, 80 ranges and 103
+ * documents for the first batch and 82 and 103 for the second. The page
+ * with `org_id` alone, 200 live and 300 archived top-level projects of the
+ * home organization beside a guest seat: 104 ranges and 77 documents for
+ * the first batch and the eighth.
+ */
+async function navTeamOf(
+  ctx: QueryCtx,
+  myProfiles: ReadonlyMap<string, Doc<'profiles'>>,
+  a: NavPageArgs,
+): Promise<NavPage> {
+  const orgId = a.org_id
+  const teamId = a.team_id
+  if (orgId === undefined || teamId === undefined) throw badRequest(TEAM_WITHOUT_ORG)
+  const ask = await openAsk(TEAM_LIST, [orgId, teamId], a, NOT_TEAM_CURSOR, teamTieOf)
+  const ceiling = await namedCeiling(ctx)
+  const seat = myProfiles.get(orgId)
+  const empty: NavPage = { state: 'ok', rows: [], next: null, stopped: false }
+  if (seat === undefined) return empty
+  const team = await byId(ctx, 'teams', teamId)
+  if (team === null || team.org_id !== orgId) return empty
+  if (!(await navReady(ctx, orgId))) return { state: 'not_ready' }
+  try {
+    const sight = seatSight(ctx, seat, true)
+    const g = grantee.team(teamId)
+    const stream = (reads: NamedReads) =>
+      mergeNamed<Doc<'project_reach'>>(
+        [
+          indexAfter(rootIndex(ctx, g, orgId), ask.after)(reads),
+          indexAfter(childListIndex(ctx, g, orgId), ask.after)(reads),
+        ],
+        { ties: 'first', reads },
+      )
+    const keep = async (row: Doc<'project_reach'>, guard: ReadGuard) => {
+      // a root row for navigation to a sub-project records no share
+      if (row.kind === 'root' && !row.on_root) return null
+      if (row.org_id !== orgId || !row.live) return null
+      const project = await sight.project(row.project_id)
+      if (project === null || project.id !== row.project_id) return null
+      if (row.name_key !== nameKey(project.name)) return null
+      const open = await opened(sight, project)
+      await guard.settle()
+      if (open === null) return null
+      return { ...navProject(project), favorite: false, parent_id: open.parent?.id ?? null }
+    }
+    const batch = await listBatch(ctx, ask, { stream, keep, limit: LIST_BATCH, ceiling })
+    return { state: 'ok', ...batch }
+  } catch (e) {
+    if (!isAccessUnchecked(e)) throw e
+    return unchecked(e.data.message)
+  }
+}
+
+/* ------------------------------------------------------------ the holds */
+
+/** What projectNav.holds answers: whether the caller sees some live
+ * top-level project (`top`) and some live sub-project under a live parent
+ * (`sub`) for navigation, `stopped` where the read share ended the walk
+ * before both were known, or a refusal, never an unknown read as false. */
+export type NavHolds =
+  | { state: 'ok'; top: boolean; sub: boolean }
+  | { state: 'stopped' }
+  | NavRefusal
+
+/**
+ * projectNav.holds for the login whose active seats are `myProfiles`, or
+ * only the seat in `org_id`: whether the person sees any live top-level
+ * project and any live sub-project for navigation, meant for the "no
+ * project" and "no sub-project" notes, which are to say so only on this
+ * confirmed answer once t3/limits-projects-part moves them off the
+ * workspace's projects part; no app reads it yet.
+ *
+ * Its candidates are the navigation reads' own: the live root reach rows
+ * of each seat and its teams (rootIndex), each judged by rootShows, never a
+ * row alone, so a stale row or one of a source the seat lost shows nothing;
+ * and under each top-level project that shows, its live sub-projects where
+ * the seat sees it for a reason of its own (each inherits that level, so
+ * the first is enough), else the live child rows of the seat and its teams
+ * under it, each judged by lib/access.ts visible. A grant on a top-level
+ * project writes no child row for its sub-projects, so the first path finds
+ * them. It stops at the first of each it finds. An org_id without the
+ * caller's seat answers both false. `not_ready` until the asked
+ * organizations' reach rows and name keys are complete, the
+ * access_unchecked refusal where a bound of the caller's own reads stops a
+ * check, and `stopped` where NAMED_READ ends the walk, which the app reads
+ * as unknown.
+ *
+ * At the design size, one figure a case, measured in
+ * convex/tests/projectNavTargets.test.ts under Convex's transaction
+ * limits: 200 live top-level projects with grants and no sub-project, so
+ * `sub` walks every root, 833 ranges and 760 documents; 167 live parents
+ * seen only through 500 archived sub-projects with grants, both false, 538
+ * and 497; a member of 5 teams whose shares are all archived sub-projects,
+ * both false, 315 and 182; sub-projects each shared with 5 teams, 19 and
+ * 16. Every case answers whole inside NAMED_READ.
+ */
+export async function navHoldsOf(
+  ctx: QueryCtx,
+  myProfiles: ReadonlyMap<string, Doc<'profiles'>>,
+  a: { org_id?: string },
+): Promise<NavHolds> {
+  const seats = [...myProfiles.values()].filter(
+    (seat) => a.org_id === undefined || seat.org_id === a.org_id,
+  )
+  for (const seat of seats) if (!(await navReady(ctx, seat.org_id))) return { state: 'not_ready' }
+  const guard = readGuard(ctx, await namedCeiling(ctx))
+  let top = false
+  let sub = false
+  try {
+    for (const seat of seats) {
+      const sight = seatSight(ctx, seat, true)
+      const grantees = await sight.grantees()
+      const judged = new Set<string>()
+      for (const g of grantees) {
+        const index = rootIndex(ctx, g, seat.org_id)
+        for await (const row of index.all()) {
+          if (!(await guard.document(row))) return { state: 'stopped' }
+          // each row is judged at its own position, as the page judges it,
+          // so a stale row of one grantee never hides a fresh row of
+          // another on the same project; the seat's sight keeps each
+          // project's verdict, so a repeat costs little
+          const project = await rootShows(sight, row)
+          if (!(await guard.settle())) return { state: 'stopped' }
+          if (project === null || judged.has(project.id)) continue
+          judged.add(project.id)
+          top = true
+          if (!sub) sub = await holdsSub(ctx, sight, grantees, project)
+          if (!(await guard.settle())) return { state: 'stopped' }
+          if (top && sub) return { state: 'ok', top, sub }
+        }
+      }
+    }
+    return { state: 'ok', top, sub }
+  } catch (e) {
+    if (!isAccessUnchecked(e)) throw e
+    return unchecked(e.data.message)
+  }
+}
+
+/* Whether the seat of `sight` sees a live sub-project of top-level project
+ * `parent`, which it sees for navigation (navHoldsOf). */
+async function holdsSub(
+  ctx: QueryCtx,
+  sight: SeatSight,
+  grantees: readonly Grantee[],
+  parent: Doc<'projects'>,
+): Promise<boolean> {
+  if (await sight.access.accessible(parent.id))
+    for await (const child of subProjectIndex(ctx, parent).all())
+      if (child.archived_at === undefined && child.org_id === parent.org_id) return true
+  for (const g of grantees)
+    for await (const row of childIndex(ctx, g, parent.id).all()) {
+      const child = await rowProject(sight, parent, row)
+      if (child === null || child.parent_id !== parent.id || child.archived_at !== undefined)
+        continue
+      if (await sight.access.visible(child.id)) return true
+    }
+  return false
+}
+
+/* ---------------------------------------------------------- the targets */
+
+/** A row of projectNav.targets: a live sub-project the caller may write in,
+ * with its top-level project's id, name and number for the picker's
+ * groups. */
+export type NavTargetRow = NavProject & {
+  parent_id: string
+  parent_name: string
+  parent_num: number
+}
+
+/** What projectNav.targets answers. */
+export type NavTargets = NavBatch<NavTargetRow> | NavRefusal
+
+/** What projectNav.targets is asked for: the cursors, the one seat to list
+ * (`org_id`) and a search of the sub-project's or its parent's name. */
+export type NavTargetsArgs = NavCursorArgs & { org_id?: string; search?: string }
+
+/** The targets list's name, which seals its cursors with the login, the
+ * organization asked for and the search's name key. */
+export const TARGETS_LIST = 'projectNav.targets'
+
+const NOT_TARGETS_CURSOR =
+  'after and through must be cursors from an earlier answer of projectNav.targets for the same organization and search; start again from the first batch'
+
+/* The tie of a target's position: its parent's id, its own name key and
+ * id, and its seat's organization. */
+type TargetTie = readonly [parent_id: string, child_key: string, child_id: string, org_id: string]
+
+/* A target's position: its parent's name key, then the tie, so the four
+ * fields order as fields whatever characters a name holds. */
+const targetAt = (
+  parent: Pick<Doc<'projects'>, 'id'>,
+  parentKey: string,
+  childKey: string,
+  childId: string,
+  orgId: string,
+): NamedAt<TargetTie> => ({ key: parentKey, tie: [parent.id, childKey, childId, orgId] })
+
+/* A targets position's tie, or null for any other shape. */
+const targetTieOf = ({ tie }: NamedAt): TargetTie | null => {
+  if (tie.length !== 4 || tie.some((part) => typeof part !== 'string')) return null
+  const [parentId, childKey, childId, orgId] = tie as readonly string[]
+  return [parentId, childKey, childId, orgId]
+}
+
+/* A target position's parts. */
+const targetParts = ({ key, tie: [parentId, childKey, childId, orgId] }: NamedAt<TargetTie>) => ({
+  parentKey: key,
+  parentId,
+  childKey,
+  childId,
+  orgId,
+})
+
+/**
+ * projectNav.targets for the login whose active seats are `myProfiles`:
+ * one batch of the live sub-projects under a live parent the person may
+ * add tasks to, Edit (User) or Lead by lib/access.ts level, across every
+ * seat or only the seat in `org_id` (an org_id without the caller's seat
+ * answers an empty last batch, as the search does), meant for the New
+ * task dialog, the Move window and the task window's Link task offer,
+ * which read the workspace's projects part until t3/limits-projects-part
+ * moves them here; no app reads it yet.
+ *
+ * The order is the parent's name key, the parent's id, the sub-project's
+ * name key and its id, the positions of page and children joined: the
+ * candidates are the page's walk without its favorites group (each seat's
+ * and its teams' live root reach rows, judged by rootShows), and under each
+ * parent that shows, children's walk (its live sub-projects where the seat
+ * sees the parent for a reason of its own, else the live child rows of the
+ * seat and its teams under it), each judged by `opened` and then by its
+ * level, a read-only one skipped before the batch is cut, so a batch is
+ * never short of a row a later one would hold. An organization Viewer's
+ * seat writes nothing and adds no candidate. `search` keeps a row whose own
+ * name or whose parent's name holds every word, in any order, ignoring case
+ * and accents, matched before the cut, and is refused past LIMITS.search.
+ *
+ * Cursors are sealed with TARGETS_LIST, the login, the organization asked
+ * for and the search's name key. `not_ready` until the asked
+ * organizations' reach rows and name keys are complete, `stopped` where
+ * NAMED_READ ends a batch, never `next: null`, and the access_unchecked
+ * refusal whole where a bound of the caller's own reads stops a check.
+ *
+ * At the design size, one figure a case, measured in
+ * convex/tests/projectNavTargets.test.ts under Convex's transaction
+ * limits: 20 writable among the 200 sub-projects a person reads under 67
+ * parents, every tenth writable, so one batch walks all 200, 705 ranges and
+ * 1,097 documents, the most of any case; 30 live sub-projects beside 40
+ * archived ones under one project the person edits, 57 ranges and 30
+ * documents, then 19 and 9; the 100 sub-projects 5 of a member's teams
+ * share with Edit, 180 and 237 for the first batch; the sub-projects of 50
+ * live projects a team of the person's shares beside its 150 archived
+ * shares, 89 and 257; 30 sub-projects each shared with 5 teams, 162 and
+ * 255; each of the three batches beside 200 top-level projects with
+ * grants, every tenth with 3 sub-projects, so the person reads 62
+ * sub-projects, at most 336 ranges and 333 documents, the second. Every
+ * batch answers inside NAMED_READ.
+ */
+export async function navTargetsOf(
+  ctx: QueryCtx,
+  authUserId: string,
+  myProfiles: ReadonlyMap<string, Doc<'profiles'>>,
+  a: NavTargetsArgs,
+): Promise<NavTargets> {
+  // refused past LIMITS.search with its sentence
+  const text = limitedText(LIMITS.search, a.search ?? '')
+  const term = text === '' ? '' : nameKey(text)
+  if (text !== '' && term === '') throw badRequest(BLANK_SEARCH)
+  if (a.org_id === '') throw badRequest(EMPTY_ORG)
+  const ask = await openAsk(
+    TARGETS_LIST,
+    [authUserId, a.org_id ?? '', term],
+    a,
+    NOT_TARGETS_CURSOR,
+    targetTieOf,
+  )
+  const ceiling = await namedCeiling(ctx)
+  const seats = [...myProfiles.values()]
+    .filter((seat) => a.org_id === undefined || seat.org_id === a.org_id)
+    .filter((seat) => seat.org_role !== 'viewer')
+    .sort((x, y) => (x.org_id < y.org_id ? -1 : x.org_id > y.org_id ? 1 : 0))
+  for (const seat of seats) if (!(await navReady(ctx, seat.org_id))) return { state: 'not_ready' }
+  const matches = term === '' ? null : allWordsMatcher(term)
+  const resume = ask.after === null ? null : targetParts(ask.after)
+  try {
+    const sights = new Map<string, SeatSight>()
+    const parents = new Map<string, Doc<'projects'>>()
+    const streams: ((reads: NamedReads) => NamedStream<TargetRow>)[] = []
+    for (const seat of seats) {
+      const sight = seatSight(ctx, seat, true)
+      sights.set(seat.org_id, sight)
+      const grantees = await sight.grantees()
+      // the parent a cursor stopped under, read again from its start, the
+      // org-less tie placing it before its own position
+      const parentAfter: NamedAt<SeatTie> | null =
+        resume === null ? null : { key: resume.parentKey, tie: [resume.parentId, ''] }
+      streams.push(
+        targetStream(ctx, sight, grantees, parentAfter, resume, (p) => parents.set(p.id, p)),
+      )
+    }
+    const kept = new Set<string>()
+    const keep = async (
+      row: TargetRow,
+      guard: ReadGuard,
+      at: NamedAt,
+    ): Promise<NavTargetRow | null> => {
+      const place = targetTieOf(at)
+      const sight = place === null ? undefined : sights.get(place[3])
+      const parent = place === null ? undefined : parents.get(place[0])
+      if (sight === undefined || parent === undefined) return null
+      const sub = 'grantee_kind' in row ? await rowProject(sight, parent, row) : row
+      if (sub === null || kept.has(sub.id)) return null
+      if (sub.org_id !== sight.seat.org_id || sub.parent_id !== parent.id) return null
+      if (sub.archived_at !== undefined) return null
+      if (matches && !matches(nameKey(sub.name)) && !matches(nameKey(parent.name))) return null
+      sight.access.seen(sub)
+      const level = await sight.access.level(sub.id)
+      await guard.settle()
+      if (level !== 'user' && level !== 'lead') return null
+      kept.add(sub.id)
+      return {
+        ...navProject(sub),
+        parent_id: parent.id,
+        parent_name: parent.name,
+        parent_num: parent.num,
+      }
+    }
+    const batch = await listBatch(ctx, ask, {
+      stream: (reads) => mergeNamed<TargetRow>(streams.map((stream) => stream(reads))),
+      keep,
+      limit: LIST_BATCH,
+      ceiling,
+    })
+    return { state: 'ok', ...batch }
+  } catch (e) {
+    if (!isAccessUnchecked(e)) throw e
+    return unchecked(e.data.message)
+  }
+}
+
+/* The rows a targets stream hands out: a parent's live sub-projects or the
+ * child reach rows under it. */
+type TargetRow = Doc<'projects'> | Doc<'project_reach'>
+
+/* One seat's targets in their order (navTargetsOf): each top-level project
+ * its and its teams' live root rows name that shows (rootShows), from
+ * `parentAfter` on, each told to `found`, then its sub-projects, the
+ * parent's own where the seat reaches it for a reason of its own, else the
+ * child rows under it, each at its position (targetAt), after `resume`'s
+ * sub-project under the parent the cursor stopped under. */
+function targetStream(
+  ctx: QueryCtx,
+  sight: SeatSight,
+  grantees: readonly Grantee[],
+  parentAfter: NamedAt<SeatTie> | null,
+  resume: { parentKey: string; parentId: string; childKey: string; childId: string } | null,
+  found: (parent: Doc<'projects'>) => void,
+): (reads: NamedReads) => NamedStream<TargetRow> {
+  const orgId = sight.seat.org_id
+  return async function* (reads) {
+    const roots = mergeNamed(
+      grantees.map((g) => indexAfter(rootIndex(ctx, g, orgId), parentAfter)(reads)),
+      { ties: 'first', reads },
+    )
+    for await (const item of roots) {
+      if (item === STOPPED) {
+        yield STOPPED
+        return
+      }
+      const parent = await rootShows(sight, item.row)
+      if (parent === null) continue
+      found(parent)
+      const parentKey = item.at.key
+      // under the parent a cursor stopped under, the children after it
+      const childAfter: NamedAt<IdTie> | null =
+        resume !== null && resume.parentId === parent.id && resume.parentKey === parentKey
+          ? { key: resume.childKey, tie: [resume.childId] }
+          : null
+      const own = await sight.access.accessible(parent.id)
+      const children: NamedStream<TargetRow> = own
+        ? indexAfter(subProjectIndex(ctx, parent), childAfter)(reads)
+        : mergeNamed<Doc<'project_reach'>>(
+            grantees.map((g) => indexAfter(childIndex(ctx, g, parent.id), childAfter)(reads)),
+            { ties: 'first', reads },
+          )
+      for await (const child of children) {
+        if (child === STOPPED) {
+          yield STOPPED
+          return
+        }
+        yield {
+          row: child.row,
+          at: targetAt(parent, parentKey, child.at.key, String(child.at.tie[0]), orgId),
+        }
+      }
+    }
+  }
+}
 
 /* ------------------------------------------------------------ the search */
 

@@ -215,7 +215,7 @@ function ScopeList({ scope, onPick }: { scope: SyncPlaceScope; onPick: (key: str
   const showAll = typed === '' || matches(nameKey('All projects'))
   const projects = P.visibleProjects().filter((p) => p.org === org)
   // a sub-project scope (a /sync/p/<n> link) is offered as itself
-  const ownProject = scope.kind === 'project' ? P.project(scope.id) : null
+  const ownProject = scope.kind === 'project' ? P.heldProject(scope.id) : null
   if (ownProject && !projects.some((p) => p.id === ownProject.id)) projects.push(ownProject)
   const shownProjects = projects.filter((p) => typed === '' || matches(nameKey(P.projectLabel(p))))
   const current = syncScopeKey(scope)

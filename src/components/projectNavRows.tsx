@@ -208,9 +208,9 @@ export function openResolved(ask: ProjectAsk, done: (opening: NavOpening) => voi
           : { state: 'unavailable' },
       )
     const { id, name } = answer.project
-    if (P.project(id)) return finish({ state: 'open', id })
+    if (P.heldProject(id)) return finish({ state: 'open', id })
     const look = () => {
-      if (P.project(id)) finish({ state: 'open', id })
+      if (P.heldProject(id)) finish({ state: 'open', id })
       else if (P.workspaceCurrent()) finish({ state: 'not_loaded', name })
     }
     const off = P.updates.workspace.subscribe(look)
@@ -303,7 +303,7 @@ export function useNavOpen(go: (id: string) => void, say: (line: string | null) 
   }, [cancel, sayNow])
   useEffect(() => drop, [drop])
   const open = (row: { id: string; name: string }) => {
-    if (P.project(row.id)) {
+    if (P.heldProject(row.id)) {
       drop()
       return goNow(row.id)
     }

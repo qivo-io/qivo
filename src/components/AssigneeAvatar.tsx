@@ -20,6 +20,7 @@ import {
   type OwnerChoice,
   type OwnerChoices,
   P,
+  READ_ONLY_PROJECT,
 } from '@/store/planner'
 import { LIMITS } from '../../convex/lib/limits'
 import { nameKey } from '../../convex/lib/nameKey'
@@ -481,7 +482,7 @@ export function OwnerField({
           issue={issue}
           field={field}
           onClose={close}
-          off={disabled ? (title ?? 'Read-only project access') : undefined}
+          off={disabled ? (title ?? READ_ONLY_PROJECT) : undefined}
         />
       )}
     </Popover>
@@ -529,9 +530,12 @@ export function AssigneeAvatar({
   const who = issue[shown]
   // the person's own new task, which the server has not stored yet, has no
   // owners to read until it has (P.createOnItsWay)
-  const off = offTitle ?? (P.createOnItsWay(issue.uuid) ? WAITS_FOR_SAVE : undefined)
+  const waits = offTitle ?? (P.createOnItsWay(issue.uuid) ? WAITS_FOR_SAVE : undefined)
   const editor = P.canWrite(issue.project)
-  const canWrite = editor && !off
+  // a project that takes no write says why first, as while it loads
+  // (P.writeNote), then the task's own wait
+  const off = editor ? waits : (P.writeNote(issue.project) ?? READ_ONLY_PROJECT)
+  const canWrite = editor && !waits
   const portrait = portraitFace(compact, <Avatar id={who} size={28} />)
   if (variant === 'portrait' && !editor) return portrait
 

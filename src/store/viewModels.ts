@@ -6,6 +6,7 @@ import { messageLine } from '../../convex/lib/inbox'
 import { LIMITS } from '../../convex/lib/limits'
 import { reviewerOwns, taskOwnerId } from '../../convex/lib/review'
 import type { PersonFaceRow } from '../../convex/model/peopleSettings'
+import type { NavByIdRow } from '../../convex/model/projectNavReads'
 import type { PersonRow } from '../../convex/model/projectSettings'
 import {
   DEFAULT_DATE_FORMAT,
@@ -315,6 +316,27 @@ export const shapeProject = (
   teamAccess: teamAccByProject.get(p.id) || {},
 })
 export type ProjectVM = ReturnType<typeof shapeProject>
+
+/** What the store knows of a project a view names, from the workspace's
+    projects part where it holds the project, else from the project cache
+    (store/projectCache.ts): what both give, so a reader of anything else
+    (the key, the lead, the grants, the sub-projects, the review time) reads
+    the part's whole project through P.heldProject. */
+export type ProjectFacts = Pick<
+  ProjectVM,
+  'id' | 'org' | 'name' | 'num' | 'parent' | 'type' | 'trackDelay'
+>
+
+/** A projectNav.byIds row as the facts the store answers for it. */
+export const shapeCachedProject = (row: NavByIdRow): ProjectFacts => ({
+  id: row.id,
+  org: row.org_id,
+  name: row.name,
+  num: row.num,
+  parent: row.parent_id ?? undefined,
+  type: row.parent_id === null ? 'meta' : 'project',
+  trackDelay: row.track_delay,
+})
 
 /* the archived ones, for the single surface that names them (Settings ›
    Projects › Archived projects) — each row answers on its own the two

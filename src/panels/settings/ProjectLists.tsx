@@ -786,7 +786,7 @@ function SettingsSubProjects({
   const settled = new Set(
     made.flatMap(({ id, saved }) => {
       if (loaded.has(id)) return [id]
-      const p = saved && current ? P.project(id) : undefined
+      const p = saved && current ? P.heldProject(id) : undefined
       return p && listPassed(list, '', p.name, id) ? [id] : []
     }),
   )
@@ -797,7 +797,7 @@ function SettingsSubProjects({
     list.phase === 'held'
       ? []
       : made.flatMap(({ id }) => {
-          const p = settled.has(id) ? undefined : P.project(id)
+          const p = settled.has(id) ? undefined : P.heldProject(id)
           return p && p.parent === parent.id ? [{ id, name: p.name, num: p.num ?? 0 }] : []
         })
   const tags = tagsOf(org, [

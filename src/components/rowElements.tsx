@@ -22,7 +22,7 @@ import { LiveTooltip } from '@/components/ui/tooltip'
 import { staticTooltipTarget } from '@/components/ui/tooltip-target'
 import type { StaticControls } from '@/lib/liveControls'
 import { cn } from '@/lib/utils'
-import { type IssueVM, P } from '@/store/planner'
+import { type IssueVM, P, READ_ONLY_PROJECT } from '@/store/planner'
 import { personLabel } from './usePeople'
 
 /** The Lucide glyphs drawn by one element each (styles/glyphs.css). */
@@ -347,13 +347,15 @@ export function portraitFace(compact: boolean, face: ReactNode) {
 
 /** The owner trigger's props after its variant's, for the owner `shown`:
     its hooks, name, hover text and the press that runs `toggle`.
-    `offTitle` is the hover text of a trigger that is off. */
+    `offTitle` is the hover text of a trigger that is off, by default why
+    the task's project takes no write (P.writeNote): "Loading this
+    project…" while its project loads, else "Read-only project access". */
 export function ownerTrigger(
   issue: IssueVM,
   shown: 'assignee' | 'reviewer',
   canWrite: boolean,
   toggle: (event: MouseEvent<HTMLElement>) => void,
-  offTitle = 'Read-only project access',
+  offTitle = P.writeNote(issue.project) ?? READ_ONLY_PROJECT,
 ) {
   const name = personLabel(
     P.person(issue[shown], issue.org),

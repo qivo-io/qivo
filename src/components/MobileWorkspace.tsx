@@ -41,7 +41,7 @@ export function MobileHeader({
 }) {
   const info = P.scopeInfo(scope)
   // Team sync is always about the home organization
-  const project = syncOpen ? undefined : P.project(scope)
+  const project = syncOpen ? undefined : P.heldProject(scope)
   const organization = P.orgs.find((org) => org.id === project?.org)?.name || P.org.name
   const title = inboxOpen
     ? 'Inbox'

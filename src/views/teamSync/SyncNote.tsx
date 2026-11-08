@@ -59,12 +59,12 @@ function narrowerChoices(scopeKey: string): SyncChoice[] | null {
       .filter((p) => p.org === P.homeOrg && p.teamAccess[scope.id] !== undefined && P.canSee(p.id))
       .map(project)
   if (scope.kind !== 'project') return []
-  const it = P.project(scope.id)
+  const it = P.heldProject(scope.id)
   if (it?.type !== 'meta') return null
   return (it.children ?? [])
     .filter((id) => P.canSee(id))
     .flatMap((id) => {
-      const sub = P.project(id)
+      const sub = P.heldProject(id)
       return sub ? [project(sub)] : []
     })
 }

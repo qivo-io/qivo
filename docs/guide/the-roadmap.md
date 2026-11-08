@@ -114,6 +114,8 @@ with its name, and its dashed line runs through that project's rows only, so
 two projects' milestones of the same week sit on their two rows. Drag one to
 move it or click it to open the Milestones window, which reads that milestone
 from the server as an Overview row does ([Overview milestones](./the-overview-project-health-at-a-glance.md)). In a project, the toolbar's **Milestone** button creates one.
+A diamond of a project Qivo is still loading can be opened but not dragged
+until it loads, and a Viewer's never moves.
 A project has at most one milestone a week, so a diamond dropped on a week
 that already has one of the project's milestones goes back, and Qivo names
 the milestone there.

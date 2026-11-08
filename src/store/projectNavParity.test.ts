@@ -23,7 +23,9 @@
  * shapes, the admins included, since it judges everyone by ordinary access
  * as the reads do: the page, a batch kept live from the start, each
  * top-level project's sub-projects, each project resolved by id and a few
- * by number, the searches, and the server's refusals. Its star
+ * by number, the searches, byIds in the server's order with its ids apart
+ * and its sentence, also while the organization's reach rows are not
+ * complete, and the server's refusals. Its star
  * (setFavoriteStandIn) is held to projectNav.setFavorite: a star and an
  * unstar of each live project of the person's organization and of an
  * unknown id, through both, answer alike and leave the same favorites.
@@ -38,13 +40,17 @@ import { allWordsMatcher } from '../../convex/lib/search'
 import { TOP_LEVEL_ONLY } from '../../convex/model/projectFavorites'
 import {
   BLANK_SEARCH,
+  BY_IDS_LIMIT,
   EMPTY_ORG,
   type NavBatch,
   type NavRefusal,
+  navByIdsOf,
   navChildrenOf,
+  navHoldsOf,
   navPageOf,
   navResolveOf,
   navSearchOf,
+  navTargetsOf,
   RESOLVE_FORM,
 } from '../../convex/model/projectNavReads'
 import { SHAPES } from '../../convex/tests/accessShapes.setup'
@@ -64,12 +70,14 @@ import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { expectedPage, expectedSearch, navSees } from '../../convex/tests/projectNav.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
 import type { Whole as Snapshot } from './guard/liveDouble.setup'
+import { plannerFixture } from './plannerFixture.setup'
 import {
   NAV_BLANK_SEARCH,
   NAV_EMPTY_ORG,
   NAV_NOT_FOUND,
   NAV_RESOLVE_FORM,
   NAV_TOP_LEVEL_ONLY,
+  NAV_UNCHECKED,
   type ProjectNavArgs,
   type ProjectNavRead,
   projectNavStandIn,
@@ -174,9 +182,11 @@ async function refusalOf(run: () => unknown): Promise<string | null> {
 }
 
 /**
- * Holds the stand-in to the four real reads for `profile`, whose workspace
- * it answers from, with `favorites` the projects their seat stars, over
- * every project of their organization and the search for each of `terms`.
+ * Holds the stand-in to the real reads for `profile`, whose workspace it
+ * answers from, with `favorites` the projects their seat stars, over every
+ * project of their organization and the search for each of `terms`.
+ * Answers how many ids byIds listed apart while the organization's reach
+ * rows were not complete, so a caller can tell that path ran.
  */
 async function compareStandIn(
   t: T,
@@ -226,6 +236,78 @@ async function compareStandIn(
       ),
     )
   }
+  // the page of the one seat, each team's own shares, the targets with and
+  // without a search, and whether the seat holds a project
+  const one = (a: ProjectNavArgs) =>
+    mine('projectNav:page', { ...a, org_id: profile.org_id }) as Promise<
+      NavBatch<unknown> | NavRefusal
+    >
+  expect(await batchesOf((after) => one({ after })), `${label}: page of the seat`).toEqual(
+    await batchesOf((after) =>
+      t.run((ctx) => navPageOf(ctx, seats, { org_id: profile.org_id, after })),
+    ),
+  )
+  for (const team of snap.teams.filter((x) => x.org_id === profile.org_id)) {
+    const ofTeam = (after?: string) =>
+      mine('projectNav:page', { org_id: profile.org_id, team_id: team.id, after }) as Promise<
+        NavBatch<unknown> | NavRefusal
+      >
+    expect(await batchesOf(ofTeam), `${label}: shares of ${team.name}`).toEqual(
+      await batchesOf((after) =>
+        t.run((ctx) => navPageOf(ctx, seats, { org_id: profile.org_id, team_id: team.id, after })),
+      ),
+    )
+  }
+  for (const search of [undefined, ...terms]) {
+    const writable = (after?: string) =>
+      mine('projectNav:targets', { search, after }) as Promise<NavBatch<unknown> | NavRefusal>
+    expect(await batchesOf(writable), `${label}: targets ${search ?? ''}`).toEqual(
+      await batchesOf((after) =>
+        t.run((ctx) => navTargetsOf(ctx, login, seats, { search, after })),
+      ),
+    )
+  }
+  expect(await mine('projectNav:holds', {}), `${label}: holds`).toEqual(
+    await t.run((ctx) => navHoldsOf(ctx, seats, {})),
+  )
+  // byIds of every project of the organization and an unknown id, in
+  // chunks the server takes, and of its top-level projects alone, rows in
+  // order, the ids apart and the sentence, also while the organization's
+  // reach rows are not complete, as force.notReady answers
+  const ids = [...projects.map((p) => p.id), crypto.randomUUID()]
+  const tops = projects.filter((p) => p.parent_id === undefined).map((p) => p.id)
+  const byIdsAlike = async (notReady: boolean) => {
+    let apart = 0
+    for (const asks of [ids, tops])
+      for (let at = 0; at < asks.length; at += 100) {
+        const chunk = asks.slice(at, at + 100)
+        const real = await t.run((ctx) => navByIdsOf(ctx, seats, chunk))
+        const stood = projectNavStandIn(
+          { ...snap, auth_user_id: login },
+          'projectNav:byIds',
+          { ids: chunk },
+          { force: { notReady } },
+        )
+        expect(stood, `${label}: byIds${notReady ? ' while not ready' : ''}`).toEqual(real)
+        apart += real.unchecked.length
+      }
+    return apart
+  }
+  expect(await byIdsAlike(false), `${label}: byIds apart`).toBe(0)
+  const ready = await t.run((ctx) =>
+    ctx.db
+      .query('org_ready')
+      .withIndex('by_org', (q) => q.eq('org_id', profile.org_id))
+      .unique(),
+  )
+  if (ready === null) throw new Error(`no readiness row for ${label}`)
+  await t.run((ctx) => ctx.db.patch(ready._id, { nav_at: undefined }))
+  let apartWhileNotReady = 0
+  try {
+    apartWhileNotReady = await byIdsAlike(true)
+  } finally {
+    await t.run((ctx) => ctx.db.patch(ready._id, { nav_at: ready.nav_at }))
+  }
   for (const p of projects.slice(0, 3))
     expect(
       await mine('projectNav:resolve', { org_id: p.org_id, num: p.num }),
@@ -259,6 +341,9 @@ async function compareStandIn(
     EMPTY_ORG,
   )
   expect(await refusalOf(() => mine('projectNav:resolve', { num: 2 }))).toBe(RESOLVE_FORM)
+  const many = Array.from({ length: 101 }, () => crypto.randomUUID())
+  expect(await refusalOf(() => mine('projectNav:byIds', { ids: many }))).toBe(BY_IDS_LIMIT)
+  expect(await refusalOf(() => t.run((ctx) => navByIdsOf(ctx, seats, many)))).toBe(BY_IDS_LIMIT)
   expect(
     await refusalOf(() => t.run((ctx) => navSearchOf(ctx, login, seats, { search: ' \u0301 ' }))),
   ).toBe(BLANK_SEARCH)
@@ -268,6 +353,7 @@ async function compareStandIn(
     expect(
       await refusalOf(() => mine('projectNav:search', { search: 'e', after: first.next ?? '' })),
     ).not.toBeNull()
+  return apartWhileNotReady
 }
 
 describe('the stand-in', () => {
@@ -279,6 +365,19 @@ describe('the stand-in', () => {
       NAV_NOT_FOUND,
       NAV_TOP_LEVEL_ONLY,
     ]).toEqual([BLANK_SEARCH, EMPTY_ORG, RESOLVE_FORM, 'project not found', TOP_LEVEL_ONLY])
+  })
+
+  it('lists apart under force.unchecked only the asked ids the server would judge, those of an organization with the seat', () => {
+    const snap = plannerFixture()
+    const home = snap.projects[0]
+    snap.projects.push({ ...home, id: 'abroad', org_id: 'org-elsewhere', key: 'ABR', num: 99 })
+    const answer = projectNavStandIn(
+      snap,
+      'projectNav:byIds',
+      { ids: ['abroad', home.id, 'no-such-project'] },
+      { force: { unchecked: NAV_UNCHECKED } },
+    )
+    expect(answer).toEqual({ rows: [], unchecked: [home.id], message: NAV_UNCHECKED })
   })
 })
 
@@ -499,7 +598,7 @@ describe('Northstar', () => {
 async function compareShape(
   shape: (typeof SHAPES)[number] | null,
   role: 'user' | 'guest' | 'viewer' | 'admin',
-): Promise<{ beyond: number; searchBeyond: number; shown: number }> {
+): Promise<{ beyond: number; searchBeyond: number; shown: number; apart: number }> {
   const t = newT()
   const f: OrgFixture = await withOrg(t)
   const subject =
@@ -513,10 +612,10 @@ async function compareShape(
   await star(t, subject, f.meta)
   const label = `${role}, ${shape?.[0] ?? 'admin'}`
   const { beyond, searchBeyond } = await compare(t, subject, label, SHAPE_TERMS)
-  await compareStandIn(t, subject, label, SHAPE_TERMS, [f.meta.id])
+  const apart = await compareStandIn(t, subject, label, SHAPE_TERMS, [f.meta.id])
   await compareStars(t, subject, label)
   const shown = (await expectedPage(t, [subject])).length
-  return { beyond, searchBeyond, shown }
+  return { beyond, searchBeyond, shown, apart }
 }
 
 describe('access shapes', () => {
@@ -524,12 +623,25 @@ describe('access shapes', () => {
   for (const role of ['admin', 'user', 'guest', 'viewer'] as const)
     it(`lists, expands and resolves what the store shows ${role === 'admin' ? 'an' : 'a'} ${role} in every shape`, async () => {
       let showing = 0
-      for (const shape of SHAPES) if ((await compareShape(shape, role)).shown > 0) showing++
+      let apart = 0
+      for (const shape of SHAPES) {
+        const compared = await compareShape(shape, role)
+        if (compared.shown > 0) showing++
+        apart += compared.apart
+      }
       // a guest takes no team shares, so fewer shapes show them anything
       expect(showing).toBeGreaterThan(SHAPES.length / 3)
+      // some shape shows a top-level project only for navigation, which
+      // byIds lists apart while the reach rows are not complete
+      expect(apart).toBeGreaterThan(0)
     })
 
   it('shows an admin without grants no project, as the store shows none', async () => {
-    expect(await compareShape(null, 'admin')).toEqual({ beyond: 0, searchBeyond: 0, shown: 0 })
+    expect(await compareShape(null, 'admin')).toEqual({
+      beyond: 0,
+      searchBeyond: 0,
+      shown: 0,
+      apart: 0,
+    })
   })
 })

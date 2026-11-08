@@ -28,6 +28,7 @@ import type { DescEditorHandle } from '../components/descEditor'
 import { IssueSubscribers } from '../components/IssueSubscribers'
 import { LimitedTextarea } from '../components/LimitedField'
 import { Markdown } from '../components/markdown'
+import { useNavOpen } from '../components/projectNavRows'
 import {
   Avatar,
   DateInput,
@@ -96,6 +97,7 @@ import {
   type CommentVM,
   type IssueVM,
   P,
+  READ_ONLY_PROJECT,
   type RelatedTaskVM,
   type SectionAttachmentVM,
   type SectionName,
@@ -155,7 +157,28 @@ function EditorSlot({ fallback, children }: { fallback: ReactNode; children: Rea
    for someone who could restore it. */
 const RESTORE_TO_CHANGE = 'Restore this task to change it'
 /* Why a control is off for someone who can only read the project. */
-const READ_ONLY = 'Read-only project access'
+const READ_ONLY = READ_ONLY_PROJECT
+/** The key of the toast the crumb's open rule's lines share. */
+const CRUMB_TOAST = 'task-crumb-open'
+
+/** Whether the store's level agrees that the caller writes in project
+    `id`, for a control a task's answer gives Edit: the store's level where
+    the projects part holds the project or the project cache answered it,
+    the answer's alone while the cache loads, failed or did not check it,
+    since that level is the server's and the server checks every write
+    again, and no where the cache answered it gone. */
+const storeWrites = (id: string) => {
+  const state = P.projectState(id)
+  if (state === 'held' || state === 'ok') return P.canWrite(id)
+  return state !== 'gone' && state !== null
+}
+
+/** storeWrites for Lead. */
+const storeLeads = (id: string) => {
+  const state = P.projectState(id)
+  if (state === 'held' || state === 'ok') return P.levelOn(id) === 'lead'
+  return state !== 'gone' && state !== null
+}
 
 /* One task in Parent, Subtasks or Linked tasks, from its row model
    (RelatedTaskVM): the workspace's view of a task it holds, else the
@@ -1873,7 +1896,7 @@ function IssueDetail({
   const projectArchived =
     !!goneAnswer &&
     typeof goneAnswer === 'object' &&
-    !P.project(goneAnswer.project) &&
+    !P.heldProject(goneAnswer.project) &&
     P.archivedProjects.some((project) => project.id === goneAnswer.project)
   // the caller's level on a task shown from its answer, which decides the
   // controls offered there, together with the workspace's (canComment);
@@ -1885,7 +1908,7 @@ function IssueDetail({
     goneAnswer !== null &&
     typeof goneAnswer === 'object' &&
     (answerEditor || (answerLevel === null && !!detail?.textless)) &&
-    P.canWrite(goneAnswer.project)
+    storeWrites(goneAnswer.project)
   /** Says that text typed for the task went with it, as its editors do,
       unless the person chose Discard for it. */
   const sayDiscarded = (what: string) => {
@@ -1895,7 +1918,7 @@ function IssueDetail({
   // an active task shown from its answer, in any state of its read: their
   // title, description and hours editors stay mounted with their drafts,
   // and a save waits while the read failed or runs again (P.refuseStaleEdit)
-  const answerEditorOn = !!it && fromAnswer && !archived && answerEditor && P.canWrite(it.project)
+  const answerEditorOn = !!it && fromAnswer && !archived && answerEditor && storeWrites(it.project)
   // a title is typed for a task the workspace holds, or one shown from its
   // answer for its editor
   useUpdateBlocker(editTitle && !!it && titleDraft !== it.title)
@@ -2293,6 +2316,21 @@ function IssueDetail({
       : P.shownParent(held.uuid)
     : (detail?.parent ?? null)
   const meta = it ? P.metaOf(it.project) : null
+  // a crumb's press shows its project on the Board, one the workspace
+  // holds at once and one only the project cache holds through the lists'
+  // open rule, which asks the server and shows it once the workspace holds
+  // it (components/projectNavRows.tsx). The rule's lines show in one toast
+  // that each line replaces and that an open or a move takes away, as the
+  // sidebar's do
+  const crumbOpen = useNavOpen(
+    (id) => {
+      if (it) onShowOnBoard?.(id, it.id, !mobile)
+    },
+    (line) =>
+      line === null
+        ? window.dismissToast?.(CRUMB_TOAST)
+        : window.showToast?.(line, 'info', { key: CRUMB_TOAST }),
+  )
   // A task lives in its sub-project. The parent may be navigation-only for a
   // child grant, so all task edits must follow the task's own write level.
   const canLabel = !!held && P.canWrite(held.project)
@@ -2316,10 +2354,10 @@ function IssueDetail({
   // Comments on a task shown from its answer need edit access by both the
   // answer and the workspace, so a stale one only takes controls away. An
   // archived task takes none.
-  const canComment = held ? canLabel : !!it && !archived && answerEditor && P.canWrite(it.project)
+  const canComment = held ? canLabel : !!it && !archived && answerEditor && storeWrites(it.project)
   const canLead = held
     ? P.levelOn(held.project) === 'lead'
-    : !!it && !archived && answerLevel === 'lead' && P.levelOn(it.project) === 'lead'
+    : !!it && !archived && answerLevel === 'lead' && storeLeads(it.project)
   // the Inbox pane's owner, named from the workspace or by id
   // (store/planner.ts P.person), so one not loaded never reads as
   // unassigned; the window names its people below (usePeople)
@@ -2334,7 +2372,9 @@ function IssueDetail({
       ? WAITS_FOR_CHECK
       : fromAnswer && answerEditor && archived
         ? RESTORE_TO_CHANGE
-        : READ_ONLY
+        : fromAnswer && answerLevel !== null && !answerEditor
+          ? READ_ONLY
+          : ((it && P.writeNote(it.project)) ?? READ_ONLY)
   // The phone's Activity view keeps the two frequent edits within reach.
   // Details uses the same controls, with the same choices and access checks.
   // Pause / Resume is the last row of the status menu: a pause is a state of
@@ -2490,7 +2530,7 @@ function IssueDetail({
   const current = !!held || (!!it && P.editsFromAnswer(it.id))
   const canRelate = canEdit
   const rowEditor = (row: RelatedTaskVM) =>
-    (row.level === 'lead' || row.level === 'user') && P.canWrite(row.project)
+    (row.level === 'lead' || row.level === 'user') && storeWrites(row.project)
   // a link needs Edit on either task (convex/model/issues.ts linkAccess),
   // so someone who only views this task links it to a task they can edit
   const canLinkAny =
@@ -3208,7 +3248,7 @@ function IssueDetail({
                         )
                           return
                         e.preventDefault()
-                        onShowOnBoard(p.id, it.id, !mobile)
+                        crumbOpen.open(p)
                       }}
                       className="max-w-60 overflow-hidden text-ellipsis whitespace-nowrap rounded-sm px-1 py-0.5 text-sm text-text-3 no-underline hover:bg-hover hover:text-text-1 focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
                     >
@@ -3594,19 +3634,22 @@ function IssueDetail({
                             held or from its answer, whose project the store
                             holds, which the Board needs; App reveals the card
                             the Board's answer names it by */}
-                          {embedded && onShowOnBoard && !archived && !!P.project(it.project) && (
-                            <MenuItem
-                              data-task-open-board
-                              onClick={() => {
-                                close()
-                                const num = Number(it.key.slice(P.ISSUE_PREFIX.length + 1))
-                                onShowOnBoard(it.project, P.openTask(it.uuid, it.org, num))
-                              }}
-                            >
-                              <Icon name="board" size={14} />
-                              Open task in board
-                            </MenuItem>
-                          )}
+                          {embedded &&
+                            onShowOnBoard &&
+                            !archived &&
+                            !!P.heldProject(it.project) && (
+                              <MenuItem
+                                data-task-open-board
+                                onClick={() => {
+                                  close()
+                                  const num = Number(it.key.slice(P.ISSUE_PREFIX.length + 1))
+                                  onShowOnBoard(it.project, P.openTask(it.uuid, it.org, num))
+                                }}
+                              >
+                                <Icon name="board" size={14} />
+                                Open task in board
+                              </MenuItem>
+                            )}
                           <MenuItem
                             onClick={() => {
                               copyId()
@@ -4704,8 +4747,11 @@ function IssueDetail({
             )
           }
           createLabel="Create new subtask:"
+          // a new subtask goes into this task's project, which P.addIssue
+          // needs the workspace to hold, so a project only the project
+          // cache holds offers no create row
           onCreate={
-            noSubtask || !canRelate
+            noSubtask || !canRelate || !P.heldProject(it.project)
               ? undefined
               : (title) => {
                   P.addIssue({ project: it.project, title, parent: it.id })

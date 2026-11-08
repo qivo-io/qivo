@@ -198,7 +198,7 @@ export function SidebarProjects({
   const end = listEnd(list, false)
 
   // the scope's top-level project, its own id or its parent's
-  const scopeProject = P.project(scope)
+  const scopeProject = P.heldProject(scope)
   const owner = scopeProject
     ? scopeProject.type === 'meta'
       ? scopeProject.id
@@ -322,7 +322,7 @@ export function SidebarProjects({
      nothing for one it does not hold. */
   const pressRow = (e: MouseEvent<HTMLElement>, row: NavProject) => {
     if (e.target instanceof Node && e.currentTarget.contains(e.target)) open(row)
-    else if (P.project(row.id)) actions.openProject(row.id)
+    else if (P.heldProject(row.id)) actions.openProject(row.id)
   }
 
   const topRow = (row: NavPageRow) => {
@@ -714,7 +714,7 @@ function SidebarChildren({
   const end = listEnd(list, false)
 
   // the scoped sub-project, when the scope is one of this project's
-  const scoped = P.project(scope)
+  const scoped = P.heldProject(scope)
   const target = scoped && scoped.type !== 'meta' && scoped.parent === parent.id ? scoped : null
   // as the tree's own list, Load more's focus rule acts only for the batch
   // a press asked for

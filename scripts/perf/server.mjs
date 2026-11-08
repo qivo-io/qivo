@@ -114,7 +114,14 @@
 //                        favorites (the first two programs starred to
 //                        begin with) and empty (projectNav.page, search
 //                        and children list nothing, as for someone who
-//                        sees no project); several joined by commas. A star
+//                        sees no project), and for projectNav.byIds alone,
+//                        which the store's project cache reads for the
+//                        projects unheldprojects leaves out: byids-loading
+//                        (it never answers, so their controls say Loading
+//                        this project…), byids-error (it fails) and
+//                        byids-unchecked (it lists every id apart with the
+//                        access_unchecked sentence); several joined by
+//                        commas. A star
 //                        or an unstar (projectNav:setFavorite) changes the
 //                        starred set by the server's rule and sends the
 //                        reads again
@@ -255,6 +262,18 @@
 //                        person's own grants reach, as anyone's, and
 //                        Settings' project lists and project pages reach
 //                        the hidden program by management
+//   unheldprojects (0)   leaves the N highest-numbered programs but the
+//                        first, with their sub-projects, grants and team
+//                        shares, out of the workspace's projects part,
+//                        while projectNav:byIds, the views' reads, the
+//                        task window and Search still answer them, so a
+//                        task window, an Inbox row, My view's Overview rows
+//                        and milestones and the phone agenda of such a
+//                        program read its name and the caller's level from
+//                        the store's project cache (src/store/projectCache.ts);
+//                        with projectnav=byids-loading, byids-error and
+//                        byids-unchecked for its loading, failed and
+//                        unchecked screenshots
 //   unheld (0)           leaves the N highest-numbered visible tasks without
 //                        a parent or subtasks out of the workspace's parts
 //                        and snapshot:forMe, with their labels, files,
@@ -880,6 +899,9 @@ const forcedProjectNav = (() => {
     else if (state === 'error') force.fail = true
     else if (state === 'favorites') force.favorites = true
     else if (state === 'empty') force.empty = true
+    else if (state === 'byids-loading') force.byIdsLoading = true
+    else if (state === 'byids-error') force.byIdsError = true
+    else if (state === 'byids-unchecked') force.byIdsUnchecked = true
   }
   return force
 })()
@@ -1242,6 +1264,15 @@ const programs = Array.from({ length: programCount }, (_, n) =>
   ),
 )
 const visible = programs[0]
+/* `unheldprojects`: the highest-numbered programs but the first, with their
+   sub-projects, which the projects part leaves out with their grants and
+   team shares (heldWorkspace), while every read by id still answers them. */
+const unheldProgramCount = Math.min(Math.max(0, option('unheldprojects', 0)), programCount - 1)
+const unheldProjects = new Set(
+  programs
+    .slice(programCount - unheldProgramCount)
+    .flatMap((p) => [p.meta.id, ...p.children.map((child) => child.id)]),
+)
 /* With projectsettings or grants, the second person, an admin, leads the
    first program, and its sub-projects, which name no lead of their own,
    are led by that lead, so their Settings pages show an inherited lead. */
@@ -1711,16 +1742,17 @@ const unheld = new Set(
 const settingsUnheld = new Set()
 /** The workspace as its parts and forMe send it: without the unheld tasks
     and the rows hung on them, and without the projects a Settings page read
-    under projectsettings=unheld, with their grants. Its people, teams and
-    labels are every one the server holds; the root part sends the
-    signed-in person's own alone. */
+    under projectsettings=unheld or unheldprojects leaves out, with their
+    grants. Its people, teams and labels are every one the server holds;
+    the root part sends the signed-in person's own alone. */
 function heldWorkspace() {
-  if (unheld.size === 0 && settingsUnheld.size === 0) return snapshot
+  if (unheld.size === 0 && settingsUnheld.size === 0 && unheldProjects.size === 0) return snapshot
   const held = (row) => !unheld.has(row.issue_id)
-  const shown = (row) => !settingsUnheld.has(row.project_id)
+  const away = (id) => settingsUnheld.has(id) || unheldProjects.has(id)
+  const shown = (row) => !away(row.project_id)
   return {
     ...snapshot,
-    projects: snapshot.projects.filter((p) => !settingsUnheld.has(p.id)),
+    projects: snapshot.projects.filter((p) => !away(p.id)),
     access: snapshot.access.filter(shown),
     teamAccess: snapshot.teamAccess.filter(shown),
     issues: snapshot.issues.filter((row) => !unheld.has(row.id)),
@@ -2314,6 +2346,13 @@ const starredSet = () => {
 const projectNavForce = () => ({ ...forcedProjectNav, favorites: starredSet() })
 const read = (name, args = {}) => {
   if (name.startsWith('workspace:')) return readPart(name, args)
+  // the project cache's read by id, with its own forced states
+  if (name === 'projectNav:byIds') {
+    if (forcedProjectNav.byIdsLoading) return NO_ANSWER
+    if (forcedProjectNav.byIdsError) throw new Error('projectNav:byIds fails, as projectnav asks')
+    const force = forcedProjectNav.byIdsUnchecked ? { unchecked: NAV_UNCHECKED } : {}
+    return projectNavStandIn(snapshot, name, args, { force })
+  }
   // the project picker's reads (src/store/projectNavStandIn.setup.ts)
   if (name.startsWith('projectNav:')) {
     const answer = projectNavStandIn(snapshot, name, args, { force: projectNavForce() })

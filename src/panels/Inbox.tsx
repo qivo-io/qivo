@@ -824,7 +824,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   }
   const menuRow = menu?.row ?? null
   // the row's project, which Open task in board opens the Board of
-  const menuBoard = menuRow ? P.project(menuRow.project.id) : undefined
+  const menuBoard = menuRow ? P.heldProject(menuRow.project.id) : undefined
 
   return (
     <div

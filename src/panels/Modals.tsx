@@ -353,7 +353,7 @@ function NewIssueModal({
   const writableSubsOf = (metaId: string) => subsOf(metaId).filter((p) => P.canWrite(p.id))
   const metas = P.projects.filter((p) => p.type === 'meta' && writableSubsOf(p.id).length > 0)
   const ctxMeta = (() => {
-    const m = init.project ? P.metaOf(init.project) : null
+    const m = init.project ? P.heldMeta(init.project) : null
     return m && metas.some((x) => x.id === m.id) ? m : null
   })()
   const initMeta = ctxMeta ? ctxMeta.id : metas[0] ? metas[0].id : null
@@ -363,7 +363,7 @@ function NewIssueModal({
   const [metaId, setMetaId] = useStateM(initMeta)
   const subProjects = metaId ? writableSubsOf(metaId) : []
   const initProj = (() => {
-    const p = init.project ? P.project(init.project) : null
+    const p = init.project ? P.heldProject(init.project) : null
     if (p && p.type === 'project' && subProjects.some((sp) => sp.id === p.id)) return p.id
     return subProjects[0] ? subProjects[0].id : null
   })()
@@ -780,7 +780,7 @@ function NewSubProjectModal({
 
   const read = useProjectSettings(parent?.id ?? null)
   const answer = read.answer
-  const held = parent ? P.project(parent.id) : undefined
+  const held = parent ? P.heldProject(parent.id) : undefined
   // the organization the popovers read in and the create goes to: the
   // check's, a picked row's, the workspace's while it holds the parent,
   // and after an `unavailable` answer or a check that failed before it
@@ -1130,7 +1130,7 @@ function MoveIssueModal({
     .map((m) => ({
       meta: m,
       subs: (m.children || [])
-        .map((cid) => P.project(cid))
+        .map((cid) => P.heldProject(cid))
         .filter((sp) => !!sp && P.canWrite(sp.id)),
     }))
     .filter((g) => g.subs.length > 0)
@@ -1142,7 +1142,7 @@ function MoveIssueModal({
   const [asked, setAsked] = useStateM<{ target: string; carries: boolean } | null>(null)
   const crossing =
     !!it &&
-    !!P.project(target) &&
+    !!P.heldProject(target) &&
     target !== it.project &&
     P.topLevelOf(target) !== P.topLevelOf(it.project)
   useEffectM(() => {
