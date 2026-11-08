@@ -26,9 +26,9 @@ import { taskRow } from './views/boardFixture.setup'
    filtered to the person in place of the chooser's entry; Back returns to
    Team sync and Forward to the chooser, with its line, on a phone too,
    where the front door otherwise opens the Inbox, also after a Back past
-   Team sync to a project, as the chooser's entry carries the person,
-   while the filters still hold them; once they do not, that entry takes
-   the startup rule. A project sync's jump opens that project. The person, Planner, holds an admin seat in
+   Team sync to a project, as the chooser's entry, and no other, carries
+   the person and the view the chooser showed on, while the filters still
+   hold them; once they do not, that entry takes the startup rule. A project sync's jump opens that project. The person, Planner, holds an admin seat in
    Testbed Labs, with Luma Sensor and its sub-projects Firmware and
    Electronics and one open task of theirs in Firmware, and Ops, a team of
    them that Luma Sensor is shared with. Everyday values, no figure at its
@@ -414,6 +414,51 @@ describe("Team sync's person jumps", { timeout: 60_000 }, () => {
       expect(asks).toEqual([])
       expect(taskReads()).toHaveLength(reads)
     })
+
+  /** Goes Back past Team sync to the project at `path` on `view`, then
+      Forward past Team sync onto the chooser's entry. */
+  async function pastSyncAndBack(path: string, view: string) {
+    await step(-1)
+    await until(() => location.pathname === `/app/testbed/sync/all/people/${ME}`, 'Team sync')
+    await step(-1)
+    await until(() => shown() === view && location.pathname === path, 'the project')
+    await step(1)
+    await until(() => location.pathname === `/app/testbed/sync/all/people/${ME}`, 'Team sync')
+    await step(1)
+    await until(() => chooserState() === 'choose', 'the chooser again')
+  }
+
+  it("shows the chooser again on the jump's view, not the Overview Back reached before Team sync", async () => {
+    await app(world(), '/app/testbed/overview/p/11')
+    await until(() => shown() === 'overview', "Firmware's Overview")
+    await jump(`/app/testbed/sync/all/people/${ME}`, 'board')
+    await until(() => chooserState() === 'choose', 'the chooser')
+    await pastSyncAndBack('/app/testbed/overview/p/11', 'overview')
+    expect(purpose()).toBe("Choose a project to see Planner's tasks on the Board.")
+    expect(q('[data-project-chooser]')?.textContent).not.toContain(
+      'The project you choose opens on the Overview.',
+    )
+    expect(location.pathname).toBe('/app/testbed')
+  })
+
+  it('shows the chooser again on the view the person moved it to, not the view the jump opened it on', async () => {
+    await app(world(), '/app/testbed/board/p/11')
+    await until(() => shown() === 'kanban', "Firmware's Board")
+    await jump(`/app/testbed/sync/all/people/${ME}`, 'board')
+    await until(() => chooserState() === 'choose', 'the chooser')
+    await click(
+      [...document.querySelectorAll('[data-view-switch] button')].find(
+        (b) => b.textContent?.trim() === 'Overview',
+      ),
+    )
+    await until(() => purpose() === null, 'the chooser on the Overview')
+    await pastSyncAndBack('/app/testbed/board/p/11', 'kanban')
+    expect(purpose()).toBeNull()
+    expect(q('[data-project-chooser]')?.textContent).toContain(
+      'The project you choose opens on the Overview.',
+    )
+    expect(location.pathname).toBe('/app/testbed')
+  })
 
   it('takes the startup rule on Forward onto the jump once a filter change on the Board left the person filter, with no line', async () => {
     await app(world(), '/app/testbed/board/p/11', {

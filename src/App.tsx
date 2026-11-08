@@ -696,6 +696,14 @@ function startupOpening(n: number): Opening {
     their profile id and first name, for the chooser's line. */
 type PersonJump = { id: string; first: string }
 
+/** A person jump's history mark (jumpMarkOf): the person, and the view the
+    chooser last showed on its entry, which the front door does not name. */
+type JumpMark = PersonJump & { view: 'overview' | 'kanban' | 'roadmap' }
+
+/** Whether `view` is one the chooser shows on, which a jump mark names. */
+const isChooserView = (view: unknown): view is JumpMark['view'] =>
+  view === 'overview' || view === 'kanban' || view === 'roadmap'
+
 /** Whether `filters` hold what a person jump set: the one person `id` and
     nothing else, Focus aside. */
 function holdsPerson(filters: Omit<IssueFilters, 'focus'>, id: string): boolean {
@@ -710,22 +718,30 @@ function holdsPerson(filters: Omit<IssueFilters, 'focus'>, id: string): boolean 
 }
 
 /** The person a history entry's state marks as the one its chooser was
-    opened for (qivoJump, which App's address sync writes on a person
-    jump's entry), else null. */
-function jumpMarkOf(state: unknown): PersonJump | null {
+    opened for, with the view it showed on (qivoJump, which App's address
+    sync writes on a person jump's entry), else null. */
+function jumpMarkOf(state: unknown): JumpMark | null {
   const mark: unknown =
     state && typeof state === 'object' ? Reflect.get(state, 'qivoJump') : undefined
   if (!mark || typeof mark !== 'object') return null
   const id: unknown = Reflect.get(mark, 'id')
   const first: unknown = Reflect.get(mark, 'first')
-  return typeof id === 'string' && typeof first === 'string' ? { id, first } : null
+  const view: unknown = Reflect.get(mark, 'view')
+  return typeof id === 'string' && typeof first === 'string' && isChooserView(view)
+    ? { id, first, view }
+    : null
 }
 
 /** `state` with the person jump mark `mark` (jumpMarkOf), or without one
     for null, as a copy when that changes it. */
-function withJumpMark(state: unknown, mark: PersonJump | null): unknown {
+function withJumpMark(state: unknown, mark: JumpMark | null): unknown {
   const was = jumpMarkOf(state)
-  if (mark === null ? was === null : was?.id === mark.id && was.first === mark.first) return state
+  if (
+    mark === null
+      ? was === null
+      : was?.id === mark.id && was.first === mark.first && was.view === mark.view
+  )
+    return state
   const entry: Record<string, unknown> = state && typeof state === 'object' ? { ...state } : {}
   const { qivoJump: _mark, ...rest } = entry
   return mark === null ? rest : { ...rest, qivoJump: mark }
@@ -1313,11 +1329,12 @@ function App() {
      chooser for (showPersonOn), while the filters hold exactly what the
      jump set, one person and nothing else (holdsPerson). The chooser then
      says whose tasks a pick will show (jumpLine). Any filter change and any
-     chosen scope end it. The jump's history entry carries the person
-     (qivoJump, the address sync below), so a Back or Forward onto it
-     shows the chooser with its line again while the filters still hold
-     that person, also after a Back past Team sync to a project ended the
-     jump, rather than the startup rule or, on a phone, the Inbox (onPop). */
+     chosen scope end it. The jump's history entry carries the person and
+     the view its chooser shows on (qivoJump, the address sync below), so a
+     Back or Forward onto it shows the chooser on that view, with its line,
+     again while the filters still hold that person, also after a Back past
+     Team sync to a project ended the jump, rather than the startup rule
+     or, on a phone, the Inbox (onPop). */
   const [personJump, setPersonJump] = useState<PersonJump | null>(null)
   const jumpHolds =
     personJump !== null && scope === undefined && holdsPerson(filters, personJump.id)
@@ -1382,18 +1399,25 @@ function App() {
     )
       return
     const p = buildPath(state)
+    /* A person jump's chooser marks its entry, the front door, with the
+       person and the view it shows on, which the front door does not name,
+       so a Back or Forward onto it shows that chooser again (onPop). Every
+       other entry the address sync writes carries no mark, also one that
+       replaces the chooser's in place, as a pick does. */
+    const mark =
+      jumpHolds && personJump && isFrontDoor(p) && isChooserView(view)
+        ? { ...personJump, view }
+        : null
     // the hash term is what finally clears a translated legacy link: the path
     // is already canonical by then, so nothing else would ever rewrite it
     if (location.pathname === p && !location.hash) {
+      // a view the chooser moves to stays on its entry, in place
+      const marked = mark ? withJumpMark(history.state, mark) : history.state
+      if (marked !== history.state) history.replaceState(marked, '', p)
       replaceNextHistory.current = false
       return
     }
     const inPlace = pathMatchesState(location.pathname, state)
-    // a person jump's chooser marks its entry, the front door, with the
-    // person, and every other entry the address sync writes carries no
-    // mark, also one that replaces the chooser's in place, as a pick does
-    // (onPop)
-    const mark = jumpHolds && isFrontDoor(p) ? personJump : null
     if (replaceNextHistory.current || inPlace)
       history.replaceState(withJumpMark(history.state, mark), '', p)
     else
@@ -1537,12 +1561,15 @@ function App() {
         // viewless issue links keep the current view; Settings, #/inbox and
         // Team sync sit over/instead of the current view, so they must not
         // reset it either, and the front door keeps it as a boot keeps the
-        // saved one
+        // saved one, except a person jump's entry, whose chooser shows on
+        // the view its mark names (jump)
         view: r.view
           ? r.view
-          : !door && !r.issue && !r.inbox && !r.settings && !r.projects && !r.sync
-            ? 'overview'
-            : was.view,
+          : door && jump
+            ? jump.view
+            : !door && !r.issue && !r.inbox && !r.settings && !r.projects && !r.sync
+              ? 'overview'
+              : was.view,
         openIssue: issue,
         // a project page held while its project left (Settings) keeps its
         // own address, which parses to no project now: a Back within it,
