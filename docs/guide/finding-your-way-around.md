@@ -136,8 +136,9 @@ on Team sync across all projects or a team opens the project list with that
 person's filter kept and a line saying whose tasks a pick will show; the
 project you choose opens filtered to them
 ([Team sync](./planning-against-real-capacity.md#team-sync)). A task link
-that names no project, such as `…/tasks/qn-12`, opens the Board, the
-Overview or the Roadmap of the task's sub-project.
+that names no project, such as `…/tasks/qn-12`, keeps the project you are
+on or opened last when that project holds the task, and otherwise opens the
+task's sub-project ([Links you can share](#links-you-can-share)).
 
 To create a task, open its project first. On a phone, **New task** in the
 task list lets you choose its project.
