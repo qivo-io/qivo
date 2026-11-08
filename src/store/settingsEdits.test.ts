@@ -387,9 +387,29 @@ describe('settings edits through the client store', () => {
       )
       expect(latest().args.expected).toEqual({ name: 'Crew' })
       const project = snap.projects[0].id
+      // the store holds no project: the page that showed it names its
+      // organization and the value the field began from, and without the
+      // page nothing is sent
+      const sentBefore = requests.length
       P.updateProject(project, { name: 'Sensor' })
-      expect(latest().args.expected).toEqual({ name: 'Task creation fixture' })
-      P.updateProject(project, { description: 'New text' }, { seen: { description: 'Old text' } })
+      expect(requests).toHaveLength(sentBefore)
+      const shown = { orgId: P.homeOrg }
+      P.updateProject(
+        project,
+        { name: 'Sensor' },
+        { seen: { name: 'Task creation fixture' } },
+        shown,
+      )
+      expect(latest().args).toMatchObject({
+        org_id: P.homeOrg,
+        expected: { name: 'Task creation fixture' },
+      })
+      P.updateProject(
+        project,
+        { description: 'New text' },
+        { seen: { description: 'Old text' } },
+        shown,
+      )
       expect(latest().args.expected).toEqual({ description: 'Old text' })
     })
 
@@ -473,17 +493,17 @@ describe('settings edits through the client store', () => {
         { orgId: P.homeOrg, name: 'Crew' },
       )
       latest().reject(changed('team', 't-crew', 'name', 'u-ben'))
-      P.updateProject(project, { name: 'Sensor' }, { keepDraft })
+      P.updateProject(project, { name: 'Sensor' }, { keepDraft }, { orgId: P.homeOrg })
       latest().reject(changed('project', project, 'name', P.CURRENT_USER))
       P.updateUser('u-ana', { plannableHours: 30 }, { keepDraft }, shownOf(snap, 'u-ana'))
       latest().reject(changed('profile', 'u-ana', 'plannable_hours'))
       await settle()
-      // a team the store does not hold, as a person, shows the store no
-      // value of its own
+      // a team, a project and a person, none of which the store holds,
+      // show the store no value of their own
       expect(kept).toEqual([
         ['Testbed Labs', { name: 'Ana' }],
         [undefined, { name: 'Ben' }],
-        ['Task creation fixture', 'you'],
+        [undefined, 'you'],
         [undefined, { name: 'Ana' }],
       ])
       expect(showToast.mock.calls.at(-1)?.[0]).toContain(

@@ -118,7 +118,11 @@ describe("the store's Roadmap reads", { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(read.key).toBe(planned)
     expect(read.current).toBe(true)
     // another scope: what the read held goes, so the other project's rows
-    // never show as this one's
+    // never show as this one's. App names the new scope with the project
+    // cache and mounts the Roadmap once it answers, so the read has its
+    // organization
+    board.P.nameProjects('the scope', ['two'])
+    await vi.waitFor(() => expect(board.P.projectState('two')).toBe('ok'))
     await watch(board, keyOf(board, 'two').key)
     read = board.P.roadmapRead()
     expect(read.key).toBeNull()

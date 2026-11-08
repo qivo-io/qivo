@@ -402,6 +402,13 @@ describe('the read of a reference', () => {
 
   it('reads the seats it said unavailable in again when access changes while a later seat reads', async () => {
     const { P } = store
+    // the person leads neither of the home organization's projects, so the
+    // project cache, which names them, answers them gone until a grant
+    // below changes who can open what
+    snap.projects = snap.projects.map((p) => (p.org_id === org ? { ...p, lead_id: undefined } : p))
+    publishWhole(snap)
+    await frame()
+    await vi.waitFor(() => expect(P.projectState(snap.projects[0].id)).toBe('gone'))
     P.watchTaskRef(taskRef({ org: null, uuid: FAR }))
     one('taskWindow:task').deliver({ state: 'unavailable' })
     const guest = one('taskWindow:task')
@@ -706,8 +713,12 @@ describe("the window's delay", () => {
   })
 
   it("a guest's window reads one owner a call, and none while the tab is hidden", async () => {
+    // an organization Viewer leads nothing, so a grant shows them the task's
+    // project, whose delay rule the window reads from the project cache
     snap.profiles[0].org_role = 'viewer'
+    snap.access.push({ project_id: snap.projects[0].id, profile_id: me, level: 'viewer' })
     await showFar()
+    await vi.waitFor(() => expect(store.P.projectState(snap.projects[0].id)).toBe('ok'))
     expect(one('planning:ownerLoads').args).toEqual({ org_id: org, owner_ids: [me] })
     gate.visible = false
     for (const listener of gate.listeners) listener({ visible: false, shownAt: 0 })

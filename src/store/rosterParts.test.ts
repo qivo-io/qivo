@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TODAY_WEEK, weekToISO } from '../lib/dates'
 import { DELAY_UNKNOWN } from '../lib/delay'
 import { peopleSettingsStandIn } from './peopleSettingsStandIn.setup'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 /* The workspace without its people and catalog parts, on the real store:
    the root part sends the signed-in person's own profiles, memberships and
@@ -246,11 +246,17 @@ describe('the store without the people and catalog parts', () => {
     })
 
     it('says Delay unknown for a held task whose owner’s face could not be read, never on track', async () => {
-      const snap = withOwner(planned('person-0001'))
+      // the task's project under a top-level project, so the project cache
+      // answers it
+      const snap = underProgram(withOwner(planned('person-0001')))
       await boot(snap, { faces: false })
       await P().askTasks('script')
       await vi.waitFor(() => expect(P().tasksHeld()).toBe(true))
       const key = P().handleOf('task-1') ?? ''
+      // the store names the held task's project, which tracks delays, and
+      // the Board the card's owner
+      const project = snap.issues.find((t) => t.id === 'task-1')?.project_id ?? ''
+      await vi.waitFor(() => expect(P().projectState(project)).toBe('ok'))
       P().namePeople('the board', [{ org: snap.orgs[0].id, id: 'person-0001' }])
       await vi.waitFor(() => expect(byIds.length).toBeGreaterThan(0))
       byIds.at(-1)?.fail(new Error('people.byIds is down'))

@@ -47,6 +47,9 @@ const DEACTIVATED: Seatless = { deleting: false, create: 'blocked' }
 describe('snapshot trouble', () => {
   let store: typeof import('./planner')
   let snapshot: Snapshot
+  /* The organization Settings › Archived projects names for its restore,
+     which a project write needs (P.unarchiveProject). */
+  const archivedShown = () => ({ orgId: snapshot.projects[0].org_id })
   let subscriptions: Subscription[]
   let threads: { deliver: (page: unknown) => void; unsubscribe: ReturnType<typeof vi.fn> }[]
   let sent: Sent[]
@@ -706,7 +709,7 @@ describe('snapshot trouble', () => {
     const { P } = store
     const [task] = P.issues
     P.updateIssue(task.id, { status: 'progress' })
-    const restore = P.unarchiveProject(snapshot.projects[0].id)
+    const restore = P.unarchiveProject(snapshot.projects[0].id, archivedShown())
     await settle()
     for (const request of sent)
       request.reject(
@@ -732,7 +735,7 @@ describe('snapshot trouble', () => {
       await boot()
       const { P } = store
       const items = [{ id: 'item-a', org_id: snapshot.orgs[0].id }]
-      const restore = P.unarchiveProject(snapshot.projects[0].id)
+      const restore = P.unarchiveProject(snapshot.projects[0].id, archivedShown())
       const acted = kind === 'restore' ? P.restoreDeletedItems(items) : P.purgeDeletedItems(items)
       await settle()
       expect(sentNames()).toEqual(['projects:unarchive', `deletedItems:${kind}`])
@@ -749,7 +752,7 @@ describe('snapshot trouble', () => {
       // organization's parts loaded again
       live().deliver(structuredClone(snapshot))
       await settle()
-      const again = P.unarchiveProject(snapshot.projects[0].id)
+      const again = P.unarchiveProject(snapshot.projects[0].id, archivedShown())
       await settle()
       sent[sent.length - 1].reject(
         new ConvexError({ code: 'forbidden', message: 'no permission on this project' }),
@@ -763,7 +766,7 @@ describe('snapshot trouble', () => {
     await boot()
     const { P } = store
     const items = [{ id: 'item-a', org_id: snapshot.orgs[0].id }]
-    const restore = P.unarchiveProject(snapshot.projects[0].id)
+    const restore = P.unarchiveProject(snapshot.projects[0].id, archivedShown())
     const restored = P.restoreDeletedItems(items)
     P.addProject({ type: 'meta', key: 'NEW', name: 'New' })
     await settle()
@@ -788,7 +791,7 @@ describe('snapshot trouble', () => {
     snapshot.myProfileIds.push(seat.id)
     await boot()
     const { P } = store
-    const restore = P.unarchiveProject(snapshot.projects[0].id)
+    const restore = P.unarchiveProject(snapshot.projects[0].id, archivedShown())
     await settle()
     sent[0].reject(
       new ConvexError({ code: 'forbidden', message: 'no profile in this organization' }),
@@ -796,7 +799,7 @@ describe('snapshot trouble', () => {
     expect(await restore).toBe(false)
     expect(showToast).toHaveBeenLastCalledWith("You don't have permission for that", 'error')
     // the same when the delivery that drops the seat arrives first
-    const again = P.unarchiveProject(snapshot.projects[0].id)
+    const again = P.unarchiveProject(snapshot.projects[0].id, archivedShown())
     await settle()
     const left = structuredClone(snapshot)
     left.myProfileIds = [seat.id]

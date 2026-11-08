@@ -106,6 +106,9 @@ describe('who may add a milestone', () => {
     })
     const store = await import('./planner')
     await store.initStore()
+    // the views name the projects they show; this suite names both, so a
+    // refusal below is the level's and never a project the cache lacks
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snap)
     return store.P
   }
 

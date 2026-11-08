@@ -87,8 +87,10 @@ describe('project labels in the store', () => {
     vi.unstubAllGlobals()
   })
 
-  // a fresh store whose first delivery is `snap`
-  async function start(snap: Delivered) {
+  // a fresh store whose first delivery is `snap`, with every project of
+  // `snap` and `also` named with the project cache, as the views name the
+  // projects they show together
+  async function start(snap: Delivered, also: string[] = []) {
     vi.resetModules()
     vi.stubGlobal('window', { showToast: vi.fn() })
     network.query.mockResolvedValue(null)
@@ -99,6 +101,14 @@ describe('project labels in the store', () => {
     })
     const store = await import('./planner')
     await store.initStore()
+    const { nameProjects } = await import('./oracleScope.setup')
+    await nameProjects(store.P, snap)
+    if (also.length > 0) {
+      store.P.nameProjects('also shown', also)
+      await vi.waitFor(() =>
+        expect(also.every((id) => store.P.projectState(id) !== 'loading')).toBe(true),
+      )
+    }
     return store.P
   }
 
@@ -114,6 +124,9 @@ describe('project labels in the store', () => {
       key: `K${i + 1}`,
       num: i + 1,
       name,
+      // the signed-in person leads every top-level project, so each one and
+      // its sub-projects show to them
+      ...(parent ? {} : { lead_id: snap.profiles[0].id }),
       description: '',
       sort_order: i,
       track_delay: true,
@@ -197,16 +210,19 @@ describe('project labels in the store', () => {
     const forColleague = await snapshotOf(colleague)
     const forAdmin = await snapshotOf(f.admin)
 
-    let P = await start(forUser)
+    // each store names both projects, as a page showing both would, and the
+    // server's read by id answers only the ones its person sees
+    const both = [mine.id, theirs.id]
+    let P = await start(forUser, both)
     expect(P.project(theirs.id)).toBeUndefined()
     expect(P.projectLabelOf(mine.id)).toBe('Test')
 
-    P = await start(forColleague)
+    P = await start(forColleague, both)
     expect(P.project(mine.id)).toBeUndefined()
     expect(P.projectLabelOf(theirs.id)).toBe('Test')
 
     // the admin sees both, so both carry their numbers
-    P = await start(forAdmin)
+    P = await start(forAdmin, both)
     expect(P.projectLabelOf(mine.id)).toBe(`Test #${mine.num}`)
     expect(P.projectLabelOf(theirs.id)).toBe(`Test #${theirs.num}`)
   })
