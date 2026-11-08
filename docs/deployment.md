@@ -567,7 +567,16 @@ page's sync socket closed once, a second mention must reach no alert of its
 own and one generic summary must follow after `notifications.claimSummary`,
 which goes before the next claim. It removes the task's item again at the
 end. Against a backend from before the release after v0.1.161 that step
-fails.
+fails. Then, in a fresh browser context for Nora with the run's bypass and
+notifications granted, it opens the app in two pages and checks the leader
+tab (`ui/notification-delivery`). Exactly one page must lead, **Settings →
+Your preferences → Notifications** in the other must show the server's mode,
+then **All enabled sessions** and **Most recently active session** from the
+server once chosen, a mention of Nora from the Standard agent must reach the
+leader's alerts alone, tagged with its message or with the generic
+summary's tag, and the other page must lead once the leader's page closes.
+The step puts Nora's mode back, removes t0's item from her Inbox and signs
+its context out. Against a backend from before v0.1.154 that step fails.
 After that it checks
 the
 search on **Settings → Projects → Archived tasks** and main Search, where an

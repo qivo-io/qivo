@@ -271,7 +271,12 @@
  * granted notifications.claimAlerts, tagged with the message's id, with no
  * workspace.inbox subscribed; with its sync socket closed for one more
  * mention, one generic summary must follow, asked with
- * notifications.claimSummary before any claim (ui/inbox-feed).
+ * notifications.claimSummary before any claim (ui/inbox-feed). In a fresh
+ * context of two pages, one must lead its browser profile, the
+ * Notification delivery control must round-trip All enabled sessions and
+ * back from the server, a mention must reach the leader's alerts alone,
+ * and the other page must take over when the leader closes; the step puts
+ * the mode back and signs its context out (ui/notification-delivery).
  * Every task, comment,
  * grant and file lives in projects the run creates and names with its run
  * tag. It revokes every credential in the app, checks that the next call is
@@ -1596,26 +1601,7 @@ async function openBrowser() {
     ),
   })
   context = await browser.newContext({ viewport: { width: 1360, height: 900 } })
-  if (cfg.bypass) {
-    // Vercel Deployment Protection: the bypass header goes to app origin
-    // requests only, never to Convex. Playwright keeps headers set here on
-    // the redirects such a request follows, so this relies on the app origin
-    // never redirecting elsewhere. A request a redirect from another origin
-    // makes, such as the OAuth authorization endpoint's redirect to the
-    // consent page, is not routed, so the header also asks Vercel for its
-    // bypass cookie, which the browser keeps for the app origin alone.
-    await context.route(
-      (url) => url.origin === cfg.appOrigin,
-      (route) =>
-        route.continue({
-          headers: {
-            ...route.request().headers(),
-            'x-vercel-protection-bypass': cfg.bypass,
-            'x-vercel-set-bypass-cookie': 'true',
-          },
-        }),
-    )
-  }
+  await routeBypass(context)
   app = await context.newPage()
   app.setDefaultTimeout(30_000)
   app.setDefaultNavigationTimeout(90_000)
@@ -1623,6 +1609,29 @@ async function openBrowser() {
   // connects as soon as the page loads, before verifyTarget runs
   appSockets = []
   app.on('websocket', (ws) => appSockets.push(ws.url()))
+}
+
+/** Routes the Vercel bypass on browser context `target`, when the run has
+ *  one. Vercel Deployment Protection: the bypass header goes to app origin
+ *  requests only, never to Convex. Playwright keeps headers set here on the
+ *  redirects such a request follows, so this relies on the app origin never
+ *  redirecting elsewhere. A request a redirect from another origin makes,
+ *  such as the OAuth authorization endpoint's redirect to the consent page,
+ *  is not routed, so the header also asks Vercel for its bypass cookie,
+ *  which the browser keeps for the app origin alone. */
+async function routeBypass(target) {
+  if (!cfg.bypass) return
+  await target.route(
+    (url) => url.origin === cfg.appOrigin,
+    (route) =>
+      route.continue({
+        headers: {
+          ...route.request().headers(),
+          'x-vercel-protection-bypass': cfg.bypass,
+          'x-vercel-set-bypass-cookie': 'true',
+        },
+      }),
+  )
 }
 
 /** Screenshot for a failure, only with --shots and never while a secret or
@@ -7024,19 +7033,184 @@ async function inboxFeedCheck() {
       expect(asked >= 0, 'the page asked no claimSummary after the socket came back')
       expect(claimed < 0 || asked < claimed, 'the page claimed before it asked claimSummary')
       // Nora's Inbox as the step found it
-      await page.goto(`${origin}/app/~/inbox`, { waitUntil: 'domcontentloaded' })
-      const row = page.locator(`[data-message="${t0.id}"]`)
-      await row.waitFor({ timeout: 60_000 })
-      await row.click({ button: 'right' })
-      await page.locator('[data-msg-menu] button', { hasText: 'Remove notification' }).click()
-      expect(
-        await until(async () => (await row.count()) === 0, 30_000),
-        "t0's row stayed in the Inbox",
-      )
+      await removeInboxRow(page, t0)
       return `one alert for the mention from ${INBOX_FEED_QUERY}, tagged with its message, and one summary after the dropped socket, asked before any claim`
     } finally {
       await context.clearPermissions()
       await page.close()
+    }
+  })
+}
+
+/** Removes task `task`'s item from the Inbox page `page` shows, with its
+ *  row's Remove notification, so Nora's Inbox is as a step found it. */
+async function removeInboxRow(page, task) {
+  await page.goto(`${cfg.appOrigin}/app/~/inbox`, { waitUntil: 'domcontentloaded' })
+  const row = page.locator(`[data-message="${task.id}"]`)
+  await row.waitFor({ timeout: 60_000 })
+  await row.click({ button: 'right' })
+  await page.locator('[data-msg-menu] button', { hasText: 'Remove notification' }).click()
+  expect(
+    await until(async () => (await row.count()) === 0, 30_000),
+    `${task.key}'s row stayed in the Inbox`,
+  )
+}
+
+/** The step that checks the leader tab of a browser profile and the
+ *  Notification delivery control (notificationDeliveryCheck). */
+export const NOTIFICATION_DELIVERY_STEP = 'ui/notification-delivery'
+
+/** The marks the step reads: the page's mirror of its part in the
+ *  profile's alerts (src/lib/notificationLeader.ts), the alert mirror, the
+ *  control and its state (src/panels/settings/NotificationDeliveryField.tsx)
+ *  and the generic summary's tag. */
+export const NOTIFICATION_DELIVERY_MARKS = {
+  mirror: '__qivoNotify',
+  notes: '__qivoNotes',
+  control: 'data-notification-delivery',
+  state: 'data-notification-delivery-state',
+  summaryTag: 'qivo:catch-up',
+}
+
+/** The leader tab of a browser profile and the Notification delivery
+ *  control on the deployment. A fresh browser context for Nora, with the
+ *  run's bypass route and notifications granted for the app's origin,
+ *  signs in and opens the app in two pages; exactly one must lead and the
+ *  other follow. In the follower, Settings › Your preferences ›
+ *  Notifications must show the server's mode, which the step notes, then
+ *  All enabled sessions once chosen and back from the server, then Most
+ *  recently active session. With the pointer moved across the leader in
+ *  front, the Standard agent mentions Nora on t0 over REST, and one note
+ *  must land in the leader and none in the follower, tagged with the
+ *  mention's message, or with the generic summary's tag where the server
+ *  answered the handoff to this new session with summarize_first. Then the
+ *  leader page closes and the other must lead. A finally sets the mode back
+ *  to the one it noted through the control, removes t0's item from Nora's
+ *  Inbox, signs the context out, so no session or notification row stays
+ *  behind, and closes the context. It needs a backend from v0.1.154 on. */
+async function notificationDeliveryCheck() {
+  const s = run.creds.stdKey
+  const { t0, nora } = run
+  const marks = NOTIFICATION_DELIVERY_MARKS
+  await check(NOTIFICATION_DELIVERY_STEP, async () => {
+    const origin = cfg.appOrigin
+    const own = await browser.newContext({ viewport: { width: 1360, height: 900 } })
+    await routeBypass(own)
+    await own.grantPermissions(['notifications'], { origin })
+    let noted = null
+    let control = null
+    let signedIn = false
+    try {
+      const first = await own.newPage()
+      await first.goto(`${origin}/app/~/projects`, { waitUntil: 'domcontentloaded' })
+      await signInBrowser(first, cfg.nora)
+      await first.waitForSelector('[data-all-nav]', { timeout: 60_000 })
+      signedIn = true
+      const second = await own.newPage()
+      await second.goto(`${origin}/app/~/projects`, { waitUntil: 'domcontentloaded' })
+      await second.waitForSelector('[data-all-nav]', { timeout: 60_000 })
+      const role = (page) => evaluate(page, (name) => window[name]?.role ?? null, marks.mirror)
+      const roles = async () => [await role(first), await role(second)]
+      expect(
+        await until(async () => {
+          const [a, b] = await roles()
+          return (a === 'leader' && b === 'follower') || (a === 'follower' && b === 'leader')
+        }, 60_000),
+        `no one leader of two pages: ${JSON.stringify(await roles())}`,
+      )
+      const [leader, follower] =
+        (await role(first)) === 'leader' ? [first, second] : [second, first]
+      // the control's round trip in the follower
+      control = follower
+      await follower.goto(`${origin}/app/${ORG_SLUG}/settings/account`, {
+        waitUntil: 'domcontentloaded',
+      })
+      const select = follower.locator(`select[${marks.control}]`)
+      await select.waitFor({ timeout: 60_000 })
+      /** The mode the control shows once it is ready, or null meanwhile. */
+      const shown = () =>
+        evaluate(
+          follower,
+          (m) => {
+            const field = document.querySelector(`[${m.state}]`)
+            if (field?.getAttribute(m.state) !== 'ready') return null
+            return document.querySelector(`select[${m.control}]`)?.value ?? null
+          },
+          marks,
+        )
+      expect(await until(async () => (await shown()) !== null, 60_000), 'the control never showed')
+      noted = await shown()
+      for (const mode of ['all', 'recent']) {
+        await select.selectOption(mode)
+        expect(
+          await until(async () => (await shown()) === mode, 30_000),
+          `the control did not show ${mode} from the server`,
+        )
+      }
+      // the leader in front, used, then a mention
+      await leader.bringToFront()
+      await leader.mouse.move(200, 200)
+      await leader.mouse.move(400, 300, { steps: 5 })
+      for (const page of [leader, follower])
+        await evaluate(
+          page,
+          (name) => {
+            window[name] = []
+          },
+          marks.notes,
+        )
+      await restOk(s, 'POST', `/tasks/${t0.key}/comments`, {
+        body: `${run.tag} notification delivery for @[${nora.name}](user:${nora.id})`,
+      })
+      const inbox = await restOk(run.creds.readToken, 'GET', '/inbox?limit=100')
+      const message = inbox.items.find((it) => it.task.id === t0.id)?.messages.at(-1)?.id
+      const notes = (page) => evaluate(page, (name) => window[name] ?? [], marks.notes)
+      let note = null
+      expect(
+        await until(async () => {
+          note = (await notes(leader))[0] ?? null
+          return note !== null
+        }, 90_000),
+        'no note in the leader for the mention',
+      )
+      expect(
+        note.tag === message || note.tag === marks.summaryTag,
+        `the leader's note has tag ${note.tag}, neither the mention's nor the summary's`,
+      )
+      eq((await notes(leader)).length, 1, "the leader's notes for one mention")
+      eq((await notes(follower)).length, 0, "the follower's notes")
+      // the leader closes, and the other page takes over
+      await leader.close({ runBeforeUnload: true })
+      expect(
+        await until(async () => (await role(follower)) === 'leader', 30_000),
+        `the follower did not take over: ${await role(follower)}`,
+      )
+      return `one leader of two pages, the control round trip from ${noted}, one note in the leader tagged ${note.tag === message ? "with the mention's message" : 'as the summary'}, and a takeover`
+    } finally {
+      try {
+        if (control && !control.isClosed() && noted !== null) {
+          await control.goto(`${origin}/app/${ORG_SLUG}/settings/account`, {
+            waitUntil: 'domcontentloaded',
+          })
+          const select = control.locator(`select[${marks.control}]`)
+          await select.waitFor({ timeout: 60_000 })
+          if ((await select.inputValue()) !== noted) {
+            await select.selectOption(noted)
+            await until(async () => (await select.inputValue()) === noted, 30_000)
+          }
+        }
+        const page = control && !control.isClosed() ? control : null
+        if (page && signedIn) {
+          await removeInboxRow(page, t0).catch(() => {})
+          await page.goto(`${origin}/app/${ORG_SLUG}/settings/account`, {
+            waitUntil: 'domcontentloaded',
+          })
+          await page.getByRole('button', { name: 'Sign out', exact: true }).click()
+          await page.waitForSelector('input[type="email"]', { timeout: 60_000 })
+        }
+      } finally {
+        await own.close()
+      }
     }
   })
 }
@@ -11644,6 +11818,9 @@ async function main() {
   // a desktop alert from the deployment's feed and the summary after a
   // dropped socket, while t0 is active
   await inboxFeedCheck()
+  // one leader tab of a browser profile, the Notification delivery control
+  // and a takeover, while t0 is active
+  await notificationDeliveryCheck()
   // archived tasks and projects, then delete the projects in the app
   await archiveChecks()
   await check('cleanup/app/delete-project', async () => {
