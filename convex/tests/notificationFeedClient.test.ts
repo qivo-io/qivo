@@ -538,6 +538,28 @@ describe('resumes', () => {
     expect(answers(tab, 'notifications:claimSummary')).toEqual([{ state: 'summary' }])
   })
 
+  it('runs the resume order once for a wake, a reconnect and a gap a few seconds apart', async () => {
+    const t = newT()
+    const { f, s, task } = await fixture(t)
+    const tab = openTab(s)
+    await startTabs([tab])
+    jump(10)
+    await news(t, f, task)
+    // the overdue tick finds the gap at once, then the desktop app's wake
+    // and the reconnect come a second or two later
+    const from = tab.calls.length
+    await wait([tab], NOTIFY_CLIENT.tick_ms)
+    expect(names(tab, from)).toContain('notifications:claimSummary')
+    jump(0.02)
+    tab.client.resume()
+    await settle([tab])
+    jump(0.02)
+    tab.connection = 2
+    await settle([tab], true)
+    expect(names(tab, from).filter((n) => n === 'notifications:claimSummary')).toHaveLength(1)
+    expect(tab.notes.filter((n) => n.tag === SUMMARY_TAG)).toHaveLength(1)
+  })
+
   it('takes a ten-minute gap between ticks for a resume, and a throttled minute for none', async () => {
     const t = newT()
     const { f, s, task } = await fixture(t)

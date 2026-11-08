@@ -362,6 +362,22 @@ describe('takeover and end', () => {
     expect(p.posted.some((m) => m.from === b.number && m.message.kind === 'bye')).toBe(true)
   })
 
+  it('drops a handover whose times lie past the new leader’s beat, or are not times', async () => {
+    const p = profile()
+    const [a, b] = [openTab(p), openTab(p)]
+    await flush()
+    // a stale build posts a floor a day ahead, then one that is no time
+    const rogue = p.hub.open()
+    rogue.postMessage({ kind: 'state', after: Date.now() + 86_400_000, keys: [], beat_at: Date.now() })
+    rogue.postMessage({ kind: 'state', after: 'soon', keys: [], beat_at: Number.NaN })
+    rogue.postMessage({ kind: 'reload', everything: true })
+    await flush()
+    a.page.win.fire('pagehide', { persisted: false })
+    await flush()
+    expect(b.feed.leads).toEqual([{ kind: 'resume' }])
+    rogue.close()
+  })
+
   it('leads again after a freeze with the resume order', async () => {
     const lone = openTab(profile())
     await flush()
@@ -510,6 +526,29 @@ describe('reports of use', () => {
     tab.settings.take?.('recent')
     await flush()
     expect(tab.beats().at(-1)?.args.active).toBe(false)
+  })
+
+  it('carries no use in a beat of All enabled sessions, nor in the last beat as it cannot notify', async () => {
+    const tab = openTab(profile())
+    await flush()
+    tab.settings.take?.('all')
+    await flush()
+    const from = tab.beats().length
+    for (let i = 0; i < 6; i++) {
+      input(tab, 'keydown')
+      await vi.advanceTimersByTimeAsync(20_000)
+    }
+    const all = tab.beats().slice(from)
+    expect(all.length).toBeGreaterThan(0)
+    expect(all.every((b) => b.args.active === false)).toBe(true)
+    tab.settings.take?.('recent')
+    await flush()
+    await vi.advanceTimersByTimeAsync(NOTIFY_CLIENT.report_ms)
+    input(tab)
+    tab.state.can = false
+    tab.capabilityChanged()
+    await flush()
+    expect(tab.beats().at(-1)?.args).toMatchObject({ can_notify: false, active: false })
   })
 })
 
