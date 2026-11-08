@@ -256,7 +256,7 @@ async function treeOf(
  * with one of their 3 teams reads 17 and 32 and gets level viewer (at most
  * 69 ms quiet, 100 ms busy), and an admin in the same teams reads the
  * same. The same member shape in 5 teams on an everyday project reads 19
- * and 49 (at most 49 ms quiet, 109 ms busy).
+ * and 49 (at most 43 ms quiet, 109 ms busy).
  */
 export async function settingsGate(
   ctx: QueryCtx,
