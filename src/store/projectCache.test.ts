@@ -215,6 +215,24 @@ describe('the project cache', () => {
     expect(s.cache.look('meta')).toMatchObject({ state: 'ok', row: { level: 'lead' } })
   })
 
+  it("drops a parent row only a named sub-project's answer brought once that answer stops bringing it", () => {
+    const s = setup()
+    s.cache.name('board', ['sub'])
+    const [read] = s.reads()
+    const rows = [project('sub', { parent_id: 'meta' }), project('meta', { level: 'viewer' })]
+    s.answer(read.token, rows)
+    expect(s.cache.look('meta').state).toBe('ok')
+    // a stopped check keeps the sub-project's row, and its parent's with it
+    s.answer(read.token, [], ['sub'])
+    expect(s.cache.look('sub')).toMatchObject({ state: 'unchecked', row: rows[0] })
+    expect(s.cache.look('meta')).toEqual({ state: 'loading', row: rows[1], message: null })
+    // the person's access went, and the answer leaves both out
+    s.answer(read.token, [])
+    expect(s.cache.look('sub')).toEqual({ state: 'gone', row: null, message: null })
+    expect(s.cache.look('meta')).toEqual({ state: 'loading', row: null, message: null })
+    expect(s.cache.rows()).toEqual([])
+  })
+
   it("answers a parent a sub-project brought ok, also when the parent's own chunk left it out", () => {
     const s = setup()
     PROJECT_CACHE.chunk = 1

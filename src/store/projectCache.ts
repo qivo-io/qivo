@@ -35,7 +35,9 @@
      row kept from an earlier answer still names the project in every state
      but `gone`, never with a right, so stale rights are never kept. An
      answer that makes a project `gone` drops its row, so nothing the cache
-     keeps names it any more.
+     keeps names it any more, and with it the row of a parent it stopped
+     bringing, or of the gone project's parent, that no owner names, no
+     chunk reads and no current answer holds.
    - A project no owner names stays `loading` until one names it: the cache
      has no safety net for an unnamed miss, so every reader's host names
      what it shows.
@@ -234,8 +236,25 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     // stopped bringing, keeps no row, so no lookup names it from an
     // earlier answer
     const dropped = before && before !== 'failed' ? [...before.rows.keys()] : []
-    for (const id of new Set([...asked, ...dropped]))
-      if (entries.has(id) && lookUp(id).state === 'gone') entries.delete(id)
+    const parentsOfGone: string[] = []
+    for (const id of new Set([...asked, ...dropped])) {
+      const row = entries.get(id)
+      if (!row || lookUp(id).state !== 'gone') continue
+      entries.delete(id)
+      if (row.parent_id) parentsOfGone.push(row.parent_id)
+    }
+    // and so does a parent row it stopped bringing, or the parent of a
+    // project it made gone, that no owner names, no chunk reads and no
+    // current answer holds, since no read would ever answer it again
+    const parents = namedParents()
+    for (const id of new Set([...dropped, ...parentsOfGone]))
+      if (
+        entries.has(id) &&
+        !chunkOf.has(id) &&
+        !isNamed(id, parents) &&
+        currentRow(id) === undefined
+      )
+        entries.delete(id)
     bound()
   }
 
