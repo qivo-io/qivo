@@ -54,6 +54,8 @@ const store = {} as {
   reference: FakeReference | null
   orgBySlug: (s: string) => FakeOrg | undefined
   project: (id: string) => FakeProject | undefined
+  /** The workspace's held project, which the fake answers as `project`. */
+  heldProject: (id: string) => FakeProject | undefined
   issueRefIn: (org: string, key: string) => string | null
   handleNow: (uuid: string, org: string, num: number) => string
   handleOf: (uuid: string) => string | null
@@ -62,7 +64,11 @@ const store = {} as {
 vi.mock('../store/planner', () => ({
   ISSUE_PREFIX: 'QN',
   MINE_SCOPE: 'mine',
-  P: new Proxy({}, { get: (_t, k) => store[k as keyof typeof store] }),
+  // every project the fake holds is the workspace's, so heldProject is project
+  P: new Proxy(
+    {},
+    { get: (_t, k) => store[(k === 'heldProject' ? 'project' : k) as keyof typeof store] },
+  ),
 }))
 
 import {
