@@ -100,6 +100,9 @@ type Tab = {
   capabilityChanged: () => void
   /** the desktop app's wake */
   wake: () => void
+  /** says the Convex client confirmed the sign-in, as lib/authSession.ts
+      onSignedIn would */
+  signedIn: () => void
   /** answers the call holdNext held */
   release: () => void
 }
@@ -117,6 +120,7 @@ function openTab(
   const number = ++tabCount
   const capability = new Set<(can: boolean) => void>()
   const powers = new Set<() => void>()
+  const signIns = new Set<() => void>()
   const sent: Sent[] = []
   const feed: FeedDouble = {
     leads: [],
@@ -163,6 +167,9 @@ function openTab(
     wake: () => {
       for (const listener of powers) listener()
     },
+    signedIn: () => {
+      for (const listener of signIns) listener()
+    },
     release: () => {},
   }
   /* what call `name` answers, at the time it answers */
@@ -203,6 +210,10 @@ function openTab(
         tab.settings.take = null
         tab.settings.watching -= 1
       }
+    },
+    watchSignIn: (listener) => {
+      signIns.add(listener)
+      return () => signIns.delete(listener)
     },
     name: NAME,
     locks: locks ?? p.manager,
@@ -952,11 +963,12 @@ describe('failures', () => {
     expect(tab.leader.role()).toBe('leader')
   })
 
-  it('takes a sign-in still missing as long after its first refusal as every retry as lost for good, and lets the next tab lead', async () => {
+  it('stands by for a sign-in still missing as long after its first refusal as every retry, sends nothing, and leads again once it is back', async () => {
     const p = profile()
     const [a, b] = [openTab(p), openTab(p)]
     await flush()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // the token service is out, so both sockets send calls without a sign-in
     a.state.fail = () => new ConvexError({ code: 'forbidden', message: 'not signed in' })
     b.state.fail = a.state.fail
     // the periodic beat, then the retries after 5, 30 and 120 seconds, the
@@ -965,19 +977,48 @@ describe('failures', () => {
     for (const wait of [5_000, 30_000, MINUTE]) await vi.advanceTimersByTimeAsync(wait)
     await flush()
     expect(a.beats()).toHaveLength(5)
-    expect(a.leader.refused()).toBe(false)
-    // the next beat comes 155 s after the first refusal, the retries' sum
+    expect(a.leader.role()).toBe('leader')
+    // the next beat comes 155 s after the first refusal, the retries' sum,
+    // and a lets go of the lock and stands by, not stopped for good
     await vi.advanceTimersByTimeAsync(MINUTE)
     await flush()
     expect(a.beats()).toHaveLength(6)
-    expect(a.leader.refused()).toBe(true)
-    expect(a.leader.role()).toBe('stopped')
-    // the next tab of the profile leads, and is refused in turn
+    expect(a.leader.role()).toBe('follower')
+    expect(a.leader.refused()).toBe(false)
+    expect(a.feed.stops).toBe(1)
+    expect(a.settings.watching).toBe(0)
+    // the next tab of the profile leads, and stands by in turn
     expect(b.beats().length).toBeGreaterThan(0)
-    await vi.advanceTimersByTimeAsync(10 * MINUTE)
-    expect(a.beats()).toHaveLength(6)
-    expect(b.leader.refused()).toBe(true)
+    await vi.advanceTimersByTimeAsync(5 * MINUTE)
+    expect(b.leader.role()).toBe('follower')
     expect(await p.manager?.query()).toEqual({ held: [], pending: [] })
+    // the outage lasts ten minutes more; nothing is sent, through the
+    // capability's readings, its changes and a return from the cache
+    const sent = [a.sent.length, b.sent.length]
+    a.capabilityChanged()
+    a.page.win.fire('pagehide', { persisted: true })
+    a.page.win.fire('pageshow', { persisted: true })
+    await vi.advanceTimersByTimeAsync(10 * MINUTE)
+    await flush()
+    expect([a.sent.length, b.sent.length]).toEqual(sent)
+    expect(await p.manager?.query()).toEqual({ held: [], pending: [] })
+    // the sign-in comes back in a, which leads with the resume order and
+    // beats again at the server's pace
+    a.state.fail = null
+    b.state.fail = null
+    a.signedIn()
+    await flush()
+    expect([a.leader.role(), b.leader.role()]).toEqual(['leader', 'follower'])
+    expect(a.beats()).toHaveLength(7)
+    expect(a.mirror?.beats).toBe(2)
+    expect(a.feed.leads.at(-1)).toEqual({ kind: 'resume' })
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    expect(a.beats()).toHaveLength(8)
+    // b, whose sign-in is back too, queues behind a
+    b.signedIn()
+    await flush()
+    expect((await p.manager?.query())?.pending).toHaveLength(1)
+    expect(b.beats()).toHaveLength(sent[1])
   })
 
   it('sends no beat while the socket is down, and the reconnect runs the resume order', async () => {

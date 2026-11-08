@@ -45,13 +45,16 @@
      feed's own beats, such as a resume each tick runs again, do not
      shorten it. A beat refused for a missing sign-in as long after the
      first such refusal as the retries take together (155 s), in one
-     leadership with no beat answered between, counts as lost for good.
-     A refusal of the session (it ended, the login was banned, a demo
-     that is not active, or its sign-in was lost for good) stops the
-     leader and lets go of the lock, so another tab, such as one loaded
-     after a new sign-in, may lead; it stays stopped until the store
-     starts a new one (refused). A bad request does the same and is a
-     defect it reports.
+     leadership with no beat answered between, makes the tab stand by. It
+     lets go of the lock, sends nothing while the sign-in is missing,
+     however long the sign-in service takes to answer, and joins the
+     election again, with the resume order, once the Convex client
+     confirms the sign-in (watchSignIn). A refusal
+     of the session (it ended, the login was banned, or a demo that is not
+     active) stops the leader and lets go of the lock, so another tab, such
+     as one loaded after a new sign-in, may lead; it stays stopped until
+     the store starts a new one (refused). A bad request does the same and
+     is a defect it reports.
    - Use. The first trusted pointer, key, touch or wheel input
      (lib/inputIdle.ts INPUTS, which the store passes) in a visible page of the profile, a pointer
      move only when it moved, NOTIFY_CLIENT.report_ms or more after the
@@ -125,7 +128,7 @@ export const NOTIFY_CLIENT = {
   /** the waits after a failed beat, in turn, each at most `every_ms`; the
       last is under the server's live_ms (180 s), so a retry lands before
       the session lapses. Their sum bounds how long a missing sign-in is
-      tried again */
+      tried again before the tab stands by for it */
   retry_ms: [5_000, 30_000, 120_000],
   /** the server's `every_ms` is clamped to this range, so a bad answer
       cannot make a tight loop or stop the beat */
@@ -202,6 +205,10 @@ export type LeaderDeps = {
   /** watches notifications.settings outside the visibility gate, handing
       each answer's mode, or null for a failure */
   watchSettings: (take: (delivery: Delivery | null) => void) => () => void
+  /** calls its listener each time the Convex client confirms the page's
+      sign-in, also after it armed the socket again (lib/authSession.ts
+      onSignedIn), for a tab that stands by while its sign-in is missing */
+  watchSignIn: (listener: () => void) => () => void
   /** the lock's and the channel's name (leaderName) */
   name: string
   /** navigator.locks, absent outside a secure context */
@@ -329,6 +336,9 @@ export function startNotificationLeader(deps: LeaderDeps) {
   let stopped = false
   // set by a refusal of the session, which stops this leader for good
   let refused = false
+  // set while the tab stands by for a sign-in missing past every retry,
+  // until the Convex client confirms it again
+  let unsigned = false
   let channel: LeaderChannel | null = null
   // the lock this tab holds, resolved to let it go
   let release: (() => void) | null = null
@@ -449,6 +459,16 @@ export function startNotificationLeader(deps: LeaderDeps) {
     mirror()
   }
 
+  /* Stands by after a sign-in stayed missing past every retry. The tab
+     lets go of the lock and sends nothing until watchSignIn says the
+     sign-in is back, then joins the election again (contend), which leads
+     with the resume order or takes over from a newer handover. */
+  function awaitSignIn(e: unknown) {
+    unsigned = true
+    console.warn('[qivo] the notification beat has no sign-in; waiting for it:', e)
+    stepAside()
+  }
+
   /** Beats with whether the page can notify and whether it reports use,
       restarting the timer. Every beat goes through here, the feed's
       included (its FeedLink). */
@@ -482,13 +502,13 @@ export function startNotificationLeader(deps: LeaderDeps) {
         const refusal = refusalOf(e)
         if (refusal === 'stop' || refusal === 'defect') refuse(refusal, e)
         // a sign-in still missing as long after its first refusal as every
-        // retry takes is lost for good, whichever beats came between
+        // retry takes stands the tab by, whichever beats came between
         else if (
           refusal === 'signin' &&
           unsignedSince !== null &&
           at - unsignedSince >= NOTIFY_CLIENT.retry_ms.reduce((sum, ms) => sum + ms, 0)
         )
-          refuse('stop', e)
+          awaitSignIn(e)
         else {
           if (refusal === 'signin') unsignedSince ??= at
           if (can && capable) {
@@ -657,11 +677,12 @@ export function startNotificationLeader(deps: LeaderDeps) {
     poll = null
   }
 
-  /* Waits outside the election while this page cannot notify, so a tab of
-     the profile that can notify leads, and reads the capability at each
-     tick, joining again once it can. A turn it queued is withdrawn with a
-     `bye`, so the leader reads its waiting tabs again and still ends the
-     session at its close when no other tab waits. */
+  /* Waits outside the election while this page cannot notify or its
+     sign-in is missing, so a tab of the profile that can notify leads, and
+     reads the capability at each tick, joining again once it can and its
+     sign-in is back. A turn it queued is withdrawn with a `bye`, so the
+     leader reads its waiting tabs again and still ends the session at its
+     close when no other tab waits. */
   function standBy() {
     dropElection()
     if (queued) {
@@ -675,18 +696,19 @@ export function startNotificationLeader(deps: LeaderDeps) {
     mirror()
   }
 
-  /* A leader whose page cannot notify lets go of the lock and stands by;
-     the server's records keep the next leader from repeating an alert. */
+  /* A leader whose page cannot notify, or whose sign-in is missing, lets
+     go of the lock and stands by; the server's records keep the next
+     leader from repeating an alert. */
   function stepAside() {
     stopLeading()
     standBy()
   }
 
-  /* A tab that does not lead joins the election once its page can notify,
-     and leaves its turn while it cannot. */
+  /* A tab that does not lead joins the election once its page can notify
+     and its sign-in is not missing, and leaves its turn while it cannot. */
   function contend() {
     if (stopped || refused || role !== 'follower') return
-    const can = deps.canNotify()
+    const can = !unsigned && deps.canNotify()
     if (can && queued === null) elect()
     else if (!can && queued !== null) standBy()
   }
@@ -750,6 +772,11 @@ export function startNotificationLeader(deps: LeaderDeps) {
      document's resume, asks once. */
   function elect() {
     if (stopped || electing) return
+    // a tab waiting for its sign-in leads nowhere, alone included
+    if (unsigned) {
+      standBy()
+      return
+    }
     if (!locks || !channel) {
       gain('alone')
       return
@@ -896,6 +923,11 @@ export function startNotificationLeader(deps: LeaderDeps) {
   listen(doc, 'freeze', leave)
   listen(doc, 'resume', rejoin)
   stops.push(
+    deps.watchSignIn(() => {
+      if (!unsigned) return
+      unsigned = false
+      contend()
+    }),
     deps.watchCapability(() => {
       if (leading()) check()
       else if (role === 'follower') {

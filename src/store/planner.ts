@@ -62,7 +62,13 @@ import { firstSittingDay, SYNC_OWNERS_MAX } from '../../convex/lib/teamSync'
 import type { AgendaAnswer } from '../../convex/lib/teamSyncAgenda'
 import type { NavByIdRow, NavByIds } from '../../convex/model/projectNavReads'
 import type { PersonRow } from '../../convex/model/projectSettings'
-import { AUTH_STORAGE_PREFIX, armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
+import {
+  AUTH_STORAGE_PREFIX,
+  armConvexAuth,
+  authClient,
+  signOut as authSignOut,
+  onSignedIn,
+} from '../lib/auth'
 import { NO_QUERY, SignOutFailed } from '../lib/authSession'
 import { avatarCacheScope, createAvatarImageCache } from '../lib/avatarImageCache'
 import { createAvatarSources } from '../lib/avatarSources'
@@ -3515,7 +3521,9 @@ let leader: NotificationLeader | null = null
     the visibility gate, so they run while the tab is hidden. A follower
     tab watches neither. A leader the server refused stopped for good, so
     the boot that follows, such as a sign-in in this page, starts them
-    afresh. */
+    afresh. A leader whose sign-in stayed missing stands by instead, and
+    leads again once the auth session says Convex confirmed the sign-in
+    (onSignedIn). */
 function startAlerts() {
   if (leader?.refused()) stopAlerts()
   if (alerts !== null || !notificationsSupported()) return
@@ -3537,6 +3545,7 @@ function startAlerts() {
       watchLive<{ delivery: Delivery }>(api.notifications.settings, {}, (result) =>
         take('value' in result ? result.value.delivery : null),
       ),
+    watchSignIn: onSignedIn,
     name: leaderName(configuredConvexDeploymentUrl(), AUTH_STORAGE_PREFIX),
     locks: typeof navigator === 'undefined' ? null : (navigator.locks ?? null),
     openChannel:

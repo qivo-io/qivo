@@ -120,6 +120,8 @@ type Tab = {
   signedIn: boolean
   /** tells the leader that the capability may have changed */
   permissionChanged: () => void
+  /** tells the leader that the Convex client confirmed the sign-in */
+  signInConfirmed: () => void
   /** a mutation name the next call of fails once, for a failure case */
   failNext: string | null
   /** a mutation name the next call of waits for release() to be sent on */
@@ -155,6 +157,7 @@ function openTab(s: Session, can = true, locks: LeaderLocks | null = null): Tab 
     can,
     signedIn: true,
     permissionChanged: () => {},
+    signInConfirmed: () => {},
     failNext: null,
     holdNext: null,
     held: null,
@@ -243,6 +246,12 @@ function startLeader(tab: Tab) {
       })
       return () => {
         stopped = true
+      }
+    },
+    watchSignIn: (listener) => {
+      tab.signInConfirmed = listener
+      return () => {
+        tab.signInConfirmed = () => {}
       }
     },
     name: 'qivo-notifications:test',
@@ -848,7 +857,7 @@ describe('resumes', () => {
     expect(tab.notes.map((n) => n.tag)).not.toContain(lost?.id)
   })
 
-  it('keeps leading through a missing sign-in while each tick runs the resume again, and stops only 155 s after the first refusal', async () => {
+  it('keeps leading through a missing sign-in while each tick runs the resume again, stands by 155 s after the first refusal, and resumes once the sign-in is back', async () => {
     const t = newT()
     const { s } = await fixture(t)
     const tab = openTab(s)
@@ -871,14 +880,28 @@ describe('resumes', () => {
     const lost = NOTIFY_CLIENT.retry_ms.reduce((sum, ms) => sum + ms, 0)
     await wait([tab], first + lost - 1_000 - Date.now())
     expect(tab.leader?.refused()).toBe(false)
-    // the first beat 155 s after the first refusal takes the sign-in as lost
+    // the first beat 155 s after the first refusal stands the tab by,
+    // and it sends nothing while the token service stays out
     await wait([tab], NOTIFY_CLIENT.tick_ms + 1_000)
-    expect(tab.leader?.refused()).toBe(true)
+    expect(tab.leader?.refused()).toBe(false)
+    expect(tab.leader?.role()).toBe('follower')
     expect(tab.after).toBeNull()
     const sent = tab.calls.length
     await wait([tab], 10 * MINUTE)
     expect(tab.calls).toHaveLength(sent)
     expect(names(tab, from).every((n) => n === 'notifications:beat')).toBe(true)
+    // the sign-in comes back: it leads alone again with the resume order,
+    // a beat the server answers, then claimSummary, and watches the feed
+    tab.signedIn = true
+    tab.signInConfirmed()
+    await settle([tab])
+    expect(tab.leader?.role()).toBe('alone')
+    expect(names(tab, sent).slice(0, 2)).toEqual([
+      'notifications:beat',
+      'notifications:claimSummary',
+    ])
+    expect(tab.calls[sent].answer).toMatchObject({ every_ms: expect.any(Number) })
+    expect(tab.after).not.toBeNull()
     warn.mockRestore()
   })
 })

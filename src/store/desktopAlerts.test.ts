@@ -42,6 +42,7 @@ vi.mock('../lib/convex', async () => {
 vi.mock('../lib/auth', () => ({
   AUTH_STORAGE_PREFIX: 'better-auth',
   armConvexAuth: async () => true,
+  onSignedIn: () => () => {},
   authClient: { getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }) },
   signOut: vi.fn(),
 }))
@@ -392,6 +393,7 @@ describe('the close guard', () => {
       canNotify: () => true,
       watchCapability: () => () => {},
       watchSettings: () => () => {},
+      watchSignIn: () => () => {},
       name: 'qivo-notifications:guard',
     })
   }

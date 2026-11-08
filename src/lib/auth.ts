@@ -10,12 +10,8 @@ import { DEMO_MODE } from './demoMode'
     the separation; the operator entry point uses ../admin/auth instead. */
 export const AUTH_STORAGE_PREFIX = DEMO_MODE ? 'qivo-demo' : 'better-auth'
 
-export const { authClient, armConvexAuth, signOut, clearLocalSession } = createAuthSession(
-  AUTH_STORAGE_PREFIX,
-  convex,
-  oauthProviderClient(),
-  DEMO_MODE,
-)
+export const { authClient, armConvexAuth, signOut, clearLocalSession, onSignedIn } =
+  createAuthSession(AUTH_STORAGE_PREFIX, convex, oauthProviderClient(), DEMO_MODE)
 
 /* Replicates ConvexBetterAuthProvider's one-time-token handoff (we skip the
  * React provider): after a social login the crossDomain server plugin lands

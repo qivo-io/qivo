@@ -597,19 +597,23 @@ describe('independent app and admin browser sessions', () => {
     expect(lost).not.toHaveBeenCalled()
   })
 
-  it('waits out a token service outage before arming a dropped sign-in again', async () => {
+  it('waits out a token service outage before arming a dropped sign-in again, and says when Convex confirms it', async () => {
     const { admin, adminSocket } = pair()
     await login(admin, 'operator@example.test')
     const lost = vi.fn()
+    const confirmed = vi.fn()
+    const stopHearing = admin.onSignedIn(confirmed)
     const ready = admin.armConvexAuth(lost)
     adminSocket.settle(true)
     expect(await ready).toBe(true)
+    expect(confirmed).toHaveBeenCalledOnce()
     service.fail('/convex/token', 503)
     adminSocket.settle(false)
     await vi.advanceTimersByTimeAsync(180_000)
     // the session lasts, and a service that cannot mint a token is no arm
     expect(lost).not.toHaveBeenCalled()
     expect(adminSocket.setAuth).toHaveBeenCalledTimes(2)
+    expect(confirmed).toHaveBeenCalledOnce()
     service.recover()
     // the longest backoff step with its jitter is 37.5 s
     await vi.advanceTimersByTimeAsync(40_000)
@@ -618,8 +622,14 @@ describe('independent app and admin browser sessions', () => {
     const asked = service.requests.length
     expect(await adminSocket.token(false)).toMatch(/^jwt:session-/)
     expect(service.requests).toHaveLength(asked)
+    expect(confirmed).toHaveBeenCalledOnce()
     adminSocket.settle(true)
     expect(lost).not.toHaveBeenCalled()
+    // the arm again is confirmed, and a listener that stopped hears no more
+    expect(confirmed).toHaveBeenCalledTimes(2)
+    stopHearing()
+    adminSocket.settle(true)
+    expect(confirmed).toHaveBeenCalledTimes(2)
   })
 
   it('stops arming again when the server keeps refusing a live session', async () => {

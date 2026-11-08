@@ -204,6 +204,20 @@ export function createAuthSession(
      running for an older one stops instead of arming over it. */
   let armGeneration = 0
 
+  /* What hears each sign-in Convex confirms (onSignedIn). */
+  const signedIn = new Set<() => void>()
+
+  /** Calls `listener` each time Convex confirms this page's sign-in, at an
+      arm and at every arm again after Convex dropped it (recover), until
+      the function it answers is called. The notification leader joins its
+      election again by it after a sign-in stayed missing. */
+  function onSignedIn(listener: () => void): () => void {
+    signedIn.add(listener)
+    return () => {
+      signedIn.delete(listener)
+    }
+  }
+
   /** Installs the token fetcher on the socket. Resolves with Convex's first
       answer, and recovers a sign-in Convex drops after that. */
   function connect(generation: number, onLost?: () => void): Promise<boolean> {
@@ -216,6 +230,14 @@ export function createAuthSession(
           arming = false
           resolve(isAuthenticated)
         } else if (!isAuthenticated) void recover(generation, onLost)
+        // a listener that throws never holds up the sign-in
+        if (isAuthenticated)
+          for (const listener of signedIn)
+            try {
+              listener()
+            } catch (error) {
+              console.error('[qivo] a sign-in listener failed:', error)
+            }
       })
     })
   }
@@ -325,5 +347,5 @@ export function createAuthSession(
     }
   }
 
-  return { authClient, armConvexAuth, signOut, clearLocalSession }
+  return { authClient, armConvexAuth, signOut, clearLocalSession, onSignedIn }
 }
