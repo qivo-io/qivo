@@ -12,10 +12,10 @@ import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
+import { accessOf } from '../lib/access'
 import {
   COUNTING_COMPLETION,
   type CompletionJson,
-  loadCatalogue,
   NO_TASKS,
   projectCompletion,
   UNAVAILABLE_COMPLETION,
@@ -381,7 +381,7 @@ describe('project completion from the counts', () => {
     ).toMatch(/^Changed over MCP/)
   })
 
-  it('reads no task, 33 ranges for a project of 30 sub-projects, however many tasks they hold', async () => {
+  it('reads no task, 34 ranges for a project of 30 sub-projects, however many tasks they hold', async () => {
     const fx = await setup()
     const subs = [fx.sub, fx.sub2]
     for (let i = 0; i < 28; i++)
@@ -407,16 +407,20 @@ describe('project completion from the counts', () => {
     const read = () =>
       fx.t.query(async (ctx) => {
         const me = (await byId(ctx, 'profiles', fx.agent.id)) as Doc<'profiles'>
-        const cat = await loadCatalogue(ctx, me)
         const project = (await byId(ctx, 'projects', fx.meta.id)) as Doc<'projects'>
-        return await readsOf(ctx, () =>
-          projectCompletion(ctx, project, { cat, readable: () => true }),
-        )
+        // the caller's own access to the project, which the single read
+        // asks for its flag first (machine/projects.ts projectRead)
+        const access = accessOf(ctx, me, [project])
+        await access.level(project.id)
+        await access.accessible(project.id)
+        return await readsOf(ctx, () => projectCompletion(ctx, project, access))
       })
     const before = await read()
     expect(before.out).toEqual(ok(100, 300))
-    expect(before.ranges).toBe(33)
-    expect(before.documents).toBeLessThanOrEqual(3 + 4 * 30)
+    // the sub-projects in one range, which inherit the agent's User on
+    // TBED without a check each, and the counts' 33
+    expect(before.ranges).toBe(34)
+    expect(before.documents).toBeLessThanOrEqual(30 + 3 + 4 * 30)
     // 300 tasks more, written past the counts, are never read
     await fx.t.run(async (ctx) => {
       for (let i = 0; i < 300; i++)

@@ -32,6 +32,7 @@ import {
   withReadingAdmin,
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
+import { withReach } from './projectReach.setup'
 import { itemFor, plantCredential, storedRows } from './trash.setup'
 
 /* ------------------------------------------------------------ wire helpers */
@@ -136,8 +137,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = '04a47d690e42d249c5f654d9cdd16972f2e1a1bf5207a99c1b61ace95a6219f8'
-const SHA_TOOLS_MODERN = 'a546a833ac7de522f5f8d4e35f7b759e90e19f0e70c72c9ed329f85df7bb6596'
+const SHA_TOOLS_LEGACY = 'b836ddd0b6f519254462956190da37b1c80b63d51fe6299cfed3236c3eaab4f9'
+const SHA_TOOLS_MODERN = '71637a8f4cb5ee05f51d043879b13d171769668830b48daf114e31cda8d289f9'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -953,6 +954,7 @@ describe('read tools', () => {
   test('list_teams / list_team_members / list_projects / list_users shapes and key order', async () => {
     const fx = await machineOrg()
     await keyOrg(fx.t, fx.org.id)
+    await withReach(fx.t)
     const teams = JSON.parse(
       await fx.t.query(internal.machine.mcp.listTeams, { callerId: fx.admin.id, access: 'read' }),
     )
@@ -982,14 +984,18 @@ describe('read tools', () => {
     expect(Object.keys(members)).toEqual(['next_cursor', 'team', 'members'])
 
     // guest reads only the granted meta tree; the admin reads the four
-    // their grants reach, and an admin without grants none
-    const guestProjects = JSON.parse(
+    // their grants reach, and an admin without grants none; each page in
+    // tree order, the cursor first
+    const guestPage = JSON.parse(
       await fx.t.query(internal.machine.mcp.listProjects, {
         callerId: fx.guest.id,
         access: 'read',
       }),
-    ) as Record<string, unknown>[]
-    expect(guestProjects.map((p) => p.key)).toEqual(['FW', 'PCB', 'TBED'])
+    ) as { next_cursor: string | null; projects: Record<string, unknown>[] }
+    expect(Object.keys(guestPage)).toEqual(['next_cursor', 'projects'])
+    expect(guestPage.next_cursor).toBeNull()
+    const guestProjects = guestPage.projects
+    expect(guestProjects.map((p) => p.key)).toEqual(['TBED', 'FW', 'PCB'])
     expect(Object.keys(guestProjects[0])).toEqual([
       'id',
       'key',
@@ -1009,8 +1015,8 @@ describe('read tools', () => {
         callerId: fx.admin.id,
         access: 'read',
       }),
-    ) as Record<string, unknown>[]
-    expect(adminProjects.map((p) => p.key)).toEqual(['FW', 'PCB', 'SKNK', 'TBED'])
+    ).projects as Record<string, unknown>[]
+    expect(adminProjects.map((p) => p.key)).toEqual(['SKNK', 'TBED', 'FW', 'PCB'])
     const rowless = await plantSeat(fx.t, { org_id: fx.org.id, name: 'Ada', org_role: 'admin' })
     await keyOrg(fx.t, fx.org.id)
     expect(
@@ -1020,7 +1026,7 @@ describe('read tools', () => {
           access: 'read',
         }),
       ),
-    ).toEqual([])
+    ).toEqual({ next_cursor: null, projects: [] })
 
     const usersPage = JSON.parse(
       await fx.t.query(internal.machine.mcp.listUsers, { callerId: fx.agent.id, access: 'read' }),
@@ -1056,12 +1062,13 @@ describe('read tools', () => {
     await grant(fx.t, fx.sub.id, pia.id, 'user')
     await grant(fx.t, fx.sub2.id, pia.id, 'viewer')
     await grant(fx.t, old.id, pia.id, 'user')
+    await withReach(fx.t)
     type Access = 'read' | 'write'
     type Row = Record<string, unknown> & { key: string; access: { read: boolean; write: boolean } }
     const mcpRows = async (p: Doc<'profiles'>, access: Access, archived: boolean) =>
       JSON.parse(
         await fx.t.query(internal.machine.mcp.listProjects, { callerId: p.id, access, archived }),
-      ) as Row[]
+      ).projects as Row[]
     const writes = async (p: Doc<'profiles'>, access: Access, archived = false) =>
       Object.fromEntries((await mcpRows(p, access, archived)).map((r) => [r.key, r.access.write]))
 
@@ -1095,11 +1102,13 @@ describe('read tools', () => {
       for (const archived of [false, true]) {
         const rows = await mcpRows(p, access, archived)
         expect(rows).toEqual(
-          await fx.t.query(internal.machine.rest.listProjects, {
-            callerId: p.id,
-            access,
-            archived: String(archived),
-          }),
+          (
+            await fx.t.query(internal.machine.rest.listProjects, {
+              callerId: p.id,
+              access,
+              archived: String(archived),
+            })
+          ).projects,
         )
         for (const row of rows) {
           const one = parse(

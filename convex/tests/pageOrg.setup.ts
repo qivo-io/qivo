@@ -9,11 +9,12 @@
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { rosterNames } from '../lib/archivedTasks'
+import { accessFlags, asMachineCaller, loadCatalogue } from '../lib/core'
 import { byId, newWindowKey } from '../lib/db'
 import { MIB } from '../lib/limits'
 import { named, nameKey } from '../lib/nameKey'
 import { listIssues as mcpListIssues } from '../machine/mcp'
-import { listIssues, listProjects } from '../machine/rest'
+import { listIssues } from '../machine/rest'
 import {
   NOW,
   newT,
@@ -109,14 +110,19 @@ export async function readMcpPage(t: T, args: Omit<McpArgs, 'today' | 'access'>)
   })
 }
 
+/* What a task list reads before its page: the caller, the catalogue and
+ * their access over it (machine/rest.ts catalogueAccess), which reads
+ * nothing else of size. */
+async function catalogueReads(ctx: QueryCtx, callerId: string) {
+  const me = await asMachineCaller(ctx, callerId, 'read')
+  await accessFlags(ctx, me, await loadCatalogue(ctx, me), 'read')
+}
+
 /* The reads before a page: the caller, the catalogue and their access, as
- * REST GET /v1/projects reads them, which reads nothing else of size. */
+ * REST GET /v1/tasks reads them before its page. */
 export async function readBefore(t: T, callerId: string) {
   return await t.query(async (ctx) => {
-    await handlerOf<{ callerId: string; access: 'read' }, unknown[]>(listProjects)(ctx, {
-      callerId,
-      access: 'read',
-    })
+    await catalogueReads(ctx, callerId)
     return await readsSoFar(ctx)
   })
 }
@@ -126,10 +132,7 @@ export async function readBefore(t: T, callerId: string) {
  * listArchivedIssuesCore reads before the page's budget starts. */
 export async function readArchivedBefore(t: T, caller: Doc<'profiles'>) {
   return await t.query(async (ctx) => {
-    await handlerOf<{ callerId: string; access: 'read' }, unknown[]>(listProjects)(ctx, {
-      callerId: caller.id,
-      access: 'read',
-    })
+    await catalogueReads(ctx, caller.id)
     await rosterNames(ctx, caller.org_id)
     await byId(ctx, 'organizations', caller.org_id)
     return await readsSoFar(ctx)

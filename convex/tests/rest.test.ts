@@ -46,6 +46,7 @@ import {
   withReadingAdmin,
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
+import { withReach } from './projectReach.setup'
 import { lowered, restPage, restPages } from './taskPages.setup'
 import { itemFor, plantCredential, storedRows } from './trash.setup'
 
@@ -355,16 +356,20 @@ describe('REST auth surface', () => {
 /* --------------------------------------------------------------- projects */
 
 describe('GET /v1/projects', () => {
-  it('lists readable projects with access flags, key-sorted; archived= flips the axis', async () => {
+  it('pages readable projects with access flags in tree order; archived= flips the axis', async () => {
     const t = newT()
     const f = await machineOrg(t)
+    await withReach(t)
     // a Standard user agent's key resolves to write access
-    const rows = await t.query(internal.machine.rest.listProjects, {
+    const page = await t.query(internal.machine.rest.listProjects, {
       callerId: f.agent.id,
       access: 'write',
     })
-    expect(rows.map((p) => p.key)).toEqual(['FW', 'PCB', 'TBED']) // SKNK invisible
-    expect(rows[2]).toEqual({
+    expect(page.next_cursor).toBeNull()
+    const rows = page.projects
+    // each top-level project by key, then its sub-projects by key; SKNK invisible
+    expect(rows.map((p) => p.key)).toEqual(['TBED', 'FW', 'PCB'])
+    expect(rows[0]).toEqual({
       id: f.meta.id,
       key: 'TBED',
       num: 1,
@@ -378,16 +383,23 @@ describe('GET /v1/projects', () => {
       access: { read: true, write: true },
     })
     await archiveProject(t, f.sub2)
-    const live = await t.query(internal.machine.rest.listProjects, {
-      callerId: f.agent.id,
-      access: 'read',
-    })
-    expect(live.map((p) => p.key)).toEqual(['FW', 'TBED'])
-    const archived = await t.query(internal.machine.rest.listProjects, {
-      callerId: f.agent.id,
-      access: 'read',
-      archived: 'true',
-    })
+    await withReach(t)
+    const live = (
+      await t.query(internal.machine.rest.listProjects, {
+        callerId: f.agent.id,
+        access: 'read',
+      })
+    ).projects
+    expect(live.map((p) => p.key)).toEqual(['TBED', 'FW'])
+    const archived = (
+      await t.query(internal.machine.rest.listProjects, {
+        callerId: f.agent.id,
+        access: 'read',
+        archived: 'true',
+      })
+    ).projects
+    // an archived sub-project of a live project, at its parent's place
+    // without the parent's row
     expect(archived.map((p) => p.key)).toEqual(['PCB'])
     expect(archived[0].archived).toBe(true)
     expect(typeof archived[0].archived_at).toBe('string')
@@ -409,12 +421,13 @@ describe('GET /v1/projects', () => {
     await grant(t, f.meta.id, roleViewer.id, 'user') // org-role viewer holding a user grant
     const grantViewer = await plantAgent(t, f.org.id, 'Grant viewer bot', 'user')
     await grant(t, f.meta.id, grantViewer.id, 'viewer') // grant-level viewer
+    await withReach(t)
     for (const bot of [roleViewer, grantViewer]) {
-      const rows = await t.query(internal.machine.rest.listProjects, {
+      const { projects: rows } = await t.query(internal.machine.rest.listProjects, {
         callerId: bot.id,
         access: 'read',
       })
-      expect(rows.map((p) => p.key)).toEqual(['FW', 'PCB', 'TBED'])
+      expect(rows.map((p) => p.key)).toEqual(['TBED', 'FW', 'PCB'])
       for (const p of rows) expect(p.access).toEqual({ read: true, write: false })
     }
   })

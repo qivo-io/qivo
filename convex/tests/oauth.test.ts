@@ -33,6 +33,7 @@ import {
   withOrg,
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
+import { withReach } from './projectReach.setup'
 
 declare class URLSearchParams {
   constructor(input?: string | Record<string, string>)
@@ -84,8 +85,10 @@ async function fixture(role: 'user' | 'viewer' = 'user') {
   t.registerComponent('betterAuth', authSchema, import.meta.glob('../betterAuth/**/*.*s'))
   const f = await withOrg(t)
   // every profile holds its name key, as on every deployment, which the
-  // workload's name order needs
+  // workload's name order needs, and every organization its reach rows,
+  // which the project list reads
   await keyOrg(t, f.org.id)
+  await withReach(t)
   const profile = f[role]
   const now = Date.now()
   // the fixture's real Better Auth login, given a password to sign in with
@@ -347,6 +350,13 @@ async function toolData(response: Response): Promise<unknown> {
   return JSON.parse((result.content as { text: string }[])[0].text)
 }
 
+/* The rows of a list_projects answer, a page `{next_cursor, projects}`. */
+async function projectRows(response: Response): Promise<Json[]> {
+  const page = (await toolData(response)) as { next_cursor: unknown; projects: Json[] }
+  expect(Object.keys(page)).toEqual(['next_cursor', 'projects'])
+  return page.projects
+}
+
 async function deniedAccess(f: Fx, accessToken: string) {
   const response = await mcp(f, accessToken, 'list_projects')
   const result = await json(response)
@@ -570,7 +580,9 @@ describe('OAuth provider and MCP integration', () => {
         }),
       }),
     )
-    expect(await toolData(await mcp(f, issued.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    expect(await projectRows(await mcp(f, issued.access_token, 'list_projects'))).toBeInstanceOf(
+      Array,
+    )
     // A token bound to a key, which Qivo never issues, is refused.
     await runInAuth(f.t, async (ctx) => {
       for (const token of await ctx.db
@@ -672,7 +684,7 @@ describe('OAuth provider and MCP integration', () => {
         expect(result.error, path).toBe('invalid_client')
       }
     }
-    expect(await toolData(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    expect(await projectRows(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
     // The public client revokes its own token with its client_id alone.
     const revoked = await authenticated('/api/auth/oauth2/revoke', {
       client_id: c.request.clientId,
@@ -791,7 +803,7 @@ describe('OAuth provider and MCP integration', () => {
     const renewed = await tokens(await refresh(f, c.request.clientId, c.refresh_token))
     expect(renewed.access_token).not.toBe(c.access_token)
     expect(renewed.refresh_token).not.toBe(c.refresh_token)
-    expect(await toolData(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
+    expect(await projectRows(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
       Array,
     )
     await toolData(
@@ -1024,7 +1036,7 @@ describe('OAuth consent and resource binding', () => {
     const grants = await f.t.run((ctx) => ctx.db.query('oauth_connections').collect())
     expect(grants).toHaveLength(1)
     expect(grants[0].resource).toBe(RESOURCE)
-    expect(await toolData(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
+    expect(await projectRows(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
       Array,
     )
     await oauthRefusal(
@@ -1065,7 +1077,9 @@ describe('OAuth consent and resource binding', () => {
     const issued = await tokens(
       await exchange(request, new URL(approved.url as string).searchParams.get('code')!),
     )
-    expect(await toolData(await mcp(f, issued.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    expect(await projectRows(await mcp(f, issued.access_token, 'list_projects'))).toBeInstanceOf(
+      Array,
+    )
   })
 
   it('rejects foreign or repeated resources before authorization parameters can be stripped by the provider', async () => {
@@ -1158,7 +1172,7 @@ describe('OAuth consent and resource binding', () => {
     ])
     // The refusals consumed nothing: the grant still renews for the MCP resource.
     const renewed = await tokens(await refresh(f, clientId, linked.refresh_token))
-    expect(await toolData(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
+    expect(await projectRows(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
       Array,
     )
     // Without its link, the same client may not authorize, exchange a code
@@ -1181,7 +1195,9 @@ describe('OAuth consent and resource binding', () => {
     const f = await fixture()
     const linked = await connect(f)
     const clientId = linked.request.clientId
-    expect(await toolData(await mcp(f, linked.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    expect(await projectRows(await mcp(f, linked.access_token, 'list_projects'))).toBeInstanceOf(
+      Array,
+    )
     await unlink(f, clientId)
     await deniedAccess(f, linked.access_token)
     // a link to another resource does not stand in for the MCP one
@@ -1441,7 +1457,7 @@ describe('OAuth consent and resource binding', () => {
       ),
     ).toBe(true)
     for (const token of [firstTokens.access_token, secondTokens.access_token]) {
-      const projects = (await toolData(await mcp(f, token, 'list_projects'))) as Json[]
+      const projects = await projectRows(await mcp(f, token, 'list_projects'))
       expect(projects.some((project) => project.id === f.otherProject.id)).toBe(false)
     }
   })
@@ -1606,7 +1622,7 @@ describe('OAuth revocation, replay and live account checks', () => {
   it('ends the access token of a connection with the browser session it was granted in, and renews it', async () => {
     const f = await fixture()
     const c = await connect(f)
-    expect(await toolData(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    expect(await projectRows(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
     expect((await signOut(f)).status).toBe(200)
     await deniedAccess(f, c.access_token)
     // The session's record goes once its access tokens have expired.
@@ -1620,7 +1636,7 @@ describe('OAuth revocation, replay and live account checks', () => {
     // An offline_access refresh token outlives the session, so the client
     // renews without a new approval.
     const renewed = await tokens(await refresh(f, c.request.clientId, c.refresh_token))
-    expect(await toolData(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
+    expect(await projectRows(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
       Array,
     )
   })
@@ -1665,7 +1681,7 @@ describe('OAuth revocation, replay and live account checks', () => {
     expect(failed.headers.get('set-better-auth-cookie') ?? '').not.toContain('session_token')
     expect(failed.headers.get('set-cookie')).toBeNull()
     expect((await sessions()).map((row) => row._id)).toEqual([session._id])
-    expect(await toolData(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    expect(await projectRows(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
     end.mockRestore()
     // One failed delete is retried within the same sign-out.
     trigger().mockRejectedValueOnce(new Error('injected session end failure'))
@@ -1702,7 +1718,9 @@ describe('OAuth revocation, replay and live account checks', () => {
         })
       }
     })
-    expect(await toolData(await mcp(f, `qvo_${lastToken}`, 'list_projects'))).toBeInstanceOf(Array)
+    expect(await projectRows(await mcp(f, `qvo_${lastToken}`, 'list_projects'))).toBeInstanceOf(
+      Array,
+    )
     // Ending every session of a login, as a ban does.
     await f.t.run((ctx) =>
       createAuth(ctx).api.revokeSessions({ headers: new Headers({ cookie: f.cookie }) }),
@@ -1743,7 +1761,7 @@ describe('OAuth revocation, replay and live account checks', () => {
     await f.t.mutation(internal.authRetention.expireSessions, {})
     expect(await runInAuth(f.t, (ctx) => ctx.db.query('session').collect())).toEqual([])
     await deniedAccess(f, c.access_token)
-    expect(await toolData(await mcp(f, `qvo_${renewed}`, 'list_projects'))).toBeInstanceOf(Array)
+    expect(await projectRows(await mcp(f, `qvo_${renewed}`, 'list_projects'))).toBeInstanceOf(Array)
   })
 
   it('ends every access token of an expired session that a ban ends, also one a refresh issued after the expiry', async () => {
@@ -1763,7 +1781,7 @@ describe('OAuth revocation, replay and live account checks', () => {
       const { _id, _creationTime, ...fields } = issued
       await ctx.db.insert('oauthAccessToken', { ...fields, token: await sha256hex(renewed) })
     })
-    expect(await toolData(await mcp(f, `qvo_${renewed}`, 'list_projects'))).toBeInstanceOf(Array)
+    expect(await projectRows(await mcp(f, `qvo_${renewed}`, 'list_projects'))).toBeInstanceOf(Array)
     // Better Auth ends every session of the login, as a ban does, through
     // the delete trigger that every one of its deletes runs.
     await f.t.run(async (ctx) =>
@@ -1797,7 +1815,7 @@ describe('OAuth revocation, replay and live account checks', () => {
     })
     expect(deleted).toBe(2)
     expect(await rows()).toEqual({ access: 1, refresh: 1 })
-    expect(await toolData(await mcp(f, rotated.access_token, 'list_projects'))).toBeInstanceOf(
+    expect(await projectRows(await mcp(f, rotated.access_token, 'list_projects'))).toBeInstanceOf(
       Array,
     )
     // A replay of the deleted refresh token still ends the whole grant,
@@ -1836,7 +1854,7 @@ describe('OAuth revocation, replay and live account checks', () => {
       // goes on.
       await oauthRefusal(await refresh(f, c.request.clientId, c.refresh_token), ['invalid_grant'])
       const fifth = await tokens(await refresh(f, c.request.clientId, fourth.refresh_token))
-      expect(await toolData(await mcp(f, fifth.access_token, 'list_projects'))).toBeInstanceOf(
+      expect(await projectRows(await mcp(f, fifth.access_token, 'list_projects'))).toBeInstanceOf(
         Array,
       )
       // The second expired a day ago, and its hash is kept for that day: its
@@ -1925,12 +1943,12 @@ describe('OAuth revocation, replay and live account checks', () => {
     expect(session?.user?.id).toBe(f.userId)
     // the access token issued in the approving session, its refresh token
     // and the personal token keep working
-    expect(await toolData(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    expect(await projectRows(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
     const renewed = await tokens(await refresh(f, c.request.clientId, c.refresh_token))
-    expect(await toolData(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
+    expect(await projectRows(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
       Array,
     )
-    expect(await toolData(await mcp(f, personal, 'list_projects'))).toBeInstanceOf(Array)
+    expect(await projectRows(await mcp(f, personal, 'list_projects'))).toBeInstanceOf(Array)
   })
 
   it('signs out from a connect page whose signed request has expired', async () => {
@@ -1960,7 +1978,7 @@ describe('OAuth revocation, replay and live account checks', () => {
     lookup.mockRestore()
     expect(failed.status, await failed.clone().text()).toBe(503)
     expect(failed.headers.get('set-better-auth-cookie') ?? '').not.toContain('session_token')
-    expect(await toolData(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    expect(await projectRows(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
   })
 
   it('leaves the session of a sign-out Better Auth refused', async () => {
@@ -1970,7 +1988,7 @@ describe('OAuth revocation, replay and live account checks', () => {
     expect(refused.status, await refused.clone().text()).toBe(400)
     const sessions = await runInAuth(f.t, async (ctx) => await ctx.db.query('session').collect())
     expect(sessions).toHaveLength(1)
-    expect(await toolData(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    expect(await projectRows(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
   })
 
   it('refuses a token issued before its session ended and passes one issued after', async () => {
@@ -1991,7 +2009,7 @@ describe('OAuth revocation, replay and live account checks', () => {
         })
       })
     await end(issued._creationTime - 1)
-    expect(await toolData(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    expect(await projectRows(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
     await end(issued._creationTime)
     await deniedAccess(f, c.access_token)
     // The cleanup removes the record once the tokens it refuses have expired.
@@ -2008,7 +2026,7 @@ describe('OAuth revocation, replay and live account checks', () => {
       'invalid_client',
     ])
     const renewed = await tokens(await refresh(f, c.request.clientId, c.refresh_token))
-    expect(await toolData(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
+    expect(await projectRows(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
       Array,
     )
   })
@@ -2026,7 +2044,7 @@ describe('OAuth revocation, replay and live account checks', () => {
     })
     await deniedAccess(f, c.access_token)
     const renewed = await tokens(await refresh(f, c.request.clientId, c.refresh_token))
-    expect(await toolData(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
+    expect(await projectRows(await mcp(f, renewed.access_token, 'list_projects'))).toBeInstanceOf(
       Array,
     )
     await f.t.mutation(components.betterAuth.adapter.updateMany, {
@@ -2062,7 +2080,9 @@ describe('OAuth revocation, replay and live account checks', () => {
     await oauthRefusal(await refresh(f, first.request.clientId, first.refresh_token), [
       'invalid_grant',
     ])
-    expect(await toolData(await mcp(f, second.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    expect(await projectRows(await mcp(f, second.access_token, 'list_projects'))).toBeInstanceOf(
+      Array,
+    )
     const replacement = await connect(f, WRITE, first.request.clientId)
     const after = await connectedApps(f.as)
     expect(after).toHaveLength(2)
@@ -2076,9 +2096,9 @@ describe('OAuth revocation, replay and live account checks', () => {
     await oauthRefusal(await refresh(f, first.request.clientId, first.refresh_token), [
       'invalid_grant',
     ])
-    expect(await toolData(await mcp(f, replacement.access_token, 'list_projects'))).toBeInstanceOf(
-      Array,
-    )
+    expect(
+      await projectRows(await mcp(f, replacement.access_token, 'list_projects')),
+    ).toBeInstanceOf(Array)
   })
 
   it('can delete previously disconnected connections without restoring credentials', async () => {
@@ -2202,7 +2222,9 @@ describe('OAuth revocation, replay and live account checks', () => {
         },
       })
       if (allowed) {
-        expect(await toolData(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
+        expect(await projectRows(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(
+          Array,
+        )
         expect(await f.t.query(internal.webhooks.list, { owner })).toEqual([])
       } else {
         await deniedAccess(f, c.access_token)
@@ -2501,7 +2523,7 @@ describe('OAuth smoke cleanup', () => {
       process.env.SITE_URL = APP
     }
     expect(await connectedApps(f.as)).toHaveLength(2)
-    expect(await toolData(await mcp(f, own.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    expect(await projectRows(await mcp(f, own.access_token, 'list_projects'))).toBeInstanceOf(Array)
   })
 
   it('deletes only the named smoke client and its credentials and preserves another connected app', async () => {
@@ -2534,6 +2556,8 @@ describe('OAuth smoke cleanup', () => {
     const uses = await f.t.run((ctx) => ctx.db.query('oauth_credential_uses').collect())
     expect(uses.every((use) => use.connection_id === connections[0].id)).toBe(true)
     await deniedAccess(f, own.access_token)
-    expect(await toolData(await mcp(f, other.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    expect(await projectRows(await mcp(f, other.access_token, 'list_projects'))).toBeInstanceOf(
+      Array,
+    )
   })
 })

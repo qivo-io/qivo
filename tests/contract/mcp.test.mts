@@ -1,7 +1,7 @@
 /* LIVE contract pass — the /mcp surface over the real wire, replaying its
  * byte-stable subset against the Convex deployment. Expected bytes are shared
  * with convex/tests/mcp.test.ts. Data-dependent exchanges (16
- * list_teams rows, 24 list_projects rows, last_used_at read-backs) are
+ * list_teams rows, the list_projects pages' 24 rows, last_used_at read-backs) are
  * deliberately skipped; gateway/infra headers are never pinned — only
  * content-type, allow, www-authenticate and the CORS surface.
  *
