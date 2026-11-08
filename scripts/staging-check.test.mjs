@@ -61,6 +61,7 @@ import {
   INBOX_LIST_MARKS,
   INBOX_LIST_STEP,
   INBOX_PAGE_QUERY,
+  INBOX_REFUSALS,
   imageDownloads,
   inDefaultWindow,
   isSiteOf,
@@ -1746,6 +1747,23 @@ describe('staging check REST contract', () => {
     )
     for (const { path } of PROJECT_LISTS)
       expect(projects).toContain(`path: 'projects/:ref/${path}',`)
+  })
+  it("expects the server's sentences for the Inbox's pages", () => {
+    expect(INBOX_REFUSALS).toEqual({
+      offset: offsetRefusal('inbox items'),
+      limit: LIMITS.listInbox.refusal,
+      cursor: CURSOR_REFUSAL,
+      unknown:
+        'unknown query parameter "page"; this request takes unread_only, include_snoozed, limit, cursor, offset',
+    })
+    // the REST route's query parameters, in the order its refusal names them
+    const discussion = readFileSync(
+      new URL('../convex/machine/discussion.ts', import.meta.url),
+      'utf8',
+    )
+    expect(discussion).toContain(
+      "query: ['unread_only', 'include_snoozed', 'limit', 'cursor', 'offset'],",
+    )
   })
   it('names the tools that answer a placeholder sent alone as the server does', () => {
     const mcp = readFileSync(new URL('../convex/machine/mcp.ts', import.meta.url), 'utf8')

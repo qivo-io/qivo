@@ -32,7 +32,9 @@
  * page at a time in tree order with their name and key search
  * (machine/project-lists), a project's details with the first page of its
  * milestones and grants, those lists' own pages and a project's users a
- * page at a time over REST and MCP (machine/project-details), task
+ * page at a time over REST and MCP (machine/project-details), the
+ * Standard agent's inbox a page at a time over REST and MCP
+ * (machine/inbox), task
  * progress, last
  * comment times, delay and project completion, which it waits to read whole
  * again after an archive or a restore regroups its counts, and the live
@@ -423,6 +425,18 @@ export const PROJECT_DETAIL_REFUSALS = {
   usersLimit: LIMITS.listProjectUsers.refusal,
   cursor: LIST_REFUSALS.cursor,
   unknown: 'unknown query parameter "page"; this request takes limit, cursor, offset',
+}
+
+/** The sentences REST GET /v1/inbox and MCP list_inbox refuse a page's
+ *  `offset`, `limit` and `cursor` with (convex/lib/listCursor.ts and the
+ *  limits registry's listInbox), and REST's unknown query parameter, which
+ *  the script's tests pin. */
+export const INBOX_REFUSALS = {
+  offset: 'offset does not apply to inbox items; pass next_cursor as cursor',
+  limit: LIMITS.listInbox.refusal,
+  cursor: LIST_REFUSALS.cursor,
+  unknown:
+    'unknown query parameter "page"; this request takes unread_only, include_snoozed, limit, cursor, offset',
 }
 
 /** A project's lists that its details hold a first page of, as MCP
@@ -3355,6 +3369,119 @@ async function projectDetailChecks() {
     } finally {
       for (const m of made) await rest(w, 'DELETE', `/projects/${M.id}/milestones/${m.id}`)
     }
+  })
+}
+
+/** The Standard agent's inbox a page at a time over REST GET /v1/inbox and
+ *  MCP list_inbox (machine/inbox). With the run's write token it makes
+ *  three tagged tasks in Alpha and mentions the agent in a comment on each,
+ *  so the agent holds three unread items. With the agent's key it reads
+ *  GET /v1/inbox at limit 200 for the count, then pages both surfaces at
+ *  limit 1 to their ends, within that count and two pages more, every page
+ *  moving on, and checks that each of the three tasks comes exactly once on
+ *  each surface, in the same order, newest first, and that a REST cursor
+ *  continues on MCP. unread_only lists the three; after POST
+ *  /v1/inbox/read with their keys an unread_only list holds none of them.
+ *  Then the refusals: offset=1, limit=0 on both surfaces, an unread_only
+ *  cursor sent without unread_only, a GET /v1/users cursor and an unknown
+ *  query parameter, each with its sentence. A backend before the paged
+ *  Inbox answers {items, truncated} without next_cursor, so the step fails
+ *  there. The tasks, and with them their messages, are left to the run's
+ *  sweep. */
+async function inboxChecks() {
+  const w = run.creds.writeToken
+  const s = run.creds.stdKey
+  await check('machine/inbox', async () => {
+    const A = run.projects.A
+    const std = run.agents.std
+    const keys = []
+    for (let i = 0; i < 3; i++) {
+      const task = await restOk(w, 'POST', '/tasks', {
+        project: A.id,
+        title: `${run.tag} inbox ${i}`,
+      })
+      run.created.push(task)
+      await restOk(w, 'POST', `/tasks/${task.key}/comments`, {
+        body: `${run.tag} inbox ${i} for @[${std.name}](user:${std.id})`,
+      })
+      keys.push(task.key)
+    }
+    const newest = [...keys].reverse()
+    const ours = (items) => items.map((i) => i.task.key).filter((key) => keys.includes(key))
+    const whole = await readOk(s, '/inbox?limit=200')
+    expect(
+      Array.isArray(whole?.items) &&
+        (whole.next_cursor === null || typeof whole.next_cursor === 'string'),
+      'GET /v1/inbox answered no {next_cursor, items} page',
+    )
+    const most = whole.items.length + 2
+    const viaRest = await movingPages(
+      (cursor) => readOk(s, withQuery('/inbox', { limit: 1, cursor })),
+      'GET /v1/inbox',
+      'items',
+      most,
+    )
+    const viaTool = await movingPages(
+      (cursor) => toolOk(s, 'list_inbox', { limit: 1, ...(cursor === null ? {} : { cursor }) }),
+      'list_inbox',
+      'items',
+      most,
+    )
+    same(ours(viaRest), newest, "the run's three items over REST, newest first")
+    same(ours(viaTool), newest, "the run's three items over MCP, newest first")
+    same(
+      viaTool.map((i) => i.task.key),
+      viaRest.map((i) => i.task.key),
+      'the inbox on both surfaces',
+    )
+    for (const key of keys)
+      eq(viaRest.filter((i) => i.task.key === key).length, 1, `${key} on the REST pages`)
+    const first = await readOk(s, '/inbox?limit=1')
+    expect(typeof first.next_cursor === 'string', 'the inbox ended after one item')
+    const next = await toolOk(s, 'list_inbox', { limit: 1, cursor: first.next_cursor })
+    eq(next.items[0]?.task.key, viaRest[1]?.task.key, 'list_inbox after a REST cursor')
+    const unread = () =>
+      movingPages(
+        (cursor) => readOk(s, withQuery('/inbox', { unread_only: true, limit: 50, cursor })),
+        'GET /v1/inbox?unread_only=true',
+        'items',
+        most,
+      )
+    same(ours(await unread()), newest, "the run's three items, unread")
+    const unreadCursor = (await readOk(s, '/inbox?unread_only=true&limit=1')).next_cursor
+    expect(typeof unreadCursor === 'string', 'the unread inbox ended after one item')
+    const marked = await restOk(s, 'POST', '/inbox/read', { tasks: keys }, 200)
+    same([...marked.tasks].sort(), [...keys].sort(), 'POST /v1/inbox/read names the three')
+    same(ours(await unread()), [], 'unread_only after marking the three read')
+    // the refusals
+    await restRefusal(s, 'GET', '/inbox?offset=1', undefined, 400, INBOX_REFUSALS.offset)
+    await restRefusal(s, 'GET', '/inbox?limit=0', undefined, 400, INBOX_REFUSALS.limit)
+    eq(await toolRefusal(s, 'list_inbox', { limit: 0 }), INBOX_REFUSALS.limit, 'list_inbox limit 0')
+    eq(
+      await toolRefusal(s, 'list_inbox', { offset: 1 }),
+      INBOX_REFUSALS.offset,
+      'list_inbox offset 1',
+    )
+    await restRefusal(
+      s,
+      'GET',
+      withQuery('/inbox', { cursor: unreadCursor }),
+      undefined,
+      400,
+      INBOX_REFUSALS.cursor,
+    )
+    const usersCursor = (await readOk(s, '/users?limit=1')).next_cursor
+    expect(typeof usersCursor === 'string', 'the users ended after one')
+    await restRefusal(
+      s,
+      'GET',
+      withQuery('/inbox', { cursor: usersCursor }),
+      undefined,
+      400,
+      INBOX_REFUSALS.cursor,
+    )
+    await restRefusal(s, 'GET', '/inbox?page=2', undefined, 400, INBOX_REFUSALS.unknown)
+    return `the Standard agent's ${viaRest.length} items a page of one on both surfaces, the run's three once each, newest first, a REST cursor on MCP, unread_only before and after marking them read; offset, limit=0, an unread_only cursor, a users cursor and an unknown parameter refused`
   })
 }
 
@@ -11117,6 +11244,7 @@ async function main() {
   await taskDetailChecks()
   await projectListChecks()
   await projectDetailChecks()
+  await inboxChecks()
   await subtaskRuleChecks()
   // task and project facts, the live group rule and the billing pause
   await factChecks()
