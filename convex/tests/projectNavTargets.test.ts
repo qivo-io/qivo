@@ -23,6 +23,7 @@ import {
   badRequest,
   mapOf,
   measured,
+  measuredWalk,
   names,
   ok,
   page,
@@ -511,23 +512,29 @@ describe('reads at the design size', () => {
     expect(answer).toEqual({ state: 'ok', top: true, sub: true })
   })
 
-  it('lists the first batch beside 200 top-level projects with grants, 66 of them with 3 sub-projects', async () => {
+  it('lists every batch beside 200 top-level projects with grants, every tenth with 3 sub-projects', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const pia = await person(t, f.org.id, 'Pia')
     const tops = await plantMetas(t, f.org.id, names('Top ', 198))
-    // 198 sub-projects beside the fixture's two under its own project, so
-    // the person reads 200, the design size
-    for (const p of tops.slice(0, 66)) await plantSubs(t, p, names(`${p.name} sub `, 3))
+    // 60 sub-projects beside the fixture's two under its own project, so the
+    // person reads 62, an everyday figure, spread over the walk of the 200
+    for (const p of tops.filter((_, i) => i % 10 === 0))
+      await plantSubs(t, p, names(`${p.name} sub `, 3))
     await plantGrants(t, pia, [f.meta, f.hidden, ...tops])
     await ready(t, f)
     const seats = mapOf([pia])
-    const first = ok(
-      await call(t, 'targets, 200 top-level projects with grants, first batch', (ctx) =>
-        navTargetsOf(ctx, LOGIN, seats, {}),
-      ),
+    const { calls, rows } = await measuredWalk(t, (ctx, after) =>
+      navTargetsOf(ctx, LOGIN, seats, { after }),
     )
-    expect(first.rows).toHaveLength(25)
+    console.log('targets, 200 top-level projects with grants, every batch', calls)
+    expect(rows).toHaveLength(62)
+    expect(calls.map((c) => c.rows)).toEqual([25, 25, 12])
+    for (const c of calls) {
+      expect(c.stopped).toBe(false)
+      expect(c.ranges).toBeLessThan(NAMED_READ.ranges)
+      expect(c.documents).toBeLessThan(NAMED_READ.documents)
+    }
   })
 
   it('walks 200 live top-level projects with no sub-project for holds, whose sub is false', async () => {

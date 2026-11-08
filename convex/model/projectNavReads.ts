@@ -1835,9 +1835,10 @@ const targetParts = ({ key, tie: [parentId, childKey, childId, orgId] }: NamedAt
  * share with Edit, 180 and 237 for the first batch; the sub-projects of 50
  * live projects a team of the person's shares beside its 150 archived
  * shares, 89 and 257; 30 sub-projects each shared with 5 teams, 162 and
- * 255; the first batch beside 200 top-level projects with grants, 66 of
- * them with 3 sub-projects, so the person reads 200 sub-projects, 91 and
- * 90. Every batch answers inside NAMED_READ.
+ * 255; each of the three batches beside 200 top-level projects with
+ * grants, every tenth with 3 sub-projects, so the person reads 62
+ * sub-projects, at most 336 ranges and 333 documents, the second. Every
+ * batch answers inside NAMED_READ.
  */
 export async function navTargetsOf(
   ctx: QueryCtx,
