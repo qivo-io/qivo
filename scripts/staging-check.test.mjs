@@ -1162,7 +1162,7 @@ describe('staging check REST contract', () => {
     // Leo loses sight over REST before Send, which must post nothing
     const lost = step.indexOf('await until(async () => !(await reaches()))')
     expect(lost).toBeGreaterThan(0)
-    expect(step).toContain('/users`)).some((u) => u.id === leo.id)')
+    expect(step).toContain("/users`, 'users')).some((u) => u.id === leo.id)")
     // a handover leaves the outgoing lead a User grant, which goes too
     expect(step.indexOf("'DELETE', `/projects/")).toBeGreaterThan(0)
     expect(step.indexOf("'DELETE', `/projects/")).toBeLessThan(lost)
