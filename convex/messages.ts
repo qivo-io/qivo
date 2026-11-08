@@ -174,8 +174,8 @@ export const removeItem = orgMutation({
 
 /* Snoozes the caller's item about one task until `until`, or with null
  * lifts its snooze now, with the snooze's checks, refusals and scheduled
- * wake (model/messages.ts snoozeMessages). The ids name nothing: the write
- * covers the WHOLE (recipient, issue) pair. The return trip is the
+ * wake (model/messages.ts snoozeMessages). The write covers the whole
+ * (recipient, issue) pair. The return trip is the
  * scheduled wake below, a server event, so the laptop that snoozed and the
  * phone that did not come back at the same instant, and a closed phone
  * finds it back the moment it opens. An `until` the snooze refuses, in the

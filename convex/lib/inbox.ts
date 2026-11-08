@@ -181,9 +181,9 @@ const KIND_COUNT = {
 } as const satisfies Record<MessageKind, keyof KindCounts>
 
 /** The kinds of an item's messages, those it counts at least one of, in
- * the order of MESSAGE_KINDS (lib/enums.ts). The app (store/viewModels.ts
- * shapeMessageGroup `kinds`) gathers the same kinds in the order of their
- * oldest messages. */
+ * the order of MESSAGE_KINDS (lib/enums.ts), as the Inbox's pages
+ * (model/inboxPage.ts) and their stand-in (src/store/inboxStandIn.setup.ts)
+ * answer them. */
 export const itemKinds = (counts: KindCounts): MessageKind[] =>
   (Object.keys(KIND_COUNT) as MessageKind[]).filter((kind) => counts[KIND_COUNT[kind]] > 0)
 

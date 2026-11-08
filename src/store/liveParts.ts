@@ -90,9 +90,9 @@
    The open task's inbox item (convex/inbox.ts item) rides with the thread
    (store/planner.ts subscribeThread), with the thread's own arguments. The
    feed of new unread events (convex/inbox.ts feed) is watched by the
-   store's desktop alert client with the floor it holds, only while the
-   session can notify (lib/notificationFeed.ts), and also runs while the
-   tab is hidden. No part sends a message.
+   leader tab's desktop alert client (lib/notificationLeader.ts,
+   lib/notificationFeed.ts) with the floor it holds, while it can notify,
+   and also runs while the tab is hidden. No part sends a message.
 
    Watching one query with the same arguments twice shares one Convex
    subscription and one token (lib/liveQueries.ts), and a watch that joins

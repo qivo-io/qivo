@@ -3004,8 +3004,7 @@ export default defineSchema({
     // task.
     project_id: v.optional(v.string()),
     // The list order: the newest message's created_at, or woke_at when the
-    // item returned from a snooze later, as the app's `ts` (store/viewModels.ts
-    // shapeMessageGroup).
+    // item returned from a snooze later (model/inboxItems.ts itemOf).
     sort_at: v.string(),
     // The newest message by (created_at, id), the order the prune keeps.
     latest_id: v.string(),

@@ -40,7 +40,7 @@ const run = (fn: unknown, ctx: QueryCtx, args: Record<string, unknown>) =>
   )
 
 /** Every part of the caller's workspace in `orgId`, and the Inbox feed
-    every session that can show desktop alerts watches from the start, each
+    the leader tab of a session that can show desktop alerts watches, each
     read in its own transaction as the app subscribes to them, the feed over
     every stored event: per part its answer as JSON,
     milliseconds, index ranges, documents and bytes read, in the windows

@@ -117,10 +117,11 @@ function derived(
  * The inbox_items row that the messages `rows` of `pair` make, or null when
  * there are none. `projectId` is the task's project, absent for a task not
  * live. This is the definition every writer keeps the stored row equal to:
- * the newest message by (created_at, id), as the prune and the app order
- * them, its snooze, the unread count, the dropped counts of the unread
- * messages, the messages of each kind and the latest wake's stamp, as
- * store/viewModels.ts shapeMessageGroup folds them.
+ * the newest message by (created_at, id), as the prune orders them, and its
+ * snooze, the newest message's; the unread count and the dropped counts of
+ * the unread messages; the messages of each kind; the latest wake's stamp
+ * and how many messages carry one; and the list order sort_at, the newest
+ * message's created_at or the wake when it is later.
  */
 export function itemOf(
   pair: Pair,
