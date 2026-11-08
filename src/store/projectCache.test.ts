@@ -131,6 +131,59 @@ describe('the project cache', () => {
     expect(s.cache.look('p2').state).toBe('ok')
   })
 
+  it('drops the row of a project an answer makes gone, also of a parent another read stops bringing', () => {
+    const s = setup()
+    s.cache.name('board', ['p1'])
+    const [read] = s.reads()
+    s.answer(read.token)
+    expect(s.cache.rows().map((row) => row.id)).toEqual(['p1'])
+    // the person's access went, and the answer leaves p1 out
+    s.answer(read.token, [])
+    expect(s.cache.look('p1')).toEqual({ state: 'gone', row: null, message: null })
+    expect(s.cache.rows()).toEqual([])
+    // a hide and a show later it loads with no row, never by its old name
+    s.show(false)
+    expect(s.cache.look('p1')).toEqual({ state: 'loading', row: null, message: null })
+    s.show(true)
+    // a parent its own read leaves out, kept while a sub-project's read
+    // brings it, goes once that read stops bringing it
+    PROJECT_CACHE.chunk = 1
+    s.cache.name('task', ['meta', 'sub'])
+    const own = s.reads().find((r) => r.ids.includes('meta'))
+    const other = s.reads().find((r) => r.ids.includes('sub'))
+    if (!own || !other) throw new Error('no read of meta or sub')
+    s.answer(own.token, [])
+    s.answer(other.token, [project('sub', { parent_id: 'meta' }), project('meta')])
+    expect(s.cache.look('meta').state).toBe('ok')
+    s.answer(other.token, [])
+    expect(s.cache.look('meta').state).toBe('gone')
+    expect(s.cache.look('sub').state).toBe('gone')
+    expect(s.cache.rows().filter((row) => row.id !== 'p1')).toEqual([])
+  })
+
+  it("keeps a chunk's answered read until the read of its new ids answers, so the ids it kept stay ok", () => {
+    const s = setup()
+    PROJECT_CACHE.chunk = 5
+    s.cache.name('list', ids(3))
+    const [first] = s.reads()
+    s.answer(first.token)
+    const states = (asked: readonly string[]) => asked.map((id) => s.cache.look(id).state)
+    expect(states(ids(3))).toEqual(['ok', 'ok', 'ok'])
+    s.cache.name('list', ids(4))
+    // the answered read runs beside the read of the new ids
+    expect(s.reads().map((r) => r.ids)).toEqual([ids(3), ids(4)])
+    expect(states(ids(3))).toEqual(['ok', 'ok', 'ok'])
+    expect(s.cache.look('p0').row?.level).toBe('user')
+    // the id that joined loads, never gone
+    expect(s.cache.look('p3').state).toBe('loading')
+    const second = s.reads().find((r) => r.ids.length === 4)
+    if (!second) throw new Error('no read of the new ids')
+    s.answer(second.token, [project('p0'), project('p1'), project('p3')])
+    // the old read stopped, and the new answer speaks for every id
+    expect(s.reads().map((r) => r.ids)).toEqual([ids(4)])
+    expect(states(ids(4))).toEqual(['ok', 'ok', 'gone', 'ok'])
+  })
+
   it("answers a parent a sub-project brought ok, also when the parent's own chunk left it out", () => {
     const s = setup()
     PROJECT_CACHE.chunk = 1

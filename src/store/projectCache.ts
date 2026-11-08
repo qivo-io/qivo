@@ -15,8 +15,11 @@
      changes only its last chunk, and each id sits in one chunk at a time
      whatever the number of owners naming it. An id no owner names any more,
      or one the part now holds, leaves its chunk, and one the part stops
-     holding, as when access goes, is read from then on. Every read stops
-     while the page is hidden and starts again on return, the entries kept.
+     holding, as when access goes, is read from then on. A chunk whose ids
+     change keeps its answered read until the read of its new ids answers,
+     so the ids it kept keep their state, levels included, meanwhile, and an
+     id that joined reads as `loading`. Every read stops while the page is
+     hidden and starts again on return, the entries kept.
    - An answer keeps each row, the parent of every sub-project it answers
      among them. A project is `ok` while a current answer holds its row,
      the only state that gives a level. An id its chunk's current answer
@@ -27,7 +30,8 @@
      read restarts holds no answer, so its ids read as `loading`, until the
      new one arrives. A row kept from an earlier answer still names the
      project in every state but `gone`, never with a right, so stale rights
-     are never kept.
+     are never kept. An answer that makes a project `gone` drops its row,
+     so nothing the cache keeps names it any more.
    - A project no owner names stays `loading` until one names it: the cache
      has no safety net for an unnamed miss, so every reader's host names
      what it shows.
@@ -93,13 +97,25 @@ export type ProjectCacheDeps = {
 
 const QUERY = api.projectNav.byIds as FunctionReference<'query'>
 
+/** A chunk's subscription: the ids it asked, as JSON too. */
+type Sub = { token: string; stop: () => void; ids: readonly string[]; args: string }
+
 /** One live read: its ids in the order first named, its subscription while
-    the page shows, and its current answer, `failed`, or null while it has
-    none. */
+    the page shows, the subscription of its new ids while that has not
+    answered (`next`), and its current answer, which says what it asked,
+    `failed`, or null while it has none. */
 type Chunk = {
   ids: string[]
-  sub: { token: string; stop: () => void; args: string } | null
-  result: { rows: Map<string, NavByIdRow>; unchecked: Map<string, string> } | 'failed' | null
+  sub: Sub | null
+  next: Sub | null
+  result:
+    | {
+        asked: ReadonlySet<string>
+        rows: Map<string, NavByIdRow>
+        unchecked: Map<string, string>
+      }
+    | 'failed'
+    | null
 }
 
 const LOADING: CachedProject = Object.freeze({ state: 'loading', row: null, message: null })
@@ -181,6 +197,7 @@ export function createProjectCache(deps: ProjectCacheDeps) {
       return
     }
     if (!answer) return
+    const asked = new Set(sub.ids)
     const unchecked = new Map(answer.unchecked.map((id) => [id, answer.message ?? '']))
     for (const row of answer.rows) {
       const was = entries.get(row.id)
@@ -194,15 +211,41 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     const same =
       before !== null &&
       before !== 'failed' &&
+      before.asked.size === asked.size &&
+      [...asked].every((id) => before.asked.has(id)) &&
       before.rows.size === rows.size &&
       [...rows].every(([id, row]) => before.rows.get(id) === row) &&
       before.unchecked.size === unchecked.size &&
       [...unchecked].every(([id, message]) => before.unchecked.get(id) === message)
-    if (!same) {
-      chunk.result = { rows, unchecked }
-      touch()
-    }
+    if (same) return
+    chunk.result = { asked, rows, unchecked }
+    touch()
+    // a project this answer makes gone, one it asked or a parent row it
+    // stopped bringing, keeps no row, so no lookup names it from an
+    // earlier answer
+    const dropped = before && before !== 'failed' ? [...before.rows.keys()] : []
+    for (const id of new Set([...asked, ...dropped]))
+      if (entries.has(id) && lookUp(id).state === 'gone') entries.delete(id)
     bound()
+  }
+
+  /** Takes in the first result of chunk `chunk`'s read of its new ids, if
+      it has one: that read becomes the chunk's, and the one it replaces
+      stops. */
+  function promote(chunk: Chunk) {
+    const next = chunk.next
+    if (!next) return
+    let settled: boolean
+    try {
+      settled = deps.live.read(next.token) !== undefined
+    } catch {
+      settled = true
+    }
+    if (!settled) return
+    chunk.sub?.stop()
+    chunk.sub = next
+    chunk.next = null
+    take(chunk)
   }
 
   /** Hears every transition once for every chunk, so the answers one
@@ -210,19 +253,39 @@ export function createProjectCache(deps: ProjectCacheDeps) {
   function listen() {
     stopTransitions ??= deps.live.onTransition(
       (transition) => {
-        for (const chunk of chunks)
+        for (const chunk of chunks) {
+          if (chunk.next && transition.tokens.has(chunk.next.token)) promote(chunk)
           if (chunk.sub && transition.tokens.has(chunk.sub.token)) take(chunk)
+        }
         flush()
       },
       { view: true },
     )
   }
 
+  /** A live read of `ids`. */
+  function watchIds(ids: readonly string[]): { sub: Sub; joined: boolean } {
+    listen()
+    const w = deps.live.watch(QUERY, { ids: [...ids] } as Record<string, Value>)
+    return {
+      sub: { token: w.token, stop: w.stop, ids: [...ids], args: JSON.stringify(ids) },
+      joined: w.joined,
+    }
+  }
+
   /** Starts, restarts or stops `chunk`'s read to match its ids and the
-      page's visibility. */
+      page's visibility. A chunk whose ids change while its read holds an
+      answer keeps that read until the read of the new ids answers
+      (promote); one with no answer to keep restarts at once. */
   function follow(chunk: Chunk) {
     const args = JSON.stringify(chunk.ids)
-    if (chunk.sub && (!visible || chunk.sub.args !== args || chunk.ids.length === 0)) {
+    const idle = !visible || chunk.ids.length === 0
+    if (chunk.next && (idle || chunk.next.args !== args)) {
+      chunk.next.stop()
+      chunk.next = null
+    }
+    const answered = chunk.result !== null && chunk.result !== 'failed'
+    if (chunk.sub && (idle || (chunk.sub.args !== args && !answered))) {
       chunk.sub.stop()
       chunk.sub = null
       if (chunk.result !== null) {
@@ -230,11 +293,17 @@ export function createProjectCache(deps: ProjectCacheDeps) {
         touch()
       }
     }
-    if (chunk.sub || !visible || chunk.ids.length === 0) return
-    listen()
-    const w = deps.live.watch(QUERY, { ids: chunk.ids } as Record<string, Value>)
-    chunk.sub = { token: w.token, stop: w.stop, args }
-    if (w.joined) take(chunk)
+    if (idle) return
+    if (!chunk.sub) {
+      const { sub, joined } = watchIds(chunk.ids)
+      chunk.sub = sub
+      if (joined) take(chunk)
+      return
+    }
+    if (chunk.sub.args === args || chunk.next) return
+    const { sub, joined } = watchIds(chunk.ids)
+    chunk.next = sub
+    if (joined) promote(chunk)
   }
 
   /** Brings the chunks in line with the projects the owners name now and
@@ -256,7 +325,7 @@ export function createProjectCache(deps: ProjectCacheDeps) {
       if (chunkOf.has(id)) continue
       let last = chunks.at(-1)
       if (!last || last.ids.length >= PROJECT_CACHE.chunk) {
-        last = { ids: [], sub: null, result: null }
+        last = { ids: [], sub: null, next: null, result: null }
         chunks.push(last)
       }
       last.ids.push(id)
@@ -337,7 +406,9 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     const kept = entries.get(id) ?? null
     const result = chunkOf.get(id)?.result
     if (result === 'failed') return kept ? { state: 'failed', row: kept, message: null } : FAILED
-    if (result) {
+    // an answer speaks only of the ids it asked, so an id that joined the
+    // chunk since loads until the read of the new ids answers
+    if (result?.asked.has(id)) {
       const message = result.unchecked.get(id)
       if (message !== undefined) return { state: 'unchecked', row: kept, message }
       return GONE
@@ -376,7 +447,8 @@ export function createProjectCache(deps: ProjectCacheDeps) {
       }
       return known
     },
-    /** Every row the cache keeps, for the store's number tags. */
+    /** Every row the cache keeps, never one of a `gone` project, for the
+        store's cached facts and number tags. */
     rows(): NavByIdRow[] {
       return [...entries.values()]
     },
@@ -403,7 +475,9 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     clear() {
       for (const chunk of chunks) {
         chunk.sub?.stop()
+        chunk.next?.stop()
         chunk.sub = null
+        chunk.next = null
       }
       chunks = []
       chunkOf.clear()
