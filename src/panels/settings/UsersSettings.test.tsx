@@ -17,7 +17,6 @@ import {
   peopleSettingsServer,
   type StandInKey,
 } from '../../store/peopleSettingsStandIn.setup'
-import { shownOf } from '../../store/personShown.setup'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 
 /* Organization > Users on the real store, its people read from the server
@@ -345,7 +344,7 @@ function Screen({ initial, reset = vi.fn() }: { initial: string; reset?: (page: 
 /* --------------------------------------------------------------- the list */
 
 describe('the list', () => {
-  it('reads one page at a time with Previous and Next, people before guests, rows painted from the store', async () => {
+  it('reads one page at a time with Previous and Next, people before guests, rows shown from the answer', async () => {
     await load((s) => {
       s.profiles.push(...people(30), person('gail', 'Gail Guest', { org_role: 'guest' }))
     })
@@ -356,10 +355,17 @@ describe('the list', () => {
     expect(pageRows().slice(0, 3)).toEqual(['anna', 'atlas', 'p00'])
     expect(has('[data-org-guests]')).toBe(false)
     expect(find('[data-org-users]').dataset.usersState).toBe('ok')
-    // a rename in this session shows at once, before the server holds it
-    store.P.updateUser('p00', { name: 'Paula Renamed' }, {}, shownOf(store.P, 'p00'))
+    // a rename in this session shows at once, before the server holds it:
+    // the field keeps what it sent, as the store holds nobody else
+    const renamed = find<HTMLInputElement>('input[data-user-name="p00"]')
+    await act(async () => renamed.focus())
+    await type(renamed, 'Paula Renamed')
+    await act(async () => renamed.blur())
     await settle()
+    expect(pending.map((p) => p.name)).toContain('profiles:update')
     expect(find<HTMLInputElement>('input[data-user-name="p00"]').value).toBe('Paula Renamed')
+    await act(async () => pending.find((p) => p.name === 'profiles:update')?.resolve(null))
+    await settle()
 
     const next = find<HTMLButtonElement>('[data-users-next]')
     next.focus()
@@ -623,6 +629,11 @@ describe('kept rows', () => {
     snap.profiles.push(person(id, 'Zed New'))
     await act(async () => server.rerun())
     expect(keptRows()).toEqual([[id, 'added']])
+    // the next add waits for this one's answer
+    expect(find<HTMLButtonElement>('[data-add-user]').disabled).toBe(true)
+    await act(async () => create?.resolve(null))
+    await settle()
+    expect(keptRows()).toEqual([[id, 'added']])
     await click(find('[data-users-next]'))
     expect(pageRows()).toContain(id)
     expect(keptRows()).toEqual([])
@@ -661,7 +672,8 @@ describe('kept rows', () => {
     await type(email, 'anna.new@example.test')
     const anna = snap.profiles.find((p) => p.id === 'anna')
     if (anna) anna.email = 'anna.other@example.test'
-    await act(async () => publish(structuredClone(snap)))
+    // the page's read reruns with it, as the store holds nobody else
+    await act(async () => server.rerun())
     await search('planner')
     expect(pageRows()).toEqual([me.id])
     expect(keptRows().sort()).toEqual(
@@ -722,8 +734,7 @@ describe('kept rows', () => {
       pending.find((p) => p.name === 'profiles:update' && p.args.id === id)
     expect(sent('p00')?.args).toMatchObject({ patch: { name: 'Paula New' } })
     expect(sent('anna')?.args).toMatchObject({ patch: { email: 'anna.new@example.test' } })
-    // the store painted both, which read as saved, but the rows wait for
-    // the server's answers
+    // both read as saved, but the rows wait for the server's answers
     expect(pageRows()).toEqual([me.id])
     expect(keptRows().sort()).toEqual(
       [
@@ -752,14 +763,21 @@ describe('kept rows', () => {
       ),
     )
     await settle()
-    // the same field holds the typed name, with the name the server keeps
+    // the same field holds the typed name; the page cannot tell the name
+    // the server keeps until a page holds Person 00 again, as the store
+    // holds nobody but the signed-in person
     expect(keptRows()).toEqual([['p00', 'kept']])
+    expect(find<HTMLInputElement>('input[data-user-name="p00"]')).toBe(name)
+    expect(name.value).toBe('Paula New')
+    expect(document.querySelector('[data-user-row="p00"] [data-draft-conflict]')).toBeNull()
+    // the search goes, and the page's answer brings the name the server keeps
+    await search('')
     expect(find<HTMLInputElement>('input[data-user-name="p00"]')).toBe(name)
     expect(name.value).toBe('Paula New')
     expect(find('[data-user-row="p00"] [data-draft-conflict]').textContent).toContain(
       'Changed elsewhere to “Paula Other”.',
     )
-    // Use saved lets the draft go, and the row with it once focus leaves
+    // Use saved lets the draft go
     await click(find('[data-user-row="p00"] [data-draft-use-saved]'))
     expect(name.value).toBe('Paula Other')
     await act(async () => find<HTMLInputElement>('[data-users-search]').focus())

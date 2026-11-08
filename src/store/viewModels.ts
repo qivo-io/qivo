@@ -5,7 +5,6 @@ import type { ArchivedPageRow } from '../../convex/lib/archivedTasks'
 import { messageLine } from '../../convex/lib/inbox'
 import { LIMITS } from '../../convex/lib/limits'
 import { reviewerOwns, taskOwnerId } from '../../convex/lib/review'
-import type { SyncStamp } from '../../convex/lib/teamSync'
 import type { PersonFaceRow } from '../../convex/model/peopleSettings'
 import type { PersonRow } from '../../convex/model/projectSettings'
 import {
@@ -26,11 +25,6 @@ type TeamAccessLevel = Row<'project_team_access'>['level']
 /** Match server ordering, including ties, before converting timestamps to milliseconds. */
 export const isNewer = (aStamp: string, aId: string, bStamp: string, bId: string) =>
   bStamp > aStamp || (bStamp === aStamp && bId > aId)
-
-/* A person's Team sync stamp as the shared rule reads it (convex/lib/teamSync.ts):
-   null until a change has been made on them through the sync page. */
-export const syncStampOf = (u: Row<'profiles'>): SyncStamp | null =>
-  u.sync_at === undefined ? null : { at: u.sync_at, since: u.sync_since }
 
 export const shapeUser = (
   u: Row<'profiles'>,
@@ -66,15 +60,12 @@ export const shapeUser = (
   // days a READ inbox message is kept before the sweep takes it (0110);
   // null is "Never", and has to survive as null — 0 would be a period
   messageRetentionDays: u.message_retention_days == null ? null : Number(u.message_retention_days),
-  // org (0081): the roster is blended across every org I can see, so each
-  // person carries theirs. `pending` = an invited seat nobody has claimed
+  // org (0081): the signed-in person holds a seat in each org they can
+  // see, so each seat carries its own. `pending` = an invited seat nobody has claimed
   // — which an agent never is: it has no login to wait for, so the
   // bare auth_user_id test would brand every agent "invited" for ever
   org: u.org_id,
   pending: !demoMode && u.kind !== 'agent' && !u.auth_user_id,
-  // the latest change made on this person through Team sync (P.syncStamp);
-  // "Done since", "untouched" and "changed" read from it through syncSince
-  sync: syncStampOf(u),
 })
 export type UserVM = ReturnType<typeof shapeUser>
 
@@ -472,11 +463,11 @@ export const shapeIssue = (i: Row<'issues'>, ctx: IssueShapeCtx) => {
 }
 export type IssueVM = ReturnType<typeof shapeIssue>
 
-export type IssueSubscribers = {
-  canManage: boolean
-  subscribers: string[]
-  candidates: string[]
-}
+/** A task's followers as the follower popover reads them
+    (convex/issues.ts subscribers): whether the caller may add and remove
+    other people's follows, the followers as rows in name order, and
+    whether the task has more than the answer holds. */
+export type IssueSubscribers = FunctionReturnType<typeof api.issues.subscribers>
 
 export const shapeMilestone = (m: Row<'milestones'>) => ({
   id: m.id,

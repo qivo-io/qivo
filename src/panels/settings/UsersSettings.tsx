@@ -46,6 +46,7 @@ import { useUpdateBlocker } from '../../lib/updateSafety'
 import { useConfirmArm } from '../../lib/useConfirmArm'
 import { useViewVisibility } from '../../lib/viewVisibility'
 import type {
+  AddedPerson,
   AgentKeysRow,
   NewUserInput,
   PeoplePageAnswer,
@@ -80,7 +81,8 @@ type PageReady = Extract<PeoplePageAnswer, { state: 'ready' }>
 
 /** The store's profile of `id` in the home organization, or undefined,
     which a row paints over the answer so this session's writes show at
-    once, and which keeps an "Added" row on screen. */
+    once. The store holds only the signed-in person's own seats, so for
+    anyone else a row shows the page's answer. */
 const held = (id: string): UserVM | undefined => {
   const user = P.user(id)
   return user && user.org === P.homeOrg ? user : undefined
@@ -781,8 +783,15 @@ export function OrgUsersPage({
     : (pageAnswer?.admins ?? null)
 
   /* ---- the rows kept on screen ---- */
-  // the people this visit added, which leave once a page has held them
-  const [added, setAdded] = useStateS<readonly string[]>([])
+  // the people this visit added, each as the page sent them (P.addUser's
+  // row) with whether the server created them yet. One shows from that
+  // row while the create is on its way and after the server accepted it,
+  // until a page holds them, the page is left, or, once created, the
+  // server says they are gone (P.person); a refused create leaves at once
+  const [added, setAdded] = useStateS<ReadonlyMap<string, { row: AddedPerson; saved: boolean }>>(
+    () => new Map(),
+  )
+  const [adding, setAdding] = useStateS(false)
   // the fields that hold their row, with unsaved text or a save the server
   // has not answered (UserControls.tsx useHeldRow), by person
   const [drafts, setDrafts] = useStateS<ReadonlyMap<string, ReadonlySet<string>>>(() => new Map())
@@ -798,9 +807,20 @@ export function OrgUsersPage({
   const pageRows = page.rows
   for (const row of pageRows) known.current.set(row.id, row)
   const onPage = new Set(pageRows.map((r) => r.id))
+  for (const [id, entry] of added) if (!onPage.has(id)) known.current.set(id, entry.row)
   useEffectS(() => {
-    const seen = added.filter((id) => onPage.has(id) || !held(id))
-    if (seen.length > 0) setAdded((was) => was.filter((id) => !seen.includes(id)))
+    const seen = [...added]
+      .filter(
+        ([id, entry]) =>
+          onPage.has(id) || (entry.saved && P.person(id, P.homeOrg)?.state === 'gone'),
+      )
+      .map(([id]) => id)
+    if (seen.length > 0)
+      setAdded((was) => {
+        const next = new Map(was)
+        for (const id of seen) next.delete(id)
+        return next
+      })
   })
   const onUnsaved = React.useCallback(
     (field: string) => (id: string, unsaved: boolean) =>
@@ -824,7 +844,7 @@ export function OrgUsersPage({
     keptIds.push({ id, note })
   }
   if (!personPage) {
-    for (const id of added) if (held(id)) keep(id, 'Added')
+    for (const id of added.keys()) keep(id, 'Added')
     for (const id of drafts.keys()) keep(id, 'Not on this page')
     if (focused !== null && known.current.has(focused)) keep(focused, 'Not on this page')
     if (openKeys !== null) keep(openKeys, 'Not on this page')
@@ -972,8 +992,7 @@ export function OrgUsersPage({
   // counted as the server stores it, with whitespace runs collapsed
   const nameTooLong = overLimit(LIMITS.personName, cleanName(addName))
   const addUser = async () => {
-    if (!addName.trim() || nameTooLong || emailBad || emailMissing) return
-    // Preserve the entered fields when addUser refuses a duplicate seat.
+    if (!addName.trim() || nameTooLong || emailBad || emailMissing || adding) return
     const made = P.addUser(
       agentMode
         ? { name: cleanName(addName), kind: 'agent', orgRole: addRole }
@@ -981,22 +1000,36 @@ export function OrgUsersPage({
     )
     if (!made) return
     const name = cleanName(addName)
+    // shown at the top from what the page sent until a page holds them
+    setAdded((was) => new Map(was).set(made.id, { row: made.row, saved: false }))
+    setAdding(true)
+    const saved = await made.saved
+    setAdding(false)
+    // a refusal, such as an address that already has a seat, which the
+    // server checks over the whole organization, is toasted with its
+    // sentence; the entered fields stay so it can be sent again
+    setAdded((was) => {
+      if (!was.has(made.id)) return was
+      const next = new Map(was)
+      if (saved) next.set(made.id, { row: made.row, saved: true })
+      else next.delete(made.id)
+      return next
+    })
+    if (!saved) return
     setAddName('')
     setAddEmail('')
     setAddRole('user')
-    // shown at the top until a page holds them
-    setAdded((was) => [...was, made])
     if (!agentMode) {
       window.showToast?.(`${name} added to the organization`)
       return
     }
     // An agent with no key cannot sign in, so creating one is a single act:
     // the agent AND the key it authenticates with, revealed once, here.
-    setMinting((was) => new Set(was).add(made))
-    const res = await P.createAgentKey(made, 'Default key')
+    setMinting((was) => new Set(was).add(made.id))
+    const res = await P.createAgentKey(made.id, 'Default key')
     setMinting((was) => {
       const next = new Set(was)
-      next.delete(made)
+      next.delete(made.id)
       return next
     })
     onKeysChanged()
@@ -1005,7 +1038,7 @@ export function OrgUsersPage({
         `${name} added, but its key could not be created. Mint one below.`,
         'error',
       )
-      setOpenKeys(made)
+      setOpenKeys(made.id)
       return
     }
     setFreshAgent({ name, secret: res.secret })
@@ -1299,7 +1332,8 @@ export function OrgUsersPage({
                 <Button
                   type="button"
                   data-add-user
-                  disabled={!addName.trim() || nameTooLong || emailBad || emailMissing}
+                  disabled={!addName.trim() || nameTooLong || emailBad || emailMissing || adding}
+                  aria-busy={adding || undefined}
                   title={
                     emailBad
                       ? emailWhy

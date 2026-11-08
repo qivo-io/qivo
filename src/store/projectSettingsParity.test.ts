@@ -32,8 +32,8 @@ import {
   plantSeat,
   type T,
   uuid,
+  wholeOf,
   withOrg,
-  workspaceOf,
 } from '../../convex/tests/helpers.setup'
 import { keyOrg } from '../../convex/tests/nameKeys.setup'
 import { plantNorthstar } from '../../convex/tests/northstar.setup'
@@ -115,7 +115,7 @@ async function northstar() {
   const { org, profiles } = await plantNorthstar(t)
   const nora = profiles.find((p) => p.name === 'Nora Berg')
   if (!nora) throw new Error('no Nora')
-  const before = await workspaceOf(as(t, nora))
+  const before = await wholeOf(t, nora)
   const project = before?.projects.find((p) => p.type === 'meta' && !p.parent_id && !p.archived_at)
   const sub = before?.projects.find((p) => p.parent_id === project?.id && !p.archived_at)
   if (!project || !sub) throw new Error('no project with a sub-project')
@@ -159,7 +159,7 @@ async function northstar() {
     }
   })
   await keyOrg(t, org.id)
-  const ws = await workspaceOf(as(t, nora))
+  const ws = await wholeOf(t, nora)
   if (!ws) throw new Error('no workspace')
   return { t, org, nora, project, sub, ws, profiles }
 }
@@ -285,7 +285,7 @@ async function compareShape(
   })
   await t.run((ctx) => plant(ctx, f, subject))
   await keyOrg(t, f.org.id)
-  const ws = await workspaceOf(as(t, subject))
+  const ws = await wholeOf(t, subject)
   if (!ws) throw new Error('no workspace')
   const states: string[] = []
   for (const p of [f.meta, f.sub, f.sub2, f.hidden, f.otherProject]) {
@@ -331,7 +331,7 @@ describe("the New sub-project dialog's parent checks", () => {
     // Skunkworks, which the user leads, archived
     await t.run((ctx) => ctx.db.patch(f.hidden._id, { archived_at: NOW }))
     await keyOrg(t, f.org.id)
-    const ws = await workspaceOf(as(t, f.user))
+    const ws = await wholeOf(t, f.user)
     if (!ws) throw new Error('no workspace')
     const answers: string[] = []
     for (const parent of [f.meta, seen, f.hidden, f.sub]) {
@@ -361,7 +361,7 @@ async function grown(total: number, grants: number) {
   const count = total - profiles.length
   const nora = profiles.find((p) => p.name === 'Nora Berg')
   if (!nora) throw new Error('no Nora')
-  const before = await workspaceOf(as(t, nora))
+  const before = await wholeOf(t, nora)
   const project = before?.projects.find((p) => p.type === 'meta' && !p.parent_id && !p.archived_at)
   if (!project) throw new Error('no project')
   const words = ['Alder', 'Birch', 'Cedar', 'Dahl', 'Elm', 'Fern', 'Grove', 'Holm']
@@ -393,7 +393,7 @@ async function grown(total: number, grants: number) {
       }
     })
   await keyOrg(t, org.id)
-  const ws = await workspaceOf(as(t, nora))
+  const ws = await wholeOf(t, nora)
   if (!ws) throw new Error('no workspace')
   return { t, org, nora, project, ws }
 }
@@ -430,7 +430,7 @@ describe('at the design size', () => {
         })
     })
     await keyOrg(t, org.id)
-    const ws = await workspaceOf(as(t, nora))
+    const ws = await wholeOf(t, nora)
     if (!ws) throw new Error('no workspace')
     expect(ws.teams.filter((team) => team.org_id === org.id)).toHaveLength(50)
     const batches = await same(

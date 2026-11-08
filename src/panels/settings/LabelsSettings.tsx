@@ -36,7 +36,7 @@ import { flushSync } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { api } from '../../../convex/_generated/api'
-import { grouped, LIMITS } from '../../../convex/lib/limits'
+import { BY_IDS_MAX, grouped, LIMITS } from '../../../convex/lib/limits'
 import { LimitedInput } from '../../components/LimitedField'
 import { Icon, Popover } from '../../components/qivo'
 import { FieldHint, PageTitle, SettingsGroup, SettingsSection } from '../../components/settingsPage'
@@ -44,6 +44,7 @@ import { limitSentence, overLimit } from '../../lib/fieldLimits'
 import { focusAround, useFocusWhenGone } from '../../lib/focusWhenGone'
 import { LABEL_COLORS } from '../../lib/labelColors'
 import { useUnsaved } from '../../lib/leaveGuard'
+import { useLiveView } from '../../lib/liveView'
 import {
   type BatchAt,
   type ListEnd,
@@ -89,14 +90,6 @@ function labelDeleteSentence(count: number | null): string {
         ? 'Used by no active tasks. '
         : `Used by ${activeTasks(count)}. `
   return `${used}Deleting this label removes it from all tasks, including archived tasks. This cannot be undone.`
-}
-
-/** The home organization's label `id` in the store's catalogue, if it
-    holds it, which a row paints over the answer so this session's writes
-    show at once. */
-const storeLabel = (id: string) => {
-  const label = P.labelById[id]
-  return label && label.org === P.homeOrg ? label : null
 }
 
 /** What New label says beside Add while it checks the typed name, and
@@ -428,9 +421,6 @@ export function OrgLabelsPage() {
   // accepts it, so a refused one never shows as the label's name or color,
   // or goes out later as `expected`.
   const known = useRef(new Map<string, { name: string; color: string }>())
-  // the labels of the kept rows the store's catalogue held during this
-  // visit. One it no longer holds was deleted, here or by someone else
-  const heldHere = useRef(new Set<string>())
   const [saved, setSaved] = useState<ReadonlyMap<string, { name?: SavedOver; color?: SavedOver }>>(
     () => new Map(),
   )
@@ -504,26 +494,33 @@ export function OrgLabelsPage() {
     })
   })
   // a created or renamed label, or one with an unsaved name, that no loaded
-  // batch shows, while the store holds it or while the page knows it and
-  // the store never held it, as a label the answers show before the
-  // catalogue does. One the store held and no longer holds is gone.
+  // batch shows, while the page knows it from an answer or from what it
+  // created; the store holds no label
   const candidates = [...new Set([...made, ...renamed, ...drafts])]
-  for (const id of candidates) if (storeLabel(id) !== null) heldHere.current.add(id)
   const kept = candidates.filter(
-    (id) =>
-      !loaded.has(id) &&
-      !deleting.has(id) &&
-      (storeLabel(id) !== null || (known.current.has(id) && !heldHere.current.has(id))),
+    (id) => !loaded.has(id) && !deleting.has(id) && known.current.has(id),
   )
+  // the kept labels read by id while they show, so one deleted here or by
+  // someone else, which no batch lists, leaves the kept rows once the
+  // server's answer leaves it out
+  const keptIds = [...kept].sort().slice(0, BY_IDS_MAX)
+  const keptKey = keptIds.length ? JSON.stringify({ org_id: org, ids: keptIds }) : null
+  const keptRead = useLiveView<{ rows: { id: string }[] }>(api.labels.byIds, keptKey)
+  const keptAnswer = keptKey !== null && keptRead.key === keptKey ? keptRead.value : undefined
+  useEffect(() => {
+    if (!keptAnswer) return
+    const there = new Set(keptAnswer.rows.map((row) => row.id))
+    const gone = (id: string) => keptIds.includes(id) && !there.has(id)
+    setMade((s) => without(s, gone))
+    setRenamed((s) => without(s, gone))
+  }, [keptAnswer])
   // forget the labels neither a batch, a kept row nor a delete on its way
   // shows
   for (const id of known.current.keys())
     if (!loaded.has(id) && !kept.includes(id) && !deleting.has(id)) known.current.delete(id)
-  /** Label `id` as the page shows it: the store's while it holds it, else
-      what the page last held or created, with what it saved over that. */
+  /** Label `id` as the page shows it: what the page last held or created,
+      with what it saved over that. */
   const shownLabel = (id: string, answer: LabelRowAnswer | null) => {
-    const label = storeLabel(id)
-    if (label) return { name: label.name, color: label.color }
     const base = answer ?? known.current.get(id)
     const over = saved.get(id)
     return {

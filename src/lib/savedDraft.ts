@@ -259,11 +259,14 @@ export type DraftSave<T> = {
   /** For a save the field awaits: the server refused it. */
   refused: () => void
   /** The store's options for the save of the row's field `field`: `seen`
-      keyed by that field, with keepDraft and keepUnsaved. */
+      keyed by that field, with keepDraft, keepUnsaved and accepted, so a
+      field whose row the store does not hold learns that its save went
+      through though no delivery brings the value. */
   as: (field: string) => {
     seen: Record<string, T>
     keepDraft: (shown?: unknown, by?: Writer) => boolean
     keepUnsaved: () => void
+    accepted: () => void
   }
 }
 
@@ -347,15 +350,16 @@ export function useSavedDraft<T>(
       const keepUnsaved = () => {
         answer({ type: 'refused', key, seq: n, value, seen })
       }
+      const accepted = () => {
+        answer({ type: 'accepted', key, seq: n, value, seen })
+      }
       return {
         seen,
         keepDraft,
         keepUnsaved,
-        accepted: () => {
-          answer({ type: 'accepted', key, seq: n, value, seen })
-        },
+        accepted,
         refused: keepUnsaved,
-        as: (field) => ({ seen: { [field]: seen }, keepDraft, keepUnsaved }),
+        as: (field) => ({ seen: { [field]: seen }, keepDraft, keepUnsaved, accepted }),
       }
     },
   }

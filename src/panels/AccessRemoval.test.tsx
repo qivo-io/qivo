@@ -309,7 +309,14 @@ const pickerNames = () =>
   [...document.querySelectorAll('[data-reassign-choice]')].map((b) => b.textContent)
 const pickerText = () => document.querySelector('[data-reassign-people]')?.textContent ?? ''
 
-const leoGrant = (): AccessRemoval => ({ kind: 'userGrant', projectId: work, userId: 'leo' })
+// as the project's access editor presses it, with the name it showed, as
+// the store holds nobody but the signed-in person
+const leoGrant = (): AccessRemoval => ({
+  kind: 'userGrant',
+  projectId: work,
+  userId: 'leo',
+  label: 'Leo Berg',
+})
 
 /* Opens the window for removing Leo from the project with `shown`, as the
    press does once the preview asks, in a root of its own. */
@@ -463,7 +470,7 @@ describe('saving the removal window', () => {
     expect(reads('accessRemovals:preview')).toHaveLength(1)
     expect(writes()).toEqual([['projects:removeAccess', 'keep_as_viewer']])
     expect(onClose).toHaveBeenCalled()
-    expect(P.levelOn(work, 'leo')).toBe('viewer')
+    // the store holds no one else's level; the requests say what changed
   })
 
   it('says Saving… from the press, and keeps the choice on screen while it checks', async () => {
@@ -554,7 +561,7 @@ describe('saving the removal window', () => {
       'Leo Berg can no longer see a task they are assigned to or reviewing. A project lead can reassign it.',
       'info',
     )
-    expect(P.levelOn(work, 'leo')).toBeNull()
+    // the store holds no one else's level; the requests say what changed
   })
 
   it('takes the plain removal when nobody loses sight of a task any more', async () => {
@@ -1020,7 +1027,7 @@ describe('the press on the Settings pages', () => {
     await press(remove('leo'))
     await press(shellButton('Change to Viewer'))
     expect(document.querySelector('[data-modal-shell]')).toBeNull()
-    expect(P.levelOn(work, 'leo')).toBe('viewer')
+    // the store holds no one else's level; the requests say what changed
     expect(document.activeElement).toBe(remove('leo'))
     // his grant is Viewer now, which Keep as Viewer cannot keep; Ada is
     // listed before Leo, so she is the row before his

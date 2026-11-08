@@ -288,99 +288,33 @@ describe('project creation through the client store', () => {
   })
 
   describe('canCreateProject', () => {
-    /* Me (the fixture's org admin) beside one seat of each kind in the home
-       org. Every seat but `plain` and `agent` carries the right, which only
-       counts for an active standard user, person or agent, while the setting
-       is 'selected'. */
-    const seat = (id: string, org_role: Profile['org_role'], extra: Partial<Profile> = {}) => ({
-      id,
-      org_id: snap.orgs[0].id,
-      name: id,
-      initials: 'SE',
-      color: '#335577',
-      org_role,
-      active: true,
-      kind: 'person' as const,
-      can_create_projects: true,
-      created_at: '2026-09-14T08:00:00.000Z',
-      ...extra,
-    })
+    /* The signed-in person's own seat, the one the store holds, under each
+       setting. The rule over every kind of seat is
+       convex/tests/projectCreators.test.ts's (lib/projectCreators.ts). */
     const ask = (setting: Setting) => {
       snap.orgs[0].project_creators = setting
       deliver(structuredClone(snap))
-      const ids = [
-        'plain',
-        'flagged',
-        'viewer',
-        'guest',
-        'inactive',
-        'agent',
-        'flaggedAgent',
-        'viewerAgent',
-      ]
-      return {
-        me: P.canCreateProject(),
-        ...Object.fromEntries(ids.map((id) => [id, P.canCreateProject(id)])),
-      }
+      return P.canCreateProject()
     }
 
-    beforeEach(() => {
-      snap.profiles.push(
-        seat('plain', 'user', { can_create_projects: undefined }),
-        seat('flagged', 'user'),
-        seat('viewer', 'viewer'),
-        seat('guest', 'guest'),
-        seat('inactive', 'user', { active: false }),
-        seat('agent', 'user', { kind: 'agent', can_create_projects: undefined }),
-        seat('flaggedAgent', 'user', { kind: 'agent' }),
-        seat('viewerAgent', 'viewer', { kind: 'agent' }),
-      )
+    it('lets an org admin create under every setting', () => {
+      for (const setting of [undefined, 'users', 'selected', 'admins'] as const)
+        expect(ask(setting)).toBe(true)
+      expect(ask('everyone' as unknown as Setting)).toBe(true)
     })
 
-    const nobodyElse = {
-      plain: false,
-      flagged: false,
-      viewer: false,
-      guest: false,
-      inactive: false,
-      agent: false,
-      flaggedAgent: false,
-      viewerAgent: false,
-    }
-
-    it('lets every active standard user, person or agent, create while the setting is missing or users', () => {
-      for (const setting of [undefined, 'users'] as const) {
-        expect(ask(setting)).toEqual({
-          ...nobodyElse,
-          me: true,
-          plain: true,
-          flagged: true,
-          agent: true,
-          flaggedAgent: true,
-        })
-      }
-    })
-
-    it('needs the right under selected users', () => {
-      expect(ask('selected')).toEqual({
-        ...nobodyElse,
-        me: true,
-        flagged: true,
-        flaggedAgent: true,
-      })
-    })
-
-    it('lets only org admins create under admins or a setting it does not know', () => {
-      expect(ask('admins')).toEqual({ ...nobodyElse, me: true })
-      expect(ask('everyone' as unknown as Setting)).toEqual({ ...nobodyElse, me: true })
-    })
-
-    it('reads my own seat when asked without a user', () => {
+    it('reads my own seat’s role and right', () => {
       snap.profiles[0].org_role = 'user'
-      expect(ask('selected').me).toBe(false)
+      expect(ask('users')).toBe(true)
+      expect(ask(undefined)).toBe(true)
+      expect(ask('selected')).toBe(false)
       snap.profiles[0].can_create_projects = true
-      expect(ask('selected').me).toBe(true)
-      expect(ask('admins').me).toBe(false)
+      expect(ask('selected')).toBe(true)
+      expect(ask('admins')).toBe(false)
+      expect(ask('everyone' as unknown as Setting)).toBe(false)
+      snap.profiles[0].org_role = 'viewer'
+      expect(ask('users')).toBe(false)
+      expect(ask('selected')).toBe(false)
     })
   })
 
@@ -443,8 +377,14 @@ describe('project creation through the client store', () => {
     })
 
     it('lets a viewer see one shared with their team, and an org admin only by their own rows', () => {
-      expect(P.seesNewProject({ lead: 'leo' }, 'ingrid')).toBe(false)
-      expect(P.seesNewProject({ lead: 'leo', teamAccess: { mine: 'user' } }, 'ingrid')).toBe(true)
+      // the store judges the signed-in person alone, here as a viewer
+      snap.profiles[0].org_role = 'viewer'
+      deliver(structuredClone(snap))
+      const declined = { [me]: null }
+      expect(P.seesNewProject({ lead: 'leo', access: declined })).toBe(false)
+      expect(
+        P.seesNewProject({ lead: 'leo', access: declined, teamAccess: { mine: 'user' } }),
+      ).toBe(true)
       snap.profiles[0].org_role = 'admin'
       deliver(structuredClone(snap))
       // admin status gives no sight of a project someone else leads

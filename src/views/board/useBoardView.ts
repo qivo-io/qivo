@@ -131,13 +131,14 @@ export type BoardView = {
   retry: () => void
 }
 
-/** Whether a task shows in the Board of `info` with `filters` on screen. A
-    task only the answer brings has no text or labels to search, and a
-    group of it no newest activity of its subtasks, so the answer decides
-    those. */
+/** Whether a task shows in the Board of `info` with `filters` on screen.
+    The text filter is the answer's for every task, held or not: the server
+    matched the whole text, label and assignee names included, which the
+    store cannot read. A group only the answer brings has no newest activity
+    of its subtasks, so the answer decides Stale for it. */
 function passes(info: ScopeInfo, filters: IssueFilters, it: IssueVM) {
   const shaped = P.handleOf(it.uuid) === null
-  const local = shaped ? { ...filters, search: '', stale: filters.stale && !it.isGroup } : filters
+  const local = { ...filters, search: '', stale: filters.stale && !(shaped && it.isGroup) }
   return (
     info.subIdSet.has(it.project) && (!info.only || info.only(it)) && P.passesFilters(it, local)
   )
@@ -390,9 +391,9 @@ export function useBoardView(
       if (created !== null && !matchesAllWords(created, filters.search)) continue
       // the person's new subtask whose parent is still to come, as above
       if (loading && P.parentLoading(it)) missing++
-      // a task only the answer brings, which the local check searched by
-      // nothing (passes)
-      if (answered && created === null && P.handleOf(uuid) === null) {
+      // a task the local check searched by nothing (passes), which the
+      // answer matched before the person's writes changed it
+      if (answered && created === null) {
         const text = !!unsent?.has(uuid)
         if (stillMatches(it, answered.get(uuid), filters.search, text) === null) unsure++
       }

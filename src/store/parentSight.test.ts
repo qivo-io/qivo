@@ -1,5 +1,13 @@
 import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  ASSIGNEE_RULE,
+  ASSIGNEE_SIGHT_RULE,
+  HOLDER_SIGHT_RULE,
+  MOVE_HOLDER_RULE,
+  REVIEWER_SIGHT_RULE,
+} from '../../convex/model/issues'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 type Planner = typeof import('./planner')['P']
@@ -26,6 +34,8 @@ const NOW = '2026-09-14T08:00:00.000Z'
 describe('assignees must see the tasks above a subtask', () => {
   let P: Planner
   let requests: { name: string; args: Record<string, unknown> }[]
+  // the sentence the server refuses the next write with, or none
+  let refusal: string | null
 
   async function load(change?: (snap: Snapshot) => void) {
     const snap: Snapshot = plannerFixture()
@@ -92,11 +102,14 @@ describe('assignees must see the tasks above a subtask', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     requests = []
     network.query.mockResolvedValue(null)
+    refusal = null
     network.mutation.mockImplementation((ref, args) => {
       const name = getFunctionName(ref)
       if (name === 'identity:claimMySeats') return Promise.resolve(null)
       requests.push({ name, args })
-      return new Promise(() => {})
+      return refusal === null
+        ? new Promise(() => {})
+        : Promise.reject(new ConvexError({ code: 'rule', message: refusal }))
     })
   })
 
@@ -107,39 +120,54 @@ describe('assignees must see the tasks above a subtask', () => {
 
   const vm = (uuid: string) => P.issues.find((it) => it.uuid === uuid)!
 
-  it('refuses a blind assignee or reviewer before anything is sent', async () => {
+  /* Lets the refusal's promise settle and its toast show. */
+  const settle = async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+    await new Promise((r) => setTimeout(r, 0))
+  }
+  const toasted = (rule: string) =>
+    expect(window.showToast).toHaveBeenCalledWith(
+      expect.stringContaining(rule.slice(1, 40)),
+      'error',
+    )
+
+  it('holds nobody but the signed-in person, so it judges no one else', async () => {
     await load()
-    P.updateIssue(vm('sub').id, { assignee: 'workOnly' })
-    P.updateIssue(vm('sub').id, { reviewer: 'workOnly' })
-    expect(requests).toEqual([])
+    expect(P.users.map((u) => u.id)).toEqual(P.myProfileIds)
+    expect(P.user('both')).toBeUndefined()
+  })
+
+  it("sends a blind assignee or reviewer and takes the paint back on the server's refusal", async () => {
+    await load()
+    refusal = ASSIGNEE_SIGHT_RULE
+    void P.updateIssue(vm('sub').id, { assignee: 'workOnly' })
+    expect(requests.map((r) => r.name)).toEqual(['issues:update'])
+    await settle()
+    toasted(ASSIGNEE_SIGHT_RULE)
     expect(vm('sub').assignee).toBeFalsy()
-    expect(window.showToast).toHaveBeenCalledTimes(2)
-    P.updateIssue(vm('sub').id, { assignee: 'both' })
-    expect(requests.map((r) => r.name)).toEqual(['issues:update'])
+    refusal = REVIEWER_SIGHT_RULE
+    void P.updateIssue(vm('sub').id, { reviewer: 'workOnly' })
+    await settle()
+    toasted(REVIEWER_SIGHT_RULE)
+    expect(vm('sub').reviewer).toBeFalsy()
+    // a holder the server takes paints and stays
+    refusal = null
+    void P.updateIssue(vm('sub').id, { assignee: 'both' })
+    expect(vm('sub').assignee).toBe('both')
+    expect(requests.map((r) => r.name)).toEqual(['issues:update', 'issues:update', 'issues:update'])
   })
 
-  it('refuses a parent that someone holding the task cannot see', async () => {
+  it("sends a parent someone holding the task cannot see and takes it back on the server's refusal", async () => {
     await load()
-    P.updateIssue(vm('free').id, { parent: vm('epic').id })
-    expect(requests).toEqual([])
-    expect(vm('free').parent).toBeNull()
-    expect(window.showToast).toHaveBeenCalledTimes(1)
-    P.updateIssue(vm('free').id, { assignee: 'both' })
-    P.updateIssue(vm('free').id, { parent: vm('epic').id })
-    expect(requests.map((r) => r.name)).toEqual(['issues:update', 'issues:update'])
-    expect(vm('free').parent).toBe(vm('epic').id)
-  })
-
-  it('ignores a switched-off holder, as the server does', async () => {
-    await load((snap) => {
-      for (const p of snap.profiles) if (p.id === 'workOnly') p.active = false
-    })
-    expect(P.holdersSeeParent(vm('free'), vm('epic').id)).toBe(true)
-    P.updateIssue(vm('free').id, { parent: vm('epic').id })
+    refusal = HOLDER_SIGHT_RULE
+    void P.updateIssue(vm('free').id, { parent: vm('epic').id })
     expect(requests.map((r) => r.name)).toEqual(['issues:update'])
+    await settle()
+    toasted(HOLDER_SIGHT_RULE)
+    expect(vm('free').parent).toBeNull()
   })
 
-  it('names who would lose access, for a move and for a new parent', async () => {
+  it('sends a move with another person on a subtask, says it moved only once the server took it, and takes a refused one back', async () => {
     await load((snap) => {
       // free's subtask belongs to workOnly, who cannot see Plans
       const free = snap.issues.find((i) => i.id === 'free')!
@@ -154,38 +182,21 @@ describe('assignees must see the tasks above a subtask', () => {
       })
     })
     const plans = P.projects.find((p) => p.name === 'Plans')!
-    const moving = P.moveBlockers(vm('free'), plans.id)
-    expect(moving.map((b) => [b.uid, b.task.uuid, b.role, b.edit])).toEqual([
-      ['workOnly', 'kid', 'assignee', false],
-    ])
-    expect(P.blockerText(moving[0])).toBe(
-      `Work only is assigned to ${vm('kid').key} but has no access to ${P.projectLabel(plans)}. Give them access or reassign ${vm('kid').key} first.`,
-    )
-    // the task's own assignee needs edit access at the destination
-    P.updateIssue(vm('free').id, { assignee: 'workOnly' })
-    expect(P.moveBlockers(vm('free'), plans.id).map((b) => [b.task.uuid, b.edit])).toEqual([
-      ['free', true],
-      ['kid', false],
-    ])
-    // a new parent in Plans is refused with the same named sentence
-    P.updateIssue(vm('free').id, { parent: vm('epic').id })
-    expect(window.showToast).toHaveBeenLastCalledWith(
-      P.blockerText(P.parentBlockers(vm('free'), vm('epic').id)[0]),
-      'error',
-    )
-  })
-
-  it("names the moved task's switched-off assignee, whom the server still refuses", async () => {
-    await load((snap) => {
-      for (const p of snap.profiles) if (p.id === 'both') p.active = false
-      const free = snap.issues.find((i) => i.id === 'free')!
-      free.assignee_id = 'both'
-    })
-    const plans = P.projects.find((p) => p.name === 'Plans')!
-    const blockers = P.moveBlockers(vm('free'), plans.id)
-    expect(blockers.map((b) => [b.uid, b.task.uuid, b.edit])).toEqual([['both', 'free', true]])
-    expect(P.blockerText(blockers[0])).toBe(
-      `Both is switched off and is assigned to ${vm('free').key}. Reassign ${vm('free').key} first.`,
-    )
+    const work = vm('free').project
+    refusal = MOVE_HOLDER_RULE
+    const saved: boolean[] = []
+    expect(P.moveIssue(vm('free').id, plans.id, (ok) => saved.push(ok))).toBe(vm('free').id)
+    expect(requests.map((r) => r.name)).toEqual(['issues:move'])
+    await settle()
+    toasted(MOVE_HOLDER_RULE)
+    expect(saved).toEqual([false])
+    expect(vm('free').project).toBe(work)
+    // the moved task's own assignee needs Edit where it lands, which the
+    // server checks with the people fields' sentence
+    refusal = ASSIGNEE_RULE
+    P.moveIssue(vm('kid').id, plans.id, (ok) => saved.push(ok))
+    await settle()
+    toasted(ASSIGNEE_RULE)
+    expect(saved).toEqual([false, false])
   })
 })

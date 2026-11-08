@@ -519,13 +519,24 @@ describe('the Roadmap at the design size', () => {
     await renderRoadmap(board)
     const rows = [...document.querySelectorAll<HTMLElement>('[data-res-row]')]
     expect(rows).toHaveLength(40)
-    for (const row of rows) {
+    // the owners' hours come with their faces (people.byIds), as the store
+    // holds nobody but the signed-in person, and show in the store's next
+    // frame
+    await vi.waitFor(
+      async () => {
+        await finish()
+        expect(board.P.person('person-39')?.state).toBe('ok')
+      },
+      { timeout: 20_000 },
+    )
+    await finish()
+    for (const row of document.querySelectorAll<HTMLElement>('[data-res-row]')) {
       const cells = [...row.querySelectorAll<HTMLElement>('[data-load-box]')]
       expect(cells.length).toBeGreaterThan(0)
       for (const cell of cells) {
         expect(cell.dataset.loadUnknown, row.dataset.resRow).toBeUndefined()
         expect(cell.dataset.loadWaiting, row.dataset.resRow).toBeUndefined()
-        expect(cell.dataset.loadPct, row.dataset.resRow).toMatch(/^\d+$/)
+        expect(cell.dataset.loadPct ?? 'none', row.dataset.resRow).toMatch(/^\d+$/)
       }
     }
     // each person's open tasks fill some weeks: no row reads as free time

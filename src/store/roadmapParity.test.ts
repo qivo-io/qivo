@@ -30,6 +30,7 @@
  * weeks that the store's rules derive from the workspace, under All
  * projects and This project, in the default window and over 52 weeks. */
 
+import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
@@ -54,18 +55,20 @@ import {
   plantSeat,
   type T,
   uuid,
+  wholeOf,
   withReadingAdmin,
-  workspaceOf,
 } from '../../convex/tests/helpers.setup'
 import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { countOrg } from '../../convex/tests/overviewCounts.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
 import { dependenciesFor, NO_ROADMAP_FILTERS, roadmapFor } from '../../convex/tests/roadmap.setup'
 import type { LoadIssue, LoadItem } from '../lib/workload'
+import type { Whole as Snapshot } from './guard/liveDouble.setup'
 import { CALL_OWNERS } from './ownerLoadCache'
 import { ownerLoadsStandIn } from './ownerLoadsStandIn.setup'
+import { peopleSettingsStandIn } from './peopleSettingsStandIn.setup'
+import { nameEveryone } from './personShown.setup'
 import type { TeamMode } from './roadmapOracle.setup'
-import type { Snapshot } from './workspaceBase'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -93,12 +96,17 @@ async function start(snap: Snapshot) {
   vi.stubGlobal('window', { showToast: vi.fn() })
   network.query.mockResolvedValue(null)
   network.mutation.mockResolvedValue(null)
-  network.onUpdate.mockImplementation((_ref, _args, next) => {
-    next(structuredClone(snap))
+  // the faces the views name come from the server's data, as the store
+  // holds nobody but the caller
+  network.onUpdate.mockImplementation((ref, args, next) => {
+    if (getFunctionName(ref) === 'people:byIds')
+      next(peopleSettingsStandIn(snap, 'people:byIds', args))
+    else next(structuredClone(snap))
     return () => {}
   })
   const store = await import('./planner')
   await store.initStore()
+  await nameEveryone(store.P, snap)
   return Object.assign(store.P, {
     dates: await import('../lib/dates'),
     oracle: await import('./roadmapOracle.setup'),
@@ -120,7 +128,7 @@ type Issue = Store['issues'][number]
 /** The store booted for `profile` from their workspace, with the clock at
  * `now`. */
 async function storeOf(t: T, profile: Doc<'profiles'>, now: number): Promise<Store> {
-  const snap = await workspaceOf(as(t, profile))
+  const snap = await wholeOf(t, profile)
   if (snap === null) throw new Error(`no workspace for ${profile.name}`)
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(now)
@@ -176,7 +184,8 @@ function expectRows(
   }
   if (answer.state !== 'ok') throw new Error(`${label}: ${JSON.stringify(answer)}`)
   const { desk } = deskFilters(P, scopeId, f)
-  const rows = P.oracle.roadmapRows(info, weeks[0], weeks[1], desk, session)
+  const names = P.oracle.textNames(P.snapshot)
+  const rows = P.oracle.roadmapRows(info, weeks[0], weeks[1], desk, names, session)
   const rowIds = new Set(answer.rows.map((row) => row.id))
   expect(sorted(rowIds), `${label}: rows`).toEqual(sorted(rows.map((it) => it.uuid)))
   const byUuid = new Map(Object.values(P.issueById).map((it) => [it.uuid, it]))
@@ -709,7 +718,8 @@ describe('the rules that must hold', () => {
     const info = P.scopeInfo(f.sub.id)
     if (info === null) throw new Error('FW')
     const desk = deskFilters(P, f.sub.id, NO_ROADMAP_FILTERS).desk
-    const rows = (w: Weeks) => P.oracle.roadmapRows(info, w[0], w[1], desk)
+    const names = P.oracle.textNames(P.snapshot)
+    const rows = (w: Weeks) => P.oracle.roadmapRows(info, w[0], w[1], desk, names)
     expect(sorted(rows(weeks).map((it) => it.uuid))).toEqual(ids)
     // a Backlog group hidden
     const noBacklogGroup = rows(weeks).filter((it) => !(P.isGroup(it) && it.status === 'backlog'))

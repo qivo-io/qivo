@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
 import type { MentionBatch } from '../../convex/model/pickers'
-import { as, NOW, newT, plantSeat, type T, workspaceOf } from '../../convex/tests/helpers.setup'
+import { as, NOW, newT, plantSeat, type T, wholeOf } from '../../convex/tests/helpers.setup'
 import { keyOrg } from '../../convex/tests/nameKeys.setup'
 import { plantNorthstar } from '../../convex/tests/northstar.setup'
 import { type MentionArgs, mentionStandIn } from './mentionStandIn.setup'
@@ -55,7 +55,7 @@ const shape = (a: MentionBatch) => (a.state === 'ready' ? { ...a, next: a.next !
 /** Every batch of the query and of the stand-in for `search`, each
     following its own cursors, from the start to the end. */
 async function both(f: Fixture, search: string) {
-  const ws = await workspaceOf(as(f.t, f.nora))
+  const ws = await wholeOf(f.t, f.nora)
   if (!ws) throw new Error('no workspace')
   const server: MentionBatch[] = []
   const stand: MentionBatch[] = []
@@ -104,7 +104,7 @@ describe("the mention suggestions' stand-in", () => {
     const [standOne, standTwo] = all.stand
     if (one?.state !== 'ready' || two?.state !== 'ready') throw new Error('not ready')
     if (standOne?.state !== 'ready' || standTwo?.state !== 'ready') throw new Error('not ready')
-    const ws = await workspaceOf(as(f.t, f.nora))
+    const ws = await wholeOf(f.t, f.nora)
     if (!ws) throw new Error('no workspace')
     const kept = await as(f.t, f.nora).query(api.pickers.mentions, {
       org_id: f.org.id,
@@ -122,7 +122,7 @@ describe("the mention suggestions' stand-in", () => {
 
   it('refuses a cursor of another search and a long search, as the server does', async () => {
     const f = await northstar()
-    const ws = await workspaceOf(as(f.t, f.nora))
+    const ws = await wholeOf(f.t, f.nora)
     if (!ws) throw new Error('no workspace')
     const first = await both(f, '')
     const [server, stand] = [first.server[0], first.stand[0]]

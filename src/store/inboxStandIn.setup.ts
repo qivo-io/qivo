@@ -75,13 +75,13 @@ import { INBOX_PAGE_ROWS, LIMITS } from '../../convex/lib/limits'
 import { MENTION_DETAILS } from '../../convex/lib/messageDetails'
 import { allWordsMatcher } from '../../convex/lib/search'
 import { issueKey } from '../../convex/lib/taskRefs'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
+import type { Whole } from './guard/liveDouble.setup'
 
 /** The workspace sections the reads' rule reads. The page reads `issues`
     and `projects` too, which a caller that answers only the summary and
     the item may leave out. */
 export type InboxWorkspace = Pick<
-  Workspace,
+  Whole,
   | 'myProfileIds'
   | 'profiles'
   | 'messages'
@@ -89,7 +89,7 @@ export type InboxWorkspace = Pick<
   | 'unreadTruncated'
   | 'readTruncated'
 > &
-  Partial<Pick<Workspace, 'issues' | 'projects'>>
+  Partial<Pick<Whole, 'issues' | 'projects'>>
 
 /** A state the stand-in answers whatever the workspace says. */
 export type ForcedInbox =
@@ -113,7 +113,7 @@ export const INBOX_NO_ANSWER = Symbol('no inbox answer')
     SUMMARY.most). */
 export const SUMMARY_MOST = 100
 
-type Message = Workspace['messages'][number] & { _creationTime?: number }
+type Message = Whole['messages'][number] & { _creationTime?: number }
 
 /** The summary as convex/inbox.ts summary answers it. */
 export type SummaryAnswer = {
@@ -358,7 +358,7 @@ function openCursor(text: string, scope: string): Position {
 /* One seat's item about one task: its messages newest first, its newest
    one, its unread ones, its list time and its page position. */
 type Item = {
-  seat: Workspace['profiles'][number]
+  seat: Whole['profiles'][number]
   messages: Message[]
   latest: Message
   unread: Message[]
@@ -368,7 +368,7 @@ type Item = {
 }
 
 /* The items of the seats `seats` in `w`, one per seat and task. */
-function seatItems(w: InboxWorkspace, seats: readonly Workspace['profiles'][number][]): Item[] {
+function seatItems(w: InboxWorkspace, seats: readonly Whole['profiles'][number][]): Item[] {
   const bySeat = new Map(seats.map((seat) => [seat.id, seat]))
   const out: Item[] = []
   for (const list of itemsOf(w).values()) {

@@ -36,7 +36,18 @@
    person's own still waits on stands in from any view, a stopped one too,
    as the write shows in every view's row of the task and maybe not yet in
    the cache's spans. So its pending hours, dates, pause or owner count at
-   once, until the server answers it (store/planner.ts viewDelayCtx). */
+   once, until the server answers it (store/planner.ts viewDelayCtx).
+
+   The store holds no other person, so an owner's capacity and organization
+   come from the profile cache (store/planner.ts ownerFacts): known for the
+   signed-in person's own seats, an agent (unbounded) and a person whose
+   face loaded with their stored hours, and unknown before that, as for a
+   person known only by a picker's name. A verdict that reads an unknown
+   capacity is unknown (judgeDelay), never judged against the default. A
+   row's span is filed for its owner unless the profile cache places the
+   owner in another organization or its current answer leaves them out
+   (ownerInOrg), so an owner whose face is on its way keeps their load,
+   whose verdicts are unknown meanwhile anyway. */
 
 import { delayProjector } from '../../convex/lib/delay'
 import { loadRowFor } from '../../convex/lib/loadRows'
@@ -45,7 +56,7 @@ import type { ViewRow } from '../../convex/lib/viewReads'
 import { canonicalLoad } from '../../convex/lib/workload'
 import { isoToWeek, TODAY_ISO, TODAY_WEEK, tsToWeek } from '../lib/dates'
 import { DELAY_UNKNOWN, type DelayInfo, type DelayIssue, delayBeforeLoads } from '../lib/delay'
-import type { LoadItem, LoadSpan } from '../lib/workload'
+import { DEFAULT_PLANNABLE_HOURS, type LoadItem, type LoadSpan } from '../lib/workload'
 import type { OwnerLoad } from './ownerLoadCache'
 import type { IssueVM } from './viewModels'
 
@@ -67,8 +78,10 @@ export type ViewDelayCtx = {
   /** every row those views hold that the workspace does not, painted,
       then the other views' rows of the tasks such a write waits on */
   viewRows: () => Iterable<ViewRow>
-  /** person `id`'s plannable hours a week (lib/workload.ts plannableHoursOf) */
-  capacity: (id: string) => number
+  /** person `id`'s plannable hours a week (lib/workload.ts plannableHoursOf),
+      or undefined while the store does not know them (store/planner.ts
+      ownerFacts) */
+  capacity: (id: string) => number | undefined
   /** whether project `id` is live */
   projectLive: (id: string) => boolean
   /** the organization of person `id`, '' for one the server's answer says
@@ -86,6 +99,15 @@ export type ViewDelayCtx = {
 
 /* A week index of an ISO week date, or null. */
 const week = (iso: string | undefined) => (iso === undefined ? null : isoToWeek(iso))
+
+/** `capacity` with an unknown week read as the default, for the rules that
+    ask only whether a verdict reads its owner's load (needsLoad), so an
+    owner whose capacity is unknown has their load registered, and for the
+    task a verdict judges, which judgeDelay calls unknown for such an owner. */
+export const knownOrDefault =
+  (capacity: (id: string) => number | undefined) =>
+  (id: string): number =>
+    capacity(id) ?? DEFAULT_PLANNABLE_HOURS
 
 /** Task `row` of a view's answer as the delay rules read it. A group's dates
     and Done come from its facts. */
@@ -385,11 +407,13 @@ const ROW_FACTS: DelayFacts = { datesKnown: true, loading: false }
 
 /** The delay of task `issue` of organization `org`, which the workspace
     cannot judge: exact where the verdict needs no one's other work, as for
-    a group, whose dates decide it (`facts`), else against its owner's load.
-    Late for a passed due date. Null while that load's first answer is on
-    its way, as before any answer nothing is known and a mark would flash
-    on every open; DELAY_UNKNOWN where the load is unavailable, failed or
-    past the cap, so it never reads as on track. */
+    a group, whose dates decide it (`facts`), else against its owner's load
+    and capacity. Late for a passed due date. Null while that load's first
+    answer is on its way, as before any answer nothing is known and a mark
+    would flash on every open; DELAY_UNKNOWN where the load is unavailable,
+    failed or past the cap, or where the owner's capacity is unknown
+    (ViewDelayCtx capacity), so it never reads as on track and is never
+    judged against a default week. */
 export function judgeDelay(
   issue: DelayIssue,
   org: string,
@@ -399,8 +423,10 @@ export function judgeDelay(
   // a group's projection reads no one's load, only its subtasks' dates
   if (issue.isGroup) return delayBeforeLoads(issue, facts)
   const load = issue.owner ? ctx.load(org, issue.owner) : null
-  // with the owner's load the verdict is exact, the projected week too
-  if (issue.owner && load?.state === 'ok') {
+  const capacityKnown = !issue.owner || ctx.capacity(issue.owner) !== undefined
+  // with the owner's load and capacity the verdict is exact, the projected
+  // week too
+  if (issue.owner && load?.state === 'ok' && capacityKnown) {
     const key = `${org}\u0000${issue.owner}`
     let project = ctx.memo?.get(key)
     if (!project) {
@@ -424,7 +450,7 @@ export const viewDelay = (
   row: ViewRow,
   ctx: ViewDelayCtx,
 ): DelayInfo | typeof DELAY_UNKNOWN | null =>
-  judgeDelay(delayIssueOfRow(row, ctx.capacity), row.org_id, ctx)
+  judgeDelay(delayIssueOfRow(row, knownOrDefault(ctx.capacity)), row.org_id, ctx)
 
 /** Whether task `issue`'s verdict reads its owner's load (judgeDelay): a
     leaf with an owner, hours left and a finite capacity, with something to

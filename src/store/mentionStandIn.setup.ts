@@ -29,8 +29,8 @@ import { ConvexError, compareValues } from 'convex/values'
 import { LIMITS, MENTION_BATCH, overText } from '../../convex/lib/limits'
 import { nameKey } from '../../convex/lib/nameKey'
 import { allWordsMatcher, searchWords } from '../../convex/lib/search'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
 import type { MentionBatch, MentionRow } from '../../convex/model/pickers'
+import type { Whole } from './guard/liveDouble.setup'
 
 /** What pickers.mentions is asked. */
 export type MentionArgs = { org_id: string; search?: string; after?: string; through?: string }
@@ -41,7 +41,7 @@ export type MentionArgs = { org_id: string; search?: string; after?: string; thr
     that fails (`fail`) and a smaller batch (`batch`). */
 export type ForcedMentions = { notReady?: boolean; stop?: number; fail?: boolean; batch?: number }
 
-type Profile = Workspace['profiles'][number]
+type Profile = Whole['profiles'][number]
 /* A place in the list, just after the profile with this name key and id. */
 type Position = { key: string; id: string }
 
@@ -79,7 +79,7 @@ const rowOf = (profile: Profile): MentionRow => ({
  * for the organization and search.
  */
 export function mentionStandIn(
-  workspace: Pick<Workspace, 'myProfileIds' | 'profiles'>,
+  workspace: Pick<Whole, 'myProfileIds' | 'profiles'>,
   args: MentionArgs,
   options: { force?: ForcedMentions } = {},
 ): MentionBatch {

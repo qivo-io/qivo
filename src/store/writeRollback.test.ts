@@ -1,7 +1,6 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { shownOf } from './personShown.setup'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 /* A refused write rolls back to the server's rows (store/workspaceBase.ts),
@@ -115,6 +114,7 @@ describe('rollback during snapshot trouble', () => {
     snapshot = plannerFixture()
     addTask('task-a', 'Calibrate the sensor')
     addTask('task-b', 'Replace the gasket')
+    snapshot.issues[1].assignee_id = 'profile-other'
     addTask('task-z', 'Order the brackets')
     addMessage('message-a', 'task-a', false)
     addMessage('message-b', 'task-b', true)
@@ -289,25 +289,19 @@ describe('rollback during snapshot trouble', () => {
       },
     },
     {
-      name: 'a deactivated seat',
-      act: async () => {
-        P().updateUser('profile-other', { active: false }, {}, shownOf(P(), 'profile-other'))
-        await accept()
-      },
-      shown: () => expect(user('Field tech')?.active).toBe(false),
-      truth: (snap) => {
-        snap.profiles[1].active = false
-      },
-    },
-    {
+      // the store holds nobody but the signed-in person, so the removal
+      // paints the person's tasks the workspace holds, which the server
+      // clears with them
       name: 'a removed seat',
       act: async () => {
         P().removeUser('profile-other', { orgId: P().homeOrg })
         await accept()
       },
-      shown: () => expect(user('Field tech')).toBeUndefined(),
+      shown: () => expect(task('Replace the gasket').assignee).toBeFalsy(),
       truth: (snap) => {
         snap.profiles.splice(1, 1)
+        const gasket = snap.issues.find((t) => t.id === 'task-b')
+        if (gasket) delete gasket.assignee_id
       },
     },
   ]

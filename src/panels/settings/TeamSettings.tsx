@@ -534,7 +534,7 @@ function TeamFields({
       checking={removal.checking(teamRemoval(teamId, id, org, ''))}
       onRemove={(shownName, at) =>
         confirm.press(`m:${id}`, () =>
-          removal.press(teamRemoval(teamId, id, org, shownName), at, () => left(id)),
+          removal.press(teamRemoval(teamId, id, org, shownName, name), at, () => left(id)),
         )
       }
       onUnsaved={onUnsaved}
@@ -561,17 +561,18 @@ function TeamFields({
   const shown = list.rows.some((r) => !removing(r.id)) || kept.length > 0
   const state = listState(list)
   const addMember = (person: { id: string; name: string }) => {
-    const again = added.has(person.id)
+    // a second add of someone the page added sends nothing and keeps the
+    // row, as the picker asks the server, which may offer them again while
+    // the first add waits, and the store paints no one else's membership
+    if (added.has(person.id)) return
     setAdded((m) => new Map(m).set(person.id, { name: person.name, saved: false }))
     void P.addTeamMember(teamId, person.id, { orgId: org }).then((saved) => {
-      // a refusal, or an add the store did not send, drops the row; a
-      // second add of someone whose first add waits answers false at once
-      // and keeps the row
+      // a refusal, or an add the store did not send, drops the row
       setAdded((m) => {
         const entry = m.get(person.id)
         if (!entry) return m
         if (saved) return new Map(m).set(person.id, { ...entry, saved: true })
-        return again ? m : without(m, (id) => id === person.id)
+        return without(m, (id) => id === person.id)
       })
     })
   }
@@ -738,6 +739,10 @@ function MemberRow({
   const isAgent = user ? user.isAgent : answer?.kind === 'agent'
   const memberHeld = !!user && user.teams.includes(teamId)
   const isLeader = memberHeld ? user.teamLeads.includes(teamId) : (answer?.is_leader ?? false)
+  // the Leader box shows a change at once while its write is on its way, as
+  // the store paints only the signed-in person's own memberships; the
+  // members read holds an accepted change before the write answers
+  const [sentLeader, setSentLeader] = useState<boolean | null>(null)
   // the person as the row shows them, for the hours write; none for a
   // member known only by the picker's name
   const shown = user
@@ -807,11 +812,15 @@ function MemberRow({
           <Input
             id={`team-leader-${teamId}-${id}`}
             type="checkbox"
-            checked={isLeader}
+            checked={sentLeader ?? isLeader}
             disabled={!leaderOn}
-            onChange={(e) =>
-              P.setTeamLeader(teamId, id, e.target.checked, { orgId: org, isLeader })
-            }
+            onChange={(e) => {
+              const next = e.target.checked
+              const sent = P.setTeamLeader(teamId, id, next, { orgId: org, isLeader })
+              if (!sent) return
+              setSentLeader(next)
+              void sent.then(() => setSentLeader(null))
+            }}
             className="[accent-color:var(--primary)]"
           />
           Leader
@@ -1029,27 +1038,23 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
   })
   const removing = (id: string) => P.removingAccess(teamRemoval(id, null, org, ''))
   const loaded = new Map(list.rows.map((row) => [row.id, row]))
-  // the teams this visit created, by id with their names, which show above
-  // the list until a loaded batch holds them, the store no longer holds
-  // them, or the list's current answers tell that they do not. A create
+  // the teams this visit created, by id with the names the page sent,
+  // which show above the list until a loaded batch holds them or the
+  // list's current answers tell that they do not, as when someone deleted
+  // one meanwhile (listPassed), or the page is left. The store holds no
+  // team the person is not in, so none of it reads the store. A create
   // answered while the page is hidden finds answers from before it.
   const [made, setMade] = useState<ReadonlyMap<string, string>>(() => new Map())
   const current = useListCurrent(list)
   useEffect(() => {
     setMade((m) =>
-      without(m, (id, name) => {
-        const team = storeTeam(id)
-        return (
-          loaded.has(id) ||
-          !team ||
-          (current && listPassed(list, search.settled, team.name || name, id))
-        )
-      }),
+      without(
+        m,
+        (id, name) => loaded.has(id) || (current && listPassed(list, search.settled, name, id)),
+      ),
     )
   })
-  const kept = [...made.keys()].filter(
-    (id) => !loaded.has(id) && !removing(id) && storeTeam(id) !== null,
-  )
+  const kept = [...made.keys()].filter((id) => !loaded.has(id) && !removing(id))
   // the teams whose Delete this visit pressed, so a deletion on its way
   // counts though a search hides its team
   const [deleted, setDeleted] = useState<ReadonlySet<string>>(() => new Set())
@@ -1104,6 +1109,7 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
       key={id}
       id={id}
       answer={team}
+      madeName={made.get(id) ?? null}
       note={note}
       admin={admin}
       last={last}
@@ -1230,12 +1236,14 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
 
 /* One team of Settings › Teams: its name, which opens its page, its member
    count from the server, or a kept row's note in its place, and Delete for
-   an admin. It paints the store's name while the store holds the team;
-   Delete waits for the store's team, and stays off for the organization's
-   last team (`last`). */
+   an admin. It paints the store's name while the store holds the team, one
+   of the person's own, else the answer's, or for a team made here the name
+   the page sent; Delete stays off for the organization's last team
+   (`last`). */
 function TeamRow({
   id,
   answer,
+  madeName,
   note,
   admin,
   last,
@@ -1247,6 +1255,8 @@ function TeamRow({
   id: string
   /** the answer's row, null for a kept row no loaded batch holds */
   answer: TeamRowAnswer | null
+  /** the name the page sent for a team it made, or null */
+  madeName: string | null
   note: string | null
   admin: boolean
   last: boolean
@@ -1258,7 +1268,7 @@ function TeamRow({
   onDelete: (name: string, focusAfter: () => HTMLElement | null) => void
 }) {
   const team = storeTeam(id)
-  const name = team?.name ?? answer?.name ?? ''
+  const name = team?.name ?? answer?.name ?? madeName ?? ''
   const lastLine = "The last team can't be deleted. Create another team first."
   return (
     <div

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { linkViews } from '../lib/taskSections'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { asStored, plannerFixture, type Snapshot } from './plannerFixture.setup'
 import { createWorkspaceRows } from './rowMap'
 import { createTaskIndex, type TaskSources } from './taskIndex'
 import { createWorkspaceBase } from './workspaceBase'
@@ -15,29 +15,29 @@ describe('the task index', () => {
   function workspace(snap: Snapshot) {
     const base = createWorkspaceBase()
     const rows = createWorkspaceRows(base)
-    base.stage(structuredClone(snap))
+    base.stage(asStored(structuredClone(snap)))
     rows.beginRepaint()
     rows.takeDirty()
     const sources = (): TaskSources => ({
       issues: rows.issues,
       links: rows.links,
       attachments: rows.attachments,
-      labels: rows.labels,
       issueLabels: rows.list('issueLabels'),
       issueSubs: rows.list('issueSubs'),
       orgLoad: rows.list('orgLoad'),
       projects: rows.projects,
-      profiles: rows.profiles,
+      // an owner the rows hold, else one the index cannot place, whose
+      // capacity is the 40 hours the cases plan with
+      ownerFacts: (id) => ({ org: rows.profiles.peek(id)?.org_id, capacity: 40 }),
+      factsVersion: 0,
       hiddenSubtaskParents: rows.flags('hiddenSubtaskParents'),
       hiddenParentTasks: rows.flags('hiddenParentTasks'),
       homeOrg: snap.orgs[0].id,
       mine: new Set(snap.myProfileIds),
-      capacity: new Map(),
-      defaultCapacity: 40,
     })
     /** Delivers `next` and answers what the rows say changed, for update. */
     const deliver = (next: Snapshot) => {
-      base.stage(structuredClone(next))
+      base.stage(asStored(structuredClone(next)))
       rows.beginRepaint()
       const dirty = rows.takeDirty()
       return {
@@ -45,8 +45,6 @@ describe('the task index', () => {
         links: dirty.keys.get('links') ?? new Set<string>(),
         attachments: dirty.keys.get('attachments') ?? new Set<string>(),
         projects: dirty.keys.get('projects') ?? new Set<string>(),
-        profiles: dirty.keys.get('profiles') ?? new Set<string>(),
-        labels: dirty.keys.has('labels'),
         issueLabels: dirty.lists.has('issueLabels'),
         issueSubs: dirty.lists.has('issueSubs'),
         orgLoad: dirty.lists.has('orgLoad'),
@@ -125,19 +123,9 @@ describe('the task index', () => {
     expect(index.issues()).toEqual(fresh.issues())
   })
 
-  it('lists every label of a task, by name those it holds, then by id those it does not', () => {
+  it('lists every label of a task by id, which the task window orders by name', () => {
     const snap = plannerFixture()
-    const home = snap.orgs[0].id
     snap.issues = [task(snap, 'a', 1)]
-    const named = (id: string, name: string) => ({
-      id,
-      org_id: home,
-      name,
-      name_lower: name.toLowerCase(),
-      color: '#557733',
-      created_at: AT,
-    })
-    snap.labels = [named('label-z', 'Zed'), named('label-a', 'Alpha')]
     snap.issueLabels = ['label-z', 'label-far-2', 'label-a', 'label-far-1'].map((label_id) => ({
       issue_id: 'a',
       label_id,
@@ -145,12 +133,14 @@ describe('the task index', () => {
     const { sources, deliver } = workspace(snap)
     const index = createTaskIndex()
     index.full(sources())
-    // a label not loaded is still the task's, never one taken off
-    expect(index.issues()[0].labels).toEqual(['label-a', 'label-z', 'label-far-1', 'label-far-2'])
-    // once the workspace holds it, it takes its place by name
-    snap.labels.push(named('label-far-2', 'Beta'))
-    index.update(sources(), deliver(snap))
-    expect(index.issues()[0].labels).toEqual(['label-a', 'label-far-2', 'label-z', 'label-far-1'])
+    // a label not loaded is still the task's, never one taken off; the
+    // store holds no label, so the index knows no name to order them by
+    // (panels/taskLabels.ts inNameOrder)
+    expect(index.issues()[0].labels).toEqual(['label-a', 'label-far-1', 'label-far-2', 'label-z'])
+    snap.issueLabels = snap.issueLabels.filter((il) => il.label_id !== 'label-far-2')
+    const changes = deliver(snap)
+    index.update(sources(), changes)
+    expect(index.issues()[0].labels).toEqual(['label-a', 'label-far-1', 'label-z'])
     const fresh = createTaskIndex()
     fresh.full(sources())
     expect(index.issues()).toEqual(fresh.issues())
@@ -332,11 +322,28 @@ describe('the task index', () => {
         else snap.profiles = snap.profiles.filter((p) => p.id !== other.id)
       },
     ]
+    // the owners' facts turn when the owner's hours or a person's
+    // organization change, as the store's do (planner.ts factsVersionNow)
+    let factsKey = ''
+    let factsTurn = 0
     for (let step = 0; step < 400; step++) {
       steps[random(steps.length)]()
       const handlesBefore = new Map(index.uuidToKey)
       const changes = deliver(snap)
-      const from = { ...sources(), capacity: new Map([[owner, capacity]]) }
+      const base = sources()
+      const key = JSON.stringify([capacity, snap.profiles.map((p) => [p.id, p.org_id])])
+      if (key !== factsKey) {
+        factsKey = key
+        factsTurn++
+      }
+      const from = {
+        ...base,
+        ownerFacts: (id: string) => ({
+          ...base.ownerFacts(id),
+          capacity: id === owner ? capacity : 40,
+        }),
+        factsVersion: factsTurn,
+      }
       const moved = index.update(from, changes) ?? index.full(from)
       const fresh = createTaskIndex()
       fresh.full(from)

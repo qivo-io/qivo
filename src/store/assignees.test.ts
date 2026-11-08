@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { Whole } from './guard/liveDouble.setup'
 
-type Snapshot = Workspace
+type Snapshot = Whole
 type Planner = typeof import('./planner')['P']
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -19,7 +19,8 @@ vi.mock('../lib/auth', () => ({
 
 const NOW = '2026-09-14T08:00:00.000Z'
 
-function fixture(): Snapshot {
+/* The server's data with person `me` signed in. */
+function fixture(me = 'Admin'): Snapshot {
   const org = crypto.randomUUID()
   const meta = crypto.randomUUID()
   const project = crypto.randomUUID()
@@ -63,8 +64,7 @@ function fixture(): Snapshot {
     return id
   }
 
-  const admin = person('Admin', 'admin')
-  admin.auth_user_id = 'test-account'
+  person('Admin', 'admin')
   const lead = person('Project lead')
   const directViewer = person('Direct View', 'user', 'viewer')
   person('Guest View', 'guest', 'viewer')
@@ -84,6 +84,8 @@ function fixture(): Snapshot {
   ] as const) {
     teamMembers.push({ profile_id: profile.id, team_id: teamId, is_leader: isLeader })
   }
+  const signedIn = profiles.find((p) => p.name === me)!
+  signedIn.auth_user_id = 'test-account'
 
   const baseProject = {
     org_id: org,
@@ -94,7 +96,7 @@ function fixture(): Snapshot {
   }
   return {
     auth_user_id: 'test-account',
-    myProfileIds: [admin.id],
+    myProfileIds: [signedIn.id],
     orgs: [
       {
         id: org,
@@ -169,14 +171,14 @@ function fixture(): Snapshot {
 }
 
 describe('task holders in the store', () => {
-  let P: Planner
   let projectId: string
 
-  beforeEach(async () => {
+  /* A store signed in as the person named `me`. */
+  async function as(me: string): Promise<Planner> {
     vi.resetModules()
     vi.clearAllMocks()
     vi.stubGlobal('window', { showToast: vi.fn() })
-    const snap = fixture()
+    const snap = fixture(me)
     projectId = snap.projects.find((project) => project.type === 'project')!.id
     network.query.mockResolvedValue(null)
     network.mutation.mockResolvedValue(null)
@@ -185,9 +187,9 @@ describe('task holders in the store', () => {
       return () => {}
     })
     const store = await import('./planner')
-    P = store.P
     await store.initStore()
-  })
+    return store.P
+  }
 
   afterEach(() => {
     vi.restoreAllMocks()
@@ -196,17 +198,23 @@ describe('task holders in the store', () => {
 
   // The people a picker offers are the server's now (pickers.taskOwners,
   // whose rule convex/tests/pickerParity.test.ts holds to the write). The
-  // store still reads levels for its own checks and names its holders.
-  it('reads direct, team and guest View access as Viewer, including the organization viewer ceiling', () => {
+  // store reads the signed-in person's own level for its own checks.
+  it('reads direct, team and guest View access as Viewer, including the organization viewer ceiling', async () => {
     for (const name of ['Direct View', 'Team View', 'Guest View', 'Org viewer with team Edit']) {
-      const user = P.users.find((candidate) => candidate.name === name)!
-      expect(P.levelOn(projectId, user.id)).toBe('viewer')
+      const P = await as(name)
+      expect(P.levelOn(projectId), name).toBe('viewer')
     }
+    // and team Edit as Edit for a person in the team
+    expect((await as('Managing team lead')).levelOn(projectId)).toBe('user')
   })
 
-  it('preserves existing assignment names', () => {
+  it('keeps existing holders by id, whom it does not hold', async () => {
+    const P = await as('Admin')
     const task = P.issues.find((issue) => issue.title === 'Existing assignment')!
-    expect(P.user(task.assignee)?.name).toBe('Direct View')
-    expect(P.user(task.reporter)?.name).toBe('Direct View')
+    const viewer = P.users.find((u) => u.name === 'Direct View')
+    expect(viewer).toBeUndefined()
+    expect(task.assignee).toBeTruthy()
+    expect(task.reporter).toBe(task.assignee)
+    expect(P.user(task.assignee)).toBeUndefined()
   })
 })

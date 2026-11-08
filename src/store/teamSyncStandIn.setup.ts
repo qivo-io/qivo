@@ -58,9 +58,9 @@ import {
   type LoadSpan,
   plannableHoursOf,
 } from '../../convex/lib/workload'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
 import { groupProgress, isIssueDone } from '../lib/issueGroups'
 import { spanOf } from './boardStandIn.setup'
+import type { Whole } from './guard/liveDouble.setup'
 import { ownerLoadsStandIn } from './ownerLoadsStandIn.setup'
 
 /** The parents and outside blockers one agenda answers at most beside its
@@ -93,8 +93,8 @@ export type ForcedSync = {
   ceiling?: number
 }
 
-type Task = Workspace['issues'][number]
-type Project = Workspace['projects'][number]
+type Task = Whole['issues'][number]
+type Project = Whole['projects'][number]
 
 /* -1, 0 or 1 as `a` sorts before, with or after `b` in code unit order. */
 const order = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
@@ -141,7 +141,7 @@ const OPEN = new Set(['todo', 'progress', 'review'])
  * they may edit one; `force` answers a state or unknown figures instead.
  */
 export function teamSyncStandIn(
-  workspace: Workspace,
+  workspace: Whole,
   args: SyncArgs,
   {
     sees,

@@ -4,10 +4,10 @@ import type { api } from '../../../convex/_generated/api'
 import type { BoardAnswer } from '../../../convex/lib/board'
 import type { RelationCandidate } from '../../../convex/lib/relationPicker'
 import type { ViewRow } from '../../../convex/lib/viewReads'
-import type { Workspace } from '../../../convex/lib/workspaceJoin'
 import type { MilestoneAsk } from '../milestoneRows'
 import { labelShownOf, shownOf } from '../personShown.setup'
 import type { Row } from '../rows'
+import type { Whole } from './liveDouble.setup'
 
 /* One recipe per write the store sends (layerGuard.test.ts checks that each
    mutation has one, and each mutator is named). writeRecipes.test.ts runs
@@ -16,7 +16,7 @@ import type { Row } from '../rows'
    write, written from the server's code with its own stamps, so a paint
    that differs from what the server stores shows up. */
 
-export type Snapshot = Workspace
+export type Snapshot = Whole
 export type Thread = FunctionReturnType<typeof api.snapshot.threadComments>
 /** The task window's own answer of a task (convex/taskWindow.ts task). */
 export type TaskAnswer = FunctionReturnType<typeof api.taskWindow.task>
@@ -1068,8 +1068,9 @@ export const recipes: Recipe[] = [
     mutator: 'syncStamp',
     what: 'a Team sync stamp',
     pause: 'P',
-    act: (P) => P.syncStamp(PAT),
-    // a first stamp keeps the reading day the page sent
+    act: (P) => P.syncStamp({ id: PAT, stamp: null }, ORG),
+    // a first stamp keeps the reading day the page sent; the store paints
+    // nothing, as the agenda answers the new stamp
     truth: (snap, args) =>
       Object.assign(profile(snap, PAT), {
         sync_at: SERVER,
@@ -1117,7 +1118,9 @@ export const recipes: Recipe[] = [
     seed: (snap) => {
       profile(snap, PAT).avatar_storage_id = STORED as Row<'profiles'>['avatar_storage_id']
     },
-    act: (P) => P.clearAvatar(PAT, P.user(PAT)?.avatarPath ?? null),
+    // the page shows the picture's version from its own answer, as the
+    // store holds nobody but the signed-in person
+    act: (P) => P.clearAvatar(PAT, STORED),
     truth: (snap) => {
       profile(snap, PAT).avatar_storage_id = undefined
     },
@@ -1937,16 +1940,6 @@ export const recipes: Recipe[] = [
   {
     mutation: 'teams:deleteDeep',
     mutator: 'sendRemoval',
-    what: 'a deleted team',
-    pause: 'P',
-    act: (P) => P.removeAccess({ kind: 'deleteTeam', teamId: 'team-b' }, { keep: true }),
-    truth: (snap) => {
-      snap.teams = [snap.teams[0]]
-    },
-  },
-  {
-    mutation: 'teams:deleteDeep',
-    mutator: 'sendRemoval',
     what: 'a deleted team from Settings › Teams, which names its organization and the team',
     pause: 'P',
     act: (P) =>
@@ -1987,7 +1980,7 @@ export const recipes: Recipe[] = [
     mutator: 'updateUser',
     what: "a person's plannable hours",
     pause: 'P',
-    act: (P) => P.updateUser(PAT, { plannableHours: 30 }, {}, shownOf(P, PAT)),
+    act: (P) => P.updateUser(PAT, { plannableHours: 30 }, {}, shownOf(fixture(), PAT)),
     truth: (snap) => {
       profile(snap, PAT).plannable_hours = 30
     },
@@ -2004,7 +1997,7 @@ export const recipes: Recipe[] = [
     mutator: 'updateUser',
     what: 'a person switched off',
     pause: 'U',
-    act: (P) => P.updateUser(PAT, { active: false }, {}, shownOf(P, PAT)),
+    act: (P) => P.updateUser(PAT, { active: false }, {}, shownOf(fixture(), PAT)),
     truth: (snap) => {
       profile(snap, PAT).active = false
     },
@@ -2014,7 +2007,8 @@ export const recipes: Recipe[] = [
     mutator: 'updateUser',
     what: "a person's name and teams",
     pause: 'P',
-    act: (P) => P.updateUser(PAT, { name: 'Pat Quinn', teams: ['team-b'] }, {}, shownOf(P, PAT)),
+    act: (P) =>
+      P.updateUser(PAT, { name: 'Pat Quinn', teams: ['team-b'] }, {}, shownOf(fixture(), PAT)),
     truth: (snap) => {
       Object.assign(profile(snap, PAT), { name: 'Pat Quinn', initials: 'PQ' })
       snap.teamMembers = [
@@ -2079,7 +2073,8 @@ export const recipes: Recipe[] = [
     mutator: 'updateLabel',
     what: 'a renamed label',
     pause: 'P',
-    act: (P) => P.updateLabel('label-a', { name: 'Defect' }, {}, labelShownOf(P, 'label-a')),
+    act: (P) =>
+      P.updateLabel('label-a', { name: 'Defect' }, {}, labelShownOf(fixture(), 'label-a')),
     truth: (snap) => Object.assign(snap.labels[0], { name: 'Defect', name_lower: 'defect' }),
   },
   {
@@ -2100,7 +2095,7 @@ export const recipes: Recipe[] = [
     mutator: 'removeLabel',
     what: 'a removed label',
     pause: 'P',
-    act: (P) => P.removeLabel('label-a', labelShownOf(P, 'label-a')),
+    act: (P) => P.removeLabel('label-a', labelShownOf(fixture(), 'label-a')),
     truth: (snap) => {
       snap.labels = []
       snap.issueLabels = []

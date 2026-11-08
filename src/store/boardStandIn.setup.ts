@@ -21,8 +21,8 @@ import { taskOwnerId } from '../../convex/lib/review'
 import { allWordsMatcher, taskSearchText } from '../../convex/lib/search'
 import { issueKey } from '../../convex/lib/taskRefs'
 import type { ViewRow } from '../../convex/lib/viewReads'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
 import { groupProgress, isIssueDone } from '../lib/issueGroups'
+import type { Whole } from './guard/liveDouble.setup'
 
 /** The arguments the Board sends. */
 export type BoardArgs = { scope: BoardScope; filters: BoardFilters }
@@ -34,8 +34,8 @@ export type ForcedBoard = 'over_ceiling' | 'over_budget' | 'unavailable' | 'acce
 export const ACCESS_UNCHECKED_MESSAGE =
   'Qivo could not check all of your access in time. Try again in a moment.'
 
-type Task = Workspace['issues'][number]
-type Project = Workspace['projects'][number]
+type Task = Whole['issues'][number]
+type Project = Whole['projects'][number]
 
 /* -1, 0 or 1 as `a` sorts before, with or after `b` in code unit order. */
 const order = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
@@ -54,7 +54,7 @@ const FOCUS = new Set(['todo', 'progress', 'review'])
  */
 export function boardStandIn(
   workspace: Pick<
-    Workspace,
+    Whole,
     'myProfileIds' | 'profiles' | 'projects' | 'issues' | 'labels' | 'issueLabels'
   >,
   { scope, filters: f }: BoardArgs,

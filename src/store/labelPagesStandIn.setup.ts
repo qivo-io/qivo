@@ -28,9 +28,10 @@
    - labelsByIdsStandIn answers the organization's labels among up to
      BY_IDS_MAX ids, each once, in the order asked.
 
-   The workspace given to a stand-in is what the server holds, which may
-   hold labels the app's catalogue was not sent, so the reads answer
-   labels the store does not hold.
+   The workspace given to a stand-in is what the server holds
+   (store/guard/liveDouble.setup.ts Whole), every label of each
+   organization, none of which the store holds, so the reads answer every
+   label the app shows.
 
    Cursors are plain JSON of the list, the organization, the search's name
    key and the position, so equal positions give equal text, as the
@@ -46,8 +47,8 @@ import { ConvexError, compareValues } from 'convex/values'
 import { BY_IDS_MAX, LIMITS, LIST_BATCH, overText } from '../../convex/lib/limits'
 import { nameKey } from '../../convex/lib/nameKey'
 import { allWordsMatcher } from '../../convex/lib/search'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
 import type { LabelBatch, LabelRow, SettingsLabelRow } from '../../convex/model/labels'
+import type { Whole } from './guard/liveDouble.setup'
 
 /** What labels.settingsPage answers. */
 export type LabelPageAnswer = LabelBatch<SettingsLabelRow> & { counting: boolean }
@@ -82,12 +83,9 @@ export type ForcedLabelPage = {
   canCreate?: boolean | null
 }
 
-type Label = Workspace['labels'][number]
+type Label = Whole['labels'][number]
 /** The parts of a workspace the label reads look at. */
-type LabelWorkspace = Pick<
-  Workspace,
-  'myProfileIds' | 'profiles' | 'labels' | 'issueLabels' | 'issues'
->
+type LabelWorkspace = Pick<Whole, 'myProfileIds' | 'profiles' | 'labels' | 'issueLabels' | 'issues'>
 /* A place in the list, just after the label with this name_lower, time
    and id. */
 type Position = { key: string; created: string; id: string }
@@ -111,7 +109,7 @@ const positionOf = (label: Label): Position => ({
 
 /* The caller's active seat in the organization, or the server's refusal
    of a login without one. */
-function seatIn(workspace: Pick<Workspace, 'myProfileIds' | 'profiles'>, orgId: string) {
+function seatIn(workspace: Pick<Whole, 'myProfileIds' | 'profiles'>, orgId: string) {
   const me = workspace.profiles.find(
     (p) => p.org_id === orgId && workspace.myProfileIds.includes(p.id),
   )
@@ -287,7 +285,7 @@ export function labelPickerStandIn(
  * sent, and fails with `force.fail`.
  */
 export function labelsByIdsStandIn(
-  workspace: Pick<Workspace, 'myProfileIds' | 'profiles' | 'labels'>,
+  workspace: Pick<Whole, 'myProfileIds' | 'profiles' | 'labels'>,
   args: LabelsByIdsArgs,
   options: { force?: Pick<ForcedLabelPage, 'fail'> } = {},
 ): { rows: LabelRow[] } {

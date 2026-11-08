@@ -6,7 +6,12 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest'
 import { descriptionForm, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
 import { TooltipProvider } from '../components/ui/tooltip'
-import { labelPickerStandIn } from '../store/labelPagesStandIn.setup'
+import {
+  type LabelsByIdsArgs,
+  labelPickerStandIn,
+  labelsByIdsStandIn,
+} from '../store/labelPagesStandIn.setup'
+import { peopleSettingsStandIn } from '../store/peopleSettingsStandIn.setup'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
 /* The task window on a task the workspace does not hold, on the real store:
@@ -1855,6 +1860,11 @@ describe('the archived task window', { timeout: 30_000 }, () => {
       'QN-40 was archived. Restore it to bring it back to the board.',
     )
     expect(document.querySelector('[data-task-description]')?.textContent).toContain('three')
+    // the store holds no label: the window names the task's by id
+    await answer(
+      'labels:byIds',
+      labelsByIdsStandIn(snap, one('labels:byIds').args as LabelsByIdsArgs),
+    )
     expect(document.querySelector('.task-labels')?.textContent).toContain('Hardware')
     expect(field('Priority')?.disabled).toBe(true)
     expect(await hintOf(field('Priority'))).toBe('Restore this task to change it')
@@ -2056,6 +2066,17 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
   /* The store repaints the faces an answer brings once a frame
      (store/planner.ts showPortraits). */
   const repaint = () => act(async () => await new Promise((r) => setTimeout(r, 40)))
+  /* Answers the open people:byIds reads from the server's people, as the
+     store holds nobody but the signed-in person. */
+  const faces = async () => {
+    for (const read of byIds())
+      await act(async () =>
+        read.deliver(
+          peopleSettingsStandIn(snap, 'people:byIds', read.args as Record<string, unknown>),
+        ),
+      )
+    await repaint()
+  }
   /* Gina is a person of the organization the workspace does not hold. */
   const GINA = {
     id: 'gina',
@@ -2079,14 +2100,18 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
     await pickersAnswer()
     await openSettled(P.handleOf(FAM) ?? '')
     expect(field('Assignee')?.disabled).toBe(false)
+    // the store holds nobody but the signed-in person, so the window names
+    // Leo by id, and shows that it waits for the name meanwhile
+    expect(byIds().flatMap((read) => read.args.ids as string[])).toContain('leo')
+    expect(fieldName('Assignee')).toBe('Loading…')
+    await faces()
     expect(fieldName('Assignee')).toBe('Leo Park')
     expect(fieldName('Reviewer')).toBe('No reviewer')
     // a screen reader hears the field and its holder, as the menu said
     expect(field('Assignee')?.getAttribute('aria-label')).toBe('Assignee, Leo Park')
     expect(field('Reviewer')?.getAttribute('aria-label')).toBe('Reviewer, No reviewer')
-    // nothing is read before a list opens, and no name by id
+    // nothing is read before a list opens but the names
     expect(asked).toEqual([])
-    expect(byIds()).toEqual([])
     await click(field('Assignee'))
     await settle()
     expect(document.querySelector('[data-owner-list="assignee"]')).not.toBeNull()
@@ -2117,11 +2142,14 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
     await openWindow(P.handleOf('01000000-0000-4000-8000-000000000031') ?? '')
     expect(field('Assignee')?.disabled).toBe(true)
     expect(await hintOf(field('Assignee'))).toBe(READ_ONLY)
+    await faces()
     expect(fieldName('Assignee')).toBe('Leo Park')
+    const named = byIds().length
     await click(field('Assignee'))
     await settle()
+    // no list and no other name is read
     expect(asked).toEqual([])
-    expect(byIds()).toEqual([])
+    expect(byIds()).toHaveLength(named)
   })
 
   it('names a holder the workspace does not hold by id, loading until the answer', async () => {

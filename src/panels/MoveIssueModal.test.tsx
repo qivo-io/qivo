@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MOVE_HOLDER_RULE } from '../../convex/model/issues'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
@@ -219,25 +221,44 @@ async function showMove() {
 }
 
 describe('the Move window over a task the window shows from its own answer', () => {
-  it('names the holders of the subtasks it carries from the answer’s rows', async () => {
+  it('leaves the holders of the subtasks it carries to the server, whose refusal says what to change', async () => {
     carries = false
     await load()
     await openFromAnswer(farAnswer())
     await chooseTarget(ids.fw)
     expect(notes()).toEqual(['Its subtasks move with it, archived ones included.'])
-    expect(document.querySelector('[data-move-blockers]')?.textContent).toContain(
-      "Pat Lee is assigned to QN-41 but can't edit",
-    )
+    // the store holds nobody but the signed-in person, so it cannot tell
+    // whether Pat, who holds the subtask, may work there: Move stays on,
+    // and the server checks every holder at full scope
+    expect(document.querySelector('[data-move-blockers]')).toBeNull()
     const move = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
       (b) => b.textContent === 'Move',
     )
-    expect(move?.disabled).toBe(true)
+    expect(move?.disabled).toBe(false)
     // and asks the server by the task's organization and uuid
     expect(asked.at(-1)).toEqual({ org_id: orgId, id: 'far', project_id: ids.fw })
     // within WEB nothing goes along, and the move is open
     await chooseTarget(ids.be)
     expect(notes()).toEqual([])
     expect(move?.disabled).toBe(false)
+    // the server refuses a move whose subtask holder cannot work there
+    network.mutation.mockImplementation((ref) =>
+      getFunctionName(ref) === 'identity:claimMySeats'
+        ? Promise.resolve(null)
+        : Promise.reject(new ConvexError({ code: 'rule', message: MOVE_HOLDER_RULE })),
+    )
+    const shown = () => P.taskDetail('far')?.view
+    const before = shown()?.project
+    P.moveIssue(shown()?.id ?? '', ids.fw)
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(window.showToast).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Someone assigned to or reviewing a subtask of this task has no access to that sub-project',
+      ),
+      'error',
+    )
+    // and the move is taken back
+    expect(shown()?.project).toBe(before)
   })
 
   it('says it cannot read every subtask while the answer’s list is not whole, and moves nothing', async () => {

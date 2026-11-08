@@ -587,6 +587,10 @@ export function ProjectRightCell({
   waiting?: boolean
 }) {
   const box = projectRightBox(user, P.org.projectCreators)
+  // the box shows a change at once while its write is on its way, as the
+  // store paints only the signed-in person's own profile; the page's read
+  // holds an accepted change before the write answers
+  const [sent, setSent] = useStateS<boolean | null>(null)
   if (labelled && box === null) return null
   const inputId = `can-create-projects-${user.id}`
   const locked = box === 'locked' || waiting
@@ -608,13 +612,17 @@ export function ProjectRightCell({
             type="checkbox"
             data-can-create-projects={user.id}
             aria-label={`${user.name} can create projects`}
-            checked={box === 'locked' || !!user.canCreateProjects}
+            checked={box === 'locked' || (sent ?? !!user.canCreateProjects)}
             disabled={locked}
             title={waiting ? WAITING : undefined}
             onChange={(e) => {
               const on = e.target.checked
               if (waiting || P.refusePausedEdit()) return
-              P.updateUser(user.id, { canCreateProjects: on }, {}, user)
+              // a write that sends nothing settles at once, after this
+              setSent(on)
+              const settle = () => setSent(null)
+              if (!P.updateUser(user.id, { canCreateProjects: on }, { onSettled: settle }, user))
+                settle()
               window.showToast?.(
                 on
                   ? `${user.name} can create projects`

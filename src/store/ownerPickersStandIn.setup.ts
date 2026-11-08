@@ -36,9 +36,9 @@ import { ConvexError, compareValues } from 'convex/values'
 import { BY_IDS_MAX, LIMITS, LIST_BATCH, overText } from '../../convex/lib/limits'
 import { nameKey } from '../../convex/lib/nameKey'
 import { allWordsMatcher } from '../../convex/lib/search'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
 import type { OwnerChecks, PeopleBatch } from '../../convex/model/pickers'
 import type { PersonRow } from '../../convex/model/projectSettings'
+import type { Whole } from './guard/liveDouble.setup'
 
 /** The reads the stand-in answers, by their function names. */
 export const OWNER_PICKER_READS = ['pickers:taskOwners', 'pickers:syncRecipients', 'pickers:canOwn']
@@ -79,7 +79,7 @@ export const STAND_IN_SENTENCES = {
     'after and through must be cursors from an earlier answer of this list, for the same task and search; start again from the first batch',
 }
 
-type Profile = Workspace['profiles'][number]
+type Profile = Whole['profiles'][number]
 type Field = 'assignee' | 'reviewer' | 'recipient'
 /* A place in a list, just after the person with this name key and id. */
 type Position = { key: string; id: string }
@@ -120,7 +120,7 @@ function passes(p: Profile, field: Field, org: string, me: Profile): boolean {
 
 /* The gate's answer for a task the stand-in will not pick for, or null. */
 function gate(
-  ws: Pick<Workspace, 'issues'>,
+  ws: Pick<Whole, 'issues'>,
   args: OwnerPickerArgs,
   field: Field,
   force: ForcedOwners,
@@ -141,7 +141,7 @@ function gate(
  * refuses, and for a read `force` fails.
  */
 export function ownerPickersStandIn(
-  ws: Pick<Workspace, 'myProfileIds' | 'profiles' | 'issues'>,
+  ws: Pick<Whole, 'myProfileIds' | 'profiles' | 'issues'>,
   name: string,
   args: OwnerPickerArgs,
   force: ForcedOwners = new Set(),

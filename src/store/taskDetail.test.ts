@@ -341,7 +341,7 @@ describe('a task the workspace does not hold, in the store', () => {
       expect(detail('far-1')).toBeNull()
     })
 
-    it('shows its labels in name order, its follow and its parent', () => {
+    it('shows its labels by id, its follow and its parent', () => {
       const { P } = store
       P.watchComments('far-1', org)
       const label = (id: string) => ({ issue_id: 'far-1', label_id: id })
@@ -354,9 +354,10 @@ describe('a task the workspace does not hold, in the store', () => {
         }),
       )
       const shown = detail('far-1')
-      // the task index's order: by name, then id, the labels the workspace
-      // holds, then by id one it does not, which the window names by id
-      expect(shown?.view?.labels).toEqual(['label-a', 'label-z', 'label-unknown'])
+      // the task index's order, by id, as the store holds no label; the
+      // window names them by id and shows them by name
+      // (panels/taskLabels.ts inNameOrder)
+      expect(shown?.view?.labels).toEqual(['label-a', 'label-unknown', 'label-z'])
       expect(shown?.view?.subscribed).toBe(true)
       expect(shown?.view?.parent).toBe('QN-41')
       expect(shown?.parent).toMatchObject({

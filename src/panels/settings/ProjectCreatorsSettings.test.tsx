@@ -330,7 +330,10 @@ describe('Can create projects in Organization > Users', () => {
       args: { id: 'aisha', patch: { can_create_projects: true } },
     })
     expect(window.showToast).toHaveBeenCalledWith('Aisha Rahman can create projects')
-    expect(P.user('aisha')?.canCreateProjects).toBe(true)
+    // the box shows it while the write is on its way; the store holds
+    // nobody but the signed-in person to paint
+    expect(query<HTMLInputElement>('[data-can-create-projects="aisha"]')?.checked).toBe(true)
+    expect(P.user('aisha')).toBeUndefined()
 
     await act(async () => query<HTMLInputElement>('[data-can-create-projects="leo"]')?.click())
     expect(window.showToast).toHaveBeenCalledWith('Leo Martins can no longer create projects')
@@ -345,7 +348,7 @@ describe('Can create projects in Organization > Users', () => {
       args: { id: 'atlas', patch: { can_create_projects: true } },
     })
     expect(window.showToast).toHaveBeenCalledWith('Atlas can create projects')
-    expect(P.canCreateProject('atlas')).toBe(true)
+    expect(query<HTMLInputElement>('[data-can-create-projects="atlas"]')?.checked).toBe(true)
     await act(async () => query<HTMLInputElement>('[data-can-create-projects="leo"]')?.click())
 
     // the server holds both rights once their writes land

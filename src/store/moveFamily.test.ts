@@ -185,14 +185,16 @@ describe('moving a task with its family', () => {
     expect(moves()).toEqual([expect.objectContaining({ detach_parent: true })])
   })
 
-  it('needs edit access for the people on a carried subtask', async () => {
+  it('sends a move whose carried subtask is held by someone the store does not hold, for the server to check', async () => {
     await load((snap) => {
       const api = snap.issues.find((i) => i.id === 'api')!
       api.assignee_id = 'webOnly'
     })
-    const blockers = P.moveBlockers(vm('epic'), ids.fw)
-    expect(blockers.map((b) => [b.uid, b.task.uuid, b.edit])).toEqual([['webOnly', 'api', true]])
-    // within the top-level project the subtask stays, and Web only sees BE
-    expect(P.moveBlockers(vm('epic'), ids.be)).toEqual([])
+    // the server refuses with its sentence where webOnly cannot edit the
+    // destination (convex/model/issues.ts MOVE_SUBTREE_HOLDER_RULE); the
+    // store judges no one but the signed-in person
+    expect(P.user('webOnly')).toBeUndefined()
+    P.moveIssue(vm('epic').id, ids.fw)
+    expect(moves()).toHaveLength(1)
   })
 })

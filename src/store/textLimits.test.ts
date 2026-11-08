@@ -4,7 +4,7 @@ import { NO_PASSWORD_LOGIN } from '../../convex/lib/email'
 import { LIMITS, TEXT_MAX } from '../../convex/lib/limits'
 import { limitSentence, sentence } from '../lib/fieldLimits'
 import { answerMilestones, isMilestoneRead } from './milestoneStandIn.setup'
-import { labelShownOf, shownOf } from './personShown.setup'
+import { shownOf } from './personShown.setup'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 import type { Row } from './rows'
 
@@ -179,7 +179,7 @@ describe('the limits in the store', () => {
         'team-a',
         { name: NAME_OVER },
         {},
-        { orgId: P.homeOrg, name: P.teamById('team-a')?.name ?? '' },
+        { orgId: P.homeOrg, name: 'Field crew' },
       ),
     ).toBe(false)
     expect(await P.setOrg({ name: NAME_OVER })).toBe(false)
@@ -190,14 +190,13 @@ describe('the limits in the store', () => {
       'An organization name must be at most 80 characters. Shorten it.',
       'A milestone name must be at most 80 characters. Shorten it.',
     ])
-    expect(P.teamById('team-a')?.name).toBe('Field crew')
     expect(sent).toEqual([])
     void P.updateProject(project, { name: NAME_AT_CAP })
     void P.updateTeam(
       'team-a',
       { name: ` ${NAME_AT_CAP} ` },
       {},
-      { orgId: P.homeOrg, name: P.teamById('team-a')?.name ?? '' },
+      { orgId: P.homeOrg, name: 'Field crew' },
     )
     expect(sent).toEqual(['projects:update', 'teams:update'])
   })
@@ -207,12 +206,18 @@ describe('the limits in the store', () => {
     // the first 40 characters are an existing label's name
     const over = 'n'.repeat(LIMITS.labelName.max + 1)
     expect(P.addLabel({ name: over })).toBeNull()
-    expect(P.updateLabel('label-a', { name: over }, {}, labelShownOf(P, 'label-a'))).toBe(false)
+    expect(
+      P.updateLabel(
+        'label-a',
+        { name: over },
+        {},
+        { orgId: store.P.homeOrg, name: 'n'.repeat(LIMITS.labelName.max), color: '#335577' },
+      ),
+    ).toBe(false)
     expect(toast.mock.calls.map(([message]) => message)).toEqual([
       'A label name must be at most 40 characters. Shorten it.',
       'A label name must be at most 40 characters. Shorten it.',
     ])
-    expect(P.orgLabels().map((l) => l.id)).toEqual(['label-a'])
     expect(sent).toEqual([])
   })
 

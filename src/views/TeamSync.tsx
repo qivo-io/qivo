@@ -31,7 +31,7 @@
      its meeting has answered. It never corrects a scope. */
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { NoProjects } from '@/components/NoProjects'
-import { Avatar, FieldSelect, Icon } from '@/components/qivo'
+import { Avatar, Icon } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
 import { usePeople } from '@/components/usePeople'
 import { WalkFooter, WalkRail } from '@/components/walk'
@@ -49,11 +49,9 @@ import {
   type SyncGroupId,
   type SyncLoad,
   type SyncPerson,
-  type SyncPlaceScope,
   type SyncVerdict,
   stampLabel,
   syncDay,
-  syncScopeKey,
   waitingOnReview,
 } from '@/lib/teamSync'
 import { useLatest } from '@/lib/useLatest'
@@ -64,6 +62,7 @@ import { type IssueVM, P } from '@/store/planner'
 import { usePlannerVersion } from '@/store/usePlannerVersion'
 import { DoneItem, LoadChip, type PageCtx, SyncCard, WaitingItem } from './teamSync/SyncCard'
 import { IncompleteNote, StaleNote, SyncNote } from './teamSync/SyncNote'
+import { SyncScopeMenu } from './teamSync/SyncScopeMenu'
 import { TeamOpening } from './teamSync/TeamOpening'
 import {
   type SyncMeeting,
@@ -87,50 +86,6 @@ export type SyncPlace = { scope: string; step: string }
 type Figures = {
   verdict: (uuid: string) => SyncVerdict
   load: (person: SyncPerson) => SyncLoad
-}
-
-/* The walk's scope choice: all projects, each team of the home
-   organization, each of its projects. It names the scope the page shows,
-   and "Choose a scope" with nothing chosen where the page asks to choose
-   (`named` false). */
-function ScopeCtl({
-  scope,
-  named,
-  onPick,
-}: {
-  scope: SyncPlaceScope
-  named: boolean
-  onPick: (key: string) => void
-}) {
-  const teams = P.teams
-    .filter((t) => t.org === P.homeOrg)
-    .sort((a, b) => a.name.localeCompare(b.name))
-  const projects = P.visibleProjects().filter((p) => p.org === P.homeOrg)
-  // a sub-project scope (a /sync/p/<n> link) is offered as itself
-  const own = scope.kind === 'project' ? P.project(scope.id) : null
-  if (own && !projects.some((p) => p.id === own.id)) projects.push(own)
-  return (
-    <span data-sync-scope className="inline-flex min-w-0">
-      <FieldSelect
-        aria-label="Sync scope"
-        value={named ? syncScopeKey(scope) : null}
-        placeholder="Choose a scope"
-        menuWidth={220}
-        backLayer
-        className="max-w-[260px] text-sm"
-        options={[
-          { value: 'all', label: 'All projects', icon: <Icon name="layers" size={14} /> },
-          ...teams.map((t) => ({
-            value: `team:${t.id}`,
-            label: t.name,
-            icon: <Icon name="people" size={14} />,
-          })),
-          ...projects.map((p) => ({ value: `project:${p.id}`, label: P.projectLabel(p) })),
-        ]}
-        onChange={onPick}
-      />
-    </span>
-  )
 }
 
 function SyncCol({
@@ -626,8 +581,10 @@ export function TeamSync({
   }, [frozen])
   const ctxFor = (owner: SyncPerson): PageCtx => {
     // P.syncStamp sends nothing for a viewer who is not staff (the server's
-    // rule), so a read-only visitor earns no refusal toasts
-    const stamp = () => P.syncStamp(owner.id)
+    // rule), so a read-only visitor earns no refusal toasts. It takes the
+    // page owner and their stamp from the agenda's row, as the store holds
+    // no one else, and the agenda's rerun brings the new stamp
+    const stamp = () => P.syncStamp(owner, P.homeOrg)
     return {
       owner: owner.id,
       // from the agenda's stamp, which its Done tasks were read by
@@ -759,7 +716,7 @@ export function TeamSync({
         <section className="overview-section">
           <div className="overview-section-body">
             <div className="mb-6 flex flex-wrap items-center gap-3">
-              <ScopeCtl scope={scope} named={named} onPick={pickScope} />
+              <SyncScopeMenu scope={scope} named={named} onPick={pickScope} />
               <span data-sync-today className="whitespace-nowrap text-sm text-text-3">
                 {P.WEEKDAYS[today.getDay()].slice(0, 3)} {P.fmtDate(today)}
               </span>

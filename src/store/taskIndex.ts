@@ -11,25 +11,36 @@
 
    Every list a task holds is in a total order, so the result never depends
    on the order rows arrive in: subtasks by number, then id; links by
-   creation time, then id; labels by name, then id; attachments by creation
-   time, then id; and the tasks by number, organization and id.
+   creation time, then id; labels by id, which the task window orders by
+   the names it reads (panels/taskLabels.ts useTaskLabels); attachments by
+   creation time, then id; and the tasks by number, organization and id.
 
    Each owner's load is the server's rows for tasks this person is not shown
    (`orgLoad`) and a row for each shown task that passes the server's fence
    (convex/lib/loadRows.ts loadRowFor), taken from the rows on screen, so a
    pending hours or owner edit moves its owner's load and delays at once.
    An owner's spans are in the server's total order (canonicalLoad), so the
-   weekly sums match the REST and MCP reads whatever order rows arrive in. */
+   weekly sums match the REST and MCP reads whatever order rows arrive in.
+
+   The workspace holds no other person, so each owner's organization and
+   capacity come from `ownerFacts` (store/planner.ts ownerFacts), the
+   profile cache's face of them. A shown task's span is filed for its owner
+   unless those facts place the owner in another organization or say they
+   are gone, and a task whose verdict reads its owner's unknown capacity is
+   unknown (delayUnknown), never judged against a default week. When
+   `factsVersion` turns, as a face arrives, the index asks again for the
+   facts of every owner it filed and refiles and judges again the tasks of
+   each whose facts changed. */
 
 import { delayProjector } from '../../convex/lib/delay'
 import { loadRowFor } from '../../convex/lib/loadRows'
 import { taskOwnerId } from '../../convex/lib/review'
 import { canonicalLoad } from '../../convex/lib/workload'
 import { isoToWeek, TODAY_ISO, TODAY_WEEK, tsToWeek } from '../lib/dates'
-import type { DelayInfo } from '../lib/delay'
+import { DELAY_UNKNOWN, type DelayInfo, delayBeforeLoads } from '../lib/delay'
 import { groupSpan, isIssueDone, isIssueGroup } from '../lib/issueGroups'
 import { linkViews } from '../lib/taskSections'
-import type { LoadSpan } from '../lib/workload'
+import { DEFAULT_PLANNABLE_HOURS, type LoadSpan } from '../lib/workload'
 import type { RowMap } from './rowMap'
 import type { Row } from './rows'
 import { sameData } from './stable'
@@ -47,42 +58,42 @@ export type LoadRow = {
   remaining_set_at?: string | null
 }
 
+/** What the index knows of an owner: their organization, '' for one the
+    server's answer says is not there, undefined while it cannot tell, and
+    their plannable hours a week, undefined while unknown. */
+export type OwnerFacts = { org: string | undefined; capacity: number | undefined }
+
 /** The rows the tasks are built from, read outside any paint. */
 export type TaskSources = {
   issues: RowMap<Row<'issues'>>
   links: RowMap<Row<'issue_links'>>
   attachments: RowMap<Row<'issue_attachments'>>
-  labels: RowMap<Row<'labels'>>
   issueLabels: readonly Row<'issue_labels'>[]
   issueSubs: readonly Row<'issue_subscriptions'>[]
   /** the load rows of tasks this person is not shown */
   orgLoad: readonly LoadRow[]
   /** the projects, to tell which are live */
   projects: RowMap<Row<'projects'>>
-  /** the people, to tell which organization each belongs to */
-  profiles: RowMap<Row<'profiles'>>
+  /** what the store knows of owner `id` now (OwnerFacts) */
+  ownerFacts: (id: string) => OwnerFacts
+  /** turns whenever ownerFacts may answer otherwise */
+  factsVersion: number
   hiddenSubtaskParents: ReadonlySet<string>
   hiddenParentTasks: ReadonlySet<string>
   /** the home organization, whose tasks go by their display key */
   homeOrg: string
   /** the signed-in person's profiles */
   mine: ReadonlySet<string>
-  /** each person's plannable hours a week */
-  capacity: ReadonlyMap<string, number>
-  /** the plannable hours of a person without an entry */
-  defaultCapacity: number
 }
 
-/** What changed since the last build: the task, link, attachment, project
-    and person ids ('all' for every one), and whether the label rows, the
-    label and follow lists, the load rows and the hidden flags changed. */
+/** What changed since the last build: the task, link, attachment and
+    project ids ('all' for every one), and whether the label and follow
+    lists, the load rows and the hidden flags changed. */
 export type TaskChanges = {
   issues: ReadonlySet<string> | 'all'
   links: ReadonlySet<string> | 'all'
   attachments: ReadonlySet<string> | 'all'
   projects: ReadonlySet<string> | 'all'
-  profiles: ReadonlySet<string> | 'all'
-  labels: boolean
   issueLabels: boolean
   issueSubs: boolean
   orgLoad: boolean
@@ -122,6 +133,8 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
   const byUuid = new Map<string, IssueVM>()
   const partial = new Set<string>()
   const delay = new Map<string, DelayInfo>()
+  // the tasks whose verdict reads an owner's unknown capacity
+  const unknownDelay = new Set<string>()
   const ownerTasks = new Map<string, Set<string>>()
   const ownerOf = new Map<string, string>()
   // load: each owner's spans, and where they come from: the server's rows
@@ -135,10 +148,11 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
   // task and by owner
   const shownPaused = new Map<string, { owner: string; item: OwnerItem }>()
   const shownPausedOf = new Map<string, Set<string>>()
-  // the live projects and each person's organization, as the fence reads them
+  // the live projects, as the fence reads them, and the facts of each
+  // owner the index asked about, as of `factsVersion`
   const liveProjects = new Set<string>()
-  const orgOf = new Map<string, string>()
-  let capacity: ReadonlyMap<string, number> = new Map()
+  const factsOf = new Map<string, OwnerFacts>()
+  let factsVersion: number | null = null
   let issues: IssueVM[] = []
   let issueById: Record<string, IssueVM> = {}
   let src: TaskSources | null = null
@@ -252,26 +266,19 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
     return count || undefined
   }
 
-  /** Every task's label ids: those the workspace holds by label name, then
-      id, and after them, by id, those it does not, which the task window
-      names from labels.byIds (panels/taskLabels.ts useTaskLabels). A
-      task's labels are whole, so a label not loaded is never taken for
-      one taken off, and the cap counts what the server counts. */
+  /** Every task's label ids, in id order. The workspace holds no label,
+      so the task window names them from labels.byIds and orders the chips
+      by those names (panels/taskLabels.ts useTaskLabels). A task's labels
+      are whole, so a label not loaded is never taken for one taken off, and
+      the cap counts what the server counts. */
   function labelIndex(): Map<string, string[]> {
-    const { issueLabels, labels } = sources()
     const out = new Map<string, string[]>()
-    for (const row of issueLabels) {
+    for (const row of sources().issueLabels) {
       const list = out.get(row.issue_id)
       if (list) list.push(row.label_id)
       else out.set(row.issue_id, [row.label_id])
     }
-    // a label the workspace does not hold sorts after every named one
-    const name = (id: string) => {
-      const label = labels.peek(id)
-      return label ? `0${label.name.toLowerCase()}` : '1'
-    }
-    for (const list of out.values())
-      if (list.length > 1) list.sort((a, b) => byThenId(name(a), a, name(b), b))
+    for (const list of out.values()) if (list.length > 1) list.sort()
     return out
   }
 
@@ -311,6 +318,26 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
     return project !== undefined && !project.archived_at
   }
 
+  /** What the store knows of owner `id`, asked once a facts version. */
+  function facts(id: string): OwnerFacts {
+    let known = factsOf.get(id)
+    if (!known) {
+      known = sources().ownerFacts(id)
+      factsOf.set(id, known)
+    }
+    return known
+  }
+
+  /** Whether owner `id`'s work files under a task of organization
+      `rowOrg`: unless their facts place them in another organization or
+      say they are gone. An owner the store cannot place yet counts as the
+      row's, since the server lets a task name only its own organization's
+      people (store/viewDelay.ts ownerInOrg). */
+  const inOrg = (id: string, rowOrg: string) => {
+    const org = facts(id).org
+    return org === undefined || org === rowOrg
+  }
+
   /** Files shown task `uuid`'s load span from its row and view model, or
       none. Adds the owners whose load it moved to `moved`. */
   function fileLoad(uuid: string, moved: Set<string>) {
@@ -321,7 +348,7 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
         ? loadRowFor(row, {
             isGroup: isIssueGroup(it),
             projectLive: liveProjects.has(row.project_id),
-            ownerInOrg: (id) => orgOf.get(id) === row.org_id,
+            ownerInOrg: (id) => inOrg(id, row.org_id),
             visible: true,
             staff: false,
             meId: '',
@@ -364,7 +391,7 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
       isIssueGroup(it) ||
       row.status === 'done' ||
       owner === undefined ||
-      orgOf.get(owner) !== row.org_id ||
+      !inOrg(owner, row.org_id) ||
       !liveProjects.has(row.project_id) ||
       row.start_week === undefined ||
       row.end_week === undefined
@@ -439,33 +466,55 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
     if (dates.partial) partial.add(it.uuid)
   }
 
-  /** The delay of each task in `uuids`, null for none (`byId` by handle). */
+  /** The delay of each task in `uuids`, null for none and DELAY_UNKNOWN
+      where the verdict reads its owner's capacity and the store does not
+      know it (`byId` by handle). */
   function judge(uuids: Iterable<string>, byId: Readonly<Record<string, IssueVM>>) {
     const project = delayProjector((owner) => loadByOwner.get(owner) || [], TODAY_WEEK)
-    const out = new Map<string, DelayInfo | null>()
+    const out = new Map<string, DelayInfo | typeof DELAY_UNKNOWN | null>()
     for (const uuid of uuids) {
       const it = byUuid.get(uuid)
       if (!it) continue
-      out.set(
-        uuid,
-        project({
-          uuid: it.uuid,
-          status: it.status,
-          isGroup: isIssueGroup(it),
-          isDone: isIssueDone(it, byId),
-          partial: partial.has(it.uuid),
-          owner: it.owner,
-          start: it.start,
-          end: it.end,
-          dueWeek: it.due ? isoToWeek(it.due) : null,
-          duePast: !!it.due && it.due < TODAY_ISO,
-          remaining: it.remaining,
-          remainingSet: it.remainingSet,
-          capacity: (it.owner && capacity.get(it.owner)) || sources().defaultCapacity,
-        }),
-      )
+      const capacity = it.owner ? facts(it.owner).capacity : 0
+      const issue = {
+        uuid: it.uuid,
+        status: it.status,
+        isGroup: isIssueGroup(it),
+        isDone: isIssueDone(it, byId),
+        partial: partial.has(it.uuid),
+        owner: it.owner,
+        start: it.start,
+        end: it.end,
+        dueWeek: it.due ? isoToWeek(it.due) : null,
+        duePast: !!it.due && it.due < TODAY_ISO,
+        remaining: it.remaining,
+        remainingSet: it.remainingSet,
+        capacity: capacity ?? DEFAULT_PLANNABLE_HOURS,
+      }
+      // a verdict that reads an unknown week is unknown; one that needs no
+      // one's capacity is the same against any week
+      const unknown =
+        capacity === undefined &&
+        !issue.isGroup &&
+        delayBeforeLoads(issue, { datesKnown: true, loading: false }) === DELAY_UNKNOWN
+      out.set(uuid, unknown ? DELAY_UNKNOWN : project(issue))
     }
     return out
+  }
+
+  /** Keeps verdict `info` of task `uuid`, answering whether it changed. */
+  function setDelay(uuid: string, info: DelayInfo | typeof DELAY_UNKNOWN | null): boolean {
+    const was = unknownDelay.has(uuid) ? DELAY_UNKNOWN : delay.get(uuid)
+    const now = info ?? undefined
+    if (now === DELAY_UNKNOWN) {
+      delay.delete(uuid)
+      unknownDelay.add(uuid)
+    } else {
+      unknownDelay.delete(uuid)
+      if (now) delay.set(uuid, now)
+      else delay.delete(uuid)
+    }
+    return !sameData(was, now)
   }
 
   /** Files task `uuid` under its owner, or under none. */
@@ -543,6 +592,9 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
     }),
     /** Every task's delay, by uuid. */
     delays: delay as ReadonlyMap<string, DelayInfo>,
+    /** The tasks whose verdict is unknown, as its owner's capacity is
+        (judge). */
+    unknownDelays: unknownDelay as ReadonlySet<string>,
     /** Each owner's organization-wide load spans. */
     loads: () => loadByOwner as ReadonlyMap<string, LoadSpan[]>,
     /** The spans of owner `owner`'s tasks this person is shown, from the
@@ -590,7 +642,8 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
       src = from
       const handlesBefore = new Map(uuidToKey)
       const before = byUuid.size ? new Map(byUuid) : null
-      const delayBefore = new Map(delay)
+      const delayBefore = new Map<string, DelayInfo | typeof DELAY_UNKNOWN>(delay)
+      for (const uuid of unknownDelay) delayBefore.set(uuid, DELAY_UNKNOWN)
       for (const map of [keyToUuid, uuidToKey, uuidToDisplayKey, keyByOrg, filedOrg]) map.clear()
       for (const map of [parentOf, children, linkEnds, linksOf, attachmentOf, attachmentsOf])
         map.clear()
@@ -614,7 +667,8 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
       subscribed = followed()
       subtaskParents = new Set(from.hiddenSubtaskParents)
       hiddenParents = new Set(from.hiddenParentTasks)
-      capacity = from.capacity
+      factsOf.clear()
+      factsVersion = from.factsVersion
       byUuid.clear()
       partial.clear()
       for (const [uuid, row] of from.issues) byUuid.set(uuid, shape(row))
@@ -623,8 +677,6 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
       for (const it of byUuid.values()) span(it, byId)
       liveProjects.clear()
       for (const id of from.projects.keys()) if (isLive(id)) liveProjects.add(id)
-      orgOf.clear()
-      for (const [id, person] of from.profiles) orgOf.set(id, person.org_id)
       hiddenLoad = hiddenIndex()
       shownLoad.clear()
       shownLoadOf.clear()
@@ -636,7 +688,8 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
       for (const owner of loaded) loadByOwner.set(owner, loadOfOwner(owner))
       const judged = judge(byUuid.keys(), byId)
       delay.clear()
-      for (const [uuid, info] of judged) if (info) delay.set(uuid, info)
+      unknownDelay.clear()
+      for (const [uuid, info] of judged) setDelay(uuid, info)
       ownerTasks.clear()
       ownerOf.clear()
       for (const it of byUuid.values()) fileOwner(it.uuid, it.owner)
@@ -648,7 +701,10 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
             return (
               !prev ||
               !sameData(prev, it) ||
-              !sameData(delayBefore.get(it.uuid), delay.get(it.uuid))
+              !sameData(
+                delayBefore.get(it.uuid),
+                unknownDelay.has(it.uuid) ? DELAY_UNKNOWN : delay.get(it.uuid),
+              )
             )
           })
           .map((it) => it.uuid)
@@ -753,7 +809,7 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
           dirty.add(att.issue_id)
         }
       }
-      if (changes.labels || changes.issueLabels) {
+      if (changes.issueLabels) {
         const next = labelIndex()
         for (const uuid of new Set([...labelsByIssue.keys(), ...next.keys()]))
           if (!sameData(labelsByIssue.get(uuid), next.get(uuid))) dirty.add(uuid)
@@ -798,22 +854,18 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
       }
       if (turned.size)
         for (const [uuid, row] of from.issues) if (turned.has(row.project_id)) recheck.add(uuid)
-      // so does a person who joined or left an organization
-      const personIds =
-        changes.profiles === 'all' ? [...orgOf.keys(), ...from.profiles.keys()] : changes.profiles
-      for (const id of personIds) {
-        const org = from.profiles.peek(id)?.org_id
-        if (org === orgOf.get(id)) continue
-        if (org === undefined) orgOf.delete(id)
-        else orgOf.set(id, org)
-        for (const uuid of ownerTasks.get(id) ?? []) recheck.add(uuid)
-      }
-      // the owners whose delays move with their load or capacity
+      // the owners whose delays move with their load or capacity, and the
+      // tasks of an owner whose organization the store now places otherwise
       const owners = new Set<string>()
-      if (from.capacity !== capacity) {
-        for (const owner of new Set([...capacity.keys(), ...from.capacity.keys()]))
-          if (capacity.get(owner) !== from.capacity.get(owner)) owners.add(owner)
-        capacity = from.capacity
+      if (from.factsVersion !== factsVersion) {
+        factsVersion = from.factsVersion
+        for (const [id, was] of [...factsOf]) {
+          const now = from.ownerFacts(id)
+          if (sameData(was, now)) continue
+          factsOf.set(id, now)
+          if (now.capacity !== was.capacity) owners.add(id)
+          if (now.org !== was.org) for (const uuid of ownerTasks.get(id) ?? []) recheck.add(uuid)
+        }
       }
       // a group's dates, completion and delay follow its subtasks
       for (const uuid of Array.from(dirty))
@@ -837,6 +889,7 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
           byUuid.delete(uuid)
           partial.delete(uuid)
           delay.delete(uuid)
+          unknownDelay.delete(uuid)
           fileOwner(uuid, undefined)
           continue
         }
@@ -865,11 +918,7 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
       const judged = new Set(shaped.keys())
       for (const owner of owners) for (const uuid of ownerTasks.get(owner) ?? []) judged.add(uuid)
       const changed = new Set<string>()
-      for (const [uuid, info] of judge(judged, byId)) {
-        if (!sameData(delay.get(uuid), info ?? undefined)) changed.add(uuid)
-        if (info) delay.set(uuid, info)
-        else delay.delete(uuid)
-      }
+      for (const [uuid, info] of judge(judged, byId)) if (setDelay(uuid, info)) changed.add(uuid)
       for (const [uuid, it] of shaped) {
         const prev = before.get(uuid)
         if (!prev || !sameData(prev, it)) changed.add(uuid)
@@ -948,15 +997,16 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
         shownLoadOf,
         shownPaused,
         shownPausedOf,
-        orgOf,
+        factsOf,
       ] as Map<string, unknown>[])
         map.clear()
+      unknownDelay.clear()
+      factsVersion = null
       liveProjects.clear()
       labelsByIssue = new Map()
       subscribed = new Set()
       subtaskParents = new Set()
       hiddenParents = new Set()
-      capacity = new Map()
       partial.clear()
       issues = []
       issueById = {}

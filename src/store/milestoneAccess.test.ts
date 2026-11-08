@@ -1,10 +1,12 @@
 /* Milestones live on the meta project, so the New milestone buttons follow
  * edit access there. A grant on a sub-project alone shows the meta read-only,
- * and the server refuses a milestone from that person. */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
+ * and the server refuses a milestone from that person. The store judges the
+ * signed-in person alone, so each case signs in as the person it asks
+ * about. */
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { Whole } from './guard/liveDouble.setup'
 
-type Snapshot = Workspace
+type Snapshot = Whole
 type Planner = typeof import('./planner')['P']
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -25,7 +27,7 @@ const org = crypto.randomUUID()
 const meta = crypto.randomUUID()
 const sub = crypto.randomUUID()
 
-function fixture(): Snapshot {
+function fixture(me: string): Snapshot {
   const profiles: Snapshot['profiles'] = []
   const access: Snapshot['access'] = []
   const person = (
@@ -43,7 +45,7 @@ function fixture(): Snapshot {
       active: true,
       kind: 'person',
       created_at: NOW,
-      ...(id === 'admin' ? { auth_user_id: 'test-account' } : {}),
+      ...(id === me ? { auth_user_id: 'test-account' } : {}),
     })
     if (grant) access.push({ project_id: grant.project, profile_id: id, level: grant.level })
   }
@@ -54,7 +56,7 @@ function fixture(): Snapshot {
   const base = { org_id: org, description: '', sort_order: 0, track_delay: false, created_at: NOW }
   return {
     auth_user_id: 'test-account',
-    myProfileIds: ['admin'],
+    myProfileIds: [me],
     orgs: [
       {
         id: org,
@@ -94,13 +96,12 @@ function fixture(): Snapshot {
 }
 
 describe('who may add a milestone', () => {
-  let P: Planner
-
-  beforeEach(async () => {
+  /* A store signed in as person `me`. */
+  async function as(me: string): Promise<Planner> {
     vi.resetModules()
     vi.clearAllMocks()
     vi.stubGlobal('window', { showToast: vi.fn() })
-    const snap = fixture()
+    const snap = fixture(me)
     network.query.mockResolvedValue(null)
     network.mutation.mockResolvedValue(null)
     network.onUpdate.mockImplementation((_ref, _args, next) => {
@@ -108,27 +109,30 @@ describe('who may add a milestone', () => {
       return () => {}
     })
     const store = await import('./planner')
-    P = store.P
     await store.initStore()
-  })
+    return store.P
+  }
 
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
 
-  it('needs edit access on the meta project, from either scope', () => {
-    expect(P.canAddMilestone(meta, 'metaUser')).toBe(true)
-    expect(P.canAddMilestone(sub, 'metaUser')).toBe(true)
+  it('needs edit access on the meta project, from either scope', async () => {
+    const P = await as('metaUser')
+    expect(P.canAddMilestone(meta)).toBe(true)
+    expect(P.canAddMilestone(sub)).toBe(true)
   })
 
-  it('refuses a person who can edit only the sub-project, or only view the meta', () => {
+  it('refuses a person who can edit only the sub-project, or only view the meta', async () => {
     // and an organization admin without a grant, as admin status gives no Edit
-    expect(P.canAddMilestone(meta, 'admin')).toBe(false)
-    expect(P.canAddMilestone(sub, 'admin')).toBe(false)
-    expect(P.canWrite(sub, 'subUser')).toBe(true)
-    expect(P.canAddMilestone(sub, 'subUser')).toBe(false)
-    expect(P.canAddMilestone(meta, 'subUser')).toBe(false)
-    expect(P.canAddMilestone(sub, 'metaViewer')).toBe(false)
+    const admin = await as('admin')
+    expect(admin.canAddMilestone(meta)).toBe(false)
+    expect(admin.canAddMilestone(sub)).toBe(false)
+    const subUser = await as('subUser')
+    expect(subUser.canWrite(sub)).toBe(true)
+    expect(subUser.canAddMilestone(sub)).toBe(false)
+    expect(subUser.canAddMilestone(meta)).toBe(false)
+    expect((await as('metaViewer')).canAddMilestone(sub)).toBe(false)
   })
 })

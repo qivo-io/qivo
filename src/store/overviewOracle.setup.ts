@@ -117,6 +117,9 @@ export function healthRows(info: ScopeInfo, scoped: IssueVM[], mine: boolean) {
       const issues = held[gi]
       const gp = progress[gi]
       const leadId = P.leadOf(g.proj.id)
+      // the lead as the store names them, the signed-in person's own
+      // profile or a face of the profile cache, which the test names
+      const lead = leadId ? P.person(leadId) : null
       /* Projected verdicts (0064), gated PER ISSUE: `delayOf` returns the
        raw projection for every issue; only `delayColor` consults the
        tracking toggle, so the gate has to be asked here, and asking it
@@ -134,7 +137,7 @@ export function healthRows(info: ScopeInfo, scoped: IssueVM[], mine: boolean) {
         done: gp.done,
         total: gp.total,
         remaining: remaining[gi],
-        lead: leadId ? P.user(leadId) : null,
+        lead: lead?.state === 'ok' ? lead : null,
         late: delayCount('late'),
         behind: delayCount('behind'),
         paused: issues.filter((i) => P.isPaused(i)).length,

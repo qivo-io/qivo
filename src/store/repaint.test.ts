@@ -225,7 +225,8 @@ describe('view model identity across repaints', () => {
     })
     expect(P().contextVersion).not.toBe(renamed)
     // a team membership decides what the person sees (the search palette
-    // asks P.canSee again when this moves)
+    // asks P.canSee again when this moves); the store holds the person's own
+    // teams and memberships alone, so a team arrives with its membership
     const named = P().contextVersion
     deliverChange((snap) => {
       snap.teams.push({
@@ -235,17 +236,31 @@ describe('view model identity across repaints', () => {
         track_delay_default: true,
         created_at: AT,
       })
-    })
-    const teamed = P().contextVersion
-    expect(teamed).not.toBe(named)
-    deliverChange((snap) => {
       snap.teamMembers.push({
         team_id: 'team-1',
         profile_id: snap.profiles[0].id,
         is_leader: false,
       })
     })
+    const teamed = P().contextVersion
+    expect(teamed).not.toBe(named)
+    deliverChange((snap) => {
+      const membership = snap.teamMembers.find((m) => m.team_id === 'team-1')
+      if (membership) membership.is_leader = true
+    })
     expect(P().contextVersion).not.toBe(teamed)
+    // another person's team reaches no part the store holds
+    const led = P().contextVersion
+    deliverChange((snap) => {
+      snap.teams.push({
+        id: 'team-2',
+        org_id: snap.orgs[0].id,
+        name: 'Elsewhere',
+        track_delay_default: true,
+        created_at: AT,
+      })
+    })
+    expect(P().contextVersion).toBe(led)
   })
 
   it('keeps contextVersion for the organization load and Team sync stamps', () => {
@@ -263,11 +278,12 @@ describe('view model identity across repaints', () => {
       })
     })
     expect(P().contextVersion).toBe(context)
-    // a change made on a person through Team sync stamps them
+    // a change made on a person through Team sync stamps them, which no
+    // part sends: the agenda reads the stamps (convex/teamSync.ts agenda)
     deliverChange((snap) => {
       snap.profiles[0].sync_at = '2026-09-16T08:00:00.000Z'
     })
-    expect(P().users).not.toBe(people)
+    expect(P().users).toBe(people)
     expect(P().contextVersion).toBe(context)
   })
 
@@ -346,33 +362,6 @@ describe('view model identity across repaints', () => {
       row(snap, 'other').priority = 'high'
     })
     expect(emits).toBe(shown + 1)
-  })
-
-  it('lists people with the same creation time by name, then id, in whatever order they arrive', () => {
-    const person = (id: string, name: string): Snapshot['profiles'][number] => ({
-      ...snapshot.profiles[0],
-      id,
-      auth_user_id: `account-${id}`,
-      name,
-    })
-    deliverChange((snap) => {
-      snap.profiles.push(
-        person('person-d', 'Sam'),
-        person('person-a', 'Zed'),
-        person('person-c', 'Sam'),
-        person('person-b', 'Amy'),
-      )
-    })
-    const order = () =>
-      P()
-        .users.map((user) => user.id)
-        .filter((id) => id.startsWith('person-'))
-    const expected = ['person-b', 'person-c', 'person-d', 'person-a']
-    expect(order()).toEqual(expected)
-    deliverChange((snap) => {
-      snap.profiles.reverse()
-    })
-    expect(order()).toEqual(expected)
   })
 
   it('lists subtasks by number, in whatever order they arrive', () => {

@@ -300,7 +300,8 @@ export const mentionSuggestion: Omit<
       // this popup builds its own avatar in plain DOM, so it inherits
       // nothing from <Avatar>: the same layers are assembled by hand,
       // initials on the row's color, with the person's picture from the
-      // store (P.person, the workspace's people part or the profile cache)
+      // store (P.person, the signed-in person's own profile or the profile
+      // cache)
       // painted over them
       const av = document.createElement('span')
       av.className = 'mentionpop-av'

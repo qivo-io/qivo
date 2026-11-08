@@ -58,7 +58,6 @@ import { nameKey } from '../../convex/lib/nameKey'
 import { canCreateProjects, projectCreationRefusal } from '../../convex/lib/projectCreators'
 import { DEFAULT_REVIEW_HOURS, resolveReviewHours } from '../../convex/lib/review'
 import { allWordsMatcher } from '../../convex/lib/search'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
 import type {
   AccessListAnswer,
   CandidateRow,
@@ -70,10 +69,11 @@ import type {
   TeamShareRow,
   UserGrantRow,
 } from '../../convex/model/projectSettings'
+import type { Whole } from './guard/liveDouble.setup'
 
 /** The workspace rows the stand-in reads. */
 export type SettingsWorkspace = Pick<
-  Workspace,
+  Whole,
   | 'myProfileIds'
   | 'orgs'
   | 'profiles'
@@ -115,8 +115,8 @@ export type ForcedProjectSettings = {
   batch?: number
 }
 
-type Profile = Workspace['profiles'][number]
-type Project = Workspace['projects'][number]
+type Profile = Whole['profiles'][number]
+type Project = Whole['projects'][number]
 type Level = 'lead' | 'user' | 'viewer'
 type GrantLevel = 'user' | 'viewer'
 
@@ -568,7 +568,7 @@ export function candidatesStandIn(
     (kind === 'team'
       ? ws.teamAccess.some((s) => s.project_id === project?.id && s.team_id === id)
       : ws.access.some((a) => a.project_id === project?.id && a.profile_id === id))
-  type Item = { kind: 'team'; team: Workspace['teams'][number] } | { kind: 'user'; person: Profile }
+  type Item = { kind: 'team'; team: Whole['teams'][number] } | { kind: 'user'; person: Profile }
   const items: { at: At; item: Item }[] = [
     ...(teams
       ? ws.teams

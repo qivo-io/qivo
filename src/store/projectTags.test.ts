@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
-import { as, newT, plantSeat, uuid, withOrg, workspaceOf } from '../../convex/tests/helpers.setup'
+import { as, newT, plantSeat, uuid, wholeOf, withOrg } from '../../convex/tests/helpers.setup'
+import type { Whole as Delivered } from './guard/liveDouble.setup'
 import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup'
 import { duplicateNameTags, type TaggableProject } from './viewModels'
-import type { Snapshot as Delivered } from './workspaceBase'
 
 type Project = TaggableProject
 
@@ -180,7 +180,7 @@ describe('project labels in the store', () => {
     const mine = await create(f.user)
     const theirs = await create(colleague)
     const snapshotOf = async (profile: Doc<'profiles'>) => {
-      const snap = await workspaceOf(as(t, profile))
+      const snap = await wholeOf(t, profile)
       if (snap === null) throw new Error(`no snapshot for ${profile.name}`)
       return snap
     }

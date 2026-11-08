@@ -4,13 +4,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { descriptionForm, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
 import type { FieldChange } from '../../convex/lib/functions'
 import { LIMITS } from '../../convex/lib/limits'
+import { peopleSettingsStandIn } from './peopleSettingsStandIn.setup'
 import { shownOf } from './personShown.setup'
 import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup'
 
 /* The field check in the app's store: every edit of an existing record
    sends the values on screen for the fields it changes as `expected`
    (convex/model/expected.ts), and a refusal over a field someone else
-   changed shows a notice that stays until it is closed. */
+   changed shows a notice that stays until it is closed. The store holds
+   nobody but the signed-in person, so a notice names Emil, who writes the
+   changes, from the profile cache: a view on screen names him (the task's
+   thread, here P.namePeople) and people:byIds answers from the server's
+   data (store/peopleSettingsStandIn.setup.ts). */
 
 type Planner = typeof import('./planner')['P']
 type Pending = {
@@ -101,7 +106,7 @@ describe('the field check in the store', () => {
     ]
     requests = []
     network.query.mockResolvedValue(null)
-    network.onUpdate.mockImplementation((ref, _args, next) => {
+    network.onUpdate.mockImplementation((ref, args, next) => {
       if (getFunctionName(ref) === 'snapshot:threadComments')
         next({
           comments: [
@@ -109,6 +114,8 @@ describe('the field check in the store', () => {
           ],
           earlier: false,
         })
+      else if (getFunctionName(ref) === 'people:byIds')
+        next(peopleSettingsStandIn(snap, 'people:byIds', args))
       else next(structuredClone(snap))
       return () => {}
     })
@@ -121,6 +128,9 @@ describe('the field check in the store', () => {
     sync = await import('../lib/syncStatus')
     P = store.P
     await store.initStore()
+    // the view that shows Emil names him, so the notices can
+    P.namePeople('field-check', [{ org, id: EMIL }])
+    await vi.waitFor(() => expect(P.person(EMIL)?.state).toBe('ok'))
   })
 
   afterEach(() => {
@@ -224,7 +234,7 @@ describe('the field check in the store', () => {
   })
 
   it('sends no expected with a change of teams alone, which is no field it compares', () => {
-    P.updateUser(EMIL, { teams: [] }, {}, shownOf(P, EMIL))
+    P.updateUser(EMIL, { teams: [] }, {}, shownOf(snap, EMIL))
     expect(latest()).toMatchObject({ name: 'profiles:update', args: { patch: { teams: [] } } })
     expect(latest().args).not.toHaveProperty('expected')
   })
@@ -247,6 +257,18 @@ describe('the field check in the store', () => {
       expect.objectContaining({ sticky: true, key: 'field-changed-1' }),
     )
     expect(P.issueById[key('task-1')].status).toBe('todo')
+  })
+
+  it('says the field was changed elsewhere when no view has named the writer', async () => {
+    // the view lets Emil go, and the cache drops a person no view names
+    // only past its bound, so another writer no view named stands in
+    P.namePeople('field-check', [])
+    void P.updateIssue(key('task-1'), { status: 'progress' })
+    latest().reject(changed([{ by: 'p-unnamed' }]))
+    await settle()
+    expect(showToast.mock.calls.at(-1)?.[0]).toBe(
+      'Not saved. The status of QN-1 was changed elsewhere. Your change was discarded.',
+    )
   })
 
   it('adds later refusals to the open notice, and opens a new one once it is closed', async () => {

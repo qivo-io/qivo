@@ -1,6 +1,11 @@
 import { type FunctionReference, getFunctionName, makeFunctionReference } from 'convex/server'
 import type { Value } from 'convex/values'
-import { type Seatless, splitWorkspace, type Workspace } from '../../../convex/lib/workspaceJoin'
+import {
+  rootOf,
+  type Seatless,
+  splitWorkspace,
+  type Workspace,
+} from '../../../convex/lib/workspaceJoin'
 import type { LiveQueries, LiveTransition } from '../../lib/liveQueries'
 import {
   type ForcedInbox,
@@ -12,16 +17,23 @@ import {
   type PageArgs,
 } from '../inboxStandIn.setup'
 import type { MilestoneRow } from '../milestoneRows'
+import type { Row } from '../rows'
 
 /* The live transport (lib/liveQueries.ts) for store tests, over a Convex
-   client double with onUpdate. A test publishes the whole workspace as one
-   value of the stand-in query WHOLE, in the shape the store keeps it (or
-   null for no seat, or a seatless answer such as SEATS_DELETING when an
-   organization deletion holds the seats, or fails it), and the double
-   answers every workspace
-   part from it, each window with the rows whose ids fall in it, and tells
-   the store of the parts whose answer changed in one transition, as Convex
-   would. A test can hold back one task window (holdWindow). Any other
+   client double with onUpdate. A test publishes the server's data as one
+   value of the stand-in query WHOLE (Whole: the workspace's sections with
+   every profile of each organization, its Team sync stamps, every team,
+   membership and label, or null for no seat, or a seatless answer such as
+   SEATS_DELETING when an organization deletion holds the seats, or fails
+   it), and the double answers every workspace part from it as the server
+   would: the root with the caller's own profiles, memberships and teams
+   alone (convex/lib/workspaceJoin.ts rootOf), and each window with the
+   rows whose ids fall in it, and tells the store of the parts whose answer
+   changed in one transition, as Convex would. So the store holds nobody
+   but the caller, and every other person, team and label reaches it only
+   through the stand-ins that answer the reads by id and the pickers from
+   the same whole (peopleSettingsStandIn, teamSettingsStandIn,
+   labelPagesStandIn, mentionStandIn, teamSyncStandIn). A test can hold back one task window (holdWindow). Any other
    query, such as a task's thread or the Board's, is watched through the
    client's own onUpdate, each result a transition of its own, and no
    other watch shares its subscription, so a view's `fresh` watch
@@ -67,16 +79,26 @@ type Client = {
   query?(ref: FunctionReference<'query'>, args: Record<string, unknown>): Promise<unknown>
 }
 
-/** The workspace a test publishes, which may name messagesCut false, and
-    may hold messages the server keeps beyond the inbox part's cut
-    (`beyondCut`, the part's INBOX_LIMIT across the seats), which the inbox
-    reads count and list and the parts leave out, as for an Inbox past 500
-    messages, tasks and projects the server holds that the parts do not
-    send (`unheld`), which the page names its rows by, such as another
-    organization's task of the same id as one the workspace holds, and the
-    server's milestones (`milestones`), which no part sends and the
+/** The server's data a test publishes, the one server-side whole the
+    stand-ins read: the workspace's sections, with `profiles`, `teams` and
+    `teamMembers` holding every person, team and membership of each
+    organization and each profile's Team sync stamp (`sync_at`,
+    `sync_since`), which no part sends but the agenda's stand-in answers,
+    and every label (`labels`), which no part sends either. The root part
+    answers only the caller's own rows of them (rootOf). It may name
+    messagesCut false, may leave out `create`, which the root then answers
+    as 'now', and may hold messages the server keeps beyond the inbox
+    part's cut (`beyondCut`, the part's INBOX_LIMIT across the seats),
+    which the inbox reads count and list and the parts leave out, as for an
+    Inbox past 500 messages, tasks and projects the server holds that the
+    parts do not send (`unheld`), which the page names its rows by, such as
+    another organization's task of the same id as one the workspace holds,
+    and the server's milestones (`milestones`), which no part sends and the
     milestone stand-in answers from. */
-export type Whole = Omit<Workspace, 'messagesCut'> & {
+export type Whole = Omit<Workspace, 'messagesCut' | 'profiles' | 'create'> & {
+  profiles: (Workspace['profiles'][number] & { sync_at?: string; sync_since?: string })[]
+  labels: Row<'labels'>[]
+  create?: Workspace['create']
   messagesCut?: boolean
   beyondCut?: Workspace['messages']
   unheld?: Partial<Pick<Workspace, 'issues' | 'projects'>>
@@ -101,12 +123,10 @@ const SHARED = new Set([
   'taskWindow:attachments',
 ])
 
-const KINDS = ['tasks', 'people', 'projects'] as const
+const KINDS = ['tasks', 'projects'] as const
 const PARTS: Record<string, string> = {
-  'workspace:catalog': 'catalog',
   'workspace:inbox': 'inbox',
   'workspace:tasks': 'tasks',
-  'workspace:people': 'people',
   'workspace:projects': 'projects',
 }
 
@@ -158,16 +178,8 @@ function inboxAnswerOf(
     holds `whole`. */
 function answerOf(whole: Published, name: string, args: Record<string, unknown>): unknown {
   if (seatless(whole)) return name === 'workspace:root' ? whole : { state: 'gone' }
-  if (name === 'workspace:root')
-    return whole === null
-      ? null
-      : {
-          auth_user_id: whole.auth_user_id,
-          myProfileIds: whole.myProfileIds,
-          orgs: whole.orgs,
-          ...(whole.create === undefined ? {} : { create: whole.create }),
-        }
-  // the window asked for; the catalog and the inbox name none
+  if (name === 'workspace:root') return whole === null ? null : rootOf(whole)
+  // the window asked for; the inbox names none
   const window = {
     from: typeof args.from === 'string' ? args.from : '',
     to: typeof args.to === 'string' ? args.to : null,
@@ -177,7 +189,7 @@ function answerOf(whole: Published, name: string, args: Record<string, unknown>)
     : undefined
   if (!org) return { state: 'gone' }
   const part = PARTS[name]
-  if (part === 'catalog' || part === 'inbox') return { state: 'ok', ...org[part] }
+  if (part === 'inbox') return { state: 'ok', ...org.inbox }
   const kind = part as (typeof KINDS)[number]
   const rows = org[kind][0]
   // the hidden load rows ride with the first task window only

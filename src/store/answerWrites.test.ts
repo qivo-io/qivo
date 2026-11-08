@@ -5,6 +5,7 @@ import type { BoardAnswer } from '../../convex/lib/board'
 import { descriptionForm, FIELD_CHANGED, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
 import { LIMITS } from '../../convex/lib/limits'
 import type { ViewRow } from '../../convex/lib/viewReads'
+import { ASSIGNEE_SIGHT_RULE } from '../../convex/model/issues'
 import { limitSentence } from '../lib/fieldLimits'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
@@ -593,16 +594,22 @@ describe('a write from the window’s own answer fails closed', { timeout: 30_00
     expect(sent('issues:move')).toEqual([])
   })
 
-  it('refuses a new assignee who cannot see the parent’s project, and leaves a hidden parent to the server', async () => {
+  it('leaves a new assignee’s sight of the parent to the server, which refuses with its sentence', async () => {
     await load()
     const parent = task(PARENT, 39, { project_id: 'manuals', title: 'Write the manual' })
     await openFar(okAnswer(far({ parent_id: PARENT }), { parent: short(parent, 'viewer') }))
-    await expect(P.updateIssue(H, { assignee: EMIL })).resolves.toBe(false)
+    // the store holds nobody but the signed-in person, so it cannot tell
+    // whether Emil sees the parent: the write goes, painted
+    const assigned = P.updateIssue(H, { assignee: EMIL })
+    expect(last('issues:update').args.patch).toEqual({ assignee_id: EMIL })
+    expect(shown().assignee).toBe(EMIL)
+    last('issues:update').reject(new ConvexError({ code: 'rule', message: ASSIGNEE_SIGHT_RULE }))
+    await expect(assigned).resolves.toBe(false)
     expect(window.showToast).toHaveBeenCalledWith(
-      expect.stringContaining('Emil Berg has no access to'),
+      'A subtask can only be assigned to someone who can see every task above it. Change reverted.',
       'error',
     )
-    expect(writes).toEqual([])
+    expect(shown().assignee).not.toBe(EMIL)
     // a parent the answer leaves out is the server's to check
     await load()
     await openFar(okAnswer(far({ has_hidden_parent: true })))

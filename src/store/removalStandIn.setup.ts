@@ -24,8 +24,8 @@
 import { LIMITS, LIST_BATCH } from '../../convex/lib/limits'
 import { nameKey } from '../../convex/lib/nameKey'
 import { allWordsMatcher } from '../../convex/lib/search'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
 import type { RemovalChange } from '../../convex/model/removalPreview'
+import type { Whole } from './guard/liveDouble.setup'
 import type { RemovalPreview } from './planner'
 
 /** The states the stand-in answers whatever the workspace says, as the
@@ -58,14 +58,14 @@ const READ_ONLY =
   'This organization is read-only. An organization admin can subscribe or update payment details in Billing.'
 
 /* The organization `change` names a project or team of. */
-function orgOf(snapshot: Workspace, change: RemovalChange): string | undefined {
+function orgOf(snapshot: Whole, change: RemovalChange): string | undefined {
   return 'project_id' in change
     ? snapshot.projects.find((p) => p.id === change.project_id)?.org_id
     : snapshot.teams.find((t) => t.id === change.team_id)?.org_id
 }
 
 /* The people `change` takes access from. */
-function losing(snapshot: Workspace, change: RemovalChange): Set<string> {
+function losing(snapshot: Whole, change: RemovalChange): Set<string> {
   if ('user_id' in change) return new Set([change.user_id])
   return new Set(
     snapshot.teamMembers.filter((m) => m.team_id === change.team_id).map((m) => m.profile_id),
@@ -77,7 +77,7 @@ function losing(snapshot: Workspace, change: RemovalChange): Set<string> {
    those who lose sight of a task. The picker lists them, and a chosen
    person's holder_eligible answers it. */
 const canTake = (
-  profile: Workspace['profiles'][number],
+  profile: Whole['profiles'][number],
   org: string | undefined,
   people: ReadonlySet<string>,
 ) =>
@@ -88,7 +88,7 @@ const canTake = (
 
 /* The projects `change` reaches, with the project Keep as Viewer would
    grant Viewer on for each. */
-function reached(snapshot: Workspace, change: RemovalChange): Map<string, string> {
+function reached(snapshot: Whole, change: RemovalChange): Map<string, string> {
   const out = new Map<string, string>()
   const add = (id: string) => {
     out.set(id, id)
@@ -106,7 +106,7 @@ function reached(snapshot: Workspace, change: RemovalChange): Map<string, string
     module header says, with reassign.holder_eligible for `reassignTo` when
     it is given. */
 export function removalPreviewStandIn(
-  snapshot: Workspace,
+  snapshot: Whole,
   change: RemovalChange,
   force: ForcedRemoval,
   reassignTo?: string,
@@ -208,7 +208,7 @@ export function removalPreviewStandIn(
 /** accessRemovals.reassignChoices' answer for `args`, from the workspace,
     as the module header says. */
 export function reassignChoicesStandIn(
-  snapshot: Workspace,
+  snapshot: Whole,
   args: { change: RemovalChange; search?: string; after?: string },
   force: ForcedRemoval,
 ) {

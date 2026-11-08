@@ -13,9 +13,9 @@ import { type AccessRemoval, P, type RemovalAnswer } from '../store/planner'
 import { AccessRemovalModal } from './Modals'
 
 /* One removal as a key, to tell the pressed control apart: its JSON
-   without the name the page showed, so a rename during a check keeps the
+   without the names the page showed, so a rename during a check keeps the
    press. */
-const keyOf = ({ label: _label, ...change }: AccessRemoval) => JSON.stringify(change)
+const keyOf = ({ label: _label, team: _team, ...change }: AccessRemoval) => JSON.stringify(change)
 
 /** What a press says while another removal of the page is being checked,
     as it then removes nothing. */

@@ -42,7 +42,7 @@ import type {
 } from '../../convex/lib/relationPicker'
 import { allWordsMatcher } from '../../convex/lib/search'
 import { issueKey, parseIssueRef } from '../../convex/lib/taskRefs'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
+import type { Whole } from './guard/liveDouble.setup'
 
 /** States the stand-in answers whatever the workspace says: a batch whose
     scan stops after this many tasks (`stop`), a read that fails (`fail`),
@@ -59,8 +59,8 @@ export type ForcedRelations = {
   blocked?: boolean
 }
 
-type Task = Workspace['issues'][number]
-type Project = Workspace['projects'][number]
+type Task = Whole['issues'][number]
+type Project = Whole['projects'][number]
 /* Where a batch starts: the phase, the family or all your projects, and
    how many tasks of that phase's scope earlier batches looked at. */
 type Place = { phase: 'family' | 'all'; at: number }
@@ -80,7 +80,7 @@ const byCreation = (a: { created_at: string; id: string }, b: { created_at: stri
  * states.
  */
 export function relationPickerStandIn(
-  snap: Workspace,
+  snap: Whole,
   args: RelationArgs & { org_id: string },
   o: { level?: RelationCandidate['level']; force?: ForcedRelations } = {},
 ): RelationCandidates {

@@ -1328,16 +1328,9 @@ describe('an open or a check that waits, and the person’s next move', { timeou
     expect(toast()).toContain('Opening Late programme…')
     // the scope menu, opened from its trigger, then its All projects choice
     const from = location.pathname
-    await act(async () =>
-      q('[data-sync-scope] [data-fieldselect]')?.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
-      ),
-    )
-    await click(
-      [...document.querySelectorAll('[data-fieldselect-menu] [role="option"]')].find(
-        (option) => option.textContent?.trim() === 'All projects',
-      ),
-    )
+    await click(q('[data-sync-scope] [data-sync-scope-trigger]'))
+    await until(() => q('[data-sync-scope-choice="all"]'), 'the scope menu')
+    await click(q('[data-sync-scope-choice="all"]'))
     const there = location.pathname
     expect(there).not.toBe(from)
     expect(there).toContain('/sync/all')

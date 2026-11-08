@@ -1,6 +1,8 @@
 /* A stand-in for the four reads of Settings › Teams and a team's page
-   (convex/teams.ts settingsPage, get, members and addable) that answers
-   from a workspace the app holds, for the jsdom tests and the browser
+   (convex/teams.ts settingsPage, get, members and addable) and Team sync's
+   scope menu (picker) that answers from the server's data a test publishes
+   (store/guard/liveDouble.setup.ts Whole), every team, membership and
+   person of each organization, for the jsdom tests and the browser
    benchmark's server (scripts/perf/server.mjs), as
    store/projectSettingsStandIn.setup.ts answers a project's Settings page.
 
@@ -20,7 +22,9 @@
      stored, whether they may lead and their plannable hours;
    - addable: the organization's admins, users and viewers who are not
      members, switched-off and invited people included, `refused` for an
-     agent and for a caller who neither administers nor leads the team.
+     agent and for a caller who neither administers nor leads the team;
+   - picker: every team of the organization for any active seat, guests
+     and Viewers included, each its id and name.
    Every list is in the byte order of the name key (convex/lib/nameKey.ts),
    as Convex compares strings, with the id to break ties; a member sorts by
    their current name, since the workspace holds no copy; the search keeps
@@ -43,21 +47,23 @@ import { ConvexError, compareValues } from 'convex/values'
 import { LIMITS, LIST_BATCH, overText } from '../../convex/lib/limits'
 import { nameKey } from '../../convex/lib/nameKey'
 import { allWordsMatcher } from '../../convex/lib/search'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
 import type { PersonRow } from '../../convex/model/projectSettings'
 import type {
   SettingsTeamsAnswer,
+  TeamChoiceRow,
   TeamChoicesAnswer,
   TeamMemberRow,
   TeamMembersAnswer,
+  TeamPickerAnswer,
   TeamSettingsAnswer,
   TeamSummaryJson,
 } from '../../convex/model/teams'
+import type { Whole } from './guard/liveDouble.setup'
 import { readsServer } from './projectSettingsStandIn.setup'
 
 /** The workspace rows the stand-in reads. */
 export type TeamSettingsWorkspace = Pick<
-  Workspace,
+  Whole,
   'myProfileIds' | 'profiles' | 'teams' | 'teamMembers'
 >
 
@@ -67,6 +73,7 @@ export const TEAM_SETTINGS_READS = [
   'teams:get',
   'teams:members',
   'teams:addable',
+  'teams:picker',
 ] as const
 export type TeamSettingsRead = (typeof TEAM_SETTINGS_READS)[number]
 
@@ -97,8 +104,8 @@ export type ForcedTeamSettings = {
   counts?: Readonly<Record<string, number | null>>
 }
 
-type Profile = Workspace['profiles'][number]
-type Team = Workspace['teams'][number]
+type Profile = Whole['profiles'][number]
+type Team = Whole['teams'][number]
 
 /* The sentences the server answers with, which the worker cannot import
    from its model code (convex/model/teams.ts TEAM_LIST_REFUSAL,
@@ -327,6 +334,16 @@ export function teamSettingsStandIn(
         matches(nameKey(p.name)) && !membership(team.id, p.id) ? person(p) : null,
     })
     return { state: 'ready', ...batch } satisfies TeamChoicesAnswer
+  }
+  if (name === 'teams:picker') {
+    const ask = open('teams.picker', [org, me.id])
+    if (force.notReady) return { state: 'not_ready' } satisfies TeamPickerAnswer
+    const batch = batchOf(placed(teamsHere), {
+      ...ask,
+      keep: (t): TeamChoiceRow | null =>
+        matches(nameKey(t.name)) ? { id: t.id, name: t.name } : null,
+    })
+    return { state: 'ready', ...batch } satisfies TeamPickerAnswer
   }
   throw new Error(`the team settings stand-in does not answer ${name}`)
 }

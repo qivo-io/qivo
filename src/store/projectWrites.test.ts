@@ -185,9 +185,10 @@ describe("a project's writes with what its Settings page showed", () => {
     expect(
       await P.setProjectAccess(plan, 'ada', 'viewer', { orgId: org, level: null, leadId: 'ada' }),
     ).toBe(false)
-    // without `shown` the workspace's grant gives the expected level
+    // without `shown` the expected level is the workspace's, which holds
+    // no one else's grant, so the server refuses it over Leo's
     void P.setProjectAccess(plan, 'leo', 'viewer')
-    expect(last('projects:setAccess')).toMatchObject({ expected: { level: 'user' } })
+    expect(last('projects:setAccess')).toMatchObject({ expected: { level: null } })
   })
 
   it('hands the lead over with the lead the page showed as expected', async () => {

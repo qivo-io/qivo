@@ -52,10 +52,10 @@ import {
   type LoadSpan,
   plannableHoursOf,
 } from '../../convex/lib/workload'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
 import type { LeafCounts } from '../../convex/model/overviewCounts'
 import { groupProgress, isIssueDone } from '../lib/issueGroups'
 import { spanOf } from './boardStandIn.setup'
+import type { Whole } from './guard/liveDouble.setup'
 import { OVERVIEW_BATCH, OVERVIEW_SPLIT, type OverviewQuery } from './overviewLists'
 import { ownerLoadsStandIn } from './ownerLoadsStandIn.setup'
 
@@ -90,8 +90,8 @@ export const HEALTH_ROWS = 200
 export const ACCESS_UNCHECKED_MESSAGE =
   'Qivo could not check all of your access in time. Try again in a moment.'
 
-type Task = Workspace['issues'][number]
-type Project = Workspace['projects'][number]
+type Task = Whole['issues'][number]
+type Project = Whole['projects'][number]
 
 /** My view's top-level projects in `workspace`, by the rule of the
     health table's My view rows and of milestones.section's `mine` scope
@@ -102,7 +102,7 @@ type Project = Workspace['projects'][number]
     included, with those tasks, in the order the tasks come.
     store/milestoneStandIn.setup.ts answers a `mine` read with it. */
 export function myViewProjects(
-  workspace: Pick<Workspace, 'myProfileIds' | 'projects' | 'issues'>,
+  workspace: Pick<Whole, 'myProfileIds' | 'projects' | 'issues'>,
   sees?: (projectId: string) => boolean,
 ): Map<string, Task[]> {
   const mine = new Set(workspace.myProfileIds)
@@ -208,7 +208,7 @@ const PREFIX = { attention: 'soa~', paused: 'sop~' } as const
     the workspace cannot reach. Throws bad_request for a position from
     another list, scope, reader or clock, as the server refuses it. */
 export function overviewStandIn(
-  workspace: Workspace,
+  workspace: Whole,
   query: OverviewQuery,
   args: OverviewArgs,
   { sees, force = {} }: { sees?: (projectId: string) => boolean; force?: ForcedOverview } = {},
@@ -767,7 +767,7 @@ export function overviewStandIn(
     over `workspace` through `next`, or through `fail` where the stand-in
     refuses, as the app-level tests' network doubles answer the Board's. */
 export function answerOverview(
-  workspace: Workspace,
+  workspace: Whole,
   name: string,
   args: unknown,
   next: (value: unknown) => void,
