@@ -2215,6 +2215,13 @@ which a deploy forward builds again with no change to data. It sets no
 floor for the app, which calls none of them, and has no backfill and no
 release step.
 
+From the release after v0.1.161, the app reads `projectNav.byIds`, new in
+that release, for the projects its views name that the workspace's projects
+part does not hold, so that release is the backend's floor for its app:
+from it on, never return the backend to a commit before it, roll forward
+instead. The release changes no table, field or index, and has no backfill
+and no release step.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.

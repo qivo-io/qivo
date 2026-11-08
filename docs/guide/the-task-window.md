@@ -150,6 +150,9 @@ with the hint **Dates come from subtasks**. Its button reads
 **Show on roadmap**.
 
 Read-only access shows the values but disables editing ([Project access](./who-sees-what-the-access-model.md)).
+While Qivo is still loading a task's project, the fields it cannot yet
+allow are off and say **Loading this project…** until Qivo knows your access
+there.
 **Assignee** and **Reviewer** open a list of the people who can take the
 task, 25 at a time with **Load more**, after **Unassigned** or
 **No reviewer** and the current assignee or reviewer, checked. Choose
