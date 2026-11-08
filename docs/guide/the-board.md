@@ -1,9 +1,9 @@
 Board has five status columns with pinned headers and live counts. Each
 column's **+** creates a task in that status, except in My view
 ([Creating a task](./how-work-is-organized.md#creating-a-task)). Tasks sort by priority within their card groups.
-A Board shows one project, one sub-project or My view. Over all projects,
-at an address that ends in `/all` ([All projects](./finding-your-way-around.md#all-projects)),
-it asks you to choose a project, and opens that project's Board.
+A Board shows one project, one sub-project or My view. An address that once
+named all projects opens as the Board's own address does
+([All projects](./finding-your-way-around.md#all-projects)).
 
 Drag a task to change its status. Read-only tasks cannot be dragged. Valid
 destinations highlight and dim their existing cards while you hover;

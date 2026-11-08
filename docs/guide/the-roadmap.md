@@ -1,8 +1,8 @@
 The Roadmap shows scheduled tasks as bars on a weekly timeline, for one
 project, one sub-project or **My view**. In a project, tasks sit under their
 sub-projects. **My view** groups your own tasks by project, then sub-project.
-Over all projects, at an address that ends in `/all`, the Roadmap asks you
-to choose a project, as the Board and the Overview do ([All projects](./finding-your-way-around.md#all-projects)). Undated tasks appear below the scheduled tasks
+An address that once named all projects opens as the Roadmap's own address
+does ([All projects](./finding-your-way-around.md#all-projects)). Undated tasks appear below the scheduled tasks
 with an **unplanned** marker and their due date, if set. Click one to open it
 and set its plan. Tasks with subtasks take their dates from them instead.
 
@@ -143,7 +143,7 @@ When a scope has nothing to schedule, for example a project without
 sub-projects or My view with nothing assigned to you, the Roadmap says why.
 In a project or sub-project, and in My view, the timeline stays behind that
 note with its window controls, and in a project with the milestones of its
-window. All projects asks you to choose a project and shows only its note.
+window. My view with no project shows only its note.
 
 ## Undo this Roadmap visit's changes
 

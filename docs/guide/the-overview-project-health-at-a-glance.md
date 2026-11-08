@@ -1,10 +1,9 @@
 Overview summarizes the selected project, sub-project or My view. Its
 opening sentence reports overdue tasks, projected missed deadlines, paused
 work, completion or remaining work. It describes current signals, not a
-guarantee that deadlines are safe. Over all projects, at an address that
-ends in `/all` ([All projects](./finding-your-way-around.md#all-projects)),
-Overview asks you to choose a project and lists your top-level projects, as
-the Board does.
+guarantee that deadlines are safe. An address that once named all projects
+opens as the Overview's own address does
+([All projects](./finding-your-way-around.md#all-projects)).
 
 The status strip shows **Lead**, **Completion**, **In progress**, **Paused**
 and **Next milestone**. Grouping parents do not add to task counts;
@@ -100,8 +99,7 @@ search box once there are more to load. Past stays as you left it when you
 come back to a page Qivo kept, and starts again at its first milestones
 when a new week begins. In My view, **Milestones** lists the milestones of
 the projects that hold your own tasks, each with its project's name, and
-not those of other projects you can see. All projects shows no
-milestones; open a project to see its milestones.
+not those of other projects you can see.
 
 **Next milestone** is the first upcoming milestone, highlighted in the
 list. While it loads it shows "…", "None scheduled" where no upcoming
@@ -164,7 +162,7 @@ week whose dates differ from the ones shown.
 
 When a scope has no task to summarize, for example a project without
 sub-projects or My view with nothing assigned to you, Overview says why
-once the server has answered. Over all projects it says so when you can
-see no project. Once the project has milestones, upcoming or past, or Qivo
-cannot tell, **Milestones** stays below that note. Otherwise, and over all
-projects, the note or the list of projects is the whole page.
+once the server has answered. In My view it says so when you can see no
+project. Once the project has milestones, upcoming or past, or Qivo cannot
+tell, **Milestones** stays below that note. Otherwise the note is the whole
+page.

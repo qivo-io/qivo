@@ -1,7 +1,8 @@
 ## Plan on roadmap
 
-**Plan on roadmap** opens the timeline and highlights the task. From the
-views over all projects it opens the task's top-level project. The task
+**Plan on roadmap** opens the timeline and highlights the task, on the
+Roadmap of the project, sub-project or My view you are on when that holds
+the task, else on the task's top-level project. The task
 stays on the timeline for the session whatever the filters, and the Roadmap
 moves its window to the task first if needed. Unscheduled tasks receive a starter bar.
 A Backlog task must first move to another status; trying to plan it leaves
@@ -79,7 +80,7 @@ planned weeks a dashed border. Resuming restores their hours. Agent rows show
 hours only, with no percentage or over-capacity warning.
 
 **All projects / This project** chooses which visible projects contribute
-hours. The toggle is absent over all projects and in My view. Use the three
+hours. The toggle is absent in My view. Use the three
 layout buttons to expand Team, show it with the Roadmap, or collapse it. Expanded
 Team keeps the timeline's dates and window controls, and a project's
 milestones. In My view, whose milestones sit on the rows, it shows none.
@@ -289,9 +290,10 @@ Use the row controls to change tasks without opening them:
 A row's **Board** and **Roadmap** links open the task's sub-project. The
 links beside a person's name filter to that person, using
 the selected project when applicable; for an all-project or team sync they
-open the Board or the Roadmap over all projects, which ask you to choose a
-project and then show that person's tasks in it. Other filters clear so tasks remain
-visible; Focus stays unchanged.
+open the project list with that person's filter kept and a line saying
+whose tasks a pick will show, and the project you choose opens on the Board
+or the Roadmap filtered to them, on a phone in its task list. Other filters
+clear so tasks remain visible; Focus stays unchanged.
 
 Read-only projects disable edits and mentions. On phones, Back closes an open
 menu or picker before leaving Team sync.

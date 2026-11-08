@@ -169,6 +169,12 @@ admins can. Org admins, and standard users the organization allows
 can choose **New project** and set its name, lead and optional team/user
 shares ([Creating projects and sub-projects](./who-sees-what-the-access-model.md#creating-projects-and-sub-projects)).
 
+A project's settings page has a numbered address, such as
+`qivo.io/app/acme/settings/project/7`, which keeps its number through a
+reload, Back and Forward. It opens for anyone who sees the project or
+manages it, so an organization admin's bookmark of a project they only
+manage opens its page; a number you cannot open shows **Your preferences**.
+
 Project settings includes the name, description, lead, access, delay tracking
 and review time. The **Lead** field lists the people who may lead the
 project 25 at a time, with a search over the organization's people and
