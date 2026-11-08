@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { ACCESS_UNCHECKED, accessOf, accessUnchecked, OWN_READS } from '../lib/access'
-import { newWindowKey } from '../lib/db'
+import { byId, newWindowKey } from '../lib/db'
 import { BY_IDS_MAX } from '../lib/limits'
 import { NAMED_READ } from '../lib/namedPages'
 import { DEFAULT_REVIEW_HOURS } from '../lib/review'
@@ -364,22 +364,32 @@ describe('checks a bound stopped', () => {
     const pia = await person(t, f.org.id, 'Pia')
     await plantGrants(t, pia, [f.sub])
     await ready(t, f)
-    // room for the sub-project's own check and no more
-    const first = await t.run(async (ctx) => {
+    // what the call reads before the sub-project's check, the lookup of its
+    // id, and what the whole call reads
+    const before = await t.run(async (ctx) => {
+      await byId(ctx, 'projects', f.sub.id)
+      return (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+    })
+    const whole = await t.run(async (ctx) => {
       await navByIdsOf(ctx, mapOf([pia]), [f.sub.id])
       return (await ctx.meta.getTransactionMetrics()).databaseQueries.used
     })
-    let seen = false
-    for (let ranges = 1; ranges < first && !seen; ranges++) {
-      Object.assign(NAMED_READ, { ranges })
-      const answer = await byIds(t, [pia], [f.sub.id])
-      expect(answer.unchecked.every((id) => id === f.sub.id)).toBe(true)
-      if (answer.unchecked.length > 0) {
-        expect(answer.rows).toEqual([])
-        seen = true
-      } else expect(answer.rows).toHaveLength(2)
-    }
-    expect(seen).toBe(true)
+    expect(whole).toBeGreaterThan(before + 1)
+    // room for the sub-project's own check, which reads past it, so the
+    // check of the parent it brings stops: the sub-project is apart, and
+    // the parent, which no one asked for, is not named
+    Object.assign(NAMED_READ, { ranges: before + 1 })
+    expect(await byIds(t, [pia], [f.sub.id])).toEqual({
+      rows: [],
+      unchecked: [f.sub.id],
+      message: accessUnchecked().data.message,
+    })
+    // with room for the whole call, both answer
+    Object.assign(NAMED_READ, { ranges: whole + 1 })
+    expect(rowsById(await byIds(t, [pia], [f.sub.id]))).toEqual({
+      [f.sub.id]: 'user',
+      [f.meta.id]: 'viewer',
+    })
     expect(ACCESS_UNCHECKED).toBe('access_unchecked')
   })
 })
