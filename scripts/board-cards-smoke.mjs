@@ -254,7 +254,16 @@ try {
   await signInDemo(page, demo)
   initialLayout = await page.evaluate(() => window.PLANNER.loadUI().metaViz || 'swimlanes')
   initialFocus = await page.evaluate(() => !!window.PLANNER.loadUI().focus)
-  await page.locator('aside').getByText('Luma Sensor', { exact: true }).click()
+  // Sign-in opens the project directory over the Overview, and a sidebar
+  // project keeps the view, so the drive opens Luma Sensor's Board by its
+  // number
+  const luma = await page.evaluate(
+    () => window.PLANNER.projects.find((p) => p.name === 'Luma Sensor' && !p.parent)?.num,
+  )
+  assert.ok(luma != null, 'Northstar holds no Luma Sensor')
+  await page.goto(`${demo.base}/app/${demo.orgSlug}/board/p/${luma}`, {
+    waitUntil: 'domcontentloaded',
+  })
   await page.getByRole('heading', { name: 'Luma Sensor', exact: true }).waitFor()
   if (initialFocus) await page.locator('[data-filter-focus]').click()
   // a large Board mounts in slices; this one is small, so this only guards
