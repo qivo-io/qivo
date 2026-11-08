@@ -3,7 +3,7 @@ import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FIELD_CHANGED } from '../../convex/lib/fieldPrints'
 import { COMMENTS_COUNTING } from '../../convex/lib/limits'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
@@ -166,7 +166,9 @@ describe('a task the workspace does not hold, in the store', () => {
     demo.on = false
     vi.stubGlobal('window', { showToast: vi.fn(), setTimeout, clearTimeout })
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    snap = plannerFixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the navigation reads name it
+    snap = underProgram(plannerFixture())
     org = snap.orgs[0].id
     snap.orgs[0].next_issue_num = 50
     snap.issues.push(task('task-a', 1))
@@ -220,6 +222,8 @@ describe('a task the workspace does not hold, in the store', () => {
     })
     store = await import('./planner')
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snap)
   })
 
   afterEach(() => {

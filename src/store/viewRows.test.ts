@@ -8,7 +8,7 @@ import { isoToWeek, TODAY_WEEK, weekToISO } from '../lib/dates'
 import { DELAY_UNKNOWN } from '../lib/delay'
 import { GUEST_CALLS } from './ownerLoadCache'
 import { peopleSettingsStandIn } from './peopleSettingsStandIn.setup'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 /* The task rows a view's answer brings (store/viewRows.ts) on the real
    store: the Board's read the store owns (P.watchBoard), the models it
@@ -115,7 +115,9 @@ beforeEach(async () => {
   vi.resetModules()
   vi.clearAllMocks()
   vi.stubGlobal('window', { showToast: vi.fn(), setTimeout, clearTimeout })
-  snapshot = plannerFixture()
+  // the project under a top-level project, as every writer stores one
+  // that holds tasks, so the navigation reads name it
+  snapshot = underProgram(plannerFixture())
   snapshot.issues.push(held('task-a', 1))
   answer = ok([])
   board = null
@@ -156,6 +158,8 @@ beforeEach(async () => {
   })
   store = await import('./planner')
   await store.initStore()
+  // the views name the projects they show; this suite names them all
+  await (await import('./oracleScope.setup')).nameProjects(store.P, snapshot)
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 

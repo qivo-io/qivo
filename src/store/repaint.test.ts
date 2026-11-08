@@ -1,6 +1,6 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 /* A repaint shapes every view model again. The memoized views (Roadmap rows,
    Board cards) skip a task by identity, so the store's contract is that a
@@ -69,7 +69,9 @@ describe('view model identity across repaints', () => {
     vi.clearAllMocks()
     vi.stubGlobal('window', { showToast: vi.fn(), setTimeout, clearTimeout })
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    snapshot = plannerFixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the navigation reads name it
+    snapshot = underProgram(plannerFixture())
     snapshot.projects[0].track_delay = true
     // a parent with two subtasks, and two tasks on their own
     addTask('parent')
@@ -93,6 +95,8 @@ describe('view model identity across repaints', () => {
     })
     store = await import('./planner')
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snapshot)
     emits = 0
     stop = P().subscribe(() => emits++)
   })
@@ -205,7 +209,7 @@ describe('view model identity across repaints', () => {
     expect(task('other')).toBe(other)
   })
 
-  it('moves contextVersion when something besides the tasks changes, and only then', () => {
+  it('moves contextVersion when something besides the tasks changes, and only then', async () => {
     const context = P().contextVersion
     const before = new Map(P().issues.map((it) => [it.uuid, it]))
     deliverChange((snap) => {
@@ -215,6 +219,8 @@ describe('view model identity across repaints', () => {
     deliverChange((snap) => {
       snap.projects[0].name = 'Renamed project'
     })
+    // the project cache's answer repaints on the store's next frame
+    await new Promise((resolve) => setTimeout(resolve, 20))
     expect(P().contextVersion).not.toBe(context)
     // the tasks themselves did not change
     expect(task('alone')).toBe(before.get('alone'))

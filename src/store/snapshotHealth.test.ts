@@ -6,7 +6,7 @@ import { DEMO_UNAVAILABLE } from '../../convex/lib/demoRefusals'
 import type { Seatless } from '../../convex/lib/workspaceJoin'
 import { SEATS_DELETING } from './guard/liveDouble.setup'
 import { shownOf } from './personShown.setup'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 /* Snapshot trouble is the live snapshot query failing after the first
    delivery (plan item 8). The network double captures each snapshot
@@ -83,6 +83,8 @@ describe('snapshot trouble', () => {
   async function boot() {
     store = await import('./planner')
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snapshot)
   }
 
   beforeEach(async () => {
@@ -94,7 +96,9 @@ describe('snapshot trouble', () => {
     vi.stubGlobal('window', { showToast, setTimeout, clearTimeout })
     vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    snapshot = plannerFixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the navigation reads name it
+    snapshot = underProgram(plannerFixture())
     const [org] = snapshot.orgs
     const [me] = snapshot.profiles
     snapshot.issues.push({

@@ -2,7 +2,7 @@ import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Id } from '../../convex/_generated/dataModel'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 /* Edits pause while Qivo cannot save (lib/syncStatus), and every sent change
    is noted until the server answers (lib/unconfirmedNote). The network
@@ -98,6 +98,8 @@ describe('the pause while Qivo cannot save', () => {
     status = await import('../lib/syncStatus')
     store = await import('./planner')
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snapshot)
     probes = []
     status.syncStatus.setProbe(() => new Promise<void>((resolve) => probes.push(resolve)))
     status.syncStatus.setSocket(UP)
@@ -134,7 +136,9 @@ describe('the pause while Qivo cannot save', () => {
     })
     vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    snapshot = plannerFixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the navigation reads name it
+    snapshot = underProgram(plannerFixture())
     const [org] = snapshot.orgs
     const [me] = snapshot.profiles
     snapshot.issues.push({

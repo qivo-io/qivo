@@ -81,7 +81,8 @@ describe('project creation through the client store', () => {
     const onSaved = vi.fn()
     const onRefused = vi.fn()
     const id = P.addProject({ type: 'meta', key: 'NEW', name: 'New' }, onSaved, onRefused)!
-    expect(P.project(id)?.name).toBe('New')
+    // the store holds no project, so the create paints none
+    expect(P.project(id)).toBeUndefined()
     expect(onSaved).not.toHaveBeenCalled()
 
     requests[0].resolve({ id, num: 2, key: 'NEW' })
@@ -291,8 +292,10 @@ describe('project creation through the client store', () => {
     it('predicts the User grant the server gives me when someone else leads', () => {
       expect(P.seesNewProject({ lead: 'leo' })).toBe(true)
       const id = P.addProject({ type: 'meta', key: 'NEW', name: 'New', lead: 'leo' })!
-      expect(P.levelOn(id)).toBe('user')
-      expect(requests.at(-1)?.args).toMatchObject({ lead_id: 'leo', access: {} })
+      // no entry of mine goes, so the server gives me User (convex/lib/
+      // projectGrants.ts), which the project cache reads once it names it
+      expect(requests.at(-1)?.args).toMatchObject({ id, lead_id: 'leo', access: {} })
+      expect(P.levelOn(id)).toBeNull()
     })
 
     it('predicts that I lose sight of it once I decline my own entry', () => {
@@ -321,8 +324,9 @@ describe('project creation through the client store', () => {
     })
 
     /* App's toast after a create reads the draft through seesNewProject, so
-       a rollback of another write cannot change it. The draft must therefore
-       give the answer canSee gives for the project addProject paints. */
+       a rollback of another write cannot change it. addProject paints
+       nothing, so the prediction stands alone until the project cache reads
+       the stored project; each draft goes out as it was drawn. */
     it.each<[string, boolean, (me: string) => Parameters<Planner['seesNewProject']>[0]]>([
       [
         'a share with a team I am not in',
@@ -332,11 +336,12 @@ describe('project creation through the client store', () => {
       ['no entry of mine', true, () => ({ lead: 'leo' })],
       ['my own Viewer entry', true, (me) => ({ lead: 'leo', access: { [me]: 'viewer' } })],
       ['a share with my team', true, () => ({ lead: 'leo', teamAccess: { mine: 'viewer' } })],
-    ])('predicts what addProject paints for %s', (_label, expected, toDraft) => {
+    ])('predicts whether I see it for %s, and paints nothing', (_label, expected, toDraft) => {
       const draft = toDraft(me)
       const id = P.addProject({ type: 'meta', key: 'NEW', name: 'New', ...draft })!
       expect(P.seesNewProject(draft)).toBe(expected)
-      expect(P.canSee(id)).toBe(expected)
+      expect(requests.at(-1)?.args).toMatchObject({ id, lead_id: 'leo' })
+      expect(P.canSee(id)).toBe(false)
     })
   })
 })

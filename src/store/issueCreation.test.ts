@@ -2,7 +2,7 @@ import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LIMITS } from '../../convex/lib/limits'
-import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture as fixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 type Planner = typeof import('./planner')['P']
 
@@ -42,7 +42,9 @@ describe('task creation through the client store', () => {
     showToast = vi.fn()
     vi.stubGlobal('window', { showToast })
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    snap = fixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the navigation reads name it
+    snap = underProgram(fixture())
     requests = []
     network.query.mockResolvedValue(null)
     network.onUpdate.mockImplementation((ref, _args, next) => {

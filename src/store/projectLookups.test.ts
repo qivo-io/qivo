@@ -105,10 +105,6 @@ async function start(
 ) {
   vi.resetModules()
   vi.stubGlobal('window', { showToast: vi.fn() })
-  // the cases answer the cache's reads themselves, with `force`
-  ;(double.live as { forceProjectNav?: (f: 'client' | null) => void } | null)?.forceProjectNav?.(
-    'client',
-  )
   const byIds: string[][] = []
   const open = new Set<() => void>()
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
@@ -135,6 +131,11 @@ async function start(
   network.query.mockResolvedValue(null)
   network.mutation.mockResolvedValue(null)
   const store = await import('./planner')
+  // the cases answer the cache's reads themselves, with `force`: told once
+  // the store's import made the double, also in the file's first case
+  ;(double.live as { forceProjectNav?: (f: 'client' | null) => void } | null)?.forceProjectNav?.(
+    'client',
+  )
   const { PROJECT_CACHE } = await import('./projectCache')
   await store.initStore()
   const rerun = () => {
@@ -211,11 +212,12 @@ describe('the project lookups', () => {
     expect(P.canAddMilestone(w.edits.id)).toBe(false)
   })
 
-  it('answers a cached top-level project for a milestone add and for management, and tells a cached twin from a held one', async () => {
+  it('answers a cached top-level project for a milestone add and for management, and tells two cached namesakes apart', async () => {
     const w = world()
     const { P } = await start(w.snap)
-    P.nameProjects('test', [w.granted.id, w.led.id, w.twin.id])
+    P.nameProjects('test', [w.granted.id, w.led.id, w.twin.id, w.held.id])
     await vi.waitFor(() => expect(P.project(w.twin.id)).toBeDefined())
+    await vi.waitFor(() => expect(P.projectTag(w.held.id)).not.toBeNull())
     expect(P.canAddMilestone(w.granted.id)).toBe(true)
     expect(P.canManageOwnProjectAccess(w.granted.id)).toBe(false)
     expect(P.canManageOwnProjectAccess(w.led.id)).toBe(true)
@@ -262,8 +264,9 @@ describe('the project lookups', () => {
   it('names nothing of a project it answered once the answer leaves it out, as after access goes', async () => {
     const w = world()
     const { P, rerun } = await start(w.snap)
-    P.nameProjects('test', [w.twin.id])
+    P.nameProjects('test', [w.twin.id, w.held.id])
     await vi.waitFor(() => expect(P.projectState(w.twin.id)).toBe('ok'))
+    await vi.waitFor(() => expect(P.projectTag(w.held.id)).not.toBeNull())
     expect(P.projectTag(w.twin.id)).toBe(`#${w.twin.num}`)
     expect(P.projectTag(w.held.id)).toBe(`#${w.held.num}`)
     // the caller no longer leads the twin, so the server's next answer
@@ -273,13 +276,14 @@ describe('the project lookups', () => {
     twin.lead_id = undefined
     rerun()
     await vi.waitFor(() => expect(P.projectState(w.twin.id)).toBe('gone'))
-    // the facts follow with the cache's repaint, a frame later
-    await vi.waitFor(() => expect(P.project(w.twin.id)).toBeUndefined())
+    // the facts go at once, as the lookups read the cache
+    expect(P.project(w.twin.id)).toBeUndefined()
     expect(P.metaOf(w.twin.id)).toBeNull()
     expect(P.orgOf(w.twin.id)).toBe('')
+    // and the number tags with the cache's repaint, a frame later: the other
+    // project has no namesake left to be told apart from
+    await vi.waitFor(() => expect(P.projectTag(w.held.id)).toBeNull())
     expect(P.projectTag(w.twin.id)).toBeNull()
-    // the held project has no twin left to be told apart from
-    expect(P.projectTag(w.held.id)).toBeNull()
     expect(P.writeNote(w.twin.id)).toBe("You can't open this project.")
   })
 

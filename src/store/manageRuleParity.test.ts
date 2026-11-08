@@ -2,10 +2,12 @@
  * server's (convex/lib/access.ts managesIn): an active seat of the
  * project's organization, the project a top-level meta or a sub-project of
  * one, and an organization admin or the project's effective lead. The
- * store is booted from a workspace that holds every project of the
- * organization, so it is asked about projects outside a meta tree too,
- * which no opener shows, and about the projects an admin only manages.
- * Everyday sizes. */
+ * store holds no project, so it judges the projects its project cache
+ * answers (projectNav.byIds, which the test double answers from the
+ * whole); it names every project of the organization, so it is asked about
+ * projects outside a meta tree too, which no opener shows, and about the
+ * projects an admin only manages, which the navigation reads leave out and
+ * the rule then refuses, failing closed. Everyday sizes. */
 /// <reference types="vite/client" />
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -52,6 +54,8 @@ async function start(snap: Snapshot) {
   })
   const store = await import('./planner')
   await store.initStore()
+  // the views name the projects they show; this suite names them all
+  await (await import('./oracleScope.setup')).nameProjects(store.P, snap)
   return store.P
 }
 
@@ -130,15 +134,20 @@ describe('the store’s management rule', () => {
       for (const p of projects) {
         const root = p.parent_id === undefined ? p : byId.get(p.parent_id)
         const server = root !== undefined && managesIn(seat, p, root)
-        expect(P.canManageOwnProjectAccess(p.id), `${seat.name} on ${p.key}`).toBe(server)
-        if (server) manages++
+        // a project the cache does not answer is one the store refuses
+        const known = P.projectState(p.id) === 'ok'
+        expect(P.canManageOwnProjectAccess(p.id), `${seat.name} on ${p.key}`).toBe(known && server)
+        if (known && server) manages++
         else refused++
       }
       if (seat === f.admin) {
-        // the admin manages every project in a meta tree, and nobody
-        // manages LOOSE or UNDER
+        // the admin manages every project in a meta tree the navigation
+        // reads show, and nobody manages LOOSE or UNDER; one the admin
+        // only manages, without a row of their own, the cache leaves out,
+        // so the store refuses it though the server allows it
         expect(P.canManageOwnProjectAccess(loose.id)).toBe(false)
-        expect(P.canManageOwnProjectAccess(f.hidden.id)).toBe(true)
+        expect(P.projectState(f.hidden.id)).toBe('gone')
+        expect(P.canManageOwnProjectAccess(f.hidden.id)).toBe(false)
         expect(P.levelOn(f.hidden.id)).toBeNull()
       }
     }
@@ -146,7 +155,7 @@ describe('the store’s management rule', () => {
       const root = p.parent_id === undefined ? p : byId.get(p.parent_id)
       expect(root !== undefined && managesIn(inactive, p, root), `${inactive.name}`).toBe(false)
     }
-    expect(manages).toBeGreaterThan(5)
+    expect(manages).toBeGreaterThanOrEqual(5)
     expect(refused).toBeGreaterThan(5)
   })
 })

@@ -1,7 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 import type { Row } from './rows'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -38,7 +38,9 @@ describe('planner refresh boundaries', () => {
     vi.stubGlobal('window', browser)
     vi.stubGlobal('document', Object.assign(new EventTarget(), { visibilityState: 'visible' }))
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    snapshot = plannerFixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the navigation reads name it
+    snapshot = underProgram(plannerFixture())
     snapshot.issues.push({
       id: 'task-a',
       org_id: snapshot.orgs[0].id,
@@ -75,6 +77,8 @@ describe('planner refresh boundaries', () => {
     })
     store = await import('./planner')
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snapshot)
     await Promise.resolve()
   })
   afterEach(() => {

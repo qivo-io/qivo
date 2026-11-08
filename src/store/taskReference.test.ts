@@ -6,7 +6,7 @@ import type { OwnerLoadsJson } from '../../convex/planning'
 import { TODAY_WEEK, weekToISO } from '../lib/dates'
 import { DELAY_UNKNOWN } from '../lib/delay'
 import { taskRef } from '../lib/taskReference'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 /* A task a window opens by a reference (lib/taskReference.ts) on the real
    store: the read of a reference that does not name the task's uuid and
@@ -87,6 +87,10 @@ const one = (name: string, which: (live: Live) => boolean = () => true) => {
 }
 /** A turn for the double's microtasks and the store's 0 ms paint timer. */
 const turn = () => new Promise((resolve) => setTimeout(resolve, 0))
+/* Waits out the store's next frame, which repaints what the project cache's
+   answers bring (store/planner.ts projectCache): a level that follows a
+   grant, or a project's delay rule. */
+const frame = () => new Promise((resolve) => setTimeout(resolve, 20))
 
 /** Task `id`, number `num`, as the workspace holds it. */
 const task = (id: string, num: number, extra: Partial<Snapshot['issues'][number]> = {}) => ({
@@ -155,6 +159,8 @@ async function boot(opts?: Parameters<typeof import('./planner')['initStore']>[2
   })
   store = await import('./planner')
   await store.initStore(undefined, undefined, opts)
+  // the views name the projects they show; this suite names them all
+  await (await import('./oracleScope.setup')).nameProjects(store.P, snap)
 }
 
 beforeEach(async () => {
@@ -163,7 +169,9 @@ beforeEach(async () => {
   vi.spyOn(console, 'error').mockImplementation(() => {})
   gate.visible = true
   gate.listeners.clear()
-  snap = plannerFixture()
+  // the project under a top-level project, as every writer stores one
+  // that holds tasks, so the navigation reads name it
+  snap = underProgram(plannerFixture())
   org = snap.orgs[0].id
   me = snap.profiles[0].id
   snap.orgs[0].next_issue_num = 50
@@ -172,7 +180,25 @@ beforeEach(async () => {
   snap.orgs.push({ ...snap.orgs[0], id: GUEST, name: 'Partner', slug: 'partner' })
   snap.profiles.push({ ...snap.profiles[0], id: 'me-guest', org_id: GUEST, org_role: 'guest' })
   snap.myProfileIds.push('me-guest')
-  snap.projects.push({ ...snap.projects[0], id: GUEST_PROJECT, org_id: GUEST, key: 'PART' })
+  // its sub-project under its own top-level project, as every writer
+  // stores one that holds tasks
+  snap.projects.push(
+    {
+      ...snap.projects[0],
+      id: 'guest-program',
+      org_id: GUEST,
+      key: 'PROG',
+      type: 'meta',
+      parent_id: undefined,
+    },
+    {
+      ...snap.projects[0],
+      id: GUEST_PROJECT,
+      org_id: GUEST,
+      key: 'PART',
+      parent_id: 'guest-program',
+    },
+  )
   subs = []
   writes = []
   network.query.mockResolvedValue(null)
@@ -352,7 +378,7 @@ describe('the read of a reference', () => {
     // goes on saying unavailable meanwhile
     snap.access.push({ project_id: GUEST_PROJECT, profile_id: 'me-guest', level: 'user' })
     publishWhole(snap)
-    await turn()
+    await frame()
     expect(one('taskWindow:task').args).toEqual({ org_id: org, ref: FAR })
     expect(P.reference?.state).toBe('unavailable')
     one('taskWindow:task').deliver({ state: 'unavailable' })
@@ -384,7 +410,7 @@ describe('the read of a reference', () => {
     // guest seat's read has not answered, and that read goes on
     snap.access.push({ project_id: snap.projects[0].id, profile_id: me, level: 'user' })
     publishWhole(snap)
-    await turn()
+    await frame()
     expect(one('taskWindow:task')).toBe(guest)
     expect(P.reference?.state).toBe('loading')
     // the guest seat says unavailable, and the walk reads the home seat again
@@ -401,13 +427,13 @@ describe('the read of a reference', () => {
     expect(open('taskWindow:task')).toEqual([])
     snap.access.push({ project_id: GUEST_PROJECT, profile_id: 'me-guest', level: 'user' })
     publishWhole(snap)
-    await turn()
+    await frame()
     one('taskWindow:task').deliver({ state: 'unavailable' })
     const again = one('taskWindow:task')
     expect(again.args).toEqual({ org_id: GUEST, ref: OTHER })
     snap.access[0] = { ...snap.access[0], level: 'viewer' }
     publishWhole(snap)
-    await turn()
+    await frame()
     expect(one('taskWindow:task')).toBe(again)
     expect(P.reference?.state).toBe('unavailable')
     again.deliver({ state: 'unavailable' })
@@ -587,7 +613,7 @@ describe("the window's delay", () => {
   async function showFar(answer = planned(FAR, 40)) {
     snap.projects[0].track_delay = true
     publishWhole(snap)
-    await turn()
+    await frame()
     const { P } = store
     P.watchComments(FAR, org)
     P.showSections(pane, true)
@@ -636,7 +662,7 @@ describe("the window's delay", () => {
     // one that does
     snap.projects[0].track_delay = true
     publishWhole(snap)
-    await turn()
+    await frame()
     expect(one('planning:ownerLoads').args).toEqual({ org_id: org, owner_ids: [me] })
     // the column closes
     P.showSections(pane, false)

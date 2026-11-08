@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { accessOf, accessUnchecked, OWN_READS, projectLevel, projectLevelsOf } from '../lib/access'
+import { accessUnchecked, OWN_READS } from '../lib/access'
 import { newWindowKey } from '../lib/db'
 import {
   cut,
@@ -40,7 +40,6 @@ import {
   withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
-import { withReach } from './projectReach.setup'
 
 const DEFAULT_PAGE = structuredClone(PAGE)
 const DEFAULT_OWN_READS = structuredClone(OWN_READS)
@@ -1264,7 +1263,7 @@ describe('many projects', () => {
         org_id: f.org.id,
         org_role: role as keyof typeof shownProjects,
       })
-      const { parent, kinds: byProject } = await t.run(async (ctx) => {
+      const { kinds: byProject } = await t.run(async (ctx) => {
         const team = async (orgId: string) => {
           const id = uuid()
           await ctx.db.insert('teams', {

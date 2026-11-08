@@ -34,7 +34,6 @@ vi.mock('../lib/auth', () => ({
   signOut: vi.fn(),
 }))
 
-const NOW = '2026-09-14T08:00:00.000Z'
 // where the last task window starts, which a load of every task holds
 const LAST_WINDOW = 'fc000000'
 
@@ -56,7 +55,6 @@ let rows: typeof import('./projectNavRows')
 let store: typeof import('../store/planner')
 let ORG: string
 
-const num = 10
 /** The fixture with its projects cleared and the person a user. */
 function base(): Snapshot {
   const next = plannerFixture()

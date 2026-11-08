@@ -8,9 +8,12 @@
    groups from its own answer (store/scopeGroups.ts); these oracles keep the
    reference the answers are checked against. */
 
+import { vi } from 'vitest'
 import type { NavByIds } from '../../convex/model/projectNavReads'
 import type { Whole } from './guard/liveDouble.setup'
-import { P, type ScopeInfo } from './planner'
+// types only: the parity tests import this before they load the store,
+// which needs a window (store/planner.ts)
+import type { IssueVM, P, ScopeInfo } from './planner'
 import { projectNavStandIn } from './projectNavStandIn.setup'
 import type { Row } from './rows'
 import type { ProjectFacts } from './viewModels'
@@ -25,6 +28,9 @@ export type OracleScope = ScopeInfo & {
   subIds: string[]
   subIdSet: Set<string>
 }
+
+/* My view's scope id (store/planner.ts MINE_SCOPE). */
+const MINE_SCOPE = 'mine'
 
 /** A stored project as the store's facts. */
 export const factsOf = (p: Row<'projects'>): ProjectFacts => ({
@@ -62,13 +68,15 @@ export function oracleLevels(whole: Whole): Map<string, string> {
 
 /** The scope `scopeId` of the person `whole` is published for, as the
     store's scopeInfo answered it while it held every project, or null for
-    a project the caller does not see, as it answered then. */
+    a project the caller does not see, as it answered then. The projects it
+    held are the whole's live ones: a server-made whole names the caller's
+    by ordinary access (convex/tests/projectsOracle.setup.ts), as the
+    workspace's projects part sent them, and a fixture's names every one. */
 export function oracleScope(whole: Whole, scopeId: string): OracleScope | null {
-  const levels = oracleLevels(whole)
-  const live = whole.projects.filter((p) => !p.archived_at && levels.has(p.id))
+  const live = whole.projects.filter((p) => !p.archived_at)
   const childrenOf = (id: string) =>
     live.filter((p) => p.parent_id === id && p.type === 'project').sort(byOrder)
-  if (scopeId === P.MINE_SCOPE) {
+  if (scopeId === MINE_SCOPE) {
     const orgName = (org: string) => whole.orgs.find((o) => o.id === org)?.name ?? ''
     const home = whole.orgs[0]?.id
     const metas = live
@@ -88,7 +96,8 @@ export function oracleScope(whole: Whole, scopeId: string): OracleScope | null {
     return {
       mine: true,
       wide: true,
-      only: P.isMine,
+      // the caller's own tasks, as P.isMine keeps them
+      only: (it: IssueVM) => !!it.owner && whole.myProfileIds.includes(it.owner),
       id: scopeId,
       name: 'My view',
       proj: null,
@@ -149,7 +158,7 @@ export function oracleStore(whole: Whole) {
       p.type === 'meta' ? live.filter((c) => c.parent_id === p.id).map((c) => c.id) : undefined,
   }))
   const byId = new Map(projects.map((p) => [p.id, p]))
-  const mine = oracleScope(whole, P.MINE_SCOPE)
+  const mine = oracleScope(whole, MINE_SCOPE)
   const admins = new Set(
     whole.profiles
       .filter((u) => whole.myProfileIds.includes(u.id) && u.org_role === 'admin' && u.active)
@@ -159,7 +168,8 @@ export function oracleStore(whole: Whole) {
     projects,
     project: (id: string) => byId.get(id),
     canSee: (id: string) => levels.has(id),
-    visibleProjects: () => (mine?.metas ?? []).map((m) => byId.get(m.id) as OracleProject),
+    // My view's top-level projects the navigation reads show
+    visibleProjects: () => (mine?.metas ?? []).flatMap((m) => byId.get(m.id) ?? []),
     canManage: (id: string) => {
       const p = byId.get(id)
       return !!p && (admins.has(p.org) || levels.get(id) === 'lead')
@@ -177,7 +187,7 @@ export function openScope(
   whole: Whole,
   scopeId: string,
 ) {
-  if (scopeId === P.MINE_SCOPE) return
+  if (scopeId === MINE_SCOPE) return
   const p = whole.projects.find((x) => x.id === scopeId)
   if (!p) return
   const parent = p.parent_id ? whole.projects.find((x) => x.id === p.parent_id) : undefined
@@ -195,9 +205,10 @@ export function openScope(
 /** Names every live project of `whole` with the store's project cache under
     `test`, as the views, dialogs and task window of the app name the
     projects they show, and waits until the cache answers each of them
-    (projectNav.byIds, which the test double answers from the whole), so a
-    store test writes and creates into them as the app does once a view
-    shows them. */
+    (projectNav.byIds, which the test double answers from the whole) and the
+    store's next rebuild has taken the answers in, so a store test writes
+    and creates into them as the app does once a view shows them, and reads
+    a version (P.contextVersion) that the naming no longer moves. */
 export async function nameProjects(
   store: { nameProjects: typeof P.nameProjects; projectState: typeof P.projectState },
   whole: Whole,
@@ -206,8 +217,16 @@ export async function nameProjects(
   store.nameProjects('test', ids)
   const levels = oracleLevels(whole)
   const until = Date.now() + 5_000
+  // a wait on the clock the suite runs, faked or not
+  const tick = async (ms: number) => {
+    if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(ms)
+    else await new Promise((resolve) => setTimeout(resolve, ms))
+  }
   while (ids.some((id) => levels.has(id) && store.projectState(id) !== 'ok')) {
     if (Date.now() > until) throw new Error('the project cache did not answer')
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await tick(0)
   }
+  // the store rebuilds on its next frame (lib/frameBatch.ts), a timer in
+  // node and an animation frame in jsdom
+  await tick(20)
 }

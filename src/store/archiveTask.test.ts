@@ -1,6 +1,6 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 type Planner = typeof import('./planner')['P']
 type Task = Snapshot['issues'][number]
@@ -46,7 +46,9 @@ describe('archiving and deleting from the Archive or delete window', () => {
       requests.push({ name, args })
       return answers[name]?.() ?? new Promise(() => {})
     })
-    const snap: Snapshot = plannerFixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the navigation reads name it
+    const snap: Snapshot = underProgram(plannerFixture())
     const org = snap.orgs[0].id
     const me = snap.profiles[0]
     me.org_role = 'user'
@@ -102,6 +104,8 @@ describe('archiving and deleting from the Archive or delete window', () => {
     const store = await import('./planner')
     P = store.P
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snap)
   }
 
   beforeEach(load)

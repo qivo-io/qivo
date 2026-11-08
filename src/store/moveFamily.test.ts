@@ -88,6 +88,8 @@ describe('moving a task with its family', () => {
     const store = await import('./planner')
     P = store.P
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snap)
   }
 
   beforeEach(() => {

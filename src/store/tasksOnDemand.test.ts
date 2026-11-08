@@ -1,6 +1,6 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 /* Tasks load on demand (store/liveParts.ts, store/planner.ts P.askTasks):
    a store boots without them, as the app does, asks for every task once
@@ -76,7 +76,9 @@ describe('tasks on demand', () => {
       setTimeout,
       clearTimeout,
     })
-    snapshot = plannerFixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the navigation reads name it
+    snapshot = underProgram(plannerFixture())
     snapshot.orgs[0].next_issue_num = 3
     snapshot.issues.push(
       task(snapshot, '01000000-a', 1),
@@ -113,6 +115,8 @@ describe('tasks on demand', () => {
 
   const boot = async () => {
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snapshot)
     await tick()
   }
   const held = (uuid: string) => store.P.handleOf(uuid) !== null

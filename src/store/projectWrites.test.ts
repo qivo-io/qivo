@@ -123,8 +123,8 @@ afterEach(() => {
 })
 
 describe("a project's writes with what its Settings page showed", () => {
-  it('sends the expected values the page showed, not the workspace’s, and paints a held project', async () => {
-    // the page showed delay tracking off while the workspace holds it on
+  it('sends the expected values the page showed, and paints no project', async () => {
+    // the page showed delay tracking off
     void P.updateProject(
       plan,
       { trackDelay: true },
@@ -137,11 +137,12 @@ describe("a project's writes with what its Settings page showed", () => {
       patch: { track_delay: true },
       expected: { track_delay: false },
     })
-    expect(P.project(plan)?.trackDelay).toBe(true)
-    // without `shown` the workspace's row gives what was on screen
+    // the store holds no project: the project cache's next answer shows it
+    expect(P.project(plan)).toBeUndefined()
     await settle('projects:update')
-    void P.updateProject(plan, { name: 'Plan B' })
-    expect(last('projects:update')).toMatchObject({ expected: { name: 'Plan' } })
+    // without `shown` nothing names what was on screen, so nothing is sent
+    expect(await P.updateProject(plan, { name: 'Plan B' })).toBe(false)
+    expect(sent.filter((s) => s.name === 'projects:update')).toHaveLength(1)
   })
 
   it('sends a project the workspace does not hold to the organization the page showed, and paints nothing', async () => {
@@ -185,10 +186,9 @@ describe("a project's writes with what its Settings page showed", () => {
     expect(
       await P.setProjectAccess(plan, 'ada', 'viewer', { orgId: org, level: null, leadId: 'ada' }),
     ).toBe(false)
-    // without `shown` the expected level is the workspace's, which holds
-    // no one else's grant, so the server refuses it over Leo's
-    void P.setProjectAccess(plan, 'leo', 'viewer')
-    expect(last('projects:setAccess')).toMatchObject({ expected: { level: null } })
+    // without `shown` nothing names the level on screen, so nothing is sent
+    expect(await P.setProjectAccess(plan, 'leo', 'viewer')).toBe(false)
+    expect(sent.filter((s) => s.name === 'projects:setAccess')).toHaveLength(1)
   })
 
   it('hands the lead over with the lead the page showed as expected', async () => {
@@ -232,9 +232,9 @@ describe("a project's writes with what its Settings page showed", () => {
     // the lookup's level, not the workspace's, for a seat it found
     void P.inviteToProject(plan, 'leo@example.test', 'user', { orgId: org, level: 'viewer' })
     expect(last('projects:inviteGuest')).toMatchObject({ expected: { level: 'viewer' } })
-    // without `shown`, an address the workspace holds no seat for sends none
-    void P.inviteToProject(plan, 'someone@example.test', 'user')
-    expect(last('projects:inviteGuest')).not.toHaveProperty('expected')
+    // without `shown` nothing names the organization, so nothing is sent
+    expect(await P.inviteToProject(plan, 'someone@example.test', 'user')).toBeNull()
+    expect(sent.filter((s) => s.name === 'projects:inviteGuest')).toHaveLength(2)
   })
 
   it("archives, counts and deletes a project the workspace does not hold in the page's organization", async () => {
@@ -254,22 +254,22 @@ describe("a project's writes with what its Settings page showed", () => {
     expect(await P.projectRemovalSummary('away')).toBeNull()
     expect(await P.removeProject('away')).toBe(false)
     expect(sent.filter((s) => s.name !== 'projects:update')).toHaveLength(2)
-    // a held project's archive still paints it gone at once
+    // the archive of the page's own project goes to its organization too
     P.archiveProject(plan, { orgId: org })
-    expect(P.project(plan)).toBeUndefined()
+    expect(last('projects:archive')).toEqual({ org_id: org, id: plan })
   })
 
-  it("restores a project the workspace does not hold in the page's organization, and a held one in its own", async () => {
+  it("restores a project in the page's organization, and says whether the server restored it", async () => {
     const restored = P.unarchiveProject('away', { orgId: AWAY_ORG })
     expect(last('projects:unarchive')).toEqual({ org_id: AWAY_ORG, id: 'away' })
     await settle('projects:unarchive')
     expect(await restored).toBe(true)
-    // the workspace's row decides for a project it holds, whatever was shown
-    const held = P.unarchiveProject(plan, { orgId: AWAY_ORG })
+    // a refusal resolves false
+    const refused = P.unarchiveProject(plan, { orgId: org })
     expect(last('projects:unarchive')).toEqual({ org_id: org, id: plan })
     await settle('projects:unarchive', new ConvexError({ code: 'forbidden', message: 'no' }))
-    expect(await held).toBe(false)
-    // without `shown`, one the workspace does not hold sends nothing
+    expect(await refused).toBe(false)
+    // without `shown` nothing names the organization, so nothing is sent
     const count = sent.length
     expect(await P.unarchiveProject('away')).toBe(false)
     expect(sent).toHaveLength(count)

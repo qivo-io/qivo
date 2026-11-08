@@ -1,6 +1,6 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -48,7 +48,9 @@ describe('a parent outside the working set', () => {
     )
     vi.stubGlobal('document', Object.assign(new EventTarget(), { visibilityState: 'visible' }))
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    snapshot = plannerFixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the navigation reads name it
+    snapshot = underProgram(plannerFixture())
     const here = snapshot.projects[0].id
     const there = crypto.randomUUID()
     snapshot.projects.push({
@@ -79,6 +81,8 @@ describe('a parent outside the working set', () => {
     })
     store = await import('./planner')
     await store.initStore()
+    // the views name the projects they show; this suite names them all
+    await (await import('./oracleScope.setup')).nameProjects(store.P, snapshot)
     await Promise.resolve()
   })
   afterEach(() => {

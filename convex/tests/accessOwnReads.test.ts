@@ -23,7 +23,6 @@ import {
 } from '../lib/access'
 import { byId, newWindowKey } from '../lib/db'
 import { ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
-import { halve, type IdWindow, idWindows, inIdWindow } from '../lib/idWindows'
 import { MAIN_SEARCH, mainSearchPage } from '../lib/mainSearch'
 import { nameKey } from '../lib/nameKey'
 import { inWorkingSet } from '../lib/workingSet'

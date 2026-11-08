@@ -2,7 +2,7 @@ import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RemovalAnswer } from './planner'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 type Planner = typeof import('./planner')['P']
 type IssueRow = Snapshot['issues'][number]
@@ -102,7 +102,9 @@ describe('removing access through the server preview', () => {
     vi.resetModules()
     requests = []
     queries = []
-    const snap: Snapshot = plannerFixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the navigation reads name it
+    const snap: Snapshot = underProgram(plannerFixture())
     org = snap.orgs[0].id
     work = snap.projects[0].id
     const someone = (id: string) =>
@@ -951,7 +953,10 @@ describe('removing access through the server preview', () => {
     await load((snap) => {
       snap.projects[0].lead_id = 'dan'
     })
-    expect(await P.setProjectAccess(work, 'leo', 'lead')).toBe(true)
+    // as the settings page that showed Dan as the lead presses it
+    expect(
+      await P.setProjectAccess(work, 'leo', 'lead', { orgId: org, leadId: 'dan', level: 'user' }),
+    ).toBe(true)
     // the server applies the same rule (convex/lib/projectGrants.ts)
     expect(requests.map((r) => [r.name, r.args.patch])).toEqual([
       ['projects:update', { lead_id: 'leo' }],
@@ -964,7 +969,9 @@ describe('removing access through the server preview', () => {
     // the page sends the level it showed, as the store holds no one else's
     const shown = (level: 'user' | 'viewer') => ({ orgId: org, leadId: null, level })
     expect(await P.setProjectAccess(work, 'leo', 'viewer', shown('user'))).toBe(true)
-    expect(await P.setProjectTeamAccess(work, 'crew', 'viewer')).toBe(true)
+    expect(
+      await P.setProjectTeamAccess(work, 'crew', 'viewer', { orgId: org, level: 'user' }),
+    ).toBe(true)
     // the level a person already has sends nothing
     expect(await P.setProjectAccess(work, 'leo', 'viewer', shown('viewer'))).toBe(true)
     expect(requests.map((r) => [r.name, r.args])).toEqual([
