@@ -2223,8 +2223,8 @@ instead. The same release adds `projectNav.targets` and `projectNav.holds`,
 lets `projectNav.page` take `org_id` and `team_id`, adds `lead_id` and
 `review_hours` to `projectNav.byIds` rows and `project_archived` to
 `taskWindow.task`'s archived answer, none of which an app before it reads.
-The release changes no table, field or index, and has no backfill and no
-release step.
+These navigation reads add no table, field or index, and need no backfill
+and no release step.
 
 ## Node.js version
 
