@@ -19,13 +19,15 @@ import {
   type MentionChoice,
   type MentionChoices,
   P,
+  type PersonView,
   type ScopeInfo,
 } from '../store/planner'
 import { ChoiceEnd, PickerSearch } from './pickerParts'
 import { type ChoiceWords, heldLine } from './pickerWords'
 import { Avatar, Icon, MenuItem, Popover, PriorityIcon } from './qivo'
 import { RowAvatar } from './RowAvatar'
-import { PERSON_FAILED, usePeople } from './usePeople'
+import { useChosenPeople } from './useChosenPeople'
+import { PERSON_FAILED } from './usePeople'
 
 /* The filter-row setter, React-state shaped: callers hand it either the next
    filters object or an updater over the previous one — both forms appear below. */
@@ -46,13 +48,12 @@ const groundRadius = (ground: Ground) => (ground === 'well' ? 'rounded-sm' : 'ro
 
 /* The clear action sits over the trigger's trailing padding as a sibling
    button. It shares the trigger's surface without nesting interactive controls. */
-/** The first name of the one chosen assignee in organization `org` as
-    P.person names them, "Loading…" while their details are on their way,
-    PERSON_FAILED after a failed read and "Unknown user" for one the server
-    says is not there, so a chosen person the workspace does not hold never
-    breaks the filter row. */
-const firstNameOf = (id: string, org: string) => {
-  const person = P.person(id, org)
+/** The first name of the one chosen assignee as useChosenPeople names
+    them, "Loading…" while their details are on their way, PERSON_FAILED
+    after a failed read and "Unknown user" for one the server says is in
+    none of the login's organizations, so a chosen person the workspace
+    does not hold never breaks the filter row. */
+const firstNameOf = (person: PersonView | undefined) => {
   if (person?.state === 'ok') return person.name.split(' ')[0] ?? person.name
   if (person?.state === 'failed') return PERSON_FAILED
   return person?.state === 'gone' ? 'Unknown user' : 'Loading…'
@@ -202,7 +203,8 @@ function FilterSearch({
    and the list's end lines, at most PICKER_CAPS.owners kept: every profile
    of the organization, agents and switched-off people included, as the
    menu has always listed. The chosen people come first, checked and named
-   (usePeople), whatever a batch holds; the listed rows are drawn from
+   (useChosenPeople, also one a filter carried from another organization's
+   project chose there), whatever a batch holds; the listed rows are drawn from
    their own initials and color and named by no one, so opening the menu
    loads no face or picture. A pick toggles, and the Board's and the
    Roadmap's reads filter by the ids on the server (`owners`).
@@ -246,7 +248,7 @@ function PeopleRows({
   const answered = !search.tooLong && search.settled === search.typed && list.phase !== 'first'
   const end = answered ? listEnd(list, search.settled !== '') : 'loading'
   // the chosen people, named while the menu shows them
-  const chosen = usePeople(filters.assignees.map((id) => ({ org, id })))
+  const chosen = useChosenPeople(filters.assignees, org)
   const toggle = (id: string) =>
     setFilters((f) => ({
       ...f,
@@ -438,7 +440,10 @@ function ViewFilters({
   // the organization whose people the Assignee menu lists: the scope's
   const org = info.proj?.org ?? P.homeOrg
   // the one chosen person the trigger names, named while it shows
-  usePeople(!mine && filters.assignees.length === 1 ? [{ org, id: filters.assignees[0] }] : [])
+  const [named] = useChosenPeople(
+    !mine && filters.assignees.length === 1 ? [filters.assignees[0]] : [],
+    org,
+  )
   return (
     <>
       {!hideSearch && (
@@ -508,7 +513,7 @@ function ViewFilters({
                     : filters.assignees.length === 0
                       ? 'Assignee'
                       : filters.assignees.length === 1
-                        ? firstNameOf(filters.assignees[0], org)
+                        ? firstNameOf(named)
                         : `${filters.assignees.length} people`}
                   {!who && <DropdownChevron />}
                 </FilterMenuButton>

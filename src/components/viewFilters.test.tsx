@@ -15,7 +15,8 @@ import { TooltipProvider } from './ui/tooltip'
    the menu lists the organization's people from the server
    (pickers.mentions through its stand-in), MENTION_BATCH a batch with the
    server's search and Load more, and the people already chosen first,
-   named by id (people.byIds). */
+   named by id (people.byIds), also one a filter carried from a project of
+   the login's other organization chose there. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -41,10 +42,18 @@ let root: Root
 let asked: Record<string, unknown>[]
 let shown: IssueFilters
 
-async function load() {
+/** Loads the store over an organization of `people` people, with `extra`
+    changes. */
+async function load({
+  people = 1000,
+  extra,
+}: {
+  people?: number
+  extra?: (snap: Snapshot) => void
+} = {}) {
   vi.resetModules()
   snap = plannerFixture()
-  for (let i = 1; i < 1000; i++)
+  for (let i = 1; i < people; i++)
     snap.profiles.push({
       ...snap.profiles[0],
       id: person(i),
@@ -53,6 +62,7 @@ async function load() {
       initials: 'PE',
       email: `person${i}@example.test`,
     })
+  extra?.(snap)
   asked = []
   network.query.mockImplementation(async (ref, args) => {
     if (getFunctionName(ref) !== 'pickers:mentions') return null
@@ -156,7 +166,6 @@ beforeEach(async () => {
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
-  await load()
 })
 
 afterEach(async () => {
@@ -168,6 +177,8 @@ afterEach(async () => {
 })
 
 describe("the view filter's Assignee menu among 1,000 people", { timeout: 30_000 }, () => {
+  beforeEach(() => load())
+
   it('lists the server’s people a batch at a time, never the store’s, and searches them on the server', async () => {
     // the store holds the signed-in person alone
     expect(store.P.users).toHaveLength(1)
@@ -214,5 +225,46 @@ describe("the view filter's Assignee menu among 1,000 people", { timeout: 30_000
     )
     await settle()
     expect(shown.assignees).toEqual([])
+  })
+})
+
+describe("the view filter's Assignee menu for a login in two organizations", () => {
+  const PARTNER = 'org-partner'
+
+  it('names a chosen person of the other organization a filter carried here, never Unknown user', async () => {
+    await load({
+      people: 30,
+      extra: (snap) => {
+        const me = snap.profiles[0]
+        snap.orgs.push({ ...snap.orgs[0], id: PARTNER, name: 'Partner Co', slug: 'partner' })
+        snap.profiles.push(
+          { ...me, id: 'seat-partner', org_id: PARTNER },
+          {
+            ...me,
+            id: 'pia',
+            org_id: PARTNER,
+            auth_user_id: 'account-pia',
+            name: 'Pia Partner',
+            initials: 'PP',
+            email: 'pia@partner.test',
+          },
+        )
+        snap.myProfileIds.push('seat-partner')
+      },
+    })
+    // the scope is a project of the home organization; Pia was chosen in a
+    // project of the partner organization, and the filter came along
+    await render({ assignees: ['pia'] })
+    const trigger = () => document.querySelector('[data-filter-assignee-menu]')?.textContent
+    await vi.waitFor(() => expect(trigger()).toContain('Pia'))
+    expect(trigger()).not.toContain('Unknown user')
+    await openMenu()
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector('[data-filter-assignee-chosen][data-filter-assignee="pia"]')
+          ?.textContent,
+      ).toContain('Pia Partner'),
+    )
+    expect(shown.assignees).toEqual(['pia'])
   })
 })
