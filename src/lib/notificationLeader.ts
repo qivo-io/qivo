@@ -18,7 +18,9 @@
      throws, the tab leads alone; the server's records keep two such tabs
      from alerting one event. One election runs at a time, so a page back
      from the cache, which hears pageshow and the document's resume, asks
-     once.
+     once. A tab whose page cannot notify stays out of the election, reads
+     its capability at each tick and on each change, and joins once it can,
+     so a tab that can notify leads.
    - Leaving. A leader lets go of the lock on `pagehide` (also into the back
      and forward cache) and on the document's `freeze`, and asks again on
      `pageshow` from the cache and on the document's `resume`. A follower
@@ -32,8 +34,9 @@
      of a resume), and on a report of use. Each beat restarts the timer. A
      capability that turns off sends one more beat with `can_notify:
      false`, which records the handoff the server needs, and stops the
-     feed, the watch and the timers. A leader that cannot notify calls
-     nothing. A beat while the socket is down is not sent; the reconnect
+     feed, the watch and the timers, and a leader then lets go of the lock
+     for a tab that can notify. A tab that leads alone and cannot notify
+     calls nothing. A beat while the socket is down is not sent; the reconnect
      runs the feed's resume order, a beat first. A failed beat tries again
      after NOTIFY_CLIENT.retry_ms in turn, and so does a beat refused for
      a missing sign-in, which the Convex client sends while it arms the
@@ -366,6 +369,9 @@ export function startNotificationLeader(deps: LeaderDeps) {
 
   let tick: ReturnType<typeof setInterval> | null = null
   let lastTick = 0
+  // the capability's reading while this page cannot notify and waits
+  // outside the election
+  let poll: ReturnType<typeof setInterval> | null = null
   let stopSettings: (() => void) | null = null
   let stopPower: (() => void) | null = null
   const stops: (() => void)[] = []
@@ -573,6 +579,8 @@ export function startNotificationLeader(deps: LeaderDeps) {
     // records the handoff the server needs, best effort; it schedules no
     // next beat, since the page cannot notify
     if (instance !== null) void beat().catch(() => undefined)
+    // the lock goes to a tab that can notify
+    if (role === 'leader') stepAside()
   }
 
   function onTick() {
@@ -593,11 +601,19 @@ export function startNotificationLeader(deps: LeaderDeps) {
     else feed.tick()
   }
 
-  /* This tab now leads, holding the lock or alone. */
+  /* This tab now leads, holding the lock or alone. A page that cannot
+     notify lets go of a lock it was granted at once. */
   function gain(as: 'leader' | 'alone') {
     role = as
     leadership += 1
     beatenSinceGain = false
+    clearPoll()
+    capable = deps.canNotify()
+    if (!capable) freshLeft = false
+    if (!capable && as === 'leader') {
+      stepAside()
+      return
+    }
     refreshOthers()
     lastTick = Date.now()
     tick = setInterval(onTick, NOTIFY_CLIENT.tick_ms)
@@ -605,10 +621,42 @@ export function startNotificationLeader(deps: LeaderDeps) {
       deps.power?.onResume(() => {
         if (leading() && capable && feedStarted) feed.resume()
       }) ?? null
-    capable = deps.canNotify()
     if (capable) begin()
-    else freshLeft = false
     mirror()
+  }
+
+  function clearPoll() {
+    if (poll) clearInterval(poll)
+    poll = null
+  }
+
+  /* Waits outside the election while this page cannot notify, so a tab of
+     the profile that can notify leads, and reads the capability at each
+     tick, joining again once it can. */
+  function standBy() {
+    dropElection()
+    queued?.abort()
+    queued = null
+    freshLeft = false
+    role = 'follower'
+    poll ??= setInterval(contend, NOTIFY_CLIENT.tick_ms)
+    mirror()
+  }
+
+  /* A leader whose page cannot notify lets go of the lock and stands by;
+     the server's records keep the next leader from repeating an alert. */
+  function stepAside() {
+    stopLeading()
+    standBy()
+  }
+
+  /* A tab that does not lead joins the election once its page can notify,
+     and leaves its turn while it cannot. */
+  function contend() {
+    if (stopped || refused || role !== 'follower') return
+    const can = deps.canNotify()
+    if (can && queued === null) elect()
+    else if (!can && queued !== null) standBy()
   }
 
   /* Stops leading: the feed, the watch, the timers and the lock. */
@@ -649,6 +697,7 @@ export function startNotificationLeader(deps: LeaderDeps) {
      dropping any turn it queued before. */
   function follow(mine: number) {
     if (stopped || !locks) return
+    clearPoll()
     queued?.abort()
     role = 'follower'
     mirror()
@@ -671,6 +720,10 @@ export function startNotificationLeader(deps: LeaderDeps) {
     if (stopped || electing) return
     if (!locks || !channel) {
       gain('alone')
+      return
+    }
+    if (!deps.canNotify()) {
+      standBy()
       return
     }
     const mine = ++election
@@ -715,6 +768,7 @@ export function startNotificationLeader(deps: LeaderDeps) {
       ).catch(() => undefined)
     }
     stopLeading()
+    clearPoll()
     queued?.abort()
     queued = null
     if (!led) post({ kind: 'bye' })
@@ -776,7 +830,8 @@ export function startNotificationLeader(deps: LeaderDeps) {
         if (leading()) took()
         return
       case 'capability':
-        check()
+        if (leading()) check()
+        else contend()
         return
       case 'state':
         if (!leading() && (heard === null || message.beat_at >= heard.beat_at)) {
@@ -809,7 +864,10 @@ export function startNotificationLeader(deps: LeaderDeps) {
   stops.push(
     deps.watchCapability(() => {
       if (leading()) check()
-      else if (role === 'follower') post({ kind: 'capability' })
+      else if (role === 'follower') {
+        post({ kind: 'capability' })
+        contend()
+      }
     }),
   )
   if (locks && deps.openChannel) {
@@ -831,6 +889,7 @@ export function startNotificationLeader(deps: LeaderDeps) {
       stopped = true
       dropElection()
       stopLeading()
+      clearPoll()
       queued?.abort()
       queued = null
       for (const stop of stops.splice(0)) stop()

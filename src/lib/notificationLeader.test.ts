@@ -692,11 +692,48 @@ describe('the capability', () => {
     lead.state.can = false
     follow.capabilityChanged()
     await flush()
+    // the leader says it cannot notify and lets the follower lead
     expect(lead.beats().at(-1)?.args.can_notify).toBe(false)
-    // a change nobody announced reaches the next tick
+    expect([lead.leader.role(), follow.leader.role()]).toEqual(['follower', 'leader'])
+    // a change nobody announced reaches the next tick, the leader's and
+    // the waiting tab's
+    follow.state.can = false
     lead.state.can = true
     await vi.advanceTimersByTimeAsync(NOTIFY_CLIENT.tick_ms)
+    await flush()
+    expect(follow.beats().at(-1)?.args.can_notify).toBe(false)
+    expect([lead.leader.role(), follow.leader.role()]).toEqual(['leader', 'follower'])
     expect(lead.beats().at(-1)?.args.can_notify).toBe(true)
+  })
+
+  it('lets a tab that can notify lead when the leader cannot, and keeps tabs that cannot out of the election', async () => {
+    const p = profile()
+    const [a, b] = [openTab(p), openTab(p)]
+    await flush()
+    // the leader's page loses its capability, as after a constructor failure
+    a.state.can = false
+    a.capabilityChanged()
+    await flush()
+    expect(a.beats().at(-1)?.args.can_notify).toBe(false)
+    expect([a.leader.role(), b.leader.role()]).toEqual(['follower', 'leader'])
+    expect(b.beats()).toHaveLength(1)
+    expect(b.feed.leads.map((s) => s.kind)).toEqual(['takeover'])
+    // a page that cannot notify opens, waits outside the election and calls nothing
+    const c = openTab(p, { can: false })
+    await flush()
+    expect(c.leader.role()).toBe('follower')
+    expect((await p.manager?.query())?.pending).toHaveLength(0)
+    // the capable leader goes: nobody can lead, so nobody holds the lock
+    b.page.win.fire('pagehide', { persisted: false })
+    await vi.advanceTimersByTimeAsync(2 * MINUTE)
+    expect(await p.manager?.query()).toEqual({ held: [], pending: [] })
+    expect([...a.sent.slice(2), ...c.sent]).toEqual([])
+    // a page whose capability comes back leads, with the resume order
+    c.state.can = true
+    c.capabilityChanged()
+    await flush()
+    expect(c.leader.role()).toBe('leader')
+    expect(c.feed.leads).toEqual([{ kind: 'resume' }])
   })
 })
 
