@@ -13,7 +13,7 @@ import { byId } from '../lib/db'
 import { compareNamed } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
 
-/** The organization's whole roster, as lib/core.ts listUsersCore read it,
+/** The organization's whole roster, as the removed lib/core.ts listUsersCore read it,
  * in the order the user pages answer: the stored name key, then the id. */
 export async function wholeRoster(ctx: QueryCtx, orgId: string): Promise<Doc<'profiles'>[]> {
   const rows = await ctx.db

@@ -660,21 +660,6 @@ describe('messages', () => {
     return { profile, task }
   }
 
-  /* The machine inbox (GET /v1/inbox) of `profile`, snoozed items included,
-   * as message ids per task id. */
-  const machineInbox = async (profile: Doc<'profiles'>) => {
-    const page = await t.query(internal.machine.discussion.restListInbox, {
-      callerId: profile.id,
-      access: 'read',
-      include_snoozed: 'true',
-      limit: '200',
-    })
-    return {
-      items: Object.fromEntries(page.items.map((i) => [i.task.id, i.messages.map((m) => m.id)])),
-      truncated: page.truncated,
-    }
-  }
-
   it('own inbox only', async () => {
     const mine = await t.run(async (ctx) => {
       const _id = await ctx.db.insert('messages', msg(f.guest.id, NOW))
@@ -830,7 +815,7 @@ describe('messages', () => {
     expect(snap.readTruncated).toBe(true)
   })
 
-  it('lists read rows even while hidden rows leave unread ones unexamined, as the machine inbox does', async () => {
+  it('lists read rows even while hidden rows leave unread ones unexamined', async () => {
     const hiddenTask = await plantIssue(t, { org_id: f.org.id, project_id: hidden2Sub.id })
     const visible = { unread: msg(f.user.id, NOW), read: msg(f.user.id, NOW, NOW) }
     await t.run(async (ctx) => {
@@ -850,10 +835,6 @@ describe('messages', () => {
     expect(snap.readMessageCount).toBe(1)
     expect(snap.unreadTruncated).toBe(true)
     expect(snap.readTruncated).toBe(false)
-    expect(await machineInbox(f.user)).toEqual({
-      items: { [issueVis.id]: [visible.read.id] },
-      truncated: true,
-    })
 
     // once the walk reaches every unread row, both are listed, unread first
     await t.run(async (ctx) => {
@@ -870,12 +851,6 @@ describe('messages', () => {
     expect(snap.readMessageCount).toBe(1)
     expect(snap.unreadTruncated).toBe(false)
     expect(snap.messagesCut).toBeUndefined()
-    // the machine inbox runs an item's messages oldest first, and these
-    // share created_at, so their ids order them
-    expect(await machineInbox(f.user)).toEqual({
-      items: { [issueVis.id]: [visible.unread.id, visible.read.id].sort() },
-      truncated: false,
-    })
   })
 
   it('reads past a stopped walk for a row the bulk actions reach, passing at most `peek` snoozed rows', async () => {
@@ -906,7 +881,7 @@ describe('messages', () => {
     // after two snoozed rows another follows, so it stops reading and counts
     // one as possible
     expect(await load(2)).toMatchObject({ unreadTruncated: true, truncated: true })
-    // without a peek the flag is the walk's truncation, as the machine inbox reads
+    // without a peek the flag is the walk's truncation
     expect(await load()).toMatchObject({ unreadTruncated: true, truncated: true })
   })
 
@@ -930,8 +905,6 @@ describe('messages', () => {
     expect(snap.unreadTruncated).toBe(false)
     // the Inbox still says it lists fewer messages than there are
     expect(snap.messagesCut).toBe(true)
-    // the machine inbox still reports rows it did not look at
-    expect((await machineInbox(f.user)).truncated).toBe(true)
 
     // once that row is no longer snoozed, Mark all as read has it to reach
     await t.run((ctx) => ctx.db.patch(oldestId, { snoozed_until: undefined }))
@@ -1001,14 +974,6 @@ describe('messages', () => {
       recent.read1.id,
     ])
     expect(snap.readMessageCount).toBe(2)
-    // the machine inbox lists both items; the backlog was not all examined
-    expect(await machineInbox(f.user)).toEqual({
-      items: {
-        [issueVis.id]: [recent.unread1.id, recent.unread2.id],
-        [other.id]: [recent.read1.id, recent.read2.id],
-      },
-      truncated: true,
-    })
   })
 
   it('counts read messages across own seats even when 500 unread messages hide every read row', async () => {
