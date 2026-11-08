@@ -21,24 +21,12 @@ import { listEnd, usePagedList, useSettledSearch } from '../lib/pagedList'
 import { cn } from '../lib/utils'
 import { P } from '../store/planner'
 import { ChoiceEnd, PickerSearch } from './pickerParts'
-import type { ChoiceWords } from './pickerWords'
+import { type ChoiceWords, TARGET_WORDS } from './pickerWords'
 import { navCursors, seedNavRow } from './projectNavRows'
 
 /** The most targets Load more gathers, past which the list asks for a
     search. */
 export const TARGETS_MOST = 500
-
-/** What the picker says at its end and while it cannot list. */
-export const TARGET_WORDS: ChoiceWords = {
-  held: (held) =>
-    held?.state === 'unavailable' && held.message
-      ? held.message
-      : "Sub-projects can't be listed yet.",
-  failed: "Couldn't load the sub-projects you can add tasks to.",
-  stopped: 'Showing the sub-projects found so far.',
-  empty: 'No sub-project you can add tasks to.',
-  none: 'No matching sub-project you can add tasks to.',
-}
 
 /** The data attribute that marks the picker's search box. */
 const TARGET_SEARCH = 'data-target-search'

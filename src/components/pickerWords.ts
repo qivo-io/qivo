@@ -127,6 +127,19 @@ export const RECIPIENT_WORDS: ChoiceWords = {
   none: 'No people match.',
 }
 
+/** What the sub-project picker (components/TargetPicker.tsx) says at its
+    end and while it cannot list. */
+export const TARGET_WORDS: ChoiceWords = {
+  held: (held) =>
+    held?.state === 'unavailable' && held.message
+      ? held.message
+      : "Sub-projects can't be listed yet.",
+  failed: "Couldn't load the sub-projects you can add tasks to.",
+  stopped: 'Showing the sub-projects found so far.',
+  empty: 'No sub-project you can add tasks to.',
+  none: 'No matching sub-project you can add tasks to.',
+}
+
 /** The data attribute of a search box that clears its text on Escape
     before its picker closes. An anchored pop (components/qivo AnchoredPop)
     stays open for that Escape while the box holds text, by the rule
