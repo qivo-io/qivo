@@ -341,7 +341,11 @@ try {
   await orgSwitch.scrollIntoViewIfNeeded()
   await sweep(page.locator('body'), 'Organization settings switches and selectors')
 
-  await route('board/all', '[data-view-switch]')
+  // Luma Sensor's Board, as no view shows a scope over all projects
+  const luma = await page.evaluate(
+    () => window.PLANNER.projects.find((p) => p.name === 'Luma Sensor' && !p.parent)?.num,
+  )
+  await route(`board/p/${luma}`, '[data-view-switch]')
   const newProject = page.getByRole('button', { name: 'New project', exact: true })
   await newProject.click()
   const dialog = page.locator('[data-modal-shell]')
@@ -378,7 +382,7 @@ try {
   )
 
   await page.setViewportSize({ width: 390, height: 844 })
-  await route('board/all', '.mobile-task-row')
+  await route(`board/p/${luma}`, '.mobile-task-row')
   const mobileTask = page.locator('.mobile-task-row').first()
   // A pointer click on this real heading establishes pointer interaction
   // without selecting a task or changing any setting.

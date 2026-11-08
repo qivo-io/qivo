@@ -171,7 +171,7 @@ try {
     (id) => window.PLANNER.issues.find((issue) => issue.uuid === id).id,
     fixture.id,
   )
-  taskURL = `${demo.base}/app/${demo.orgSlug}/board/all/tasks/${taskKey.toLowerCase()}`
+  taskURL = `${demo.base}/app/${demo.orgSlug}/board/tasks/${taskKey.toLowerCase()}`
   await manager.goto(taskURL, { waitUntil: 'domcontentloaded' })
   await eye(manager).waitFor({ timeout: 30000 })
   taskURL = manager.url()

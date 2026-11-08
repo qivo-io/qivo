@@ -89,6 +89,18 @@ const PNG = makePng(16, 16)
 
 const log = (...a) => console.log('[smoke]', ...a)
 let browser, pageA, pageB
+/* The address of Northstar's Luma Sensor on `view`, a project whose Board
+   holds cards for every person the smoke signs in, read from the signed-in
+   `page`'s store: no view shows a scope over all projects, and an address
+   that ended in /all now opens the startup rule's page. */
+async function lumaPath(page, view = 'board') {
+  const num = await page.evaluate(
+    () => window.PLANNER.projects.find((p) => p.name === 'Luma Sensor' && !p.parent)?.num,
+  )
+  if (num == null) throw new Error('Northstar holds no Luma Sensor')
+  return `${BASE}/app/${demo.orgSlug}/${view}/p/${num}`
+}
+
 const fail = async (msg) => {
   throw new Error(msg)
 }
@@ -459,7 +471,7 @@ async function checkCompressedCanvas(page) {
     delivery = 'hold'
     await page.route(matchesConvex, delayBoot)
     const warmRequestCount = requests.length
-    await page.goto(`${BASE}/app/${demo.orgSlug}/board/all`, { waitUntil: 'domcontentloaded' })
+    await page.goto(`${BASE}/app/${demo.orgSlug}/projects`, { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => window.__smokeWorkspaceBoot?.appearanceHeld)
     await waitForQuality('full')
     const restoredFull = page.locator(
@@ -517,7 +529,7 @@ async function checkCompressedCanvas(page) {
     const slowFullRequested = page
       .waitForRequest((request) => new URL(request.url()).pathname === fullPath)
       .catch(() => null)
-    await page.goto(`${BASE}/app/${demo.orgSlug}/board/all`, { waitUntil: 'domcontentloaded' })
+    await page.goto(`${BASE}/app/${demo.orgSlug}/projects`, { waitUntil: 'domcontentloaded' })
     if (!(await slowFullRequested))
       await fail('The slow-original fixture did not receive a full-size request')
     await page.waitForFunction(() => window.__smokeWorkspaceBoot?.snapshotHeld)
@@ -670,7 +682,7 @@ try {
     if ([...states].some((state) => state !== 'checking'))
       await fail(`The bare address showed the chooser as ${[...states].join(', ')}`)
     log(`A: the bare address opened the remembered ${target.name} after one projectNav.resolve`)
-    await pageA.goto(`${BASE}/app/~/board/all`, { waitUntil: 'domcontentloaded' })
+    await pageA.goto(await lumaPath(pageA), { waitUntil: 'domcontentloaded' })
     await pageA.locator('[data-filter-focus]').waitFor({ timeout: 30000 })
   }
 
@@ -680,7 +692,7 @@ try {
   const settingsModule = '**/src/panels/Settings.tsx*'
   try {
     await recoveryPage.route(settingsModule, (route) => route.abort('failed'))
-    await recoveryPage.goto(`${BASE}/app/${demo.orgSlug}/board/all`, {
+    await recoveryPage.goto(await lumaPath(pageA), {
       waitUntil: 'domcontentloaded',
     })
     await recoveryPage.locator('[data-filter-focus]').waitFor({ timeout: 30000 })
@@ -1207,7 +1219,8 @@ try {
       .count()
     if (fields) await fail(`Phone ${where} still mounts a page-level search field`)
   }
-  await pageA.goto(`${BASE}/app/${demo.orgSlug}/board/all`, { waitUntil: 'domcontentloaded' })
+  const lumaBoard = await lumaPath(pageA)
+  await pageA.goto(lumaBoard, { waitUntil: 'domcontentloaded' })
   const desktopTaskFilter = pageA.getByPlaceholder('Filter tasks…', { exact: true })
   await desktopTaskFilter.waitFor({ state: 'visible', timeout: 30000 })
   if ((await pageA.locator('[data-filter-focus]').count()) !== 1)
@@ -1218,8 +1231,8 @@ try {
   await desktopTaskFilter.fill(desktopOnlyQuery)
   await pageA.waitForFunction(() => document.querySelectorAll('[data-card]').length === 0)
   await pageA.setViewportSize({ width: 390, height: 844 })
-  const allTasksURL = `${BASE}/app/~/board/all`
-  await pageA.waitForURL(allTasksURL)
+  // the Board's own address, which the phone layout keeps
+  await pageA.waitForURL(lumaBoard)
   const phoneNavigation = pageA.getByRole('navigation', { name: 'Main navigation', exact: true })
   const myTasks = phoneNavigation.getByRole('button', { name: 'My tasks', exact: true })
   await myTasks.focus()
@@ -1649,7 +1662,7 @@ try {
   // A new desktop visit must return to the ordinary timeline, independent of
   // the phone flow retained while the same mounted screen rotates.
   await pageA.setViewportSize(originalViewport)
-  await pageA.goto(`${BASE}/app/${demo.orgSlug}/roadmap/all`, {
+  await pageA.goto(await lumaPath(pageA, 'roadmap'), {
     waitUntil: 'domcontentloaded',
   })
   await pageA
@@ -2266,7 +2279,7 @@ try {
     'A: Settings labels, project creation, aligned identities, + Add, key fingerprint and the label delete window verified',
   )
 
-  await pageA.goto(`${BASE}/app/~/board/all`, { waitUntil: 'domcontentloaded' })
+  await pageA.goto(await lumaPath(pageA), { waitUntil: 'domcontentloaded' })
   await pageA.waitForSelector('[data-card]', { timeout: 30000 })
   await boardMounted(pageA)
   await pageA.locator('aside').getByText('Luma Sensor', { exact: true }).click()

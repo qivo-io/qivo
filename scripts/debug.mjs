@@ -13,7 +13,7 @@ page.on('pageerror', (e) => logs.push(`PAGEERROR: ${e}`))
 page.on('console', (m) => logs.push(`${m.type().toUpperCase()}: ${m.text()}`))
 page.on('requestfailed', (r) => logs.push(`REQFAIL: ${r.url()} ${r.failure()?.errorText}`))
 
-await page.goto(`${demo.base}/app/~/board/all`)
+await page.goto(`${demo.base}/app/~/projects`)
 await page.waitForSelector('input[type=email]', { timeout: 20000 })
 await page.screenshot({ path: 'scripts/shots/dbg-1-initial.png' })
 console.log('--- after load:')

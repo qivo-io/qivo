@@ -174,7 +174,8 @@ export async function signInBrowser(page, account) {
 }
 
 export async function signInDemo(page, demo, key = 'nora') {
-  await page.goto(`${demo.base}/app/~/board/all`, { waitUntil: 'domcontentloaded' })
+  // the All projects directory, which reads no task and needs no project
+  await page.goto(`${demo.base}/app/~/projects`, { waitUntil: 'domcontentloaded' })
   await signInBrowser(page, demo.account(key))
   await page.waitForSelector('[data-all-nav]', { timeout: 30000 })
   const slug = await page.evaluate(() => window.PLANNER.org?.slug)
