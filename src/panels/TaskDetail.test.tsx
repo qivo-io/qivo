@@ -2320,3 +2320,60 @@ describe('the task window’s Move', { timeout: 30_000 }, () => {
     expect(movedToasts()).toEqual([['Moved QN-27 to Bench']])
   })
 })
+
+describe('the task window on a task whose project the workspace does not hold', {
+  timeout: 30_000,
+}, () => {
+  const GONE_NOTE = "You can't open this project."
+  /* Lab, a top-level project, and Lab work under it, which the projects
+     part leaves out while the project cache reads them by id; the far
+     task lives in Lab work. */
+  const withLab = (next: Snapshot) => {
+    const base = next.projects.find((p) => p.id === 'plan')
+    if (!base) throw new Error('no Plan')
+    const { lead_id: _lead, ...rest } = base
+    next.projects.push(
+      { ...rest, id: 'lab', type: 'meta', key: 'LAB', num: 6, name: 'Lab' },
+      {
+        ...rest,
+        id: 'lab-work',
+        type: 'project',
+        key: 'LABW',
+        num: 7,
+        name: 'Lab work',
+        parent_id: 'lab',
+      },
+    )
+    next.access.push({ project_id: 'lab-work', profile_id: 'mira', level: 'user' })
+    next.unheldProjects = ['lab', 'lab-work']
+  }
+  const inLab = () => far({ project_id: 'lab-work' })
+
+  it("takes the answer's level while the project loads, and turns off once the cache answers it gone", async () => {
+    await load(false, withLab)
+    await openWindow(await noteTask(inLab()))
+    await answer('taskWindow:task', okAnswer(inLab()))
+    await answer('snapshot:threadComments', { comments: [], earlier: false })
+    // the window names its task's project, which the cache has not answered
+    expect(one('projectNav:byIds').args).toEqual({ ids: ['lab-work'] })
+    expect(P.projectState('lab-work')).toBe('loading')
+    for (const label of ['Status', 'Priority', 'Assignee'])
+      expect(field(label)?.disabled, label).toBe(false)
+    // the server's answer leaves the project out, as after access went
+    await answer('projectNav:byIds', { rows: [], unchecked: [], message: null })
+    expect(P.projectState('lab-work')).toBe('gone')
+    // the window shows it with the cache's repaint, a frame later
+    await act(() => vi.waitFor(() => expect(field('Priority')?.disabled).toBe(true)))
+    expect(await hintOf(field('Priority'))).toBe(GONE_NOTE)
+  })
+
+  it("says it is read-only where the task's answer gives View, while the project loads", async () => {
+    await load(false, withLab)
+    await openWindow(await noteTask(inLab()))
+    await answer('taskWindow:task', okAnswer(inLab(), { level: 'viewer' }))
+    await answer('snapshot:threadComments', { comments: [], earlier: false })
+    expect(P.projectState('lab-work')).toBe('loading')
+    expect(field('Priority')?.disabled).toBe(true)
+    expect(await hintOf(field('Priority'))).toBe(READ_ONLY)
+  })
+})

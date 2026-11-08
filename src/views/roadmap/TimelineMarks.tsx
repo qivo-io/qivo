@@ -7,12 +7,6 @@ import { cn } from '@/lib/utils'
 import { Icon } from '../../components/qivo'
 import type { RoadmapEdge } from '../../lib/roadmapEdges'
 import { type IssueVM, type MilestoneVM, P } from '../../store/planner'
-
-/* Whether the store knows the caller's level on project `id`, which a bar
-   that takes no drag says as ", read-only"; while the project cache loads
-   the project, it says ", loading" instead (P.projectState). */
-const projectKnown = (id: string) => P.projectState(id) !== 'loading'
-
 import {
   FLAG_LANE_H,
   type FlagPlace,
@@ -20,6 +14,17 @@ import {
   flagBandHeight,
   flagLanesShown,
 } from './flagLanes'
+
+/* Whether the store knows the caller's level on project `id`, which a bar
+   that takes no drag says as ", read-only": the projects part holds it, or
+   the project cache's current answer gave it or left it out. While the
+   cache loads it, failed or did not check it, the bar says ", loading"
+   instead, so a project not yet answered never reads as read-only
+   (P.projectState). */
+const projectKnown = (id: string) => {
+  const state = P.projectState(id)
+  return state === 'held' || state === 'ok' || state === 'gone'
+}
 
 export const BAR_RING = 4
 

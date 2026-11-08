@@ -162,8 +162,8 @@ const READ_ONLY = READ_ONLY_PROJECT
     `id`, for a control a task's answer gives Edit: the store's level where
     the projects part holds the project or the project cache answered it,
     the answer's alone while the cache loads, failed or did not check it,
-    which only narrows nothing the server would refuse, and no where the
-    cache answered it gone. */
+    since that level is the server's and the server checks every write
+    again, and no where the cache answered it gone. */
 const storeWrites = (id: string) => {
   const state = P.projectState(id)
   if (state === 'held' || state === 'ok') return P.canWrite(id)

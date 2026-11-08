@@ -315,6 +315,71 @@ describe("the phone agenda's milestone rows of a project only the cache holds", 
   })
 })
 
+describe("My view's Overview rows and milestones of a program only the cache holds", {
+  timeout: 30_000,
+}, () => {
+  it("name it from the Overview's own answers, show its names, and stop reading it on leaving My view", async () => {
+    const snap = world({ planLevel: 'user', unheld: true })
+    // the whole program is out of the projects part, so no scope names it,
+    // and a held project of the person's with a sub-project, which My view
+    // needs for its lists while its notes read the held projects, to go
+    // to after My view
+    snap.unheldProjects = ['plan', 'plan-a']
+    const me = snap.profiles[0].id
+    snap.projects.push(
+      {
+        ...snap.projects[0],
+        id: 'home',
+        type: 'meta',
+        key: 'HOME',
+        num: 5,
+        name: 'Home',
+        lead_id: me,
+      },
+      {
+        ...snap.projects[1],
+        id: 'home-a',
+        key: 'HOA',
+        num: 6,
+        name: 'Home work',
+        parent_id: 'home',
+      },
+    )
+    // a paused task of the person's, which My view's Paused list shows
+    const task = snap.issues.find((t) => t.id === 't-plan')
+    if (!task) throw new Error('no Plan task')
+    task.paused = true
+    const { P } = await app(snap, '/app/~/overview/mine')
+    const row = () =>
+      [...document.querySelectorAll<HTMLElement>('[data-workspace-view] [data-ovrow]')].find((r) =>
+        r.textContent?.includes('Plan task'),
+      )
+    // the row's place and the milestone's project label from the cache
+    await waitFor(() => row()?.textContent?.includes('Plan, Plan work'), "the row's place")
+    // the label above the milestone's name, which shows only once known
+    await waitFor(
+      () =>
+        document.querySelector(
+          '[data-workspace-view] [data-overview-milestone="m-plan"] .overview-milestone-text > span',
+        )?.textContent === 'Plan',
+      "the milestone's project label",
+    )
+    // the Paused list's answer named the sub-project, and the milestone
+    // section's `mine` answer the program itself
+    expect(byIds.some((ids) => ids.includes('plan-a'))).toBe(true)
+    expect(byIds.some((ids) => ids.includes('plan'))).toBe(true)
+    expect(P.heldProject('plan-a')).toBeUndefined()
+    // Home's Overview names neither, so the reads stop
+    await act(async () => {
+      history.pushState(null, '', '/app/~/overview/p/5')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    await settle()
+    await waitFor(() => P.cacheStats().reads.length === 0, 'the reads stopped')
+    expect(P.projectState('plan-a')).toBe('loading')
+  })
+})
+
 describe('the views while the projects part holds every project they name', {
   timeout: 30_000,
 }, () => {

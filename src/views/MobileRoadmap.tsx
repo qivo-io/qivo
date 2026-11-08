@@ -46,8 +46,6 @@ type MobileRoadmapProps = {
   milestones: ScopeMilestones
 }
 
-/* A task row's height before it renders (a two-line title), and the least
-   it takes, for the rows a first screen holds. */
 /* The verb of an agenda milestone row's label: Edit where the caller
    writes in its top-level project, View for a known level without Edit,
    and Open while the project cache loads it, failed or did not check it,
@@ -58,6 +56,8 @@ function milestoneVerb(projectId: string): 'Edit' | 'View' | 'Open' {
   return state === 'held' || state === 'ok' || state === 'gone' ? 'View' : 'Open'
 }
 
+/* A task row's height before it renders (a two-line title), and the least
+   it takes, for the rows a first screen holds. */
 const ROW_ESTIMATE_PX = 96
 const ROW_MIN_PX = 72
 const taskKey = (task: IssueVM) => task.id
