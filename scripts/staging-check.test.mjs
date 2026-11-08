@@ -310,8 +310,9 @@ describe('staging check REST contract', () => {
     // no step opens a task at /task/, which the router does not parse
     expect(check).not.toContain(`/app/\${ORG_SLUG}/task/`)
     // the Add list offers only people who see the task's project, so Leo
-    // gets Viewer on Alpha before the search, and the grant goes in the
-    // step's finally
+    // gets Viewer on Alpha before the search. The grant goes once the
+    // follower half is done, a refusal failing the step, and again in the
+    // step's finally after a failure
     const grant = step.indexOf(`\`/projects/\${A.id}/access/users/\${leo.id}\`, {`)
     expect(grant).toBeGreaterThan(-1)
     expect(grant).toBeLessThan(step.indexOf(`'[data-task-subscriber-search]'`))
@@ -323,6 +324,11 @@ describe('staging check REST contract', () => {
     expect(address).toBeGreaterThan(step.indexOf(`'[data-filter-x="assignee"]'`))
     expect(address).toBeLessThan(grant)
     expect(step).toContain(`.fill(address)`)
+    const removal = step.indexOf(
+      `await restOk(w, 'DELETE', \`/projects/\${A.id}/access/users/\${leo.id}\`)\n      granted = false`,
+    )
+    expect(removal).toBeGreaterThan(step.indexOf(`'[data-task-subscriber-search]'`))
+    expect(removal).toBeLessThan(step.indexOf(`'[data-sync-scope-trigger]'`))
     expect(
       step.indexOf(`rest(w, 'DELETE', \`/projects/\${A.id}/access/users/\${leo.id}\`)`),
     ).toBeGreaterThan(step.indexOf('} finally {'))

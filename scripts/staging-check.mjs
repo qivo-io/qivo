@@ -7016,8 +7016,8 @@ export const ROSTER_READS = {
  *  run otherwise shares with its agents alone, and run.t0's follower
  *  popover finds him by his address, from the mention read as a REST user
  *  row carries none, under + Add through pickers.taskFollowers and closes
- *  without adding anyone. A failure
- *  clears the filter and Team sync's scope, and the grant goes, in a
+ *  without adding anyone. The grant goes once the follower half is done,
+ *  and a failure clears the filter, Team sync's scope and the grant in a
  *  `finally`. It writes no record. It runs after ui/settings-teams and
  *  before the run archives M, and needs a backend from this release on. */
 async function rosterPartsCheck() {
@@ -7106,6 +7106,10 @@ async function rosterPartsCheck() {
         .waitFor({ timeout: 30_000 })
       await app.keyboard.press('Escape')
       await app.keyboard.press('Escape')
+      // a refused removal fails the step, so Leo never keeps Viewer on
+      // Alpha through the later steps
+      await restOk(w, 'DELETE', `/projects/${A.id}/access/users/${leo.id}`)
+      granted = false
 
       // Team sync's scope menu finds the run's team by its tag on the
       // server, and a pick names it and reads its agenda
