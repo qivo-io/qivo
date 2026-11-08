@@ -884,16 +884,15 @@ describe('the benchmark server', () => {
     ).toHaveLength(5)
     expect((await read('labelpicker=unchecked', 'labels:picker')).answer.can_create).toBeNull()
     expect((await read('labelpicker=error', 'labels:picker')).answer.error).toContain('fails')
-    // the catalogue leaves the unheld labels out; the picker and byIds answer them
-    const unheld = await read('unheldlabels=3', 'labels:picker')
-    const names = unheld.snap.labels.map((l) => l.name)
-    expect(names).toHaveLength(9)
-    expect(names).not.toContain('Label L')
-    expect(unheld.answer.rows.map((row) => row.name)).toContain('Label L')
-    const far = unheld.answer.rows.filter((row) => !names.includes(row.name)).map((row) => row.id)
+    // the workspace's parts hold no label (the root sends none, and no
+    // other part does); the picker and byIds answer every one
+    const root = await read('', 'workspace:root')
+    expect(root.answer).not.toHaveProperty('labels')
+    const all = await read('', 'labels:picker')
+    expect(all.answer.rows.map((row) => row.name)).toContain('Label L')
+    const far = all.answer.rows.filter((row) => /^Label [JKL]$/.test(row.name)).map((row) => row.id)
     expect(far).toHaveLength(3)
-    expect(unheld.snap.issueLabels.some((row) => far.includes(row.label_id))).toBe(true)
-    const byIds = await read('unheldlabels=3', 'labels:byIds', { ids: far })
+    const byIds = await read('', 'labels:byIds', { ids: far })
     expect(byIds.answer.rows.map((row) => row.name).sort()).toEqual([
       'Label J',
       'Label K',
@@ -987,25 +986,22 @@ describe('the benchmark server', () => {
         }))
       ).answer.error,
     ).toContain('fails')
-    // the people part leaves the unheld people out; the pickers and byIds
-    // answer them, and the two hold the first open task without subtasks
-    const unheld = await read('people=50&unheldpeople=2', 'people:byIds', () => ({
+    // the root holds the signed-in person alone; the pickers and byIds
+    // answer everyone
+    const root = await read('people=50', 'workspace:root')
+    expect(root.answer.profiles.map((p) => p.id)).toEqual(root.snap.myProfileIds)
+    const faces = await read('people=50', 'people:byIds', () => ({
       ids: [id('1', 48), id('1', 49)],
     }))
-    const ids = unheld.snap.profiles.map((p) => p.id)
-    expect(ids).toHaveLength(48)
-    expect(ids).not.toContain(id('1', 49))
-    expect(unheld.answer.rows.map((row) => row.id).sort()).toEqual([id('1', 48), id('1', 49)])
-    const held = unheld.snap.issues.find((t) => t.assignee_id === id('1', 49))
-    expect(held?.reviewer_id).toBe(id('1', 48))
-    const listed = await read('people=50&unheldpeople=2', 'pickers:taskOwners', () => ({
+    expect(faces.answer.rows.map((row) => row.id).sort()).toEqual([id('1', 48), id('1', 49)])
+    const listed = await read('people=50', 'pickers:taskOwners', () => ({
       field: 'assignee',
       search: 'asa 50',
     }))
     expect(listed.answer.rows.map((row) => row.id)).toEqual([id('1', 49)])
   }, 60_000)
 
-  it('answers people the people part leaves out by id with their pictures, and the forced states of peoplebyids', async () => {
+  it('answers people by id with their pictures, and the forced states of peoplebyids', async () => {
     /** What `name` answers with `args(snap)` on a workspace with page
         parameters `params`, and the snapshot. */
     const read = async (params, name, args = () => ({})) => {
@@ -1021,30 +1017,31 @@ describe('the benchmark server', () => {
       const answer = posted.find((m) => m.to === 'read')
       return { snap, answer: answer.error ? { error: answer.error } : JSON.parse(answer.text) }
     }
-    // the server's ids exist once a test loaded it
+    // the server's ids exist once a test loaded it; the workspace holds
+    // nobody but the signed-in person, so every other person is read so
     const unheld = () => [id('1', 48), id('1', 49)]
-    const faces = await read('people=50&unheldpeople=2&pictures=1', 'people:byIds', () => ({
+    const faces = await read('people=50&pictures=1', 'people:byIds', () => ({
       ids: unheld(),
     }))
-    // each unheld person comes with a picture's version and hours
+    // each person comes with a picture's version and hours
     expect(faces.answer.rows.map((row) => typeof row.avatar)).toEqual(['string', 'string'])
     expect(faces.answer.rows.every((row) => 'plannable_hours' in row)).toBe(true)
     // and files:mintUrls answers their pictures by that version
-    const minted = await read('people=50&unheldpeople=2&pictures=1', 'files:mintUrls', () => ({
+    const minted = await read('people=50&pictures=1', 'files:mintUrls', () => ({
       profile_ids: unheld(),
     }))
     for (const row of faces.answer.rows)
       expect(minted.answer.avatars[row.id].url).toContain(`v=${row.avatar}`)
     expect(
       (
-        await read('people=50&unheldpeople=2&peoplebyids=byids-error', 'people:byIds', () => ({
+        await read('people=50&peoplebyids=byids-error', 'people:byIds', () => ({
           ids: unheld(),
         }))
       ).answer.error,
     ).toContain('fails')
     expect(
       (
-        await read('people=50&unheldpeople=2&peoplebyids=byids-gone', 'people:byIds', () => ({
+        await read('people=50&peoplebyids=byids-gone', 'people:byIds', () => ({
           ids: unheld(),
         }))
       ).answer,
@@ -1052,7 +1049,7 @@ describe('the benchmark server', () => {
     // byids-slow holds a live read's answer two seconds, as a subscription
     // and as the watched part the app's profile cache reads
     const { posted, send } = await server(
-      'tasks=20&latency=0&mbps=100000&people=50&unheldpeople=2&peoplebyids=byids-slow',
+      'tasks=20&latency=0&mbps=100000&people=50&peoplebyids=byids-slow',
     )
     await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
     const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
@@ -1125,6 +1122,81 @@ describe('the benchmark server', () => {
     expect((await read('role=viewer', 'teams:settingsPage')).answer).toMatchObject({
       state: 'refused',
     })
+  }, 60_000)
+
+  it("answers Team sync's scope menu and a task's followers from the whole, with the states the page asks for", async () => {
+    /** What `name` answers with `args(snap)` on a workspace with page
+        parameters `params`, and the snapshot. */
+    const read = async (params, name, args = () => ({})) => {
+      const { posted, send } = await server(`tasks=20&latency=0&mbps=100000&${params}`)
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      await send({
+        type: 'query',
+        id: 'read',
+        name,
+        args: { org_id: snap.orgs[0].id, ...args(snap) },
+      })
+      const answer = posted.find((m) => m.to === 'read')
+      if (!answer) return { snap, answer: 'none' }
+      return { snap, answer: answer.error ? { error: answer.error } : JSON.parse(answer.text) }
+    }
+    // every team, for any seat, a Viewer's too, each its id and name alone
+    const teams = await read('role=viewer', 'teams:picker')
+    expect(teams.answer).toMatchObject({ state: 'ready', next: null, stopped: false })
+    expect(new Set(teams.answer.rows.map((row) => row.id))).toEqual(
+      new Set(teams.snap.teams.map((t) => t.id)),
+    )
+    for (const row of teams.answer.rows) expect(Object.keys(row).sort()).toEqual(['id', 'name'])
+    expect((await read('teampicker=not-ready', 'teams:picker')).answer).toEqual({
+      state: 'not_ready',
+    })
+    const small = await read('teampicker=small', 'teams:picker')
+    expect(small.answer.rows).toHaveLength(2)
+    expect(small.answer.next).not.toBeNull()
+    expect((await read('teampicker=stopped', 'teams:picker')).answer.stopped).toBe(true)
+    expect((await read('teampicker=error', 'teams:picker')).answer.error).toContain('fails')
+    // a task's followers as rows, and the Add list's batch, which leaves
+    // out the caller and every follower
+    const task = (snap) => snap.issueSubs[0]?.issue_id ?? snap.issues[0].id
+    const roster = await read('role=admin', 'issues:subscribers', (snap) => ({
+      issue_id: task(snap),
+    }))
+    expect(roster.answer).toMatchObject({ canManage: true, more: false })
+    const following = roster.snap.issueSubs
+      .filter((s) => s.issue_id === task(roster.snap))
+      .map((s) => s.profile_id)
+    expect(roster.answer.subscribers.map((row) => row.id).sort()).toEqual([...following].sort())
+    const offered = await read('role=admin', 'pickers:taskFollowers', (snap) => ({
+      issue_id: task(snap),
+    }))
+    expect(offered.answer.state).toBe('ready')
+    expect(offered.answer.rows.length).toBeGreaterThan(0)
+    for (const row of offered.answer.rows) {
+      expect(following).not.toContain(row.id)
+      expect(offered.snap.myProfileIds).not.toContain(row.id)
+    }
+    expect(
+      (
+        await read('followers=small', 'pickers:taskFollowers', (snap) => ({
+          issue_id: task(snap),
+        }))
+      ).answer.rows,
+    ).toHaveLength(5)
+    expect(
+      (
+        await read('followers=viewer', 'pickers:taskFollowers', (snap) => ({
+          issue_id: task(snap),
+        }))
+      ).answer.state,
+    ).toBe('refused')
+    expect(
+      (
+        await read('followers=error', 'issues:subscribers', (snap) => ({
+          issue_id: task(snap),
+        }))
+      ).answer.error,
+    ).toContain('fails')
   }, 60_000)
 
   it("answers Settings › Users, the agents' keys and the creators line from the workspace, with the states the page asks for", async () => {
@@ -2603,13 +2675,14 @@ describe('Deleted items on the benchmark page', () => {
     expect(root.orgs.map((o) => o.name)).toEqual(['Testbed Labs', 'Partner Co'])
     expect(root.myProfileIds).toHaveLength(2)
     const partner = root.orgs[1]
-    // its parts hold its projects and its seat, and the first one's neither
+    // its parts hold its projects, the root its seat, and the first one's
+    // parts neither
     const [projectWindow] = idWindows(startWindows(partner).projects)
     const projects = await two.read('workspace:projects', { org_id: partner.id, ...projectWindow })
     expect(projects.projects.map((p) => p.name)).toEqual(['Partner launch', 'Partner web'])
-    const [peopleWindow] = idWindows(1)
-    const people = await two.read('workspace:people', { org_id: partner.id, ...peopleWindow })
-    expect(people.profiles.map((p) => p.id)).toEqual(['perf-partner-seat'])
+    expect(root.profiles.filter((p) => p.org_id === partner.id).map((p) => p.id)).toEqual([
+      'perf-partner-seat',
+    ])
     const [firstWindow] = idWindows(startWindows(root.orgs[0]).projects)
     const first = await two.read('workspace:projects', { org_id: two.org, ...firstWindow })
     expect(first.projects.length).toBeGreaterThan(0)

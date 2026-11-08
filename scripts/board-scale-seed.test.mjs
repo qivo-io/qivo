@@ -143,6 +143,7 @@ vi.mock('convex/browser', () => ({
             used_ids: fake.usedRows,
             deleted_tasks: fake.deletedTasks,
             agent_keys: fake.keys,
+            labels: [],
             billing_usage: fake.usage,
             profile_removals: fake.removals,
             issue_descriptions: [
@@ -180,10 +181,16 @@ vi.mock('convex/browser', () => ({
           auth_user_id: 'nora-login',
           myProfileIds: ['nora'],
           orgs: [{ id: 'org' }],
+          // the caller's own rows, which the root carries
+          // (convex/lib/workspaceParts.ts readRoot)
+          profiles: [],
+          teamMembers: [],
+          teams: [],
+          create: 'now',
         },
-        'workspace:catalog': { state: 'ok', teams: [], labels: [] },
         'billing:usageFigures': { period_kind: 'paid', period_key: fake.period },
-        'workspace:people': { state: 'ok', profiles: [], teamMembers: [] },
+        // no label the run looks up by id is there yet
+        'labels:byIds': { rows: [] },
         'workspace:projects': {
           state: 'ok',
           projects: fake.projects ?? [{ id: 'sub', org_id: 'org', type: 'project' }],

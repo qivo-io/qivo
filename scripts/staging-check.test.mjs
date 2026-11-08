@@ -113,9 +113,12 @@ import {
   RELATION_STEP,
   REMOVAL_EXPECTED,
   REMOVAL_STEP,
+  REMOVED_PARTS,
   REST_BODY_FIELDS,
   ROADMAP_MILESTONES_STEP,
   ROADMAP_QUERY,
+  ROSTER_PARTS_STEP,
+  ROSTER_READS,
   rateLimitWait,
   redact,
   request,
@@ -242,6 +245,51 @@ describe('staging check REST contract', () => {
       expect(page, mark).toContain(mark)
     expect(TEAMS_STEP).toBe('ui/settings-teams')
     expect(TEAMS_EXPECTED).toEqual({ none: '0 members', one: '1 member' })
+  })
+  it("checks the workspace without its people and catalog parts, and the menus that read the roster's rows, by the pages' own marks", () => {
+    const read = (file) => readFileSync(new URL(file, import.meta.url), 'utf8')
+    const workspace = read('../convex/workspace.ts')
+    // the parts the step expects no page to subscribe are gone from the server
+    for (const part of REMOVED_PARTS) {
+      expect(part.startsWith('workspace:')).toBe(true)
+      expect(workspace).not.toContain(`export const ${part.slice('workspace:'.length)} =`)
+    }
+    expect(workspace).toContain('export const root =')
+    expect(REMOVED_PARTS).toEqual(['workspace:people', 'workspace:catalog'])
+    // the reads the menus take their rows from
+    expect(read('../convex/teams.ts')).toContain('export const picker =')
+    expect(read('../convex/pickers.ts')).toContain('export const mentions =')
+    expect(read('../convex/pickers.ts')).toContain('export const taskFollowers =')
+    expect(ROSTER_READS).toEqual({
+      teams: 'teams:picker',
+      people: 'pickers:mentions',
+      followers: 'pickers:taskFollowers',
+      board: 'tasks:board',
+    })
+    const filters = read('../src/components/viewFilters.tsx')
+    for (const mark of [
+      'data-filter-assignee-menu',
+      'probe="data-filter-assignee-search"',
+      'data-filter-assignee={row.id}',
+      'data-filter-x={kind}',
+    ])
+      expect(filters, mark).toContain(mark)
+    const scope = read('../src/views/teamSync/SyncScopeMenu.tsx')
+    for (const mark of [
+      'data-sync-scope-trigger={shown.label}',
+      "const SCOPE_SEARCH = 'data-sync-scope-search'",
+      'data-sync-scope-choice={key}',
+    ])
+      expect(scope, mark).toContain(mark)
+    const followers = read('../src/components/IssueSubscribers.tsx')
+    for (const mark of [
+      'data-task-subscribe',
+      'data-task-subscriber-add-open',
+      'data-task-subscriber-search',
+      'data-task-subscriber-add={row.id}',
+    ])
+      expect(followers, mark).toContain(mark)
+    expect(ROSTER_PARTS_STEP).toBe('ui/roster-parts')
   })
   it("opens its own milestone in the Milestones window by the window's own marks, in a free week, and a past one in Past", () => {
     // the window and its section part, which the Overview and the phone
@@ -1496,11 +1544,12 @@ describe('staging check REST contract', () => {
       check.indexOf('export const ON_DEMAND_STEP'),
     )
     expect(step).toContain('const names = [found.name, madeName]')
-    // the app deletes each label as the page would show it
-    expect(step).toContain('evaluate(app, removeLabelInApp, label.id)')
-    expect(check).toContain(
-      'window.PLANNER.removeLabel(id, { orgId: label.org, name: label.name, color: label.color })',
-    )
+    // the app deletes each label as the REST row shows it, in the home
+    // organization, without waiting for the store, which holds no label
+    expect(step).toContain('evaluate(app, removeLabelInApp, {')
+    expect(step).not.toContain('orgLabels')
+    expect(check).toContain('function removeLabelInApp(label) {')
+    expect(check).toContain('orgId: window.PLANNER.homeOrg,')
     expect(step).toMatch(/\} finally \{\s+await dropLabels\(\)/)
     for (const mark of [
       'data-label-picker',
@@ -2405,24 +2454,27 @@ describe('task list pages', () => {
       '/labels?limit=20&cursor=a%2Bb%2Fc',
     )
   })
-  it('removes each tagged agent and label of a sweep in its own organization', () => {
+  it("finds each tagged agent and label of a sweep through the app's own pickers, and removes it in the home organization", () => {
     const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
     const sweep = check.slice(
       check.indexOf('async function sweep(tag, label)'),
       check.indexOf('async function removeTokenInApp('),
     )
-    // each tagged agent carries its organization from the app's people
-    expect(sweep).toContain('.map((u) => ({ id: u.id, name: u.name, org: u.org }))')
-    expect(sweep).toContain('window.PLANNER.removeUser(a.id, { orgId: a.org })')
+    // the store holds nobody but Nora and no label, so the agents come from
+    // the mention popup's read, whose rows give an agent no address, and the
+    // labels from the label picker's, both without the cleanup token
+    expect(sweep).toContain('window.PLANNER.mentionChoices(o, search, after)')
+    expect(sweep).toContain('.filter((p) => p.email === null && matches(p.name))')
     expect(sweep).toContain(
-      'window.PLANNER.removeLabel(l.id, { orgId: l.org, name: l.name, color: l.color })',
+      'window.PLANNER.labelChoices({ org: window.PLANNER.homeOrg, search, cursor: after })',
     )
-    // and no agent or label removal names the home organization, which
-    // only the managed-projects passes read, as Nora's managed lists are
-    // her home organization's
-    const removals = sweep.match(/\bremove(?:User|Label)\([^)]*\)/g) ?? []
-    expect(removals.length).toBeGreaterThanOrEqual(2)
-    for (const call of removals) expect(call).not.toContain('homeOrg')
+    expect(sweep).toContain('window.PLANNER.removeUser(a.id, { orgId: a.org })')
+    expect(sweep).toContain('evaluate(app, removeLabelInApp, {')
+    // a removed agent is confirmed over REST, else by a search that no
+    // longer lists it, never by the store's people
+    expect(sweep).toContain('!(await taggedAgents()).some((a) => a.id === agent.id)')
+    for (const gone of ['window.PLANNER.users', 'orgLabels', 'canDeleteTeam'])
+      expect(sweep).not.toContain(gone)
   })
   it('searches a sweep by the run tag, or by the prefix every run tag shares', () => {
     expect(searchOf('stgchk-0a1b2c')).toBe('stgchk-0a1b2c')

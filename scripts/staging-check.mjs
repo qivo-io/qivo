@@ -100,6 +100,11 @@
  * through Add member's search (teams.get, members and addable), checks the
  * count over REST and on both pages, renames the team in place, removes
  * the agent and deletes the team from the list (ui/settings-teams). It
+ * loads M's Board without the workspace's removed people and catalog
+ * parts and with Nora's own seats alone in the store, finds Leo Martins in
+ * the Board's Assignee menu and by his address in a task's follower
+ * popover, and the run's team by its tag in Team sync's scope menu, each
+ * on the server's reads (ui/roster-parts). It
  * searches Settings › Users for its Standard agent by name, which the deployment answers alone
  * with its key's fingerprint from a one-shot key read, opens its keys, and
  * checks that Organization › General's creators line names and counts what
@@ -2034,12 +2039,17 @@ export async function appBatches(what, read) {
  *
  *  1. OAuth connections, personal tokens and agent keys, which need only
  *     the signed-in app, so no credential of a run outlives a REST outage;
+ *     the agents come from the mention popup's read (pickers.mentions), as
+ *     the store holds nobody but Nora;
  *  2. with a temporary token for REST reads, projects (with their tasks,
  *     comments, files, grants and milestones), those REST lists and those
  *     Nora only manages, live and archived, from Settings' lists, tasks
- *     elsewhere and teams; then, with or without that token, labels,
- *     which only the app deletes;
- *  3. the agents, each confirmed gone;
+ *     elsewhere and teams, deleted with the name REST gives; then, with
+ *     or without that token, labels, which only the app deletes, found
+ *     through the label picker's read (labels.picker), as the store holds
+ *     no label;
+ *  3. the agents, each confirmed gone, over REST with the token, else by
+ *     a mention search that no longer lists it;
  *  4. the temporary token, then a fresh read of every list, Settings'
  *     project lists included, to prove that nothing with the tag is
  *     left.
@@ -2099,14 +2109,24 @@ async function sweep(tag, label) {
         ),
       )
     ).filter((p) => !p.under && matches(p.name))
-  const taggedAgents = async () =>
-    (
-      await evaluate(app, () =>
-        window.PLANNER.users
-          .filter((u) => u.isAgent)
-          .map((u) => ({ id: u.id, name: u.name, org: u.org })),
+  /** The agents with the tag in Nora's organization, from the mention
+   *  popup's read (P.mentionChoices, pickers.mentions), whose rows give an
+   *  agent no address, a batch at a time, as the store holds nobody but
+   *  Nora; a failed read is a failure. */
+  const taggedAgents = async () => {
+    const org = await evaluate(app, () => window.PLANNER.homeOrg)
+    return (
+      await appBatches('agents', (cursor) =>
+        evaluate(app, ([o, search, after]) => window.PLANNER.mentionChoices(o, search, after), [
+          org,
+          searchOf(tag),
+          cursor,
+        ]),
       )
-    ).filter((a) => matches(a.name))
+    )
+      .filter((p) => p.email === null && matches(p.name))
+      .map((p) => ({ id: p.id, name: p.name, org }))
+  }
   /** The keys of `agents`, read once in each agent's organization
    *  (tokens.agentKeys); a failed read is a failure, never no keys. */
   const agentKeysOf = async (agents) => {
@@ -2242,44 +2262,39 @@ async function sweep(tag, label) {
         const tagged = await restRows(cleaner, '/teams', 'teams', { search: searchOf(tag) })
         for (const team of tagged.filter((t) => matches(t.name)))
           await step(`team ${team.name}`, async () => {
-            await app.waitForFunction((id) => window.PLANNER.canDeleteTeam(id), team.id, {
-              timeout: 30_000,
-            })
+            // with the organization and the name the REST row says, as
+            // Settings › Teams presses it; the server refuses the last team
             expect(
-              await evaluate(
-                app,
-                (id) =>
-                  window.PLANNER.removeAccess({ kind: 'deleteTeam', teamId: id }, { to: null }),
-                team.id,
-              ),
+              await evaluate(app, deleteTeamInApp, { id: team.id, name: team.name }),
               'the app could not delete it',
             )
             note(`team ${team.name}`)
           })
       })
     }
-    // labels, which only the app deletes, so they go without the token too
+    // labels, which only the app deletes, so they go without the token too,
+    // found through the label picker's read (P.labelChoices, labels.picker)
+    // a batch at a time, as the store holds no label
     await step('labels', async () => {
       const labels = (
-        await evaluate(app, () =>
-          window.PLANNER.orgLabels().map((l) => ({
-            id: l.id,
-            name: l.name,
-            color: l.color,
-            org: l.org,
-          })),
+        await appBatches('labels', (cursor) =>
+          evaluate(
+            app,
+            ([search, after]) =>
+              window.PLANNER.labelChoices({ org: window.PLANNER.homeOrg, search, cursor: after }),
+            [searchOf(tag), cursor],
+          ),
         )
       ).filter((l) => matches(l.name))
       for (const label of labels)
         await step(`label ${label.name}`, async () => {
-          // the app's delete sends the label as the page would show it
+          // the app's delete sends the label as the picker's row shows it
           expect(
-            await evaluate(
-              app,
-              (l) =>
-                window.PLANNER.removeLabel(l.id, { orgId: l.org, name: l.name, color: l.color }),
-              label,
-            ),
+            await evaluate(app, removeLabelInApp, {
+              id: label.id,
+              name: label.name,
+              color: label.color,
+            }),
             'the app could not delete it',
           )
           note(`label ${label.name}`)
@@ -2295,11 +2310,13 @@ async function sweep(tag, label) {
           // in the agent's own organization, which the server removes it from
           await evaluate(app, (a) => window.PLANNER.removeUser(a.id, { orgId: a.org }), agent)
           await settled()
+          // over REST with the token, else by the mention popup's search,
+          // which no longer lists a removed agent
           expect(
             await until(async () =>
               cleaner
                 ? (await rest(cleaner, 'GET', `/users/${agent.id}`)).status === 404
-                : !(await agentListedAfterReload(agent.id)),
+                : !(await taggedAgents()).some((a) => a.id === agent.id),
             ),
             'it is still in the organization',
           )
@@ -2398,10 +2415,16 @@ async function removeTokenInApp(id, revoked) {
   )
 }
 
-/** Whether the Users page lists an agent after a cold reload. */
-async function agentListedAfterReload(id) {
-  await openUsers()
-  return await evaluate(app, (agent) => window.PLANNER.users.some((u) => u.id === agent), id)
+/** Deletes team `team` (its REST row's id and name) in the app, as
+ *  Settings › Teams presses it with the home organization and the name it
+ *  showed (P.removeAccess), and answers whether the server deleted it. It
+ *  runs in the page through evaluate, so it names nothing outside itself.
+ *  The store holds only Nora's own teams, so the name is the row's. */
+function deleteTeamInApp(team) {
+  return window.PLANNER.removeAccess(
+    { kind: 'deleteTeam', teamId: team.id, orgId: window.PLANNER.homeOrg, label: team.name },
+    { to: null },
+  )
 }
 
 /** Tasks whose title carries the tag, active and archived. The default
@@ -2708,12 +2731,10 @@ async function peopleListChecks() {
       [label.id],
       'the label list_labels finds without its accent',
     )
-    await app.waitForFunction(
-      (id) => window.PLANNER?.orgLabels().some((l) => l.id === id),
-      label.id,
-      { timeout: 30_000 },
+    expect(
+      await evaluate(app, removeLabelInApp, { id: label.id, name: label.name, color: label.color }),
+      'the app could not delete the label',
     )
-    expect(await evaluate(app, removeLabelInApp, label.id), 'the app could not delete the label')
     expect(
       await until(async () =>
         (await restRows(w, '/labels', 'labels', { search: run.tag })).every(
@@ -5065,17 +5086,15 @@ async function labelMentionPickersCheck() {
         (await restRows(w, '/labels', 'labels', { search: run.tag })).filter((l) =>
           names.includes(l.name),
         )
-      for (const label of await mine()) {
-        await app.waitForFunction(
-          (id) => window.PLANNER?.orgLabels().some((l) => l.id === id),
-          label.id,
-          { timeout: 30_000 },
-        )
+      for (const label of await mine())
         expect(
-          await evaluate(app, removeLabelInApp, label.id),
+          await evaluate(app, removeLabelInApp, {
+            id: label.id,
+            name: label.name,
+            color: label.color,
+          }),
           `the app could not delete ${label.name}`,
         )
-      }
       expect(
         await until(async () => (await mine()).length === 0),
         `GET /labels still lists ${names.join(' or ')}`,
@@ -6808,14 +6827,17 @@ async function overviewMilestonesCheck() {
   })
 }
 
-/** Deletes label `id` in the app, sending the label as the app's
- *  catalogue holds it, as the page would show it (P.removeLabel), and
- *  answers whether the server deleted it. It runs in the page through
- *  evaluate, so it names nothing outside itself; the caller first waits
- *  until the catalogue holds the label. */
-function removeLabelInApp(id) {
-  const label = window.PLANNER.orgLabels().find((l) => l.id === id)
-  return window.PLANNER.removeLabel(id, { orgId: label.org, name: label.name, color: label.color })
+/** Deletes label `label` (its id, name and color, as a REST row or the
+ *  label picker's row says) in the app, as Settings › Labels shows it in
+ *  the home organization (P.removeLabel), and answers whether the server
+ *  deleted it. It runs in the page through evaluate, so it names nothing
+ *  outside itself. The store holds no label, so nothing waits for it. */
+function removeLabelInApp(label) {
+  return window.PLANNER.removeLabel(label.id, {
+    orgId: window.PLANNER.homeOrg,
+    name: label.name,
+    color: label.color,
+  })
 }
 
 /** The step that checks Settings › Labels (settingsLabelsCheck). */
@@ -6920,12 +6942,10 @@ async function settingsLabelsCheck() {
       LABELS_EXPECTED.palette.map((c) => c.toLowerCase()).includes(made.color.toLowerCase()),
       `${madeName} has ${made.color}, not a palette color`,
     )
-    await app.waitForFunction(
-      (id) => window.PLANNER?.orgLabels().some((l) => l.id === id),
-      made.id,
-      { timeout: 30_000 },
+    expect(
+      await evaluate(app, removeLabelInApp, { id: made.id, name: made.name, color: made.color }),
+      `the app could not delete ${madeName}`,
     )
-    expect(await evaluate(app, removeLabelInApp, made.id), `the app could not delete ${madeName}`)
     const renamed = `${run.tag} Label renamed`
     const name = row.locator('[data-label-name]')
     await name.fill(renamed)
@@ -6962,6 +6982,170 @@ async function settingsLabelsCheck() {
     )
     return `found ${label.name} by search with ${LABELS_EXPECTED.count}, kept Add off for its name in upper case, made ${madeName} in a palette color, renamed ${label.name} in place and deleted it in its window`
   })
+}
+
+/** The step that checks the workspace's parts without the people and the
+ *  catalog, and the reads that took their place (rosterPartsCheck). */
+export const ROSTER_PARTS_STEP = 'ui/roster-parts'
+
+/** The workspace parts no page subscribes from this release on
+ *  (convex/workspace.ts): the root part carries the caller's own
+ *  profiles, memberships and teams, and every other person, team and
+ *  label is read by id or through a picker. */
+export const REMOVED_PARTS = ['workspace:people', 'workspace:catalog']
+
+/** The queries the step's menus read their rows from. */
+export const ROSTER_READS = {
+  teams: 'teams:picker',
+  people: 'pickers:mentions',
+  followers: 'pickers:taskFollowers',
+  board: 'tasks:board',
+}
+
+/** The workspace without its people and catalog parts on the deployment,
+ *  as Nora. A fresh load of M's Board passes no subscription of
+ *  REMOVED_PARTS on its sync socket, and the store holds Nora's own seats
+ *  alone (P.users). Team sync's scope menu finds the run's team by its
+ *  tag through teams.picker, a pick names it on the trigger, and the
+ *  agenda answers for its scope. M's Board's Assignee menu finds
+ *  OWNER_PICKERS_PERSON through pickers.mentions, a pick sends the
+ *  Board's read with his id in its owners, and the filter's × clears it.
+ *  run.t0's follower popover finds him by his address under + Add
+ *  through pickers.taskFollowers and closes without adding anyone. A
+ *  failure clears the filter and Team sync's scope in a `finally`. It
+ *  writes no record. It runs after ui/settings-teams and before the run
+ *  archives M, and needs a backend from this release on. */
+async function rosterPartsCheck() {
+  const w = run.creds.writeToken
+  const { M } = run.projects
+  await check(ROSTER_PARTS_STEP, async () => {
+    expect(run.team, 'the run made no team')
+    expect(Number.isInteger(M.num), 'the run project has no number')
+    const leo = (await restRows(w, '/users', 'users', { search: OWNER_PICKERS_PERSON })).find(
+      (u) => u.name === OWNER_PICKERS_PERSON,
+    )
+    expect(leo?.email, `the organization has no ${OWNER_PICKERS_PERSON} with an address`)
+    const team = await restOk(w, 'GET', `/teams/${run.team.id}`)
+    const sent = []
+    const record = (ws) => ws.on('framesent', (frame) => sent.push(String(frame.payload)))
+    app.on('websocket', record)
+    const board = `${cfg.appOrigin}/app/${ORG_SLUG}/board/p/${M.num}`
+    let filtered = false
+    let scoped = false
+    try {
+      // a fresh load subscribes neither removed part, and the store holds
+      // Nora's own seats alone
+      await app.goto(board, { waitUntil: 'domcontentloaded' })
+      const root = app.locator('[data-workspace-view] [data-board-root][data-board-state="ok"]')
+      await root.waitFor({ timeout: 60_000 })
+      for (const part of REMOVED_PARTS)
+        eq(sent.filter((f) => addsQuery(f, part)).length, 0, `the load subscribed ${part}`)
+      const seats = await evaluate(app, () => ({
+        users: window.PLANNER.users.map((u) => u.id).sort(),
+        mine: [...window.PLANNER.myProfileIds].sort(),
+      }))
+      same(seats.users, seats.mine, "the store's people")
+
+      // the Board's Assignee menu finds Leo on the server, and a pick sends
+      // the Board's read with him among its owners
+      await app.locator('[data-filter-assignee-menu]').first().click()
+      await app.locator('[data-filter-assignee-search]').fill(OWNER_PICKERS_PERSON)
+      const choice = app.locator(`[data-filter-assignee="${leo.id}"]`).first()
+      await choice.waitFor({ timeout: 30_000 })
+      eq(sent.filter((f) => addsQuery(f, ROSTER_READS.people)).length > 0, true, 'the menu read')
+      const before = sent.length
+      await choice.click()
+      filtered = true
+      expect(
+        await until(async () =>
+          sent
+            .slice(before)
+            .some((f) => addsQueryFor(f, ROSTER_READS.board, leo.id) || isOneShotFor(f, leo.id)),
+        ),
+        `the Board did not read ${leo.name}'s tasks`,
+      )
+      await app.keyboard.press('Escape')
+      await app.locator('[data-filter-x="assignee"]').first().click()
+      filtered = false
+      await app.locator('[data-filter-x="assignee"]').first().waitFor({ state: 'detached' })
+
+      // run.t0's follower popover finds Leo by his address under + Add
+      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/task/${run.t0.key}`, {
+        waitUntil: 'domcontentloaded',
+      })
+      await app.locator('[data-task-subscribe]').first().click()
+      await app.locator('[data-task-subscriber-add-open]').first().click()
+      await app.locator('[data-task-subscriber-search]').first().fill(leo.email)
+      await app
+        .locator(`[data-task-subscriber-add="${leo.id}"]`)
+        .first()
+        .waitFor({ timeout: 30_000 })
+      await app.keyboard.press('Escape')
+      await app.keyboard.press('Escape')
+
+      // Team sync's scope menu finds the run's team by its tag on the
+      // server, and a pick names it and reads its agenda
+      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/sync/p/${M.num}`, {
+        waitUntil: 'domcontentloaded',
+      })
+      await app
+        .locator('[data-workspace-view] [data-sync-page][data-sync-state="ok"]')
+        .waitFor({ timeout: 60_000 })
+      await app.locator('[data-sync-scope-trigger]').first().click()
+      await app.locator('[data-sync-scope-search]').first().fill(run.tag)
+      const pick = app.locator(`[data-sync-scope-choice="team:${team.id}"]`).first()
+      await pick.waitFor({ timeout: 30_000 })
+      eq(sent.filter((f) => addsQuery(f, ROSTER_READS.teams)).length > 0, true, 'the scope read')
+      const picked = sent.length
+      await pick.click()
+      scoped = true
+      expect(
+        await until(
+          async () =>
+            ((await app
+              .locator('[data-sync-scope-trigger]')
+              .first()
+              .getAttribute('data-sync-scope-trigger')) ?? '') === team.name,
+        ),
+        `the trigger does not name ${team.name}`,
+      )
+      expect(
+        await until(async () =>
+          sent.slice(picked).some((f) => addsQueryFor(f, AGENDA_QUERY, team.id)),
+        ),
+        "the agenda was not read for the team's scope",
+      )
+      return `loaded ${M.key}'s Board without ${REMOVED_PARTS.join(' or ')} and with Nora's own seats alone, found ${leo.name} in its Assignee menu and by his address in ${run.t0.key}'s follower popover, and found ${team.name} by its tag in Team sync's scope menu`
+    } finally {
+      // a failure leaves the Board's filter and Team sync's scope as they
+      // were: the filter's × on M's Board, and M's meeting by its address
+      if (filtered)
+        await app
+          .goto(board, { waitUntil: 'domcontentloaded' })
+          .then(() => app.locator('[data-filter-x="assignee"]').first().click({ timeout: 30_000 }))
+          .catch(() => {})
+      if (scoped)
+        await app
+          .goto(`${cfg.appOrigin}/app/${ORG_SLUG}/sync/p/${M.num}`, {
+            waitUntil: 'domcontentloaded',
+          })
+          .catch(() => {})
+      app.off('websocket', record)
+    }
+  })
+}
+
+/** Whether frame `text` the page sent is a one-shot read that names
+ *  `id`, as the Board's read goes when its subscription is already open
+ *  with other arguments. */
+function isOneShotFor(text, id) {
+  let message
+  try {
+    message = JSON.parse(text)
+  } catch {
+    return false
+  }
+  return message?.type === 'Query' && JSON.stringify(message.args ?? '').includes(id)
 }
 
 /** The step that checks Settings › Teams and a team's page
@@ -10479,6 +10663,10 @@ async function main() {
   // Settings › Teams and a team's page on the server's reads, with a team
   // of its own
   await settingsTeamsCheck()
+  // the workspace without its people and catalog parts, Team sync's teams,
+  // the Board's Assignee menu and a task's follower popover on the
+  // server's reads, while M is active
+  await rosterPartsCheck()
   // Settings › Users with the run's Standard agent, and the creators line
   await settingsUsersCheck()
   // the removal window and its Reassign picker on a sub-project of its own
@@ -10564,17 +10752,9 @@ async function main() {
   })
   if (run.team)
     await check('cleanup/app/delete-team', async () => {
-      await app.waitForFunction((id) => window.PLANNER.canDeleteTeam(id), run.team.id, {
-        timeout: 30_000,
-      })
-      expect(
-        await evaluate(
-          app,
-          (id) => window.PLANNER.removeAccess({ kind: 'deleteTeam', teamId: id }, { to: null }),
-          run.team.id,
-        ),
-        'refused',
-      )
+      // the name the server holds now, which a step may have changed
+      const team = await restOk(c.writeToken, 'GET', `/teams/${run.team.id}`)
+      expect(await evaluate(app, deleteTeamInApp, { id: team.id, name: team.name }), 'refused')
       eq((await rest(c.writeToken, 'GET', `/teams/${run.team.id}`)).status, 404, 'the team')
     })
   await check('cleanup/rest/no-tagged-tasks', async () => {

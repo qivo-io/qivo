@@ -301,8 +301,12 @@ try {
     const firmware = P.projects.find(
       (project) => project.parent === meta?.id && project.name === 'Firmware',
     )
+    // the store holds the signed-in person alone, so Leo is found through
+    // the mention popup's read
     const nora = P.users.find((user) => user.id === P.CURRENT_USER)
-    const leo = P.users.find((user) => user.name === 'Leo Martins' && user.org === P.org.id)
+    const found = await P.mentionChoices(P.org.id, 'Leo Martins', null)
+    const leo =
+      found?.state === 'ready' ? found.rows.find((row) => row.name === 'Leo Martins') : undefined
     if (!meta || !electronics || !firmware || !nora || !leo)
       throw new Error('Northstar fixture projects or assignees are unavailable')
     const { convex } = await import('/src/lib/convex.ts')

@@ -58,6 +58,10 @@ async function persistedRoster(page) {
   })
 }
 
+/* The ids of the followers a roster answer lists (issues.subscribers
+   answers them as rows), sorted. */
+const followerIds = (roster) => roster.subscribers.map((row) => row.id).sort()
+
 async function openRoster(page) {
   const subscribed = await eye(page).getAttribute('data-task-subscribe')
   const before = await persistedRoster(page)
@@ -69,8 +73,8 @@ async function openRoster(page) {
   assert.equal(await popup(page).getByRole('alert').count(), 0, 'Subscriber query failed')
   assert.equal(await eye(page).getAttribute('data-task-subscribe'), subscribed)
   assert.deepEqual(
-    (await persistedRoster(page)).subscribers.sort(),
-    before.subscribers.sort(),
+    followerIds(await persistedRoster(page)),
+    followerIds(before),
     'Opening the eye changed a subscription',
   )
   await me(page).getByText('Me', { exact: true }).waitFor()
@@ -91,7 +95,7 @@ async function setMe(page, subscribed) {
   )
   assert.equal(await popup(page).isVisible(), true, 'Me toggle closed the subscriber list')
   const current = await page.evaluate(() => window.PLANNER.CURRENT_USER)
-  assert.equal((await persistedRoster(page)).subscribers.includes(current), subscribed)
+  assert.equal(followerIds(await persistedRoster(page)).includes(current), subscribed)
 }
 
 async function escapeRoster(page) {
@@ -126,19 +130,6 @@ try {
       )
       if (!project || !subproject || !P.canManageOwnProjectAccess(project.id))
         throw new Error('Northstar manager or Luma Sensor project is unavailable')
-      const available = accounts.flatMap((account) => {
-        const profile = P.users.find(
-          (user) => user.org === P.org.id && user.email === account.email && user.active,
-        )
-        return profile &&
-          P.canSee(project.id, profile.id) &&
-          !P.canManageOwnProjectAccess(project.id, profile.id)
-          ? [{ key: account.key, id: profile.id, name: profile.name, role: profile.orgRole }]
-          : []
-      })
-      const ordinary = available.find((user) => user.role === 'user')
-      if (!ordinary) throw new Error('Northstar has no ordinary account with task access')
-      const viewer = available.find((user) => user.role === 'viewer')
       const { convex } = await import('/src/lib/convex.ts')
       await convex.mutation('issues:create', {
         org_id: P.org.id,
@@ -148,6 +139,31 @@ try {
         status: 'todo',
         priority: 'low',
       })
+      // the store holds nobody but the signed-in person, so each account is
+      // found on the server: among the people who may follow the new task
+      // (pickers.taskFollowers) by address, with its role from its face
+      // (people.byIds); one who leads the project manages its followers
+      const lead = P.projects.find((item) => item.id === project.id)?.lead
+      const found = []
+      for (const account of accounts) {
+        const batch = await P.followerChoices({
+          task: { uuid: task.id, org: P.org.id },
+          search: account.email,
+          cursor: null,
+        })
+        const row = batch?.state === 'ready' && batch.rows.length === 1 ? batch.rows[0] : null
+        if (row?.active && row.id !== lead) found.push({ key: account.key, row })
+      }
+      const faces = found.length
+        ? await convex.query('people:byIds', { org_id: P.org.id, ids: found.map((f) => f.row.id) })
+        : { rows: [] }
+      const available = found.flatMap(({ key, row }) => {
+        const face = faces.rows.find((f) => f.id === row.id)
+        return face ? [{ key, id: row.id, name: row.name, role: face.org_role }] : []
+      })
+      const ordinary = available.find((user) => user.role === 'user')
+      if (!ordinary) throw new Error('Northstar has no ordinary account with task access')
+      const viewer = available.find((user) => user.role === 'viewer')
       return {
         orgId: P.org.id,
         managerId: P.CURRENT_USER,
@@ -177,11 +193,11 @@ try {
   taskURL = manager.url()
   const initial = await openRoster(manager)
   assert.equal(initial.canManage, true)
-  assert.deepEqual(initial.subscribers, [], 'Unassigned temporary task has unexpected subscribers')
+  assert.deepEqual(followerIds(initial), [], 'Unassigned temporary task has unexpected subscribers')
   await popup(manager).getByText('No other subscribers.', { exact: true }).waitFor()
   await setMe(manager, true)
   await setMe(manager, false)
-  assert.deepEqual((await persistedRoster(manager)).subscribers, [])
+  assert.deepEqual(followerIds(await persistedRoster(manager)), [])
   await escapeRoster(manager)
   await openRoster(manager)
   await setMe(manager, true)
@@ -196,7 +212,6 @@ try {
     await eye(page).waitFor({ timeout: 30000 })
     const ordinaryRoster = await openRoster(page)
     assert.equal(ordinaryRoster.canManage, false)
-    assert.deepEqual(ordinaryRoster.candidates, [])
     await row(page, setup.managerId).waitFor()
     assert.equal(await add(page).count(), 0, 'Ordinary user can add other subscribers')
     assert.equal(await page.locator('[data-task-subscriber-remove]').count(), 0)
@@ -240,7 +255,7 @@ try {
     )
     await page.locator('[data-task-subscribe="on"]').waitFor({ state: 'attached' })
     await page.locator('[data-task-subscribe-me="on"]').waitFor()
-    assert.equal((await persistedRoster(manager)).subscribers.includes(account.id), true)
+    assert.equal(followerIds(await persistedRoster(manager)).includes(account.id), true)
     await page.reload({ waitUntil: 'domcontentloaded' })
     await eye(page).waitFor({ timeout: 30000 })
     assert.equal(await eye(page).getAttribute('data-task-subscribe'), 'on')
@@ -253,7 +268,7 @@ try {
     await remove(manager, account.id).click()
     await row(manager, account.id).waitFor({ state: 'detached' })
     await page.locator('[data-task-subscribe-me="off"]').waitFor()
-    assert.equal((await persistedRoster(manager)).subscribers.includes(account.id), false)
+    assert.equal(followerIds(await persistedRoster(manager)).includes(account.id), false)
     log(
       `Manager search, add and remove persist; ${account.role}'s eye updates live and after reload`,
     )
@@ -284,7 +299,7 @@ try {
   await eye(manager).waitFor({ timeout: 30000 })
   await openRoster(manager)
   await popup(manager).getByText('No other subscribers.', { exact: true }).waitFor()
-  assert.deepEqual((await persistedRoster(manager)).subscribers, [setup.managerId])
+  assert.deepEqual(followerIds(await persistedRoster(manager)), [setup.managerId])
   await manager.screenshot({ path: 'scripts/shots/subscribers-desktop.png' })
   await escapeRoster(manager)
   assert.deepEqual(pageErrors, [], 'Browser reported uncaught errors')

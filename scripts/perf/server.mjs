@@ -9,7 +9,11 @@
 // It serves the workspace in live parts (convex/workspace.ts), its tasks
 // and projects in the id windows the app asks for, cut from the whole
 // workspace it holds
-// (convex/lib/workspaceJoin.ts splitWorkspace). After a write it sends every
+// (convex/lib/workspaceJoin.ts splitWorkspace), and the root part with the
+// signed-in person's own profiles, memberships and teams alone (rootOf),
+// so the app holds nobody else and no label, and names every other person,
+// team and label through the reads by id and the pickers, which answer
+// from the whole. After a write it sends every
 // part whose JSON changed, and only those, in one transition, as Convex does.
 // The whole it holds keeps the planted milestones as the server's rows,
 // which no part sends, as the projects part sends none; the milestone reads
@@ -161,10 +165,6 @@
 //                        byids-error (every read by id fails) and
 //                        byids-loading (a read by id never answers);
 //                        several joined by commas
-//   unheldlabels (0)     leaves the N highest-numbered labels out of the
-//                        workspace's catalog part while labels:picker and
-//                        labels:byIds still answer them, so the task
-//                        window names those of its task by id
 //   mentions             states the editor's @ mention suggestions
 //                        (pickers:mentions) answer whatever the people say,
 //                        for screenshots of states a seeded backend cannot
@@ -185,6 +185,20 @@
 //                        third team not counted yet) and batch-N (batches
 //                        of N); several joined by commas. Open it with
 //                        role=admin, or as a user, who leads the first team
+//   teampicker           a state Team sync's scope menu answers whatever the
+//                        teams say (teams:picker,
+//                        src/store/teamSettingsStandIn.setup.ts): not-ready,
+//                        stopped (an open batch stops after two teams
+//                        looked at), small (batches of two, so the three
+//                        teams reach Load more) and error (every batch
+//                        fails); several joined by commas
+//   followers            a state a task's subscribers popover answers
+//                        whatever the people say (issues:subscribers and
+//                        pickers:taskFollowers,
+//                        src/store/followerStandIn.setup.ts): small (Add
+//                        batches of five), error (both reads fail) and
+//                        viewer (the caller may not manage the followers);
+//                        several joined by commas
 //   userspage            a state Settings › Users' pages answer whatever the
 //                        people say (people:settingsPage and people:get,
 //                        src/store/peopleSettingsStandIn.setup.ts), for
@@ -304,21 +318,12 @@
 //                        check-slow (checks answer after two seconds);
 //                        several joined by commas. people=1000 reaches
 //                        Load more and the lists' cap of 500
-//   unheldpeople (0)     leaves the N highest-numbered people out of the
-//                        workspace's people part while the pickers and
-//                        people:byIds still answer them, with their
-//                        pictures (with `pictures`, which files:mintUrls
-//                        answers for them too) and hours, and makes the two
-//                        highest the assignee and reviewer of the first
-//                        open task without subtasks, so the task window
-//                        names them by id; the app's profile cache reads
-//                        them for every view that shows them
 //   peoplebyids          a state people:byIds answers whatever the people
 //                        say (src/store/peopleSettingsStandIn.setup.ts):
 //                        byids-error (every read fails), byids-slow (each
 //                        answer comes two seconds late) or byids-gone
 //                        (every asked id is left out), for the loading,
-//                        failed and unknown people with unheldpeople
+//                        failed and unknown people every view shows
 //   projectsettings      states a project's Settings page reads answer
 //                        whatever the workspace says, for screenshots of
 //                        states a seeded backend cannot reach inside the
@@ -623,7 +628,7 @@ import { creatorGrant } from '../../convex/lib/projectGrants'
 import { matchesTerms, scoreOf, searchTerms } from '../../convex/lib/searchTerms'
 import { parseIssueRef } from '../../convex/lib/taskRefs'
 import { nextSyncStamp } from '../../convex/lib/teamSync'
-import { splitWorkspace } from '../../convex/lib/workspaceJoin'
+import { rootOf, splitWorkspace } from '../../convex/lib/workspaceJoin'
 import { boardStandIn } from '../../src/store/boardStandIn.setup'
 import {
   credentialListsStandIn,
@@ -637,6 +642,7 @@ import {
   deletedStandIn,
   isDeletedRead,
 } from '../../src/store/deletedItemsStandIn.setup'
+import { subscribersStandIn, taskFollowersStandIn } from '../../src/store/followerStandIn.setup'
 import {
   INBOX_NO_ANSWER,
   inboxItemStandIn,
@@ -815,9 +821,6 @@ const forcedLabelPicker = (() => {
   if (labelPickerStates.has('unchecked')) force.canCreate = null
   return force
 })()
-/* The labels left out of the workspace's catalog part (`unheldlabels`),
-   named once the labels exist. */
-const unheldLabelCount = Math.max(0, option('unheldlabels', 0))
 /* The mention suggestions' forced states (the `mentions` parameter), as
    the stand-in's `force` takes them. */
 const forcedMentions = (() => {
@@ -847,6 +850,22 @@ const forcedTeams = (() => {
   if (fail.length) force.fail = fail
   return force
 })()
+/* Team sync's scope menu's forced states (the `teampicker` parameter), as
+   the team stand-in's `force` takes them for teams:picker. */
+const forcedTeamPicker = (() => {
+  const force = {}
+  for (const state of (parameters.get('teampicker') ?? '').split(',').filter(Boolean)) {
+    if (state === 'not-ready') force.notReady = true
+    else if (state === 'stopped') force.stop = 2
+    else if (state === 'small') force.batch = 2
+    else if (state === 'error') force.fail = ['picker']
+  }
+  return force
+})()
+/* The subscribers popover's forced states (the `followers` parameter), as
+   the follower stand-in's options take them, beside whether the caller
+   manages the followers. */
+const forcedFollowers = new Set((parameters.get('followers') ?? '').split(',').filter(Boolean))
 /* The navigation reads' forced states (the `projectnav` parameter), as the
    stand-in's `force` takes them; `favorites` names its programs once they
    exist (projectNavForce). */
@@ -1027,9 +1046,6 @@ const forcedRemoval = new Set((parameters.get('removal') ?? '').split(',').filte
 /* The owner lists' and the Mention window's forced states (the `owners`
    parameter), as the stand-in's `force` takes them. */
 const forcedOwners = new Set((parameters.get('owners') ?? '').split(',').filter(Boolean))
-/* How many of the highest-numbered people the people part leaves out
-   (`unheldpeople`). */
-const unheldPeopleCount = Math.max(0, Math.floor(option('unheldpeople', 0)))
 const fixtureTime = new Date()
 const now = fixtureTime.toISOString()
 const day = (offset) => {
@@ -1290,11 +1306,6 @@ const labels = Array.from({ length: orgLabelCount }, (_, n) => ({
   color: '#557733',
   created_at: now,
 }))
-/* The highest-numbered labels, which the catalog part leaves out
-   (`unheldlabels`) while the label reads answer them. */
-const unheldLabels = new Set(
-  labels.slice(labels.length - Math.min(unheldLabelCount, labels.length)).map((l) => l.id),
-)
 /* What the planted weekly milestones are called, by turns. */
 const MILESTONE_NAMES = ['Design review', 'Prototype build', 'Field test', 'Supplier audit']
 const milestoneWeeks = option('milestoneweeks', 0)
@@ -1446,27 +1457,6 @@ const hiddenTasks = Array.from({ length: perProject * hiddenCount }, (_, h) =>
 if (hiddenTasks.length)
   for (const row of tasks)
     if (!row.parent_id && row.num % 20 === 13) row.parent_id = hiddenTasks[0].id
-/* The highest-numbered people, never the signed-in person, whom the people
-   part leaves out (`unheldpeople`) while the pickers and people:byIds
-   answer them. The highest holds the first open task without subtasks,
-   and the next reviews it, so the task window names both by id. */
-const unheldPeople = new Set(
-  unheldPeopleCount > 0
-    ? profiles
-        .slice(1, peopleCount)
-        .slice(-unheldPeopleCount)
-        .map((p) => p.id)
-    : [],
-)
-if (unheldPeople.size > 0) {
-  const parentIds = new Set(tasks.map((row) => row.parent_id).filter(Boolean))
-  const held = tasks.find((row) => !parentIds.has(row.id) && row.status !== 'done')
-  const [holder, reviewer] = [...unheldPeople].reverse()
-  if (held) {
-    held.assignee_id = holder
-    if (reviewer) held.reviewer_id = reviewer
-  }
-}
 const shown = new Set(tasks.map((row) => row.id))
 const allTasks = [...tasks, ...hiddenTasks]
 // visible tasks with a hidden subtask (workingSetOf's hidden subtask parents)
@@ -1719,24 +1709,16 @@ const unheld = new Set(
    projectsettings=unheld, which the workspace's parts then leave out. */
 const settingsUnheld = new Set()
 /** The workspace as its parts and forMe send it: without the unheld tasks
-    and the rows hung on them, without the projects a Settings page read
-    under projectsettings=unheld, with their grants, without the
-    labels `unheldlabels` leaves out of the catalogue, and without the
-    people `unheldpeople` leaves out. */
+    and the rows hung on them, and without the projects a Settings page read
+    under projectsettings=unheld, with their grants. Its people, teams and
+    labels are every one the server holds; the root part sends the
+    signed-in person's own alone. */
 function heldWorkspace() {
-  if (
-    unheld.size === 0 &&
-    settingsUnheld.size === 0 &&
-    unheldLabels.size === 0 &&
-    unheldPeople.size === 0
-  )
-    return snapshot
+  if (unheld.size === 0 && settingsUnheld.size === 0) return snapshot
   const held = (row) => !unheld.has(row.issue_id)
   const shown = (row) => !settingsUnheld.has(row.project_id)
   return {
     ...snapshot,
-    profiles: snapshot.profiles.filter((profile) => !unheldPeople.has(profile.id)),
-    labels: snapshot.labels.filter((label) => !unheldLabels.has(label.id)),
     projects: snapshot.projects.filter((p) => !settingsUnheld.has(p.id)),
     access: snapshot.access.filter(shown),
     teamAccess: snapshot.teamAccess.filter(shown),
@@ -2054,7 +2036,6 @@ function windowsOf(orgId) {
     const start = startWindows(snapshot.orgs.find((row) => row.id === orgId) ?? snapshot.orgs[0])
     windows = {
       tasks: idWindows(start.tasks),
-      people: idWindows(1),
       projects: idWindows(start.projects),
     }
     windowsByOrg.set(orgId, windows)
@@ -2071,7 +2052,6 @@ function partsNow() {
 }
 const PART_KINDS = {
   'workspace:tasks': 'tasks',
-  'workspace:people': 'people',
   'workspace:projects': 'projects',
 }
 /** What workspace part `name` answers for `args`. */
@@ -2079,16 +2059,9 @@ function readPart(name, args) {
   const parts = partsNow()
   // the organization's parts the read names, the first one's by default
   const part = parts.find((p) => p.org_id === args.org_id) ?? parts[0]
-  if (name === 'workspace:root')
-    return {
-      auth_user_id: snapshot.auth_user_id,
-      myProfileIds: snapshot.myProfileIds,
-      orgs: snapshot.orgs,
-      // when the login may create an organization, which the app reads as
-      // 'now' when absent (convex/lib/workspaceParts.ts readRoot)
-      ...(snapshot.create === undefined ? {} : { create: snapshot.create }),
-    }
-  if (name === 'workspace:catalog') return { state: 'ok', ...chunkLists(part.catalog) }
+  // the signed-in person's own profiles, memberships and teams
+  // (convex/lib/workspaceParts.ts readRoot)
+  if (name === 'workspace:root') return rootOf(heldWorkspace())
   if (name === 'workspace:inbox') return { state: 'ok', ...part.inbox }
   const kind = PART_KINDS[name]
   const at = windowsOf(part.org_id)[kind].findIndex((w) => w.from === args.from)
@@ -2493,7 +2466,7 @@ const read = (name, args = {}) => {
       })
     }
     // the task label picker and the window's labels by id, over every label
-    // the server holds, the ones the catalog part leaves out included
+    // the server holds, none of which the workspace holds
     case 'labels:picker':
       return labelPickerStandIn(snapshot, args, { force: forcedLabelPicker })
     case 'labels:byIds':
@@ -2505,7 +2478,7 @@ const read = (name, args = {}) => {
     case 'pickers:mentions':
       return mentionStandIn(snapshot, args, { force: forcedMentions })
     // a task's owner lists and Team sync's Mention window, over every
-    // person the server holds, the ones the people part leaves out included
+    // person the server holds
     case 'pickers:taskOwners':
     case 'pickers:syncRecipients':
     case 'pickers:canOwn':
@@ -2531,6 +2504,22 @@ const read = (name, args = {}) => {
       return ownerLoadsStandIn(snapshot, args, {
         unavailable: forcedLoads === 'unavailable' ? args.owner_ids : [],
       })
+    // a task's subscribers popover: its followers as rows and the Add
+    // list's batches (src/store/followerStandIn.setup.ts), managed by an
+    // admin or the lead of the first project, which the signed-in person
+    // leads, unless followers=viewer
+    case 'issues:subscribers':
+    case 'pickers:taskFollowers': {
+      const options = {
+        canManage: !forcedFollowers.has('viewer'),
+        batch: forcedFollowers.has('small') ? 5 : undefined,
+        fail: forcedFollowers.has('error'),
+      }
+      const at = { org_id: args.org_id ?? org, ...args }
+      return name === 'issues:subscribers'
+        ? subscribersStandIn(snapshot, at, options)
+        : taskFollowersStandIn(snapshot, at, options)
+    }
     // the removal window's reads (src/store/removalStandIn.setup.ts)
     case 'accessRemovals:preview':
       return removalPreviewStandIn(snapshot, args.change, forcedRemoval, args.reassign_to)
@@ -2582,6 +2571,9 @@ function readSettings(name, args) {
     stand-in over the workspace, with every third team uncounted under
     teamsettings=uncounted. */
 function readTeams(name, args) {
+  // Team sync's scope menu takes its own states (`teampicker`)
+  if (name === 'teams:picker')
+    return teamSettingsStandIn(snapshot, name, { org_id: org, ...args }, forcedTeamPicker)
   const { uncounted, ...force } = forcedTeams
   const counts = uncounted
     ? Object.fromEntries(snapshot.teams.filter((_, n) => n % 3 === 0).map((t) => [t.id, null]))

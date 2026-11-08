@@ -2174,8 +2174,15 @@ try {
   )
   // Northstar has no permanent agent credential. Mint only this run's key;
   // its secret stays in the browser and cleanup revokes/deletes the row.
+  // the store holds nobody but the signed-in person, so Atlas is found
+  // through the mention popup's read, whose rows give an agent no address
   const atlasId = await pageA.evaluate(async (name) => {
-    const atlas = window.PLANNER.users.find((u) => u.name === 'Atlas' && u.isAgent)
+    const P = window.PLANNER
+    const found = await P.mentionChoices(P.homeOrg, 'Atlas', null)
+    const atlas =
+      found?.state === 'ready'
+        ? found.rows.find((row) => row.name === 'Atlas' && row.email === null)
+        : undefined
     if (!atlas) throw new Error('Northstar has no Atlas profile')
     const key = await window.PLANNER.createAgentKey(atlas.id, name)
     return key ? atlas.id : null
@@ -2763,14 +2770,17 @@ try {
       const deadline = Date.now() + 30000
       for (;;) {
         const it = P.syncTask(id)
-        if (it && P.users.some((u) => u.id === agent && u.isAgent)) return it.id
+        // the agenda names the agent on its own rows, as the store holds
+        // nobody but the signed-in person
+        if (it && document.querySelector(`[data-sync-rail] [data-sync-jump="${agent}"]`))
+          return it.id
         if (Date.now() > deadline) return null
         await new Promise((resolve) => setTimeout(resolve, 250))
       }
     },
     { id: syncTaskId, agent: syncAgentId },
   )
-  if (!syncKey) await fail('The temporary Team sync task or agent never reached the store')
+  if (!syncKey) await fail('The temporary Team sync task or agent never reached the page')
   // An agent in the rail opens the agents step with that agent expanded.
   const depth = await pageA.evaluate(() => history.length)
   await pageA.locator(`[data-sync-rail] [data-sync-jump="${syncAgentId}"]`).click()
