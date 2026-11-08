@@ -2509,22 +2509,23 @@ roadmap save or an access removal changes, and of the subtasks a task delete
 detaches, get their messages moments after it saves.
 
 ```
-GET  /v1/inbox                 items, latest activity first (read)
+GET  /v1/inbox                 a page of items, latest activity first (read)
 POST /v1/inbox/read            { "tasks": ["QN-3"] } or { "all": true }
 POST /v1/inbox/unread          { "tasks": ["QN-3"] }
 POST /v1/inbox/remove          { "tasks": ["QN-3"] } or { "all": true }
 POST /v1/inbox/snooze          { "tasks": ["QN-3"], "until": "2026-11-02T08:00:00Z" }
 ```
 
-`GET /v1/inbox` takes `unread_only=true` (items with an unread message),
-`include_snoozed=true` (snoozed items are left out otherwise, as in the app),
-`limit` (1 to 200, 50 by default) and `offset`. A `limit` outside that range
-is a `400` with `limit must be a whole number of items from 1 to 200.`, and
-an `offset` that is not a whole number from 0 up is a `400` with `offset must
-be a whole number, 0 or more`. It answers:
+`GET /v1/inbox` answers one page of items at a time, `limit` of them at
+most, 50 by default and 1 to 200. It takes `unread_only=true` (items with an
+unread message), `include_snoozed=true` (snoozed items are left out
+otherwise, as in the app), `limit`, `cursor` and `offset`, which is refused
+unless it is `0`. Both filters apply before the page is cut. A page with one
+item:
 
 ```json
 {
+  "next_cursor": "…",
   "items": [
     {
       "task": { "id": "…uuid…", "key": "QN-3", "title": "Fix hinge tolerance", "status": "progress" },
@@ -2540,8 +2541,7 @@ be a whole number, 0 or more`. It answers:
         }
       ]
     }
-  ],
-  "truncated": false
+  ]
 }
 ```
 
@@ -2549,10 +2549,49 @@ be a whole number, 0 or more`. It answers:
 items are listed only for active tasks the caller can read in active
 projects. Messages about a task it has lost access to, an archived task or a
 task in an archived project stay stored and come back when the access or the
-task does, unless they were removed meanwhile. `messages` run oldest first;
-`kind` is `mention`, `comment` or `change`, and `detail` is the line the app
-shows. `latest_at` is the newest message's time, or the end of a snooze when
-that is later, and orders the list.
+task does, unless they were removed meanwhile. `messages` holds every message
+of the item, oldest first; `kind` is `mention`, `comment` or `change`,
+`detail` is the line the app shows, and `actor_name` is the name of the
+person or agent of the caller's organization who caused it, or `null`.
+`latest_at` is the newest message's time, or the end of a snooze when that
+is later, and orders the list, newest first. Items with the same
+`latest_at` come in descending order of their task's `id`.
+
+Pass `next_cursor` unchanged, URL-encoded, as `cursor` for the next page,
+with the same `unread_only` and `include_snoozed`, and stop when it is
+`null`. A page can hold fewer than `limit` items, or none, while
+`next_cursor` is set, because each page reads a bounded amount however
+large the inbox is, the items about tasks it does not list included. A
+short or empty page is never the end of the inbox. Only a `null`
+`next_cursor` is. `limit` may change from one page to the next. A cursor
+works only for the organization, caller and filters it came from, on REST
+and MCP alike, so a `next_cursor` from `GET /v1/inbox` continues
+`list_inbox` on MCP. Pages are not a snapshot. An item that gets a new
+message, wakes from a snooze or, with `unread_only`, is read while you page
+moves, so a page may miss it or show it again; start again from the first
+page to see the inbox as it is. An item about a task that a large move took
+into a project the caller can read shows moments after the move.
+
+These requests are a `400`, checked in this order after any unknown query
+parameter:
+
+- `limit` that is not a whole number from 1 to 200: `limit must be a whole
+  number of items from 1 to 200.`
+- `offset` other than `0`: `offset does not apply to inbox items; pass
+  next_cursor as cursor`
+- `unread_only` or `include_snoozed` other than `true` or `false`:
+  `unread_only must be true or false` or `include_snoozed must be true or
+  false`
+- a `cursor` that is not the `next_cursor` of an earlier page of the same
+  list: `cursor must be the next_cursor of an earlier page`
+- an inbox Qivo has not finished preparing: `your inbox cannot be read
+  until Qivo has finished preparing it. Try again in a few minutes, or
+  contact support@qivo.io if it stays so.`
+- a check of which projects the caller can see that a fixed limit of one
+  request stopped: `Qivo could not finish checking which projects you can
+  see in one request. Contact support@qivo.io so we can help.` Only a
+  person far past the sizes Qivo is built for, such as one in hundreds of
+  teams, meets it.
 
 Archiving a task marks every message about it and the subtasks archived
 with it read, for every recipient, shortly after the archive. Archiving a
@@ -2572,15 +2611,15 @@ send no `Restored` message. Deleting a task or a project deletes the
 messages about its tasks, and restoring it from Deleted items does not
 bring them back.
 
-One request lists up to 500 of the caller's unread messages (newest first)
-and up to 500 read ones (most recently read first). It looks at no more than
-1,000 of each, counting the stored ones about tasks it does not list. When
-some messages were not looked at, `truncated` is `true`, so a large backlog
-about such tasks can set it too. Items whose messages were not looked at are
-then missing, and an item listed may lack its older messages. Marking items
-read keeps only each item's latest message, so `POST /v1/inbox/read` with
-`{"all": true}`, repeated while `has_more` is `true`, shrinks the inbox until
-it fits.
+Marking items read keeps only each item's latest message, so `POST
+/v1/inbox/read` with `{"all": true}`, repeated while `has_more` is `true`,
+shrinks the inbox.
+
+Until November 2026 `GET /v1/inbox` answered `{items, truncated}`, read at
+most 500 unread and 500 read messages and paged with `offset`. Code that
+read `items` now reads the first page, which can hold fewer than `limit`
+items, or none, while `next_cursor` is set. Follow `next_cursor` until it is
+`null`. An `offset` other than `0` is refused, and `truncated` is gone.
 
 The `POST` routes change the caller's own items and answer `{ "action":
 "read", "tasks": ["QN-3"], "has_more": false }`, where `tasks` lists the
@@ -2620,7 +2659,11 @@ above. `read` and `remove` still work on archived tasks.
 With `all`, repeat the call while `has_more` is `true`. Like the app's bulk
 actions, `all` also reaches messages about tasks that are not listed,
 archived ones and those the caller can no longer read, but `tasks` names
-only readable ones. Other bodies are `400`: neither or both of `tasks` and
+only readable ones, asking for each project of the changed tasks whether
+the caller can see it. Where a fixed limit of one request stops that check,
+the call is a `400` with `Qivo could not finish checking which projects you
+can see in one request. Contact support@qivo.io so we can help.`, and
+nothing changes. Other bodies are `400`: neither or both of `tasks` and
 `all`, `all` with `unread` or `snooze`, `until` on another action, or
 `snooze` without `until`.
 
@@ -3290,9 +3333,11 @@ curl -H "Authorization: Bearer $QIVO_KEY" \
 curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
   -d '{"plannable_hours":30}' "$BASE/users/<profile uuid>"
 
-# follow QN-26, then read what is new and mark it read
+# follow QN-26, then read what is new, a page at a time, and mark it read
 curl -X PUT -H "Authorization: Bearer $QIVO_KEY" "$BASE/tasks/QN-26/following"
 curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/inbox?unread_only=true"
+curl -G -H "Authorization: Bearer $QIVO_KEY" --data-urlencode "cursor=<next_cursor>" \
+  "$BASE/inbox?unread_only=true"
 curl -X POST -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
   -d '{"tasks":["QN-26"]}' "$BASE/inbox/read"
 

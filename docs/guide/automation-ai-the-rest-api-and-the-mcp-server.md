@@ -35,8 +35,9 @@ through the inbox ([Your inbox](./working-together.md#your-inbox)). MCP uses
 `list_comments`, `add_comment`, `update_comment`, `delete_comment`,
 `set_following`, `list_inbox` and `update_inbox`. REST uses
 `/v1/tasks/{ref}/comments`, `/v1/comments/{id}`, `/v1/tasks/{ref}/following`
-and `/v1/inbox`. A Standard user agent reads and clears its own inbox this
-way. A Viewer agent gets no new inbox messages and cannot follow tasks or
+and `/v1/inbox`. Both read the inbox a page at a time and give the next
+page's cursor until the end. A Standard user agent reads and clears its own
+inbox this way. A Viewer agent gets no new inbox messages and cannot follow tasks or
 clear its inbox, but it can still read messages it received before. An
 Inactive agent can neither read nor clear its inbox.
 

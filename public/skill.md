@@ -402,14 +402,14 @@ Useful field rules:
   a `400` with `this task already has 100 followers, the most a task can
   have. Someone must unfollow it first.`, and comments and mentions add no follower there, though a mention
   still notifies. A new assignee or reviewer still becomes a follower.
-- **Read your inbox:** `list_inbox` or `GET /v1/inbox` answers `items`, one
-  per active task you can read, latest activity first, with its unread count
-  and messages. Use `unread_only` to see what is new. The task title shown is
-  the current one. One call lists up to 500 unread messages (newest first)
-  and up to 500 read ones (most recently read first), and looks at no more
-  than 1,000 of each, counting messages about tasks it does not list.
-  `truncated: true` means some were not looked at, so mark everything read
-  to shrink the inbox. An item keeps at most 50 unread messages, dropping
+- **Read your inbox:** `list_inbox` or `GET /v1/inbox` answers one page,
+  `{next_cursor, items}`, one item per active task you can read, latest
+  activity first, with its unread count and every message it holds. Use
+  `unread_only` to see what is new. The task title shown is the current
+  one. Pass `next_cursor` back as `cursor`, with the same filters, until it
+  is `null`; a page can hold fewer than `limit` items, or none, before the
+  end. `truncated` is gone, and an `offset` other than 0 is refused. Mark
+  everything read to shrink the inbox. An item keeps at most 50 unread messages, dropping
   the oldest except its first unread one and the newest of each kind, on a
   busy task moments after an arrival. Its `dropped_count` says how many it dropped
   until the item is read. Archiving a task

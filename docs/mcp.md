@@ -384,6 +384,17 @@ its `users`; such code must follow the cursors until they are `null`, and
 its model learns the new arguments and tool only after the client refreshes
 its tool list.
 
+Later in November 2026 `list_inbox` began to answer one page of items at a
+time, as `{next_cursor, items}`, and took `cursor`. An `offset` other than
+`0` is refused with `offset does not apply to inbox items; pass next_cursor
+as cursor`, `truncated` is gone, and each item holds every message it has
+(see [Comments, inbox and following](#comments-inbox-and-following)). A
+client holding the older catalogue gets the new answer too. The answer kept
+`items`, so code that read it reads the first page without any error, but a
+page can now hold fewer than `limit` items, or none, while `next_cursor` is
+set. Such code must follow `next_cursor` until it is `null`, and its model
+learns the new argument only after the client refreshes its tool list.
+
 ## Access model: the credential is a user
 
 MCP authenticates as **one user**, with three connection options. **OAuth is
@@ -1415,7 +1426,7 @@ as `a task title must be at most 255 characters. Shorten it.`
 | `get_workload` | Each person's planned hours per week from the week holding `from_week` (default this week) for `weeks` weeks (1 to 52, default 8), optionally limited to one `project`, one page of people in name order (`limit` 1 to 200, 50 by default), paged with `cursor` until `next_cursor` is `null`, or one `person` alone. See [Workload](#workload) |
 | `update_comment` | Replace a comment's `body` (at most 20,000 characters); `comment` is its `id` from `list_comments`. The comment's author may, and so may a lead of the task's project. `expected` holds the `body` you last read. See [Comments, inbox and following](#comments-inbox-and-following) and [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `delete_comment` | Delete a comment, by the same rule as `update_comment`. `expected` holds the `body` you last read, because a deleted comment cannot be restored |
-| `list_inbox` | Your inbox as `items`, one per active task you can read, latest activity first, with `unread_only`, `include_snoozed`, `limit` (50 by default, at most 200) and `offset`. `truncated` says some messages were not looked at |
+| `list_inbox` | One page of your inbox as `{next_cursor, items}`, one item per active task you can read, latest activity first, with `unread_only`, `include_snoozed`, `limit` (50 by default, at most 200), `cursor` and `offset` (refused unless 0) |
 | `update_inbox` | `read`, `unread`, `remove` or `snooze` your items about `tasks`, or with `all: true` mark every item read or remove every read item. `snooze` takes `until` |
 | `set_following` | Follow a task (`following: true`) or stop following it |
 | `update_user` | Set a user's `plannable_hours`. Allowed for an **organization admin**, or a **leader of a team that person belongs to**. Nobody else may, your own account included. An agent is never an organization admin (0100/0102) and never leads a team (only people do), so a leaked agent key cannot rewrite the organization's capacity plan. The database decides (0094), so a refusal here is the same refusal the app gives; the value is a **whole number of hours**, 1 to 168, and the schema turns a fraction away (0095). It applies to **people only**. An agent has no plannable week and cannot be given one (0103, "an agent has no plannable week, because its capacity is unbounded"), refused by the tool and by the RPC underneath. Qivo checks a team leader against at most 256 of the person's teams in one request, so a leader setting the hours of a person in more teams is refused with "Qivo could not finish checking this person's teams in one request. Ask an organization admin to change these hours." `expected` holds the `plannable_hours` you last read. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
@@ -2842,11 +2853,13 @@ A comment or description can mention at most 100 distinct people. A tool
 call whose text mentions more is refused with `a text can mention at most
 100 people. Remove some mentions and save again.` and saves nothing.
 
-`list_inbox` answers your inbox as the app's **Inbox** shows it, one item per
-task, latest activity first:
+`list_inbox` answers your inbox as the app's **Inbox** shows it, one page at
+a time, the cursor first, one item per task, latest activity first. A page
+with one item:
 
 ```json
 {
+  "next_cursor": "…",
   "items": [
     {
       "task": { "id": "…uuid…", "key": "QN-3", "title": "Fix hinge tolerance", "status": "progress" },
@@ -2862,8 +2875,7 @@ task, latest activity first:
         }
       ]
     }
-  ],
-  "truncated": false
+  ]
 }
 ```
 
@@ -2887,10 +2899,15 @@ receive an unread `Restored` message, which replaces the item's read
 messages as any new message does. Parents restored along with a subtask
 send no `Restored` message. Deleting a task or a project deletes the
 messages about its tasks, and restoring it from Deleted items does not
-bring them back. `messages` run oldest first, `kind` is
-`mention`, `comment` or `change`, and `detail` is the line the app shows.
-`latest_at` is the newest message's time, or the end of a snooze when that
-is later. Snoozed items are left out unless `include_snoozed` is `true`. An
+bring them back. `messages` holds every message of the item, oldest first,
+`kind` is `mention`, `comment` or `change`, `detail` is the line the app
+shows, and `actor_name` is the name of the person or agent of your
+organization who caused it, or `null`. `latest_at` is the newest message's
+time, or the end of a snooze when that is later, and orders the list,
+newest first. Items with the same `latest_at` come in descending order of
+their task's `id`. Snoozed items are left out unless `include_snoozed` is
+`true`, and `unread_only` keeps the items with an unread message. Both apply
+before the page is cut. An
 item keeps at most 50 unread messages. When more arrive, Qivo drops the
 oldest unread ones but keeps the item's first unread message and the newest
 message of each `kind`. On a task with many followers it does so moments
@@ -2907,15 +2924,50 @@ theirs. The followers of the tasks a roadmap save or an access removal
 changes, and of the subtasks a task delete detaches, get their messages
 moments after it saves.
 
-One call lists up to 500 of your unread messages (newest first) and up to
-500 read ones (most recently read first). It looks at no more than 1,000 of
-each, counting the stored ones about tasks it does not list. When some
-messages were not looked at, `truncated` is `true`, so a large backlog about
-such tasks can set it too. Items whose messages were not looked at are then
-missing, and an item listed may lack its older messages. Marking items read
-keeps only each item's latest message, so `update_inbox` with
-`action: "read"` and `all: true`, repeated while `has_more` is `true`,
-shrinks the inbox until it fits.
+A page holds at most `limit` items, 50 by default and 1 to 200. Pass
+`next_cursor` back unchanged as `cursor` for the next page, with the same
+`unread_only` and `include_snoozed`, and stop when it is `null`. A page can
+hold fewer than `limit` items, or none, while `next_cursor` is set, because
+each page reads a bounded amount however large the inbox is, the items
+about tasks it does not list included. A short or empty page is never the
+end of the inbox. Only a `null` `next_cursor` is. `limit` may change from
+one page to the next. A cursor works only for the organization, caller and
+filters it came from, on MCP and REST alike, so a `next_cursor` from
+`list_inbox` continues `GET /v1/inbox`. Pages are not a snapshot. An item
+that gets a new message, wakes from a snooze or, with `unread_only`, is
+read while you page moves, so a page may miss it or show it again; start
+again from the first page to see the inbox as it is. An item about a task
+that a large move took into a project you can read shows moments after the
+move.
+
+These calls are refused, checked in this order:
+
+- `limit` that is not a whole number from 1 to 200: `limit must be a whole
+  number of items from 1 to 200.` A `limit` that is not a whole number is
+  refused by the schema first, and so is an `offset` that is not one, or an
+  `unread_only` or `include_snoozed` that is not `true` or `false`.
+- `offset` other than `0`: `offset does not apply to inbox items; pass
+  next_cursor as cursor`
+- a `cursor` that is not the `next_cursor` of an earlier page of the same
+  list, an empty one included: `cursor must be the next_cursor of an
+  earlier page`
+- an inbox Qivo has not finished preparing: `your inbox cannot be read
+  until Qivo has finished preparing it. Try again in a few minutes, or
+  contact support@qivo.io if it stays so.`
+- a check of which projects you can see that a fixed limit of one request
+  stopped: `Qivo could not finish checking which projects you can see in
+  one request. Contact support@qivo.io so we can help.` Only a person far
+  past the sizes Qivo is built for, such as one in hundreds of teams, meets
+  it.
+
+Marking items read keeps only each item's latest message, so `update_inbox`
+with `action: "read"` and `all: true`, repeated while `has_more` is `true`,
+shrinks the inbox.
+
+Until November 2026 `list_inbox` answered `{items, truncated}`, read at
+most 500 unread and 500 read messages and paged with `offset`. Code that
+read `items` now reads the first page and must follow `next_cursor` until
+it is `null`.
 
 `update_inbox` applies `action` to your items about `tasks`, at most 100
 task refs per call with repeats counted (a longer list is refused with
@@ -2941,7 +2993,11 @@ where `tasks` lists the items the call changed. With `all`, each call
 changes up to 160 messages; repeat it while `has_more` is `true`. Like the
 app's bulk actions, `all` also reaches messages about tasks that are not
 listed, archived ones and those you can no longer read, but the result names
-only tasks you can read. A task ref you cannot read refuses the whole call
+only tasks you can read, asking for each project of the changed tasks
+whether you can see it. Where a fixed limit of one request stops that
+check, the call is refused with `Qivo could not finish checking which
+projects you can see in one request. Contact support@qivo.io so we can
+help.`, and nothing changes. A task ref you cannot read refuses the whole call
 with `task "<ref>" not found (or not visible to you)`. Naming neither or
 both of `tasks` and `all`, `all` with `unread` or `snooze`, `until` on
 another action and `snooze` without `until` are refused.
