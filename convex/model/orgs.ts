@@ -8,7 +8,8 @@
  *   counters         the per-org issue and project numbers (org_counters),
  *                    and the helpers that insert an organization with its
  *                    org_counters and org_ready rows and delete them
- *   live counts      the active tasks and live projects the app's windows
+ *   live counts      the active tasks the app's task windows and the live
+ *                    projects admin usage
  *                    read (org_counters), kept by tallyRow, which also
  *                    moves the label usage counts (model/labelCounts.ts),
  *                    and for a new task by numberNewTask

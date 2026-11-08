@@ -99,7 +99,6 @@ function fixture(myRole: Role) {
         slug: 'testbed-labs',
         created_at: NOW,
         next_issue_num: num,
-        next_project_num: 3,
         date_format: 'iso',
         week_start: 1,
         week_one_rule: 'first4day',

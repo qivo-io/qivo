@@ -54,10 +54,14 @@
  * workspace does not hold (src/components/projectNavRows.tsx). byIds is
  * the read of the store's project cache (src/store/projectCache.ts), which
  * keeps the projects the open views name that the workspace does not hold,
- * and of the staging check's ui/project-by-ids step. No app code reads
- * targets, holds or page's org_id and team_id yet. Those readers still
- * read the workspace's projects part, and t3/limits-projects-part moves
- * them onto these reads. */
+ * and of the staging check's ui/project-by-ids step, which reads every
+ * project the app shows since the workspace sends none. targets is the
+ * New task dialog's and the Move window's list (src/components/
+ * TargetPicker.tsx) and the task window's Link task offer (store/planner.ts
+ * P.watchEditsSomeProject); holds every "no project" note
+ * (src/components/useHolds.ts); page with org_id Team sync's scope menu
+ * and its notes' smaller scopes, with team_id a team's shares
+ * (src/views/teamSync/SyncScopeMenu.tsx, SyncNote.tsx). */
 
 import { v } from 'convex/values'
 import { authedQuery, orgMutation } from './lib/functions'

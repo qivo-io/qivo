@@ -39,6 +39,7 @@ import {
   withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
+import { projectsOracle } from './projectsOracle.setup'
 
 /* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
  * declare it (same situation as helpers.setup's crypto) */
@@ -85,9 +86,13 @@ const snapFor = async (profile: Doc<'profiles'>) => {
   return snap
 }
 
-/* The projects part's answer for one whole window, as `profile` reads it. */
-const projectsPartFor = (profile: Doc<'profiles'>) =>
-  as(t, profile).query(api.workspace.projects, { org_id: f.org.id, from: '', to: null })
+/* The projects `profile` sees with every grant and team grant on them, as
+   the projects part sent them before it went, from the test oracle
+   (projectsOracle.setup.ts). */
+const projectsPartFor = async (profile: Doc<'profiles'>) => ({
+  state: 'ok' as const,
+  ...(await t.run((ctx) => projectsOracle(ctx, [profile]))),
+})
 
 const plantLabel = (name: string) =>
   t.run(async (ctx) => {
@@ -273,7 +278,9 @@ describe('billing redaction', () => {
     const user = await snapFor(f.user)
     expect(user.orgs[0]?.billing).toBeUndefined()
     expect(user.orgs[0]?.next_issue_num).toBe(1)
-    expect(user.orgs[0]?.next_project_num).toBe(5)
+    // the root sends no project number or count, which no app reads
+    expect(user.orgs[0]).not.toHaveProperty('next_project_num')
+    expect(user.orgs[0]).not.toHaveProperty('live_projects')
 
     const guest = await snapFor(f.guest)
     expect(guest.orgs[0]?.billing).toBeUndefined()

@@ -56,7 +56,7 @@ let rows: typeof import('./projectNavRows')
 let store: typeof import('../store/planner')
 let ORG: string
 
-let num = 10
+const num = 10
 /** The fixture with its projects cleared and the person a user. */
 function base(): Snapshot {
   const next = plannerFixture()

@@ -36,7 +36,6 @@ function fixture(): Snapshot {
         slug: 'testbed',
         created_at: NOW,
         next_issue_num: 2,
-        next_project_num: 1,
         date_format: 'iso',
         week_start: 1,
         week_one_rule: 'first4day',
@@ -617,7 +616,7 @@ describe('private demo store disposal', () => {
     expect(P.issueById).toEqual({})
     expect(P.taskLoad()).toEqual({ state: 'not_asked' })
     expect(P.users).toEqual([])
-    expect(P.projects).toEqual([])
+    expect(P.projectTags.size).toBe(0)
     expect(stored.has(prefKey)).toBe(false)
     expect(stored.get('unrelated-app')).toBe('keep')
     publish!(structuredClone(snap))

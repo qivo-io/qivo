@@ -162,7 +162,6 @@ export function fixture(): Snapshot {
         slug: 'testbed',
         created_at: '2026-09-01T08:00:00.000Z',
         next_issue_num: 3,
-        next_project_num: 3,
         date_format: 'iso',
         week_start: 1,
         week_one_rule: 'first4day',
@@ -1478,7 +1477,6 @@ export const recipes: Recipe[] = [
     // past Plan, the organization's one top-level project, as the server
     // places a create without a sort_order (nextSiblingPlace)
     truth: (snap, args) => {
-      snap.orgs[0].next_project_num = 4
       snap.projects.push({
         id: str(args.id),
         org_id: ORG,
@@ -1509,7 +1507,6 @@ export const recipes: Recipe[] = [
     answers: { 'projects:create': () => ({ num: 4, key: 'DOCS' }) },
     // one past Work 2, the last of Plan's sub-projects
     truth: (snap, args) => {
-      snap.orgs[0].next_project_num = 4
       snap.projects.push({
         id: str(args.id),
         org_id: ORG,

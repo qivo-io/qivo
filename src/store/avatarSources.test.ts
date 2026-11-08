@@ -31,7 +31,6 @@ function fixture(): Snapshot {
     slug: 'testbed-labs',
     created_at: NOW.toISOString(),
     next_issue_num: 1,
-    next_project_num: 1,
     date_format: 'iso' as const,
     week_start: 1 as const,
     week_one_rule: 'first4day' as const,

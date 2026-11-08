@@ -1,14 +1,15 @@
 /* The readers behind the workspace parts (workspace.ts), which together
  * send what the app shows of every organization the caller holds a seat in:
  * the root part with the caller's seats, organizations and own rows, and
- * per organization its projects and tasks. No part sends another
- * person's profile, membership or Team sync stamp, a team the caller is not
- * in, or a label; the app reads those by id or a batch at a time.
+ * per organization its tasks. No part sends another person's profile,
+ * membership or Team sync stamp, a team the caller is not in, a label, a
+ * message or a project with its grants; the app reads those by id or a
+ * batch at a time, every project through the navigation reads and
+ * projectNav.byIds (projectNav.ts).
  *
- * The long sections come in windows (lib/idWindows.ts): a window [from,
- * to) of the organization's tasks or projects holds those whose window key
- * falls in it. The server
- * picks a task's or project's window key at random when it inserts the row
+ * The tasks come in windows (lib/idWindows.ts): a window [from, to) of the
+ * organization's tasks holds those whose window key falls in it. The server
+ * picks a task's window key at random when it inserts the row
  * (lib/db.ts newWindowKey), so no writer can crowd rows into one window,
  * and the ids writers choose say nothing about where a row lands. The app
  * chooses the windows from the organization's counts of the rows they read
@@ -97,17 +98,17 @@ export function relationRow<
   return row
 }
 
-/* An organization as the app receives it. Billing is admin-only; the
- * counters and the live counts, once counted, come from org_counters
- * (model/orgs.ts numbersOf, liveCountsOf). The retired gravatar_avatars
- * setting stays out. */
+/* An organization as the app receives it. Billing is admin-only; the task
+ * number and the count of active tasks, once counted, come from
+ * org_counters (model/orgs.ts numbersOf, liveCountsOf), the count only to
+ * size the task windows. The retired gravatar_avatars setting stays out. */
 type OrgRow = Omit<AppRow<'organizations'>, 'billing' | 'gravatar_avatars'> &
-  OrgCounters &
-  LiveCounts & { billing?: Doc<'organizations'>['billing'] }
+  Pick<OrgCounters, 'next_issue_num'> &
+  Pick<LiveCounts, 'active_tasks'> & { billing?: Doc<'organizations'>['billing'] }
 
 const orgRowFor = (
   doc: Doc<'organizations'>,
-  counters: OrgCounters & LiveCounts,
+  counters: Pick<OrgCounters, 'next_issue_num'> & Pick<LiveCounts, 'active_tasks'>,
   isAdmin: boolean,
 ): OrgRow => {
   const { _id, _creationTime, billing, gravatar_avatars: _gravatar, ...rest } = doc
@@ -141,20 +142,15 @@ export function taskFields(task: Doc<'issues'>) {
   return row
 }
 
-/** The windowed kinds. */
-export type Kind = 'tasks' | 'projects'
-
 /* A read budget, as Convex counts a transaction's reads. */
 type Budget = { bytes: number; documents: number; ranges: number }
 
-/** The budgets of the windowed parts. A part holding more than `split`
- * rows, or that read past `soft`, answers `split`. A part that would read
- * more than `most` rows, or past `hard`, stops and answers `overflow`. The
- * app starts each kind with about lib/idWindows.ts WINDOW_ROWS rows a
- * window. Tests lower them. */
+/** The budgets of the tasks part. A window holding more than `split` rows,
+ * or that read past `soft`, answers `split`. One that would read more than
+ * `most` rows, or past `hard`, stops and answers `overflow`. The app starts
+ * with about lib/idWindows.ts WINDOW_ROWS rows a window. Tests lower them. */
 export const PAGE = {
   tasks: { split: 300, most: 1500 },
-  projects: { split: 600, most: 1200 },
   soft: { bytes: 4 * 1024 * 1024, documents: 8000, ranges: 2000 } satisfies Budget,
   hard: { bytes: 8 * 1024 * 1024, documents: 16_000, ranges: 3200 } satisfies Budget,
   /** how many rows a part reads the per-row reads of at once, checking
@@ -400,13 +396,19 @@ export async function readRoot(
     for (const team of own.teams) teams.push(keyFree(rowOf(team)))
     const counters = await countersRow(ctx, org.id)
     /* Staff see hidden work counted anonymously (capacity views). Guests
-     * and Viewers may not learn how much there is, so they get the counts
-     * rounded up to the windows they start. */
-    const live = liveCountsOf(counters)
+     * and Viewers may not learn how much there is, so they get the count of
+     * active tasks rounded up to the windows it starts. The app reads no
+     * project count or number, so the root sends none, and a project
+     * create changes no seat's root answer. */
+    const { active_tasks } = liveCountsOf(counters)
+    const live = active_tasks === undefined ? {} : { active_tasks }
     orgs.push(
       orgRowFor(
         org,
-        { ...numbersOf(counters), ...(isOrgStaff(me) ? live : roundedCounts(live)) },
+        {
+          next_issue_num: numbersOf(counters).next_issue_num,
+          ...(isOrgStaff(me) ? live : roundedCounts(live)),
+        },
         me.org_role === 'admin',
       ),
     )
@@ -419,69 +421,6 @@ export async function readRoot(
     teamMembers,
     teams,
     create: await orgCreateFor(ctx, ctx.authUserId),
-  }
-}
-
-// --- projects -----------------------------------------------------------------
-
-/** The projects of window `w` (by window key) the caller can see, archived
- * ones included for navigation, oldest first, with every grant on them and
- * their team grants. It reads the window's projects in one range, the
- * caller's levels on each and on its parent, and two ranges per shown
- * project. It reads and sends no milestone, as the app reads every
- * milestone it shows through milestones.ts (get, section and between). A
- * check of the caller's access that a bound stopped answers `overflow` or
- * `refused` (unlessUnchecked). */
-export const readProjects = (ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) =>
-  unlessUnchecked(projectsOf(ctx, me, w), w)
-
-/* readProjects' answer while every check of the caller's access finishes. */
-async function projectsOf(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) {
-  const read = await pageOf(
-    ctx.db
-      .query('projects')
-      .withIndex('by_org_window', (q) => ids(q.eq('org_id', me.org_id), 'window_key', w)),
-    PAGE.projects.most,
-  )
-  if (!read.complete) return overflow(w, read.rows.at(-1)?.window_key)
-  const caller = accessOf(ctx, me, read.rows)
-  const seen = await mapInBatches(ctx, read.rows, (p) => caller.visible(p.id))
-  if (seen === null) return overflow(w)
-  const shown = read.rows
-    .filter((_, i) => seen[i])
-    .sort((a, b) => a._creationTime - b._creationTime)
-  const access: Doc<'project_access'>[][] = shown.map(() => [])
-  const teamAccess: Doc<'project_team_access'>[][] = shown.map(() => [])
-  const done = await inBatches(ctx, shown, async (p, at) => {
-    ;[access[at], teamAccess[at]] = await Promise.all([
-      ctx.db
-        .query('project_access')
-        .withIndex('by_project', (q) => q.eq('project_id', p.id))
-        .collect(),
-      ctx.db
-        .query('project_team_access')
-        .withIndex('by_project', (q) => q.eq('project_id', p.id))
-        .collect(),
-    ])
-  })
-  if (!done) return overflow(w)
-  return {
-    state: 'ok' as const,
-    ...chunkLists({
-      projects: shown.map(
-        (p): Omit<AppRow<'projects'>, 'window_key' | 'name_key' | 'archive_state'> => {
-          const { window_key: _window, name_key: _key, archive_state: _state, ...row } = rowOf(p)
-          return row
-        },
-      ),
-      // Every grant on a shown project, other members' too. The app shows
-      // only those of people it holds (lib/workspaceJoin.ts), as a removed
-      // person's grants can outlive their profile for a moment
-      // (model/cascade.ts removeProfile).
-      access: access.flat().map((g) => keyFree(rowOf(g))),
-      teamAccess: teamAccess.flat().map((g) => keyFree(rowOf(g))),
-    }),
-    ...(await softSplit(ctx, w, read.split || shown.length > PAGE.projects.split, caller.shared)),
   }
 }
 
