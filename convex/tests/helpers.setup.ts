@@ -1265,7 +1265,7 @@ type Caller = ReturnType<typeof as>
 
 /** The workspace the app holds for `caller`, read through the workspace
  * parts that still run, with the projects the caller sees beside it: the
- * root and every organization's tasks and inbox once every part answered
+ * root and every organization's tasks once every part answered
  * (lib/workspaceJoin.ts readWorkspace), its delivery time blank so two
  * reads of the same data compare equal, and the caller's projects with
  * their team grants and the caller's own grants on them from the test

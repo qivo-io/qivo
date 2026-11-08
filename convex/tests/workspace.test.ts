@@ -40,6 +40,7 @@ import {
   withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
+import { ready } from './projectNavFixtures.setup'
 
 const DEFAULT_PAGE = structuredClone(PAGE)
 const DEFAULT_OWN_READS = structuredClone(OWN_READS)
@@ -1197,7 +1198,7 @@ describe('the root part', () => {
 })
 
 describe('many projects', () => {
-  it('a part reads only the projects its rows name, and a parent of 30 sub-projects shows for navigation within the real limits', async () => {
+  it('shows a parent of 30 sub-projects for navigation through projectNav.byIds within the real limits, and the tasks part reads only the projects its rows name', async () => {
     const t = newT(REAL_LIMITS)
     const f = await withReadingAdmin(t)
     // a parent the viewer reaches only through the last of its 30
@@ -1231,11 +1232,18 @@ describe('many projects', () => {
       return ids
     })
     const task = await plantIssue(t, { org_id: f.org.id, project_id: subs[29] })
-    const snap = await workspaceOf(as(t, f.viewer))
-    const shown = new Set(snap?.projects.map((p) => p.id))
+    // the read the app takes its projects from, projectNav.byIds, asked for
+    // all 30 sub-projects with the real limits, once the organization's
+    // reach rows and name keys are complete: the one the viewer reads, with
+    // its parent, which shows for navigation through it
+    await ready(t, f)
+    const answer = await as(t, f.viewer).query(api.projectNav.byIds, { ids: subs })
+    const shown = new Set(answer.rows.map((p) => p.id))
     expect(shown.has(parent)).toBe(true)
     expect(shown.has(subs[29])).toBe(true)
     expect(subs.filter((id) => shown.has(id))).toHaveLength(1)
+    expect(answer.unchecked).toEqual([])
+    const snap = await workspaceOf(as(t, f.viewer))
     expect(snap?.issues.map((i) => i.id)).toContain(task.id)
     // the task's window reads its task and project, not the organization's
     const read = await t.run(async (ctx) => {

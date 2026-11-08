@@ -1073,9 +1073,13 @@ describe("0056 §C — planted forbidden rows grant nothing ('the design assumes
     const snap = await workspaceOf(as(t, f.viewer))
     expect(snap).not.toBeNull()
     expect(snap!.orgs.map((o) => o.id)).toEqual([f.org.id])
-    expect(snap!.projects.map((p) => p.id)).not.toContain(f.otherProject.id)
-    expect(snap!.access.map((a) => a.project_id)).not.toContain(f.otherProject.id)
     expect(snap!.profiles.map((p) => p.id)).not.toContain(f.otherAdmin.id)
+    // the read the app takes every project and level from leaves the
+    // foreign project out, with no grant of it, as for any project the
+    // viewer cannot open
+    expect(await as(t, f.viewer).query(api.projectNav.byIds, { ids: [f.otherProject.id] })).toEqual(
+      { rows: [], unchecked: [], message: null },
+    )
   })
 
   it('a team_members row on a foreign team is inert — leadership, level and snapshot all say no', async () => {
@@ -1100,8 +1104,10 @@ describe("0056 §C — planted forbidden rows grant nothing ('the design assumes
     expect(snap).not.toBeNull()
     expect(snap!.orgs.map((o) => o.id)).toEqual([f.org.id])
     expect(snap!.teams.map((tm) => tm.id)).not.toContain(foreignTeam.id)
-    expect(snap!.projects.map((p) => p.id)).not.toContain(foreignTeamProject.id)
     expect(snap!.teamMembers.map((m) => m.team_id)).not.toContain(foreignTeam.id)
+    expect(
+      await as(t, f.user).query(api.projectNav.byIds, { ids: [foreignTeamProject.id] }),
+    ).toEqual({ rows: [], unchecked: [], message: null })
   })
 })
 
