@@ -16,3 +16,16 @@ export const LABEL_COLORS = [
   { color: '#BE123C', name: 'Rose' },
   { color: '#8A8F98', name: 'Gray' },
 ] as const
+
+/** The palette color of a new label `id`: a fixed hash (FNV-1a) of the
+    id's characters onto LABEL_COLORS, so the same id always takes the
+    same color, new labels spread over the whole palette, and the choice
+    needs no catalogue of the organization's labels. */
+export function labelColorFor(id: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return LABEL_COLORS[h % LABEL_COLORS.length].color
+}

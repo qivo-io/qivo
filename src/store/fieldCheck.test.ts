@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { descriptionForm, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
 import type { FieldChange } from '../../convex/lib/functions'
 import { LIMITS } from '../../convex/lib/limits'
+import { shownOf } from './personShown.setup'
 import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup'
 
 /* The field check in the app's store: every edit of an existing record
@@ -223,7 +224,7 @@ describe('the field check in the store', () => {
   })
 
   it('sends no expected with a change of teams alone, which is no field it compares', () => {
-    P.updateUser(EMIL, { teams: [] })
+    P.updateUser(EMIL, { teams: [] }, {}, shownOf(P, EMIL))
     expect(latest()).toMatchObject({ name: 'profiles:update', args: { patch: { teams: [] } } })
     expect(latest().args).not.toHaveProperty('expected')
   })

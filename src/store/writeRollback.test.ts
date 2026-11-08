@@ -1,6 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { shownOf } from './personShown.setup'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 /* A refused write rolls back to the server's rows (store/workspaceBase.ts),
@@ -290,7 +291,7 @@ describe('rollback during snapshot trouble', () => {
     {
       name: 'a deactivated seat',
       act: async () => {
-        P().updateUser('profile-other', { active: false })
+        P().updateUser('profile-other', { active: false }, {}, shownOf(P(), 'profile-other'))
         await accept()
       },
       shown: () => expect(user('Field tech')?.active).toBe(false),
@@ -301,7 +302,7 @@ describe('rollback during snapshot trouble', () => {
     {
       name: 'a removed seat',
       act: async () => {
-        P().removeUser('profile-other')
+        P().removeUser('profile-other', { orgId: P().homeOrg })
         await accept()
       },
       shown: () => expect(user('Field tech')).toBeUndefined(),
@@ -593,7 +594,7 @@ describe('rollback during snapshot trouble', () => {
     snapshot.profiles[0] = { ...me, avatar_storage_id: 'storage-1' as typeof me.avatar_storage_id }
     deliverTruth(() => {})
     const slug = P().setOrgSlug('new-address')
-    const cleared = P().clearAvatar(me.id)
+    const cleared = P().clearAvatar(me.id, P().user(me.id)?.avatarPath ?? null)
     live().fail(new Error(QUERY_FAILURE))
     await accept()
     await expect(slug).resolves.toBeNull()

@@ -38,7 +38,7 @@ function metaOf(it: IssueVM, place: ProjectPlace | null) {
     items.push(text(MONO_CHAR_PX * `${it.children.length ? 'Σ ' : ''}${remaining}h`.length))
   if (place) items.push(text(SANS_CHAR_PX * P.placeLabel(place).length))
   if (it.due) items.push(text(META_ICON_PX + 4 + MONO_CHAR_PX * P.fmtISO(it.due).length))
-  if (!P.user(it.owner)) items.push(text(SANS_CHAR_PX * 'Unassigned'.length))
+  if (!it.owner) items.push(text(SANS_CHAR_PX * 'Unassigned'.length))
   return items
 }
 

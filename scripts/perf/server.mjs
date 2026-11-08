@@ -306,10 +306,19 @@
 //                        Load more and the lists' cap of 500
 //   unheldpeople (0)     leaves the N highest-numbered people out of the
 //                        workspace's people part while the pickers and
-//                        people:byIds still answer them, and makes the two
+//                        people:byIds still answer them, with their
+//                        pictures (with `pictures`, which files:mintUrls
+//                        answers for them too) and hours, and makes the two
 //                        highest the assignee and reviewer of the first
 //                        open task without subtasks, so the task window
-//                        names them by id
+//                        names them by id; the app's profile cache reads
+//                        them for every view that shows them
+//   peoplebyids          a state people:byIds answers whatever the people
+//                        say (src/store/peopleSettingsStandIn.setup.ts):
+//                        byids-error (every read fails), byids-slow (each
+//                        answer comes two seconds late) or byids-gone
+//                        (every asked id is left out), for the loading,
+//                        failed and unknown people with unheldpeople
 //   projectsettings      states a project's Settings page reads answer
 //                        whatever the workspace says, for screenshots of
 //                        states a seeded backend cannot reach inside the
@@ -755,9 +764,19 @@ const forcedPeople = (() => {
     if (state === 'unavailable') force.creatorsUnavailable = true
     else if (state === 'error') fail.push('projectCreators')
   }
+  for (const state of states('peoplebyids')) {
+    if (state === 'byids-error') force.byIds = 'error'
+    else if (state === 'byids-gone') force.byIds = 'gone'
+  }
   if (fail.length) force.fail = fail
   return force
 })()
+/* Whether people:byIds answers two seconds late (`peoplebyids=byids-slow`),
+   as a subscription and as a watched part, which the app's profile cache
+   reads it through. */
+const slowByIds = (parameters.get('peoplebyids') ?? '').split(',').includes('byids-slow')
+/* How long people:byIds waits before it answers. */
+const BY_IDS_SLOW_MS = 2000
 /* MCP access's forced states (the `credlists` parameter), as the
    stand-in's `force` takes them. */
 const forcedCredentials = (() => {
@@ -2601,6 +2620,15 @@ function transition() {
     const results = []
     let bytes = 0
     for (const [to, part] of watchedParts) {
+      // byids-slow: a watched people:byIds answers two seconds after its
+      // watch began, in a transition of its own
+      if (slowByIds && part.name === 'people:byIds' && part.sent === null) {
+        const wait = part.since + BY_IDS_SLOW_MS - Date.now()
+        if (wait > 0) {
+          setTimeout(() => void transition(), wait)
+          continue
+        }
+      }
       let encoded
       try {
         const value = read(part.name, part.args)
@@ -3266,10 +3294,18 @@ port.onmessage = async ({ data }) => {
       const subscription = {
         args,
         send() {
-          next ??= deliver(sub, () => {
-            next = null
-            return read(name, args)
-          })
+          next ??=
+            slowByIds && name === 'people:byIds'
+              ? new Promise((resolve) => setTimeout(resolve, BY_IDS_SLOW_MS)).then(() =>
+                  deliver(sub, () => {
+                    next = null
+                    return read(name, args)
+                  }),
+                )
+              : deliver(sub, () => {
+                  next = null
+                  return read(name, args)
+                })
           return next
         },
       }
@@ -3283,7 +3319,12 @@ port.onmessage = async ({ data }) => {
       return
     }
     case 'watch': {
-      watchedParts.set(data.id, { name: data.name, args: data.args, sent: null })
+      watchedParts.set(data.id, {
+        name: data.name,
+        args: data.args,
+        sent: null,
+        since: Date.now(),
+      })
       // the parts watched in one task are answered in one transition
       if (!watchPending) {
         watchPending = true

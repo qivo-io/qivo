@@ -565,7 +565,7 @@ describe('default plannable hours', () => {
       const leo = store.P.user(LEO)
       return leo ? (
         <leaveGuard.UnsentScopeContext.Provider value={scope}>
-          <PlannableHoursInput user={leo} canEdit />
+          <PlannableHoursInput user={{ id: leo.id, ...store.personShownOf(leo) }} canEdit />
         </leaveGuard.UnsentScopeContext.Provider>
       ) : null
     })

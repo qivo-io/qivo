@@ -2,15 +2,20 @@
    Delete on Teams, a member's Remove on a team's page, and a person's or a
    team's Remove in a project's access editor. One hook beside the removal
    window, so the three pages share its code, and each page that calls it
-   holds its own press. It lives apart from Modals.tsx, which exports
+   holds its own press. Each change carries the organization and the name
+   the page showed (store/planner.ts grantRemoval, teamRemoval), so the
+   window and the store's sentences name the person or team without the
+   store holding them. It lives apart from Modals.tsx, which exports
    components only. */
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useFocusAfterRender } from '../lib/focusWhenGone'
 import { type AccessRemoval, P, type RemovalAnswer } from '../store/planner'
 import { AccessRemovalModal } from './Modals'
 
-/* One removal as a key, to tell the pressed control apart. */
-const keyOf = (change: AccessRemoval) => JSON.stringify(change)
+/* One removal as a key, to tell the pressed control apart: its JSON
+   without the name the page showed, so a rename during a check keeps the
+   press. */
+const keyOf = ({ label: _label, ...change }: AccessRemoval) => JSON.stringify(change)
 
 /** What a press says while another removal of the page is being checked,
     as it then removes nothing. */
@@ -24,7 +29,12 @@ const REMOVAL_BUSY = 'Another removal is still being checked. Try again once it 
  * is disabled. When the answer asks, it opens the window with it, and
  * `focus` takes focus as the window closes; otherwise the store has done
  * what the answer called for, and `focus` takes focus once the page renders
- * the outcome, after the pressed control is enabled again.
+ * the outcome, after the pressed control is enabled again. `onRemoved`,
+ * when given, runs once the access is gone, whichever way: the plain
+ * removal, the one that leaves the tasks or the window's choice was
+ * accepted, or the server said it was gone already. A page that keeps a row
+ * of its own for the person or team, such as a team page's "Added" member,
+ * drops it then, since its list may not reach their place.
  * `checking(change)` says whether that removal is being checked, so the
  * page can disable its control (aria-busy, store/planner.ts
  * REMOVAL_CHECKING). `window` is the open window, or null, for the page to
@@ -32,14 +42,18 @@ const REMOVAL_BUSY = 'Another removal is still being checked. Try again once it 
  * that does nothing.
  */
 export function useAccessRemoval(): {
-  press: (change: AccessRemoval, focus: () => HTMLElement | null) => void
+  press: (change: AccessRemoval, focus: () => HTMLElement | null, onRemoved?: () => void) => void
   checking: (change: AccessRemoval) => boolean
   window: ReactNode
 } {
   const [checking, setChecking] = useState<string | null>(null)
   // the same, at once, so a second press before the render sends nothing
   const busy = useRef(false)
-  const [open, setOpen] = useState<{ change: AccessRemoval; answer: RemovalAnswer } | null>(null)
+  const [open, setOpen] = useState<{
+    change: AccessRemoval
+    answer: RemovalAnswer
+    removed: () => void
+  } | null>(null)
   const focusRef = useRef<() => HTMLElement | null>(() => null)
   const mounted = useRef(true)
   useEffect(() => {
@@ -49,7 +63,11 @@ export function useAccessRemoval(): {
     }
   }, [])
   const focusAfterRender = useFocusAfterRender()
-  const press = (change: AccessRemoval, focus: () => HTMLElement | null) => {
+  const press = (
+    change: AccessRemoval,
+    focus: () => HTMLElement | null,
+    onRemoved?: () => void,
+  ) => {
     if (busy.current) {
       window.showToast?.(REMOVAL_BUSY, 'info')
       return
@@ -57,12 +75,16 @@ export function useAccessRemoval(): {
     busy.current = true
     focusRef.current = focus
     setChecking(keyOf(change))
-    void P.startRemoval(change, () => mounted.current).then((answer) => {
+    // an outcome after the page was left tells it nothing
+    const removed = () => {
+      if (mounted.current) onRemoved?.()
+    }
+    void P.startRemoval(change, () => mounted.current, removed).then((answer) => {
       busy.current = false
       if (!mounted.current) return
       // the control is enabled again before focus moves to a target
       setChecking(null)
-      if (answer) setOpen({ change, answer })
+      if (answer) setOpen({ change, answer, removed })
       else focusAfterRender(focus)
     })
   }
@@ -74,6 +96,7 @@ export function useAccessRemoval(): {
         key={keyOf(open.change)}
         change={open.change}
         answer={open.answer}
+        onRemoved={open.removed}
         onClose={() => setOpen(null)}
         focusAfterClose={() => focusRef.current()}
       />

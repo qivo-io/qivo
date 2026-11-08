@@ -29,7 +29,11 @@ The planning panel offers:
   an owner and positive Remaining hours. After each drag, Qivo computes the end
   from the owner's free weekly capacity, starting no earlier than the estimate
   measurement week. It uses the reviewer while a task is In Review with one
-  and follows ownership changes during the session.
+  and follows ownership changes during the session. While Qivo loads the
+  owner's details the panel says **Loading the owner's hours…**, and the
+  first fit of an unscheduled task waits for their weekly hours. If Qivo
+  could not read their hours, it says **Capacity unknown, so auto-fit is
+  off**.
 - The owner's committed hours by project, excluding paused work. Hidden
   projects appear as anonymous **Other projects** hours where your role allows
   it ([Delay projections](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)). The free-hours summary uses that person's plannable week.
@@ -58,6 +62,11 @@ workload of the 50 people with the most tasks on the Roadmap, and shows the
 others as unknown.
 Their weekly capacity appears beside their name. New people start with the
 organization default, initially 32 hours ([Planning hours](./organization-and-team-settings.md#planning-hours-and-teams)).
+While Qivo loads a person's details their row says **Loading…**, and a
+person whose weekly hours Qivo could not read shows their hours without a
+percentage or color, with **Capacity unknown** beside their name and in the
+cell descriptions. Their row stays in its place until their details
+arrive.
 
 Blue shows ordinary load, yellow marks **90–100%**, and red marks **over 100%**.
 **100%** fills that person's planning time, which already excludes time

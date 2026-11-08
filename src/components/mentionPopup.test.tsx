@@ -52,7 +52,10 @@ vi.mock('../store/planner', () => ({
       store.reads.push(read)
       return read
     },
-    user: () => undefined,
+    // nobody's picture is held, and the popup's names go nowhere
+    person: () => null,
+    namePeople: () => {},
+    subscribe: () => () => {},
   },
 }))
 vi.mock('../lib/convex', () => ({ live: {}, convex: {} }))

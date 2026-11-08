@@ -2256,13 +2256,24 @@ async function sweep(tag, label) {
     await step('labels', async () => {
       const labels = (
         await evaluate(app, () =>
-          window.PLANNER.orgLabels().map((l) => ({ id: l.id, name: l.name })),
+          window.PLANNER.orgLabels().map((l) => ({
+            id: l.id,
+            name: l.name,
+            color: l.color,
+            org: l.org,
+          })),
         )
       ).filter((l) => matches(l.name))
       for (const label of labels)
         await step(`label ${label.name}`, async () => {
+          // the app's delete sends the label as the page would show it
           expect(
-            await evaluate(app, (id) => window.PLANNER.removeLabel(id), label.id),
+            await evaluate(
+              app,
+              (l) =>
+                window.PLANNER.removeLabel(l.id, { orgId: l.org, name: l.name, color: l.color }),
+              label,
+            ),
             'the app could not delete it',
           )
           note(`label ${label.name}`)
@@ -2275,7 +2286,8 @@ async function sweep(tag, label) {
       for (const agent of await taggedAgents()) {
         agentIds.add(agent.id)
         await step(`agent ${agent.name}`, async () => {
-          await evaluate(app, (id) => window.PLANNER.removeUser(id), agent.id)
+          // in the agent's own organization, which the server removes it from
+          await evaluate(app, (a) => window.PLANNER.removeUser(a.id, { orgId: a.org }), agent)
           await settled()
           expect(
             await until(async () =>
@@ -2695,10 +2707,7 @@ async function peopleListChecks() {
       label.id,
       { timeout: 30_000 },
     )
-    expect(
-      await evaluate(app, (id) => window.PLANNER.removeLabel(id), label.id),
-      'the app could not delete the label',
-    )
+    expect(await evaluate(app, removeLabelInApp, label.id), 'the app could not delete the label')
     expect(
       await until(async () =>
         (await restRows(w, '/labels', 'labels', { search: run.tag })).every(
@@ -5057,7 +5066,7 @@ async function labelMentionPickersCheck() {
           { timeout: 30_000 },
         )
         expect(
-          await evaluate(app, (id) => window.PLANNER.removeLabel(id), label.id),
+          await evaluate(app, removeLabelInApp, label.id),
           `the app could not delete ${label.name}`,
         )
       }
@@ -6793,29 +6802,59 @@ async function overviewMilestonesCheck() {
   })
 }
 
+/** Deletes label `id` in the app, sending the label as the app's
+ *  catalogue holds it, as the page would show it (P.removeLabel), and
+ *  answers whether the server deleted it. It runs in the page through
+ *  evaluate, so it names nothing outside itself; the caller first waits
+ *  until the catalogue holds the label. */
+function removeLabelInApp(id) {
+  const label = window.PLANNER.orgLabels().find((l) => l.id === id)
+  return window.PLANNER.removeLabel(id, { orgId: label.org, name: label.name, color: label.color })
+}
+
 /** The step that checks Settings › Labels (settingsLabelsCheck). */
 export const LABELS_STEP = 'ui/settings-labels'
 
 /** What Settings › Labels shows for the run's label on its one fixture
- *  task (settingsLabelsCheck): its count of active tasks, and the sentence
- *  of its delete window. */
+ *  task (settingsLabelsCheck): its count of active tasks, the sentence of
+ *  its delete window, what New label says beside Add for a name a label
+ *  holds, and the palette a new label's color comes from
+ *  (src/lib/labelColors.ts LABEL_COLORS). */
 export const LABELS_EXPECTED = {
   count: '1 active task',
   confirm:
     'Used by 1 active task. Deleting this label removes it from all tasks, including archived tasks. This cannot be undone.',
+  taken: 'A label with that name already exists',
+  palette: [
+    '#6D7BF2',
+    '#F0555D',
+    '#2FBE7A',
+    '#F2994A',
+    '#A78BFA',
+    '#4C9AFF',
+    '#E3C55A',
+    '#0891B2',
+    '#BE123C',
+    '#8A8F98',
+  ],
 }
 
 /** Settings › Labels on the deployment's live batches (labels.settingsPage):
  *  the run makes `<tag> Label` over REST and puts it on its fixture task
  *  Alpha, then in the app the page reaches its ok state, a search for the
  *  label lists it alone, from the deployment's answer rather than kept in
- *  the page, with LABELS_EXPECTED.count, a rename in place with Enter
- *  reaches GET /labels, and its delete window says LABELS_EXPECTED.confirm
- *  and deletes it, which GET /labels then no longer lists. A count reads
- *  Counting… only while a label count backfill runs on the deployment, and
- *  the step then fails with that reason. The sweep finds a label a failure
- *  left by its tag. It runs while the run's tasks are active, after
- *  ui/overview. */
+ *  the page, with LABELS_EXPECTED.count. New label typed with the label's
+ *  name in upper case keeps Add label off and says LABELS_EXPECTED.taken
+ *  beside it once the deployment's answer of labels.picker names the label
+ *  (`exact`), and typed with `<tag> Label made` turns Add on, whose new
+ *  label GET /labels then lists with one of LABELS_EXPECTED.palette's
+ *  colors, and which the step deletes in the app. A rename in place with
+ *  Enter reaches GET /labels, and its delete window says
+ *  LABELS_EXPECTED.confirm and deletes it, which GET /labels then no
+ *  longer lists. A count reads Counting… only while a label count backfill
+ *  runs on the deployment, and the step then fails with that reason. The
+ *  sweep finds a label a failure left by its tag. It runs while the run's
+ *  tasks are active, after ui/overview. */
 async function settingsLabelsCheck() {
   const w = run.creds.writeToken
   await check(LABELS_STEP, async () => {
@@ -6846,6 +6885,41 @@ async function settingsLabelsCheck() {
       await until(async () => (await count()) === LABELS_EXPECTED.count),
       `its count reads ${short(await count())}, not ${LABELS_EXPECTED.count}`,
     )
+    // New label checks the typed name on the deployment's `exact`, in any
+    // case, and keeps Add off while a label holds it
+    const newName = app.locator('input[placeholder="New label name"]')
+    const add = app.locator('button[data-label-add]')
+    const nameCheck = app.locator('[data-label-name-check]')
+    await newName.fill(label.name.toUpperCase())
+    await app.locator('[data-label-name-check="taken"]').waitFor({ timeout: 30_000 })
+    eq(((await nameCheck.textContent()) ?? '').trim(), LABELS_EXPECTED.taken, 'New label says')
+    expect(await add.isDisabled(), 'Add label is on for a name a label holds')
+    // a free name turns Add on, and the new label takes a palette color
+    const madeName = `${run.tag} Label made`
+    await newName.fill(madeName)
+    expect(await until(async () => await add.isEnabled()), 'Add label stays off for a free name')
+    await add.click()
+    let made = null
+    expect(
+      await until(async () => {
+        made =
+          (await restRows(w, '/labels', 'labels', { search: run.tag })).find(
+            (l) => l.name === madeName,
+          ) ?? null
+        return made !== null
+      }),
+      `GET /labels does not list ${madeName}`,
+    )
+    expect(
+      LABELS_EXPECTED.palette.map((c) => c.toLowerCase()).includes(made.color.toLowerCase()),
+      `${madeName} has ${made.color}, not a palette color`,
+    )
+    await app.waitForFunction(
+      (id) => window.PLANNER?.orgLabels().some((l) => l.id === id),
+      made.id,
+      { timeout: 30_000 },
+    )
+    expect(await evaluate(app, removeLabelInApp, made.id), `the app could not delete ${madeName}`)
     const renamed = `${run.tag} Label renamed`
     const name = row.locator('[data-label-name]')
     await name.fill(renamed)
@@ -6880,7 +6954,7 @@ async function settingsLabelsCheck() {
       ),
       'GET /labels still lists it',
     )
-    return `found ${label.name} by search with ${LABELS_EXPECTED.count}, renamed it in place and deleted it in its window`
+    return `found ${label.name} by search with ${LABELS_EXPECTED.count}, kept Add off for its name in upper case, made ${madeName} in a palette color, renamed ${label.name} in place and deleted it in its window`
   })
 }
 

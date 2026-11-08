@@ -42,7 +42,7 @@ function Label({ user }: { user: UserVM }) {
   const rows = invites.useInviteDeliveries(user.org, [user.id])
   return (
     <invites.InviteRows.Provider value={rows}>
-      <InviteLabel user={user} />
+      <InviteLabel user={{ id: user.id, orgId: user.org }} />
     </invites.InviteRows.Provider>
   )
 }

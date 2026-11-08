@@ -113,7 +113,7 @@ export type GuestProject = { id: string; name: string; level: GrantLevel | 'lead
  * agent and for a seat that stores none, which plans the organization's
  * default), and for a guest the first projects they lead or hold a grant on
  * (null for anyone else). No avatar, color, initials, login or hash field;
- * the app paints faces from the people it holds. */
+ * the app paints faces from people.byIds through its profile cache. */
 export type SettingsPersonRow = PersonRow & {
   email: string | null
   can_create_projects: boolean
@@ -137,8 +137,19 @@ export type PersonSettingsAnswer =
 
 /** A person row with the face the workspace paints for every seat today,
  * the avatar color (gray for an older non-hex value, model/people.ts
- * shownAvatarColor) and the stored initials (people.byIds). */
-export type PersonFaceRow = PersonRow & { color: string; initials: string }
+ * shownAvatarColor), the stored initials, the uploaded picture's storage id
+ * (`avatar`, null for none), which is the picture's version the app mints,
+ * keys and keeps it by, the demo's sample portrait (`sample_avatar`, null
+ * for none), and the plannable hours as stored (null for an agent and for a
+ * seat that stores none, which plans the organization's default), the same
+ * fields the workspace's people part sends every seat (people.byIds). */
+export type PersonFaceRow = PersonRow & {
+  color: string
+  initials: string
+  avatar: string | null
+  sample_avatar: NonNullable<Doc<'profiles'>['sample_avatar']> | null
+  plannable_hours: number | null
+}
 
 /** One creator the creators line names, with `agent` set for an agent,
  * which the line marks. */
@@ -313,13 +324,14 @@ export async function settingsPersonOf(
 
 /**
  * people.byIds for `me`, any active seat, which answers the person rows,
- * with their faces, of the profiles of `me`'s organization among `ids`,
- * each once. Every profile of the organization answers, switched-off and
- * pending ones included, each with its `active` and `pending`, so a
- * reference to a person who left keeps its name. An unknown id and a profile of another
- * organization are left out, a definite answer, since each was looked up.
- * More than BY_IDS_MAX ids are refused on the raw length, repeats
- * included.
+ * with their faces, pictures and plannable hours (PersonFaceRow), of the
+ * profiles of `me`'s organization among `ids`, each once. Every profile of
+ * the organization answers, switched-off and pending ones included, each
+ * with its `active` and `pending`, so a reference to a person who left
+ * keeps its name. An unknown id and a profile of another organization are
+ * left out, a definite answer, since each was looked up. More than
+ * BY_IDS_MAX ids are refused on the raw length, repeats included. It reads
+ * each distinct profile once and nothing else.
  */
 export async function peopleByIdsOf(
   ctx: QueryCtx,
@@ -331,7 +343,16 @@ export async function peopleByIdsOf(
   return {
     rows: profiles.flatMap((p) =>
       p !== null && p.org_id === me.org_id
-        ? [{ ...personRow(p), color: shownAvatarColor(p.color), initials: p.initials }]
+        ? [
+            {
+              ...personRow(p),
+              color: shownAvatarColor(p.color),
+              initials: p.initials,
+              avatar: p.avatar_storage_id ?? null,
+              sample_avatar: p.sample_avatar ?? null,
+              plannable_hours: p.plannable_hours ?? null,
+            },
+          ]
         : [],
     ),
   }

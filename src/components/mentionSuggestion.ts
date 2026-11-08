@@ -69,6 +69,10 @@ export const MENTION_DELAY_MS = 150
 /** The most texts that matched nobody one popup remembers. */
 const NONE_KEPT = 32
 
+/* How many popups were made, which names each one's key for the people it
+   names (P.namePeople). */
+let popups = 0
+
 /** What the popup shows now: its state (`data-mention-state`), its rows,
     whether they are an older text's (`stale`), the lines under them, and
     the action after the lines, which the keys reach after the rows: Load
@@ -115,6 +119,11 @@ export const mentionSuggestion: Omit<
     // how many rows a Load more started from, so the highlight moves to
     // the first new one
     let moreFrom: number | null = null
+    // the key this popup names its people under, the pictures its rows
+    // showed at the last build, and the way to stop hearing the store
+    const owner = `mention:${++popups}`
+    let pictures = ''
+    let stopWatch: (() => void) | null = null
 
     const list = onceList<MentionChoices, MentionChoice>(
       () => ({
@@ -201,11 +210,14 @@ export const mentionSuggestion: Omit<
     }
 
     /** Forgets everything a popup typed, read and was asked, so the next
-        popup of this editor starts as the first did. */
+        popup of this editor starts as the first did, and releases the
+        people it named. */
     function reset() {
       if (timer !== null) clearTimeout(timer)
       timer = null
       list.stop()
+      P.namePeople(owner, [])
+      pictures = ''
       words = ''
       typedKey = null
       tooLong = false
@@ -287,14 +299,14 @@ export const mentionSuggestion: Omit<
       row.setAttribute('data-mention-id', u.id)
       // this popup builds its own avatar in plain DOM, so it inherits
       // nothing from <Avatar>: the same layers are assembled by hand,
-      // initials on the row's color, with a picture the workspace holds
-      // for the person painted over them
+      // initials on the row's color, with the person's picture from the
+      // store (P.person, the workspace's people part or the profile cache)
+      // painted over them
       const av = document.createElement('span')
       av.className = 'mentionpop-av'
       av.style.background = u.color
       av.textContent = u.initials
-      const held = P.user(u.id)
-      const src = held?.avatarPath ? held.avatarUrl : null
+      const src = pictureOf(u.id)
       if (src) {
         const img = document.createElement('img')
         img.src = src
@@ -350,10 +362,23 @@ export const mentionSuggestion: Omit<
       return button
     }
 
+    /** Person `id`'s picture as the store holds it now, or null. */
+    function pictureOf(id: string): string | null {
+      const person = P.person(id, org)
+      return person?.state === 'ok' ? person.picture : null
+    }
+
     function rebuild() {
       if (!el) return
       el.innerHTML = ''
       const shown = current()
+      // the loaded rows' people, named while the popup is open, so the
+      // store asks for their pictures in the rows' order
+      P.namePeople(
+        owner,
+        shown.rows.map((u) => ({ org, id: u.id })),
+      )
+      pictures = shown.rows.map((u) => pictureOf(u.id) ?? '').join('\n')
       el.setAttribute('data-mention-state', shown.state)
       const count = itemCount(shown)
       if (selected >= count) selected = Math.max(0, count - 1)
@@ -395,6 +420,17 @@ export const mentionSuggestion: Omit<
         reset()
         update(props.query)
         unmount = props.mount(el)
+        // a picture that arrives while the popup is open shows without a
+        // keystroke: each store change builds the rows again when one of
+        // their pictures changed
+        stopWatch?.()
+        stopWatch = P.subscribe(() => {
+          if (!el) return
+          const now = current()
+            .rows.map((u) => pictureOf(u.id) ?? '')
+            .join('\n')
+          if (now !== pictures) rebuild()
+        })
       },
       onUpdate: (props: SuggestionProps<MentionChoice, MentionNodeAttrs>) => {
         command = props.command
@@ -435,6 +471,8 @@ export const mentionSuggestion: Omit<
       },
       onExit: () => {
         reset()
+        stopWatch?.()
+        stopWatch = null
         unmount?.()
         unmount = null
         el = null

@@ -261,7 +261,7 @@ describe('refusal sentences in restore and upload toasts', () => {
         `Couldn't upload "notes.txt". ${LOST}`,
         'error',
       )
-      expect(await P.setAvatar(snap.profiles[0].id, picture)).toBe(LOST)
+      expect(await P.setAvatar(snap.profiles[0].id, picture, null)).toBe(LOST)
     }
   })
 
@@ -278,7 +278,7 @@ describe('refusal sentences in restore and upload toasts', () => {
     answers['files:avatarUploadUrl'] = () => Promise.resolve(demo('reservation-2'))
     expect(await P.addAttachment('task-1', file())).toBeNull()
     expect(sentWith('files:cancelDemoUpload')).toEqual({ id: 'reservation-1' })
-    expect(await P.setAvatar(snap.profiles[0].id, picture)).toBe(LOST)
+    expect(await P.setAvatar(snap.profiles[0].id, picture, null)).toBe(LOST)
     expect(sentWith('files:cancelDemoUpload')).toEqual({ id: 'reservation-2' })
     // a refusal from the receiver, which released the reservation itself,
     // and an upload ticket outside the demo cancel nothing
@@ -329,7 +329,7 @@ describe('refusal sentences in restore and upload toasts', () => {
     )
     expect(sentWith('files:cancelDemoUpload')).toEqual({ id: 'reservation-1' })
     // the picture control stops waiting at once too
-    expect(await soon(P.setAvatar(snap.profiles[0].id, picture))).toBe(LOST)
+    expect(await soon(P.setAvatar(snap.profiles[0].id, picture, null))).toBe(LOST)
     expect(sentWith('files:cancelDemoUpload')).toEqual({ id: 'reservation-2' })
   })
 
@@ -338,7 +338,7 @@ describe('refusal sentences in restore and upload toasts', () => {
     receiverRefuses(BUDGET)
     const picture = new File(['png bytes'], 'me.png', { type: 'image/png' })
     const profile = snap.profiles[0].id
-    expect(await P.setAvatar(profile, picture)).toBe(
+    expect(await P.setAvatar(profile, picture, null)).toBe(
       `${BUDGET.charAt(0).toUpperCase()}${BUDGET.slice(1)}`,
     )
     expect(sentWith('files:avatarUploadUrl')).toEqual({ profile_id: profile, size: 9 })

@@ -33,6 +33,7 @@ import type { PlannedTask } from '../../convex/lib/roadmap'
 import { NoProjects } from '../components/NoProjects'
 import { EmptyState, Icon } from '../components/qivo'
 import { RoadmapUndo } from '../components/RoadmapUndo'
+import { sortName, usePeople } from '../components/usePeople'
 import { WorkspaceToolbar } from '../components/WorkspaceShell'
 import { isoToWeek, winWeeks } from '../lib/dates'
 import { isIssueGroup } from '../lib/issueGroups'
@@ -49,6 +50,7 @@ import {
   type ScopeInfo,
 } from '../store/planner'
 import { planItemsOf } from '../store/viewDelay'
+import { capacityOf, hoursLoading } from './capacity'
 import { LandscapeRoadmap } from './LandscapeRoadmap'
 import { MobileRoadmap } from './MobileRoadmap'
 import { ResourceStrip, type TeamPerson } from './Resources'
@@ -358,6 +360,19 @@ function Roadmap({
     planAsk ??
     (session ? { id: session.uuid, project_id: sessionModel?.project ?? session.project } : null)
   const view = useRoadmapView(info, filters, w0, w1, planned)
+  // the people the Roadmap shows, named while it shows: each row's
+  // assignee and reviewer in the rows' order, Team utilization's people
+  // and the planning panel's owner among them
+  usePeople(
+    useMemoR(
+      () =>
+        view.tasks.flatMap((it) => [
+          { org: it.org, id: it.assignee ?? '' },
+          { org: it.org, id: it.reviewer ?? '' },
+        ]),
+      [view.tasks],
+    ),
+  )
   /** The task handle `id` names on the Roadmap: one its answer brings, else
       the workspace's or another view's. */
   const taskOf = (id: string): IssueVM | undefined => view.family.byId[id] ?? P.anyTask(id)
@@ -770,12 +785,21 @@ function Roadmap({
     // auto-fit: the planned issue's end follows the owner's free capacity —
     // a move sets the start and recomputes the end; dragging the end is
     // overridden by the same recompute ("checked against the rest of the plan")
-    if (sess && sess.issueId === id && sess.autoFit && it.owner && it.remaining > 0 && load) {
+    const cap = capacityFor(it)
+    if (
+      sess &&
+      sess.issueId === id &&
+      sess.autoFit &&
+      it.owner &&
+      it.remaining > 0 &&
+      load &&
+      cap !== null
+    ) {
       // the fit consumes capacity from the week the remaining hours were
       // measured (never before the dragged start) — the same anchor the delay
       // projection walks from, so the fitted end and the status agree
       const from = it.remainingSet != null ? Math.max(l.start, it.remainingSet) : l.start
-      const end = fitEndWeekAgainst(load, it.uuid, from, it.remaining, capacityFor(it))
+      const end = fitEndWeekAgainst(load, it.uuid, from, it.remaining, cap)
       if (l.start !== it.start || end !== it.end) sendDates(id, { start: l.start, end })
       return
     }
@@ -946,7 +970,13 @@ function Roadmap({
      (P.ownerItems). So it follows changes made elsewhere, the person's own
      edits, an owner change and a moved grid, not only the session's
      start. */
-  const capacityFor = (it) => plannableHoursOf(it?.owner ? P.user(it.owner) : null)
+  // the owner's weekly capacity as P.person knows it, or null while the
+  // store does not know their hours, when auto-fit stays off (PlanCard)
+  // rather than fit against the default
+  const capacityFor = (it): number | null => {
+    const owner = it?.owner ? P.person(it.owner, it.org) : null
+    return owner ? capacityOf(owner) : plannableHoursOf(null)
+  }
   const sessionOwner = sessionModel?.owner ?? null
   const sessionOrg = sessionModel?.org ?? null
   const sessionOpen = !!session
@@ -989,19 +1019,29 @@ function Roadmap({
       another view may still hold the task (taskOf). */
   const sessionTask = (s: PlanSession): IssueVM | undefined =>
     cannotPlanReason(view) === null ? view.family.byId[s.issueId] : undefined
-  // Initial placement waits for valid workload and for an answer that
-  // names the task. Later answers leave the user's chosen dates alone.
+  // The first fit of an unscheduled task, once an answer names the task.
+  // While the owner's weekly hours are unknown (capacityFor), it waits
+  // only while a read for the owner is on its way (hoursLoading). Once
+  // that read failed or left them out, the panel says auto-fit is off, so
+  // the first fit is spent at once, whether or not the workload is in,
+  // and a later answer with their hours leaves the dates alone, as every
+  // later answer does. With the hours known it waits for the workload. A
+  // fit is computed and applied only with both, and a bar the person
+  // moves while it waits gets it from where they dropped it.
   useEffectR(() => {
     const s = sessionRef.current
-    const load = planLoad?.items
-    if (!s?.fitOnLoad || !load) return
+    if (!s?.fitOnLoad) return
     const it = sessionTask(s)
     if (!it) return
+    const cap = capacityFor(it)
+    const load = planLoad?.items
+    const waits = cap === null ? hoursLoading(it.owner ? P.person(it.owner, it.org) : null) : !load
+    if (waits) return
     const placed = { ...s, fitOnLoad: false }
     sessionRef.current = placed
     setSession(placed)
-    if (s.autoFit && it.owner && !P.isGroup(it) && it.remaining > 0 && it.start != null)
-      autoFitEnd(it.id, it.start, load, capacityFor(it), it.uuid, it.remaining)
+    const fits = s.autoFit && !!it.owner && !P.isGroup(it) && it.remaining > 0 && it.start != null
+    if (fits && cap !== null && load) autoFitEnd(it.id, it.start, load, cap, it.uuid, it.remaining)
   })
   const toggleAutoFit = () => {
     const s = sessionRef.current
@@ -1012,8 +1052,17 @@ function Roadmap({
     const load = planLoadRef.current
     // side effect OUTSIDE the state updater — a store write there would setState
     // on App (its store subscription) mid-render
-    if (autoFit && it?.owner && !P.isGroup(it) && it.remaining > 0 && load && it.start != null)
-      autoFitEnd(s.issueId, it.start, load, capacityFor(it), it.uuid, it.remaining)
+    const cap = capacityFor(it)
+    if (
+      autoFit &&
+      it?.owner &&
+      !P.isGroup(it) &&
+      it.remaining > 0 &&
+      load &&
+      it.start != null &&
+      cap !== null
+    )
+      autoFitEnd(s.issueId, it.start, load, cap, it.uuid, it.remaining)
   }
   const confirmPlanning = () => {
     const s = sessionRef.current
@@ -1630,15 +1679,21 @@ function Roadmap({
       if (was) was.rows++
       else byOwner.set(it.owner, { org: it.org, rows: 1 })
     }
-    for (const [id, place] of byOwner) {
-      const user = P.user(id)
-      if (user) team.push({ user, ...place })
-    }
-    team.sort((a, b) => a.user.name.localeCompare(b.user.name))
+    // every owner stays, one not loaded yet in place by id after the named
+    // people, never dropped
+    for (const [id, place] of byOwner)
+      team.push({ id, ...place, person: P.person(id, place.org) ?? { state: 'loading', id } })
+    team.sort((a, b) => {
+      const an = sortName(a.person, 'Unknown user')
+      const bn = sortName(b.person, 'Unknown user')
+      if (an === undefined || bn === undefined)
+        return an !== undefined ? -1 : bn !== undefined ? 1 : a.id.localeCompare(b.id)
+      return an.localeCompare(bn) || a.id.localeCompare(b.id)
+    })
   }
-  const teamKey = team.map((p) => `${p.org}:${p.user.id}:${p.rows}`).join()
+  const teamKey = team.map((p) => `${p.org}:${p.id}:${p.rows}`).join()
   useEffectR(() => {
-    P.watchRoadmapTeam(team.map((p) => ({ org: p.org, owner: p.user.id, cards: p.rows })))
+    P.watchRoadmapTeam(team.map((p) => ({ org: p.org, owner: p.id, cards: p.rows })))
     // the people's signature covers the list
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teamKey])
@@ -1820,7 +1875,7 @@ function Roadmap({
   const totalH = top
 
   // effective highlight: only while the selected person is actually in the strip
-  const hl = hlUser && team.some((p) => p.user.id === hlUser) ? hlUser : null
+  const hl = hlUser && team.some((p) => p.id === hlUser) ? hlUser : null
   const activeResourceWeek =
     stripMode !== 'min' &&
     team.length > 0 &&

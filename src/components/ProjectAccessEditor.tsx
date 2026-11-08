@@ -47,6 +47,7 @@ import { ChoiceEnd, PickerSearch } from './pickerParts'
 import { ACCESS_WORDS, escapeClearsFirst, LEAD_WORDS } from './pickerWords'
 import { Avatar, Icon, MenuItem, Popover } from './qivo'
 import { SettingsGroup } from './settingsPage'
+import { usePeople } from './usePeople'
 
 type UsersAnswer = FunctionReturnType<typeof api.projectSettings.users>
 type TeamsAnswer = FunctionReturnType<typeof api.projectSettings.teams>
@@ -339,7 +340,8 @@ type Kept = { kind: Kind; id: string; name: string; level: AccessLevel }
  * `onLevel` sends one grant's level, or Lead through the Lead field's
  * write, with the level the row showed (null for a new grant), and
  * resolves whether the server accepted it; the row shows the chosen level,
- * disabled and busy, until then. `onRemove` presses a row's Remove;
+ * disabled and busy, until then. `onRemove` presses a row's Remove, with
+ * the row's name as the list showed it, which the removal window names;
  * `checking` says the press waits for the server's preview, and `removing`
  * that its write is on its way, which hides the row until the list no
  * longer holds it, and shows it again on a refusal. A grant added past the
@@ -372,7 +374,7 @@ export function ProjectAccessEditor({
     level: AccessLevel,
     shown: GrantLevel | null,
   ) => Promise<boolean>
-  onRemove: (kind: Kind, id: string) => void
+  onRemove: (kind: Kind, id: string, name: string) => void
   checking: (kind: Kind, id: string) => boolean
   removing: (kind: Kind, id: string) => boolean
 }) {
@@ -391,6 +393,15 @@ export function ProjectAccessEditor({
   const [pending, setPending] = useState<ReadonlyMap<string, AccessLevel>>(() => new Map())
   const [kept, setKept] = useState<readonly Kept[]>([])
   const [target, setTarget] = useState<AccessTarget | null>(null)
+  // the people the editor shows, named while it shows: the lead, the kept
+  // people, the users list's loaded rows and the person chosen in Add team
+  // or user, whom its button shows after the picker closes, in that order
+  usePeople([
+    ...(lead ? [{ org: project.org_id, id: lead.id }] : []),
+    ...kept.flatMap((k) => (k.kind === 'user' ? [{ org: project.org_id, id: k.id }] : [])),
+    ...users.list.rows.map((row) => ({ org: project.org_id, id: row.id })),
+    ...(target?.type === 'user' ? [{ org: project.org_id, id: target.id }] : []),
+  ])
   const [adding, setAdding] = useState(false)
   useUpdateBlocker(!!target)
   const teamSearch = useRef<HTMLInputElement>(null)
@@ -489,7 +500,7 @@ export function ProjectAccessEditor({
           aria-busy={check || undefined}
           title={check ? REMOVAL_CHECKING : `Remove ${row.name} team access`}
           disabled={!canManageTeams || !writable || check || busy !== undefined}
-          onClick={() => onRemove('team', row.id)}
+          onClick={() => onRemove('team', row.id, row.name)}
         >
           <Icon name="close" size={16} />
         </Button>
@@ -601,7 +612,7 @@ export function ProjectAccessEditor({
           aria-busy={check || undefined}
           title={check ? REMOVAL_CHECKING : `Remove ${row.name} direct access`}
           disabled={off || check}
-          onClick={() => onRemove('user', row.id)}
+          onClick={() => onRemove('user', row.id, row.name)}
         >
           <Icon name="close" size={16} />
         </Button>
@@ -852,6 +863,8 @@ function AccessChoiceList({
   const end = listEnd(list, query !== '')
   const teamRows = list.rows.filter((r) => r.type === 'team')
   const people = list.rows.filter((r) => r.type === 'user')
+  // the picker's people, named while it is open
+  usePeople(people.map((row) => ({ org: project.org_id, id: row.id })))
   const ended = end === 'end'
   const noTeams = list.rows.length > 0 && teamRows.length === 0 && (people.length > 0 || ended)
   const noPeople = list.rows.length > 0 && people.length === 0 && ended
@@ -862,7 +875,9 @@ function AccessChoiceList({
     <MenuItem
       key={`${row.type}:${row.id}`}
       active={target?.type === row.type && target.id === row.id}
-      onClick={() =>
+      onClick={() => {
+        // a person picked outlives the picker, so their row is kept as a name
+        if (row.type === 'user') P.takePeople(project.org_id, [row])
         onPick(
           row.type === 'team'
             ? {
@@ -880,7 +895,7 @@ function AccessChoiceList({
                 can_lead: row.can_lead,
               },
         )
-      }
+      }}
       data-project-access-choice={row.id}
       data-project-access-choice-type={row.type}
     >
@@ -1023,6 +1038,8 @@ function LeadChoiceList({
     most: ACCESS_CAPS.choices,
   })
   const end = listEnd(list, query !== '')
+  // the picker's people, named while it is open
+  usePeople(list.rows.map((person) => ({ org: on.org_id, id: person.id })))
   return (
     <div data-lead-choices="" className="flex flex-col gap-1">
       <PickerSearch

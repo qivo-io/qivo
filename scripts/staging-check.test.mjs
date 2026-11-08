@@ -14,6 +14,7 @@ import {
 import { COMMENT_PAGE_MAX } from '../convex/model/comments'
 import { billingBytes, CALLS_COUNTING, STORAGE_COUNTING } from '../src/lib/billingDisplay'
 import { endText } from '../src/lib/deletedItems'
+import { LABEL_COLORS } from '../src/lib/labelColors'
 import { creatorPhrase } from '../src/lib/projectCreators'
 import {
   ADMIN_MANAGEMENT_CLEANUP,
@@ -198,7 +199,14 @@ describe('staging check REST contract', () => {
       count: '1 active task',
       confirm:
         'Used by 1 active task. Deleting this label removes it from all tasks, including archived tasks. This cannot be undone.',
+      taken: 'A label with that name already exists',
+      palette: LABEL_COLORS.map((c) => c.color),
     })
+    // New label's check of a typed name, by the page's own marks and words
+    expect(page).toContain("export const NAME_TAKEN = 'A label with that name already exists'")
+    expect(page).toContain('data-label-name-check={checked}')
+    expect(page).toContain('data-label-add=""')
+    expect(page).toContain('placeholder="New label name"')
   })
   it("checks its own team in Settings › Teams and on its page, by the pages' own marks and words", () => {
     const page = readFileSync(
@@ -1439,7 +1447,11 @@ describe('staging check REST contract', () => {
       check.indexOf('export const ON_DEMAND_STEP'),
     )
     expect(step).toContain('const names = [found.name, madeName]')
-    expect(step).toContain('window.PLANNER.removeLabel(id)')
+    // the app deletes each label as the page would show it
+    expect(step).toContain('evaluate(app, removeLabelInApp, label.id)')
+    expect(check).toContain(
+      'window.PLANNER.removeLabel(id, { orgId: label.org, name: label.name, color: label.color })',
+    )
     expect(step).toMatch(/\} finally \{\s+await dropLabels\(\)/)
     for (const mark of [
       'data-label-picker',
@@ -2343,6 +2355,25 @@ describe('task list pages', () => {
     expect(withQuery('/labels?limit=20', { cursor: 'a+b/c' })).toBe(
       '/labels?limit=20&cursor=a%2Bb%2Fc',
     )
+  })
+  it('removes each tagged agent and label of a sweep in its own organization', () => {
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const sweep = check.slice(
+      check.indexOf('async function sweep(tag, label)'),
+      check.indexOf('async function removeTokenInApp('),
+    )
+    // each tagged agent carries its organization from the app's people
+    expect(sweep).toContain('.map((u) => ({ id: u.id, name: u.name, org: u.org }))')
+    expect(sweep).toContain('window.PLANNER.removeUser(a.id, { orgId: a.org })')
+    expect(sweep).toContain(
+      'window.PLANNER.removeLabel(l.id, { orgId: l.org, name: l.name, color: l.color })',
+    )
+    // and no agent or label removal names the home organization, which
+    // only the managed-projects passes read, as Nora's managed lists are
+    // her home organization's
+    const removals = sweep.match(/\bremove(?:User|Label)\([^)]*\)/g) ?? []
+    expect(removals.length).toBeGreaterThanOrEqual(2)
+    for (const call of removals) expect(call).not.toContain('homeOrg')
   })
   it('searches a sweep by the run tag, or by the prefix every run tag shares', () => {
     expect(searchOf('stgchk-0a1b2c')).toBe('stgchk-0a1b2c')

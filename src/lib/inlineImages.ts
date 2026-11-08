@@ -376,7 +376,7 @@ export function createInlineImages(
       if (version !== generation || entries.get(entry.id) !== entry || !entry.minting) return
       entry.minting = false
       if (outcome.state === 'missing' || outcome.state === 'refused') return gone(entry)
-      if (outcome.state === 'failed') return retryLater(entry)
+      if (outcome.state === 'failed' || outcome.state === 'dropped') return retryLater(entry)
       entry.exp = outcome.lease.exp * 1000
       if (entry.phase === 'ready' && entry.owned) {
         // a renewal: the held bytes show again, nothing downloads

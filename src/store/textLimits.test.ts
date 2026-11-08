@@ -4,6 +4,7 @@ import { NO_PASSWORD_LOGIN } from '../../convex/lib/email'
 import { LIMITS, TEXT_MAX } from '../../convex/lib/limits'
 import { limitSentence, sentence } from '../lib/fieldLimits'
 import { answerMilestones, isMilestoneRead } from './milestoneStandIn.setup'
+import { labelShownOf, shownOf } from './personShown.setup'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 import type { Row } from './rows'
 
@@ -173,7 +174,14 @@ describe('the limits in the store', () => {
     await vi.waitFor(() => expect(P.milestoneRead('limits').state).toBe('ok'))
     const project = P.projects[0].id
     expect(await P.updateProject(project, { name: NAME_OVER })).toBe(false)
-    expect(await P.updateTeam('team-a', { name: NAME_OVER })).toBe(false)
+    expect(
+      await P.updateTeam(
+        'team-a',
+        { name: NAME_OVER },
+        {},
+        { orgId: P.homeOrg, name: P.teamById('team-a')?.name ?? '' },
+      ),
+    ).toBe(false)
     expect(await P.setOrg({ name: NAME_OVER })).toBe(false)
     expect(await P.updateMilestone('milestone-a', { name: NAME_OVER })).toBe(false)
     expect(toast.mock.calls.map(([message]) => message)).toEqual([
@@ -185,7 +193,12 @@ describe('the limits in the store', () => {
     expect(P.teamById('team-a')?.name).toBe('Field crew')
     expect(sent).toEqual([])
     void P.updateProject(project, { name: NAME_AT_CAP })
-    void P.updateTeam('team-a', { name: ` ${NAME_AT_CAP} ` })
+    void P.updateTeam(
+      'team-a',
+      { name: ` ${NAME_AT_CAP} ` },
+      {},
+      { orgId: P.homeOrg, name: P.teamById('team-a')?.name ?? '' },
+    )
     expect(sent).toEqual(['projects:update', 'teams:update'])
   })
 
@@ -194,7 +207,7 @@ describe('the limits in the store', () => {
     // the first 40 characters are an existing label's name
     const over = 'n'.repeat(LIMITS.labelName.max + 1)
     expect(P.addLabel({ name: over })).toBeNull()
-    expect(P.updateLabel('label-a', { name: over })).toBe(false)
+    expect(P.updateLabel('label-a', { name: over }, {}, labelShownOf(P, 'label-a'))).toBe(false)
     expect(toast.mock.calls.map(([message]) => message)).toEqual([
       'A label name must be at most 40 characters. Shorten it.',
       'A label name must be at most 40 characters. Shorten it.',
@@ -208,7 +221,9 @@ describe('the limits in the store', () => {
     const sentence = 'Plannable hours per week must be a whole number of hours from 1 to 168.'
     expect(await P.setOrg({ defaultPlannableHours: 0 })).toBe(false)
     expect(await P.setOrg({ defaultPlannableHours: 169 })).toBe(false)
-    expect(P.updateUser(P.CURRENT_USER, { plannableHours: 169 })).toBe(false)
+    expect(
+      P.updateUser(P.CURRENT_USER, { plannableHours: 169 }, {}, shownOf(P, P.CURRENT_USER)),
+    ).toBe(false)
     expect(toast.mock.calls.map(([message]) => message)).toEqual([sentence, sentence, sentence])
     expect(sent).toEqual([])
     void P.setOrg({ defaultPlannableHours: 168 })

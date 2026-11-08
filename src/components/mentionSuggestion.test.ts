@@ -19,14 +19,26 @@ type Read = { org: string; search: string; cursor: string | null; resolve: (a: C
 
 const store = vi.hoisted(() => ({
   reads: [] as Read[],
-  pictures: new Map<string, { avatarPath: string; avatarUrl: string }>(),
+  // each person's picture as P.person paints it, by id
+  pictures: new Map<string, string>(),
+  // what each popup names (P.namePeople), by its key
+  named: new Map<string, { org: string; id: string }[]>(),
+  listeners: new Set<() => void>(),
 }))
 vi.mock('../store/planner', () => ({
   P: {
     homeOrg: 'org-home',
     mentionChoices: (org: string, search: string, cursor: string | null) =>
       new Promise((resolve) => store.reads.push({ org, search, cursor, resolve })),
-    user: (id: string) => store.pictures.get(id),
+    person: (id: string) => ({ state: 'ok', id, picture: store.pictures.get(id) ?? null }),
+    namePeople: (owner: string, people: { org: string; id: string }[]) => {
+      if (people.length === 0) store.named.delete(owner)
+      else store.named.set(owner, [...people])
+    },
+    subscribe: (listener: () => void) => {
+      store.listeners.add(listener)
+      return () => store.listeners.delete(listener)
+    },
   },
 }))
 vi.mock('../lib/convex', () => ({ live: {}, convex: {} }))
@@ -160,6 +172,8 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = () => {}
   store.reads.length = 0
   store.pictures.clear()
+  store.named.clear()
+  store.listeners.clear()
 })
 
 afterEach(() => {
@@ -513,7 +527,7 @@ describe('the mention popup', () => {
   })
 
   it("paints the row's portrait, and a picture only from the store", async () => {
-    store.pictures.set('erik', { avatarPath: 'storage-1', avatarUrl: 'https://example.test/erik' })
+    store.pictures.set('erik', 'https://example.test/erik')
     const p = popup()
     p.start('holm')
     await rest()
@@ -524,5 +538,28 @@ describe('the mention popup', () => {
     expect(av('me')?.querySelector('img')).toBeNull()
     expect(av('erik')?.querySelector('img')?.getAttribute('src')).toBe('https://example.test/erik')
     expect(p.el()?.querySelector('[title]')).toBeNull()
+  })
+
+  it('names its loaded rows while open, paints a picture that arrives without a keystroke, and releases them on exit', async () => {
+    const p = popup()
+    p.start('holm')
+    await rest()
+    await answer()
+    // the rows are named in their order, in the editor's organization
+    const [named] = [...store.named.values()]
+    const rows = [...(p.el()?.querySelectorAll<HTMLElement>('[data-mention-id]') ?? [])]
+    expect(named?.map((person) => person.id)).toEqual(rows.map((row) => row.dataset.mentionId))
+    expect(named?.map((person) => person.id)).toContain('erik')
+    expect(named?.every((person) => person.org === 'org-task')).toBe(true)
+    const img = () =>
+      p.el()?.querySelector<HTMLImageElement>('[data-mention-id="erik"] .mentionpop-av img')
+    expect(img()).toBeNull()
+    // the store holds Erik's picture now, and tells its listeners
+    store.pictures.set('erik', 'https://example.test/erik-late')
+    for (const listener of store.listeners) listener()
+    expect(img()?.getAttribute('src')).toBe('https://example.test/erik-late')
+    p.exit()
+    expect(store.named.size).toBe(0)
+    expect(store.listeners.size).toBe(0)
   })
 })

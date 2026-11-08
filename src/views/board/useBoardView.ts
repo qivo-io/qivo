@@ -61,10 +61,17 @@
 import { useEffect, useState } from 'react'
 import type { BoardAnswer } from '../../../convex/lib/board'
 import type { ViewRow } from '../../../convex/lib/viewReads'
+import { nameOf } from '../../components/usePeople'
 import { matchesAllWords, taskSearchText } from '../../lib/search'
 import { useViewVisibility } from '../../lib/viewVisibility'
 import { STALL } from '../../store/liveParts'
-import { type IssueFilters, type IssueVM, P, type ScopeInfo } from '../../store/planner'
+import {
+  type IssueFilters,
+  type IssueVM,
+  nameUnknown,
+  P,
+  type ScopeInfo,
+} from '../../store/planner'
 import { useViewsNews } from '../useViewsNews'
 import { type BoardVariant, boardFilters, useBoardRequest } from './boardArgs'
 
@@ -140,7 +147,8 @@ function passes(info: ScopeInfo, filters: IssueFilters, it: IssueVM) {
 
 /* The search text of task `key` (convex/lib/search.ts taskSearchText)
    from the fields a row of the answer sends: without its description and
-   labels. */
+   labels, and without the assignee's name while it has not loaded
+   (P.person), where the Board cannot tell (nameUnknown). */
 export const shownText = (
   key: string,
   t: { title: string; status: ViewRow['status']; priority: ViewRow['priority'] },
@@ -154,7 +162,7 @@ export const shownText = (
     status: t.status,
     group,
     priority: t.priority,
-    assigneeName: assignee ? P.user(assignee)?.name : undefined,
+    assigneeName: nameOf(P.person(assignee)),
     labelNames: [],
   })
 
@@ -335,9 +343,12 @@ export function useBoardView(
     }
     // the Board's own text check of a narrowed answer, over the fields a
     // row sends
+    // A task whose assignee's name has not loaded may match by it, so the
+    // check keeps it and the server's answer for the text decides.
     const textOk = (it: IssueVM) =>
       !narrowed ||
-      matchesAllWords(shownText(it.key, it, P.isGroup(it), it.assignee), filters.search)
+      matchesAllWords(shownText(it.key, it, P.isGroup(it), it.assignee), filters.search) ||
+      nameUnknown(P.person(it.assignee, it.org))
     const shown = new Set<string>()
     const tasks: IssueVM[] = []
     let missing = 0

@@ -8,11 +8,12 @@ import { SettingsField } from '../../components/settingsPage'
 import { cleanName, overLimit } from '../../lib/fieldLimits'
 import { PERSON_NAME, useSavedDraft } from '../../lib/savedDraft'
 import { useUpdateBlocker } from '../../lib/updateSafety'
-import { P, type ToastTone, type UserVM } from '../../store/planner'
+import { P, type PersonOk, type PersonView, type ToastTone, type UserVM } from '../../store/planner'
 import { DraftConflictLine } from './controls'
 
 // Account owners and organization admins share the same avatar controls.
-function useAvatarUpload(user: UserVM) {
+// Each write sends the picture the control showed as its `expected`.
+function useAvatarUpload(user: PersonOk) {
   const ref = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   // The avatar mutators answer an error sentence, or nothing when they worked.
@@ -23,14 +24,14 @@ function useAvatarUpload(user: UserVM) {
     e.target.value = ''
     if (!file || busy) return
     setBusy(true)
-    const err = await P.setAvatar(user.id, file)
+    const err = await P.setAvatar(user.id, file, user.avatar)
     setBusy(false)
     toast(err || 'Picture updated', err ? 'error' : 'success')
   }
   const clear = async () => {
     if (busy) return
     setBusy(true)
-    const err = await P.clearAvatar(user.id)
+    const err = await P.clearAvatar(user.id, user.avatar)
     setBusy(false)
     toast(err || 'Picture removed', err ? 'error' : 'success')
   }
@@ -48,11 +49,20 @@ function useAvatarUpload(user: UserVM) {
 
 // Keep the file input outside the closing menu and invoke pick() synchronously
 // before close(): opening a file dialog requires the original user activation.
-export function AvatarPicker({ user, size = 28 }: { user: UserVM; size?: AvatarSize }) {
-  const canEdit = P.canSetAvatar(user.id)
+/** Person `person`'s portrait, with the menu that changes or removes their
+    picture for whoever may (P.canSetAvatar), whether or not the store holds
+    them, or the plain portrait while they are not named yet or known only
+    by a picker's name, which does not say what picture they have, so the
+    menu could not offer the right actions or send it as `expected`. */
+export function AvatarPicker({ person, size = 28 }: { person: PersonView; size?: AvatarSize }) {
+  if (person.state !== 'ok' || person.nameOnly || !P.canSetAvatar(person.id, person.org))
+    return <Avatar id={person.id} size={size} />
+  return <AvatarMenu user={person} size={size} />
+}
+
+function AvatarMenu({ user, size }: { user: PersonOk; size: AvatarSize }) {
   const { input, busy, clear, pick } = useAvatarUpload(user)
-  const source = user.sampleAvatar ? 'Sample portrait' : null
-  if (!canEdit) return <Avatar id={user.id} size={size} />
+  const source = user.sample ? 'Sample portrait' : null
   return (
     <>
       {input}
@@ -98,10 +108,10 @@ export function AvatarPicker({ user, size = 28 }: { user: UserVM; size?: AvatarS
               }}
             >
               <Icon name="camera" size={14} />
-              {user.avatarPath ? 'Change picture…' : 'Upload a picture…'}
+              {user.avatar || user.sample ? 'Change picture…' : 'Upload a picture…'}
             </MenuItem>
             {/* Only private uploads can be removed; sample portraits are demo data. */}
-            {user.avatarPath && !user.sampleAvatar && (
+            {user.avatar && (
               <MenuItem
                 danger
                 data-avatar-clear={user.id}
@@ -124,7 +134,7 @@ export function AvatarPicker({ user, size = 28 }: { user: UserVM; size?: AvatarS
 export function AvatarField({ user }: { user: UserVM }) {
   return (
     <SettingsField label="Picture" width={430}>
-      <AvatarPicker user={user} size={40} />
+      <AvatarPicker person={P.person(user.id) ?? { state: 'loading', id: user.id }} size={40} />
     </SettingsField>
   )
 }

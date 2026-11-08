@@ -61,6 +61,7 @@ import {
   ProjectName,
   StatusDot,
 } from '../components/qivo'
+import { personLabel, useOrgPeople, usePeople } from '../components/usePeople'
 import { ViewNote } from '../components/ViewNote'
 import { OVERVIEW_BATCH } from '../store/overviewLists'
 import { type IssueVM, OVERVIEW_MILESTONE_SLOTS, P, type ScopeInfo } from '../store/planner'
@@ -224,8 +225,10 @@ function OvStat({
 function OvLeadStat({ info }: { info: ScopeInfo }) {
   const proj = info.proj
   const leadId = proj ? P.leadOf(proj.id) : null
-  const u = leadId ? P.user(leadId) : null
-  if (!u) return null
+  // named while the strip shows; a lead not loaded yet shows as loading,
+  // and only one the server's answer leaves out takes the cell away
+  const [u] = useOrgPeople(proj?.org ?? '', [leadId])
+  if (!u || u.state === 'gone') return null
   // Inheritance changes who is accountable, so keep it explicit. The owning
   // team remains in project settings; repeating it here dilutes the identity.
   const meta = info.metas[0]
@@ -235,7 +238,9 @@ function OvLeadStat({ info }: { info: ScopeInfo }) {
       <Avatar id={u.id} size={40} />
       <div className="min-w-0 break-words">
         <div className="mb-1 text-sm text-text-2">Lead</div>
-        <div className="text-md font-semibold leading-snug text-text-1">{u.name}</div>
+        <div className="text-md font-semibold leading-snug text-text-1">
+          {personLabel(u, 'No lead')}
+        </div>
         {inherited && <div className={statSubClass}>Inherited from {meta.name}</div>}
       </div>
     </div>
@@ -547,6 +552,8 @@ function OvList({
   let missing = 0
   let shown = 0
   let unknown = false
+  // the owners of the rows the list shows, named below
+  const owners: { org: string; id: string }[] = []
   const batches = list.batches.map((batch, i) => {
     const rows: ReactNode[] = []
     for (const row of batch.rows) {
@@ -558,6 +565,7 @@ function OvList({
         continue
       }
       shown++
+      if (it.owner) owners.push({ org: it.org, id: it.owner })
       if (kind === 'paused') {
         rows.push(
           <OvPausedRow
@@ -606,6 +614,8 @@ function OvList({
       </div>
     )
   })
+  // the people the list's loaded rows show, named while it shows
+  usePeople(owners)
   // as the Board's: a row with no model fails STALL.ms later while no task
   // load is on its way, which could still bring its model
   const stalled = useStall(missing > 0 && !P.tasksArriving(), kind)

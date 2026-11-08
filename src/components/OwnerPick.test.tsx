@@ -809,8 +809,12 @@ describe('the owner list’s pick', () => {
     await load({ holder: 'unnamed' })
     holding = true
     await openList()
-    const { ownerNameKept } = await import('./ownerNames')
     const org = snap.orgs[0].id
+    // the names the list hands the store's profile cache for the task's
+    // fields (P.takePeople)
+    const take = vi.spyOn(P, 'takePeople')
+    const ownerNameKept = (of: string, id: string) =>
+      take.mock.calls.some(([at, rows]) => at === of && rows.some((r) => r.id === id))
     expect(holderRow()?.textContent).toContain('Loading…')
     await act(async () => holderRow()?.click())
     expect(ownerNameKept(org, 'unnamed')).toBe(false)

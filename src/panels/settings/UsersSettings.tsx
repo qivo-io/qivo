@@ -6,11 +6,15 @@
    agents and then the guests, in name order, with a search over names and
    addresses on the server and Previous and Next (lib/pagedList.ts
    usePagedPages). A row shows the store's profile while the store holds
-   it, so this session's writes show at once and every write sends the
-   store's `expected`; while it does not, the row shows the answer's values
-   and its write controls wait ("Loading this person…"). The last-admin
-   lock follows the server's count of active admins, never the rows on
-   screen. An agent's key line and its key panel read tokens.agentKeys
+   it, so this session's writes show at once, else the answer's values, and
+   every write sends what the row showed (UserControls.tsx ShownPerson,
+   store/planner.ts PersonShown) with its `expected` from it, whether or
+   not the store holds the person, so no control waits for the store. Each
+   row's face is P.person's, its picture editor included, and the page
+   names the people of its rows and kept rows (usePeople). A removal
+   hides its row while it is on its way and after the server accepted it,
+   and a refused one shows it again. The last-admin lock follows the
+   server's count of active admins, never the rows on screen. An agent's key line and its key panel read tokens.agentKeys
    once, for the agents on screen, and again after a key write and when
    the tab shows again, never as a subscription, and a key line says
    Checking keys… while its read waits. A row whose name, address or hours
@@ -32,9 +36,9 @@ import { PageFold } from '../../components/pageFold'
 import { pagesState, useMoveFocus } from '../../components/pageMoves'
 import { Avatar, Icon, Seg } from '../../components/qivo'
 import { FieldHint, PageTitle, SettingsGroup, SettingsSection } from '../../components/settingsPage'
+import { usePeople } from '../../components/usePeople'
 import { DEMO_MODE } from '../../lib/demoMode'
 import { cleanName, overLimit, sentence } from '../../lib/fieldLimits'
-import { nameInitials } from '../../lib/initials'
 import { type InviteReads, InviteRows, useInviteDeliveries } from '../../lib/inviteDeliveries'
 import { useUnsaved } from '../../lib/leaveGuard'
 import { pageEnd, usePagedPages, useSettledSearch } from '../../lib/pagedList'
@@ -48,7 +52,7 @@ import type {
   SettingsPersonRow,
   UserVM,
 } from '../../store/planner'
-import { P } from '../../store/planner'
+import { P, personShownOf } from '../../store/planner'
 import { BackLink, DemoCapabilityNotice } from './controls'
 import { AvatarPicker } from './ProfileControls'
 import {
@@ -56,6 +60,7 @@ import {
   PlannableHoursInput,
   ProjectRightCell,
   ProjectRightHeader,
+  type ShownPerson,
   UserEmail,
   UserName,
   UserRoleSelect,
@@ -73,57 +78,42 @@ type PageReady = Extract<PeoplePageAnswer, { state: 'ready' }>
 
 /* ------------------------------------------------------------- the rows */
 
-/** What a row shows of a person, the store's profile while the store
-    holds it, else the server's answer. */
-type Shown = Pick<
-  UserVM,
-  | 'id'
-  | 'name'
-  | 'org'
-  | 'orgRole'
-  | 'active'
-  | 'isAgent'
-  | 'email'
-  | 'pending'
-  | 'plannableHours'
-  | 'canCreateProjects'
->
-
-/** The store's profile of `id` in the home organization, or undefined. */
+/** The store's profile of `id` in the home organization, or undefined,
+    which a row paints over the answer so this session's writes show at
+    once, and which keeps an "Added" row on screen. */
 const held = (id: string): UserVM | undefined => {
   const user = P.user(id)
   return user && user.org === P.homeOrg ? user : undefined
 }
 
-/** `answer` as the fields a row shows. */
-const shownOf = (answer: SettingsPersonRow): Shown => ({
+/** `answer` as the row shows it and its writes send it. */
+const shownOf = (answer: SettingsPersonRow): ShownPerson => ({
   id: answer.id,
+  orgId: P.homeOrg,
   name: answer.name,
-  org: P.homeOrg,
   orgRole: answer.org_role,
   active: answer.active,
   isAgent: answer.kind === 'agent',
-  email: answer.email ?? undefined,
+  email: answer.email,
   pending: answer.pending,
   plannableHours: answer.plannable_hours,
   canCreateProjects: answer.can_create_projects,
 })
 
-/** A face for a person the store does not hold, their initials on a
-    neutral color, named for readers, never the dashed "Unassigned" face
-    a missing person gets elsewhere. In a div, so the row's name block
-    stays its second div, as the phone layout reads it. */
-function PersonFace({ name }: { name: string }) {
+/** Person `id` as the row shows them: the store's profile while it holds
+    them, else the answer, or null with neither. */
+const rowShown = (id: string, answer: SettingsPersonRow | null): ShownPerson | null => {
+  const vm = held(id)
+  return vm ? { id, ...personShownOf(vm) } : answer ? shownOf(answer) : null
+}
+
+/** A row's face, P.person's, with the picture editor for an admin. In a
+    div, so the row's name block stays its second div, as the phone layout
+    reads it. */
+function RowFace({ id }: { id: string }) {
   return (
-    <div className="shrink-0">
-      <span
-        role="img"
-        aria-label={name}
-        data-person-face
-        className="flex size-7 items-center justify-center rounded-[5px] bg-surface-3 font-semibold text-text-2 [font-size:var(--fs-sm)]"
-      >
-        {nameInitials(name)}
-      </span>
+    <div className="flex shrink-0">
+      <AvatarPicker person={P.person(id, P.homeOrg) ?? { state: 'loading', id }} />
     </div>
   )
 }
@@ -386,7 +376,10 @@ type RowContext = {
   setOpenKeys: (id: string | null) => void
   onKeysChanged: () => void
   onUnsaved: (field: string) => (id: string, unsaved: boolean) => void
-  onRemoved: (id: string) => void
+  /** Hides person `id`'s row while their removal `removal` is on its way
+      and once the server accepted it, then runs `done`; a refused one
+      shows the row again. */
+  onRemove: (id: string, removal: Promise<boolean>, done: () => void) => void
 }
 
 /* One person or agent of the list, by id. While the store holds the
@@ -413,10 +406,9 @@ function UserRow({
   pageRow?: boolean
   ctx: RowContext
 }) {
-  const vm = held(id)
-  const u: Shown | null = vm ?? (answer ? shownOf(answer) : null)
+  const u = rowShown(id, answer)
   if (!u) return null
-  const waiting = !vm || forceWaiting
+  const waiting = forceWaiting
   const isSelf = id === P.CURRENT_USER
   const lastAdmin = u.orgRole === 'admin' && u.active && (ctx.admins === null || ctx.admins <= 1)
   const blocked = isSelf || lastAdmin || waiting
@@ -431,7 +423,7 @@ function UserRow({
         style={{ opacity: u.active ? 1 : 0.62 }}
         className="[display:flex] [align-items:center] [gap:8px] [padding:8px] [border-radius:var(--r-md)] [border:1px_solid_var(--border)] [background:var(--surface-1)]"
       >
-        {vm ? <AvatarPicker user={vm} /> : <PersonFace name={u.name} />}
+        <RowFace id={id} />
         <div className="[flex:1] [min-width:0]">
           <UserName user={u} isSelf={isSelf} waiting={waiting} onUnsaved={ctx.onUnsaved('name')} />
           {/* an agent has no address to show or edit; what stands in its
@@ -509,12 +501,11 @@ function UserRow({
           }
           onClick={() => {
             if (blocked) return
-            ctx.confirm.press(`u:${id}`, () => {
-              if (P.removeUser(id)) {
-                ctx.onRemoved(id)
-                window.showToast?.(`${u.name} removed from the organization`)
-              }
-            })
+            ctx.confirm.press(`u:${id}`, () =>
+              ctx.onRemove(id, P.removeUser(id, { orgId: u.orgId }), () =>
+                window.showToast?.(`${u.name} removed from the organization`),
+              ),
+            )
           }}
         >
           <Icon name="trash" size={16} />
@@ -531,24 +522,27 @@ function UserRow({
 /* One guest of the list, by id, with the address, the invitation's state,
    the first projects the server listed and the hours, and a two-press
    Remove. Like UserRow, it paints the store's profile while the store
-   holds it and waits otherwise. */
+   holds it, else the answer, and writes with what it showed;
+   `forceWaiting` keeps the writes off on the phone's user page while its
+   read is not current. */
 function GuestRow({
   id,
   answer,
   note,
   ctx,
+  forceWaiting = false,
   pageRow = false,
 }: {
   id: string
   answer: SettingsPersonRow | null
   note: KeptNote | null
   ctx: RowContext
+  forceWaiting?: boolean
   pageRow?: boolean
 }) {
-  const vm = held(id)
-  const u: Shown | null = vm ?? (answer ? shownOf(answer) : null)
+  const u = rowShown(id, answer)
   if (!u) return null
-  const waiting = !vm
+  const waiting = forceWaiting
   const arm = ctx.confirm.armed === `g:${id}`
   const projects = answer?.guest ?? null
   return (
@@ -559,7 +553,7 @@ function GuestRow({
       {...(note ? { 'data-user-kept': note === 'Added' ? 'added' : 'kept' } : {})}
       className="[display:flex] [align-items:center] [gap:8px] [padding:8px] [border-radius:var(--r-md)] [border:1px_solid_var(--border)] [background:var(--surface-1)]"
     >
-      {vm ? <AvatarPicker user={vm} /> : <PersonFace name={u.name} />}
+      <RowFace id={id} />
       <div className="[flex:1] [min-width:0]">
         {/* the address gives way to a long line, never the invitation's
             state and its Send invitation */}
@@ -620,12 +614,11 @@ function GuestRow({
         }
         onClick={() => {
           if (waiting) return
-          ctx.confirm.press(`g:${id}`, () => {
-            if (P.removeUser(id)) {
-              ctx.onRemoved(id)
-              window.showToast?.(`${u.email || u.name} no longer has access`)
-            }
-          })
+          ctx.confirm.press(`g:${id}`, () =>
+            ctx.onRemove(id, P.removeUser(id, { orgId: u.orgId }), () =>
+              window.showToast?.(`${u.email || u.name} no longer has access`),
+            ),
+          )
         }}
       >
         <Icon name="trash" size={16} />
@@ -650,8 +643,7 @@ function PhoneRow({
   setPage: (page: string) => void
   pageRow: boolean
 }) {
-  const vm = held(id)
-  const u: Shown | null = vm ?? (answer ? shownOf(answer) : null)
+  const u = rowShown(id, answer)
   if (!u) return null
   return (
     <Button
@@ -664,7 +656,7 @@ function PhoneRow({
       aria-label={`Manage ${u.name}`}
       onClick={() => setPage(`user:${id}`)}
     >
-      {vm ? <Avatar id={id} size={28} /> : <PersonFace name={u.name} />}
+      <Avatar id={id} size={28} />
       <span className="settings-mobile-menu-copy">
         <span>
           {u.name}
@@ -794,7 +786,8 @@ export function OrgUsersPage({
   // the fields that hold their row, with unsaved text or a save the server
   // has not answered (UserControls.tsx useHeldRow), by person
   const [drafts, setDrafts] = useStateS<ReadonlyMap<string, ReadonlySet<string>>>(() => new Map())
-  // the profiles removed here, hidden while the store no longer holds them
+  // the people removed here, hidden while the removal is on its way and
+  // once the server accepted it; a refused one comes back
   const [removed, setRemoved] = useStateS<ReadonlySet<string>>(() => new Set())
   // the row that holds focus, which stays while a person edits it, so a
   // kept row does not leave under the cursor as its text passes through
@@ -827,7 +820,7 @@ export function OrgUsersPage({
   const keptIds: { id: string; note: KeptNote }[] = []
   const keep = (id: string, note: KeptNote) => {
     if (onPage.has(id) || keptIds.some((k) => k.id === id)) return
-    if (removed.has(id) && !held(id)) return
+    if (removed.has(id)) return
     keptIds.push({ id, note })
   }
   if (!personPage) {
@@ -839,6 +832,16 @@ export function OrgUsersPage({
   // forget the answers of rows neither the page nor a kept row shows
   for (const id of known.current.keys())
     if (!onPage.has(id) && !keptIds.some((k) => k.id === id)) known.current.delete(id)
+  // the people the page shows, named while it shows: the kept rows, then
+  // the page's rows, or the phone page's one person
+  usePeople(
+    (personPage
+      ? person?.answer
+        ? [person.answer.person.id]
+        : []
+      : [...keptIds.map((k) => k.id), ...pageRows.map((r) => r.id)]
+    ).map((id) => ({ org: P.homeOrg, id })),
+  )
 
   /* ---- the key lines ---- */
   const { visible, shownAt } = useViewVisibility()
@@ -929,7 +932,17 @@ export function OrgUsersPage({
     setOpenKeys,
     onKeysChanged,
     onUnsaved,
-    onRemoved: (id) => setRemoved((was) => new Set(was).add(id)),
+    onRemove: (id, removal, done) => {
+      setRemoved((was) => new Set(was).add(id))
+      void removal.then((accepted) => {
+        if (accepted) return done()
+        setRemoved((was) => {
+          const next = new Set(was)
+          next.delete(id)
+          return next
+        })
+      })
+    },
   }
 
   /* ---- the add form ---- */
@@ -1053,7 +1066,13 @@ export function OrgUsersPage({
             <SettingsSection>
               <div className="[display:flex] [flex-direction:column] [gap:6px]">
                 {answer.person.org_role === 'guest' ? (
-                  <GuestRow id={id} answer={answer.person} note={null} ctx={ctx} />
+                  <GuestRow
+                    id={id}
+                    answer={answer.person}
+                    note={null}
+                    forceWaiting={person.state !== 'ok'}
+                    ctx={ctx}
+                  />
                 ) : (
                   <UserRow
                     id={id}
@@ -1082,7 +1101,7 @@ export function OrgUsersPage({
     note: KeptNote | null,
     pageRow: boolean,
   ) => {
-    if (removed.has(id) && !held(id)) return null
+    if (removed.has(id)) return null
     const role = held(id)?.orgRole ?? answer?.org_role
     if (role === 'guest')
       return <GuestRow key={id} id={id} answer={answer} note={note} ctx={ctx} pageRow={pageRow} />

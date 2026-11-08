@@ -27,6 +27,7 @@ import { ChoiceEnd, PickerSearch } from '../components/pickerParts'
 import { type ChoiceWords, escapeClearsFirst } from '../components/pickerWords'
 import { Avatar, DateSelect, Icon, MenuItem, Popover } from '../components/qivo'
 import { WAITS_FOR_SAVE } from '../components/rowElements'
+import { useOrgPeople, usePeople } from '../components/usePeople'
 import { ACCESS_CAPS } from '../lib/accessCaps'
 import { copyText } from '../lib/clipboard'
 import { relativeWeek, weekToISO } from '../lib/dates'
@@ -1301,12 +1302,16 @@ type Taker = { id: string; name: string } | null
 function AccessRemovalModal({
   change,
   answer,
+  onRemoved,
   onClose,
   focusAfterClose,
 }: {
   change: AccessRemoval
   /** the server's preview that opened the window (P.startRemoval) */
   answer: RemovalAnswer
+  /** runs once the access is gone: the server accepted the removal the
+      window sent, or said it was gone already */
+  onRemoved?: () => void
   onClose: () => void
   /** what takes focus as the window closes, as the removal takes the row
       of the button that opened it away before the server accepts it */
@@ -1338,13 +1343,17 @@ function AccessRemovalModal({
   const tasks = `${count} task${count === 1 ? '' : 's'}`
   // "the task" and "this task" read better than "the 1 task"
   const theTasks = count === 1 ? 'the task' : `the ${tasks}`
-  const team = 'teamId' in change ? P.teams.find((t) => t.id === change.teamId) : null
-  const teamName = `the ${teamNoun(team?.name)}`
+  // the team and the person as the page that pressed showed them (the
+  // change's label), the store's team only as a fallback
+  const team =
+    'teamId' in change
+      ? ((change.kind !== 'teamMember' ? change.label : undefined) ??
+        P.teamById(change.teamId)?.name)
+      : undefined
+  const teamName = `the ${teamNoun(team)}`
   const person =
     'userId' in change
-      ? shown.people.find((p) => p.id === change.userId)?.name ||
-        P.user(change.userId)?.name ||
-        'Someone'
+      ? shown.people.find((p) => p.id === change.userId)?.name || change.label || 'Someone'
       : ''
   const refs = new Map(shown.projects.map((p) => [p.id, p]))
   const places = shown.keep.targets.flatMap((id) => refs.get(id) ?? [])
@@ -1386,6 +1395,14 @@ function AccessRemovalModal({
       chosen ? nextKeep || !next.reassign.allowed : !next.reassign.allowed && nextKeep,
     )
   }
+  /* The removal that leaves the tasks, once a read-only organization
+     allows only that, reported once the server accepts it. */
+  const leaveTasks = (now: RemovalAnswer) => {
+    onClose()
+    void P.removeLeavingTasks(change, now).then((removed) => {
+      if (removed) onRemoved?.()
+    })
+  }
   /* After a refused write, the window asks the server again: an answer it
      cannot read keeps the window with its lists, a refusal closes it, as the
      write's own message already said why, and a read-only organization
@@ -1393,18 +1410,20 @@ function AccessRemovalModal({
   const finish = (removal: Promise<boolean>) => {
     setSaving(true)
     void removal.then(async (removed) => {
-      if (removed) return onClose()
+      if (removed) {
+        onRemoved?.()
+        return onClose()
+      }
       const now = await P.previewRemoval(change)
       if (!open.current) return
       setSaving(false)
       if (now === null || now.state === 'too_large') return
       if (now.state === 'refused') return onClose()
-      if (now.state === 'unavailable' || !now.pending) return onClose()
-      if (now.leave_only) {
-        onClose()
-        void P.removeLeavingTasks(change, now)
-        return
+      if (now.state === 'unavailable' || !now.pending) {
+        onRemoved?.()
+        return onClose()
       }
+      if (now.leave_only) return leaveTasks(now)
       // a refused removal whose tasks are now covered keeps its answer, so
       // a retry checks again and takes the plain removal
       if (now.tasks > 0) showAgain(now, true)
@@ -1425,6 +1444,7 @@ function AccessRemovalModal({
       if (now.state === 'unavailable' || (now.state === 'ok' && !now.pending)) {
         // someone else removed this access meanwhile: say so instead of a silent close
         window.showToast?.(`${P.removalGoneText(change)} Nothing was changed.`, 'info')
+        onRemoved?.()
         onClose()
         return
       }
@@ -1440,11 +1460,7 @@ function AccessRemovalModal({
         window.showToast?.(sentence(now.message), 'error')
         return
       }
-      if (now.leave_only) {
-        onClose()
-        void P.removeLeavingTasks(change, now)
-        return
-      }
+      if (now.leave_only) return leaveTasks(now)
       // nobody loses sight of anything any more, so the plain removal applies
       if (now.tasks === 0) {
         finish(P.removeAccess(change, { to: null }))
@@ -1645,6 +1661,9 @@ function ReassignPicker({
   onPick: (taker: Taker) => void
 }) {
   const label = to?.name ?? 'Unassigned'
+  // the chosen person, named while the button shows them after the list
+  // closes, so their portrait loads
+  useOrgPeople(change.orgId ?? P.homeOrg, [to?.id])
   return (
     <Popover
       width={280}
@@ -1713,6 +1732,9 @@ function ReassignChoiceList({
     most: TAKERS_MOST,
   })
   const end = listEnd(list, query !== '')
+  // the picker's people, named while it is open, in the change's
+  // organization
+  usePeople(list.rows.map((person) => ({ org: change.orgId ?? P.homeOrg, id: person.id })))
   // the answer of a read that holds no rows says why: the first read's, or
   // a Load more's, after which Try again would only ask the same
   const held = end === 'held' ? list.answers[0] : (list.failure ?? undefined)
@@ -1752,7 +1774,11 @@ function ReassignChoiceList({
           <MenuItem
             key={person.id}
             active={to?.id === person.id}
-            onClick={() => onPick({ id: person.id, name: person.name })}
+            onClick={() => {
+              // a pick outlives the list, so its row is kept as a name
+              P.takePeople(change.orgId ?? P.homeOrg, [person])
+              onPick({ id: person.id, name: person.name })
+            }}
             data-reassign-choice={person.id}
           >
             <Avatar id={person.id} size={20} />

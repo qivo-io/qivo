@@ -2076,6 +2076,23 @@ schema change, no backfill and no release step. The staging check's step
 `ui/startup-selection` checks it on the deployment's reads, so it needs a
 backend from v0.1.126 on.
 
+From the release after v0.1.159, the app asks for pictures only for the
+signed-in person's own seats and the people its open pages, pickers and
+views show, names and paints a person
+the workspace does not hold from `people.byIds` through a bounded profile
+cache, sends the writes of Settings › Users, a team's page, Settings ›
+Teams and Settings › Labels with the values the page showed, whether or
+not the workspace holds the person, team or label, checks a new label's
+name on `labels.picker`'s `exact` and picks its color from the label's id.
+`people.byIds` now answers `avatar`, `sample_avatar` and `plannable_hours`
+beside each person's face, which the workspace's people part already sends
+every seat. The app reads `people.byIds`, which v0.1.147 (`cd7ff803`)
+first shipped, and `exact`, which v0.1.97 (`92434062`) first shipped, and
+while the people part sends every profile it reads `people.byIds` only
+for references to people who were removed, so the floors above already
+hold this app and the release sets no new rollback floor. There is no
+schema change, no backfill and no release step.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.

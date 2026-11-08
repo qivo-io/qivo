@@ -20,6 +20,7 @@
 import { type CSSProperties, type Ref, useEffect, useMemo, useRef, useState } from 'react'
 import { Avatar, Icon, Seg } from '../components/qivo'
 import { Button } from '../components/ui/button'
+import { personLabel } from '../components/usePeople'
 import {
   fmtHours,
   hasPlannableWeek,
@@ -27,16 +28,17 @@ import {
   type LoadIssue,
   loadTone,
   pausedWeeksByPerson,
-  plannableHoursOf,
 } from '../lib/workload'
-import { P, type ScopeInfo, type UserVM } from '../store/planner'
+import { P, type PersonView, type ScopeInfo } from '../store/planner'
 import type { OwnerItem } from '../store/viewDelay'
+import { CAPACITY_UNKNOWN, capacityOf } from './capacity'
 import './Resources.css'
 
-/** Person `user`'s place in Team utilization: their organization, and how
+/** A person's place in Team utilization: their id and organization, how
     many of the Roadmap's shown rows they own, which orders a guest's or
-    Viewer's capped calls (P.watchRoadmapTeam). */
-export type TeamPerson = { user: UserVM; org: string; rows: number }
+    Viewer's capped calls (P.watchRoadmapTeam), and the person as P.person
+    names them, kept in place while their details load. */
+export type TeamPerson = { id: string; org: string; rows: number; person: PersonView }
 
 /** What the strip knows of one person's weeks: still loading, unknown, or
     the hours each shown week holds and the weeks with paused work. */
@@ -156,11 +158,10 @@ function ResourceStrip({
       onActiveWeek?.(hoveredCell.current?.week ?? focusedCell.current?.week ?? null)
     }
   }, [selectedUser, onActiveWeek])
-  const users = people.map((p) => p.user)
   // Filters clear transient hover/focus but retain a clicked week while its
   // person remains visible. Changing the grid itself releases the week lock.
   const lockContext = JSON.stringify([info.id, info.wide, P.gridEpoch, mode, viewMode, w0, w1])
-  const highlightContext = JSON.stringify([filterKey, lockContext, users.map((u) => u.id)])
+  const highlightContext = JSON.stringify([filterKey, lockContext, people.map((p) => p.id)])
   const activeContext = useRef(highlightContext)
   useEffect(() => {
     if (activeContext.current !== highlightContext) {
@@ -178,7 +179,7 @@ function ResourceStrip({
     return () => onActiveWeek?.(null)
   }, [onActiveWeek])
   const scopeOnly = viewMode === 'scope' && !info.wide
-  const capById = new Map(users.map((u) => [u.id, plannableHoursOf(u)]))
+  const capById = new Map(people.map((p) => [p.id, capacityOf(p.person)]))
 
   /* Each person's figures, once for each answer of the owner-load cache,
      change of the rows on screen (the views' news covers both), window and
@@ -186,21 +187,21 @@ function ResourceStrip({
      load; its weeks get a fixed dashed mark instead. Only the weeks on
      screen are spread, however far a plan runs. */
   const views = P.updates.views.getSnapshot()
-  const peopleKey = people.map((p) => `${p.org}:${p.user.id}`).join()
+  const peopleKey = people.map((p) => `${p.org}:${p.id}`).join()
   const base = useMemo(() => {
     const range = { from: w0, to: w1 }
     const scopeSet = new Set([info.id, ...info.subIds])
     const inScope = scopeOnly ? (pid: string) => scopeSet.has(pid) : undefined
     const out = new Map<string, Figures>()
-    for (const { user, org } of people) {
-      const load = P.ownerLoad(org, user.id)
-      const items = P.ownerItems(org, user.id)
+    for (const { id, org } of people) {
+      const load = P.ownerLoad(org, id)
+      const items = P.ownerItems(org, id)
       out.set(
-        user.id,
+        id,
         load.state === 'waiting'
           ? { state: 'waiting' }
           : items
-            ? figuresOf(user.id, items, range, inScope)
+            ? figuresOf(id, items, range, inScope)
             : { state: 'unknown' },
       )
     }
@@ -216,17 +217,18 @@ function ResourceStrip({
     if (!f.items.some((it) => it.uuid && livePositions[it.uuid])) return f
     return figuresOf(id, f.items, base.range, base.inScope, livePositions)
   }
-  const measurement = (u: UserVM, f: Figures | undefined, week: number) => {
+  const measurement = (id: string, f: Figures | undefined, week: number) => {
     if (!f || f.state === 'waiting') return `${P.weekLabel(week)}, Loading workload`
     if (f.state === 'unknown') return `${P.weekLabel(week)}, workload unknown`
     const h = f.hours.get(week) ?? 0
-    const cap = capById.get(u.id)
+    const cap = capById.get(id) ?? null
+    if (cap === null) return `${P.weekLabel(week)}, ${fmtHours(h)} h, ${CAPACITY_UNKNOWN}`
     return hasPlannableWeek(cap)
       ? `${P.weekLabel(week)}, ${fmtHours(h)} / ${fmtHours(cap)} h, ${Math.round((h / cap) * 100)}%`
       : `${P.weekLabel(week)}, ${fmtHours(h)} h`
   }
-  const description = (u: UserVM, f: Figures | undefined, week: number) =>
-    `${u.name}, ${measurement(u, f, week)}${f?.state === 'ok' && f.paused.has(week) ? ', includes paused work' : ''}`
+  const description = (p: TeamPerson, f: Figures | undefined, week: number) =>
+    `${personLabel(p.person, 'Unknown user')}, ${measurement(p.id, f, week)}${f?.state === 'ok' && f.paused.has(week) ? ', includes paused work' : ''}`
   const weeks = Array.from({ length: w1 - w0 + 1 }, (_, i) => w0 + i)
 
   return (
@@ -308,7 +310,7 @@ function ResourceStrip({
           ref={bodyRef}
           onScroll={(e) => onBodyScroll?.(e.currentTarget.scrollLeft)}
         >
-          {users.length === 0 ? (
+          {people.length === 0 ? (
             // only a current answer says nothing matches
             <p className="rs-empty" data-res-empty={status}>
               {status === 'ok'
@@ -319,9 +321,13 @@ function ResourceStrip({
             </p>
           ) : (
             <div className="rs-week-grid">
-              {users.map((u) => {
-                const capacity = capById.get(u.id)
-                const bounded = hasPlannableWeek(capacity)
+              {people.map((p) => {
+                const u = { id: p.id, name: personLabel(p.person, 'Unknown user') }
+                const capacity = capById.get(u.id) ?? null
+                // a person whose hours the store does not know shows hours
+                // without a percentage, never one against the default
+                const unknownCap = capacity === null
+                const bounded = capacity !== null && hasPlannableWeek(capacity)
                 const f = figures(u.id)
                 return (
                   <div
@@ -329,6 +335,7 @@ function ResourceStrip({
                     key={u.id}
                     data-res-row={u.id}
                     data-res-unbounded={!bounded || undefined}
+                    data-res-capacity-unknown={unknownCap || undefined}
                   >
                     <div className="rs-label">
                       <Button
@@ -356,6 +363,11 @@ function ResourceStrip({
                               {fmtHours(capacity)} hours/week
                             </span>
                           )}
+                          {unknownCap && p.person.state === 'ok' && (
+                            <span className="rs-person-capacity" data-res-capacity-unknown="">
+                              {CAPACITY_UNKNOWN}
+                            </span>
+                          )}
                         </span>
                       </Button>
                     </div>
@@ -364,7 +376,8 @@ function ResourceStrip({
                       {weeks.map((w) => {
                         const known = f?.state === 'ok' ? f : null
                         const raw = known?.hours.get(w) ?? 0
-                        const pct = bounded && known ? Math.round((raw / capacity) * 100) : null
+                        const pct =
+                          bounded && known ? Math.round((raw / (capacity as number)) * 100) : null
                         return (
                           <Button
                             type="button"
@@ -376,9 +389,11 @@ function ResourceStrip({
                                 ? (f?.state ?? 'waiting')
                                 : bounded
                                   ? loadTone(pct as number)
-                                  : 'agent'
+                                  : unknownCap
+                                    ? 'capacity-unknown'
+                                    : 'agent'
                             }
-                            aria-label={description(u, f, w)}
+                            aria-label={description(p, f, w)}
                             onMouseEnter={() => {
                               hoveredCell.current = { userId: u.id, week: w }
                               highlightCell(hoveredCell.current)

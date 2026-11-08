@@ -71,7 +71,10 @@ export type ViewDelayCtx = {
   capacity: (id: string) => number
   /** whether project `id` is live */
   projectLive: (id: string) => boolean
-  /** the organization of person `id` */
+  /** the organization of person `id`, '' for one the server's answer says
+      is not a person of any organization asked, or undefined while the
+      store cannot tell, as for a person whose details are on their way
+      (store/planner.ts P.person) */
   orgOf: (id: string) => string | undefined
   /** each owner's projection, built once while the rows hold still (one
       reshape of the views), by organization and owner; viewDelay fills it */
@@ -141,6 +144,14 @@ export function needsLoad(row: ViewRow, capacity: (id: string) => number): boole
   return issueNeedsLoad(delayIssueOfRow(row, capacity))
 }
 
+/** Whether an owner of organization `org` (ViewDelayCtx orgOf) is of a
+    row's organization `rowOrg`, as loadRowFor files the row's work. An
+    owner the store cannot place yet counts as the row's: the server lets a
+    task name only its own organization's people, so only a known other
+    organization, or the server's answer that leaves the person out, keeps
+    their work off their load, never a person not loaded yet. */
+const ownerInOrg = (org: string | undefined, rowOrg: string) => org === undefined || org === rowOrg
+
 /** The spans the views' rows file (convex/lib/loadRows.ts loadRowFor), by
     organization and owner, in one pass over the rows. */
 function filedSpans(ctx: ViewDelayCtx): Map<string, LoadSpan[]> {
@@ -152,7 +163,7 @@ function filedSpans(ctx: ViewDelayCtx): Map<string, LoadSpan[]> {
     const filed = loadRowFor(row, {
       isGroup: row.has_subtasks,
       projectLive: ctx.projectLive(row.project_id),
-      ownerInOrg: (id) => ctx.orgOf(id) === row.org_id,
+      ownerInOrg: (id) => ownerInOrg(ctx.orgOf(id), row.org_id),
       visible: true,
       staff: false,
       meId: '',
@@ -245,7 +256,7 @@ export function filedItems(ctx: OwnerItemsCtx): Map<string, OwnerItem[]> {
     const facts = {
       isGroup: row.has_subtasks,
       projectLive: ctx.projectLive(row.project_id),
-      ownerInOrg: (id: string) => ctx.orgOf(id) === row.org_id,
+      ownerInOrg: (id: string) => ownerInOrg(ctx.orgOf(id), row.org_id),
       visible: true,
       staff: false,
       meId: '',

@@ -38,6 +38,7 @@ import { cn } from '@/lib/utils'
 import { LIMITS } from '../../../convex/lib/limits'
 import type { Figure, HealthRow, HealthSort } from '../../../convex/lib/overview'
 import { Avatar, Icon, ProjectName } from '../../components/qivo'
+import { personLabel, usePeople } from '../../components/usePeople'
 import type { HealthView } from '../../store/overviewLists'
 import { P } from '../../store/planner'
 import { OvStatusBar } from './StatusBar'
@@ -244,6 +245,15 @@ export function OvHealthTable({
     ok && view?.table.sort === asked.key && view.table.dir === asked.dir ? shown : asked
   const more = view?.more ?? null
   const rows = ok?.rows ?? []
+  // the rows' leads, named while the table shows, each in its project's
+  // organization; a row whose project the workspace cannot place names no
+  // one, since a lead read in another organization would be gone there
+  usePeople(
+    rows.map((r) => {
+      const org = rowOrg(r)
+      return { org: org ?? '', id: org ? (r.lead_id ?? '') : '' }
+    }),
+  )
   const kept = !!view?.kept
   // Load more leaves at the end or where its next rows failed: focus it
   // left nowhere goes to Retry, else to the table
@@ -568,6 +578,17 @@ function TryAgain({ table }: { table: RefObject<HTMLDivElement | null> }) {
     the target for a keyboard. The row stays out of the Tab order; focus on
     its name also opens the shared tooltip. The button stops the click from
     reaching the row so one press is one navigation. */
+/** The organization of health row `row`'s project, whose lead it names,
+    or undefined while the workspace does not hold the project. */
+const rowOrg = (row: HealthRow) => P.project(row.project_id)?.org
+
+/** Row `row`'s lead as P.person answers them, or null for none or for one
+    the server's answer leaves out of the project's organization. */
+function leadOf(row: HealthRow) {
+  const lead = P.person(row.lead_id, rowOrg(row))
+  return lead && lead.state !== 'gone' ? lead : null
+}
+
 function HealthTableRow({
   row,
   last,
@@ -580,7 +601,7 @@ function HealthTableRow({
   onOpen: (id: string) => void
 }) {
   const f = figuresOf(row)
-  const lead = row.lead_id ? P.user(row.lead_id) : undefined
+  const lead = leadOf(row)
   const project = nameOf(row)
   return (
     <HoverTooltip content={`Open the ${project.name} board`}>
@@ -671,7 +692,7 @@ function HealthCard({
   onOpen: (id: string) => void
 }) {
   const f = figuresOf(row)
-  const lead = row.lead_id ? P.user(row.lead_id) : undefined
+  const lead = leadOf(row)
   const counting = row.counts.state === 'unavailable' && row.counts.reason === 'counting'
   /* a count's fact, or what stands in for it where the counts are not given */
   const fact = (n: number | null, text: string) =>
@@ -740,7 +761,7 @@ function HealthCard({
         {lead ? (
           <>
             <Avatar id={lead.id} size={28} />
-            <span>{lead.name}, Lead</span>
+            <span>{personLabel(lead, 'No lead assigned')}, Lead</span>
           </>
         ) : (
           'No lead assigned'

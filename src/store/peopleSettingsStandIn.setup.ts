@@ -21,8 +21,10 @@
      live and of the organization, each once, with `more`;
    - get: the person, `unavailable` alike for an unknown id and another
      organization's;
-   - byIds: the person rows with color and initials of the organization's
-     profiles among the ids, for any active seat, at most BY_IDS_MAX ids;
+   - byIds: the person rows with color, initials, picture, sample portrait
+     and stored hours of the organization's profiles among the ids, for any
+     active seat, at most BY_IDS_MAX ids, or the state `force.byIds` asks
+     for (every read failing, answering late or leaving every id out);
    - agentKeys: refused for anyone but an admin, for no ids and past
      LIST_BATCH; each agent of the organization among the ids with its
      keys newest first by created_at, the id breaking ties, at most
@@ -107,7 +109,12 @@ export const isPeopleSettingsRead = (name: string): name is PeopleSettingsRead =
     - `admins`, the count of active admins settingsPage and get answer;
     - `keysMost`, the bound on one agent's keys (AGENT_KEYS.most);
     - `creatorsUnavailable`, projectCreators answers `unavailable`;
-    - `guestShown`, the bound on a guest's projects (GUEST_PROJECTS.shown). */
+    - `guestShown`, the bound on a guest's projects (GUEST_PROJECTS.shown);
+    - `byIds`, what people.byIds answers whatever the workspace holds, as
+      the perf page's `peoplebyids` names it: `error`, every read fails, or
+      `gone`, every asked id is left out, as for people the organization
+      does not hold. The page's `byids-slow`, an answer after two seconds,
+      is the transport's (scripts/perf/server.mjs). */
 export type ForcedPeopleSettings = {
   notReady?: boolean
   stop?: number
@@ -117,6 +124,7 @@ export type ForcedPeopleSettings = {
   keysMost?: number
   creatorsUnavailable?: boolean
   guestShown?: number
+  byIds?: 'error' | 'gone'
 }
 
 type Profile = Workspace['profiles'][number]
@@ -315,10 +323,20 @@ export function peopleSettingsStandIn(
   if (name === 'people:byIds') {
     const ids = (args.ids ?? []) as readonly string[]
     if (ids.length > BY_IDS_MAX) throw badRequest(`ids must name at most ${BY_IDS_MAX} people`)
+    if (force.byIds === 'error') throw new Error(`${name} fails, as the stand-in was asked`)
+    if (force.byIds === 'gone') return { rows: [] }
     const rows: PersonFaceRow[] = []
     for (const id of new Set(ids)) {
       const p = people.find((row) => row.id === id)
-      if (p) rows.push({ ...personRow(p), color: p.color, initials: p.initials })
+      if (p)
+        rows.push({
+          ...personRow(p),
+          color: p.color,
+          initials: p.initials,
+          avatar: p.avatar_storage_id ?? null,
+          sample_avatar: p.sample_avatar ?? null,
+          plannable_hours: p.plannable_hours ?? null,
+        })
     }
     return { rows }
   }

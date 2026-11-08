@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { SYNC_LIMIT } from '../lib/boardGroups'
 import { menuTrigger } from '../lib/focusWhenGone'
 import { inboxBadge } from '../lib/inboxBadge'
@@ -19,6 +19,7 @@ import { Avatar, Icon, MenuItem, PausedMark, Popover, PriorityIcon, Seg, StatusD
 import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog'
 import { NativeSelect } from './ui/native-select'
+import { usePeople } from './usePeople'
 import { ViewFilters } from './viewFilters'
 
 type Actions = Record<string, (...args: unknown[]) => void>
@@ -376,6 +377,18 @@ function MobileTaskBoard({
     (info.mine ? 0 : Number(filters.mine || filters.assignees.length > 0))
   // the tasks the Board shows, groups as rows
   const tasks = view.tasks
+  // the owners the rows show, named while the list shows, with each task's
+  // assignee, whose name the text filter matches the task by
+  usePeople(
+    useMemo(
+      () =>
+        tasks.flatMap((task) => [
+          { org: task.org, id: task.owner ?? '' },
+          { org: task.org, id: task.assignee ?? '' },
+        ]),
+      [tasks],
+    ),
+  )
   const statusOrder = info.mine
     ? ['progress', 'review', 'todo', 'backlog', 'done']
     : P.STATUSES.map((item) => item.id)

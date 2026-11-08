@@ -12,6 +12,7 @@ import { type AccessChoices, type AccessLevel, P, type TeamAccessLevel } from '.
 import { ChoiceEnd, PickerSearch } from './pickerParts'
 import { ACCESS_WORDS, escapeClearsFirst } from './pickerWords'
 import { Avatar } from './qivo'
+import { usePeople } from './usePeople'
 
 /* "2 teams, 1 user": how many of each are selected. */
 const countOf = (teams: number, users: number) =>
@@ -242,6 +243,10 @@ function AccessChoiceList({
   const end = listEnd(list, query !== '')
   const teamRows = list.rows.filter((r) => r.type === 'team')
   const people = list.rows.filter((r): r is PersonChoice => r.type === 'user')
+  // the people the list shows, chosen ones first, named while it is open
+  usePeople(
+    [...members.people, ...people.map((row) => row.id)].map((id) => ({ org: on.org_id, id })),
+  )
   const ended = end === 'end'
   const noTeams = list.rows.length > 0 && teamRows.length === 0 && (people.length > 0 || ended)
   const noPeople = list.rows.length > 0 && people.length === 0 && ended

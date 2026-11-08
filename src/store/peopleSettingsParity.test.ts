@@ -156,6 +156,8 @@ async function northstar(o: { people?: number } = {}) {
   const nora = profiles.find((p) => p.name === 'Nora Berg')
   if (!nora) throw new Error('no Nora')
   const planted = await t.run(async (ctx) => {
+    // a picture for the first planted person, as people.byIds answers it
+    const picture = await ctx.storage.store(new Blob([new Uint8Array(64)], { type: 'image/png' }))
     const people: Doc<'profiles'>[] = []
     const extra = Math.max(0, (o.people ?? 0) - profiles.length - PLANTED.length - 1)
     const names = [
@@ -176,6 +178,8 @@ async function northstar(o: { people?: number } = {}) {
         ...(i === 4 || i === 3 ? {} : { auth_user_id: `auth_planted_${i}` }),
         plannable_hours: i === 0 ? 32 : undefined,
         can_create_projects: i === 0 ? true : undefined,
+        ...(i === 0 ? { avatar_storage_id: picture } : {}),
+        ...(i === 1 ? { sample_avatar: 'leo' as const } : {}),
         created_at: NOW,
       })
       people.push((await ctx.db.get(_id)) as Doc<'profiles'>)
@@ -227,6 +231,18 @@ describe("the Users page's stand-in", () => {
       ids: rows.slice(100, 200).map((r) => r.id),
     })
   }, 60_000)
+
+  it('answers people by id with their pictures, sample portraits and hours as the server does', async () => {
+    const { t, org, nora, ws, people, guest } = await northstar()
+    // the planted people carry a picture, a sample portrait, stored hours,
+    // an agent's none and a guest's, beside an id nobody holds
+    const ids = [...people.map((p) => p.id), guest.id, nora.id, 'no-such-person']
+    const walked = await same(t, nora, ws, 'people:byIds', { org_id: org.id, ids })
+    const rows = (walked.server[0] as { rows: Record<string, unknown>[] }).rows
+    expect(rows.some((r) => typeof r.avatar === 'string')).toBe(true)
+    expect(rows.some((r) => r.sample_avatar === 'leo')).toBe(true)
+    expect(rows.some((r) => r.plannable_hours === 32)).toBe(true)
+  })
 
   it('answers a guest who reads 200 live sub-projects in an everyday organization as the server does', async () => {
     const { t, org, nora, guest } = await northstar()

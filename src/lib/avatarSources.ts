@@ -19,20 +19,37 @@ const LOAD_TIMEOUT = 15_000
       re-encode that could not run is tried once more RETRY_DELAY later
       before the picture stays as initials.
     - `keptBytes`: the bytes all kept pictures hold together. The design
-      size's 1,000 pictures of 10 to 30 KB fit. Past it, a picture that
-      would need room waits as the person's initials instead of evicting
-      another, because while the store asks for its whole roster every
-      picture is wanted at once. A waiting picture keeps the lease it was
-      minted with and starts by itself once room frees.
-    Measured on the benchmark page (scripts/perf, people=1000&pictures=1 at
-    1440 by 1000, each picture a 20 KB PNG answered after 150 ms): the
-    1,000 pictures took 10 mint calls, at most 2 at once, and 1,000
-    downloads, at most 6 at once, and all showed after 27 s, which the
-    150 ms each download waits sets. They keep 20.2 MB, and the JS heap
-    settled at 12.4 MB. Hidden for 11 minutes of the page's clock, nothing
-    minted or downloaded and all 1,000 stayed shown; on return 10 mint
-    calls renewed them and nothing downloaded. Past a budget lowered to
-    1 MB, 37 of 200 showed and the rest waited as initials. */
+      size's 1,000 pictures of 10 to 30 KB fit. Past it, a picture an open
+      view names takes the room of the held picture shown least recently
+      that no view names, and waits as the person's initials, in the named
+      order, only while every held picture is named. Each download counts
+      at pictureBytes until its size is known, and a picture past the
+      budget only because of the downloads still waiting for a slot waits
+      for them rather than take any held picture's room. A waiting picture
+      keeps the lease it was minted with and starts by itself once room
+      frees.
+    The store asks only for the caller's own pictures and those its open
+    pages, pickers and views name (`named`, store/planner.ts). Measured on
+    the benchmark page (scripts/perf, people=1000&pictures=1 at 1440 by
+    1000, each picture a 20 KB PNG answered after 150 ms, 7 November 2026),
+    against the store that asked for every picture of its roster. The
+    caller's own picture is minted at boot in a call of its own:
+    - The Board of 100 tasks, whose people include the caller: 2 mint
+      calls of 100 people in all, 100 downloads, 2.0 MB kept, 13.3 MiB of
+      JS heap, the first 25 pictures 1.5 s after the page opened; before,
+      10 mint calls, 1,000 downloads, 20.2 MB, 14.6 MiB and 6.7 s.
+    - Settings › Users' first page, without the caller: 2 mint calls of the
+      caller and the page's 25 people, 26 downloads, 0.5 MB kept, 15.3 MiB,
+      the 25 pictures after 1.3 s; before, 10 mint calls, 1,000 downloads,
+      20.2 MB, 16.4 MiB and 0.9 s, because that store minted from boot,
+      before the page's rows arrived.
+    - Leaving that page while each picture took 1.5 s: of the 22 people
+      only it showed, the 5 downloads already running finished and no other
+      was minted or downloaded until the page opened again.
+    - With keptBytes lowered to 600 KB, after Settings › Users kept 17
+      pictures, the caller's among them, the Board took their room for 14
+      of its own and showed 14 pictures among its 84 people; before, it
+      downloaded none and showed 2. */
 export const AVATAR_SOURCES = {
   downloads: 6,
   pictureBytes: 256 * 1024,
@@ -58,7 +75,9 @@ type Entry = {
   tooLarge?: boolean
   /** its re-encode could not run once, so the next failure is final */
   shrinkFailed?: boolean
-  pending?: { controller: AbortController; source?: string }
+  /** its download: `slotted` once it holds a download slot, `dropped`
+      when no view names its key any more while it waited for one */
+  pending?: { controller: AbortController; source?: string; slotted: boolean; dropped: boolean }
 }
 
 type Dependencies = {
@@ -85,10 +104,23 @@ type Dependencies = {
  * survive view remounts; decoded bytes may also be restored from the optional
  * account-scoped persistent cache. Signed URLs never go into persistence.
  *
+ * `sync` gives the keys the store knows, every profile it holds or has a
+ * face of with a picture, which the entries follow, and `named` the keys
+ * the open views name, in their order, the only ones the store mints,
+ * renews and downloads. A key no view names any more leaves the waiting
+ * pictures, and its prepare still waiting for a download slot is dropped;
+ * a download on its way finishes. A held picture no view names is not
+ * renewed: past its lease and STALE_GRACE it shows no more (`url` answers
+ * null) but keeps its bytes, counted in the kept bytes and the first to go
+ * when a named picture needs room, the one shown least recently first.
+ * Named again, one mint shows it with no download.
+ *
  * AVATAR_SOURCES bounds the downloads at once, each kept picture and the
- * bytes kept in all. pause(true) holds everything while the page is hidden:
- * nothing renews, downloads or is released, and on return a held picture
- * past its renewal shows until its renewal answers, at most STALE_GRACE. */
+ * bytes kept in all. pause(true) holds everything while the page is hidden,
+ * so nothing renews, downloads or is released. On return a held picture a
+ * view names that is past its renewal shows until its renewal answers, at
+ * most STALE_GRACE. One no view names is not renewed, and past its grace it
+ * shows neither while the page is hidden nor after the return. */
 export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
   const deps: Dependencies = {
     now: () => Date.now(),
@@ -123,7 +155,14 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
   const entries = new Map<string, Entry>()
   let persistent: AvatarImageCache | null = null
   let restoreGeneration = 0
+  // whether the boot's restore ran, after which a key that becomes known
+  // is restored on its own
+  let restoredAll = false
   let paused = false
+  // the keys the open views name, and when each other key was last named
+  let namedKeys: ReadonlySet<string> = new Set()
+  const shownAt = new Map<string, number>()
+  let shownTick = 0
   // the bytes kept sources hold, and the downloads on their way, each
   // counted at pictureBytes until it is known
   let kept = 0
@@ -138,6 +177,30 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
      for a slot may hold, each download counted at pictureBytes. */
   const held = () => kept + (downloading + slotQueue.length) * AVATAR_SOURCES.pictureBytes
   const roomFor = (bytes: number) => held() + bytes <= AVATAR_SOURCES.keptBytes
+  /* Whether `bytes` more pass the budget beside the kept pictures and the
+     downloads on their way. The downloads waiting for a slot are left out,
+     since each counts at pictureBytes until it runs, while a picture
+     normally holds 10 to 30 KB. */
+  const short = (bytes: number) =>
+    kept + downloading * AVATAR_SOURCES.pictureBytes + bytes > AVATAR_SOURCES.keptBytes
+  /* Frees room for `bytes` by releasing the held pictures no view names,
+     the one shown least recently first, and answers whether it fits now.
+     Only a real need releases one. A picture that does not fit only
+     because of the downloads waiting for a slot waits for them, and
+     starts once their real sizes leave room (admit). A named picture is
+     never released for room. */
+  const makeRoom = (bytes: number) => {
+    if (roomFor(bytes)) return true
+    if (!short(bytes)) return false
+    const spare = [...entries]
+      .filter(([key, entry]) => entry.bytes > 0 && !entry.pending && !namedKeys.has(key))
+      .sort(([a], [b]) => (shownAt.get(a) ?? 0) - (shownAt.get(b) ?? 0))
+    for (const [, entry] of spare) {
+      if (!short(bytes)) break
+      release(entry)
+    }
+    return roomFor(bytes)
+  }
   /* Starts the waiting keys, in order, while room remains for them: with
      the lease each waits with while it lasts, else marked due so the
      store mints it again. A picture started here tells the store through
@@ -148,7 +211,7 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
     admitting = true
     try {
       for (const [key, entry] of waitingKeys) {
-        if (held() + AVATAR_SOURCES.pictureBytes > AVATAR_SOURCES.keptBytes) return
+        if (!makeRoom(AVATAR_SOURCES.pictureBytes)) return
         if (entries.get(key) !== entry || !entry.waiting) {
           waitingKeys.delete(key)
           continue
@@ -259,6 +322,9 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
     ticket = entries.get(key),
   ): Promise<boolean> => {
     if (!current(key, ticket)) return false
+    // a held picture past its grace that no view named shows no more; its
+    // renewal shows it again
+    const hidden = !!ticket.source && !ticket.restored && expired(ticket)
     ticket.expiresAt = lease.exp * 1000
     ticket.retryAt = 0
     // The storage version is immutable. Keep the decoded source when only
@@ -266,19 +332,26 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
     if (ticket.source && ticket.sourceOwned) {
       ticket.restored = false
       ticket.refreshFailed = false
-      return false
+      return hidden
     }
     if (ticket.pending || ticket.tooLarge) return false
-    // start no download while the kept bytes and one more picture would
-    // pass the budget; the key waits, in order, as initials
-    if (!ticket.source && !roomFor(AVATAR_SOURCES.pictureBytes)) {
+    // a picture no open view names downloads nothing
+    if (!namedKeys.has(key)) return false
+    // a named picture takes the room of a held one no view names; with
+    // every held picture named it waits, in the named order, as initials
+    if (!ticket.source && !makeRoom(AVATAR_SOURCES.pictureBytes)) {
       ticket.waiting = { due: false, lease }
       if (!waitingKeys.has(key)) waitingKeys.set(key, ticket)
       return false
     }
     ticket.waiting = undefined
     waitingKeys.delete(key)
-    const pending = { controller: new AbortController(), source: undefined as string | undefined }
+    const pending = {
+      controller: new AbortController(),
+      source: undefined as string | undefined,
+      slotted: false,
+      dropped: false,
+    }
     ticket.pending = pending
     let slot = false
     let timeout: ReturnType<typeof setTimeout> | undefined
@@ -286,6 +359,7 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
       const queued = takeSlot(pending.controller.signal)
       if (queued) await queued
       slot = true
+      pending.slotted = true
       if (!current(key, ticket) || ticket.pending !== pending) return false
       // a lease that ran out while it waited for a slot, as through a
       // hidden page, is minted again now, not taken to the gateway for a
@@ -306,6 +380,8 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
       const publish = (source: string, owned: boolean, bytes: number) => {
         if (!current(key, ticket) || ticket.pending !== pending) return false
         setSource(ticket, source, owned, bytes)
+        // the lease this download used decides when the picture renews
+        ticket.expiresAt = lease.exp * 1000
         ticket.restored = false
         ticket.refreshFailed = false
         if (owned) pending.source = undefined
@@ -383,6 +459,9 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
       return ready
     } catch {
       if (!current(key, ticket) || ticket.pending !== pending) return false
+      // dropped while it waited for a slot: no failure, and the store mints
+      // it again once a view names it
+      if (pending.dropped) return false
       return failure(key, false, ticket)
     } finally {
       clearTimeout(timeout)
@@ -392,18 +471,133 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
     }
   }
 
+  /* Restores the persistent cache's pictures of `keys` that hold no
+     source and are not downloading yet, answering whether any shows now.
+     A download that starts while a restore reads wins, and its lease
+     decides when the picture renews. */
+  const restoreKeys = async (keys: readonly string[]): Promise<boolean> => {
+    const cache = persistent
+    if (!cache) return false
+    const generation = restoreGeneration
+    const work = keys.map(async (key) => {
+      const entry = entries.get(key)
+      if (!entry || entry.pending) return false
+      let blob: Blob | null
+      try {
+        blob = await cache.read(key)
+      } catch {
+        return false
+      }
+      if (!blob || generation !== restoreGeneration || entries.get(key) !== entry || entry.source)
+        return false
+      if (blob.size > AVATAR_SOURCES.pictureBytes) {
+        cache.remove(key)
+        return false
+      }
+      if (!roomFor(blob.size)) return false
+      const source = deps.createUrl(blob)
+      let timeout: ReturnType<typeof setTimeout> | undefined
+      const timedOut = new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('Profile picture restore timed out')), 750)
+      })
+      let size: unknown
+      try {
+        size = await Promise.race([deps.decode(source), timedOut])
+      } catch {
+        deps.revokeUrl(source)
+        cache.remove(key)
+        return false
+      } finally {
+        if (timeout) clearTimeout(timeout)
+      }
+      if (!fits(blob, size)) {
+        deps.revokeUrl(source)
+        cache.remove(key)
+        return false
+      }
+      if (
+        generation !== restoreGeneration ||
+        entries.get(key) !== entry ||
+        entry.source ||
+        entry.pending ||
+        !roomFor(blob.size)
+      ) {
+        deps.revokeUrl(source)
+        return false
+      }
+      setSource(entry, source, true, blob.size)
+      entry.restored = true
+      entry.waiting = undefined
+      entry.expiresAt = Number.POSITIVE_INFINITY
+      entry.refreshFailed = false
+      return true
+    })
+    return (await Promise.all(work)).some(Boolean)
+  }
+
   return {
-    /** Removing/replacing a roster entry fences every pending response. */
-    sync(keys: Iterable<string>) {
+    /** Follows the keys the store knows (`keys`), every profile it holds
+        or has a face of with a picture, beside `without`, the profiles it
+        knows with none, which the persistent cache prunes by
+        (avatarImageCache.ts sync). Removing or replacing a key fences every
+        pending response. A key that becomes known after the boot's restore
+        is restored from the persistent cache on its own. */
+    sync(keys: Iterable<string>, without: Iterable<string> = []) {
       const wanted = new Set(keys)
-      persistent?.sync(wanted)
+      persistent?.sync(wanted, without)
       for (const [key, entry] of entries) {
         if (wanted.has(key)) continue
         entries.delete(key)
         waitingKeys.delete(key)
+        shownAt.delete(key)
         release(entry)
       }
-      for (const key of wanted) if (!entries.has(key)) entries.set(key, newEntry())
+      const added: string[] = []
+      for (const key of wanted)
+        if (!entries.has(key)) {
+          entries.set(key, newEntry())
+          added.push(key)
+        }
+      admit()
+      if (restoredAll && added.length > 0 && persistent)
+        void restoreKeys(added).then((shown) => {
+          if (shown) deps.changed()
+        })
+    },
+    /** Follows the keys the open views name, in their order, which the
+        store mints, renews and downloads. Each named key counts as shown
+        now; a key keeps the moment its last view let it go. A key no view
+        names any more leaves the waiting pictures, and its prepare still
+        waiting for a download slot is dropped. A held picture past its
+        grace that a view names again is due for its renewal at once, and
+        an older failed renewal no longer counts against it, so expire()
+        keeps it until the new renewal answers. */
+    named(keys: readonly string[]) {
+      const next = new Set(keys)
+      shownTick++
+      for (const key of namedKeys) if (!next.has(key)) shownAt.set(key, shownTick)
+      for (const key of next) {
+        shownAt.delete(key)
+        const entry = entries.get(key)
+        if (namedKeys.has(key) || !entry?.source || entry.restored || !expired(entry)) continue
+        entry.refreshFailed = false
+        entry.retryAt = 0
+      }
+      namedKeys = next
+      // the waiting pictures follow the named order
+      const waiting = new Map<string, Entry>()
+      for (const key of keys) {
+        const entry = waitingKeys.get(key)
+        if (entry) waiting.set(key, entry)
+      }
+      for (const [key, entry] of waitingKeys) if (!waiting.has(key)) entry.waiting = undefined
+      waitingKeys.clear()
+      for (const [key, entry] of waiting) waitingKeys.set(key, entry)
+      for (const [key, entry] of entries) {
+        if (next.has(key) || !entry.pending || entry.pending.slotted) continue
+        entry.pending.dropped = true
+        entry.pending.controller.abort()
+      }
       admit()
     },
     setPersistent(cache: AvatarImageCache | null) {
@@ -413,66 +607,15 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
       restoreGeneration++
       previous?.dispose()
     },
-    /** Shows the persistent cache's pictures, at most its 128 entries at
-        once, each counted in the kept bytes, before their leases renew. A
-        cached picture past pictureBytes or pictureEdge, as an older app
-        kept, leaves the cache instead and downloads and re-encodes as any
-        picture does. */
-    async restore() {
-      const cache = persistent
-      if (!cache) return false
-      const generation = ++restoreGeneration
-      const work = [...entries.entries()].map(async ([key, entry]) => {
-        let blob: Blob | null
-        try {
-          blob = await cache.read(key)
-        } catch {
-          return false
-        }
-        if (!blob || generation !== restoreGeneration || entries.get(key) !== entry || entry.source)
-          return false
-        if (blob.size > AVATAR_SOURCES.pictureBytes) {
-          cache.remove(key)
-          return false
-        }
-        if (!roomFor(blob.size)) return false
-        const source = deps.createUrl(blob)
-        let timeout: ReturnType<typeof setTimeout> | undefined
-        const timedOut = new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => reject(new Error('Profile picture restore timed out')), 750)
-        })
-        let size: unknown
-        try {
-          size = await Promise.race([deps.decode(source), timedOut])
-        } catch {
-          deps.revokeUrl(source)
-          cache.remove(key)
-          return false
-        } finally {
-          if (timeout) clearTimeout(timeout)
-        }
-        if (!fits(blob, size)) {
-          deps.revokeUrl(source)
-          cache.remove(key)
-          return false
-        }
-        if (
-          generation !== restoreGeneration ||
-          entries.get(key) !== entry ||
-          entry.source ||
-          !roomFor(blob.size)
-        ) {
-          deps.revokeUrl(source)
-          return false
-        }
-        setSource(entry, source, true, blob.size)
-        entry.restored = true
-        entry.waiting = undefined
-        entry.expiresAt = Number.POSITIVE_INFINITY
-        entry.refreshFailed = false
-        return true
-      })
-      return (await Promise.all(work)).some(Boolean)
+    /** Shows the persistent cache's pictures of the keys known at boot, at
+        most its 128 entries at once, each counted in the kept bytes,
+        before their leases renew. A cached picture past pictureBytes or
+        pictureEdge, as an older app kept, leaves the cache instead and
+        downloads and re-encodes as any picture does. A restored picture
+        renews once a view names it. */
+    restore(): Promise<boolean> {
+      restoredAll = true
+      return restoreKeys([...entries.keys()])
     },
     ticket: (key: string) => entries.get(key),
     /** Whether the store should mint `key` again now. Never while the page
@@ -493,17 +636,31 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
           entry.expiresAt - deps.now() <= REFRESH_SKEW)
       )
     },
+    /** The source to show for `key`, or null. A held picture past its
+        lease and STALE_GRACE shows no more, and keeps its bytes: named
+        again, its renewal shows it with no download. While the page is
+        hidden a named one still shows, until its renewal on return, and
+        one no view names does not, so a render while hidden leaves no
+        unrenewed picture on screen for the return. Only expire() and a
+        failed renewal release it, never a render, which runs as soon as a
+        view names the key, before its renewal can answer. */
     url(key: string) {
       const entry = entries.get(key)
       if (!entry) return null
-      if (!paused && !entry.restored && expired(entry)) release(entry)
+      if (!entry.restored && expired(entry) && (!paused || !namedKeys.has(key))) return null
       return entry.source
     },
+    /** Releases the named pictures past their grace whose renewal failed,
+        answering whether any went. One no view names keeps its bytes, and
+        so does a named one whose renewal has not answered yet, as when a
+        view names a held picture again: its renewal shows it, and a failed
+        renewal releases it (failure). */
     expire() {
       if (paused) return false
       let changed = false
-      for (const entry of entries.values()) {
-        if (!entry.source || !expired(entry)) continue
+      for (const [key, entry] of entries) {
+        if (!entry.source || !expired(entry) || !namedKeys.has(key) || !entry.refreshFailed)
+          continue
         release(entry)
         changed = true
       }
@@ -515,14 +672,17 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
       return changed
     },
     /** Holds every picture while the page is hidden, and on return makes
-        each held one past its renewal due at once, shown until its renewal
-        answers and released STALE_GRACE after the return if it never does. */
+        each held one a view names past its renewal due at once, shown
+        until its renewal answers and released STALE_GRACE after the return
+        if it never does. A held picture no view names is not renewed, so
+        one past its grace stays hidden until a view names it again. */
     pause(hidden: boolean) {
       if (paused === hidden) return
       paused = hidden
       if (hidden) return
       const now = deps.now()
-      for (const entry of entries.values()) {
+      for (const [key, entry] of entries) {
+        if (!namedKeys.has(key)) continue
         if (!entry.source || entry.restored || entry.expiresAt - now > REFRESH_SKEW) continue
         entry.expiresAt = Math.max(entry.expiresAt, now)
         entry.retryAt = 0
@@ -542,6 +702,9 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
         each release frees starts no download with the old session's lease. */
     clear() {
       waitingKeys.clear()
+      namedKeys = new Set()
+      shownAt.clear()
+      restoredAll = false
       const all = [...entries.values()]
       entries.clear()
       for (const entry of all) {

@@ -9,6 +9,7 @@ import { LIMITS } from '../../convex/lib/limits'
 import { matchesAllWords } from '../lib/search'
 import { type IssueVM, P, type IssueSubscribers as SubscriberRoster } from '../store/planner'
 import { Avatar, Icon, MenuItem } from './qivo'
+import { personLabel, sortName, usePeople } from './usePeople'
 
 /** The eye remains personal; opening its roster never changes a subscription.
     The roster, Me and a lead's add and remove take the task's organization
@@ -67,9 +68,21 @@ export function IssueSubscribers({
   // removing others still work. A new assignee or reviewer still follows.
   const full = !!roster && roster.subscribers.length >= LIMITS.followers.max
   const fullTip = `This task has ${LIMITS.followers.max} followers, the most a task can have`
-  const nameOf = (id: string) => P.user(id)?.name || 'Unavailable user'
-  const byName = (a: string, b: string) => nameOf(a).localeCompare(nameOf(b))
+  // a follower as P.person names them: "Loading…" while their details are
+  // on their way, and "Unavailable user" only once the server says so
+  const nameOf = (id: string) => personLabel(P.person(id, issue.org), 'Unavailable user')
+  // named people by name, then the ones not named yet in place by id
+  const byName = (a: string, b: string) => {
+    const an = sortName(P.person(a, issue.org), 'Unavailable user')
+    const bn = sortName(P.person(b, issue.org), 'Unavailable user')
+    if (an === undefined || bn === undefined)
+      return an !== undefined ? -1 : bn !== undefined ? 1 : a.localeCompare(b)
+    return an.localeCompare(bn) || a.localeCompare(b)
+  }
   const others = (roster?.subscribers ?? []).filter((id) => id !== me).sort(byName)
+  // the followers, named while the popover is open; the Add list's
+  // candidates are the roster parts stage's (later-work.md)
+  usePeople(open ? others.map((id) => ({ org: issue.org, id })) : [])
   const candidates = (roster?.candidates ?? [])
     .filter((id) => id !== me)
     .filter((id) => matchesAllWords(`${nameOf(id)} ${P.user(id)?.email || ''}`, search))

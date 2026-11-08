@@ -25,6 +25,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { PopoverContent, Popover as PopoverRoot, PopoverTrigger } from '@/components/ui/popover'
 import { HoverTooltip } from '@/components/ui/tooltip'
+import { personLabel, usePeople } from '@/components/usePeople'
 import { RemainingInput, ReviewTick } from '@/components/walk'
 import { planHint, type Reviewed } from '@/components/walkRows'
 import { clampedTitleTip } from '@/lib/clampedTitle'
@@ -432,6 +433,8 @@ function MentionPeople({
     if (offered && !picked && who === null) onWho(offered, false)
   }, [offered, picked, who])
   const rows = list.rows.filter((row) => row.id !== who?.id)
+  // the choice and the batches' people, named while the window is open
+  usePeople([who, ...rows].flatMap((person) => (person ? [{ org: it.org, id: person.id }] : [])))
   const answered = query === search.typed && !search.tooLong && opened.current === listKey
   const end = answered ? listEnd(list, query !== '') : 'loading'
   const row = (person: Recipient, chosen: boolean) => (
@@ -448,7 +451,7 @@ function MentionPeople({
         chosen && 'font-semibold',
       )}
     >
-      <MentionFace id={person.id} />
+      <Avatar id={person.id} size={28} />
       <span className="min-w-0 flex-1 truncate">{person.name}</span>
       {chosen && <Icon name="check" size={16} strokeWidth={2} color="var(--muted-foreground)" />}
     </Button>
@@ -476,13 +479,6 @@ function MentionPeople({
       </div>
     </div>
   )
-}
-
-/* A recipient's face. It is the store's portrait, or a plain square while
-   the store does not hold them. */
-function MentionFace({ id }: { id: string }) {
-  if (P.user(id)) return <Avatar id={id} size={28} />
-  return <span aria-hidden="true" className="size-7 shrink-0 rounded-[5px] bg-surface-3" />
 }
 
 /* The line for a chosen person the server says can no longer be
@@ -838,7 +834,10 @@ function SyncCardView({ it, ctx, later, verdict, blockedBy }: SyncCardProps) {
   })
   const hint = planHint(it)
   const dueLate = !!it.due && (it.due < ctx.day.today || marks.verdict === 'late')
-  const reviewFor = marks.reviewFor ? P.user(marks.reviewFor) : null
+  // the person a review waits for, as P.person names them; one the
+  // server's answer leaves out takes the mark away
+  const reviewForView = marks.reviewFor ? P.person(marks.reviewFor, it.org) : null
+  const reviewFor = reviewForView && reviewForView.state !== 'gone' ? reviewForView : null
   const hasMarks =
     marks.noEstimate ||
     marks.noReviewer ||
@@ -907,7 +906,10 @@ function SyncCardView({ it, ctx, later, verdict, blockedBy }: SyncCardProps) {
               {reviewFor && (
                 <span className="inline-flex items-center gap-1.5 text-text-2">
                   <Avatar id={reviewFor.id} size={20} />
-                  for {firstName(reviewFor.name)}
+                  for{' '}
+                  {reviewFor.state === 'ok'
+                    ? firstName(reviewFor.name)
+                    : personLabel(reviewFor, 'Unknown person')}
                 </span>
               )}
             </div>
