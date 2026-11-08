@@ -8,9 +8,11 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 /* The workspace without its people and catalog parts, on the real store:
    the root part sends the signed-in person's own profiles, memberships and
    teams (convex/lib/workspaceJoin.ts rootOf), so an organization of 1,000
-   people, 50 teams and 60 labels reaches the store as one profile, the
-   teams the person is in and no label. Everyone else is named through the
-   profile cache's people.byIds reads, which answer from the server's data
+   people and an organization of 50 teams, each with 60 labels, reach the
+   store as one profile, the teams the person is in and no label. Each case
+   raises one figure to its design size and keeps the others at everyday
+   values. Everyone else is named through the profile cache's people.byIds
+   reads, which answer from the server's data
    (store/peopleSettingsStandIn.setup.ts), and a delay waits for its owner's
    face, whose hours it is judged by. */
 
@@ -29,47 +31,50 @@ vi.mock('../lib/auth', () => ({
 
 const AT = '2026-09-14T08:00:00.000Z'
 
-/** The design size's organization: 1,000 people, the signed-in user among
-    them, 50 teams of which they lead `led` and are in three, and 60
-    labels, with `extra` changes. */
-function crowd(extra?: (snap: Snapshot) => void): Snapshot {
+const pad = (n: number, width: number) => String(n).padStart(width, '0')
+
+/** Person `n` of the organization, a standard user like the signed-in one
+    with a 10-hour week. */
+const personOf = (me: Snapshot['profiles'][number], n: number) => ({
+  ...me,
+  id: `person-${pad(n, 4)}`,
+  auth_user_id: `account-${n}`,
+  name: `Person ${pad(n, 4)}`,
+  plannable_hours: 10,
+})
+
+/** An organization of `people` people, the signed-in user, a standard
+    user, among them, and `teams` teams, of which the user leads the first
+    and is in two more, the eighth and the last, every other person in one
+    team, and 60 labels, with `extra` changes. */
+function organization(
+  { people, teams }: { people: number; teams: number },
+  extra?: (snap: Snapshot) => void,
+): Snapshot {
   const snap = plannerFixture()
   const org = snap.orgs[0].id
   const me = snap.profiles[0]
   me.org_role = 'user'
-  for (let i = 1; i < 1000; i++)
-    snap.profiles.push({
-      ...me,
-      id: `person-${String(i).padStart(4, '0')}`,
-      auth_user_id: `account-${i}`,
-      name: `Person ${String(i).padStart(4, '0')}`,
-      plannable_hours: 10,
-    })
-  for (let i = 0; i < 50; i++)
+  for (let i = 1; i < people; i++) snap.profiles.push(personOf(me, i))
+  for (let i = 0; i < teams; i++)
     snap.teams.push({
-      id: `team-${String(i).padStart(2, '0')}`,
+      id: `team-${pad(i, 2)}`,
       org_id: org,
-      name: `Team ${String(i).padStart(2, '0')}`,
+      name: `Team ${pad(i, 2)}`,
       track_delay_default: true,
       created_at: AT,
     })
-  // three teams of the person's, the first of which they lead, and every
-  // team with members of its own
   for (const [n, leads] of [
     [0, true],
     [7, false],
-    [42, false],
+    [teams - 1, false],
   ] as const)
+    snap.teamMembers.push({ team_id: `team-${pad(n, 2)}`, profile_id: me.id, is_leader: leads })
+  for (let i = 1; i < people; i++)
     snap.teamMembers.push({
-      team_id: `team-${String(n).padStart(2, '0')}`,
-      profile_id: me.id,
-      is_leader: leads,
-    })
-  for (let i = 1; i < 1000; i++)
-    snap.teamMembers.push({
-      team_id: `team-${String(i % 50).padStart(2, '0')}`,
-      profile_id: `person-${String(i).padStart(4, '0')}`,
-      is_leader: i < 50,
+      team_id: `team-${pad(i % teams, 2)}`,
+      profile_id: `person-${pad(i, 4)}`,
+      is_leader: i < teams,
     })
   for (let i = 0; i < 60; i++)
     snap.labels.push({
@@ -81,6 +86,21 @@ function crowd(extra?: (snap: Snapshot) => void): Snapshot {
       created_at: AT,
     })
   extra?.(snap)
+  return snap
+}
+
+/** The people figure at its design size: 1,000 people, with an everyday
+    10 teams. */
+const crowd = () => organization({ people: 1000, teams: 10 })
+
+/** The fixture with the one owner a delay case judges, Person 0001, at
+    everyday values, with `extra` changes. */
+function withOwner(extra: (snap: Snapshot) => void): Snapshot {
+  const snap = plannerFixture()
+  const me = snap.profiles[0]
+  me.org_role = 'user'
+  snap.profiles.push(personOf(me, 1))
+  extra(snap)
   return snap
 }
 
@@ -116,7 +136,7 @@ describe('the store without the people and catalog parts', () => {
     vi.restoreAllMocks()
   })
 
-  it('holds the signed-in person’s own profile, memberships and teams of 1,000 people and 50 teams, and no label', async () => {
+  it('holds the signed-in person’s own profile, memberships and teams of 1,000 people, and no label', async () => {
     const snap = crowd()
     await boot(snap)
     const me = snap.profiles[0].id
@@ -125,8 +145,8 @@ describe('the store without the people and catalog parts', () => {
       P()
         .teams.map((t) => t.id)
         .sort(),
-    ).toEqual(['team-00', 'team-07', 'team-42'])
-    expect(P().user(me)?.teams.sort()).toEqual(['team-00', 'team-07', 'team-42'])
+    ).toEqual(['team-00', 'team-07', 'team-09'])
+    expect(P().user(me)?.teams.sort()).toEqual(['team-00', 'team-07', 'team-09'])
     expect(P().user('person-0001')).toBeUndefined()
     expect(P().teamById('team-01')).toBeUndefined()
     // no label reaches the store
@@ -138,6 +158,21 @@ describe('the store without the people and catalog parts', () => {
     expect(P().isAdmin()).toBe(false)
     expect(P().isTeamLeader('team-00')).toBe(true)
     expect(P().isTeamLeader('team-07')).toBe(false)
+  })
+
+  it('holds only the signed-in person’s own three of 50 teams, with everyday people', async () => {
+    const snap = organization({ people: 30, teams: 50 })
+    await boot(snap)
+    const me = snap.profiles[0].id
+    expect(
+      P()
+        .teams.map((t) => t.id)
+        .sort(),
+    ).toEqual(['team-00', 'team-07', 'team-49'])
+    expect(P().user(me)?.teams.sort()).toEqual(['team-00', 'team-07', 'team-49'])
+    expect(P().teamById('team-42')).toBeUndefined()
+    expect(P().isTeamLeader('team-00')).toBe(true)
+    expect(P().users.map((u) => u.id)).toEqual([me])
   })
 
   it('names another person once a view names them, through one read by id', async () => {
@@ -186,7 +221,7 @@ describe('the store without the people and catalog parts', () => {
     }
 
     it('says nothing until the owner’s face brings their hours, never judging the default week', async () => {
-      const snap = crowd(planned('person-0001'))
+      const snap = withOwner(planned('person-0001'))
       await boot(snap, { faces: false })
       await P().askTasks('script')
       await vi.waitFor(() => expect(P().tasksHeld()).toBe(true))
@@ -202,7 +237,7 @@ describe('the store without the people and catalog parts', () => {
     })
 
     it('judges an owner a current answer leaves out against the default week', async () => {
-      const snap = crowd(planned('person-gone'))
+      const snap = withOwner(planned('person-gone'))
       await boot(snap)
       await P().askTasks('script')
       await vi.waitFor(() => expect(P().tasksHeld()).toBe(true))
