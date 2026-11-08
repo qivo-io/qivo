@@ -419,7 +419,7 @@ export function createProjectCache(deps: ProjectCacheDeps) {
   const sameList = (a: readonly string[], b: readonly string[]) =>
     a.length === b.length && a.every((id, i) => id === b[i])
 
-  /** The answer of `chunk` that counts now: the one that arrived on the
+  /** The answer of `chunk` that counts now, the one that arrived on the
       newest connection, else none. */
   const currentOf = (chunk: Chunk | undefined) => (chunk?.fresh ? chunk.result : null)
 

@@ -341,7 +341,7 @@ describe('the project lookups', () => {
     // the hidden Board's project keeps its name and gives no right
     expect(P.project(w.edits.id)?.name).toBe('Edits')
     expect(P.canWrite(w.edits.id)).toBe(false)
-    // back to the Board: its projects read again at once, from the answer
+    // back on the Board, its projects read again at once from the answer
     // it kept, while its own read has not answered again
     P.watchRoadmap(null)
     P.watchBoard('board:desktop', '{"board":1}', 0, 0, false)

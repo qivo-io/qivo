@@ -376,7 +376,7 @@ describe('checks a bound stopped', () => {
     })
     expect(whole).toBeGreaterThan(before + 1)
     // room for the sub-project's own check, which reads past it, so the
-    // check of the parent it brings stops: the sub-project is apart, and
+    // check of the parent it brings stops, the sub-project is apart, and
     // the parent, which no one asked for, is not named
     Object.assign(NAMED_READ, { ranges: before + 1 })
     expect(await byIds(t, [pia], [f.sub.id])).toEqual({

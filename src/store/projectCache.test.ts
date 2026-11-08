@@ -78,7 +78,7 @@ function setup(held: Set<string> = new Set()) {
     show(visible: boolean) {
       for (const listener of visibility) listener({ visible, shownAt: 0 })
     },
-    /** Drops the socket and connects again: the connection count moves on
+    /** Drops the socket and connects again. The connection count moves on
         and a transition brings again only the reads `tokens` name, as
         between the transitions that bring every result again. */
     reconnect(...tokens: string[]) {
@@ -256,7 +256,7 @@ describe('the project cache', () => {
     const [first] = s.reads()
     s.answer(first.token)
     s.cache.name('list', ids(4))
-    // the server answers the first read again: p0 is read-only now, and p1 went
+    // the server answers the first read again, p0 read-only now and p1 gone
     s.answer(first.token, [project('p0', { level: 'viewer' }), project('p2')])
     expect(s.cache.look('p0')).toMatchObject({ state: 'ok', row: { level: 'viewer' } })
     expect(s.cache.look('p1')).toEqual({ state: 'gone', row: null, message: null })

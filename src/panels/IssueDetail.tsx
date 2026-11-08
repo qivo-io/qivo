@@ -2314,8 +2314,8 @@ function IssueDetail({
       : P.shownParent(held.uuid)
     : (detail?.parent ?? null)
   const meta = it ? P.metaOf(it.project) : null
-  // a crumb's press shows its project on the Board: one the workspace
-  // holds at once, and one only the project cache holds through the lists'
+  // a crumb's press shows its project on the Board, one the workspace
+  // holds at once and one only the project cache holds through the lists'
   // open rule, which asks the server and shows it once the workspace holds
   // it, else toasts why it cannot (components/projectNavRows.tsx)
   const crumbOpen = useNavOpen(
