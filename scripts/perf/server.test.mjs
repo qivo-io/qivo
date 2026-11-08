@@ -1427,7 +1427,7 @@ describe('the benchmark server', () => {
     expect(new Set(snap.milestones.map((m) => m.id)).size).toBe(8)
   }, 60_000)
 
-  it('sends no milestone in its projects part, while the milestone reads answer the planted ones', async () => {
+  it('sends no milestone in its workspace parts, while the milestone reads answer the planted ones', async () => {
     const { posted, send } = await server(
       'tasks=20&latency=0&mbps=100000&programs=3&milestoneweeks=3&milestoneprograms=2',
     )
@@ -1443,9 +1443,9 @@ describe('the benchmark server', () => {
     const root = await read('workspace:root', {})
     const org = root.orgs[0]
     const parts = []
-    for (const w of idWindows(startWindows(org).projects))
-      parts.push(await read('workspace:projects', { org_id: org.id, ...w }))
-    expect(parts.flatMap((part) => part.projects).length).toBe(snap.projects.length)
+    for (const w of idWindows(startWindows(org).tasks))
+      parts.push(await read('workspace:tasks', { org_id: org.id, ...w }))
+    expect(parts.length).toBeGreaterThan(0)
     for (const part of parts) {
       expect(part.state).toBe('ok')
       expect(part).not.toHaveProperty('milestones')
@@ -2822,23 +2822,20 @@ describe('Deleted items on the benchmark page', () => {
     expect(root.orgs.map((o) => o.name)).toEqual(['Testbed Labs', 'Partner Co'])
     expect(root.myProfileIds).toHaveLength(2)
     const partner = root.orgs[1]
-    // its parts hold its projects, the root its seat, and the first one's
-    // parts neither
-    const [projectWindow] = idWindows(startWindows(partner).projects)
-    const projects = await two.read('workspace:projects', { org_id: partner.id, ...projectWindow })
-    expect(projects.projects.map((p) => p.name)).toEqual(['Partner launch', 'Partner web'])
+    // the root holds its seat, and no workspace part a project: the project
+    // picker offers its project, so its scope can be chosen
+    const nav = await two.read('projectNav:page')
     expect(root.profiles.filter((p) => p.org_id === partner.id).map((p) => p.id)).toEqual([
       'perf-partner-seat',
     ])
-    const [firstWindow] = idWindows(startWindows(root.orgs[0]).projects)
-    const first = await two.read('workspace:projects', { org_id: two.org, ...firstWindow })
-    expect(first.projects.length).toBeGreaterThan(0)
-    expect(first.projects.some((p) => p.org_id === partner.id)).toBe(false)
-    // the project picker offers its project, so its scope can be chosen
-    const nav = await two.read('projectNav:page')
     expect(nav.rows.filter((row) => row.org_id === partner.id).map((row) => row.name)).toEqual([
       'Partner launch',
     ])
+    // and the reads by id name it and its sub-project
+    const named = await two.read('projectNav:byIds', {
+      ids: ['perf-partner-top', 'perf-partner-web'],
+    })
+    expect(named.rows.map((row) => row.name)).toEqual(['Partner launch', 'Partner web'])
     // Deleted items reads both, and the scope of Partner Co its own
     const both = await two.read('deletedItems:page')
     expect(new Set(both.items.map((row) => row.org_name))).toEqual(

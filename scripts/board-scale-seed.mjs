@@ -1076,18 +1076,25 @@ async function mintCredential(scheme) {
   return { id: crypto.randomUUID(), secret, hash: hex(new Uint8Array(digest)) }
 }
 
-/** Every row of `table` as the local admin reads it, page by page. */
-/** What the seed reads of Nora's workspace: its parts, which send no
-    project since the app reads them by id, with every project of her
-    organizations from the tables (tableRows), as the local admin key reads
-    them. */
-async function seedSnapshot(client) {
+/** What the seed reads of the workspace `client` reads as Nora: its parts,
+    which send no project since the app reads them by id, with the live
+    projects of her organizations, neither archived nor under an archived
+    parent, from the tables (tableRows) through a client of the local admin
+    key itself, since a system table answers no person the admin acts as. */
+async function seedSnapshot(client, target) {
   const snapshot = await readWorkspace((name, args) => client.query(ref(name), args))
   const orgs = new Set(snapshot.orgs.map((o) => o.id))
-  const projects = (await tableRows(client, 'projects')).filter((p) => orgs.has(p.org_id))
+  const admin = new ConvexHttpClient(target.url, { logger: false })
+  admin.setAdminAuth(target.key)
+  const rows = (await tableRows(admin, 'projects')).filter((p) => orgs.has(p.org_id))
+  const byId = new Map(rows.map((p) => [p.id, p]))
+  const projects = rows.filter(
+    (p) => !p.archived_at && !(p.parent_id && byId.get(p.parent_id)?.archived_at),
+  )
   return { ...snapshot, projects }
 }
 
+/** Every row of `table` as the local admin reads it, page by page. */
 async function tableRows(client, table) {
   const rows = []
   for (let cursor = null; ; ) {
@@ -1569,7 +1576,7 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   const inTrash = await deletedTasksOf(client, actor.org_id)
   const takenIds = options.deleted > 0 ? await storedIdsOf(client, actor.org_id) : null
   client.setAdminAuth(target.key, identityOf(actor.auth_user_id))
-  const snapshot = await seedSnapshot(client)
+  const snapshot = await seedSnapshot(client, target)
   const org = snapshot.orgs.find((o) => o.id === actor.org_id)?.id
   if (!org) throw new DemoCliError('Nora cannot see Northstar; seed it again.')
   // Northstar's own rows: the snapshot holds every organization Nora is in
@@ -1785,7 +1792,7 @@ const RATE_REFUSAL = /^too many comments on this task.*Try again in (\d+) second
    when the server refuses one, then THREAD_LABEL made if the toggles use
    it and it is missing, and the label toggled. */
 async function seedThread(count, { client, target, people, actor, org, log }) {
-  const snapshot = await seedSnapshot(client)
+  const snapshot = await seedSnapshot(client, target)
   const joined = (name) =>
     [...snapshot[name], ...(snapshot.more?.[name] ?? []).flat()].filter((row) => row.org_id === org)
   const active = joined('issues')
@@ -1972,7 +1979,7 @@ async function seedDeleted(
     the seeded tasks still active, by number, or Northstar's own active
     tasks, by number, where the run holds none. */
 async function seedLabels(count, { client, org, seeded, target, log }) {
-  const snapshot = await seedSnapshot(client)
+  const snapshot = await seedSnapshot(client, target)
   const joined = (name) =>
     [...snapshot[name], ...(snapshot.more?.[name] ?? []).flat()].filter((row) => row.org_id === org)
   const active = joined('issues')
@@ -2380,7 +2387,7 @@ async function seedArchive(ids, { client, org, target, log }) {
 /* Posts the --inbox comments (planInbox) on the seeded tasks as they are
    now, which `client` reads as Nora, each comment as its poster's login. */
 async function seedInbox(count, { client, target, people, actor, org, log }) {
-  const snapshot = await seedSnapshot(client)
+  const snapshot = await seedSnapshot(client, target)
   const joined = (name) =>
     [...snapshot[name], ...(snapshot.more?.[name] ?? []).flat()].filter((row) => row.org_id === org)
   const live = new Set(

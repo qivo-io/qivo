@@ -69,7 +69,7 @@ const fake = vi.hoisted(() => ({
   period: '2026-10-20T00:00:00.000Z',
   // the profile_removals table
   removals: [],
-  // the sub-projects the workspace holds, the one below when null
+  // the live projects Nora's organizations hold, one sub-project when null
   projects: null,
   // the issue_links table, which holds links the workspace leaves out
   linkRows: [],
@@ -137,7 +137,17 @@ vi.mock('convex/browser', () => ({
             ],
             mcp_tokens: fake.tokens,
             issue_links: fake.linkRows,
-            projects: fake.projectRows,
+            // the live projects the seed reads beside the workspace
+            // (seedSnapshot) and the stored rows the file seed counts
+            // (storedIdsOf), each id once
+            projects: [
+              ...new Map(
+                [
+                  ...(fake.projects ?? [{ id: 'sub', org_id: 'org', type: 'project' }]),
+                  ...fake.projectRows,
+                ].map((p) => [p.id, p]),
+              ).values(),
+            ],
             issue_attachments: fake.fileRows,
             deleted_rows: fake.storedRows,
             used_ids: fake.usedRows,
@@ -191,13 +201,6 @@ vi.mock('convex/browser', () => ({
         'billing:usageFigures': { period_kind: 'paid', period_key: fake.period },
         // no label the run looks up by id is there yet
         'labels:byIds': { rows: [] },
-        'workspace:projects': {
-          state: 'ok',
-          projects: fake.projects ?? [{ id: 'sub', org_id: 'org', type: 'project' }],
-          access: [],
-          teamAccess: [],
-          milestones: [],
-        },
         'workspace:tasks': {
           state: 'ok',
           issues: fake.issues,
@@ -2445,16 +2448,17 @@ describe('board-scale-seed --images and --pictures', () => {
 
   it.each([
     ['archived', { archived_at: '2026-10-29T00:00:00.000Z' }, []],
+    // the task's sub-project beside the live one the run fills
     [
       'in an archived sub-project',
-      {},
-      [{ id: 'sub', org_id: 'org', archived_at: '2026-10-29T00:00:00.000Z' }],
+      { project_id: 'shelved' },
+      [{ id: 'shelved', org_id: 'org', archived_at: '2026-10-29T00:00:00.000Z' }],
     ],
     [
       'under an archived top-level project',
-      {},
+      { project_id: 'shelved' },
       [
-        { id: 'sub', org_id: 'org', parent_id: 'top' },
+        { id: 'shelved', org_id: 'org', parent_id: 'top' },
         { id: 'top', org_id: 'org', archived_at: '2026-10-29T00:00:00.000Z' },
       ],
     ],

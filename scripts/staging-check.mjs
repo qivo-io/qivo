@@ -9466,10 +9466,6 @@ export const PROJECT_DIRECTORY_MARKS = {
   state: 'data-project-directory-state',
 }
 
-/** The note the directory gives for a project the workspace has not
- *  delivered yet, which the step waits out. */
-export const NOT_LOADED_YET = 'has not loaded yet'
-
 /** The group of each row the directory shows, by id, read from
  *  `sequence`, the page's group headings (`{ group }`, 'favorites' or
  *  'rest') and rows (`{ row, starred }`) in order. A row under a heading
@@ -9597,18 +9593,10 @@ async function projectDirectoryCheck() {
         "M's sub-projects do not list Alpha and Zulu",
       )
       const path = () => new URL(app.url()).pathname
-      let pressed = false
-      const opened = await until(async () => {
-        if (atProject(path(), Z.num)) return true
-        // the directory left for another page, so wait and press nothing more
-        if (!path().endsWith('/projects')) return false
-        const note = (await app.locator(`[${m.status}]`).textContent()) ?? ''
-        // a project the workspace has not delivered yet: the directory says
-        // so and moves nothing, so the step presses again
-        if (!pressed || note.includes(NOT_LOADED_YET)) await child(Z).click()
-        pressed = true
-        return atProject(path(), Z.num)
-      }, 60_000)
+      // a row opens its project at once, while the page checks it
+      // (src/components/projectNavRows.tsx useNavOpen), so one press does
+      await child(Z).click()
+      const opened = await until(async () => atProject(path(), Z.num), 60_000)
       expect(opened, `Zulu's page did not open from the directory, which went to ${path()}`)
       // and the page shows Zulu, whose name the header holds
       const scope = app.locator('[data-scope-crumb] h1')
@@ -9726,13 +9714,10 @@ async function sidebarProjectsCheck() {
       )
       // Zulu opened from the tree
       const path = () => new URL(app.url()).pathname
-      const opened = await until(async () => {
-        if (atProject(path(), Z.num)) return true
-        // a project the workspace has not delivered yet: the tree says so
-        // in a toast and moves nothing, so the step presses again
-        await child(Z).locator('button').first().click()
-        return atProject(path(), Z.num)
-      }, 60_000)
+      // a row opens its project at once, while the page checks it
+      // (src/components/projectNavRows.tsx useNavOpen), so one press does
+      await child(Z).locator('button').first().click()
+      const opened = await until(async () => atProject(path(), Z.num), 60_000)
       expect(opened, `Zulu's page did not open from the tree, which went to ${path()}`)
       await tree.locator(`[${m.child}="${Z.id}"][data-on]`).waitFor({ timeout: 30_000 })
       // no scrollbar beside the tree

@@ -88,7 +88,6 @@ import {
   mcpListSettled,
   mutationRequest,
   NEW_TASK_READS,
-  NOT_LOADED_YET,
   NOTIFICATION_DELIVERY_MARKS,
   NOTIFICATION_DELIVERY_STEP,
   newerWalk,
@@ -683,12 +682,14 @@ describe('staging check REST contract', () => {
     )
     // the server's answer decides, never the store's copy
     expect(remove).not.toContain('window.PLANNER.project(id)')
-    expect(remove.indexOf("if (projectDeleteRoute(current) === 'archive') {")).toBeLessThan(
-      remove.indexOf(
-        'window.PLANNER.archivedProjects?.some((x) => x.id === id),\n      project.id',
-      ),
-    )
-    expect(remove).toContain('window.PLANNER.removeProject(id, undefined, {')
+    // an archive first, which REST confirms, since the app holds no project
+    const route = remove.indexOf("if (projectDeleteRoute(current) === 'archive') {")
+    const confirmed = remove.indexOf('expect(archived.json?.archived === true')
+    const removed = remove.indexOf('window.PLANNER.removeProject(id, undefined, {')
+    expect(route).toBeGreaterThan(-1)
+    expect(confirmed).toBeGreaterThan(route)
+    expect(removed).toBeGreaterThan(confirmed)
+    expect(remove).not.toContain('archivedProjects')
     const sweep = check.slice(
       check.indexOf('async function sweep('),
       check.indexOf('async function removeTokenInApp('),
@@ -768,13 +769,9 @@ describe('staging check REST contract', () => {
     )
     expect(PROJECT_DIRECTORY_STEP).toBe('ui/project-directory')
     for (const mark of Object.values(PROJECT_DIRECTORY_MARKS)) expect(page).toContain(mark)
-    // the note for a project the workspace has not delivered, which the
-    // step waits out, in the open rule the directory shares
-    // (projectNavRows.tsx)
+    // the open rule the directory shares (projectNavRows.tsx), which opens
+    // a row's project at once, so the step presses once
     expect(page).toContain('nav.open(row)')
-    expect(
-      readFileSync(new URL('../src/components/projectNavRows.tsx', import.meta.url), 'utf8'),
-    ).toContain(`${NOT_LOADED_YET}. Try again in a moment.`)
     const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
     expect(check.indexOf('await projectDirectoryCheck()')).toBeGreaterThan(
       check.indexOf('await settingsProjectsCheck()'),
@@ -793,6 +790,10 @@ describe('staging check REST contract', () => {
     // it waits for Zulu's own address and name, not any page but the
     // directory
     expect(step).toContain('atProject(path(), Z.num)')
+    expect(step.indexOf('await child(Z).click()')).toBeLessThan(
+      step.indexOf('atProject(path(), Z.num)'),
+    )
+    expect(step.split('await child(Z).click()')).toHaveLength(2)
     expect(step).toContain("app.locator('[data-scope-crumb] h1')")
     // the browse list answered with a row before any search, and the star
     // puts M ahead of Alpha, which sorts before it by name
@@ -808,12 +809,6 @@ describe('staging check REST contract', () => {
     )
     expect(SIDEBAR_PROJECTS_STEP).toBe('ui/sidebar-projects')
     for (const mark of Object.values(SIDEBAR_PROJECTS_MARKS)) expect(tree).toContain(mark)
-    // the open rule's toast, which the step presses through
-    const rows = readFileSync(
-      new URL('../src/components/projectNavRows.tsx', import.meta.url),
-      'utf8',
-    )
-    expect(rows).toContain(`${NOT_LOADED_YET}. Try again in a moment.`)
     const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
     expect(check.indexOf('await sidebarProjectsCheck()')).toBeGreaterThan(
       check.indexOf('await projectDirectoryCheck()'),
@@ -840,8 +835,10 @@ describe('staging check REST contract', () => {
       'window.PLANNER.setFavorite({ id, org_id: window.PLANNER.homeOrg }, want)',
     )
     expect(step).toContain('if (starred) await setStar(false)')
-    // Zulu's own address and lit row, and no scrollbar
+    // Zulu's own address after one press, which opens it at once, its lit
+    // row, and no scrollbar
     expect(step).toContain('atProject(path(), Z.num)')
+    expect(step.split("await child(Z).locator('button').first().click()")).toHaveLength(2)
     expect(step).toContain(`[\${m.child}="\${Z.id}"][data-on]`)
     expect(step).toContain('getComputedStyle(el).scrollbarWidth')
   })
@@ -1381,7 +1378,7 @@ describe('staging check REST contract', () => {
     expect(ASSIGNEE_LOAD_QUERY).toBe('planning:assigneeLoad')
     // the registry subscribes the workspace's task windows by that name
     const parts = readFileSync(new URL('../src/store/liveParts.ts', import.meta.url), 'utf8')
-    expect(parts).toContain('tasks: api.workspace.tasks')
+    expect(parts).toContain('watch(api.workspace.tasks, {')
     const add = (udfPath) => ({ type: 'Add', queryId: 1, udfPath, args: [{}] })
     const frame = (...modifications) =>
       JSON.stringify({ type: 'ModifyQuerySet', baseVersion: 0, newVersion: 1, modifications })
@@ -1390,7 +1387,7 @@ describe('staging check REST contract', () => {
       addsQuery(frame(add('workspace:root'), add('workspace:tasks')), TASK_WINDOWS_QUERY),
     ).toBe(true)
     // the other parts, a removal, another message and no JSON are not one
-    expect(addsQuery(frame(add('workspace:projects')), TASK_WINDOWS_QUERY)).toBe(false)
+    expect(addsQuery(frame(add('workspace:inbox')), TASK_WINDOWS_QUERY)).toBe(false)
     expect(
       addsQuery(
         frame({ type: 'Remove', queryId: 1, udfPath: 'workspace:tasks' }),
