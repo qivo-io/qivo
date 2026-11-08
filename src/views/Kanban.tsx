@@ -954,7 +954,7 @@ function KanbanBoard({
           groups: CardGroup[]
           width: number
           kind: string
-          context: typeof P.contextVersion
+          projects: typeof P.projectsVersion
           dates: string
           value: number
         }
@@ -975,7 +975,7 @@ function KanbanBoard({
       known.groups === cell.groups &&
       known.width === cardWidth &&
       known.kind === layoutKey &&
-      known.context === P.contextVersion &&
+      known.projects === P.projectsVersion &&
       known.dates === dateFormatInUse()
     )
       return known.value
@@ -987,7 +987,7 @@ function KanbanBoard({
       groups: cell.groups,
       width: cardWidth,
       kind: layoutKey,
-      context: P.contextVersion,
+      projects: P.projectsVersion,
       dates: dateFormatInUse(),
       value,
     })

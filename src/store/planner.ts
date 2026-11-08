@@ -9067,6 +9067,10 @@ function rebuild(now = new Date(), full = false) {
   if (context.some((part, i) => part !== lastContext[i]))
     P.contextVersion = Object.freeze({ revision: P.contextVersion.revision + 1 })
   lastContext = context
+  if (projectCache.version() !== lastProjectsRevision) {
+    lastProjectsRevision = projectCache.version()
+    P.projectsVersion = Object.freeze({ revision: P.projectsVersion.revision + 1 })
+  }
 
   // the views' delays read the day, and their models' week indexes the
   // grid (reshapeViews): a rebuild for a new day or a moved grid judges and
@@ -9099,6 +9103,9 @@ export const nameUnknown = (person: PersonView | null) =>
 
 /* What the last rebuild's contextVersion was taken from. */
 let lastContext: unknown[] = []
+/* The project cache's version the last rebuild's projectsVersion was taken
+   from. */
+let lastProjectsRevision: number | null = null
 
 /* Hands the picture source the keys the store knows, the signed-in
    person's own profiles and every face of the cache with a picture, and
@@ -11934,6 +11941,12 @@ export const PLANNER = {
      skips unchanged tasks by identity compares this as well. The
      organization-wide load reaches a task's view through its delay only. */
   contextVersion: Object.freeze({ revision: 0 }) as StoreVersion,
+  /* Changes whenever a rebuild finds that the project cache changed an
+     entry or a state (store/projectCache.ts version): a project that
+     arrived, left, was renamed, changed its delay rule or its level. A card's
+     height estimate follows it (views/board/cardEstimate.ts), which a
+     person's rename or a picture leaves alone, as contextVersion does not. */
+  projectsVersion: Object.freeze({ revision: 0 }) as StoreVersion,
   // whether the watched thread stopped loading; the comments delivered
   // before the failure stay (P.retryComments)
   commentsFailure: 'none' as CommentsFailure,
