@@ -4395,7 +4395,9 @@ type ViewQuery = {
       cache under the slot (nameSlotProjects), so a row, a flag or a label
       of a project the workspace's projects part does not hold reads its
       name and the caller's level from the cache; none for a value that
-      names none */
+      names none. A slot whose read stops, as a kept page's that hides,
+      releases them and names them again from its kept answer when it
+      reads again (watchView) */
   projects?: (value: unknown) => readonly string[] | null
 }
 
@@ -4896,6 +4898,17 @@ function watchView(
   const wasLive = read.live !== null
   read.want = key
   syncViewRead(slot)
+  // a view whose read stops, as a kept page that hides, lets its projects
+  // go with its read, so the project cache stops reading them, and names
+  // them again from the answer it kept as it reads again, so the cache
+  // reads them at once rather than after the view's next answer
+  const named = read.query.projects
+  if (named && wasLive && read.live === null) nameSlotProjects(slot, [])
+  else if (named && !wasLive && read.live !== null && read.held?.value !== undefined) {
+    nameSlotProjects(slot, named(read.held.value) ?? [])
+    // the part painted every delivery it took, so nothing waits for it
+    if (!owed.workspace) nameWaiting()
+  }
   // a view whose read stops keeps its owners' loads without reading them
   ownerLoads.setLive(slot, key !== null)
   // which view's copies of a task lead follows which reads are live

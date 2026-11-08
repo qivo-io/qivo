@@ -90,11 +90,18 @@ function world() {
     `force`, the ids of every byIds subscription it opened, and a way to
     answer every open byIds read again from `snap` as it stands, as the
     server reruns them after an access change. The Board's and the
-    Roadmap's reads answer `views.board` and `views.roadmap`. */
+    Roadmap's reads answer `views.board` and `views.roadmap`, with
+    `views.once` only their first subscription each, and `views.reads`
+    counts each one's subscriptions by name. */
 async function start(
   snap: Whole,
   force: ForcedProjectNav = {},
-  views: { board?: BoardAnswer; roadmap?: RoadmapAnswer } = {},
+  views: {
+    board?: BoardAnswer
+    roadmap?: RoadmapAnswer
+    once?: boolean
+    reads?: Map<string, number>
+  } = {},
 ) {
   vi.resetModules()
   vi.stubGlobal('window', { showToast: vi.fn() })
@@ -103,9 +110,14 @@ async function start(
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') next(structuredClone(snap))
-    else if (name === 'tasks:board' && views.board) next(structuredClone(views.board))
-    else if (name === 'tasks:roadmap' && views.roadmap) next(structuredClone(views.roadmap))
-    else if (isProjectNavRead(name)) {
+    const count = (views.reads?.get(name) ?? 0) + 1
+    views.reads?.set(name, count)
+    const answers = !views.once || count === 1
+    else if (name === 'tasks:board' && views.board) {
+      if (answers) next(structuredClone(views.board))
+    } else if (name === 'tasks:roadmap' && views.roadmap) {
+      if (answers) next(structuredClone(views.roadmap))
+    } else if (isProjectNavRead(name)) {
       const answer = () => answerProjectNav(snap, name, args, next, fail, { force })
       if (name === 'projectNav:byIds') {
         byIds.push([...(args as { ids: string[] }).ids])
@@ -299,6 +311,46 @@ describe('the project lookups', () => {
     expect(stopped.P.canWrite(w.edits.id)).toBe(false)
     expect(stopped.P.writeNote(w.edits.id)).toBe(NAV_UNCHECKED)
   })
+  it("lets a kept page's projects go while it hides, and names them again from its kept answer as it shows", async () => {
+    const w = world()
+    const board: BoardAnswer = {
+      state: 'ok',
+      rows: [viewRow(w.snap, 'board-task', w.edits.id)],
+      parents: [],
+      held_projects: [w.granted.id],
+    }
+    const roadmap: RoadmapAnswer = {
+      state: 'ok',
+      rows: [viewRow(w.snap, 'roadmap-task', w.led.id)],
+      parents: [],
+      subtasks: [],
+      held_sub_projects: [w.views.id],
+      remaining: { state: 'ok', tenths: {} },
+    }
+    const reads = new Map<string, number>()
+    const { P } = await start(w.snap, {}, { board, roadmap, once: true, reads })
+    const named = () => P.cacheStats().reads.flat().sort()
+    const sorted = (ids: readonly string[]) => [...ids].sort()
+    P.watchBoard('board:desktop', '{"board":1}', 0, 0, false)
+    await vi.waitFor(() => expect(named()).toEqual(sorted([w.edits.id, w.granted.id])))
+    await vi.waitFor(() => expect(P.canWrite(w.edits.id)).toBe(true))
+    // the Board's page hides behind the Roadmap's, as App keeps both
+    P.watchBoard('board:desktop', null, 0, 0, false)
+    P.watchRoadmap('{"roadmap":1}')
+    await vi.waitFor(() => expect(named()).toEqual(sorted([w.led.id, w.views.id])))
+    // the hidden Board's project keeps its name and gives no right
+    expect(P.project(w.edits.id)?.name).toBe('Edits')
+    expect(P.canWrite(w.edits.id)).toBe(false)
+    // back to the Board: its projects read again at once, from the answer
+    // it kept, while its own read has not answered again
+    P.watchRoadmap(null)
+    P.watchBoard('board:desktop', '{"board":1}', 0, 0, false)
+    expect(named()).toEqual(sorted([w.edits.id, w.granted.id]))
+    await vi.waitFor(() => expect(P.canWrite(w.edits.id)).toBe(true))
+    expect(reads.get('tasks:board')).toBe(2)
+    expect(P.boardRead('board:desktop').current).toBe(false)
+  })
+
 
   it('gives no right from an answer of before a reconnect until byIds answers again, keeping the name', async () => {
     const w = world()
