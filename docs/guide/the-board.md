@@ -147,8 +147,7 @@ breadcrumb in a task window and an active task picked in Search while the
 Board is open. The first two open the Board of the task's sub-project, the
 breadcrumb opens the Board of the project or sub-project you click, and a
 task picked in Search stays on the Board you are on. A breadcrumb project
-opens at once, and the page says **Opening** and its name while Qivo
-checks that you can open it, or says that you can no longer open it. The
+opens at once, and the page says so if you can no longer open it. The
 Board
 scrolls the card to the middle of the screen once it has its tasks, and
 rings it until a moment after you close the window, following the task to

@@ -284,8 +284,9 @@ for editable details, attachments and links; a related task opened there
 opens in both the pane and the pop-out. **Open task in board**, in the
 pane's **Task actions** menu or a row's right-click menu, opens the full
 task window over its Board, scrolls to the task's card and rings it until a
-moment after the window closes. It shows for every task whose project you
-can open. The project breadcrumb does the same
+moment after the window closes. It shows for every task with a project,
+and Qivo says so if you cannot open that project. The project breadcrumb
+does the same
 ([Showing a task on the Board](./the-board.md#showing-a-task-on-the-board)).
 
 The address follows the selected task, such as `/app/<org>/inbox/tasks/qn-14`,
