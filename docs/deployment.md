@@ -577,9 +577,9 @@ server once chosen, a mention of Nora from the Standard agent must reach the
 leader's alerts alone, tagged with its message or with the generic
 summary's tag, and the other page must lead once the leader's page closes.
 The step puts Nora's mode back once the control shows it from the server,
-removes t0's item from her Inbox and signs its context out from whichever
-page it stopped on, and a cleanup that cannot do one of these fails the
-step. Against a backend from before the release after v0.1.161
+removes t0's item from her Inbox and signs its context out from one of its
+open pages, or a new one, since the session cookie signs in every page, and
+a cleanup that cannot do one of these fails the step. Against a backend from before the release after v0.1.161
 that step fails, since the leader's alerts come from `inbox.feed`; v0.1.154
 first shipped only its session calls.
 After that it checks
