@@ -24,8 +24,9 @@ import { taskRow } from './views/boardFixture.setup'
    line that says whose tasks a pick will show, never All projects, My view
    or a project the person did not pick. A pick opens that project's view
    filtered to the person in place of the chooser's entry; Back returns to
-   Team sync and Forward to the chooser, with its line. A project sync's
-   jump opens that project. The person, Planner, holds an admin seat in
+   Team sync and Forward to the chooser, with its line, on a phone too,
+   where the front door otherwise opens the Inbox. A project sync's jump
+   opens that project. The person, Planner, holds an admin seat in
    Testbed Labs, with Luma Sensor and its sub-projects Firmware and
    Electronics and one open task of theirs in Firmware, and Ops, a team of
    them that Luma Sensor is shared with. Everyday values, no figure at its
@@ -53,6 +54,8 @@ let server: Snapshot
 let log: { name: string; args: unknown }[]
 let asks: unknown[]
 let prefs: Record<string, unknown>
+// whether matchMedia answers as a phone (lib/useMobile.ts)
+let phone = false
 let store: typeof import('./store/planner')
 let ME: string
 let LUMA: string
@@ -202,6 +205,7 @@ async function jump(path: string, which: 'board' | 'roadmap') {
 }
 
 beforeEach(() => {
+  phone = false
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
   Range.prototype.getBoundingClientRect = () => new DOMRect()
   Element.prototype.scrollIntoView = () => {}
@@ -210,7 +214,11 @@ beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal(
     'matchMedia',
-    vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+    vi.fn((query: string) => ({
+      matches: phone && query === '(max-width: 760px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
   )
   vi.stubGlobal(
     'ResizeObserver',
@@ -294,6 +302,29 @@ describe("Team sync's person jumps", { timeout: 60_000 }, () => {
     // no check of the remembered project, and no task read
     expect(asks).toEqual([])
     expect(taskReads()).toHaveLength(reads)
+  })
+
+  it('on a phone, Back before a pick then Forward shows the chooser again with its task list line, not the Inbox the front door opens there', async () => {
+    phone = true
+    await app(world(), '/app/testbed/board/p/11')
+    await until(() => shown() === 'kanban', "Firmware's task list")
+    await jump(`/app/testbed/sync/all/people/${ME}`, 'board')
+    await until(() => chooserState() === 'choose', 'the chooser')
+    const line = "Choose a project to see Planner's tasks in its task list."
+    expect(purpose()).toBe(line)
+    expect(location.pathname).toBe('/app/testbed')
+    const entries = history.length
+    await step(-1)
+    await until(() => location.pathname === `/app/testbed/sync/all/people/${ME}`, 'Team sync')
+    expect(q('[data-project-chooser]')).toBeNull()
+    await step(1)
+    await until(() => chooserState() === 'choose', 'the chooser again')
+    expect(purpose()).toBe(line)
+    expect(shown()).toBeUndefined()
+    expect(q('[data-inbox-page-state]')).toBeNull()
+    expect(location.pathname).toBe('/app/testbed')
+    expect(history.length).toBe(entries)
+    expect(asks).toEqual([])
   })
 
   it("opens a project sync's own project, with no chooser and no line", async () => {

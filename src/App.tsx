@@ -1274,8 +1274,8 @@ function App() {
      jump set, one person and nothing else. The chooser then says whose
      tasks a pick will show (jumpLine), also after Back to Team sync and
      Forward to the chooser, and a Back or Forward onto the front door
-     shows the chooser rather than the startup rule (onPop). Any filter
-     change and any chosen scope end it. */
+     shows the chooser rather than the startup rule or, on a phone, the
+     Inbox (onPop). Any filter change and any chosen scope end it. */
   const [personJump, setPersonJump] = useState<{ id: string; first: string } | null>(null)
   const jumpHolds =
     personJump !== null &&
@@ -1497,8 +1497,10 @@ function App() {
         settingsPage: namesProjectPage(location.pathname, was.settingsPage)
           ? was.settingsPage
           : r.settings || null,
-        // the phone opens the Inbox at the front door, as on a boot
-        inboxOpen: door ? mobileRef.current : !!r.inbox,
+        // the phone opens the Inbox at the front door, as on a boot, but
+        // not over a person jump's chooser (personJump), whose entry shows
+        // the chooser again
+        inboxOpen: door ? mobileRef.current && !jumpHoldsRef.current : !!r.inbox,
         projectsOpen: !!r.projects,
         sync: r.sync && P.homeOrg ? syncPlaceFor(r.sync, mobileRef.current) : null,
       }
