@@ -892,9 +892,13 @@ a later backend, and that includes a tab already open when the release
 deploys, until it reloads. This moves the floor: never return the app or the
 demo to a deployment of a commit before the release that replaced
 `snapshot.forMe` with the parts (the release after v0.1.52). Roll forward
-instead. From the release after v0.1.160 the root part carries the
-signed-in person's own profiles, team memberships and teams, and no
-people or catalog part remains.
+instead. From the release after v0.1.160 the backend has no
+`workspace.people` or `workspace.catalog`, which every earlier app
+subscribes, so that app cannot load against it, and the app from that
+release needs its backend's `teams.picker`, `pickers.taskFollowers` and the
+root part's own rows. Never return the backend to a commit before that
+release, and never return the app or the demo alone to a release before
+it; roll forward.
 
 An app from before the release after v0.1.159 joins the milestones of every
 workspace projects part it reads, which later backends no longer send, so
