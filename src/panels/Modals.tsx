@@ -757,6 +757,9 @@ function NewSubProjectModal({
 
   const read = useProjectSettings(parent?.id ?? null)
   const answer = read.answer
+  // the parent, named with the project cache while the dialog shows, whose
+  // facts give the popovers their organization while the check loads
+  useProjects([parent?.id])
   const held = parent ? P.project(parent.id) : undefined
   // the organization the popovers read in and the create goes to: the
   // check's, a picked row's, the project cache's while it knows the parent,
@@ -2802,13 +2805,14 @@ function MilestoneModal({
   // knows it: at once for a new milestone, and from the server's first
   // answer that names the milestone when opened on one. It stays on that
   // project after the milestone itself is deleted here.
-  // the project it opens on, named with the project cache while the
-  // window shows, so its top-level project, its level and its add row read
-  // the cache's answer, which the window takes once it arrives
-  useProjects([init.project])
   const [projectId, setProjectId] = useStateM<string | null>(() =>
     init.id ? null : (P.metaOf(init.project)?.id ?? null),
   )
+  // the project it opens on, and the one an opened milestone's answer
+  // fixes, named with the project cache while the window shows, so its
+  // top-level project, its level and its add row read the cache's answer,
+  // which the window takes once it arrives
+  useProjects([init.project, projectId])
   const metaNow = init.id ? null : (P.metaOf(init.project)?.id ?? null)
   if (!init.id && projectId === null && metaNow !== null) setProjectId(metaNow)
   // the name the answer gave the project as it fixed it, which the badge
