@@ -37,6 +37,7 @@ import {
   BILLING_ACCOUNTS_STEP,
   BILLING_STORAGE_EXPECTED,
   BILLING_STORAGE_STEP,
+  byIdsProblems,
   CREATE_ANSWER_STEP,
   CREATE_MUTATION,
   createOrder,
@@ -101,6 +102,7 @@ import {
   PICKER_EXPECTED,
   PICKER_STEP,
   PROJECT_DETAIL_REFUSALS,
+  PROJECT_BY_IDS_STEP,
   PROJECT_DIALOGS_EXPECTED,
   PROJECT_DIALOGS_STEP,
   PROJECT_DIRECTORY_MARKS,
@@ -714,6 +716,43 @@ describe('staging check REST contract', () => {
     expect(check).toContain(
       'if (run.projects.L) await deleteProjectInApp(c.writeToken, run.projects.L)',
     )
+  })
+  it("reads the run's projects by id while M is active, and finds what a wrong answer gets wrong", () => {
+    expect(PROJECT_BY_IDS_STEP).toBe('ui/project-by-ids')
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    // after the last UI step before the archive, and through the store's read
+    expect(check.indexOf('await projectByIdsCheck()')).toBeGreaterThan(
+      check.indexOf('await inboxListCheck()'),
+    )
+    expect(check.indexOf('await projectByIdsCheck()')).toBeLessThan(
+      check.indexOf('await archiveChecks()'),
+    )
+    expect(check).toContain('window.PLANNER.projectsByIds(asked)')
+    const ids = { M: 'm', A: 'a', Z: 'z', unknown: 'u', archived: 'x' }
+    const row = (id, parent_id, level = 'user') => ({ id, parent_id, level })
+    const right = { rows: [row('m', null, 'lead'), row('a', 'm'), row('z', 'm')], unchecked: [] }
+    expect(byIdsProblems(right, ids)).toEqual([])
+    // each kind of wrong answer is named
+    expect(byIdsProblems(null, ids)).toHaveLength(1)
+    expect(byIdsProblems({ ...right, rows: right.rows.slice(1) }, ids)).toEqual([
+      'M answered 0 times',
+    ])
+    expect(
+      byIdsProblems({ ...right, rows: [row('m', null, 'user'), ...right.rows.slice(1)] }, ids),
+    ).toHaveLength(1)
+    expect(byIdsProblems({ ...right, rows: [...right.rows, row('m', null, 'lead')] }, ids)).toEqual(
+      ['M answered 2 times'],
+    )
+    expect(
+      byIdsProblems({ ...right, rows: [right.rows[0], row('a', 'z'), right.rows[2]] }, ids),
+    ).toEqual(['Alpha answered parent z'])
+    expect(byIdsProblems({ ...right, rows: [...right.rows, row('x', null)] }, ids)).toEqual([
+      'the archived project answered',
+    ])
+    expect(byIdsProblems({ ...right, rows: [...right.rows, row('u', null)] }, ids)).toEqual([
+      'the unknown id answered',
+    ])
+    expect(byIdsProblems({ ...right, unchecked: ['z'] }, ids)).toEqual(['listed apart ["z"]'])
   })
   it('checks the All projects directory on its own marks and words, after Settings › Projects', () => {
     const page = readFileSync(

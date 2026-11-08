@@ -184,6 +184,10 @@
  * it by name (projectNav.setFavorite), lists Alpha and Zulu under it
  * (projectNav.children), opens Zulu, and unstars the project again
  * (ui/project-directory).
+ * It reads the run's project, Alpha and Zulu, an id of no project and a
+ * project the run archived by id through the store's read of
+ * projectNav.byIds, and checks the level, the parent row and the ids left
+ * out (ui/project-by-ids).
  * It opens its project's Board by its address, waits for the sidebar's
  * tree from the deployment's navigation reads (projectNav.page) to light
  * the project wherever it sorts, with Alpha and Zulu under it
@@ -8919,6 +8923,69 @@ async function settingsProjectsCheck() {
   })
 }
 
+/** The step that reads the run's projects by id through the store's
+ *  project cache read (projectByIdsCheck). */
+export const PROJECT_BY_IDS_STEP = 'ui/project-by-ids'
+
+/** What is wrong with `answer`, a projectNav.byIds answer for the run's M,
+ *  Alpha and Zulu (`M`, `A`, `Z`), an id of no project (`unknown`) and a
+ *  project the run archived (`archived`), as the signed-in Nora reads them:
+ *  M with Lead and no parent, Alpha and Zulu with M as their parent, M
+ *  once, the unknown and the archived ids left out and nothing listed
+ *  apart. An empty list when nothing is. */
+export function byIdsProblems(answer, { M, A, Z, unknown, archived }) {
+  if (!answer || !Array.isArray(answer.rows)) return [`no answer: ${JSON.stringify(answer)}`]
+  const problems = []
+  const rowsOf = (id) => answer.rows.filter((row) => row.id === id)
+  const one = (id, name) => {
+    const rows = rowsOf(id)
+    if (rows.length !== 1) problems.push(`${name} answered ${rows.length} times`)
+    return rows[0]
+  }
+  const m = one(M, 'M')
+  if (m && (m.level !== 'lead' || m.parent_id !== null))
+    problems.push(`M answered ${JSON.stringify(m)}`)
+  for (const [id, name] of [
+    [A, 'Alpha'],
+    [Z, 'Zulu'],
+  ]) {
+    const row = one(id, name)
+    if (row && row.parent_id !== M) problems.push(`${name} answered parent ${row.parent_id}`)
+  }
+  if (rowsOf(unknown).length > 0) problems.push('the unknown id answered')
+  if (rowsOf(archived).length > 0) problems.push('the archived project answered')
+  if (answer.unchecked?.length) problems.push(`listed apart ${JSON.stringify(answer.unchecked)}`)
+  return problems
+}
+
+/** projectNav.byIds on the deployment, through the store's one-shot read
+ *  (window.PLANNER.projectsByIds), signed in as Nora: the run's M, which
+ *  she leads, its sub-projects Alpha and Zulu, an id of no project and a
+ *  project the run archived (`<tag> Lists B`, which Settings › Projects
+ *  left archived on its own), checked by byIdsProblems. It writes nothing.
+ *  It runs while M is active, and needs a backend from the release that
+ *  adds projectNav.byIds on. */
+async function projectByIdsCheck() {
+  await check(PROJECT_BY_IDS_STEP, async () => {
+    const { M, A, Z } = run.projects
+    const archived = (await restOk(run.creds.writeToken, 'GET', '/projects?archived=true')).find(
+      (p) => p.name.startsWith(run.tag),
+    )
+    if (!archived) throw new Error('no archived project of the run')
+    const ids = { M: M.id, A: A.id, Z: Z.id, unknown: randomUUID(), archived: archived.id }
+    const answer = await evaluate(app, (asked) => window.PLANNER.projectsByIds(asked), [
+      ids.M,
+      ids.A,
+      ids.Z,
+      ids.unknown,
+      ids.archived,
+    ])
+    const problems = byIdsProblems(answer, ids)
+    if (problems.length > 0) throw new Error(problems.join('; '))
+    return `read M with Lead, Alpha and Zulu under it and M once, and left out an unknown id and the archived ${archived.name}`
+  })
+}
+
 /** The step that checks the All projects directory
  *  (projectDirectoryCheck). */
 export const PROJECT_DIRECTORY_STEP = 'ui/project-directory'
@@ -11374,6 +11441,8 @@ async function main() {
   // the Inbox list from the deployment's pages, with a row's actions by
   // organization and task, while t0 is active
   await inboxListCheck()
+  // the run's projects read by id, while M is active
+  await projectByIdsCheck()
   // archived tasks and projects, then delete the projects in the app
   await archiveChecks()
   await check('cleanup/app/delete-project', async () => {
