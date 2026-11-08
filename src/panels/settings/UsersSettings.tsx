@@ -1044,8 +1044,13 @@ export function OrgUsersPage({
   const emailNoteId = React.useId()
   // counted as the server stores it, with whitespace runs collapsed
   const nameTooLong = overLimit(LIMITS.personName, cleanName(addName))
+  // the add form as it reads now, for a create that answers after the
+  // person typed on
+  const formNow = useRefS({ name: addName, email: addEmail, role: addRole })
+  formNow.current = { name: addName, email: addEmail, role: addRole }
   const addUser = async () => {
     if (!addName.trim() || nameTooLong || emailBad || emailMissing || adding) return
+    const submitted = { name: addName, email: addEmail, role: addRole }
     const made = P.addUser(
       agentMode
         ? { name: cleanName(addName), kind: 'agent', orgRole: addRole }
@@ -1069,9 +1074,13 @@ export function OrgUsersPage({
       return next
     })
     if (!saved) return
-    setAddName('')
-    setAddEmail('')
-    setAddRole('user')
+    // the fields that still hold the person just added clear; a next
+    // person typed while the create waited stays, with the role on screen
+    const now = formNow.current
+    const typedOn = now.name !== submitted.name || now.email !== submitted.email
+    if (now.name === submitted.name) setAddName('')
+    if (now.email === submitted.email) setAddEmail('')
+    if (!typedOn && now.role === submitted.role) setAddRole('user')
     if (!agentMode) {
       window.showToast?.(`${name} added to the organization`)
       return

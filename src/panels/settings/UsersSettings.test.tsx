@@ -1643,6 +1643,47 @@ describe('Add person', () => {
     expect(addButton().disabled).toBe(true)
   })
 
+  it('keeps a next person typed while the create waits, and clears what still holds the added one', async () => {
+    await load()
+    await show()
+    const email = () => find<HTMLInputElement>('[data-add-email]')
+    const role = () => find<HTMLSelectElement>('[data-add-role]')
+    await type(nameInput(), 'Alice Added')
+    await type(email(), 'alice@example.test')
+    await act(async () => {
+      role().value = 'viewer'
+      role().dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await click(addButton())
+    const creates = () => pending.filter((p) => p.name === 'profiles:create')
+    expect(creates().map((p) => p.args.name)).toEqual(['Alice Added'])
+    // the next person, typed while Alice's create waits, with the same role
+    await type(nameInput(), 'Bob Next')
+    await type(email(), 'bob@example.test')
+    await act(async () => creates()[0].resolve(null))
+    await settle()
+    expect(nameInput().value).toBe('Bob Next')
+    expect(email().value).toBe('bob@example.test')
+    expect(role().value).toBe('viewer')
+    // with nothing typed since, the form clears and the role goes back
+    await click(addButton())
+    expect(creates().map((p) => p.args.name)).toEqual(['Alice Added', 'Bob Next'])
+    await act(async () => creates()[1].resolve(null))
+    await settle()
+    expect(nameInput().value).toBe('')
+    expect(email().value).toBe('')
+    expect(role().value).toBe('user')
+    // a name typed on clears the address the added person still held
+    await type(nameInput(), 'Cleo Third')
+    await type(email(), 'cleo@example.test')
+    await click(addButton())
+    await type(nameInput(), 'Dan Fourth')
+    await act(async () => creates()[2].resolve(null))
+    await settle()
+    expect(nameInput().value).toBe('Dan Fourth')
+    expect(email().value).toBe('')
+  })
+
   it('says why an address longer than the server stores cannot be added', async () => {
     await load()
     await show()
