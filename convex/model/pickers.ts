@@ -4,7 +4,9 @@
  * named people could be chosen in one of those pickers now (canOwnOf).
  * Beside them, and unlike them, the editor's @ mention popup reads every
  * person of the organization with no task, gate or rule (mentionsOf, at
- * the end of this file).
+ * the end of this file). The REST and MCP project user list (lib/core.ts
+ * projectUserPage) asks the owner rule's helpers for one project, without
+ * a task, within the rule's share (withinRule).
  *
  * Each task picker runs one gate first (pickerTask): the task, its projects and the
  * caller's level, in that order, with the write's own sentences, before it

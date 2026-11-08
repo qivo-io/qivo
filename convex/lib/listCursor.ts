@@ -11,9 +11,15 @@
  * teamPage and memberPage), and REST GET /v1/tasks/{ref}/subtasks, /links,
  * /followers and /attachments and MCP list_task_related a task's related
  * lists, whose first pages REST GET /v1/tasks/{ref} and MCP get_task answer
- * with a cursor each (lib/core.ts relatedPage and taskOut), and REST GET
+ * with a cursor each (lib/core.ts relatedPage and taskOut), REST GET
  * /v1/projects and MCP list_projects the projects a caller sees, in tree
- * order (machine/projects.ts projectPage). REST GET /v1/inbox and MCP
+ * order (machine/projects.ts projectPage), and REST GET
+ * /v1/projects/{ref}/users, /milestones, /access/users and /access/teams
+ * and MCP list_project_users and list_project_related a project's users,
+ * milestones, user grants and team shares (lib/core.ts projectUserPage and
+ * machine/projects.ts milestoneRows and grantRows), whose last three first
+ * pages REST GET /v1/projects/{ref} and MCP get_project answer with a
+ * cursor each (machine/projects.ts projectDetail). REST GET /v1/inbox and MCP
  * list_inbox (t3/limits-machine-inbox) are to page with them too. A
  * cursor is a position in one list's order, sealed with the
  * list's name and its scope (lib/namedPages.ts namedCursor over
@@ -37,7 +43,13 @@
  * with namedPaging and seals the organization, the caller, the side of the
  * archive axis and the search's name key (namedScope), at a position of
  * three strings, the top-level project's id and, inside its sub-projects,
- * a sub-project's key and id. A cursor never grants access by itself,
+ * a sub-project's key and id. A project's lists, machine.project_users,
+ * machine.project_milestones, machine.project_user_grants and
+ * machine.project_team_grants, check their paging with cursorPaging and
+ * seal the organization, the caller and the project, so a cursor of the
+ * details continues on the list call for the same project, at a position
+ * of a name key and the holder's id (model/nameKeys.ts idTieOf), or for a
+ * milestone its day, name key and id. A cursor never grants access by itself,
  * since every page checks the caller's access again. Archived task lists
  * keep their own `2~` cursors (lib/archivedTasks.ts). */
 
