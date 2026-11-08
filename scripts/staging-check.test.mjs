@@ -81,6 +81,9 @@ import {
   NEW_TASK_READS,
   NOT_LOADED_YET,
   newerWalk,
+  OLD_PATHS_CLEANUP,
+  OLD_PATHS_MARKS,
+  OLD_PATHS_STEP,
   ON_DEMAND_STEP,
   OVERVIEW_EXPECTED,
   OVERVIEW_HEALTH_EXPECTED,
@@ -682,6 +685,52 @@ describe('staging check REST contract', () => {
     expect(step).toContain(`[\${m.child}="\${Z.id}"][data-on]`)
     expect(step).toContain('getComputedStyle(el).scrollbarWidth')
   })
+  it('checks the old All projects address and a numbered project page on their own marks, after startup selection and before the archive', () => {
+    const sources = [
+      '../src/App.tsx',
+      '../src/components/ProjectChooser.tsx',
+      '../src/panels/settings/ProjectSettings.tsx',
+      '../src/panels/Settings.tsx',
+    ]
+      .map((path) => readFileSync(new URL(path, import.meta.url), 'utf8'))
+      .join('\n')
+    for (const mark of Object.values(OLD_PATHS_MARKS)) expect(sources).toContain(mark)
+    expect(OLD_PATHS_STEP).toBe('ui/old-paths')
+    expect(OLD_PATHS_CLEANUP).toBe('cleanup/old-paths')
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const at = check.indexOf('await oldPathsCheck()')
+    expect(at).toBeGreaterThan(check.indexOf('await startupSelectionCheck()'))
+    expect(at).toBeGreaterThan(check.indexOf('await adminManagementCheck()'))
+    expect(at).toBeLessThan(check.indexOf('await archiveChecks()'))
+    const step = check.slice(
+      check.indexOf('async function oldPathsCheck()'),
+      check.indexOf('/** The step that checks startup selection (startupSelectionCheck). */'),
+    )
+    // the old address first, then the managed project by its number, a
+    // reload of it, and a number no project holds
+    const old = step.indexOf('/board/all`')
+    const managed = step.indexOf(`/access/users/\${run.nora.id}`)
+    const numbered = step.indexOf(`/settings/project/\${project.num}`)
+    const reload = step.indexOf('app.reload(')
+    const free = step.indexOf('+ 100_000')
+    expect(old).toBeGreaterThan(-1)
+    expect(managed).toBeGreaterThan(old)
+    expect(numbered).toBeGreaterThan(managed)
+    expect(reload).toBeGreaterThan(numbered)
+    expect(free).toBeGreaterThan(reload)
+    expect(step).toContain("!path().endsWith('/all')")
+    expect(step).toContain("'/app/~/settings/account'")
+    // its own project goes at its end, also after a failure, under its own id
+    const cleanup =
+      'if (project) await check(OLD_PATHS_CLEANUP, () => deleteProjectInApp(w, project))'
+    expect(step.indexOf(cleanup)).toBeGreaterThan(step.indexOf('await check(OLD_PATHS_STEP'))
+    // no step opens an address that names all projects but this one: the
+    // sign-in, the thread pages' leave and both Searches open the directory
+    const rest = check.replace(step, '')
+    expect(rest).not.toMatch(/goto\(`[^`]*\/(board|overview|roadmap)\/all\b/)
+    expect(check).toContain(`app.goto(\`\${cfg.appOrigin}/app/~/projects\``)
+  })
+
   it('checks startup selection on its own marks and note, after the tree and before the deleted items and the archive', () => {
     const chooser = readFileSync(
       new URL('../src/components/ProjectChooser.tsx', import.meta.url),
