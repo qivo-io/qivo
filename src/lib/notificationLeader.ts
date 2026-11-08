@@ -49,12 +49,15 @@
      lets go of the lock, sends nothing while the sign-in is missing,
      however long the sign-in service takes to answer, and joins the
      election again, with the resume order, once the Convex client
-     confirms the sign-in (watchSignIn). A refusal of the session (it
-     ended, the login was banned, or a demo that is not active) stops the
-     leader and lets go of the lock, so another tab, such as one loaded
-     after a new sign-in, may lead; it stays stopped until the store starts
-     a new one (refused). A bad request does the same and is a defect it
-     reports.
+     confirms the sign-in (watchSignIn). A beat refused for a missing
+     sign-in that went out before the latest confirmation stands nothing
+     by. The 155 s count from the next such refusal, and a fresh beat goes
+     at once, so a page signed in again keeps its alerts. A refusal of the
+     session (it ended, the login was banned, or a demo that is not
+     active) stops the leader and lets go of the lock, so another tab,
+     such as one loaded after a new sign-in, may lead; it stays stopped
+     until the store starts a new one (refused). A bad request does the
+     same and is a defect it reports.
    - Use. The first trusted pointer, key, touch or wheel input
      (lib/inputIdle.ts INPUTS, which the store passes) in a visible page of the profile, a pointer
      move only when it moved, NOTIFY_CLIENT.report_ms or more after the
@@ -207,7 +210,8 @@ export type LeaderDeps = {
   watchSettings: (take: (delivery: Delivery | null) => void) => () => void
   /** calls its listener each time the Convex client confirms the page's
       sign-in, also after it armed the socket again (lib/authSession.ts
-      onSignedIn), for a tab that stands by while its sign-in is missing */
+      onSignedIn), for a tab that stands by while its sign-in is missing
+      and for a beat sent before it that is refused after it */
   watchSignIn: (listener: () => void) => () => void
   /** the lock's and the channel's name (leaderName) */
   name: string
@@ -363,6 +367,10 @@ export function startNotificationLeader(deps: LeaderDeps) {
   // the local time of the first beat refused for a missing sign-in since
   // one answered or this tab gained leadership, or null
   let unsignedSince: number | null = null
+  // how many times the Convex client confirmed the sign-in (watchSignIn),
+  // whatever the tab's state, so a refusal of a beat sent before the
+  // latest confirmation stands nothing by
+  let signIns = 0
   let inFlight = false
   // the local time the in-flight beat went out
   let sentAt = 0
@@ -477,6 +485,7 @@ export function startNotificationLeader(deps: LeaderDeps) {
     instance ??= (deps.newInstance ?? randomInstance)()
     const id = instance
     const mine = leadership
+    const signedInAs = signIns
     const can = deps.canNotify()
     const at = Date.now()
     const active =
@@ -501,6 +510,13 @@ export function startNotificationLeader(deps: LeaderDeps) {
       else {
         const refusal = refusalOf(e)
         if (refusal === 'stop' || refusal === 'defect') refuse(refusal, e)
+        // the Convex client confirmed the sign-in after this beat went
+        // out, so its refusal says nothing of the sign-in now. The retries'
+        // time counts from the next refusal, and a fresh beat goes at once
+        else if (refusal === 'signin' && signedInAs !== signIns) {
+          unsignedSince = null
+          if (can && capable) schedule(0)
+        }
         // a sign-in still missing as long after its first refusal as every
         // retry takes stands the tab by, whichever beats came between
         else if (
@@ -924,6 +940,7 @@ export function startNotificationLeader(deps: LeaderDeps) {
   listen(doc, 'resume', rejoin)
   stops.push(
     deps.watchSignIn(() => {
+      signIns += 1
       if (!unsigned) return
       unsigned = false
       contend()

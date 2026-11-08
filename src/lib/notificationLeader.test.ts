@@ -103,8 +103,8 @@ type Tab = {
   /** says the Convex client confirmed the sign-in, as lib/authSession.ts
       onSignedIn would */
   signedIn: () => void
-  /** answers the call holdNext held */
-  release: () => void
+  /** answers the call holdNext held, or refuses it with `error` */
+  release: (error?: unknown) => void
 }
 
 const tabs: Tab[] = []
@@ -185,8 +185,8 @@ function openTab(
       if (tab.state.hang) return new Promise(() => {})
       if (tab.state.holdNext) {
         tab.state.holdNext = false
-        return new Promise((resolve) => {
-          tab.release = () => resolve(answerOf(name))
+        return new Promise((resolve, reject) => {
+          tab.release = (error) => (error === undefined ? resolve(answerOf(name)) : reject(error))
         })
       }
       return Promise.resolve(answerOf(name))
@@ -1019,6 +1019,46 @@ describe('failures', () => {
     await flush()
     expect((await p.manager?.query())?.pending).toHaveLength(1)
     expect(b.beats()).toHaveLength(sent[1])
+  })
+
+  it('keeps leading when the sign-in is confirmed before a beat sent without it is refused, and beats again at once', async () => {
+    const tab = openTab(profile())
+    await flush()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const unsigned = () => new ConvexError({ code: 'forbidden', message: 'not signed in' })
+    tab.state.fail = unsigned
+    // the periodic beat, then the retries after 5, 30 and 120 seconds, the
+    // last at the server's pace of a minute, 95 s after the first refusal
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    for (const wait of [5_000, 30_000, MINUTE]) await vi.advanceTimersByTimeAsync(wait)
+    await flush()
+    expect(tab.beats()).toHaveLength(5)
+    // the next beat goes out 155 s after the first refusal and waits for
+    // its answer, while the Convex client arms the socket again and
+    // confirms the sign-in
+    tab.state.fail = null
+    tab.state.holdNext = true
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    expect(tab.beats()).toHaveLength(6)
+    tab.signedIn()
+    // the client drops the sign-in again at once, so the fresh beat is
+    // refused too, the first refusal of a new outage
+    tab.state.fail = unsigned
+    tab.release(unsigned())
+    await flush()
+    // the refusal of the beat sent before the confirmation stands nothing
+    // by, a fresh beat goes at once, and its own refusal starts the
+    // retries' time again
+    expect(tab.beats()).toHaveLength(7)
+    expect(tab.leader.role()).toBe('leader')
+    expect(tab.feed.stops).toBe(0)
+    expect(tab.settings.watching).toBe(1)
+    // the sign-in is back, and the next try answers
+    tab.state.fail = null
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    expect(tab.beats()).toHaveLength(8)
+    expect(tab.mirror?.beats).toBe(2)
+    expect(tab.leader.role()).toBe('leader')
   })
 
   it('sends no beat while the socket is down, and the reconnect runs the resume order', async () => {
