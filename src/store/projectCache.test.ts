@@ -193,6 +193,95 @@ describe('the project cache', () => {
     expect(states(ids(4))).toEqual(['ok', 'ok', 'gone', 'ok'])
   })
 
+  it('follows ids that change again before the read of the new ids answers', () => {
+    const s = setup()
+    PROJECT_CACHE.chunk = 5
+    s.cache.name('list', ids(3))
+    const [first] = s.reads()
+    s.answer(first.token)
+    s.cache.name('list', ids(4))
+    s.cache.name('list', ids(5))
+    // the read of four ids stopped for the read of five, the answered one
+    // still runs
+    expect(s.reads().map((r) => r.ids)).toEqual([ids(3), ids(5)])
+    expect(ids(3).map((id) => s.cache.look(id).row?.level)).toEqual(['user', 'user', 'user'])
+    expect(['p3', 'p4'].map((id) => s.cache.look(id).state)).toEqual(['loading', 'loading'])
+    const second = s.reads().find((r) => r.ids.length === 5)
+    if (!second) throw new Error('no read of five ids')
+    s.answer(second.token)
+    expect(s.reads().map((r) => r.ids)).toEqual([ids(5)])
+    expect(ids(5).map((id) => s.cache.look(id).state)).toEqual(['ok', 'ok', 'ok', 'ok', 'ok'])
+  })
+
+  it('marks the chunk failed, its kept rows without a level, when the read of its new ids fails', () => {
+    const s = setup()
+    PROJECT_CACHE.chunk = 5
+    s.cache.name('list', ids(3))
+    const [first] = s.reads()
+    s.answer(first.token)
+    s.cache.name('list', ids(4))
+    const second = s.reads().find((r) => r.ids.length === 4)
+    if (!second) throw new Error('no read of the new ids')
+    s.fail(second.token)
+    // the failed read is the chunk's now, and the answered one stopped
+    expect(s.reads().map((r) => r.ids)).toEqual([ids(4)])
+    expect(s.cache.look('p0')).toEqual({ state: 'failed', row: project('p0'), message: null })
+    expect(s.cache.look('p3')).toEqual({ state: 'failed', row: null, message: null })
+    s.answer(second.token)
+    expect(ids(4).map((id) => s.cache.look(id).state)).toEqual(['ok', 'ok', 'ok', 'ok'])
+  })
+
+  it('stops both reads while the page hides, and on show reads the new ids once', () => {
+    const s = setup()
+    PROJECT_CACHE.chunk = 5
+    s.cache.name('list', ids(3))
+    s.answer(s.reads()[0].token)
+    s.cache.name('list', ids(4))
+    expect(s.reads()).toHaveLength(2)
+    s.show(false)
+    expect(s.reads()).toEqual([])
+    // the names stay, with no level, and the id that joined loads
+    expect(s.cache.look('p0')).toEqual({ state: 'loading', row: project('p0'), message: null })
+    expect(s.cache.look('p3')).toEqual({ state: 'loading', row: null, message: null })
+    s.show(true)
+    expect(s.reads().map((r) => r.ids)).toEqual([ids(4)])
+    s.answer(s.reads()[0].token)
+    expect(ids(4).map((id) => s.cache.look(id).state)).toEqual(['ok', 'ok', 'ok', 'ok'])
+  })
+
+  it('takes a new answer of the answered read while the read of the new ids has not answered', () => {
+    const s = setup()
+    PROJECT_CACHE.chunk = 5
+    s.cache.name('list', ids(3))
+    const [first] = s.reads()
+    s.answer(first.token)
+    s.cache.name('list', ids(4))
+    // the server answers the first read again: p0 is read-only now, and p1 went
+    s.answer(first.token, [project('p0', { level: 'viewer' }), project('p2')])
+    expect(s.cache.look('p0')).toMatchObject({ state: 'ok', row: { level: 'viewer' } })
+    expect(s.cache.look('p1')).toEqual({ state: 'gone', row: null, message: null })
+    expect(s.cache.look('p2').state).toBe('ok')
+    // the id that joined still loads, never gone
+    expect(s.cache.look('p3').state).toBe('loading')
+    expect(s.reads()).toHaveLength(2)
+  })
+
+  it('answers a project the part stops holding as loading, with no level, until its read answers', () => {
+    const s = setup(new Set(['p1']))
+    s.cache.name('board', ['p1', 'p2'])
+    const [first] = s.reads()
+    s.answer(first.token)
+    // the part's access went, so the part leaves p1 out from now on
+    s.held.delete('p1')
+    s.cache.sync()
+    expect(s.cache.look('p1')).toEqual({ state: 'loading', row: null, message: null })
+    expect(s.cache.look('p2').state).toBe('ok')
+    const second = s.reads().find((r) => r.ids.includes('p1'))
+    if (!second) throw new Error('no read of p1')
+    s.answer(second.token, [project('p1', { level: 'viewer' }), project('p2')])
+    expect(s.cache.look('p1')).toMatchObject({ state: 'ok', row: { level: 'viewer' } })
+  })
+
   it("gives no level after a reconnect until each chunk's read answers again, a parent row another chunk brought included, keeping the names", () => {
     const s = setup()
     PROJECT_CACHE.chunk = 1
