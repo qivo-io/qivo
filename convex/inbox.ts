@@ -1,11 +1,13 @@
 /* The inbox reads that need only inbox_items rows (model/inboxReads.ts,
- * model/inboxPage.ts). The app watches the summary from the start beside
- * the workspace's parts, for its Inbox badge and the availability of Mark
- * all as read and Remove all read, and the item beside the open task's
- * thread, for the task window's New divider and its read on open
- * (messages.ts readItem). The Inbox list reads the page while it shows,
- * one page at a time, and its row actions are the item actions. The
- * workspace inbox part (workspace.ts inbox) stays for the desktop alerts.
+ * model/inboxPage.ts, model/notificationCatchup.ts). The app watches the
+ * summary from the start beside the workspace's parts, for its Inbox badge
+ * and the availability of Mark all as read and Remove all read, and the
+ * item beside the open task's thread, for the task window's New divider
+ * and its read on open (messages.ts readItem). The Inbox list reads the
+ * page while it shows, one page at a time, and its row actions are the
+ * item actions. A session that can show desktop alerts watches the feed,
+ * also while the Inbox is closed and the tab is hidden, and nothing else
+ * for its alerts (src/lib/notificationFeed.ts).
  *
  * - summary (across the caller's seats): each seat's organization, whether
  *   its items are complete (model/inboxItems.ts seatReady) and whether Mark
@@ -19,13 +21,12 @@
  *   into a project the caller can see counts once the move's background
  *   re-key reaches its row (model/inboxItems.ts rekeyItems). The two flags
  *   include messages about tasks the caller cannot see, as both actions
- *   reach those too, where the workspace inbox part offers them only for
- *   the rows it shows or leaves unexamined. It reads each seat's profile,
- *   inbox_state, first message and first unsnoozed unread and read
- *   messages, then the unread item rows project by project, each project
- *   with the caller's levels on it, and the task of each item it may
- *   count, at most model/inboxReads.ts SUMMARY.most (100) counted tasks in
- *   a run, where the workspace inbox part reads up to 2,000. So it reruns
+ *   reach those too. It reads each seat's profile, inbox_state, first
+ *   message and first unsnoozed unread and read messages, then the unread
+ *   item rows project by project, each project with the caller's levels on
+ *   it, and the task of each item it may count, at most
+ *   model/inboxReads.ts SUMMARY.most (100) counted tasks in a run. So it
+ *   reruns
  *   when one of those item rows, tasks, projects or access rows changes,
  *   when a seat's inbox_state changes, and when a seat's first unsnoozed
  *   unread or read message changes.
@@ -72,15 +73,41 @@
  *   messages, actors and unread fields of each group it examines, and with
  *   a search every message of a group whose title, key, second line and
  *   places miss a word. It reruns when any of those change.
+ * - feed (across the caller's seats): the newest unread events after the
+ *   floor `after` (epoch ms), at most model/notificationCatchup.ts
+ *   FEED.events (50), newest first: each unread message of an unread,
+ *   unsnoozed item about a task the caller is shown, and each such item's
+ *   snooze return, with its key and time as the claims take them
+ *   (notifications.ts), its kind, the task's live title, the actor's name
+ *   in the seat's organization and the detail the Inbox shows. `through`
+ *   is the newest event's time, or `after` with none, and `more` says
+ *   that an event after `after` may be missing, past the cap, the budget
+ *   or a check a bound stopped. A query cannot read the time, so the
+ *   client sends the floor, and the read reaches one minute further back
+ *   for notices stored late (NOTIFY.lag_ms). A seat that is not ready is
+ *   skipped. It answers no count, no project and no organization. It reads
+ *   each seat's readiness and its unread items after that time, the task,
+ *   project and access rows of each item its project lets through, each
+ *   shown item's unread messages after that time, a woken item's newest
+ *   unread message, and the actors' profiles, and no notification row
+ *   (model/notificationCatchup.ts readInboxFeed). It reruns when any of
+ *   those change.
  *
- * All three show the working set as the workspace parts do (lib/access.ts
+ * All four show the working set as the workspace parts do (lib/access.ts
  * accessOf). Nothing here writes. The item actions are in messages.ts. */
 
 import { v } from 'convex/values'
 import { vMessageKind } from './lib/enums'
-import { authedQuery, orgQuery } from './lib/functions'
+import { authedQuery, badRequest, orgQuery } from './lib/functions'
 import { readInboxPage } from './model/inboxPage'
 import { readInboxItem, readInboxSummary } from './model/inboxReads'
+import { readInboxFeed } from './model/notificationCatchup'
+
+/* The latest time whose ISO string has a four-digit year,
+ * 9999-12-31T23:59:59.999Z, in epoch ms. The feed compares its floor with
+ * the stored ISO times as strings, which a later, six-digit year would
+ * sort before. */
+const LATEST_TIME = 253_402_300_799_999
 
 export const summary = authedQuery({
   args: {},
@@ -104,4 +131,14 @@ export const page = authedQuery({
   },
   handler: async (ctx, args) =>
     await readInboxPage(ctx, ctx.authUserId, [...ctx.myProfiles.values()], args),
+})
+
+export const feed = authedQuery({
+  args: { after: v.number() },
+  handler: async (ctx, { after }) => {
+    // a time a Date holds, before any of the caller's rows is read
+    if (!Number.isFinite(after) || after < 0 || after > LATEST_TIME)
+      throw badRequest('after must be epoch milliseconds')
+    return await readInboxFeed(ctx, [...ctx.myProfiles.values()], after)
+  },
 })

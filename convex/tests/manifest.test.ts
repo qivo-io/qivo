@@ -276,6 +276,7 @@ identity:claimMySeats mutation public {"type":"object","value":{}}
 identity:claimSeatsInternal mutation internal {"type":"object","value":{"userId":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"emailVerified":{"fieldType":{"type":"boolean"},"optional":false}}}
 identity:createOrganization mutation public {"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false}}}
 identity:whoami query public {"type":"object","value":{}}
+inbox:feed query public {"type":"object","value":{"after":{"fieldType":{"type":"number"},"optional":false}}}
 inbox:item query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 inbox:page query public {"type":"object","value":{"order":{"fieldType":{"type":"union","value":[{"type":"literal","value":"newest"},{"type":"literal","value":"oldest"}]},"optional":false},"unread_only":{"fieldType":{"type":"boolean"},"optional":false},"include_snoozed":{"fieldType":{"type":"boolean"},"optional":false},"kinds":{"fieldType":{"type":"array","value":{"type":"union","value":[{"type":"literal","value":"mention"},{"type":"literal","value":"change"},{"type":"literal","value":"comment"}]}},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true}}}
 inbox:summary query public {"type":"object","value":{}}
@@ -1052,9 +1053,11 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   },
   // The inbox reads over inbox_items, the capped unread summary across the
   // login's own seats, one task's own item in one organization, which is
-  // null unless the caller is shown the task, and a page of the login's own
-  // task groups across its seats, each about a task the caller is shown.
-  inbox: { summary: 'authedQuery', item: 'orgQuery', page: 'authedQuery' },
+  // null unless the caller is shown the task, a page of the login's own
+  // task groups across its seats, each about a task the caller is shown,
+  // and the feed of the login's own newest unread events after a floor,
+  // each about a task the caller is shown, at most 50, with no count.
+  inbox: { summary: 'authedQuery', item: 'orgQuery', page: 'authedQuery', feed: 'authedQuery' },
   // The Notification delivery setting and the caller's own session: no
   // argument names a login, a seat or a session; every row is the one of the
   // live session in the caller's token. claimSummary reads only the
@@ -1390,7 +1393,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 257
+const PUBLIC_COUNT = 258
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

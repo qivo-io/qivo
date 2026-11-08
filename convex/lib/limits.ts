@@ -211,6 +211,15 @@ export const BY_IDS_MAX = 100
  * the Inbox through model/inboxPage.ts instead. */
 export const INBOX_LIMIT = 500
 
+/** How old an event may be and still become a live desktop alert, ten
+ * minutes. No claim grants an event older than this
+ * (model/notificationSessions.ts NOTIFY.live_window_ms reads it), and the
+ * app's feed client (src/lib/notificationFeed.ts) starts its floor this far
+ * before its first beat's server time and keeps it no further back than
+ * this before the latest beat, so inbox.feed reads only events a claim may
+ * still grant. A bound on the app's own calls, not a limit people meet. */
+export const ALERT_WINDOW_MS = 600_000
+
 /** The task groups one Inbox page holds (model/inboxPage.ts INBOX_PAGE.rows),
  * the owner's 50, which the app's list shows a page at a time. */
 export const INBOX_PAGE_ROWS = 50
