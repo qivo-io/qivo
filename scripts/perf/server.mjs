@@ -189,9 +189,10 @@
 //                        teams say (teams:picker,
 //                        src/store/teamSettingsStandIn.setup.ts): not-ready,
 //                        stopped (an open batch stops after two teams
-//                        looked at), small (batches of two, so the three
-//                        teams reach Load more) and error (every batch
-//                        fails); several joined by commas
+//                        looked at), small (batches of five, so the
+//                        teams of people=60 or more reach Load more) and
+//                        error (every batch fails); several joined by
+//                        commas
 //   followers            a state a task's subscribers popover answers
 //                        whatever the people say (issues:subscribers and
 //                        pickers:taskFollowers,
@@ -857,7 +858,7 @@ const forcedTeamPicker = (() => {
   for (const state of (parameters.get('teampicker') ?? '').split(',').filter(Boolean)) {
     if (state === 'not-ready') force.notReady = true
     else if (state === 'stopped') force.stop = 2
-    else if (state === 'small') force.batch = 2
+    else if (state === 'small') force.batch = 5
     else if (state === 'error') force.fail = ['picker']
   }
   return force

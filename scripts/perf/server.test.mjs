@@ -1151,8 +1151,10 @@ describe('the benchmark server', () => {
     expect((await read('teampicker=not-ready', 'teams:picker')).answer).toEqual({
       state: 'not_ready',
     })
-    const small = await read('teampicker=small', 'teams:picker')
-    expect(small.answer.rows).toHaveLength(2)
+    // batches of five, so ten teams reach a second batch
+    const small = await read('teampicker=small&people=100', 'teams:picker')
+    expect(small.snap.teams).toHaveLength(10)
+    expect(small.answer.rows).toHaveLength(5)
     expect(small.answer.next).not.toBeNull()
     expect((await read('teampicker=stopped', 'teams:picker')).answer.stopped).toBe(true)
     expect((await read('teampicker=error', 'teams:picker')).answer.error).toContain('fails')
