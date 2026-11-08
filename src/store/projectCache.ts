@@ -158,7 +158,7 @@ export function createProjectCache(deps: ProjectCacheDeps) {
   function bound() {
     if (entries.size <= PROJECT_CACHE.most) return
     const parents = namedParents()
-    for (const id of [...entries.keys()]) {
+    for (const id of entries.keys()) {
       if (entries.size <= PROJECT_CACHE.most) return
       if (isNamed(id, parents)) continue
       entries.delete(id)
