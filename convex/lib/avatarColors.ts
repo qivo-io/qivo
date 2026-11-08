@@ -1,9 +1,12 @@
-/* The avatar color palette. A new seat takes the entry at its roster position,
- * in the app's add-user flow and in the platform operator's organization setup
- * (adminOrgs.ts). Hex on purpose, not tokens. The color is DATA, written to
+/* The avatar color palette. The app's add-user flow takes the entry its hash of
+ * the new id picks (src/lib/labelColors.ts avatarColorFor), and the platform
+ * operator's organization setup (adminOrgs.ts) the entry at the seat's roster
+ * position. Hex on purpose, not tokens. The color is DATA, written to
  * profiles.color and read back by every client, so a var() would be stored as
  * a string no other client could resolve. The server stores only #rrggbb
- * values (model/people.ts avatarColor), and a test keeps every entry valid. */
+ * values (model/people.ts avatarColor), and a test keeps every entry valid.
+ * What a read sends for an older value (shownAvatarColor) is here too, free of
+ * server runtime, so the stand-ins of the server send what it sends. */
 export const AVATAR_COLORS = [
   '#0F766E',
   '#B45309',
