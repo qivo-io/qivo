@@ -1820,6 +1820,9 @@ function App() {
     const was = scopePlace.current?.id === scope ? scopePlace.current : null
     const note = lostNote(scope, scopeOpened.current, was?.name ?? null)
     scopeOpened.current = null
+    // the address, by uuid or by number, gives way to the front door's in
+    // place, as it is no page the person can open
+    replaceNextHistory.current = true
     setScope(undefined)
     showOpening((n) => ({
       kind: 'choose',
