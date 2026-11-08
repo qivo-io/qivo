@@ -8,7 +8,9 @@ that the client needs:
   the system tray by default. The tray menu offers **Open Qivo** and **Quit
   Qivo**.
 - Inbox events can raise native desktop notifications. Clicking one restores
-  Qivo and opens the Inbox.
+  Qivo and opens the Inbox. The shell also tells the page when the computer
+  wakes from sleep ([power.ts](power.ts)), so the app checks for missed Inbox
+  activity at once.
 - A packaged Windows build with a release feed built into it checks that
   feed, downloads updates in the background and shows a native “update
   ready” notification. Qivo waits for active edits and asks before restarting
@@ -23,8 +25,10 @@ The shell follows Electron's
 [security checklist](https://www.electronjs.org/docs/latest/tutorial/security):
 
 - The renderer has context isolation, the Chromium sandbox and no Node.js.
-  The preload exposes only `window.qivoDesktop`, and every IPC handler
-  accepts calls only from the top-level page of the configured app origin.
+  The preload exposes only `window.qivoDesktop`, whose members are the
+  settings, notifications, updates, power (the wake from sleep) and sign-in
+  bridges, and every IPC handler accepts calls only from the top-level page
+  of the configured app origin.
 - The window loads only pages of the configured app origin. A link, a
   redirect or `window.open` to any other page, sign-in providers included,
   goes to the system instead: `http`, `https`, `mailto` and `tel` links open

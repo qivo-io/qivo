@@ -9,6 +9,7 @@ import {
   Menu,
   Notification,
   nativeImage,
+  powerMonitor,
   shell,
   Tray,
 } from 'electron'
@@ -16,6 +17,7 @@ import electronUpdater from 'electron-updater'
 import { resolveAppURL } from './appURL.js'
 import { createLeavePrompt } from './leavePrompt.js'
 import { guardWindow, isOAuthProviderURL } from './navigation.js'
+import { forwardResume } from './power.js'
 import { disableStagingUserId } from './privacy.js'
 import { secureSession } from './session.js'
 import { createDesktopSettingsStore, defaultDesktopSettings } from './settings.js'
@@ -511,6 +513,9 @@ if (refusedSwitches.length > 0) {
       ),
     )
     setupAutoUpdates()
+    // a wake from sleep tells the page, whose notification leader then
+    // checks for missed Inbox activity at once (power.ts)
+    forwardResume(powerMonitor, () => mainWindow)
     const startupDeepLink = process.argv.find((arg) => arg.startsWith('qivo://'))
     if (startupDeepLink) consumeDeepLink(startupDeepLink)
     app.on('activate', showWindow)

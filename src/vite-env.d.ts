@@ -51,6 +51,11 @@ type QivoDesktopBridge = {
     setBlocked(blocked: boolean): void
     onState(listener: (state: QivoDesktopUpdateState) => void): () => void
   }
+  /** The computer's wake from sleep, which the notification leader takes as
+      a resume (lib/notificationLeader.ts). */
+  power: {
+    onResume(listener: () => void): () => void
+  }
   auth: {
     beginOAuth(): Promise<{ callbackURL: string }>
     openOAuth(url: string): Promise<boolean>

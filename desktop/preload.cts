@@ -78,6 +78,15 @@ const updates = {
   },
 }
 
+// The computer woke from sleep (main.ts forwards powerMonitor's resume).
+const power = {
+  onResume: (listener: () => void): Unsubscribe => {
+    const handler = () => listener()
+    ipcRenderer.on('qivo:power:resume', handler)
+    return () => ipcRenderer.removeListener('qivo:power:resume', handler)
+  },
+}
+
 const auth = {
   beginOAuth: async (): Promise<{ callbackURL: string }> =>
     (await ipcRenderer.invoke('qivo:auth:begin-oauth')) as { callbackURL: string },
@@ -91,5 +100,6 @@ contextBridge.exposeInMainWorld('qivoDesktop', {
   settings,
   notifications,
   updates,
+  power,
   auth,
 })
