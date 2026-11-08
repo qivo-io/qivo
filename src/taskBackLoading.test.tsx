@@ -7,8 +7,12 @@ import { TooltipProvider } from './components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerLabelPages } from './store/labelPagesStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
-import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
-import { answerProjectNav, isProjectNavRead } from './store/projectNavStandIn.setup'
+import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixture.setup'
+import {
+  answerProjectNav,
+  isProjectNavRead,
+  queryProjectNav,
+} from './store/projectNavStandIn.setup'
 import { isProjectListRead, projectListsServer } from './store/projectSettingsListsStandIn.setup'
 import { isProjectSettingsRead, projectSettingsServer } from './store/projectSettingsStandIn.setup'
 import { isTeamSettingsRead, teamSettingsServer } from './store/teamSettingsStandIn.setup'
@@ -222,7 +226,12 @@ async function bootLoading(
     else if (isProjectNavRead(name)) answerProjectNav(server, name, args, next, fail)
     return () => {}
   })
-  network.query.mockResolvedValue(null)
+  // a project address by number resolves through projectNav.resolve
+  network.query.mockImplementation(async (ref, args) =>
+    getFunctionName(ref) === 'projectNav:resolve'
+      ? queryProjectNav(server, 'projectNav:resolve', args)
+      : null,
+  )
   network.mutation.mockResolvedValue(null)
   const store = await import('./store/planner')
   if (held) double.live?.holdWindow(LAST_WINDOW)
@@ -319,7 +328,9 @@ const arrive = () =>
 
 describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
   it('holds its address in a window that shows, and opens the task in its own scope once it arrives', async () => {
-    const { store, org } = await bootLoading()
+    // the fixture's project under a top-level project, as every writer
+    // stores one that holds tasks, so the project cache answers it
+    const { store, org } = await bootLoading(true, undefined, (snap) => void underProgram(snap))
     // from My view, which Back to a task address leaves
     await back(`/app/${org}/board/mine`)
     const address = `/app/${org}/board/tasks/qn-2`
@@ -585,6 +596,9 @@ describe('Back to a task during the first load', { timeout: 30_000 }, () => {
       // My view, which an earlier app saved as the scope, is read by
       // nothing, though QN-2 is the person's own and My view holds it
       (snap) => {
+        // the fixture's project under a top-level project, which the
+        // project cache answers
+        underProgram(snap)
         const own = snap.issues.find((t) => t.num === 2)
         if (own) own.assignee_id = snap.profiles[0].id
         localStorage.setItem(
@@ -850,6 +864,7 @@ describe('Back to an address that is gone', { timeout: 30_000 }, () => {
     const entries = history.length
     // the server is asked by the address's organization and number; a
     // failed check keeps the address, with Retry, and no other page
+    network.query.mockResolvedValue(null)
     await back(`/app/${org}/board/p/9`)
     await waitFor(
       () => document.querySelector('[data-project-chooser-state="retry"]'),
