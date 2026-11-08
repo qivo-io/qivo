@@ -11,6 +11,7 @@
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { forbidden } from '../lib/functions'
+import { ALERT_WINDOW_MS } from '../lib/limits'
 
 /** The bounds of notification delivery. Tests lower them and restore them
  * with structuredClone.
@@ -35,10 +36,13 @@ export const NOTIFY = {
    * runs its timers about once a minute, so a shorter beat would not hold
    * there. */
   beat_ms: 60_000,
-  /** How often every other session beats, one that cannot notify or any
-   * in 'all', where no target is chosen. It keeps the row from the expiry
-   * cron (session_keep_ms), so a session left open for days keeps its own
-   * checkpoint. */
+  /** How often a session that can notify beats in 'all', where no target
+   * is chosen, and the pace a beat answers a session that cannot notify.
+   * It keeps a session's row from the expiry cron (session_keep_ms), so one
+   * left open for days keeps its own checkpoint. The app sends one beat
+   * with can_notify false as its capability turns off and none while it
+   * cannot notify (src/lib/notificationLeader.ts), so such a session's row
+   * goes with the expiry cron session_keep_ms after that beat. */
   idle_beat_ms: 6 * 3_600_000,
   /** A session is live while its last beat is less than this many beats
    * old, so a target that sleeps or loses its connection hands delivery on
@@ -48,18 +52,20 @@ export const NOTIFY = {
    * so a client cannot turn input into writes. */
   active_ms: 15_000,
   /** No live alert is granted for an event older than this. A handoff
-   * takes about three minutes (live_beats), so a late alert stays live. */
-  live_window_ms: 600_000,
+   * takes about three minutes (live_beats), so a late alert stays live.
+   * The app's feed client reads the same ten minutes (lib/limits.ts
+   * ALERT_WINDOW_MS). */
+  live_window_ms: ALERT_WINDOW_MS,
   /** How far a catch-up reads back before its checkpoint for items that
    * were stored after it with an earlier time, and how far before a
    * summary or a mode change a live claim may still be granted, so such an
    * item reaches an alert or a later summary (notifications.ts
    * claimAlerts). Convex stamps a row with its mutation's start, not its
    * commit, and background steps store follower and mention notices with
-   * their write's earlier created_at (model/messages.ts itemMessages). The
-   * app allows the same minute (src/store/planner.ts COMMIT_SLACK_MS). A
-   * step delayed past it stays a miss until messages carry a commit
-   * timestamp. */
+   * their write's earlier created_at (model/messages.ts itemMessages).
+   * inbox.feed reads the same minute back before the floor its client
+   * sends (model/notificationCatchup.ts readInboxFeed). A step delayed past
+   * it stays a miss until messages carry a commit timestamp. */
   lag_ms: 60_000,
   /** How long a delivery or summary record is kept. Longer than
    * live_window_ms, so a record outlives every grant it must refuse, and

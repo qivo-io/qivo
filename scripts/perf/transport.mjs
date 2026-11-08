@@ -107,6 +107,12 @@ export const convex = {
   mutation(ref, args) {
     return call({ type: 'mutation', name: getFunctionName(ref), args })
   },
+  /* The worker answers every call, so the socket always counts as
+     connected, which the desktop alert client asks before it sends
+     (src/lib/notificationFeed.ts). */
+  connectionState() {
+    return { isWebSocketConnected: true, inflightMutations: 0 }
+  },
 }
 /* The watched parts by token, each with its id on the server, its latest
    value or error and how many watch it; tokens by id; the handlers. */
@@ -162,6 +168,9 @@ export const authClient = {
   }),
 }
 export const armConvexAuth = async () => true
+// the sign-in namespace the notification leader names its lock by
+// (src/lib/auth.ts AUTH_STORAGE_PREFIX)
+export const AUTH_STORAGE_PREFIX = 'better-auth'
 export const signOut = async () => {}
 export const clearLocalSession = () => {}
 export const handleOAuthReturn = async () => false

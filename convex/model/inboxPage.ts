@@ -12,7 +12,7 @@
  *
  * Who sees what. Each seat reads only its own items (recipient_id), and a
  * group shows only when its task is in the seat's working set, the rule of
- * inbox.summary, inbox.item and the workspace inbox part (lib/access.ts
+ * inbox.summary, inbox.item and inbox.feed (lib/access.ts
  * accessOf holds), the task read and checked by its own project. An item's
  * project_id is only a hint. A project the seat cannot hold items in lets
  * the walk skip the item without reading its task, and never shows one. So

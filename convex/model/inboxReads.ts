@@ -7,7 +7,7 @@
  * reads the item for its New divider and its read on open. The app's Inbox
  * list reads the pages (model/inboxPage.ts).
  *
- * Both show the seat's working set, as readInbox does, which holds a task
+ * Both show the seat's working set, as the workspace parts do, which holds a task
  * that is not archived, in a project of the seat's organization that is
  * not archived and that the seat can see, navigation included
  * (lib/access.ts accessOf).
@@ -225,7 +225,7 @@ async function walkSeat(
  * a seat the budget did not reach is left out of `seats`. With `complete`
  * true the count can still be short for a moment, never over, while a
  * move's re-key steps run (below). The count never comes from the
- * messages, a page of items or the workspace inbox part.
+ * messages or a page of items.
  *
  * A row's project_id is the task's project at the item's last arrival,
  * build or re-key; other writes keep it. A move re-keys it inline up to

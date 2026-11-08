@@ -12,6 +12,7 @@ import { convex } from './lib/convex'
 import { DEMO_MODE } from './lib/demoMode'
 import { installFocusVisibility } from './lib/focusVisibility'
 import { installLeaveGuard } from './lib/leaveGuard'
+import { othersInFlight } from './lib/notificationFeed'
 import { disarmReloadGuard, installPageHistory } from './lib/pageHistory'
 import { syncStatus, watchConnection } from './lib/syncStatus'
 import { P } from './store/planner'
@@ -32,9 +33,12 @@ import.meta.hot?.dispose(disposeAnnouncer)
 const stopWatchingConnection = watchConnection(syncStatus, convex)
 import.meta.hot?.dispose(stopWatchingConnection)
 // a change waiting for the server, or typed text an editor has not sent; the
-// Convex count also covers panels that call a mutation directly
+// Convex count also covers panels that call a mutation directly, past the
+// desktop alerts' beats, claims, summaries and end, which are no change the
+// person made (lib/notificationFeed.ts trackNotificationCall, which the
+// leader's calls go through too)
 const removeLeaveGuard = installLeaveGuard(
-  () => P.hasUnsavedWork() || convex.connectionState().inflightMutations > 0,
+  () => P.hasUnsavedWork() || othersInFlight(convex.connectionState().inflightMutations) > 0,
 )
 import.meta.hot?.dispose(removeLeaveGuard)
 

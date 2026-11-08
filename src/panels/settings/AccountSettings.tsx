@@ -1,4 +1,5 @@
-/* Personal profile, appearance, Inbox retention and assistant connections. */
+/* Personal profile, appearance, notification delivery, Inbox retention and
+   assistant connections. */
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
@@ -16,6 +17,7 @@ import { P } from '../../store/planner'
 import { AppearanceSettings } from '../AppearanceSettings'
 import { ConnectedApps } from '../ConnectedApps'
 import { BackLink, DemoCapabilityNotice } from './controls'
+import { NotificationDeliveryField } from './NotificationDeliveryField'
 import { PersonalTokens } from './PersonalTokens'
 import { AvatarField, NameField } from './ProfileControls'
 
@@ -39,6 +41,12 @@ export function AccountPage({
   const sections = [
     { id: 'profile', label: 'Profile', icon: 'user', hint: 'Name, picture and sign out' },
     { id: 'appearance', label: 'Appearance', icon: 'cog', hint: 'Theme and background' },
+    {
+      id: 'notifications',
+      label: 'Notifications',
+      icon: 'bell',
+      hint: 'Where desktop alerts appear',
+    },
     { id: 'inbox', label: 'Inbox', icon: 'inbox', hint: 'How long to keep read messages' },
     { id: 'mcp', label: 'MCP access', icon: 'command', hint: 'Connect your assistant with OAuth' },
   ]
@@ -129,6 +137,11 @@ export function AccountPage({
       {profile && (!narrow || section === 'appearance') && (
         <SettingsSection title={heading('Appearance')}>
           <AppearanceSettings key={profile.id} />
+        </SettingsSection>
+      )}
+      {profile && (!narrow || section === 'notifications') && (
+        <SettingsSection title={heading('Notifications')}>
+          <NotificationDeliveryField />
         </SettingsSection>
       )}
       {profile && (!narrow || section === 'inbox') && (

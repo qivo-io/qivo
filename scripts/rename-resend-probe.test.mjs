@@ -68,7 +68,7 @@ describe('rename-resend-probe verdict', () => {
     expect(
       partName({ name: 'workspace:tasks', args: { org_id: 'o', from: '80000000', to: null } }),
     ).toBe('workspace:tasks [80000000, (end))')
-    expect(partName({ name: 'workspace:inbox', args: { org_id: 'o' } })).toBe('workspace:inbox')
+    expect(partName({ name: 'workspace:root', args: {} })).toBe('workspace:root')
   })
 })
 

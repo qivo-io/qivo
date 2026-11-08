@@ -207,15 +207,6 @@ vi.mock('convex/browser', () => ({
           issueSubs: [],
           orgLoad: [],
         },
-        'workspace:inbox': {
-          state: 'ok',
-          unread: [],
-          read: [],
-          readMessageCount: 0,
-          unreadTruncated: false,
-          readTruncated: false,
-          truncated: false,
-        },
       }[name]
     }
     async mutation(ref, fields) {

@@ -50,6 +50,7 @@ import {
   uuid,
   withReadingAdmin,
 } from './helpers.setup'
+import { markRead, snoozeIds } from './inboxItems.setup'
 
 const DEFAULT_FANOUT = { ...FOLLOWER_FANOUT }
 afterEach(() => {
@@ -834,7 +835,7 @@ describe('pruneReadMessages — the 0109 pair invariant', () => {
       read_at: READ,
     })
 
-    // pair C: identical instants — the id breaks the tie, same as the client's isNewer
+    // pair C: identical instants, where the id breaks the tie (lib/inbox.ts newestFirst)
     const issueC = uuid()
     await plantMessage(t, { ...base, issue_id: issueC, id: 'aaaa', created_at: NOW, read_at: READ })
     const c2 = await plantMessage(t, {
@@ -1057,11 +1058,10 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
     const t = newT()
     const f = await withReadingAdmin(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const guest = as(t, f.guest)
     const ids = async () => (await messagesFor(t, f.guest.id, issue.id)).map((m) => m.id)
 
     await arrive(t, f, { recipient: f.guest, issue }, SIXTY)
-    await guest.mutation(api.messages.markRead, { org_id: f.org.id, ids: await ids() })
+    await markRead(t, f.guest, await ids())
     let rows = await messagesFor(t, f.guest.id, issue.id)
     expect(rows.map((m) => m.detail)).toEqual(['arrival 59'])
     expect(rows[0].read_at).toBeDefined()
@@ -1069,11 +1069,7 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
     // refill past the cap, then snooze the whole item from one id
     await arrive(t, f, { recipient: f.guest, issue }, SIXTY, 60)
     const until = new Date(Date.now() + 3_600_000).toISOString()
-    await guest.mutation(api.messages.snooze, {
-      org_id: f.org.id,
-      ids: [(await ids())[0]],
-      until,
-    })
+    await snoozeIds(t, f.guest, [(await ids())[0]], until)
     rows = await messagesFor(t, f.guest.id, issue.id)
     expect(rows).toHaveLength(ITEM_UNREAD_CAP)
     expect(rows.every((m) => m.snoozed_until === until && m.read_at === undefined)).toBe(true)

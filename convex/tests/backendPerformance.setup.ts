@@ -1,4 +1,5 @@
 import type { QueryCtx } from '../_generated/server'
+import * as inbox from '../inbox'
 import { idWindows, startWindows, type WindowCounts } from '../lib/idWindows'
 import { logActivity } from '../model/activity'
 import * as workspace from '../workspace'
@@ -30,16 +31,18 @@ const keyOf = (i: number) => taskId(i).slice(0, 8)
 /* A caller as convex-test's withIdentity gives one. */
 type Identity = { query: <R>(fn: (ctx: QueryCtx) => Promise<R>) => Promise<R> }
 
-/** Public query `fn` of workspace.ts run inside `ctx`, its wrapper
-    included, so the transaction's metrics after it are the part's. */
+/** Public query `fn` of workspace.ts or inbox.ts run inside `ctx`, its
+    wrapper included, so the transaction's metrics after it are the part's. */
 const run = (fn: unknown, ctx: QueryCtx, args: Record<string, unknown>) =>
   (fn as { _handler: (ctx: QueryCtx, args: Record<string, unknown>) => Promise<unknown> })._handler(
     ctx,
     args,
   )
 
-/** Every part of the caller's workspace in `orgId`, each read in its own
-    transaction as the app subscribes to them: per part its answer as JSON,
+/** Every part of the caller's workspace in `orgId`, and the Inbox feed
+    the leader tab of a session that can show desktop alerts watches, each
+    read in its own transaction as the app subscribes to them, the feed over
+    every stored event: per part its answer as JSON,
     milliseconds, index ranges, documents and bytes read, in the windows
     the app would choose. */
 async function readParts(identity: Identity, orgId: string) {
@@ -73,7 +76,7 @@ async function readParts(identity: Identity, orgId: string) {
   // there is no people or catalog part to measure
   const parts = [
     await measured('root', workspace.root, {}),
-    await measured('inbox', workspace.inbox, { org_id: orgId }),
+    await measured('feed', inbox.feed, { after: 0 }),
   ]
   const windowed = {
     tasks: workspace.tasks,

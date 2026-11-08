@@ -59,10 +59,14 @@ import {
   IMAGE_DOWNLOADS,
   IMAGE_SPACER,
   INBOX_BADGE_STEP,
+  INBOX_FEED_MARKS,
+  INBOX_FEED_QUERY,
+  INBOX_FEED_STEP,
   INBOX_LIST_MARKS,
   INBOX_LIST_STEP,
   INBOX_PAGE_QUERY,
   INBOX_PAGES_MAX,
+  INBOX_PART_QUERY,
   INBOX_REFUSALS,
   imageDownloads,
   inboxPagesMax,
@@ -85,7 +89,10 @@ import {
   mutationRequest,
   NEW_TASK_READS,
   NOT_LOADED_YET,
+  NOTIFICATION_DELIVERY_MARKS,
+  NOTIFICATION_DELIVERY_STEP,
   newerWalk,
+  notificationCall,
   OLD_PATHS_CLEANUP,
   OLD_PATHS_MARKS,
   OLD_PATHS_STEP,
@@ -1252,7 +1259,7 @@ describe('staging check REST contract', () => {
       JSON.stringify({ type: 'Mutation', requestId: 3, udfPath, args: [args] })
     const read = { org_id: 'o', issue_id: 't', through: 12.5 }
     expect(sentMutation(mutation('messages:readItem', read), 'messages:readItem')).toEqual(read)
-    expect(sentMutation(mutation('messages:markRead', read), 'messages:readItem')).toBeNull()
+    expect(sentMutation(mutation('messages:unreadItem', read), 'messages:readItem')).toBeNull()
     expect(sentMutation('not json', 'messages:readItem')).toBeNull()
     const add = (udfPath, args) => ({ type: 'Add', queryId: 1, udfPath, args: [args] })
     const frame = JSON.stringify({
@@ -1261,6 +1268,111 @@ describe('staging check REST contract', () => {
     })
     expect(addedArgs(frame, INBOX_PAGE_QUERY)).toEqual([{ search: 'QN-1' }])
     expect(addedArgs(frame, TASK_WINDOWS_QUERY)).toEqual([])
+  })
+  it("names the delivery step and its marks, runs it after the feed's, and puts back what it changed", () => {
+    expect(NOTIFICATION_DELIVERY_STEP).toBe('ui/notification-delivery')
+    expect(NOTIFICATION_DELIVERY_MARKS).toEqual({
+      mirror: '__qivoNotify',
+      notes: '__qivoNotes',
+      control: 'data-notification-delivery',
+      state: 'data-notification-delivery-state',
+      summaryTag: 'qivo:catch-up',
+    })
+    // the store mirrors the leader by that name, and the field carries the
+    // control's marks
+    const store = readFileSync(new URL('../src/store/planner.ts', import.meta.url), 'utf8')
+    expect(store).toContain(`page.${NOTIFICATION_DELIVERY_MARKS.mirror} = state`)
+    const field = readFileSync(
+      new URL('../src/panels/settings/NotificationDeliveryField.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(field).toContain(`${NOTIFICATION_DELIVERY_MARKS.control}={shown}`)
+    expect(field).toContain(`${NOTIFICATION_DELIVERY_MARKS.state}=`)
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const order = [
+      'await inboxFeedCheck()',
+      'await notificationDeliveryCheck()',
+      'await archiveChecks()',
+    ]
+    const at = order.map((call) => script.indexOf(call))
+    expect(at.every((n) => n > 0)).toBe(true)
+    expect([...at].sort((a, b) => a - b)).toEqual(at)
+    const step = script.slice(
+      script.indexOf('async function notificationDeliveryCheck()'),
+      script.indexOf("/** What the Overview of the run's own sub-project shows"),
+    )
+    // its own context with the run's bypass, signed in, and signed out,
+    // with the mode put back, t0's item removed and the context closed
+    expect(step).toContain('await routeBypass(own)')
+    expect(step).toContain('signInBrowser(first, cfg.nora)')
+    expect(step).toContain("getByRole('button', { name: 'Sign out', exact: true })")
+    // a sign-in counts once it went through, before the app shows, so a
+    // session whose app never loads is signed out too, by the account
+    // page or the app's own sign-out request
+    const signedIn = step.indexOf('authenticated = true')
+    expect(signedIn).toBeGreaterThan(step.indexOf('signInBrowser(first, cfg.nora)'))
+    expect(signedIn).toBeLessThan(step.indexOf("waitForSelector('[data-all-nav]'"))
+    expect(step).toContain('const page = !authenticated')
+    expect(step).toContain('window.PLANNER?.signOut?.()')
+    expect(step).toContain('restoreDelivery(control, noted)')
+    expect(step).toContain('removeInboxRow(page, t0)')
+    expect(step).toContain('await own.close()')
+    expect(step.indexOf('} finally {')).toBeLessThan(
+      step.indexOf('restoreDelivery(control, noted)'),
+    )
+    // the mode put back is the one the control shows ready from the server,
+    // and a cleanup that could not do its part fails a step that passed
+    const restore = script.slice(
+      script.indexOf('async function restoreDelivery('),
+      script.indexOf('/** The leader tab of a browser profile and the Notification delivery'),
+    )
+    expect(restore).toContain('selectOption(mode)')
+    expect(restore).toContain('(await deliveryShown(page)) === mode')
+    expect(step).toContain('expect(left.length === 0')
+    // the leader closes so its beforeunload runs, as a person's close does
+    expect(step).toContain('leader.close({ runBeforeUnload: true })')
+  })
+
+  it("names the Inbox feed's step, its reads and marks, and reads the notification calls", () => {
+    expect(INBOX_FEED_STEP).toBe('ui/inbox-feed')
+    expect(INBOX_FEED_QUERY).toBe('inbox:feed')
+    expect(INBOX_PART_QUERY).toBe('workspace:inbox')
+    // the store watches the feed by that name, and the client tags its
+    // summary and mirrors its alerts by these
+    const store = readFileSync(new URL('../src/store/planner.ts', import.meta.url), 'utf8')
+    expect(store).toContain("watchSide('feed', api.inbox.feed, { after })")
+    const client = readFileSync(new URL('../src/lib/notificationFeed.ts', import.meta.url), 'utf8')
+    expect(client).toContain(`SUMMARY_TAG = '${INBOX_FEED_MARKS.summaryTag}'`)
+    const notify = readFileSync(new URL('../src/lib/notify.ts', import.meta.url), 'utf8')
+    expect(notify).toContain(`window.${INBOX_FEED_MARKS.notes}.push`)
+    // it runs after the list's step and before the archive, while t0 is active
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const order = ['await inboxListCheck()', 'await inboxFeedCheck()', 'await archiveChecks()']
+    const at = order.map((call) => script.indexOf(call))
+    expect(at.every((n) => n > 0)).toBe(true)
+    expect([...at].sort((a, b) => a - b)).toEqual(at)
+    // the route is set before the page loads, and the step gives the
+    // permission back
+    const step = script.slice(
+      script.indexOf('async function inboxFeedCheck()'),
+      script.indexOf("/** Removes task `task`'s item from the Inbox page"),
+    )
+    expect(step.indexOf('page.routeWebSocket(')).toBeGreaterThan(0)
+    expect(step.indexOf('page.routeWebSocket(')).toBeLessThan(step.indexOf('page.goto('))
+    expect(step).toContain('context.clearPermissions()')
+    // the app page comes back to the app for the steps and the cleanup after
+    expect(step.indexOf('await showApp()')).toBeGreaterThan(
+      step.indexOf('context.clearPermissions()'),
+    )
+    // a notification call's name and arguments, and nothing for any other frame
+    const frame = (udfPath, args) =>
+      JSON.stringify({ type: 'Mutation', requestId: 4, udfPath, args: [args] })
+    expect(notificationCall(frame('notifications:claimAlerts', { events: [] }))).toEqual({
+      name: 'notifications:claimAlerts',
+      args: { events: [] },
+    })
+    expect(notificationCall(frame('messages:readItem', {}))).toBeNull()
+    expect(notificationCall('not json')).toBeNull()
   })
   it('tells a frame that subscribes the task windows from every other frame', () => {
     expect(ON_DEMAND_STEP).toBe('ui/tasks-on-demand')

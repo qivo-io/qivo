@@ -23,10 +23,6 @@ import type { Row } from './rows'
 
 type TeamAccessLevel = Row<'project_team_access'>['level']
 
-/** Match server ordering, including ties, before converting timestamps to milliseconds. */
-export const isNewer = (aStamp: string, aId: string, bStamp: string, bId: string) =>
-  bStamp > aStamp || (bStamp === aStamp && bId > aId)
-
 export const shapeUser = (
   u: Row<'profiles'>,
   teams: string[],
@@ -528,86 +524,6 @@ export const shapeComment = (c: Row<'comments'>) => ({
 })
 export type CommentVM = ReturnType<typeof shapeComment>
 
-/* inbox messages (0074) — own rows only. The issue title prefers the live
-   row (renames follow) and falls back to the creation-time snapshot for a
-   task that disappeared from the working set for another access reason. */
-export const shapeMessage = (
-  m: Row<'messages'>,
-  ctx: {
-    issues: Lookup<Row<'issues'>>
-    uuidToKey: Lookup<string>
-    uuidToDisplayKey: Lookup<string>
-  },
-) => {
-  const { uuidToKey, uuidToDisplayKey } = ctx
-  const iss = ctx.issues.get(m.issue_id)
-  return {
-    id: m.id,
-    kind: m.kind,
-    actor: m.actor_id,
-    detail: m.detail,
-    issueUuid: m.issue_id, // …which IS the inbox item this belongs to (0109)
-    // the task's organization, which a row whose task the workspace does
-    // not hold opens it in (lib/taskReference.ts)
-    issueOrg: m.org_id,
-    issueKey: uuidToKey.get(m.issue_id) || null, // handle; null = archived/unloaded
-    issueLabel: uuidToDisplayKey.get(m.issue_id) || null, // the readable "QN-n"
-    issueTitle: iss?.title || m.issue_title,
-    ts: new Date(m.created_at).getTime(),
-    createdAt: m.created_at, // the raw stamp — see isNewer on why ts won't do
-    read: !!m.read_at,
-    // the server's stamps, as instants; snoozed = the item is hidden until
-    // the scheduled wake clears it (never a client clock comparison — the
-    // return is one server event, so every device shows it at once)
-    snoozedUntil: m.snoozed_until ? new Date(m.snoozed_until).getTime() : null,
-    wokeAt: m.woke_at ? new Date(m.woke_at).getTime() : null,
-    // how many older unread messages of the item the server's item cap
-    // deleted (convex/schema.ts messages.dropped)
-    dropped: m.dropped ?? 0,
-  }
-}
-export type MessageVM = ReturnType<typeof shapeMessage>
-
-/* inbox ITEMS (0109) — the unit the inbox actually lists: one per TASK (the
-   (recipient, task) pair itself, so a task cannot occupy two rows even in
-   principle). The item wears its NEWEST message; `count` is what is IN the
-   item, `unreadCount` what has happened since you last looked, `dropped`
-   how many earlier unread updates the server's 50-per-item cap took out of
-   it; `kinds` is the union, so the kind filter still finds a mention behind
-   a change. */
-export const shapeMessageGroup = (issueUuid: string, newestFirst: MessageVM[]) => {
-  const items = [...newestFirst].reverse() // oldest → newest, as they happened
-  // asked of the whole item rather than taken off the end: the list sort is
-  // by millisecond, and the server settles a sub-millisecond tie the other
-  // way round (see isNewer)
-  const latest = items.reduce((a, b) => (isNewer(a.createdAt, a.id, b.createdAt, b.id) ? b : a))
-  const unread = items.reduce((n, m) => n + (m.read ? 0 : 1), 0)
-  // the earlier updates the item cap deleted, counted on its unread rows
-  const dropped = items.reduce((n, m) => n + (m.read ? 0 : m.dropped), 0)
-  // the server stamps every row of the item alike; the newest row is the
-  // authority, and an arrival (which carries no stamp) is what wakes it
-  const snoozedUntil = latest.snoozedUntil
-  const wokeAt = items.reduce((t, m) => Math.max(t, m.wokeAt ?? 0), 0) || null
-  return {
-    ...latest,
-    id: issueUuid, // the item's identity IS its task
-    ids: items.map((m) => m.id),
-    items,
-    count: items.length,
-    unreadCount: unread,
-    dropped,
-    read: unread === 0,
-    kinds: [...new Set(items.map((m) => m.kind))],
-    snoozed: snoozedUntil !== null,
-    snoozedUntil,
-    wokeAt,
-    // a returned item floats like news: its age and list position are the
-    // wake's, until the next arrival's own instant outranks it
-    ts: Math.max(latest.ts, wokeAt ?? 0),
-  }
-}
-export type MessageGroupVM = ReturnType<typeof shapeMessageGroup>
-
 /** The key of the Inbox row, and of its mark, of task `task` in
     organization `org`. Two organizations can hold one task id
     (convex/model/inboxPage.ts), so a row is never named by its task alone. */
@@ -632,8 +548,7 @@ export type InboxMark = {
    (convex/lib/inbox.ts messageLine, which the server and the stand-in
    write the same), the newest message's kind and the item's kinds, its
    list time in ms, its counts, whether it is read, its snooze's end in ms
-   or null, and the cutoff the item actions take (`through`) with the
-   newest message's created_at (`latestAt`). */
+   or null, and the cutoff the item actions take (`through`). */
 export const shapeInboxRow = (row: InboxPageRow) => ({
   key: inboxMarkKey(row.org_id, row.issue_id),
   org: row.org_id,
@@ -652,7 +567,6 @@ export const shapeInboxRow = (row: InboxPageRow) => ({
   read: row.unread_count === 0,
   snoozedUntil: row.snoozed_until === null ? null : Date.parse(row.snoozed_until),
   through: row.through,
-  latestAt: row.latest_at,
 })
 export type InboxRowVM = ReturnType<typeof shapeInboxRow>
 

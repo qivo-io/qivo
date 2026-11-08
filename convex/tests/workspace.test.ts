@@ -21,7 +21,7 @@ import {
   startWindows,
   windowCount,
 } from '../lib/idWindows'
-import { PAGE, readInbox, readProjects, readTasks } from '../lib/workspaceParts'
+import { PAGE, readProjects, readTasks } from '../lib/workspaceParts'
 import { descriptionOf, insertTask, TEXT_READ } from '../model/descriptions'
 import {
   as,
@@ -32,7 +32,6 @@ import {
   patchCounters,
   plantIssue,
   plantLogin,
-  plantMessage,
   plantProject,
   plantSeat,
   type T,
@@ -102,7 +101,6 @@ const SCALED_BYTES = (factor = 8) => {
   PAGE.textReserve.bytes = DEFAULT_PAGE.textReserve.bytes / factor
   PAGE.batch = rows(DEFAULT_PAGE.batch / factor)
   PAGE.kids = rows(DEFAULT_PAGE.kids / Math.sqrt(factor))
-  PAGE.inboxCheck = rows(DEFAULT_PAGE.inboxCheck / factor)
 }
 
 /* Plants `n` active tasks with fields `extra`, in writes of 50. */
@@ -441,46 +439,6 @@ describe('reads a window cannot bound by its rows', () => {
     const shown = new Set(snap?.projects.map((p) => p.id))
     expect(shared.filter((id) => shown.has(id))).toHaveLength(25)
     expect(snap?.issues.map((i) => i.id)).toContain(task.id)
-  })
-
-  it('cuts an inbox whose tasks would pass its budget, and says so', async () => {
-    const t = newT(REAL_LIMITS)
-    SCALED_BYTES()
-    const f = await withReadingAdmin(t)
-    // 300 archived tasks of about 8 KB each, about 2.4 MB, each named by an
-    // unread message, older than one about a task the person is shown, past
-    // an eighth of the inbox's budgets as 900 tasks of about 60 KB were
-    // past them
-    const archived = await plantMany(t, 300, () => ({
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      description: LONG,
-      archived_at: NOW,
-    }))
-    for (let from = 0; from < archived.length; from += 300)
-      await t.run(async (ctx) => {
-        for (const task of archived.slice(from, from + 300))
-          await ctx.db.insert('messages', {
-            id: uuid(),
-            org_id: f.org.id,
-            recipient_id: f.admin.id,
-            issue_id: task.id,
-            issue_title: task.title,
-            kind: 'change',
-            detail: 'planted',
-            created_at: NOW,
-          })
-      })
-    const [shown] = await plantTasks(t, f, 1)
-    await plantMessage(t, { org_id: f.org.id, recipient_id: f.admin.id, issue_id: shown.id })
-    const answer = await as(t, f.admin).query(api.workspace.inbox, { org_id: f.org.id })
-    if (answer.state !== 'ok') throw new Error(answer.state)
-    expect(answer.unread.map((m) => m.issue_id)).toEqual([shown.id])
-    expect(answer).toMatchObject({ truncated: true, unreadTruncated: true })
-    // the real budgets read them all
-    Object.assign(PAGE, structuredClone(DEFAULT_PAGE))
-    const real = await as(t, f.admin).query(api.workspace.inbox, { org_id: f.org.id })
-    expect(real).toMatchObject({ truncated: false })
   })
 })
 
@@ -999,9 +957,9 @@ describe('what a part reveals', () => {
     expect(
       await as(t, f.admin).query(api.workspace.tasks, { org_id: f.otherOrg.id, ...whole }),
     ).toEqual({ state: 'gone' })
-    expect(await as(t, f.admin).query(api.workspace.inbox, { org_id: 'no-such-org' })).toEqual({
-      state: 'gone',
-    })
+    expect(
+      await as(t, f.admin).query(api.workspace.projects, { org_id: 'no-such-org', ...whole }),
+    ).toEqual({ state: 'gone' })
     await expectRefusal(
       t.query(api.workspace.projects, { org_id: f.org.id, ...whole }),
       'forbidden',
@@ -1855,7 +1813,7 @@ function narrowest(key: string): IdWindow {
 }
 
 describe('a check of the caller access that a bound stops', () => {
-  it('cuts the projects and tasks parts where the room of their reads ran out and refuses them where their own rows stop it, cuts the inbox, and one bound up answers as with the default bounds', async () => {
+  it('cuts the projects and tasks parts where the room of their reads ran out and refuses them where their own rows stop it, and one bound up answers as with the default bounds', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const me = await plantTeamMember(t, f)
@@ -1863,13 +1821,11 @@ describe('a check of the caller access that a bound stops', () => {
     // a task an earlier version stored on TBED, which shows the member only
     // for navigation
     const onTop = await plantIssue(t, { org_id: f.org.id, project_id: f.meta.id })
-    await plantMessage(t, { org_id: f.org.id, recipient_id: me.id, issue_id: task.id })
     await stampTeamReach(t, f)
     // each part in a transaction of its own, as each is a query
     const parts = async (w: IdWindow = { from: '', to: null }) => ({
       projects: await t.run((ctx) => readProjects(ctx, me, w)),
       tasks: await t.run((ctx) => readTasks(ctx, me, w)),
-      inbox: await t.run((ctx) => readInbox(ctx, me)),
     })
     const usual = await parts()
     expect(
@@ -1878,7 +1834,6 @@ describe('a check of the caller access that a bound stops', () => {
     expect(usual.tasks.state === 'ok' && usual.tasks.issues.map((row) => row.id).sort()).toEqual(
       [task.id, onTop.id].sort(),
     )
-    expect(usual.inbox.unread).toHaveLength(1)
     const refused = { state: 'refused', message: accessUnchecked().data.message }
     // FW's one share is past what the parts read project by project and by
     // the member's teams at once, and its team may not be asked by itself:
@@ -1887,7 +1842,6 @@ describe('a check of the caller access that a bound stops', () => {
     Object.assign(OWN_READS, { projectShares: 0, rows: 0, teamReads: 0 })
     const room = await parts()
     expect([room.projects, room.tasks]).toEqual([{ state: 'overflow' }, { state: 'overflow' }])
-    expect(room.inbox).toMatchObject({ state: 'ok', unread: [], truncated: true })
     expect((await parts(narrowest(f.sub.window_key!))).projects).toEqual(refused)
     expect((await parts(narrowest(task.window_key!))).tasks).toEqual(refused)
     // the member's memberships are past what the parts read, which TBED's

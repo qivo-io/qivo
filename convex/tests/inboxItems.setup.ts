@@ -8,19 +8,28 @@
  * writer without postMessage's checks (deliver), many groups through it
  * (plantGroups) or raw with their item rows (plantRaw), a reader with
  * grants (reader), a reader of everyday reach (everyday) and the actors of
- * a case (actors).
+ * a case (actors). Then the writes on chosen message ids that set up an
+ * Inbox (markRead, markUnread, removeIds, snoozeIds) and the tasks an
+ * Inbox lists (listedTasks).
  *
  * Named *.setup.ts, as two dots in the basename is the Convex CLI's skip
  * rule (see helpers.setup.ts). */
 
+import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import type { QueryCtx } from '../_generated/server'
+import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { byId, newWindowKey } from '../lib/db'
 import type { MessageKind } from '../lib/enums'
 import { insertTask } from '../model/descriptions'
 import { covers, ensureInboxState, type ItemFields, itemEdits, itemOf } from '../model/inboxItems'
-import { postMessage } from '../model/messages'
-import { NOW, type OrgFixture, plantLogin, plantSeat, type T, uuid } from './helpers.setup'
+import {
+  markMessagesRead,
+  markMessagesUnread,
+  postMessage,
+  removeMessages,
+  snoozeMessages,
+} from '../model/messages'
+import { as, NOW, type OrgFixture, plantLogin, plantSeat, type T, uuid } from './helpers.setup'
 
 const MINUTE = 60_000
 
@@ -491,4 +500,88 @@ export async function actors(t: T, f: OrgFixture, n: number) {
   for (let i = 0; i < n; i++)
     out.push(await plantSeat(t, { org_id: f.org.id, name: `Engineer ${i}`, accepted_at: NOW }))
   return out
+}
+
+/* ---------------------------------------- writes on chosen message ids */
+
+/* The rows among `ids` that are `me`'s own, each once, read in `ctx`.
+ * Other people's rows and unknown ids are skipped, as the app's removed
+ * writes on message ids skipped them. */
+async function ownRows(
+  ctx: MutationCtx,
+  me: Doc<'profiles'>,
+  ids: readonly string[],
+): Promise<Doc<'messages'>[]> {
+  const out: Doc<'messages'>[] = []
+  for (const id of new Set(ids)) {
+    const row = await byId(ctx, 'messages', id)
+    if (row !== null && row.recipient_id === me.id) out.push(row)
+  }
+  return out
+}
+
+/* `me`'s profile as it is stored now. */
+const fresh = async (ctx: MutationCtx, me: Doc<'profiles'>) =>
+  ((await ctx.db.get(me._id)) ?? me) as Doc<'profiles'>
+
+/** Marks `me`'s messages among `ids` read through the model write the item
+ * actions and the machine inbox run (model/messages.ts markMessagesRead),
+ * for a test that sets up an Inbox with chosen rows read. The app names an
+ * item by its task (messages.ts readItem). */
+export const markRead = (t: T, me: Doc<'profiles'>, ids: readonly string[]) =>
+  t.run(async (ctx) => {
+    const who = await fresh(ctx, me)
+    await markMessagesRead(ctx, who, await ownRows(ctx, who, ids), new Date().toISOString())
+    return null
+  })
+
+/** Marks `me`'s messages among `ids` unread (model/messages.ts
+ * markMessagesUnread), which refuses a message about an archived task. */
+export const markUnread = (t: T, me: Doc<'profiles'>, ids: readonly string[]) =>
+  t.run(async (ctx) => {
+    const who = await fresh(ctx, me)
+    await markMessagesUnread(ctx, who, await ownRows(ctx, who, ids))
+    return null
+  })
+
+/** Deletes `me`'s messages among `ids` (model/messages.ts removeMessages). */
+export const removeIds = (t: T, me: Doc<'profiles'>, ids: readonly string[]) =>
+  t.run(async (ctx) => {
+    await removeMessages(ctx, await ownRows(ctx, await fresh(ctx, me), ids))
+    return null
+  })
+
+/** Snoozes the items of `me`'s messages among `ids` until `until`, or with
+ * null lifts their snooze (model/messages.ts snoozeMessages), with its
+ * refusals and its scheduled wake. */
+export const snoozeIds = (
+  t: T,
+  me: Doc<'profiles'>,
+  ids: readonly string[],
+  until: string | null,
+) =>
+  t.run(async (ctx) => {
+    const who = await fresh(ctx, me)
+    await snoozeMessages(ctx, who, await ownRows(ctx, who, ids), until)
+    return null
+  })
+
+/** The tasks `who`'s Inbox list shows over all its pages, newest first,
+ * snoozed groups included (inbox.page), as the app lists them. */
+export async function listedTasks(t: T, who: Doc<'profiles'>): Promise<string[]> {
+  const out: string[] = []
+  let after: string | undefined
+  for (let i = 0; i < 100; i++) {
+    const page = await as(t, who).query(api.inbox.page, {
+      order: 'newest',
+      unread_only: false,
+      include_snoozed: true,
+      kinds: [],
+      ...(after === undefined ? {} : { after }),
+    })
+    out.push(...page.rows.map((row) => row.issue_id))
+    if (page.next === null) return out
+    after = page.next
+  }
+  throw new Error('the pages did not end')
 }

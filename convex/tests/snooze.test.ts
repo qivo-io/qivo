@@ -23,12 +23,13 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { snoozeIds } from './inboxItems.setup'
 
 const HOUR = 3_600_000
 const inAnHour = () => new Date(Date.now() + HOUR).toISOString()
 
 const snooze = (t: T, who: Doc<'profiles'>, ids: string[], until: string | null) =>
-  as(t, who).mutation(api.messages.snooze, { org_id: who.org_id, ids, until })
+  snoozeIds(t, who, ids, until)
 
 const subscribe = (t: T, who: Doc<'profiles'>, issueId: string) =>
   as(t, who).mutation(api.issues.subscribe, { org_id: who.org_id, issue_id: issueId })

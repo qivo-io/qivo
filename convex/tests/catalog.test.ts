@@ -26,6 +26,7 @@ import {
   uuid,
   withReadingAdmin,
 } from './helpers.setup'
+import { markRead, markUnread, removeIds } from './inboxItems.setup'
 
 const HEX64 = 'ab'.repeat(32)
 
@@ -483,10 +484,7 @@ describe('messages — markRead / markUnread / remove', () => {
       recipient_id: f.user.id,
       issue_id: issue.id,
     })
-    await as(t, f.admin).mutation(api.messages.markRead, {
-      org_id: f.org.id,
-      ids: [m1.id, m2.id, foreign.id, uuid()],
-    })
+    await markRead(t, f.admin, [m1.id, m2.id, foreign.id, uuid()])
     const mine = await messagesFor(t, f.admin.id, issue.id)
     expect(mine.map((m) => m.id)).toEqual([m2.id]) // m1 pruned, newest survives read
     expect(mine[0].read_at).not.toBeUndefined()
@@ -648,17 +646,14 @@ describe('messages — markRead / markUnread / remove', () => {
       issue_id: issue.id,
       read_at: NOW,
     })
-    await as(t, f.admin).mutation(api.messages.markUnread, { org_id: f.org.id, ids: [m.id] })
+    await markUnread(t, f.admin, [m.id])
     expect((await messagesFor(t, f.admin.id, issue.id))[0].read_at).toBeUndefined()
     const foreign = await plantMessage(t, {
       org_id: f.org.id,
       recipient_id: f.user.id,
       issue_id: issue.id,
     })
-    await as(t, f.admin).mutation(api.messages.remove, {
-      org_id: f.org.id,
-      ids: [m.id, foreign.id],
-    })
+    await removeIds(t, f.admin, [m.id, foreign.id])
     expect(await messagesFor(t, f.admin.id, issue.id)).toEqual([])
     expect(await messagesFor(t, f.user.id, issue.id)).toHaveLength(1)
   })
@@ -692,10 +687,7 @@ describe('messages — markRead / markUnread / remove', () => {
     const base = { org_id: f.org.id, recipient_id: f.admin.id }
     const reopened = await plantMessage(t, { ...base, issue_id: uuid(), read_at: NOW })
     const read = await plantMessage(t, { ...base, issue_id: uuid(), read_at: NOW })
-    await as(t, f.admin).mutation(api.messages.markUnread, {
-      org_id: f.org.id,
-      ids: [reopened.id],
-    })
+    await markUnread(t, f.admin, [reopened.id])
     const arrival = await plantMessage(t, { ...base, issue_id: read.issue_id })
     await as(t, f.admin).mutation(api.messages.removeRead, {
       org_id: f.org.id,

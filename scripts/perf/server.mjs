@@ -515,6 +515,20 @@
 //                        (every page after the first is refused), stuck (a
 //                        page after the first stops without moving), failed
 //                        (every page fails) or loading (no page answers)
+//   inboxfeed            a state the Inbox feed (inbox:feed) answers whatever
+//                        the messages say (src/store/inboxStandIn.setup.ts),
+//                        one of more (an event is said to be missing, which
+//                        the desktop alert client turns into one summary),
+//                        failed (every answer fails) or loading (no answer)
+//   notify               states of the notification session calls
+//                        (src/store/notificationsStandIn.setup.ts), several
+//                        joined by commas: summary (the first claimSummary
+//                        answers summary, so a page granted notifications
+//                        shows the generic summary after its first resume),
+//                        all (the Notification delivery mode starts as All
+//                        enabled sessions), loading (notifications:settings
+//                        never answers), error (it fails) or demo-limit
+//                        (setDelivery refuses with the demo's change limit)
 //   thread (0)           comments of ordinary text, a few sentences each,
 //                        some with a list, a link or a mention, every tenth
 //                        the signed-in person's, on the task the benchmark
@@ -620,15 +634,21 @@
 // tasks in the projects the change reaches as the lost holdings and every
 // person who can hold work as the choices, and answers a chosen person's
 // holder_eligible by that rule, without the server's rules.
-// So are the Inbox's unread summary, the open task's inbox item and the
-// Inbox's pages (inbox:summary, inbox:item and inbox:page), through the
-// stand-in the jsdom tests use (src/store/inboxStandIn.setup.ts), folded
-// from the messages held here, and a write sends them again with the parts
-// it changed. Its read of one item (messages:readItem) marks the item's
-// unread messages up to its `through` read and prunes the item, as
-// messages:markRead does; unreadItem marks every message of the item
-// unread, removeItem removes those up to `through`, and snoozeItem stamps
-// every message of the item, unread, with the snooze or wakes it.
+// So are the Inbox's unread summary, the open task's inbox item, the
+// Inbox's pages and the feed of new unread events (inbox:summary,
+// inbox:item, inbox:page and inbox:feed), through the stand-in the jsdom
+// tests use (src/store/inboxStandIn.setup.ts), folded from the messages
+// held here, which no part sends, and a write sends them again with the
+// parts it changed. Its read of one item (messages:readItem) marks the
+// item's unread messages up to its `through` read and prunes the item;
+// unreadItem marks every message of the item unread, removeItem removes
+// those up to `through`, and snoozeItem stamps every message of the item,
+// unread, with the snooze or wakes it. The notification session calls
+// (notifications:settings, setDelivery, beat, end, claimAlerts and
+// claimSummary) answer through the session stand-in the jsdom tests use
+// (src/store/notificationsStandIn.setup.ts), which holds the mode, sends
+// settings again after a setDelivery that changed it, and grants each
+// key once.
 // So is Team sync's agenda (teamSync:agenda), through the stand-in the
 // jsdom tests use (src/store/teamSyncStandIn.setup.ts): the agenda's rules
 // over the workspace held here, with no access rule or read budget, and the
@@ -665,6 +685,7 @@ import {
 import { subscribersStandIn, taskFollowersStandIn } from '../../src/store/followerStandIn.setup'
 import {
   INBOX_NO_ANSWER,
+  inboxFeedStandIn,
   inboxItemStandIn,
   inboxPageStandIn,
   inboxSummaryStandIn,
@@ -676,6 +697,7 @@ import {
 } from '../../src/store/labelPagesStandIn.setup'
 import { mentionStandIn } from '../../src/store/mentionStandIn.setup'
 import { milestoneStandIn } from '../../src/store/milestoneStandIn.setup'
+import { createNotificationsStandIn } from '../../src/store/notificationsStandIn.setup'
 import { overviewStandIn } from '../../src/store/overviewStandIn.setup'
 import { ownerLoadsStandIn } from '../../src/store/ownerLoadsStandIn.setup'
 import { OWNER_CHECK_SLOW_MS, ownerPickersStandIn } from '../../src/store/ownerPickersStandIn.setup'
@@ -931,6 +953,27 @@ const forcedInboxPage = {
   failed: 'failed',
   loading: 'loading',
 }[parameters.get('inboxpage') ?? '']
+/* The Inbox feed's forced state (the `inboxfeed` parameter), as the
+   stand-in's `force` takes it. */
+const forcedInboxFeed = ['more', 'failed', 'loading'].includes(parameters.get('inboxfeed'))
+  ? parameters.get('inboxfeed')
+  : undefined
+/* The notification session calls' states (the `notify` parameter), and the
+   stand-in that answers them. */
+const notifyStates = new Set((parameters.get('notify') ?? '').split(',').filter(Boolean))
+const notifications = createNotificationsStandIn(
+  undefined,
+  notifyStates.has('all') ? 'all' : 'recent',
+)
+if (notifyStates.has('summary')) notifications.summaryNext()
+const forcedNotifications = {
+  ...(notifyStates.has('loading')
+    ? { settings: 'loading' }
+    : notifyStates.has('error')
+      ? { settings: 'failed' }
+      : {}),
+  ...(notifyStates.has('demo-limit') ? { setDelivery: 'demo-limit' } : {}),
+}
 /* The milestone reads' forced states (the `milestones` parameter), as the
    stand-in's `force` takes them; sync-too-many and roadmap-too-many are
    the page's (scripts/perf/entry.tsx). The roadmap-* states force the
@@ -1633,9 +1676,6 @@ const snapshot = {
   attachments,
   orgLoad: [],
   messages: [],
-  readMessageCount: 0,
-  unreadTruncated: false,
-  readTruncated: false,
   delivered_at: now,
 }
 /* With deletedstate=two-orgs the person holds a seat in Partner Co too,
@@ -1769,18 +1809,8 @@ function heldWorkspace() {
     parts (convex/lib/arrayLimit.ts). */
 function wireSnapshot() {
   const { auth_user_id, myProfileIds, orgs, messages, ...rest } = heldWorkspace()
-  const { readMessageCount, unreadTruncated, readTruncated, delivered_at, ...lists } = rest
-  return {
-    auth_user_id,
-    myProfileIds,
-    orgs,
-    ...chunkLists(lists),
-    messages,
-    readMessageCount,
-    unreadTruncated,
-    readTruncated,
-    delivered_at,
-  }
+  const { delivered_at, ...lists } = rest
+  return { auth_user_id, myProfileIds, orgs, ...chunkLists(lists), messages, delivered_at }
 }
 
 /* --- the wire ------------------------------------------------------------- */
@@ -2095,7 +2125,6 @@ function readPart(name, args) {
   // the signed-in person's own profiles, memberships and teams
   // (convex/lib/workspaceParts.ts readRoot)
   if (name === 'workspace:root') return rootOf(heldWorkspace())
-  if (name === 'workspace:inbox') return { state: 'ok', ...part.inbox }
   const kind = PART_KINDS[name]
   const at = windowsOf(part.org_id)[kind].findIndex((w) => w.from === args.from)
   return { state: 'ok', ...chunkLists(part[kind][at]) }
@@ -2425,6 +2454,18 @@ const read = (name, args = {}) => {
     const answer = inboxPageStandIn(snapshot, args, forcedInboxPage)
     return answer === INBOX_NO_ANSWER ? NO_ANSWER : answer
   }
+  // Notification delivery's mode, which answers nothing under notify=loading
+  // and fails under notify=error
+  if (name === 'notifications:settings') {
+    const answer = notifications.settings(forcedNotifications)
+    return answer === 'loading' ? NO_ANSWER : answer
+  }
+  // the feed the desktop alert client watches, which answers nothing under
+  // inboxfeed=loading
+  if (name === 'inbox:feed') {
+    const answer = inboxFeedStandIn(snapshot, args, forcedInboxFeed)
+    return answer === INBOX_NO_ANSWER ? NO_ANSWER : answer
+  }
   switch (name) {
     case 'snapshot:forMe':
       snapshot.delivered_at = new Date().toISOString()
@@ -2710,9 +2751,8 @@ function markRead(marked, at) {
   const ids = new Set(marked.map((m) => m.id))
   snapshot.messages = snapshot.messages.map((m) => (ids.has(m.id) ? { ...m, read_at: at } : m))
 }
-/* Counts the read rows and delivers the inbox's new state. */
+/* Delivers the inbox's new state. */
 function settleInbox() {
-  snapshot.readMessageCount = snapshot.messages.filter((m) => m.read_at).length
   return emitWorkspace()
 }
 /* Writes the scenarios hold until they release them, in order. */
@@ -2801,15 +2841,17 @@ async function mutate(name, args) {
     await Promise.all(DELETED_READS.map((read) => emit(read)))
     return answer
   }
-  if (name === 'messages:markRead') {
-    const ids = new Set(args.ids)
-    const at = new Date().toISOString()
-    const marked = snapshot.messages.filter((m) => ids.has(m.id) && !m.read_at)
-    markRead(marked, at)
-    for (const issue of new Set(marked.map((m) => m.issue_id))) pruneItem(issue)
-    await settleInbox()
-    return null
+  // a change of Notification delivery, then the settings watches it
+  // changed, before its answer as Convex sends them; refused under
+  // notify=demo-limit
+  if (name === 'notifications:setDelivery') {
+    const answer = notifications.answer(name, args, forcedNotifications)
+    writes++
+    await transition()
+    return answer
   }
+  // the desktop alerts' bookkeeping, which changes no row here
+  if (notifications.answers(name)) return notifications.answer(name, args)
   if (name === 'messages:readItem') {
     // as convex/messages.ts readItem does, it marks the unread messages of
     // the caller's item stored up to `through` read, then prunes. The rows
@@ -3311,7 +3353,8 @@ async function write(data, turn) {
     const refusal =
       data.name.startsWith('deletedItems:') ||
       data.name === 'projectNav:setFavorite' ||
-      data.name === 'issues:create'
+      data.name === 'issues:create' ||
+      data.name === 'notifications:setDelivery'
         ? refusalOf(error).data
         : undefined
     post(

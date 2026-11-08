@@ -1,11 +1,18 @@
 /* The inbox reads' stand-in (store/inboxStandIn.setup.ts) against the real
- * queries (convex/inbox.ts summary, item and page, model/inboxReads.ts and
- * model/inboxPage.ts) on convex-test, as the other parity suites hold their
- * stand-ins to the server. For every Northstar person with a login it
- * compares the summary, the item of every task they hold a message about,
- * and the Inbox page in each order and filter, and for planted cases a
+ * queries (convex/inbox.ts summary, item, page and feed, model/inboxReads.ts,
+ * model/inboxPage.ts and model/notificationCatchup.ts) on convex-test, as
+ * the other parity suites hold their stand-ins to the server. The stand-in
+ * reads the messages the whole holds, here a seat's messages about the
+ * tasks it is shown as the test oracle folds them
+ * (convex/tests/inboxOracle.setup.ts). For every Northstar person with a
+ * login it compares the summary, the item of every task they hold a
+ * message about, the Inbox page in each order and filter, and the feed
+ * after a floor before their newest message and after it, and for planted
+ * cases a
  * snoozed group, a read group, a mention in the description alone and a
- * comment mention alone, and an everyday Inbox of 60 groups over 3
+ * comment mention alone, a burst of 70 messages over 7 groups that the
+ * feed cuts at its cap, with floors that leave 51, 50 and 49 events after
+ * them, and an everyday Inbox of 60 groups over 3
  * projects, which holds a second page, a woken group and two groups at one
  * time, asked also with Unread only beside Show snoozed and beside a kind
  * filter, with a search by a task ID, a sub-project's name, a change
@@ -17,19 +24,20 @@
  * a number. One difference is named. A message about a task the seat can
  * no longer see or an archived task, which neither counts, sets the
  * server's flag of the action that reaches it, as markAllRead and
- * removeRead do, and not the stand-in's, which sees only the workspace's
- * messages; convex/tests/inboxReads.test.ts holds the server's flags. So
- * the comparison takes each flag the stand-in raises as one the server
- * raises, and each flag only the server raises as one a message the
- * workspace leaves out explains. Everyday sizes. */
+ * removeRead do, and not the stand-in's, which sees only the shown
+ * messages it is given; convex/tests/inboxReads.test.ts holds the server's
+ * flags. So the comparison takes each flag the stand-in raises as one the
+ * server raises, and each flag only the server raises as one a message
+ * the oracle leaves out explains. Everyday sizes. */
 
 import { describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
 import { MENTION_DETAILS } from '../../convex/lib/messageDetails'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
 import { NOT_INBOX_CURSOR as SERVER_NOT_INBOX_CURSOR } from '../../convex/model/inboxPage'
 import { wakeSnoozedItem } from '../../convex/model/messages'
+import { FEED } from '../../convex/model/notificationCatchup'
+import { NOTIFY } from '../../convex/model/notificationSessions'
 import {
   as,
   newT,
@@ -40,10 +48,15 @@ import {
   wholeOf,
   withOrg,
 } from '../../convex/tests/helpers.setup'
-import { at, grant, post } from '../../convex/tests/inboxItems.setup'
+import { at, grant, markRead, post, snoozeIds } from '../../convex/tests/inboxItems.setup'
+import { oracleInbox } from '../../convex/tests/inboxOracle.setup'
 import { plantNorthstar } from '../../convex/tests/northstar.setup'
+import type { Whole } from './guard/liveDouble.setup'
 import {
+  FEED_EVENTS,
+  FEED_LAG_MS,
   INBOX_NO_ANSWER,
+  inboxFeedStandIn,
   inboxItemStandIn,
   inboxPageStandIn,
   inboxSummaryStandIn,
@@ -57,16 +70,23 @@ vi.hoisted(() => {
   process.env.BETTER_AUTH_SECRET ??= 'inbox-parity-secret-not-a-deployment-key'
 })
 
-/** The workspace `who` holds, or a failure. */
-async function workspace(t: T, who: Doc<'profiles'>): Promise<Workspace> {
+/** The whole the stand-in reads for `who`: the workspace `who` holds, and
+    the messages about the tasks `who` is shown, as the oracle folds them,
+    or a failure. */
+async function workspace(
+  t: T,
+  who: Doc<'profiles'>,
+): Promise<Whole & Pick<Required<Whole>, 'messages'>> {
   const ws = await wholeOf(t, who)
   if (!ws) throw new Error(`no workspace for ${who.name}`)
-  return ws
+  const { unread, read } = await oracleInbox(t, who)
+  const messages = [...unread, ...read].map(({ _id, ...m }) => m)
+  return { ...ws, messages }
 }
 
 /** The unsnoozed messages of `who`, read (`read`) or not, as the server
-    holds them, and as the workspace sends them. */
-async function unsnoozed(t: T, who: Doc<'profiles'>, ws: Workspace, read: boolean) {
+    holds them, and as the stand-in reads them. */
+async function unsnoozed(t: T, who: Doc<'profiles'>, ws: Whole, read: boolean) {
   const all = await t.run((ctx) =>
     ctx.db
       .query('messages')
@@ -77,7 +97,7 @@ async function unsnoozed(t: T, who: Doc<'profiles'>, ws: Workspace, read: boolea
     m.snoozed_until === undefined && (m.read_at !== undefined) === read
   return {
     server: all.filter(keep).map((m) => m.id),
-    shown: ws.messages.filter(keep).map((m) => m.id),
+    shown: (ws.messages ?? []).filter(keep).map((m) => m.id),
   }
 }
 
@@ -137,7 +157,7 @@ describe("the inbox reads' stand-in", () => {
           const rows = await unsnoozed(t, person, ws, read)
           expect(line[flag], what).toBe(rows.server.length > 0)
           if (standSeats[at][flag] === line[flag]) continue
-          // only the server raises it, for messages the workspace leaves out
+          // only the server raises it, for messages the oracle leaves out
           expect(line[flag], what).toBe(true)
           const left = rows.server.filter((id) => !rows.shown.includes(id))
           expect(left.length, what).toBeGreaterThan(0)
@@ -159,7 +179,6 @@ describe("the inbox reads' stand-in", () => {
     const t = newT()
     const f = await withOrg(t)
     const task = () => plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const guest = as(t, f.guest)
     const [unread, read, snoozed, described, mentioned, mixed] = [
       await task(),
       await task(),
@@ -172,14 +191,10 @@ describe("the inbox reads' stand-in", () => {
     await post(t, f, { to: f.guest, task: unread, minute: 2, kind: 'comment', body: 'New comment' })
     const readRow = await post(t, f, { to: f.guest, task: read, minute: 3 })
     if (!readRow) throw new Error('no message')
-    await guest.mutation(api.messages.markRead, { org_id: f.org.id, ids: [readRow.id] })
+    await markRead(t, f.guest, [readRow.id])
     const snoozedRow = await post(t, f, { to: f.guest, task: snoozed, minute: 4 })
     if (!snoozedRow) throw new Error('no message')
-    await guest.mutation(api.messages.snooze, {
-      org_id: f.org.id,
-      ids: [snoozedRow.id],
-      until: new Date(Date.now() + 86_400_000).toISOString(),
-    })
+    await snoozeIds(t, f.guest, [snoozedRow.id], new Date(Date.now() + 86_400_000).toISOString())
     // a mention in the description alone tells of a change, a comment's not
     await post(t, f, {
       to: f.guest,
@@ -198,7 +213,7 @@ describe("the inbox reads' stand-in", () => {
     // a read change and an unread comment mention, so nothing unread tells of one
     const change = await post(t, f, { to: f.guest, task: mixed, minute: 7 })
     if (!change) throw new Error('no message')
-    await guest.mutation(api.messages.markRead, { org_id: f.org.id, ids: [change.id] })
+    await markRead(t, f.guest, [change.id])
     await post(t, f, {
       to: f.guest,
       task: mixed,
@@ -338,14 +353,9 @@ describe("the Inbox page's stand-in", () => {
       const row = await post(t, f, { to: f.guest, task, minute, kind, body })
       if (!row) throw new Error('no message')
       // every seventh group read, every eleventh snoozed
-      if (n % 7 === 3)
-        await guest.mutation(api.messages.markRead, { org_id: f.org.id, ids: [row.id] })
+      if (n % 7 === 3) await markRead(t, f.guest, [row.id])
       if (n % 11 === 4)
-        await guest.mutation(api.messages.snooze, {
-          org_id: f.org.id,
-          ids: [row.id],
-          until: new Date(Date.now() + 86_400_000).toISOString(),
-        })
+        await snoozeIds(t, f.guest, [row.id], new Date(Date.now() + 86_400_000).toISOString())
     }
     // group 20 snoozed and woken after every other message, so its list
     // time is the wake's
@@ -398,5 +408,90 @@ describe("the Inbox page's stand-in", () => {
     await expect(
       as(t, f.guest).query(api.inbox.page, { ...ask, kinds: [], after: 'not a cursor' }),
     ).rejects.toThrow(SERVER_NOT_INBOX_CURSOR)
+  })
+})
+
+/* ------------------------------------------------------------- the feed */
+
+describe("the feed's stand-in", () => {
+  it('answers every Northstar person after a floor before their newest message and after it, as the server does', async () => {
+    const t = newT()
+    const { profiles } = await plantNorthstar(t)
+    let events = 0
+    for (const person of profiles.filter((p) => p.auth_user_id !== undefined)) {
+      const ws = await workspace(t, person)
+      const newest = Math.max(0, ...ws.messages.map((m) => Date.parse(m.created_at)))
+      for (const after of [0, newest - 60 * 60_000, newest + 60_000]) {
+        const server = await as(t, person).query(api.inbox.feed, { after })
+        const stand = inboxFeedStandIn(ws, { after })
+        expect(stand, `${person.name} after ${after}`).toEqual(server)
+        events += server.events.length
+      }
+    }
+    // the seed leaves unread events, so the comparison compares some
+    expect(events).toBeGreaterThan(0)
+  })
+
+  it('cuts a burst over several groups at the server’s cap, with more only for an event after the floor', async () => {
+    // the stand-in's copies of the server's bounds
+    expect(FEED_EVENTS).toBe(FEED.events)
+    expect(FEED_LAG_MS).toBe(NOTIFY.lag_ms)
+    const t = newT()
+    const f = await withOrg(t)
+    const tasks: Doc<'issues'>[] = []
+    for (let i = 0; i < 7; i++)
+      tasks.push(await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }))
+    // 70 messages over 7 groups, 600 ms apart from minute 10 on
+    for (let i = 0; i < 70; i++)
+      await post(t, f, { to: f.guest, task: tasks[i % 7], minute: 10 + 0.01 * i })
+    const ws = await workspace(t, f.guest)
+    // floors with 51, 50 and 49 events after them, the rest inside the
+    // minute read back
+    for (const [minute, more] of [
+      [10.185, true],
+      [10.195, false],
+      [10.205, false],
+    ] as const) {
+      const after = Date.parse(at(minute))
+      const server = await as(t, f.guest).query(api.inbox.feed, { after })
+      expect(server.events, String(minute)).toHaveLength(FEED.events)
+      expect(server.more, String(minute)).toBe(more)
+      expect(inboxFeedStandIn(ws, { after }), String(minute)).toEqual(server)
+    }
+  })
+
+  it('answers a woken group, a snoozed one, a read one and a mention as the server does', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = () => plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const [woken, snoozed, read, mentioned] = [
+      await task(),
+      await task(),
+      await task(),
+      await task(),
+    ]
+    await post(t, f, { to: f.guest, task: woken, minute: 1 })
+    const asleep = await post(t, f, { to: f.guest, task: snoozed, minute: 2 })
+    const done = await post(t, f, { to: f.guest, task: read, minute: 3 })
+    await post(t, f, { to: f.guest, task: mentioned, minute: 4, kind: 'mention' })
+    if (!asleep || !done) throw new Error('no message')
+    await markRead(t, f.guest, [done.id])
+    const until = new Date(Date.now() + 86_400_000).toISOString()
+    await snoozeIds(t, f.guest, [asleep.id], until)
+    await as(t, f.guest).mutation(api.messages.snoozeItem, {
+      org_id: f.org.id,
+      issue_id: woken.id,
+      until,
+    })
+    await t.run((ctx) =>
+      wakeSnoozedItem(ctx, { recipient_id: f.guest.id, issue_id: woken.id, until }, at(90)),
+    )
+    const ws = await workspace(t, f.guest)
+    for (const after of [Date.parse(at(-10)), Date.parse(at(3.5)), Date.parse(at(89.5))]) {
+      const server = await as(t, f.guest).query(api.inbox.feed, { after })
+      expect(inboxFeedStandIn(ws, { after }), String(after)).toEqual(server)
+    }
+    const all = await as(t, f.guest).query(api.inbox.feed, { after: Date.parse(at(-10)) })
+    expect(all.events.map((e) => e.kind)).toEqual(['wake', 'mention', 'change'])
   })
 })

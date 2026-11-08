@@ -21,7 +21,9 @@
 // milestones joins the milestones of every projects part, which this
 // checkout's perf server no longer sends, so it cannot load here; measure
 // such a revision with its own checkout's benchmark on the same machine
-// instead.
+// instead. So it is for a revision before the Inbox feed, whose workspace
+// waits for the inbox part (workspace.inbox), which this checkout's perf
+// server no longer answers either.
 //
 // Every sample ends on the Overview and the Roadmap after the Board was
 // open (which stays loaded, hidden): the page's memory, and a remote change
@@ -974,13 +976,9 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
   await noToasts()
   // Mark all as read over `messages` new unread messages.
   await page.evaluate((count) => window.__perf.seedMessages(count), messages)
-  // one inbox item per task the messages land on
-  await page.waitForFunction(
-    (items) => window.PLANNER.unreadMessages >= items,
-    Math.min(messages, tasks),
-  )
-  // and, on a build whose badge counts from the server's unread summary,
-  // the summary's count of them, exact to 99 and then more than 99
+  // one inbox item per task the messages land on, as the server's unread
+  // summary counts them, exact to 99 and then more than 99, on every build
+  // it compares
   await page.waitForFunction(
     (items) => {
       const summary = window.PLANNER.inboxSummary
@@ -1006,7 +1004,12 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
       await paintTimer()
     }),
   )
-  assert.equal(await page.evaluate(() => window.PLANNER.unreadMessages), 0)
+  // the summary counts none once the server marked them read
+  await page.waitForFunction(() => {
+    const summary = window.PLANNER.inboxSummary
+    if (!summary) return true
+    return summary.state === 'ok' && summary.current && summary.answer.unread_count === 0
+  })
   await noToasts()
   // Other people's changes besides a rename, each one delivery: a new
   // task, a renamed project, a new inbox message and a Team sync stamp.
@@ -1040,9 +1043,8 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
       await paintTimer()
     }),
   )
-  assert.equal(await page.evaluate(() => window.PLANNER.unreadMessages), 1)
-  // on a build whose badge counts from the unread summary, the summary
-  // counts the one message and the top bar's chip says so, untimed
+  // the summary counts the one message and the top bar's chip says so,
+  // untimed
   await page.waitForFunction(() => {
     const summary = window.PLANNER.inboxSummary
     if (!summary) return true

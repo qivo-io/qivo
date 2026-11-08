@@ -1,8 +1,10 @@
 import { useEffect } from 'react'
 import { useLatest } from './useLatest'
 
-/** What counts as the person using the app. */
-const INPUTS = ['pointerdown', 'pointermove', 'keydown', 'touchstart', 'wheel'] as const
+/** What counts as the person using the app. Two modules read it: the idle
+    timer below, and the notification leader (lib/notificationLeader.ts),
+    which reports that real use happened, never what it was. */
+export const INPUTS = ['pointerdown', 'pointermove', 'keydown', 'touchstart', 'wheel'] as const
 
 /** Calls `onIdle` once `ms` pass with no pointer, key, touch or wheel input
     in the page, whether it is visible or not, and again each time `ms` pass

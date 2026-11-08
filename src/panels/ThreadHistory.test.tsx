@@ -126,11 +126,7 @@ async function load(
     await Promise.resolve()
     const name = getFunctionName(ref)
     const read =
-      name === 'messages:markRead'
-        ? (m: Row<'messages'>) => args.ids.includes(m.id)
-        : name === 'messages:readItem'
-          ? (m: Row<'messages'>) => m.issue_id === args.issue_id
-          : null
+      name === 'messages:readItem' ? (m: Row<'messages'>) => m.issue_id === args.issue_id : null
     if (read) {
       snap.messages = snap.messages.map((m) =>
         !m.read_at && read(m) ? { ...m, read_at: at(30) } : m,
@@ -438,7 +434,9 @@ describe('the Inbox pane and its pop-out', { timeout: 20_000 }, () => {
     await load([{ minute: 20, kind: 'change' }])
     await openInbox()
     await select()
-    expect(P.messages.every((m) => m.read)).toBe(true)
+    expect(network.mutation.mock.calls.map(([ref]) => getFunctionName(ref))).toContain(
+      'messages:readItem',
+    )
     await comments({ comments: range(1, 10), earlier: false })
     expect(tailNote(pane())).toBe('New activity on this task. Changes show only under All.')
   })

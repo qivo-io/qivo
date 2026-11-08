@@ -169,7 +169,9 @@ and **Show notifications** start enabled. **Minimize to tray** starts disabled:
 - **Minimize to tray** hides Qivo in the tray when you minimize its window.
   When it is off, minimizing keeps Qivo in the taskbar.
 - **Show notifications** controls desktop alerts for Inbox messages and app
-  updates. It does not remove Inbox messages or in-app update notices.
+  updates. With it on, the desktop app is one of the places alerts can appear
+  under **Notification delivery**. It does not remove Inbox messages or in-app
+  update notices.
 
 These settings apply to this computer. The desktop window has no application
 menu row. Linux requires a desktop environment with tray support to show the
@@ -232,5 +234,5 @@ and restores its original dates. Confirm the plan first to keep your changes.
 
 Tap your portrait for **Settings**. Preferences, organization settings,
 project settings and user profiles open as pages with **Back** controls.
-Under **Your preferences**, Profile, Appearance, Inbox and MCP access have
-separate pages.
+Under **Your preferences**, Profile, Appearance, Notifications, Inbox and MCP
+access have separate pages.

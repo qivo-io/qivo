@@ -17,9 +17,7 @@
 import { joinLists } from './arrayLimit.ts'
 import { shownAvatarColor } from './avatarColors.ts'
 import { type IdWindow, idWindows, inIdWindow, piecesAfter, startWindows } from './idWindows.ts'
-import { blendInbox } from './inbox.ts'
-import { INBOX_LIMIT } from './limits.ts'
-import type { readInbox, readProjects, readRoot, readTasks } from './workspaceParts.ts'
+import type { readProjects, readRoot, readTasks } from './workspaceParts.ts'
 
 /* What a reader behind a part answers (lib/workspaceParts.ts), the types
  * taken from the readers rather than from `api`, which lists this module. */
@@ -43,14 +41,12 @@ export const rootOrgs = (root: RootAnswer): RootSeats['orgs'] =>
   root === null || 'deleting' in root ? [] : root.orgs
 export type ProjectsPart = Ok<typeof readProjects>
 export type TasksPart = Ok<typeof readTasks>
-export type InboxPart = Ok<typeof readInbox>
 
 /** The parts of one organization, its windows in order, chunked lists
  * (lib/arrayLimit.ts) joined. */
 export type OrgParts = {
   projects: readonly ProjectsPart[]
   tasks: readonly TasksPart[]
-  inbox: InboxPart
 }
 
 /** A part's answer with its chunked lists joined back and the window
@@ -113,13 +109,6 @@ export function joinParts(root: RootSeats, orgs: readonly OrgParts[], deliveredA
       orgLoad.push(...part.orgLoad)
     }
   }
-  // the inbox part's newest messages across the seats, which the desktop
-  // alerts read; the Inbox lists inbox.page instead, and this cap goes
-  // with the part (t3/limits-inbox-feed)
-  const inbox = blendInbox(
-    orgs.map((org) => org.inbox),
-    INBOX_LIMIT,
-  )
   return {
     auth_user_id: root.auth_user_id,
     myProfileIds: root.myProfileIds,
@@ -136,11 +125,6 @@ export function joinParts(root: RootSeats, orgs: readonly OrgParts[], deliveredA
     issueSubs,
     attachments,
     orgLoad,
-    messages: inbox.messages,
-    readMessageCount: inbox.readMessageCount,
-    unreadTruncated: inbox.unreadTruncated,
-    readTruncated: inbox.readTruncated,
-    ...(inbox.messagesCut ? { messagesCut: true as const } : {}),
     create: root.create,
     delivered_at: deliveredAt,
   }
@@ -208,10 +192,9 @@ export function rootOf(whole: ServerRows): RootSeats {
  * the app cannot tell apart from keys the server picked. Inverse of
  * joinParts, with rootOf, for a workspace whose sections hold no row of an
  * organization it does not list. A hidden load row names no task, so every
- * one goes to the first task window, and every seat's inbox counters go to
- * the first organization, which blendInbox adds up the same. */
+ * one goes to the first task window. */
 export function splitWorkspace(
-  workspace: Omit<Workspace, 'messagesCut' | 'create'> & { messagesCut?: boolean },
+  workspace: Omit<Workspace, 'create'>,
   windows: (orgId: string, kind: 'tasks' | 'projects') => readonly IdWindow[],
 ) {
   /** `rows` of `orgId` cut into its windows of `kind`. */
@@ -221,7 +204,7 @@ export function splitWorkspace(
     rows: readonly R[],
   ) => windows(orgId, kind).map((w) => rows.filter((row) => inIdWindow(row.id, w)))
   const orgOfProfile = new Map(workspace.profiles.map((p) => [p.id, p.org_id]))
-  return workspace.orgs.map((org, at) => {
+  return workspace.orgs.map((org) => {
     const id = org.id
     const mine = <R>(rows: readonly R[], orgOf: (row: R) => string | undefined) =>
       rows.filter((row) => orgOf(row) === id)
@@ -230,7 +213,6 @@ export function splitWorkspace(
     const projectWindows = cut(id, 'projects', projects)
     const taskWindows = cut(id, 'tasks', issues)
     const owners = mine(workspace.orgLoad, (r) => orgOfProfile.get(r.owner_id))
-    const messages = mine(workspace.messages, (m) => m.org_id)
     return {
       org_id: id,
       projects: projectWindows.map((ps) => {
@@ -252,14 +234,6 @@ export function splitWorkspace(
           issueSubs: workspace.issueSubs.filter((s) => ids.has(s.issue_id)),
         }
       }),
-      inbox: {
-        unread: messages.filter((m) => m.read_at === undefined),
-        read: messages.filter((m) => m.read_at !== undefined),
-        readMessageCount: at === 0 ? workspace.readMessageCount : 0,
-        unreadTruncated: at === 0 && workspace.unreadTruncated,
-        readTruncated: at === 0 && workspace.readTruncated,
-        truncated: at === 0 && workspace.messagesCut === true,
-      },
     }
   })
 }
@@ -287,7 +261,7 @@ function rowsOrThrow(name: string, answer: unknown) {
 /**
  * The workspace of the caller of `query` read once, as the app holds it once
  * every part answered: the root, with the caller's own profiles,
- * memberships and teams, and each organization's projects, tasks and inbox,
+ * memberships and teams, and each organization's projects and tasks,
  * each window cut where it answers overflow or split, as the app cuts them
  * (lib/idWindows.ts piecesAfter), joined by joinParts with the local time
  * as delivery time. Null without a seat. It holds no other person and no
@@ -327,10 +301,6 @@ export async function readWorkspace(query: QueryByName): Promise<Workspace | nul
     orgs.push({
       projects: await windows<ProjectsPart>('projects'),
       tasks: await windows<TasksPart>('tasks'),
-      inbox: rowsOrThrow(
-        'workspace:inbox',
-        await query('workspace:inbox', { org_id: id }),
-      ) as InboxPart,
     })
   }
   return joinParts(root, orgs, new Date().toISOString())

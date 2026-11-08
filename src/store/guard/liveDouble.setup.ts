@@ -11,6 +11,7 @@ import {
   type ForcedInbox,
   INBOX_NO_ANSWER,
   INBOX_STAND_IN,
+  inboxFeedStandIn,
   inboxItemStandIn,
   inboxPageStandIn,
   inboxSummaryStandIn,
@@ -58,17 +59,21 @@ import type { Row } from '../rows'
    does, so a view, the task window and the store's project cache
    (store/projectCache.ts) meet a project the workspace does not hold.
 
-   The two inbox reads every store watches beside the parts, the unread
-   summary and the open task's item (convex/inbox.ts summary and item), and
-   the Inbox list's page (convex/inbox.ts page), which the Inbox watches as
-   a view's read (lib/pagedList.ts usePagedPages), are answered from the
-   published whole too, through their stand-in (store/inboxStandIn.setup.ts),
-   on the parts' path, so each publish answers them again and a failed
-   whole or a reconnect reaches them, and no test mocks them unless it
-   forces a state (forceInbox). A page watch counts among the generation's
-   parts, so the whole stays subscribed while an Inbox shows. That is new
-   beside the other stand-ins, which tests wire through the client's
-   onUpdate one by one; these run in every store.
+   The inbox reads every store watches beside the parts, the unread
+   summary and the open task's item (convex/inbox.ts summary and item), the
+   Inbox list's page (convex/inbox.ts page), which the Inbox watches as a
+   view's read (lib/pagedList.ts usePagedPages), and the feed the desktop
+   alert client watches where the session can notify (convex/inbox.ts
+   feed), are answered from the published whole's stored messages, which
+   no part sends, through their stand-in (store/inboxStandIn.setup.ts), on
+   the parts' path, so each publish answers them again and a failed whole
+   or a reconnect reaches them, and no test mocks them unless it forces a
+   state (forceInbox). A page watch counts among the generation's parts, so
+   the whole stays subscribed while an Inbox shows. That is new beside the
+   other stand-ins, which tests wire through the client's onUpdate one by
+   one; these run in every store. jsdom has no Notification, so a store
+   test that does not stub one runs no beat, feed or claim; one that does
+   answers the session functions through store/notificationsStandIn.setup.ts.
 
    Each store test file mocks lib/convex with `{ convex: network, live:
    liveOver(network) }`. */
@@ -92,24 +97,22 @@ type Client = {
     organization and each profile's Team sync stamp (`sync_at`,
     `sync_since`), which no part sends but the agenda's stand-in answers,
     and every label (`labels`), which no part sends either. The root part
-    answers only the caller's own rows of them (rootOf). It may name
-    messagesCut false, may leave out `create`, which the root then answers
-    as 'now', and may hold messages the server keeps beyond the inbox
-    part's cut (`beyondCut`, the part's INBOX_LIMIT across the seats),
-    which the inbox reads count and list and the parts leave out, as for an
-    Inbox past 500 messages, tasks and projects the server holds that the
-    parts do not send (`unheld`), which the page names its rows by, such as
-    another organization's task of the same id as one the workspace holds,
-    and the server's milestones (`milestones`), which no part sends and the
+    answers only the caller's own rows of them (rootOf). It may leave out
+    `create`, which the root then answers as 'now', and holds the messages
+    the server stores for the caller's seats (`messages`, none when left
+    out), which no part sends and the inbox reads count, list and feed,
+    tasks and projects the server holds that the parts do not send
+    (`unheld`), which the page names its rows by, such as another
+    organization's task of the same id as one the workspace holds, the
+    server's milestones (`milestones`), which no part sends and the
     milestone stand-in answers from, and the projects the projects part
     leaves out with their grants and team shares (`unheldProjects`, by id),
     which the stand-ins answer from `projects`. */
-export type Whole = Omit<Workspace, 'messagesCut' | 'profiles' | 'create'> & {
+export type Whole = Omit<Workspace, 'profiles' | 'create'> & {
   profiles: (Workspace['profiles'][number] & { sync_at?: string; sync_since?: string })[]
   labels: Row<'labels'>[]
   create?: Workspace['create']
-  messagesCut?: boolean
-  beyondCut?: Workspace['messages']
+  messages?: Row<'messages'>[]
   unheld?: Partial<Pick<Workspace, 'issues' | 'projects'>>
   milestones?: MilestoneRow[]
   unheldProjects?: readonly string[]
@@ -135,16 +138,15 @@ const SHARED = new Set([
 
 const KINDS = ['tasks', 'projects'] as const
 const PARTS: Record<string, string> = {
-  'workspace:inbox': 'inbox',
   'workspace:tasks': 'tasks',
   'workspace:projects': 'projects',
 }
 
 /* The inbox reads answered from the whole, beside the parts. */
-const INBOX_READS = new Set(['inbox:summary', 'inbox:item', 'inbox:page'])
+const INBOX_READS = new Set(['inbox:summary', 'inbox:item', 'inbox:page', 'inbox:feed'])
 
 /** The inbox reads a test may force alone (forceInbox). */
-export type InboxRead = 'inbox:summary' | 'inbox:item' | 'inbox:page'
+export type InboxRead = 'inbox:summary' | 'inbox:item' | 'inbox:page' | 'inbox:feed'
 
 /** What the inbox read `name` with `args` answers while the server holds
     `whole`, or INBOX_NO_ANSWER for none; throws a failure or a refusal. A
@@ -156,27 +158,22 @@ function inboxAnswerOf(
   args: Record<string, unknown>,
   force: ForcedInbox | undefined,
 ): unknown {
-  const w =
+  const w: Pick<
+    Whole,
+    'myProfileIds' | 'profiles' | 'messages' | 'issues' | 'projects' | 'unheld'
+  > =
     whole === null || seatless(whole)
-      ? {
-          myProfileIds: [],
-          profiles: [],
-          messages: [],
-          readMessageCount: 0,
-          unreadTruncated: false,
-          readTruncated: false,
-          issues: [],
-          projects: [],
-        }
+      ? { myProfileIds: [], profiles: [], messages: [], issues: [], projects: [] }
       : whole
   const held = {
     ...w,
-    messages: 'beyondCut' in w && w.beyondCut ? [...w.messages, ...w.beyondCut] : w.messages,
-    issues: [...w.issues, ...(('unheld' in w && w.unheld?.issues) || [])],
-    projects: [...w.projects, ...(('unheld' in w && w.unheld?.projects) || [])],
+    messages: w.messages ?? [],
+    issues: [...w.issues, ...(w.unheld?.issues ?? [])],
+    projects: [...w.projects, ...(w.unheld?.projects ?? [])],
   }
   if (name === 'inbox:summary') return inboxSummaryStandIn(held, force)
   if (name === 'inbox:page') return inboxPageStandIn(held, args as PageArgs, force)
+  if (name === 'inbox:feed') return inboxFeedStandIn(held, { after: Number(args.after) }, force)
   return inboxItemStandIn(
     held,
     { org_id: String(args.org_id), issue_id: String(args.issue_id) },
@@ -189,7 +186,7 @@ function inboxAnswerOf(
 function answerOf(whole: Published, name: string, args: Record<string, unknown>): unknown {
   if (seatless(whole)) return name === 'workspace:root' ? whole : { state: 'gone' }
   if (name === 'workspace:root') return whole === null ? null : rootOf(whole)
-  // the window asked for; the inbox names none
+  // the window asked for
   const window = {
     from: typeof args.from === 'string' ? args.from : '',
     to: typeof args.to === 'string' ? args.to : null,
@@ -203,9 +200,7 @@ function answerOf(whole: Published, name: string, args: Record<string, unknown>)
     ? splitWorkspace(sent, () => [window]).find((o) => o.org_id === args.org_id)
     : undefined
   if (!org) return { state: 'gone' }
-  const part = PARTS[name]
-  if (part === 'inbox') return { state: 'ok', ...org.inbox }
-  const kind = part as (typeof KINDS)[number]
+  const kind = PARTS[name] as (typeof KINDS)[number]
   const rows = org[kind][0]
   // the hidden load rows ride with the first task window only
   if (kind === 'tasks' && window.from !== '') return { state: 'ok', ...rows, orgLoad: [] }

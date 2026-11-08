@@ -3,12 +3,15 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../../components/ui/tooltip'
+import { noteCapabilityChange } from '../../lib/notify'
 import { isUpdateBlocked } from '../../lib/updateSafety'
 import { DesktopSettingsPage } from './DesktopSettings'
 
 // Shared controls import the planner through Icon, but this page uses only
 // its native settings bridge and must not start an application data client.
 vi.mock('../../store/planner', () => ({ P: {} }))
+// the notification leader hears a saved Show notifications at once
+vi.mock('../../lib/notify', () => ({ noteCapabilityChange: vi.fn() }))
 
 const confirmedSettings: QivoDesktopSettings = {
   startAtLogin: true,
@@ -182,5 +185,18 @@ describe('desktop settings page recovery', () => {
     expect(toggle('Start Qivo at logon').getAttribute('aria-checked')).toBe('true')
     expect(toggle('Show notifications').getAttribute('aria-checked')).toBe('false')
     expectSwitchesDisabled(false)
+  })
+
+  it('tells the notification leader once a save answered, and not after a refused one', async () => {
+    const settings = bridge()
+    settings.update
+      .mockResolvedValueOnce({ ...confirmedSettings, showNotifications: false })
+      .mockRejectedValueOnce(new Error('Save unavailable'))
+    vi.mocked(noteCapabilityChange).mockClear()
+    await render(settings)
+    await act(async () => toggle('Show notifications').click())
+    expect(noteCapabilityChange).toHaveBeenCalledOnce()
+    await act(async () => toggle('Show notifications').click())
+    expect(noteCapabilityChange).toHaveBeenCalledOnce()
   })
 })

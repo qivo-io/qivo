@@ -35,15 +35,6 @@ const RIGHT = { from: '80000000', to: null }
 const ok = (rows: Record<string, unknown[]>) => ({ state: 'ok', ...rows })
 const task = (id: string) => ({ id, org_id: ORG, title: id })
 const EMPTY = {
-  'workspace:inbox': {
-    state: 'ok',
-    unread: [],
-    read: [],
-    readMessageCount: 0,
-    unreadTruncated: false,
-    readTruncated: false,
-    truncated: false,
-  },
   'workspace:projects': ok({ projects: [], access: [], teamAccess: [] }),
 }
 const tasksPart = (ids: string[], extra = {}) => ({
@@ -125,11 +116,8 @@ function scripted() {
    second. */
 function serve(s: ReturnType<typeof scripted>) {
   s.set('workspace:root', ROOT_ARGS, { value: ROOT })
-  for (const [name, value] of Object.entries(EMPTY)) {
-    const args = name === 'workspace:inbox' ? { org_id: ORG } : null
-    if (args) s.set(name, args, { value })
-    else s.set(name, { org_id: ORG, from: '', to: null }, { value })
-  }
+  for (const [name, value] of Object.entries(EMPTY))
+    s.set(name, { org_id: ORG, from: '', to: null }, { value })
   s.set('workspace:tasks', { org_id: ORG, ...LEFT }, { value: tasksPart(['a', 'b']) })
   s.set('workspace:tasks', { org_id: ORG, ...RIGHT }, { value: tasksPart(['c']) })
 }
@@ -316,20 +304,19 @@ describe('the live parts registry', () => {
 
   it('fails on a failed or refusing part, and Retry runs only that part again', async () => {
     const { s, parts, last } = await started()
-    const inbox = s.keyOf('workspace:inbox', { org_id: ORG })
-    s.set('workspace:inbox', { org_id: ORG }, { error: new Error('boom') })
-    s.send([inbox])
+    const projectsKey = s.keyOf('workspace:projects', PROJECTS)
+    s.set('workspace:projects', PROJECTS, { error: new Error('boom') })
+    s.send([projectsKey])
     expect(last()).toMatchObject({ state: 'failed' })
-    s.set('workspace:inbox', { org_id: ORG }, { value: EMPTY['workspace:inbox'] })
+    s.set('workspace:projects', PROJECTS, { value: EMPTY['workspace:projects'] })
     // the failed run stays until the part is watched again
-    s.send([inbox])
+    s.send([projectsKey])
     expect(last()).toMatchObject({ state: 'failed' })
     s.log.length = 0
     expect(parts.retry()).toBe(true)
-    expect(s.log).toEqual([`stop ${inbox}`, `watch ${inbox}`])
-    s.send([inbox])
+    expect(s.log).toEqual([`stop ${projectsKey}`, `watch ${projectsKey}`])
+    s.send([projectsKey])
     expect(last()?.state).toBe('complete')
-    const projectsKey = s.keyOf('workspace:projects', PROJECTS)
     s.set('workspace:projects', PROJECTS, { value: { state: 'refused', message: 'Too much.' } })
     s.send([projectsKey])
     const failed = last()
@@ -537,7 +524,7 @@ describe('the live parts registry', () => {
     STALL.ms = 1000
     const s = scripted()
     serve(s)
-    s.set('workspace:inbox', { org_id: ORG }, {})
+    s.set('workspace:projects', PROJECTS, {})
     let online = false
     const reports: PartsReport[] = []
     createLiveParts(
@@ -554,7 +541,7 @@ describe('the live parts registry', () => {
     online = true
     // a part answering starts the wait over
     await vi.advanceTimersByTimeAsync(600)
-    s.send([s.keyOf('workspace:projects', PROJECTS)])
+    s.send([s.keyOf('workspace:root', ROOT_ARGS)])
     await vi.advanceTimersByTimeAsync(600)
     expect(reports.at(-1)?.workspace.state).toBe('held')
     await vi.advanceTimersByTimeAsync(400)
@@ -582,7 +569,7 @@ describe('the live parts registry', () => {
     STALL.ms = 1000
     const s = scripted()
     serve(s)
-    s.set('workspace:inbox', { org_id: ORG }, {})
+    s.set('workspace:projects', PROJECTS, {})
     const reports: PartsReport[] = []
     const parts = createLiveParts(
       s.live,
@@ -801,12 +788,12 @@ describe('tasks on demand', () => {
     s.send()
     expect(last()).toMatchObject({ state: 'complete', tasks: 'all' })
 
-    // a silent inbox during a load fails the workspace as before
+    // a silent projects window during a load fails the workspace as before
     const t = big()
     for (const w of WINDOWS) t.s.set('workspace:tasks', { org_id: ORG, ...w }, {})
     t.parts.askTasks()
     t.s.reconnect()
-    t.s.set('workspace:inbox', { org_id: ORG }, {})
+    t.s.set('workspace:projects', PROJECTS, {})
     t.s.send([t.s.keyOf('workspace:root', ROOT_ARGS)])
     await vi.advanceTimersByTimeAsync(1000)
     expect(t.last()?.state).toBe('failed')
@@ -975,7 +962,7 @@ describe('tasks on demand', () => {
     // ahead of the organization's parts, and no task window
     const order = s.log.filter((l) => l.startsWith('watch ')).map((l) => l.split('{')[0])
     expect(order.indexOf('watch taskWindow:task')).toBeLessThan(
-      order.indexOf('watch workspace:inbox'),
+      order.indexOf('watch workspace:projects'),
     )
     expect(parts.sideArgs('reference')).toEqual(args)
     expect(taskWatches(s)).toEqual([])
@@ -1045,16 +1032,14 @@ const orgRow = (id: string, windows: number) => ({
 /** Serves organization `id` with `windows` task windows, task <id>-<i> in
     window i. */
 function serveOrg(s: ReturnType<typeof scripted>, id: string, windows: number) {
-  for (const [name, value] of Object.entries(EMPTY)) {
-    const args = name === 'workspace:inbox' ? { org_id: id } : { org_id: id, from: '', to: null }
-    s.set(name, args, { value })
-  }
+  for (const [name, value] of Object.entries(EMPTY))
+    s.set(name, { org_id: id, from: '', to: null }, { value })
   for (const [i, w] of idWindows(windows).entries())
     s.set('workspace:tasks', { org_id: id, ...w }, { value: tasksPart([`${id}-${i}`]) })
 }
 
 describe('the parts an organization subscribes', () => {
-  it('watches no people or catalog part, and joins the caller’s own rows from the root', async () => {
+  it('watches no people, catalog or inbox part, and joins the caller’s own rows from the root', async () => {
     const s = scripted()
     serve(s)
     s.set('workspace:root', ROOT_ARGS, {
@@ -1081,13 +1066,11 @@ describe('the parts an organization subscribes', () => {
     const watched = s.log.filter((l) => l.startsWith('watch ')).map((l) => l.split('{')[0])
     expect(watched).not.toContain('watch workspace:people')
     expect(watched).not.toContain('watch workspace:catalog')
+    expect(watched).not.toContain('watch workspace:inbox')
+    // the feed waits for the desktop alert client, which watches it with a floor
+    expect(watched).not.toContain('watch inbox:feed')
     expect(new Set(watched)).toEqual(
-      new Set([
-        'watch workspace:root',
-        'watch inbox:summary',
-        'watch workspace:inbox',
-        'watch workspace:projects',
-      ]),
+      new Set(['watch workspace:root', 'watch inbox:summary', 'watch workspace:projects']),
     )
     const w = reports.at(-1)?.workspace
     if (w?.state !== 'complete' || !w.value) throw new Error(`not complete: ${w?.state}`)

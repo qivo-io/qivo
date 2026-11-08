@@ -37,7 +37,20 @@ import {
   uuid,
   withReadingAdmin,
 } from './helpers.setup'
-import { archiveRaw, at, drift, grant, plantItems, plantLegacy, post } from './inboxItems.setup'
+import {
+  archiveRaw,
+  at,
+  drift,
+  grant,
+  markRead,
+  markUnread,
+  plantItems,
+  plantLegacy,
+  post,
+  removeIds,
+  snoozeIds,
+} from './inboxItems.setup'
+import { oracleInbox } from './inboxOracle.setup'
 import { plantNorthstar } from './northstar.setup'
 import { DAY, deleteTask, installTrashTimers, runSteps, START } from './trash.setup'
 
@@ -117,18 +130,15 @@ async function backfillAll(t: T) {
 }
 
 describe('the unread summary', () => {
-  it('counts what the workspace inbox part shows, for every person of Northstar', async () => {
+  it('counts what the messages say, for every person of Northstar', async () => {
     const t = newT()
     const { org, profiles } = await plantNorthstar(t)
     let total = 0
     for (const person of profiles.filter((p) => p.auth_user_id !== undefined)) {
       const caller = t.withIdentity({ subject: person.auth_user_id as string })
-      const part = await caller.query(api.workspace.inbox, { org_id: org.id })
-      if (part.state !== 'ok') throw new Error(part.state)
-      // Northstar holds far fewer than 500 messages, so the part is complete
-      expect(part.truncated, person.name).toBe(false)
+      const inbox = await oracleInbox(t, person)
       const groups = new Set(
-        part.unread.filter((m) => m.snoozed_until === undefined).map((m) => m.issue_id),
+        inbox.unread.filter((m) => m.snoozed_until === undefined).map((m) => m.issue_id),
       )
       const summary = await caller.query(api.inbox.summary, {})
       expect(summary, person.name).toMatchObject({
@@ -176,22 +186,17 @@ describe('the unread summary', () => {
   it('counts no item that is read, snoozed, archived, hidden, in Deleted items or another login’s', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
-    const guest = as(t, f.guest)
     const task = (project_id = f.sub.id) => plantIssue(t, { org_id: f.org.id, project_id })
     const shown = await task()
     await post(t, f, { to: f.guest, task: shown, minute: 1 })
     // read
     const read = await task()
     const readRow = (await post(t, f, { to: f.guest, task: read, minute: 2 }))!
-    await guest.mutation(api.messages.markRead, { org_id: f.org.id, ids: [readRow.id] })
+    await markRead(t, f.guest, [readRow.id])
     // snoozed
     const snoozed = await task()
     const snoozedRow = (await post(t, f, { to: f.guest, task: snoozed, minute: 3 }))!
-    await guest.mutation(api.messages.snooze, {
-      org_id: f.org.id,
-      ids: [snoozedRow.id],
-      until: new Date(START + DAY).toISOString(),
-    })
+    await snoozeIds(t, f.guest, [snoozedRow.id], new Date(START + DAY).toISOString())
     // archived before the archive's read step ran, which fake timers hold
     const archived = await task()
     await post(t, f, { to: f.guest, task: archived, minute: 4 })
@@ -507,7 +512,6 @@ describe('the unread summary', () => {
   it('offers the bulk actions when they would change anything, hidden tasks included', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
-    const guest = as(t, f.guest)
     const flags = async () => {
       const got = await summaryOf(t, f.guest)
       return [got.seats[0].can_mark_all_read, got.seats[0].can_remove_read]
@@ -522,19 +526,15 @@ describe('the unread summary', () => {
     expect(await flags()).toEqual([true, false])
     // once read, only Remove all read reaches it
     const [row] = await pairRows(t, f.guest.id, hidden.id)
-    await guest.mutation(api.messages.markRead, { org_id: f.org.id, ids: [row.id] })
+    await markRead(t, f.guest, [row.id])
     expect(await flags()).toEqual([false, true])
-    await guest.mutation(api.messages.remove, { org_id: f.org.id, ids: [row.id] })
+    await removeIds(t, f.guest, [row.id])
     // snoozed rows are out of both actions' reach, read or not
     const [task] = await plantItems(t, f, f.guest, 1, f.sub.id)
     const [snoozed] = await pairRows(t, f.guest.id, task.id)
-    await guest.mutation(api.messages.snooze, {
-      org_id: f.org.id,
-      ids: [snoozed.id],
-      until: new Date(START + DAY).toISOString(),
-    })
+    await snoozeIds(t, f.guest, [snoozed.id], new Date(START + DAY).toISOString())
     expect(await flags()).toEqual([false, false])
-    await guest.mutation(api.messages.markRead, { org_id: f.org.id, ids: [snoozed.id] })
+    await markRead(t, f.guest, [snoozed.id])
     expect((await pairRows(t, f.guest.id, task.id))[0]).toMatchObject({
       read_at: expect.any(String),
       snoozed_until: expect.any(String),
@@ -548,14 +548,13 @@ describe('one task’s item', () => {
   it('answers counts, the oldest unread message, the newest one and whether a change is unread', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
-    const guest = as(t, f.guest)
     const task = () => plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // three messages, the oldest read and pruned away
     const a = await task()
     const first = (await post(t, f, { to: f.guest, task: a, minute: 1, kind: 'comment' }))!
     await post(t, f, { to: f.guest, task: a, minute: 2, kind: 'comment' })
     const newest = (await post(t, f, { to: f.guest, task: a, minute: 3, kind: 'change' }))!
-    await guest.mutation(api.messages.markRead, { org_id: f.org.id, ids: [first.id] })
+    await markRead(t, f.guest, [first.id])
     expect(await itemFor(t, f, f.guest, a.id)).toEqual({
       state: 'ok',
       item: {
@@ -587,7 +586,7 @@ describe('one task’s item', () => {
     for (let i = 0; i < 5; i++)
       await post(t, f, { to: f.guest, task: seen, minute: 100 + i, kind: 'comment' })
     const change = (await post(t, f, { to: f.guest, task: seen, minute: 110, kind: 'change' }))!
-    await guest.mutation(api.messages.markRead, { org_id: f.org.id, ids: [change.id] })
+    await markRead(t, f.guest, [change.id])
     expect(await storedItem(t, f.guest.id, seen.id)).toMatchObject({ changes: 1, unread_count: 5 })
     expect(await itemFor(t, f, f.guest, seen.id)).toMatchObject({
       item: { unread_count: 5, first_unread_at: at(100), unread_change: false },
@@ -613,7 +612,7 @@ describe('one task’s item', () => {
     // a snoozed item says until when
     const until = new Date(START + DAY).toISOString()
     const ids = (await pairRows(t, f.guest.id, quiet.id)).map((m) => m.id)
-    await guest.mutation(api.messages.snooze, { org_id: f.org.id, ids, until })
+    await snoozeIds(t, f.guest, ids, until)
     expect(await itemFor(t, f, f.guest, quiet.id)).toMatchObject({ item: { snoozed_until: until } })
     expect(await drift(t)).toEqual([])
   })
@@ -644,7 +643,7 @@ describe('one task’s item', () => {
     expect(unread.unread).toBeGreaterThan(900)
     // the item row, the task and the access reads, and three messages at most
     expect(unread.documents).toBeLessThan(20)
-    await as(t, f.guest).mutation(api.messages.markRead, { org_id: f.org.id, ids: [change.id] })
+    await markRead(t, f.guest, [change.id])
     const seen = await read()
     expect(seen.change).toBe(false)
     expect(seen.documents).toBeLessThan(20)
@@ -654,7 +653,6 @@ describe('one task’s item', () => {
   it('counts an unread mention in the description as an unread change, as the app does, and no other mention', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
-    const guest = as(t, f.guest)
     const task = () => plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const changeOf = async (issueId: string) => {
       const got = await itemFor(t, f, f.guest, issueId)
@@ -673,7 +671,7 @@ describe('one task’s item', () => {
     }))!
     expect(await changeOf(described.id)).toBe(true)
     // read, it is no longer unread news
-    await guest.mutation(api.messages.markRead, { org_id: f.org.id, ids: [mention.id] })
+    await markRead(t, f.guest, [mention.id])
     expect(await changeOf(described.id)).toBe(false)
     // a mention in a comment is not a change, also beside a read one in
     // the description, which the counts alone cannot tell apart
@@ -977,14 +975,14 @@ describe('the item actions', () => {
     const until = new Date(START + DAY).toISOString()
     const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const row = (await post(t, f, { to: f.guest, task: a, minute: 1 }))!
-    await guest.mutation(api.messages.markRead, { org_id: f.org.id, ids: [row.id] })
+    await markRead(t, f.guest, [row.id])
     // before the archive, unreadItem opens the item again
     await guest.mutation(api.messages.unreadItem, { org_id: f.org.id, issue_id: a.id })
     expect(await storedItem(t, f.guest.id, a.id)).toMatchObject({ unread_count: 1 })
     await guest.mutation(api.messages.readItem, { org_id: f.org.id, issue_id: a.id })
     await as(t, f.user).mutation(api.issues.archive, { org_id: f.org.id, id: a.id })
     const byIds = await expectRefusal(
-      guest.mutation(api.messages.markUnread, { org_id: f.org.id, ids: [row.id] }),
+      markUnread(t, f.guest, [row.id]),
       'rule',
       /is archived and must be restored first$/,
     )
@@ -993,15 +991,12 @@ describe('the item actions', () => {
       'rule',
     )
     expect(byItem.data.message).toBe(byIds.data.message)
-    const snoozeIds = await expectRefusal(
-      guest.mutation(api.messages.snooze, { org_id: f.org.id, ids: [row.id], until }),
-      'rule',
-    )
+    const snoozeByIds = await expectRefusal(snoozeIds(t, f.guest, [row.id], until), 'rule')
     const snoozeItem = await expectRefusal(
       guest.mutation(api.messages.snoozeItem, { org_id: f.org.id, issue_id: a.id, until }),
       'rule',
     )
-    expect(snoozeItem.data.message).toBe(snoozeIds.data.message)
+    expect(snoozeItem.data.message).toBe(snoozeByIds.data.message)
     // an archived task the guest no longer sees changes nothing, silently
     const lost = await plantProject(t, { org_id: f.org.id })
     const revoke = await grant(t, f.guest, lost.id)

@@ -39,7 +39,12 @@ type QivoDesktopBridge = {
   }
   notifications: {
     supported: boolean
+    /** the permission when the page loaded, which the bridge copies once */
     readonly permission: QivoDesktopNotificationPermission
+    /** the permission now, from Show notifications and the platform; absent
+        in a shell built before it, which installed test builds still run
+        with each web release (lib/notify.ts canNotify) */
+    currentPermission?(): QivoDesktopNotificationPermission
     requestPermission(): Promise<QivoDesktopNotificationPermission>
     show(payload: { tag: string; title: string; body: string }): Promise<boolean>
     onClick(listener: (tag: string) => void): () => void
@@ -50,6 +55,12 @@ type QivoDesktopBridge = {
     install(): Promise<boolean>
     setBlocked(blocked: boolean): void
     onState(listener: (state: QivoDesktopUpdateState) => void): () => void
+  }
+  /** The computer's wake from sleep, which the notification leader takes as
+      a resume (lib/notificationLeader.ts); absent in a shell built before
+      it, whose leader finds a sleep by its clock's gap instead. */
+  power?: {
+    onResume(listener: () => void): () => void
   }
   auth: {
     beginOAuth(): Promise<{ callbackURL: string }>

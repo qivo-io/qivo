@@ -55,8 +55,8 @@ import {
   taskWithText,
   uuid,
   withReadingAdmin,
-  workspaceOf,
 } from './helpers.setup'
+import { listedTasks } from './inboxItems.setup'
 import { liveAttachmentUsage } from './liveAttachments.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 import {
@@ -788,9 +788,8 @@ describe('a task delete at the caps', () => {
     return n
   }
 
-  /** The tasks the messages in the guest's app are about. */
-  const shownToGuest = async (t: T, f: OrgFixture) =>
-    new Set(((await workspaceOf(as(t, f.guest)))?.messages ?? []).map((m) => m.issue_id))
+  /** The tasks the guest's Inbox lists. */
+  const shownToGuest = async (t: T, f: OrgFixture) => new Set(await listedTasks(t, f.guest))
 
   it('deletes a parent at LIMITS.subtasks.max with every follower holding a full item, in the app', async () => {
     const t = newT({ transactionLimits: TX_LIMITS })

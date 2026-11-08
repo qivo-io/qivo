@@ -205,11 +205,19 @@ export const MENTION_BATCH = 8
  * limit people meet. */
 export const BY_IDS_MAX = 100
 
-/** The most messages one seat's bounded inbox walk examines in each of its
- * unread and read halves (lib/inbox.ts loadInbox), which only the workspace
- * inbox part reads, and which stays for it until it goes. REST and MCP page
- * the Inbox through model/inboxPage.ts instead. */
-export const INBOX_LIMIT = 500
+/** How old an event may be and still become a live desktop alert, ten
+ * minutes. No claim grants an event older than this
+ * (model/notificationSessions.ts NOTIFY.live_window_ms reads it), and the
+ * app's feed client (src/lib/notificationFeed.ts) starts its floor this far
+ * before its first beat's server time and keeps it no further back than
+ * this before the latest beat's, and than this and a minute more
+ * (FLOOR_SLACK_MS) before the server time it estimates at the leader's
+ * tick, which also holds under All enabled sessions, where a leader beats
+ * every six hours. So inbox.feed reads the events a claim may still
+ * grant, and at most the two minutes before them that the slack and the
+ * read-back minute add. A bound on the app's own calls, not a limit people
+ * meet. */
+export const ALERT_WINDOW_MS = 600_000
 
 /** The task groups one Inbox page holds (model/inboxPage.ts INBOX_PAGE.rows),
  * the owner's 50, which the app's list shows a page at a time. */

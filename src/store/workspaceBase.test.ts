@@ -66,8 +66,7 @@ describe('the workspace base', () => {
     const d = { ...next.issues[1], id: 'd', num: 4, title: 'Task d' }
     next.issues = [next.issues[0], next.issues[2], d]
     next.orgLoad = [next.orgLoad[1], next.orgLoad[2], next.orgLoad[0]]
-    const entered = base.stage(asStored(structuredClone(next)))
-    expect([...entered]).toEqual(['d'])
+    base.stage(asStored(structuredClone(next)))
     const changes = base.apply()
     expect(new Set(changes?.issues?.keys())).toEqual(new Set(['b', 'd']))
     expect(changes?.issues?.get('b')).toMatchObject({ id: 'b' })

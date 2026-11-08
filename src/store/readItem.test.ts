@@ -43,17 +43,12 @@ describe("the store's read of one inbox item", () => {
   const settle = async () => {
     for (let i = 0; i < 8; i++) await Promise.resolve()
   }
-  /* The loaded messages of `task`, by id, read or not. */
-  const loaded = (task: string) =>
-    P()
-      .messages.filter((m) => m.issueUuid === task)
-      .map((m) => `${m.id} ${m.read ? 'read' : 'unread'}`)
-      .sort()
+  /* The mark of `task`'s Inbox row, which shows it read at once. */
+  const markOf = (task: string) => P().inboxMarks.get(`${snapshot.orgs[0].id}:${task}`)
   const target = (latest: number) => ({
     org: snapshot.orgs[0].id,
     task: 'task-a',
     through: Date.parse(at(latest)),
-    latestAt: at(latest),
   })
 
   function message(id: string, task: string, minute: number, over: Partial<Row<'messages'>> = {}) {
@@ -103,12 +98,11 @@ describe("the store's read of one inbox item", () => {
     vi.restoreAllMocks()
   })
 
-  it("paints the task's loaded unread messages read up to the item's newest, and sends the item read", async () => {
+  it("marks the task's Inbox row read up to the item's newest, and sends the item read", async () => {
     expect(P().readItem(target(5))).toBe(true)
-    // read, and pruned to the newest, as the server keeps it
-    expect(loaded('task-a')).toEqual(['a-5 read'])
-    // another task's stays unread
-    expect(loaded('task-b')).toEqual(['b-1 unread'])
+    expect(markOf('task-a')).toMatchObject({ through: Date.parse(at(5)), read: true })
+    // another task's row has no mark
+    expect(markOf('task-b')).toBeUndefined()
     expect(sent.map(({ name, args }) => ({ name, args }))).toEqual([
       {
         name: 'messages:readItem',
@@ -120,32 +114,15 @@ describe("the store's read of one inbox item", () => {
     expect(sent).toHaveLength(2)
   })
 
-  it('leaves a message newer than the item it read, and a snoozed one, unread', async () => {
-    // stored after the answer the read took its through from
-    message('a-20', 'task-a', 20)
-    deliver(snapshot)
+  it('takes its mark back when the server refuses it', async () => {
     P().readItem(target(5))
-    // the newer one stays, unread, and the prune keeps it as the newest
-    expect(loaded('task-a')).toEqual(['a-20 unread'])
-    snapshot.messages = snapshot.messages.map((m) =>
-      m.issue_id === 'task-b' ? { ...m, snoozed_until: at(600) } : m,
-    )
-    deliver(snapshot)
-    // the delivery paints once the waiting read's paint timer runs
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    P().readItem({ ...target(5), task: 'task-b' })
-    expect(loaded('task-b')).toEqual(['b-1 unread'])
-  })
-
-  it('takes its paint back when the server refuses it', async () => {
-    P().readItem(target(5))
-    expect(loaded('task-a')).toEqual(['a-5 read'])
+    expect(markOf('task-a')).toMatchObject({ read: true })
     sent[0].reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
     await settle()
-    expect(loaded('task-a')).toEqual(['a-1 unread', 'a-5 unread'])
+    expect(markOf('task-a')).toBeUndefined()
   })
 
-  it('answers false while edits pause and paints nothing, quietly when asked', async () => {
+  it('answers false while edits pause and marks nothing, quietly when asked', async () => {
     // the seat went, so the Inbox's writes pause
     deliver(null)
     await settle()
@@ -153,7 +130,7 @@ describe("the store's read of one inbox item", () => {
     expect(showToast).not.toHaveBeenCalled()
     expect(P().readItem(target(5))).toBe(false)
     expect(showToast).toHaveBeenCalledTimes(1)
-    expect(loaded('task-a')).toEqual(['a-1 unread', 'a-5 unread'])
+    expect(markOf('task-a')).toBeUndefined()
     expect(sent).toEqual([])
   })
 })

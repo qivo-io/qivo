@@ -2845,7 +2845,7 @@ export default defineSchema({
     kind: vMessageKind,
     detail: v.string(),
     created_at: v.string(),
-    // client-writable (markRead/markUnread; snooze and wake clear it). A
+    // client-writable (readItem/unreadItem; snooze and wake clear it). A
     // write that leaves a row read and not snoozed keeps message_sweeps in
     // step (model/messages.ts noteSweepable).
     read_at: v.optional(v.string()),
@@ -3004,8 +3004,7 @@ export default defineSchema({
     // task.
     project_id: v.optional(v.string()),
     // The list order: the newest message's created_at, or woke_at when the
-    // item returned from a snooze later, as the app's `ts` (store/viewModels.ts
-    // shapeMessageGroup).
+    // item returned from a snooze later (model/inboxItems.ts itemOf).
     sort_at: v.string(),
     // The newest message by (created_at, id), the order the prune keeps.
     latest_id: v.string(),

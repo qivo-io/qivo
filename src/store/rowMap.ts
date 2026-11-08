@@ -257,7 +257,6 @@ export function createWorkspaceRows(base: WorkspaceBase) {
     issues: new RowMap<Row<'issues'>>('issues', host),
     links: new RowMap<Row<'issue_links'>>('links', host),
     attachments: new RowMap<Row<'issue_attachments'>>('attachments', host),
-    messages: new RowMap<Row<'messages'>>('messages', host),
   }
 
   // the paints' copies of the lists and flag sets, and the lists keepList
@@ -438,11 +437,9 @@ export function createWorkspaceRows(base: WorkspaceBase) {
       return taken
     },
 
-    /** Whether any row outside `except` shows other data than at the last
-        checkpoint. */
-    rowsChanged(except: KeyedName): boolean {
+    /** Whether any row shows other data than at the last checkpoint. */
+    rowsChanged(): boolean {
       for (const [name, keys] of shownKeys) {
-        if (name === except) continue
         const map = maps[name] as RowMap<object>
         for (const [key, shown] of keys) {
           const now = map.peek(key)

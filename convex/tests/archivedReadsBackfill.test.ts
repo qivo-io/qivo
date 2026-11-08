@@ -22,7 +22,7 @@ import {
   type T,
   withOrg,
 } from './helpers.setup'
-import { drift, post } from './inboxItems.setup'
+import { drift, markRead, post } from './inboxItems.setup'
 import { installTrashTimers, runSteps } from './trash.setup'
 
 installTrashTimers()
@@ -121,7 +121,7 @@ async function plant(t: T, f: OrgFixture) {
           .collect(),
       )
     ).map((m) => m.id)
-    await as(t, to).mutation(api.messages.markRead, { org_id: f.org.id, ids: [row] })
+    await markRead(t, to, [row])
   }
   // the other organization's person, who sees its project
   const elsewhere = await plantSeat(t, {

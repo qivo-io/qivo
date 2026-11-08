@@ -85,7 +85,6 @@ describe('the pause while Qivo cannot save', () => {
         org: snapshot.orgs[0].id,
         task: 'task-a',
         through: Date.parse('2026-09-14T08:00:00.000Z'),
-        latestAt: '2026-09-14T08:00:00.000Z',
       },
       { quiet: true },
     )
@@ -207,13 +206,19 @@ describe('the pause while Qivo cannot save', () => {
     expect(readOnOpen()).toBe(false)
     expect(showToast).toHaveBeenCalledTimes(1)
     vi.advanceTimersByTime(1000)
-    expect(P.markMessagesRead(['message-a'])).toBe(false)
+    expect(
+      P.readItem({
+        org: snapshot.orgs[0].id,
+        task: 'task-a',
+        through: Date.parse('2026-09-14T08:00:00.000Z'),
+      }),
+    ).toBe(false)
     P.setIssueSubscribed(task.id, true)
     await settle()
     expect(sent).toEqual([])
     expect(P.issueById[task.id].status).toBe('todo')
     expect(P.issueById[task.id].subscribed).toBe(false)
-    expect(P.messages.find((message) => message.id === 'message-a')?.read).toBeFalsy()
+    expect(P.inboxMarks.size).toBe(0)
     expect(showToast).toHaveBeenCalledWith(store.OFFLINE_TEXT, 'error')
     expect(showToast).toHaveBeenCalledTimes(2)
     expect(notes()).toEqual([])

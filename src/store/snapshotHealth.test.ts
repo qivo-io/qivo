@@ -67,10 +67,18 @@ describe('snapshot trouble', () => {
         org: snapshot.orgs[0].id,
         task: 'task-a',
         through: Date.parse('2026-09-14T08:00:00.000Z'),
-        latestAt: '2026-09-14T08:00:00.000Z',
       },
       { quiet: true },
     )
+  /* The read of task-a's item the person asks for (P.readItem). */
+  const readA = () =>
+    store.P.readItem({
+      org: snapshot.orgs[0].id,
+      task: 'task-a',
+      through: Date.parse('2026-09-14T08:00:00.000Z'),
+    })
+  /* Whether task-a's Inbox row shows read, by its mark. */
+  const readMark = () => store.P.inboxMarks.get(`${snapshot.orgs[0].id}:task-a`)?.read
 
   async function boot() {
     store = await import('./planner')
@@ -184,23 +192,23 @@ describe('snapshot trouble', () => {
     expect(sentNames()).not.toContain('issues:update')
     expect(P.issueById[task.id].status).toBe('todo')
     expect(showToast).toHaveBeenCalledWith(store.PAUSED_TEXT, 'error')
-    P.markMessagesRead(['message-a'])
+    readA()
     // a star writes only the seat's own row, which the server checks
     void P.setFavorite({ id: snapshot.projects[0].id, org_id: snapshot.orgs[0].id }, true)
     P.saveUI({ view: 'kanban' })
     vi.advanceTimersByTime(600)
     await settle()
-    expect(sentNames()).toEqual(['messages:markRead', 'projectNav:setFavorite', 'prefs:save'])
+    expect(sentNames()).toEqual(['messages:readItem', 'projectNav:setFavorite', 'prefs:save'])
   })
 
   it('refuses paused edits before their paint, so saved personal state stays on screen', async () => {
     await boot()
     const { P } = store
     live().fail(new Error(QUERY_FAILURE))
-    P.markMessagesRead(['message-a'])
+    readA()
     sent[0].resolve(null)
     await settle()
-    const read = () => P.messages.find((message) => message.id === 'message-a')?.read
+    const read = readMark
     expect(read()).toBe(true)
     const [task] = P.issues
     const project = snapshot.projects[0].id
@@ -216,7 +224,7 @@ describe('snapshot trouble', () => {
     await settle()
     // nothing was painted, so no rollback took the saved read mark away
     expect(read()).toBe(true)
-    expect(sentNames()).toEqual(['messages:markRead'])
+    expect(sentNames()).toEqual(['messages:readItem'])
     expect(P.issueById[task.id].status).toBe('todo')
     expect(P.org.name).toBe('Testbed Labs')
     expect(P.teams).toHaveLength(teams)
@@ -234,12 +242,12 @@ describe('snapshot trouble', () => {
     live().fail(new ConvexError({ code: 'forbidden', message: 'not signed in' }))
     sent.splice(0)[0].resolve(null)
     await settle()
-    const read = () => P.messages.find((message) => message.id === 'message-a')?.read
+    const read = readMark
     // opening the task reads its messages on its own, and says nothing
     expect(readOnOpen()).toBe(false)
     expect(read()).toBeFalsy()
     expect(showToast).not.toHaveBeenCalled()
-    expect(P.markMessagesRead(['message-a'])).toBe(false)
+    expect(readA()).toBe(false)
     P.setIssueSubscribed(task.id, true)
     expect(P.issueById[task.id].subscribed).toBe(false)
     P.createParent(task.id, 'Sensor work')
@@ -273,7 +281,7 @@ describe('snapshot trouble', () => {
     await settle()
     expect(sent).toHaveLength(1)
     expect(P.issueById[task.id].status).toBe('progress')
-    expect(P.messages.find((message) => message.id === 'message-a')?.read).toBeFalsy()
+    expect(readMark()).toBeFalsy()
     expect(showToast).not.toHaveBeenCalled()
   })
 
@@ -561,7 +569,7 @@ describe('snapshot trouble', () => {
     expect(P.issues).toHaveLength(1)
     const [task] = P.issues
     P.updateIssue(task.id, { status: 'progress' })
-    P.markMessagesRead(['message-a'])
+    readA()
     P.saveUI({ view: 'kanban' })
     // the writes that take access away or change a seat answer that they
     // were not sent, so their callers announce nothing
@@ -578,7 +586,7 @@ describe('snapshot trouble', () => {
     // appearance and connected apps go out
     expect(sentNames()).toEqual(['appearance:save', 'oauthConnections:revoke'])
     expect(P.issueById[task.id].status).toBe('todo')
-    expect(P.messages.find((message) => message.id === 'message-a')?.read).toBeFalsy()
+    expect(readMark()).toBeFalsy()
     // the store holds the login's own seat alone, kept from the last view
     expect(P.users.map((user) => user.id)).toEqual(snapshot.myProfileIds)
     expect(showToast).toHaveBeenCalledWith(store.NO_ACCESS_TEXT, 'error')
@@ -820,7 +828,7 @@ describe('snapshot trouble', () => {
     live().fail(new Error(QUERY_FAILURE))
     expect(P.snapshotTrouble()?.kind).toBe('no_access')
     // read marks need a seat, so they stay paused
-    P.markMessagesRead(['message-a'])
+    readA()
     await settle()
     expect(sentNames()).toEqual([])
     // a lost sign-in still says so

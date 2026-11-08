@@ -1,6 +1,7 @@
 import { useEffect, useId, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { PageTitle, SettingsSection } from '../../components/settingsPage'
+import { noteCapabilityChange } from '../../lib/notify'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { Toggle } from './controls'
 
@@ -62,7 +63,11 @@ export function DesktopSettingsPage({
     setSaving(true)
     setError(null)
     try {
-      setValues(await settings.update(patch))
+      const saved = await settings.update(patch)
+      setValues(saved)
+      // Show notifications decides whether this app can show alerts, which
+      // the notification leader reports to the server at once
+      noteCapabilityChange(saved)
     } catch {
       setError("Couldn't save desktop settings. Try again.")
       try {

@@ -123,9 +123,5 @@ describe('the automatic read in the task window', { timeout: 20_000 }, () => {
       issue_id: 'task-a',
       through: Date.parse('2026-09-14T09:00:00.000Z'),
     })
-    // and no read by the loaded message's id
-    expect(
-      network.mutation.mock.calls.filter(([ref]) => getFunctionName(ref) === 'messages:markRead'),
-    ).toEqual([])
   })
 })

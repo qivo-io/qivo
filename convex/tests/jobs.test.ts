@@ -60,6 +60,7 @@ import {
   type withOrg,
   withReadingAdmin,
 } from './helpers.setup'
+import { markRead } from './inboxItems.setup'
 import { plantNorthstar } from './northstar.setup'
 
 /* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
@@ -3197,7 +3198,7 @@ describe('sweepReadMessages reads only what is due', () => {
     expect(await runSweep(t)).toEqual({ deleted: 0, woken: 0 })
     expect(await t.run((ctx) => ctx.db.query('message_sweeps').collect())).toEqual([])
 
-    await as(t, f.viewer).mutation(api.messages.markRead, { org_id: f.org.id, ids: [inApp.id] })
+    await markRead(t, f.viewer, [inApp.id])
     await t.mutation(internal.messages.readArchivedTasks, { issues: [shelved.id] })
     await as(t, f.user).mutation(api.profiles.setMessageRetention, { days: 1 })
     const skip = (await scheduled(t, 'jobs:')).length

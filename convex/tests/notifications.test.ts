@@ -17,7 +17,6 @@ import { CATCH_UP } from '../model/notificationCatchup'
 import { EXPIRY, NOTIFY } from '../model/notificationSessions'
 import * as notifications from '../notifications'
 import {
-  as,
   expectRefusal,
   NOW,
   newT,
@@ -32,7 +31,7 @@ import {
   uuid,
   withReadingAdmin,
 } from './helpers.setup'
-import { archiveRaw, grant, plantItems, post } from './inboxItems.setup'
+import { archiveRaw, grant, markRead, plantItems, post, snoozeIds } from './inboxItems.setup'
 
 const MINUTE = 60_000
 const DAY = 86_400_000
@@ -1085,13 +1084,12 @@ describe('claimSummary', () => {
   it('counts no item read, snoozed or hidden meanwhile, and no item whose new message was read', async () => {
     const t = newT()
     const { f, s } = await guestFixture(t)
-    const guest = as(t, f.guest)
     // an older unread message on a task whose newer one is read below
     const { task: partly } = await newsAt(t, f, -1)
     // an item that returns from a snooze after the checkpoint and is read
     const { task: woken, message: dozing } = await newsAt(t, f, -1)
     const until = new Date(START + 4 * MINUTE).toISOString()
-    await guest.mutation(api.messages.snooze, { org_id: f.org.id, ids: [dozing.id], until })
+    await snoozeIds(t, f.guest, [dozing.id], until)
     expect(await resume(s)).toEqual({ state: 'baseline' })
     clock(4)
     await t.mutation(internal.messages.wake, {
@@ -1111,17 +1109,13 @@ describe('claimSummary', () => {
     const { task: archived } = await newsAt(t, f, 5)
     await archiveRaw(t, [archived])
     clock(6)
-    await guest.mutation(api.messages.markRead, { org_id: f.org.id, ids: [read.id] })
-    await guest.mutation(api.messages.snooze, {
-      org_id: f.org.id,
-      ids: [snoozed.id],
-      until: new Date(START + DAY).toISOString(),
-    })
+    await markRead(t, f.guest, [read.id])
+    await snoozeIds(t, f.guest, [snoozed.id], new Date(START + DAY).toISOString())
     await revoke()
-    await guest.mutation(api.messages.markRead, {
-      org_id: f.org.id,
-      ids: [(newer as Doc<'messages'>).id, ...(await unreadOf(t, f, woken)).map((m) => m.id)],
-    })
+    await markRead(t, f.guest, [
+      (newer as Doc<'messages'>).id,
+      ...(await unreadOf(t, f, woken)).map((m) => m.id),
+    ])
     // the older message keeps the item unread, sorted at the newer one
     expect(await unreadOf(t, f, partly)).toHaveLength(1)
     clock(7)
@@ -1133,11 +1127,7 @@ describe('claimSummary', () => {
     const { f, s } = await guestFixture(t)
     const { task, message } = await newsAt(t, f, -1)
     const until = new Date(START + 5 * MINUTE).toISOString()
-    await as(t, f.guest).mutation(api.messages.snooze, {
-      org_id: f.org.id,
-      ids: [message.id],
-      until,
-    })
+    await snoozeIds(t, f.guest, [message.id], until)
     expect(await resume(s)).toEqual({ state: 'baseline' })
     clock(5)
     await t.mutation(internal.messages.wake, {
@@ -1395,7 +1385,7 @@ describe('claimSummary', () => {
     expect((await records(t)).map((r) => r.key).sort()).toEqual([older.id, newer.id].sort())
     // the newest alone is marked read, which leaves the older one the item's
     // newest unread event inside the next summary's read back
-    await as(t, f.guest).mutation(api.messages.markRead, { org_id: f.org.id, ids: [newer.id] })
+    await markRead(t, f.guest, [newer.id])
     expect(await unreadOf(t, f, task)).toHaveLength(1)
     clock(0.75)
     expect(await resume(s)).toEqual({ state: 'none' })
@@ -1408,10 +1398,9 @@ describe('claimSummary', () => {
   it('records the snooze return of an item it counted in its last minute, so reading the newer message repeats nothing', async () => {
     const t = newT()
     const { f, s } = await guestFixture(t)
-    const guest = as(t, f.guest)
     const { task, message } = await newsAt(t, f, -1)
     const until = at5()
-    await guest.mutation(api.messages.snooze, { org_id: f.org.id, ids: [message.id], until })
+    await snoozeIds(t, f.guest, [message.id], until)
     expect(await resume(s)).toEqual({ state: 'baseline' })
     // the item returns at minute 5 and a newer message follows, both in the
     // summary's last minute
@@ -1430,7 +1419,7 @@ describe('claimSummary', () => {
     // the newer message alone is marked read, which leaves the wake, later
     // than the older unread message, the item's newest unread event inside
     // the next summary's read back
-    await guest.mutation(api.messages.markRead, { org_id: f.org.id, ids: [newer.id] })
+    await markRead(t, f.guest, [newer.id])
     expect(await unreadOf(t, f, task)).toHaveLength(1)
     clock(6)
     expect(await resume(s)).toEqual({ state: 'none' })

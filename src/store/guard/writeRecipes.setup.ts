@@ -16,7 +16,7 @@ import type { Whole } from './liveDouble.setup'
    write, written from the server's code with its own stamps, so a paint
    that differs from what the server stores shows up. */
 
-export type Snapshot = Whole
+export type Snapshot = Whole & Required<Pick<Whole, 'messages'>>
 export type Thread = FunctionReturnType<typeof api.snapshot.threadComments>
 /** The task window's own answer of a task (convex/taskWindow.ts task). */
 export type TaskAnswer = FunctionReturnType<typeof api.taskWindow.task>
@@ -121,7 +121,8 @@ const task = (id: string, num: number, over: Partial<Row<'issues'>> = {}): Row<'
 
 /** A small workspace every recipe starts from: one organization where I am
     an admin, Pat a member, two teams, a project with two sub-projects,
-    three tasks, a link, a label, an attachment and two messages. The
+    three tasks, a link, a label, an attachment, and two messages the
+    server stores, which no part sends and the inbox reads answer from. The
     milestone recipes bring their milestone in a milestone read. */
 export function fixture(): Snapshot {
   const person = (id: string, name: string, role: Row<'profiles'>['org_role']) => ({
@@ -264,9 +265,6 @@ export function fixture(): Snapshot {
         read_at: '2026-10-19T09:00:00.000Z',
       },
     ],
-    readMessageCount: 1,
-    unreadTruncated: false,
-    readTruncated: false,
     delivered_at: '2026-10-20T09:59:00.000Z',
   }
 }
@@ -1183,17 +1181,6 @@ export const recipes: Recipe[] = [
   },
   /* --- inbox ---------------------------------------------------------- */
   {
-    mutation: 'messages:markRead',
-    mutator: 'markMessagesRead',
-    what: 'a read message',
-    pause: 'U',
-    act: (P) => P.markMessagesRead(['msg-1']),
-    truth: (snap) => {
-      snap.messages[0].read_at = SERVER
-      snap.readMessageCount = 2
-    },
-  },
-  {
     // the item read of P.readItem, which the read on open (P.readOnOpen)
     // sends too. The server marks every unread message of the item stored
     // up to `through` read and prunes the item to its newest message, the
@@ -1207,11 +1194,9 @@ export const recipes: Recipe[] = [
         org: ORG,
         task: 'task-a',
         through: Date.parse('2026-10-19T08:00:00.000Z'),
-        latestAt: '2026-10-19T08:00:00.000Z',
       }),
     truth: (snap) => {
       snap.messages[0].read_at = SERVER
-      snap.readMessageCount = 2
     },
   },
   {
@@ -1225,7 +1210,6 @@ export const recipes: Recipe[] = [
       P.unreadItem({ org: ORG, task: 'task-b', through: Date.parse('2026-10-19T08:00:00.000Z') }),
     truth: (snap) => {
       snap.messages[1].read_at = undefined
-      snap.readMessageCount = 0
     },
   },
   {
@@ -1240,11 +1224,9 @@ export const recipes: Recipe[] = [
         org: ORG,
         task: 'task-b',
         through: Date.parse('2026-10-19T08:00:00.000Z'),
-        latestAt: '2026-10-19T08:00:00.000Z',
       }),
     truth: (snap) => {
       snap.messages = [snap.messages[0]]
-      snap.readMessageCount = 0
     },
   },
   {
@@ -1274,29 +1256,6 @@ export const recipes: Recipe[] = [
     },
     truth: (snap) => {
       snap.messages[0].read_at = SERVER
-      snap.readMessageCount = 2
-    },
-  },
-  {
-    mutation: 'messages:markUnread',
-    mutator: 'markMessagesUnread',
-    what: 'a message back to unread',
-    pause: 'U',
-    act: (P) => P.markMessagesUnread(['msg-2']),
-    truth: (snap) => {
-      snap.messages[1].read_at = undefined
-      snap.readMessageCount = 0
-    },
-  },
-  {
-    mutation: 'messages:remove',
-    mutator: 'deleteMessages',
-    what: 'a removed message',
-    pause: 'U',
-    act: (P) => P.deleteMessages(['msg-2']),
-    truth: (snap) => {
-      snap.messages = [snap.messages[0]]
-      snap.readMessageCount = 0
     },
   },
   {
@@ -1308,17 +1267,6 @@ export const recipes: Recipe[] = [
     answers: { 'messages:removeRead': () => ({ removed: 1, ids: ['msg-2'], hasMore: false }) },
     truth: (snap) => {
       snap.messages = [snap.messages[0]]
-      snap.readMessageCount = 0
-    },
-  },
-  {
-    mutation: 'messages:snooze',
-    mutator: 'snoozeMessages',
-    what: 'a snoozed message',
-    pause: 'U',
-    act: (P) => P.snoozeMessages(['msg-1'], '2026-10-27T08:00:00.000Z'),
-    truth: (snap) => {
-      snap.messages[0].snoozed_until = '2026-10-27T08:00:00.000Z'
     },
   },
   {
@@ -1338,6 +1286,13 @@ export const recipes: Recipe[] = [
     what: 'an appearance',
     pause: 'U-all',
     act: (P) => P.setAppearance({ mode: 'dark', image_source: 'none' }).catch(() => {}),
+  },
+  {
+    mutation: 'notifications:setDelivery',
+    mutator: 'setNotificationDelivery',
+    what: 'a notification delivery',
+    pause: 'U-all',
+    act: (P) => P.setNotificationDelivery('all').catch(() => {}),
   },
   {
     mutation: 'appearance:removeCustom',

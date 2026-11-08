@@ -152,7 +152,7 @@ function group(
   else snap.messages.push(message)
   return uuid
 }
-// messages the server holds beyond the inbox part's cut
+// more messages the server holds, which a case plants apart from the rest
 let beyondCut: Row<'messages'>[]
 
 /** Applies write `name` with `args` to the server as the server does,
@@ -214,7 +214,8 @@ async function openInbox(
   network.onUpdate.mockImplementation((ref, _args, next) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') {
-      publishWhole = () => next(structuredClone({ ...snap, beyondCut }))
+      publishWhole = () =>
+        next(structuredClone({ ...snap, messages: [...snap.messages, ...beyondCut] }))
       publishWhole()
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     return () => {}
@@ -469,7 +470,7 @@ describe('the Inbox list', { timeout: 30_000 }, () => {
     expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
   })
 
-  it("pages one sub-project's 450 groups, all past the inbox part's cut, to the end and back, holding one page", async () => {
+  it("pages one sub-project's 450 groups to the end and back, holding one page", async () => {
     await openInbox(
       () => {
         project('firmware', 'Firmware', { parent_id: 'atlas' })
@@ -490,8 +491,6 @@ describe('the Inbox list', { timeout: 30_000 }, () => {
       { tasks: false },
     )
     await until(() => expect(rows()).toHaveLength(50))
-    // the workspace's inbox part holds none of them
-    expect(store.P.messages).toEqual([])
     const seen = new Set(rows().map((row) => row.dataset.messageKey))
     for (let page = 2; page <= 9; page++) {
       await next()

@@ -3,14 +3,15 @@ import { createAuthSession, NO_QUERY } from './authSession'
 import { convex } from './convex'
 import { DEMO_MODE } from './demoMode'
 
-// Preserve the app's existing namespace so current app logins survive the
-// separation. The operator entry point uses ../admin/auth instead.
-export const { authClient, armConvexAuth, signOut, clearLocalSession } = createAuthSession(
-  DEMO_MODE ? 'qivo-demo' : 'better-auth',
-  convex,
-  oauthProviderClient(),
-  DEMO_MODE,
-)
+/** The app's sign-in storage prefix, under which every tab of a browser
+    profile shares one Better Auth session, so the notification leader
+    (lib/notificationLeader.ts) names its lock and channel by it. It
+    preserves the app's existing namespace so current app logins survive
+    the separation; the operator entry point uses ../admin/auth instead. */
+export const AUTH_STORAGE_PREFIX = DEMO_MODE ? 'qivo-demo' : 'better-auth'
+
+export const { authClient, armConvexAuth, signOut, clearLocalSession, onSignedIn } =
+  createAuthSession(AUTH_STORAGE_PREFIX, convex, oauthProviderClient(), DEMO_MODE)
 
 /* Replicates ConvexBetterAuthProvider's one-time-token handoff (we skip the
  * React provider): after a social login the crossDomain server plugin lands

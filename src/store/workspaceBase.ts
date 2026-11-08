@@ -31,7 +31,6 @@ const KEYED = {
   issues: (r: Snapshot['issues'][number]) => r.id,
   links: (r: Snapshot['links'][number]) => r.id,
   attachments: (r: Snapshot['attachments'][number]) => r.id,
-  messages: (r: Snapshot['messages'][number]) => r.id,
 }
 /** The row sections kept as lists in delivery order, and their natural keys.
     A hidden task's load row has no task id, so a load row is keyed by its
@@ -60,7 +59,6 @@ const SAME_KEY: Record<keyof typeof KEYED | keyof typeof LISTED, (a: never, b: n
     issues: byId,
     links: byId,
     attachments: byId,
-    messages: byId,
     teamMembers: (a: RowOf<'teamMembers'>, b: RowOf<'teamMembers'>) =>
       a.team_id === b.team_id && a.profile_id === b.profile_id,
     access: (a: RowOf<'access'>, b: RowOf<'access'>) =>
@@ -85,17 +83,7 @@ export const LISTED_SECTIONS = Object.keys(LISTED) as ListedName[]
 export type RowOf<S extends SectionName> = Snapshot[S][number]
 
 /** The values outside the row sections. */
-export type Scalars = Pick<
-  Snapshot,
-  | 'auth_user_id'
-  | 'myProfileIds'
-  | 'readMessageCount'
-  | 'unreadTruncated'
-  | 'readTruncated'
-  | 'messagesCut'
-  | 'create'
-  | 'delivered_at'
->
+export type Scalars = Pick<Snapshot, 'auth_user_id' | 'myProfileIds' | 'create' | 'delivered_at'>
 
 /** What one apply changed: for each section, every key whose row was
     added, changed or removed, with the row it had before (undefined when
@@ -204,13 +192,12 @@ export function createWorkspaceBase() {
   reset()
 
   /** Stages section `name` of a delivery: unchanged rows keep the object
-      staged before, changed ones are frozen. Answers the keys it holds that
-      the delivery before did not. */
+      staged before, changed ones are frozen. */
   function stageSection(
     name: SectionName,
     next: readonly object[],
     keyOf: (row: never) => string,
-  ): string[] {
+  ): void {
     const state = staged.get(name) ?? empty()
     const prev = state.list
     const remember = (key: string, before: object | undefined) => {
@@ -225,7 +212,6 @@ export function createWorkspaceBase() {
       : keysOf(next, keyOf as (row: object) => string, name === 'orgLoad')
     let list: object[]
     let changed = false
-    const added: string[] = []
     if (sameKeys) {
       list = next.map((row, i) => {
         if (sameRow(prev[i], row)) return prev[i]
@@ -239,8 +225,7 @@ export function createWorkspaceBase() {
       list = next.map((row, i) => {
         const old = before.get(keys[i])
         before.delete(keys[i])
-        if (old === undefined) added.push(keys[i])
-        else if (sameRow(old, row)) return old
+        if (old !== undefined && sameRow(old, row)) return old
         remember(keys[i], old)
         return deepFreeze(row)
       })
@@ -253,30 +238,19 @@ export function createWorkspaceBase() {
       state.keys = keys
     }
     staged.set(name, state)
-    return added
   }
 
   return {
-    /** Stages delivery `snap`, which apply() makes the rows. Answers the
-        ids of the tasks it holds that the delivery before it did not. */
-    stage(snap: Snapshot): Set<string> {
-      let added: string[] = []
-      for (const name of KEYED_SECTIONS) {
-        const keys = stageSection(name, snap[name], KEYED[name])
-        if (name === 'issues') added = keys
-      }
+    /** Stages delivery `snap`, which apply() makes the rows. */
+    stage(snap: Snapshot): void {
+      for (const name of KEYED_SECTIONS) stageSection(name, snap[name], KEYED[name])
       for (const name of LISTED_SECTIONS) stageSection(name, snap[name], LISTED[name])
       stagedScalars = {
         auth_user_id: snap.auth_user_id,
         myProfileIds: snap.myProfileIds,
-        readMessageCount: snap.readMessageCount,
-        unreadTruncated: snap.unreadTruncated,
-        readTruncated: snap.readTruncated,
-        messagesCut: snap.messagesCut,
         create: snap.create,
         delivered_at: snap.delivered_at,
       }
-      return new Set(added)
     },
 
     /** Makes the staged delivery the rows and answers what changed, or

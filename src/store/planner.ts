@@ -62,7 +62,13 @@ import { firstSittingDay, SYNC_OWNERS_MAX } from '../../convex/lib/teamSync'
 import type { AgendaAnswer } from '../../convex/lib/teamSyncAgenda'
 import type { NavByIdRow, NavByIds } from '../../convex/model/projectNavReads'
 import type { PersonRow } from '../../convex/model/projectSettings'
-import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
+import {
+  AUTH_STORAGE_PREFIX,
+  armConvexAuth,
+  authClient,
+  signOut as authSignOut,
+  onSignedIn,
+} from '../lib/auth'
 import { NO_QUERY, SignOutFailed } from '../lib/authSession'
 import { avatarCacheScope, createAvatarImageCache } from '../lib/avatarImageCache'
 import { createAvatarSources } from '../lib/avatarSources'
@@ -141,6 +147,7 @@ import { frameBatch } from '../lib/frameBatch'
 import { AVATAR_TYPES, avatarImage, compressImage } from '../lib/images'
 import { nameInitials } from '../lib/initials'
 import { createInlineImages } from '../lib/inlineImages'
+import { INPUTS } from '../lib/inputIdle'
 import { groupProgress, groupSpan, isIssueDone, isIssueGroup } from '../lib/issueGroups'
 import { avatarColorFor, labelColorFor } from '../lib/labelColors'
 import { hasUnsaved, holdUnsaved, leaveDeliberately } from '../lib/leaveGuard'
@@ -149,7 +156,18 @@ import { loadFailureText } from '../lib/loadFailure'
 import { watchLocalDay } from '../lib/localDay'
 import { createMintQueue, type MintOutcome } from '../lib/mintQueue'
 import { pauseSentence } from '../lib/noticeText'
-import { desktopNotify } from '../lib/notify'
+import {
+  createNotificationFeed,
+  type FeedNews,
+  type NotificationFeed,
+} from '../lib/notificationFeed'
+import {
+  type Delivery,
+  leaderName,
+  type NotificationLeader,
+  startNotificationLeader,
+} from '../lib/notificationLeader'
+import { canNotify, desktopNotify, notificationsSupported, watchCapability } from '../lib/notify'
 import { reloadPage } from '../lib/pageHistory'
 import { taskSearchText } from '../lib/search'
 import { type OfflineWindow, type SavePause, syncStatus } from '../lib/syncStatus'
@@ -271,9 +289,6 @@ import {
   type IssueSubscribers,
   type IssueVM,
   inboxMarkKey,
-  isNewer,
-  type MessageGroupVM,
-  type MessageVM,
   type MilestoneVM,
   type OrgRefVM,
   type OrgVM,
@@ -291,8 +306,6 @@ import {
   shapeAttachment,
   shapeCachedProject,
   shapeComment,
-  shapeMessage,
-  shapeMessageGroup,
   shapeMilestone,
   shapeOrg,
   shapeOrgRef,
@@ -317,8 +330,6 @@ export type {
   IssueSubscribers,
   IssueVM,
   LabelVM,
-  MessageGroupVM,
-  MessageVM,
   MilestoneVM,
   OrgRefVM,
   OrgVM,
@@ -419,10 +430,6 @@ const rows = {
   // the watched issue's history while a window shows All (P.showHistory),
   // from its own side query (threadHistory)
   threadEvents: [] as Row<'activity_events'>[],
-  // inbox messages (0074) — the snapshot returns only the signed-in user's
-  // rows; generation is server-side (notify triggers), clients only mark
-  // read/unread, snooze and delete
-  messages: workspaceRows.messages,
   // Reactive organization-wide load by effective owner; hidden projects
   // contribute hours without exposing their identity.
   get orgLoad() {
@@ -432,20 +439,6 @@ const rows = {
     workspaceRows.setList('orgLoad', value)
   },
 }
-
-// Read notifications outside the snapshot's 500-row display window still
-// participate in Inbox cleanup. Loaded rows contribute their optimistic state.
-let hiddenReadMessages = 0
-// Whether the server's bounded inbox read left unread (read) rows that Mark
-// all as read (Remove all read) reaches undelivered (snapshot unreadTruncated,
-// readTruncated). Such rows may exist without any loaded row or count showing
-// them. Rows left that are all snoozed do not count, because neither action
-// touches a snoozed row.
-let unexaminedUnread = false
-let unexaminedRead = false
-// Whether the snapshot left out any message the Inbox would list, snoozed
-// ones included (snapshot messagesCut).
-let messagesCut = false
 
 /* Each owner's hours in the weeks P.weekLoadOf was asked about, added up
    one week at a time on first ask from the owner's organization-wide load
@@ -564,7 +557,7 @@ const freeHold = () => ({
 })
 /* This client's hold on the open task's read on open this visit
    (P.readOnOpen), from its Mark as unread or a snooze or its end on the
-   task (holdUnreadOf), its unread choices, each by the number holdWrites
+   task (holdUnreadOfItem), its unread choices, each by the number holdWrites
    gave it as it went out. `waiting` holds the numbers of those whose
    write still waits, `accepted` the newest the server accepted, and
    `readThrough` the newest that went out before a row's Mark as read the
@@ -1894,21 +1887,6 @@ function stopItem() {
   itemHold = freeHold()
 }
 
-/* Holds off the read on open of the watched task while a write about the
-   loaded messages `ids` waits, when they name one of its messages, as an
-   id-list Mark as unread or snooze does (holdWatched). Only the store's
-   tests send those since the Inbox acts on items (holdUnreadOfItem); it
-   goes with them. */
-function holdUnreadOf(ids: readonly string[]): SendOptions<unknown> {
-  const watched = threadWatched
-  if (!watched) return {}
-  const ofTask = ids.some((id) => {
-    const row = rows.messages.get(id)
-    return row?.issue_id === watched.task && row.org_id === watched.org
-  })
-  return ofTask ? holdWatched(watched.task) : {}
-}
-
 /* Holds off the read on open of the watched task while a write about its
    inbox item waits, when `org` and `task` name it, as the person's own
    Mark as unread, snooze or its end does (holdWatched). Another
@@ -2870,6 +2848,7 @@ const SIDE_NEWS: Record<SideName, (news: SideNews, connection: number) => void> 
   reference: referenceNews,
   summary: summaryNews,
   item: itemNews,
+  feed: feedNews,
 }
 
 /* The state of section side `side`, whose answer is `answer`. */
@@ -3358,49 +3337,18 @@ function detailAttachment(attId: string): { org: string } | null {
   return text && imageRefs(text).has(attId.toLowerCase()) && detail ? { org: detail.org } : null
 }
 
-/* Desktop notifications (0074): fired once per inbox row id. An id set, not
-   a timestamp watermark — created_at is the writer TRANSACTION's start (0109
-   tried clock_timestamp() and 0111 put it back, because a comment's message
-   has to share its comment's instant), so a slow write can commit a message
-   stamped before an already-announced quick one, and a watermark would
-   silently swallow it. Empty until the FIRST snapshot lands — sign-in must
-   show the unread badge, not replay every stored message as an OS
-   notification. noteDelivery() calls this once per delivery, so the
-   null-prime runs on the first one. */
-let announcedMessages: Map<string, string | undefined> | null = null // id → woke_at announced
-// the server time of the previous snapshot; older messages on a task that
-// newly enters the working set are history, not news
+/* The server time of the workspace delivery the store took last, which
+   snapshot trouble says what it shows as of (beginTrouble). */
 let lastDeliveryAt: string | null = null
-/* A restore reintroduces the task's historical inbox rows. The server marks
-   an archived task's messages read in the background, so they usually come
-   back read, but a restore that beats that step brings them back unread.
-   Either way, keep them from looking like new arrivals when the next
-   snapshot admits the restored task (and any ancestors restored with it).
-   Each restore maps to whether the server accepted it (unarchiveIssue).
-   Before every task is held, a task only shows that it came back when it
-   brings a message, and one with no message for the restorer never does,
-   so a restore also ends with the delivery that holds it, whether or not
-   its task's messages came. Convex hands that delivery to the listeners
-   before the write resolves, so a restore accepted after such a delivery
-   ends at once, and one accepted before any ends with the next one the
-   store takes (tookInbox). A restore left waiting would swallow the
-   task's next real notification. */
-const pendingRestores = new Map<string, boolean>()
-/* The live deliveries the store took the Inbox from: every complete one
-   and, while every task loads, every partial one, which holds every part
-   but the tasks (tookInbox). */
-let inboxDeliveries = 0
-/* Whether the newest workspace report was such a delivery, as
-   snapshotCurrent is for a complete one. */
-let inboxCurrent = false
+/* Whether the newest workspace report was a delivery the store took: a
+   complete one or, while every task loads, a partial one, which holds
+   every part but the tasks (tookDelivery). P.workspaceCurrent reads it. */
+let deliveryCurrent = false
 
-/** Counts a live delivery the store took the Inbox from, after its arrival
-    bookkeeping (noteDelivery), and ends each restore the server accepted
-    before it, which it holds. */
-function tookInbox() {
-  inboxDeliveries++
-  inboxCurrent = true
-  for (const [id, accepted] of pendingRestores) if (accepted) pendingRestores.delete(id)
+/** Notes a live delivery the store took, at server time `at`. */
+function tookDelivery(at: string) {
+  lastDeliveryAt = at
+  deliveryCurrent = true
 }
 /* Draft-only uploads a discarded draft let go of while edits were paused
    (removeAttachment's deferWhilePaused), with the task each belongs to
@@ -3474,8 +3422,6 @@ function purgeIssueRows(subtree: Set<string>) {
     rows.links.delete(id)
   workspaceRows.keepList('issueLabels', (label) => !subtree.has(label.issue_id))
   workspaceRows.keepList('issueSubs', (subscription) => !subtree.has(subscription.issue_id))
-  for (const id of rows.messages.keysWhere((message) => subtree.has(message.issue_id)))
-    rows.messages.delete(id)
   subtree.forEach((id) => {
     rows.issues.delete(id)
   })
@@ -3540,8 +3486,8 @@ function dropDeletedTasks(deleted: ReadonlySet<string>, at: string, org: string)
     r.parent_id = undefined
     r.updated_at = at
   }
-  // the rows, and everything hung on them: links, labels, attachments and
-  // inbox messages. Their load leaves with the rows. The task's window releases the watched thread
+  // the rows, and everything hung on them: links, labels and attachments.
+  // Their load leaves with the rows. The task's window releases the watched thread
   // once the task leaves the rows (IssueDetail).
   purgeIssueRows(gone)
 }
@@ -3558,68 +3504,82 @@ function setInboxOpener(open: (() => void) | null) {
   inboxOpener = open
 }
 
-/* Raises a desktop notification for each message of delivery `snap` that is
-   new since the last one, and for each item back from a snooze. It reads
-   the delivery, not the painted rows, so the person's own pending changes,
-   such as a snooze the server then refuses, never raise one. */
-function announceNewMessages(snap: Snapshot) {
-  if (announcedMessages === null) {
-    announcedMessages = new Map(snap.messages.map((m) => [m.id, m.woke_at]))
-    return
-  }
-  const fresh: Row<'messages'>[] = []
-  // a snooze that ended since the last delivery: the server stamps every
-  // row of the item with one woke_at, so the item announces once, not per row
-  const returned = new Map<string, Row<'messages'>>()
-  const profiles = new Map(snap.profiles.map((profile) => [profile.id, profile]))
-  snap.messages.forEach((m) => {
-    const known = announcedMessages!.has(m.id)
-    const wokeBefore = announcedMessages!.get(m.id)
-    announcedMessages!.set(m.id, m.woke_at)
-    if (!known) {
-      if (!m.read_at) fresh.push(m) // read elsewhere already — no pop-up
-      return
-    }
-    if (m.woke_at === undefined || m.woke_at === wokeBefore || m.read_at) return
-    const cur = returned.get(m.issue_id)
-    if (!cur || isNewer(cur.created_at, cur.id, m.created_at, m.id)) returned.set(m.issue_id, m)
+/* The desktop alert client (lib/notificationFeed.ts) and this tab's part
+   in its browser profile's alerts (lib/notificationLeader.ts), made at the
+   first boot with a seat on a page with the Notification API
+   (notificationsSupported), made again at the next boot after the server
+   refused the session, and stopped at disposal and at a sign-out. */
+let alerts: NotificationFeed | null = null
+let leader: NotificationLeader | null = null
+
+/** Starts the desktop alerts once: the feed client, with the store's feed
+    watch, App's way into the Inbox (setInboxOpener) and the Convex client
+    itself, which it calls by name, and the leader, which runs that client
+    only while this tab leads its browser profile and owns the beat, the
+    capability, the mode's watch and the session's end. The feed is a side
+    of every registry (watchFeed) and the mode a live watch, both outside
+    the visibility gate, so they run while the tab is hidden. A follower
+    tab watches neither. A leader the server refused stopped for good, so
+    the boot that follows, such as a sign-in in this page, starts them
+    afresh. A leader whose sign-in stayed missing stands by instead, and
+    leads again once the auth session says Convex confirmed the sign-in
+    (onSignedIn). */
+function startAlerts() {
+  if (leader?.refused()) stopAlerts()
+  if (alerts !== null || !notificationsSupported()) return
+  const feed = createNotificationFeed({
+    convex,
+    watch: (after) => parts?.watchSide('feed', api.inbox.feed, { after }),
+    unwatch: () => parts?.stopSide('feed'),
+    notify: desktopNotify,
+    openInbox: () => inboxOpener?.(),
   })
-  // a click on the notification opens the inbox (setInboxOpener)
-  const openInbox = () => inboxOpener?.()
-  const titleOf = (m: Row<'messages'>) => {
-    // this delivery's row, which base.stage just kept
-    const iss = base.stagedTask(m.issue_id)
-    return (iss ? iss.title : m.issue_title) || m.issue_title
-  }
-  fresh
-    .sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
-    .forEach((m) => {
-      // null actor = an agent-less API write OR a since-deleted user (the FK
-      // set-null cascade) — same neutral fallback the feed and comments use.
-      // The workspace holds only the signed-in person's own profiles, so
-      // another actor is named from the profile cache where an open view,
-      // such as the Inbox list, named them in the message's organization
-      // (P.person), and is "Someone" otherwise, until the Inbox feed names
-      // actors itself (t3/limits-inbox-feed)
-      const own = m.actor_id ? profiles.get(m.actor_id) : undefined
-      const cached = own ? null : PLANNER.person(m.actor_id, m.org_id)
-      const who = own ? own.name : cached?.state === 'ok' ? cached.name : 'Someone'
-      const title = titleOf(m)
-      desktopNotify(
-        m.id,
-        m.kind === 'mention' ? `${who} mentioned you, ${title}` : `${who}, ${title}`,
-        m.detail,
-        openInbox,
-      )
-    })
-  returned.forEach((m) => {
-    desktopNotify(
-      `${m.issue_id}:${m.woke_at}`,
-      `Back from snooze, ${titleOf(m)}`,
-      m.detail,
-      openInbox,
-    )
+  alerts = feed
+  const page = typeof window === 'undefined' ? null : window
+  leader = startNotificationLeader({
+    convex,
+    feed,
+    canNotify,
+    watchCapability,
+    watchSettings: (take) =>
+      watchLive<{ delivery: Delivery }>(api.notifications.settings, {}, (result) =>
+        take('value' in result ? result.value.delivery : null),
+      ),
+    watchSignIn: onSignedIn,
+    name: leaderName(configuredConvexDeploymentUrl(), AUTH_STORAGE_PREFIX),
+    locks: typeof navigator === 'undefined' ? null : (navigator.locks ?? null),
+    openChannel:
+      typeof BroadcastChannel === 'undefined' ? null : (name) => new BroadcastChannel(name),
+    win: page,
+    inputs: INPUTS,
+    doc: typeof document === 'undefined' ? null : document,
+    power: page?.qivoDesktop?.power ?? null,
+    mirror: (state) => {
+      if (page) page.__qivoNotify = state
+    },
   })
+}
+
+/** Stops the desktop alerts, which send nothing more, the session's end
+    included. */
+function stopAlerts() {
+  leader?.stop()
+  leader = null
+  alerts?.stop()
+  alerts = null
+}
+
+/** Watches the feed again on fresh live parts with the floor the client
+    holds, after Try again or a re-init. */
+function watchFeed() {
+  const after = alerts?.floor() ?? null
+  if (after !== null) parts?.watchSide('feed', api.inbox.feed, { after })
+}
+
+/* The feed's news, for the desktop alert client; the transport hands out
+   the server's answer as it came. */
+function feedNews(news: SideNews, connection: number) {
+  alerts?.receive(news as FeedNews, connection)
 }
 
 /* Issue keys are "QN-<num>": a fixed product prefix + the org-scoped number
@@ -3715,50 +3675,22 @@ const MILESTONE_COLOR = 'var(--milestone)'
    hours. */
 const MESSAGE_RETENTION_DAYS = [1, 7, 30, 90]
 
-/* Inbox writes are orgMutations and a bulk act (mark all read) can span
-   seats (0081): group the ids by their row's org so each mutation carries
-   the org whose seat the rows are addressed to. Resolved BEFORE the caller
-   mutates or prunes the rows. */
-function messagesByOrg(ids: string[]): Map<string, string[]> {
-  const m = new Map<string, string[]>()
-  ids.forEach((id) => {
-    const r = rows.messages.get(id)
-    if (!r) return
-    const l = m.get(r.org_id) || []
-    l.push(id)
-    m.set(r.org_id, l)
-  })
-  return m
-}
-
 /* Sends messages.readItem for the item `target` names (P.readItem), with a
    read mark on its Inbox row (setInboxMark), and runs `confirmed` once the
    server accepted it and its paint settled, so `confirmed` may send
    another write. Answers false when the pause refuses it, with no mark. */
 function sendItemRead(
-  target: { org: string; task: string; through: number; latestAt: string },
+  target: { org: string; task: string; through: number },
   quiet: boolean,
   confirmed?: () => void,
 ): boolean {
   if (refusePausedWrite(api.messages.readItem, quiet)) return false
-  const at = new Date().toISOString()
-  const latest = Date.parse(target.latestAt)
-  const ids: string[] = []
-  for (const row of rows.messages.peekValues())
-    if (
-      row.issue_id === target.task &&
-      row.org_id === target.org &&
-      !row.read_at &&
-      row.snoozed_until === undefined &&
-      Date.parse(row.created_at) <= latest
-    )
-      ids.push(row.id)
   let accepted = false
   const mark = setInboxMark(target.org, target.task, { through: target.through, read: true })
   void send(
     api.messages.readItem,
     { org_id: target.org, issue_id: target.task, through: target.through },
-    ids.length ? { workspace: () => markLoadedMessagesRead(ids, at, true) } : 'none',
+    'none',
     {
       // the read that opening a task sends is not a change the person made
       about: { background: quiet },
@@ -3773,36 +3705,6 @@ function sendItemRead(
     },
   )
   return true
-}
-
-/* Mirror the server prune after a read. A task retains its newest message
-   plus any unread arrivals that were not part of this action. Skips rows
-   that are gone or already read, so it can paint again, and with
-   `skipSnoozed` the snoozed rows a bulk action leaves alone. */
-function markLoadedMessagesRead(ids: string[], at: string, skipSnoozed = false) {
-  const hit = ids.filter((id) => {
-    const row = rows.messages.get(id)
-    return row && !row.read_at && !(skipSnoozed && row.snoozed_until !== undefined)
-  })
-  hit.forEach((id) => {
-    rows.messages.get(id)!.read_at = at
-  })
-  const issues = new Set(hit.map((id) => rows.messages.get(id)!.issue_id))
-  // one pass over the loaded rows, however many tasks the read reaches,
-  // which only reads them (store/rowMap.ts peekValues)
-  const byIssue = new Map<string, Row<'messages'>[]>()
-  for (const row of rows.messages.peekValues()) {
-    if (!issues.has(row.issue_id)) continue
-    const mine = byIssue.get(row.issue_id)
-    if (mine) mine.push(row)
-    else byIssue.set(row.issue_id, [row])
-  }
-  byIssue.forEach((mine) => {
-    const newest = mine.reduce((x, y) => (isNewer(x.created_at, x.id, y.created_at, y.id) ? y : x))
-    mine.forEach((row) => {
-      if (row.read_at && row.id !== newest.id) rows.messages.delete(row.id)
-    })
-  })
 }
 
 const updates = createPlannerUpdates()
@@ -3866,13 +3768,6 @@ function shownWorkspace() {
       P.sections,
       P.detail,
       P.reference,
-      P.messages,
-      P.messageGroups,
-      P.unreadMessages,
-      P.readMessageCount,
-      P.inboxCut,
-      P.inboxCutReach.markAllRead,
-      P.inboxCutReach.removeRead,
       P.CURRENT_USER,
       P.contextVersion,
       stillLoading,
@@ -3892,17 +3787,14 @@ let lastShown: ReturnType<typeof shownWorkspace> | null = null
 /** Whether what shows now is what `a` showed: the same derived values
     (which rebuild keeps identical while their data is, stable.ts), rows
     holding the same data and the same answer to whether a write waits. The
-    workspace rows compare only the keys changed since `a` (rowsChanged).
-    The inbox's rows are left out, because a painted read and the server's
-    read differ only in its time, which no view shows; its view models count
-    instead. */
+    workspace rows compare only the keys changed since `a` (rowsChanged). */
 function sameShown(a: ReturnType<typeof shownWorkspace>) {
   const b = shownWorkspace()
   return (
     a.waiting === b.waiting &&
     a.derived.every((value, i) => value === b.derived[i]) &&
     sameData(a.thread, b.thread) &&
-    !workspaceRows.rowsChanged('messages')
+    !workspaceRows.rowsChanged()
   )
 }
 
@@ -4225,7 +4117,6 @@ function paintRows(workspace: boolean, thread: boolean, view = false, detail = f
   if (painting) {
     workspaceRows.beginRepaint()
     adoptIdentity()
-    countInbox()
   }
   if (thread) buildThreadRows()
   if (view) {
@@ -6357,7 +6248,6 @@ function checkLayers() {
   const savedMilestones = milestoneRows.save()
   const thread = { comments: rows.comments, threadEvents: rows.threadEvents }
   const detail = detailRows
-  const counters = { hiddenReadMessages, unexaminedUnread, unexaminedRead, messagesCut }
   try {
     const shown = canonicalRows()
     paintRows(true, true, true, true)
@@ -6391,7 +6281,6 @@ function checkLayers() {
     milestoneRows.restore(savedMilestones)
     detailRows = detail
     Object.assign(rows, thread)
-    ;({ hiddenReadMessages, unexaminedUnread, unexaminedRead, messagesCut } = counters)
     checkingLayers = false
   }
 }
@@ -6417,7 +6306,7 @@ const SERVER_STAMPS = new Set([
    same as absent. */
 const SET_FLAGS = new Set(['has_subtasks', 'has_hidden_subtasks', 'has_hidden_parent'])
 
-/** Every row section and inbox counter in one canonical form: map entries,
+/** Every row section in one canonical form: map entries,
     set members and array items sorted, object keys sorted and undefined
     fields left out, each section as JSON. With `noStamps` a server stamp
     shows only that it is set. */
@@ -6438,7 +6327,6 @@ function canonicalRows(noStamps = false): Record<string, string> {
   }
   const out: Record<string, string> = {}
   for (const [section, value] of Object.entries(rows)) out[section] = JSON.stringify(norm(value))
-  out.counters = JSON.stringify([hiddenReadMessages, unexaminedUnread, unexaminedRead, messagesCut])
   for (const [slot, value] of viewRows.views()) out[`view:${slot}`] = JSON.stringify(norm(value))
   // each milestone read's rows in their order, which a paint keeps
   for (const [slot, value] of milestoneRows.views())
@@ -6589,30 +6477,6 @@ export const __layerProbe = STRICT_LAYERS
       },
     }
   : null
-
-/** Starts a layer that covers several writes, such as the rows a bulk inbox
-    action reaches before its batches name them, and paints it. A paint
-    that throws takes its layer away again and passes the throw on. */
-function openUmbrella(name: string, view: View): Layer {
-  const layer = layers.open(name, view)
-  layers.send(layer, deliveryCounters())
-  try {
-    showPaint(view)
-  } catch (fault) {
-    settleRefused(layer)
-    throw fault
-  }
-  return layer
-}
-
-/** Ends umbrella `layer`: with `save` as an accepted write, which stays
-    until a live delivery holds it (settleAccepted), otherwise its paint goes
-    now. */
-function endUmbrella(layer: Layer, save: boolean) {
-  if (!layers.has(layer)) return
-  if (save) settleAccepted(layer, undefined)
-  else settleRefused(layer)
-}
 
 type RoadmapOperation = FunctionArgs<typeof api.roadmap.change>['operations'][number]
 type RoadmapVisit = {
@@ -9215,47 +9079,9 @@ function rebuild(now = new Date(), full = false) {
   // answers, after the tasks they read
   rebuildSections()
 
-  // inbox messages (0074) — own rows only, newest first (shapeMessage)
-  P.messages = keepItems(
-    P.messages,
-    [...rows.messages.values()]
-      .map((message) => shapeMessage(message, { issues: rows.issues, uuidToKey, uuidToDisplayKey }))
-      .sort((a, b) => b.ts - a.ts || (a.id < b.id ? -1 : 1)),
-  )
-
-  // …folded into inbox ITEMS, one per task (0109) — see shapeMessageGroup.
-  // Every row here is already the signed-in user's, so the task uuid alone
-  // identifies the item; `ts` is the newest message's, so news floats it up.
-  const groups = new Map<string, MessageVM[]>()
-  P.messages.forEach((m) => {
-    const g = groups.get(m.issueUuid)
-    if (g) g.push(m)
-    else groups.set(m.issueUuid, [m])
-  })
-  P.messageGroups = keepItems(
-    P.messageGroups,
-    [...groups.entries()]
-      .map(([issueUuid, newestFirst]) => shapeMessageGroup(issueUuid, newestFirst))
-      .sort((a, b) => b.ts - a.ts || (a.id < b.id ? -1 : 1)),
-  )
-  // the loaded groups that are unread and not snoozed (P.unreadMessages),
-  // which no view reads, since the badge counts from the unread summary
-  P.unreadMessages = P.messageGroups.reduce((n, g) => n + (g.read || g.snoozed ? 0 : 1), 0)
-  P.readMessageCount =
-    hiddenReadMessages +
-    P.messages.filter((message) => message.read && message.snoozedUntil === null).length
   // Mark all as read and Remove all read follow the unread summary, whose
   // rule reads the seats this repaint may have changed
   deriveInboxFlags()
-  // the inbox part delivers at most 500 messages, so these say when older
-  // ones exist that it did not send, snoozed ones included, and whether
-  // Mark all as read and Remove all read reach them (they skip snoozed
-  // rows); no view reads them, as the Inbox lists inbox.page
-  P.inboxCutReach = {
-    markAllRead: unexaminedUnread,
-    removeRead: hiddenReadMessages > 0 || unexaminedRead,
-  }
-  P.inboxCut = messagesCut || P.inboxCutReach.markAllRead || P.inboxCutReach.removeRead
 
   P.CURRENT_USER = CURRENT_USER
   const context = [
@@ -11522,10 +11348,7 @@ function dropStopToast(key: string) {
    of more than one round waits for the keep-open notice
    (P.answerInboxNotice) and sends nothing when the person cancels it; the
    press ends, sending nothing, when the Inbox that showed it hides or goes
-   (P.hostInboxNotice). Then the `messages` it reached when pressed show
-   `paint`, under one umbrella layer per seat, and the `flags` it clears
-   under one more; rows that arrived later stay as they are, as the press's
-   cutoff leaves them out. The Inbox's rows on screen at the press, `shown`,
+   (P.hostInboxNotice). The Inbox's rows on screen at the press, `shown`,
    that the action changes in a planned seat, the unread ones that are not
    snoozed for Mark all as read and the read ones that are not snoozed for
    Remove all read, take a read or removed mark at their cutoff
@@ -11535,14 +11358,9 @@ function dropStopToast(key: string) {
    (lib/batchRunner.ts runLanes), at most BULK_SEATS at once, a long action
    on the app's shared lanes: each sends `batch` until an answer has no
    more, every Mark all as read batch with its seat's cutoff from the
-   press, and each batch keeps a layer, `named`, for the rows its answer
-   names (`keep`).
-   A seat's umbrella goes when its batches end, so a refused or paused batch
-   takes back only the rows no accepted batch named, and the seat stops
-   while the others go on. The pause (refusedAsPaused) stops every seat,
-   the queued ones before they send anything. The first refusal takes the
-   flags back; with every seat done they stay until the next delivery. The
-   last seat's umbrella and the flags end in one repaint. A long action ends
+   press. A refused or paused batch stops its seat while the others go on.
+   The pause (refusedAsPaused) stops every seat, the queued ones before
+   they send anything. A long action ends
    with a toast of what it did, a seat a refusal stopped with a sticky toast
    of what was done there and what was not, the pause with one such toast
    for every seat it stopped, and a short action that finished with
@@ -11552,20 +11370,16 @@ function dropStopToast(key: string) {
    a write in flight again after a reconnect and answers it, so nothing
    here stops waiting for an answer that could still commit. A reload or a
    disposed store ends the action, and the next press asks bulkReach again
-   for a new cutoff. A fault here, such as a paint that throws, ends the
-   action, its paints and its notice, and says so. */
+   for a new cutoff. A fault here ends the action, its marks and its
+   notice, and says so. */
 async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
   action: BulkAction,
   ask: boolean,
   a: {
     ref: FunctionReference<'mutation'>
-    messages: () => MessageVM[]
-    paint: (ids: string[]) => View
-    named: (ids: string[]) => View
-    flags: View
     count: (answer: R) => number
   },
-  batch: (seat: BulkSeat, previous: R | null, keep: (answer: R) => View) => Promise<R>,
+  batch: (seat: BulkSeat, previous: R | null) => Promise<R>,
   shown: readonly ShownInboxRow[] = [],
 ): Promise<void> {
   if (bulkBusy(PLANNER.inboxBulk) || refusePausedWrite(a.ref)) return
@@ -11575,9 +11389,6 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
   const press: Press = { host: ask ? noticeHost : null }
   asking = press
   const current = () => live() && asking === press
-  // the rows the press reaches, as loaded now
-  const pressed = messagesByOrg(a.messages().map((message) => message.id))
-  const opened: Layer[] = []
   // the marks of the shown rows the action changes, by seat
   const marked = new Map<string, MarkOf[]>()
   const endMarks = (org: string | null, accepted: boolean) => {
@@ -11645,28 +11456,17 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
             })),
         ),
       )
-    const name = getFunctionName(a.ref)
-    const flag = openUmbrella(name, a.flags)
-    opened.push(flag)
-    const umbrellas = new Map<string, Layer>()
-    for (const { org } of plan.seats) {
-      const umbrella = openUmbrella(name, a.paint(pressed.get(org) ?? []))
-      opened.push(umbrella)
-      umbrellas.set(org, umbrella)
-    }
     bulk = { ...bulk, state: 'running' }
     setInboxBulk(bulk)
-    const keep = (answer: R) => a.named(answer.ids)
     const stops: BulkStop[] = []
     // the rows each seat's accepted batches confirmed
     const doneIn = new Map<string, number>()
-    let last: Layer | null = null
     const ran = await runLanes<BulkSeat, R>({
       lanes: plan.seats,
       // a long action shares the app's lanes with every other large action
       pool: plan.long ? LANE_POOL : undefined,
       live,
-      send: (seat, previous) => batch(seat, previous, keep),
+      send: (seat, previous) => batch(seat, previous),
       more: (_seat, answer) => answer.hasMore,
       pauseOf: (error) => (refusedAsPaused(error) ? refusalPauseText(error) : null),
       reasonOf: refusalSentence,
@@ -11684,26 +11484,16 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
       onStop: ({ lane: seat, reason, paused }) => {
         // the seat's rows show as the server keeps them, at once
         endMarks(seat.org, false)
-        // the first stop takes the flags back
-        if (stops.length === 0) endUmbrella(flag, false)
         stops.push({ org: seat.org, done: doneIn.get(seat.org) ?? 0, reason, paused })
         bulk = { ...bulk, stops: [...stops] }
         setInboxBulk(bulk)
       },
-      onLaneEnd: (seat, lastSeat) => {
+      onLaneEnd: (seat) => {
         endMarks(seat.org, true)
-        const umbrella = umbrellas.get(seat.org)
-        // the last seat's umbrella ends with the flags in one repaint
-        if (lastSeat) last = umbrella ?? null
-        else if (umbrella) endUmbrella(umbrella, false)
       },
     })
     if (ran === null) return endMarks(null, false)
     const finished = ran.finished.map((seat) => seat.org)
-    together(() => {
-      if (last) endUmbrella(last, false)
-      endUmbrella(flag, stops.length === 0)
-    })
     bulk = { ...bulk, state: stops.length ? 'stopped' : 'finished' }
     setInboxBulk(bulk)
     const orgName = (org: string) => rows.orgs.get(org)?.name ?? 'an organization'
@@ -11734,24 +11524,8 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
     if (!live()) return
     reportFault(fault)
     noticeAnswer = null
-    for (const layer of opened) endUmbrella(layer, false)
     setInboxBulk(null)
     toast(`${bulkName(action)} stopped after a fault in Qivo. What it already did stays done.`)
-  }
-}
-
-/* The paint of removing messages `ids`. With `onlyRead` it removes, as the
-   server's Remove all read selects at commit, only those still read and not
-   snoozed, for rows named before the server answered. */
-function removeMessagesPaint(ids: string[], onlyRead = false): View {
-  return {
-    workspace: () =>
-      ids.forEach((id) => {
-        const row = rows.messages.get(id)
-        if (!row) return
-        if (onlyRead && (row.read_at === undefined || row.snoozed_until !== undefined)) return
-        rows.messages.delete(id)
-      }),
   }
 }
 
@@ -12228,25 +12002,6 @@ export const PLANNER = {
   // the watched people whose latest-comment answer stayed cut short by the
   // server's budgets even when asked alone, so some of their cards lack marks
   lastCommentsCut: [] as string[],
-  /* The workspace inbox part's messages, and their groups one per task.
-     No view reads them since the Inbox lists inbox.page. The desktop
-     alerts read the part (announceNewMessages), the store's tests read
-     these, and scripts/smoke.mjs reads P.messages to pick tasks it can
-     open without marking unread messages read. They go with the part
-     (t3/limits-inbox-feed). */
-  messages: [] as MessageVM[],
-  messageGroups: [] as MessageGroupVM[],
-  /** The loaded message groups (P.messageGroups) that are unread and not
-      snoozed. No view reads it, as the Inbox badge counts every unread
-      task from the unread summary (P.inboxSummary). The store's tests read it to
-      check the paint of loaded messages, and the browser benchmark's checks
-      read it on builds before and after that move
-      (scripts/benchmark-browser.mjs). It goes with the workspace inbox
-      part. */
-  unreadMessages: 0,
-  // the read messages the part counts, beyond those it sent too; no view
-  // reads it, the store's tests do, and it goes with the part
-  readMessageCount: 0,
   // whether the Inbox's Mark all as read and Remove all read may change
   // anything, from the unread summary's seat flags, and true while it has
   // no answer (deriveInboxFlags)
@@ -12267,12 +12022,6 @@ export const PLANNER = {
   // progress (runDeletedItems), and the deferred items it watches
   deletedAction: null as DeletedAction | null,
   deletedWaiting: new Set<string>() as ReadonlySet<string>,
-  // whether the inbox part left out older messages than it sent (its 500),
-  // and which of Mark all as read and Remove all read reach some of them;
-  // no view reads them since the Inbox lists inbox.page, the store's tests
-  // do, and they go with the part
-  inboxCut: false,
-  inboxCutReach: { markAllRead: false, removeRead: false },
   loaded: false,
 
   /** Whether the newest workspace delivery brought the projects, a
@@ -12282,7 +12031,7 @@ export const PLANNER = {
       a project a server read named, such as the open rule after
       projectNav.resolve (components/projectNavRows.tsx), which stops
       waiting when this holds and the project is still missing. */
-  workspaceCurrent: (): boolean => inboxCurrent && !owed.workspace,
+  workspaceCurrent: (): boolean => deliveryCurrent && !owed.workspace,
 
   /** The facts of project `id` a view names (store/viewModels.ts
       ProjectFacts): the workspace's live project where its projects part
@@ -15039,15 +14788,8 @@ export const PLANNER = {
     orgId?: string,
   ): Promise<boolean> => {
     const org = orgId || orgOfProject(projectId) || HOME_ORG
-    const seen = inboxDeliveries
-    pendingRestores.set(issueUuid, false)
     try {
       const out = await sendAwaited(api.issues.unarchive, { org_id: org, id: issueUuid }, 'none')
-      // a delivery taken since the send holds the restore (pendingRestores)
-      if (pendingRestores.has(issueUuid)) {
-        if (inboxCurrent && inboxDeliveries > seen) pendingRestores.delete(issueUuid)
-        else pendingRestores.set(issueUuid, true)
-      }
       // the parent was full (LIMITS.subtasks), or was deleted after this
       // task was archived and came back since
       if (out.left_parent) {
@@ -15061,7 +14803,6 @@ export const PLANNER = {
         )
       }
     } catch (e) {
-      pendingRestores.delete(issueUuid)
       console.error('[qivo] restore failed:', e)
       toast(restoreErrorText(e))
       return false
@@ -16649,7 +16390,7 @@ export const PLANNER = {
       issue_id: issueUuid,
       author: profileIn(org),
       body: text,
-      created_at: new Date().toISOString(), // ISO-Z, the isNewer format
+      created_at: new Date().toISOString(), // ISO-Z, as the server stamps it
     }
     return send(
       api.comments.create,
@@ -16764,45 +16505,15 @@ export const PLANNER = {
      Rows are created only by the server; the client's whole write surface is
      read_at (and delete). The Inbox acts on an ITEM, every message for one
      task, by its organization and task with the row's cutoff (readItem,
-     unreadItem, removeItem, snoozeItem). The id-list actions here
-     (markMessagesRead, markMessagesUnread, deleteMessages, snoozeMessages
-     and the singular forms) act on the workspace inbox part's loaded
-     messages; no view calls them since the Inbox lists inbox.page, the
-     store's tests do, and they go with the part (t3/limits-inbox-feed).
-     Each checks the pause before its paint, so a paused write paints
-     nothing, and sends one write per organization, each with its own
-     layer, so a seat that refuses takes back only its rows. */
-  /** Marks messages read and answers whether it sent the mark, for the
-      Inbox's rows. */
-  markMessagesRead: (ids: string[]): boolean => {
-    const at = new Date().toISOString()
-    const hit = ids.filter((id) => {
-      const r = rows.messages.get(id)
-      return r && !r.read_at
-    })
-    if (!hit.length || refusePausedWrite(api.messages.markRead)) return false
-    // an item's messages share one org, but a bulk mark-all spans seats —
-    // group per org BEFORE any paint prunes the hit rows
-    messagesByOrg(hit).forEach((list, org) => {
-      void send(
-        api.messages.markRead,
-        { org_id: org, ids: list },
-        { workspace: () => markLoadedMessagesRead(list, at) },
-      )
-    })
-    return true
-  },
+     unreadItem, removeItem, snoozeItem), and the bulk actions on every
+     seat (markAllMessagesRead, deleteReadMessages). The store holds no
+     message: each action's mark shows the Inbox's row at once
+     (P.inboxMarks), and the badge follows the unread summary. */
   /** Marks the person's inbox item about task `task` in organization `org`
       read (messages.readItem), every unread message the server stored up
       to `through`, the item's newest _creationTime as inbox.item or a page
-      row answered it, loaded or not, and answers whether it sent the read.
-      Its paint marks read the loaded messages of the task that are unread,
-      not snoozed and no newer than `latestAt`, the item's newest message,
-      so the Inbox's row turns read at once; the badge changes once the
-      unread summary answers again. The paint compares `created_at`, where
-      the server cuts by _creationTime, so a backdated notice stored after
-      the answer is painted read and comes back unread when the server
-      answers. `quiet` refuses a paused read without a toast and leaves it
+      row answered it, and answers whether it sent the read. The badge
+      changes once the unread summary answers again. `quiet` refuses a paused read without a toast and leaves it
       out of what the notice counts, for the read that opening a task sends
       on its own (P.readOnOpen). Its read mark turns the Inbox's row read
       at once (P.inboxMarks). Once the server accepts it, a read of the
@@ -16817,7 +16528,7 @@ export const PLANNER = {
       holds nothing once refused or failed. The read on open never frees
       it. */
   readItem: (
-    target: { org: string; task: string; through: number; latestAt: string },
+    target: { org: string; task: string; through: number },
     { quiet = false } = {},
   ): boolean => {
     const before = holdWrites
@@ -16891,17 +16602,13 @@ export const PLANNER = {
       confirmed: false,
       again,
     }
-    const sent = sendItemRead(
-      { org: shown.org, task, through: item.through, latestAt: item.latest_at },
-      true,
-      () => {
-        if (itemRead !== read) return
-        read.confirmed = true
-        // the answer that came with the confirmation may still hold a
-        // message committed after the read
-        PLANNER.readOnOpen(task)
-      },
-    )
+    const sent = sendItemRead({ org: shown.org, task, through: item.through }, true, () => {
+      if (itemRead !== read) return
+      read.confirmed = true
+      // the answer that came with the confirmation may still hold a
+      // message committed after the read
+      PLANNER.readOnOpen(task)
+    })
     if (sent) itemRead = read
     return sent
   },
@@ -16921,63 +16628,18 @@ export const PLANNER = {
      `shown`, so they turn read at once. */
   markAllMessagesRead: async (ask = false, shown: readonly ShownInboxRow[] = []): Promise<void> => {
     if (!PLANNER.canMarkAllRead) return
-    const at = new Date().toISOString()
     await bulkInboxAction<FunctionReturnType<typeof api.messages.markAllRead>>(
       'read',
       ask,
-      {
-        ref: api.messages.markAllRead,
-        messages: () =>
-          PLANNER.messages.filter((message) => !message.read && message.snoozedUntil === null),
-        paint: (ids) => ({ workspace: () => markLoadedMessagesRead(ids, at, true) }),
-        named: (ids) => ({ workspace: () => markLoadedMessagesRead(ids, at, true) }),
-        flags: {
-          workspace: () => {
-            unexaminedUnread = false
-          },
-        },
-        count: (answer) => answer.marked,
-      },
-      (seat, previous, keep) =>
+      { ref: api.messages.markAllRead, count: (answer) => answer.marked },
+      (seat, previous) =>
         sendAwaited(
           api.messages.markAllRead,
           { org_id: seat.org, before: previous?.before ?? seat.before },
           'none',
-          { keep },
         ),
       shown,
     )
-  },
-  /* Back to unread, the same column the other way. Nothing is pruned by
-     it: the rows it re-opens are no longer read, which is exactly what the
-     server's prune asks. Marking the open task's messages unread holds off
-     its read on open for the rest of the visit, unless the server refuses
-     it or it fails (holdUnreadOf). */
-  markMessagesUnread: (ids: string[]) => {
-    const hit = ids.filter((id) => {
-      const r = rows.messages.get(id)
-      return r?.read_at
-    })
-    if (!hit.length || refusePausedWrite(api.messages.markUnread)) return
-    messagesByOrg(hit).forEach((list, org) => {
-      const view: View = {
-        workspace: () =>
-          list.forEach((id) => {
-            const row = rows.messages.get(id)
-            if (row) row.read_at = undefined
-          }),
-      }
-      void send(api.messages.markUnread, { org_id: org, ids: list }, view, holdUnreadOf(list))
-    })
-  },
-  /* Removing an item removes every message in it — the caller passes the
-     whole list (P.messageGroups' ids). */
-  deleteMessages: (ids: string[]) => {
-    const hit = ids.filter((id) => rows.messages.has(id))
-    if (!hit.length || refusePausedWrite(api.messages.remove)) return
-    messagesByOrg(hit).forEach((list, org) => {
-      void send(api.messages.remove, { org_id: org, ids: list }, removeMessagesPaint(list))
-    })
   },
   /* Inbox cleanup spans every seat and the full server inbox, loaded or
      not. Each bounded batch selects current read rows, so unread arrivals
@@ -16989,23 +16651,8 @@ export const PLANNER = {
     await bulkInboxAction<FunctionReturnType<typeof api.messages.removeRead>>(
       'remove',
       ask,
-      {
-        ref: api.messages.removeRead,
-        messages: () =>
-          PLANNER.messages.filter((message) => message.read && message.snoozedUntil === null),
-        paint: (ids) => removeMessagesPaint(ids, true),
-        // the rows each batch's answer names, which the server removed
-        named: (ids) => removeMessagesPaint(ids),
-        flags: {
-          workspace: () => {
-            hiddenReadMessages = 0
-            unexaminedRead = false
-          },
-        },
-        count: (answer) => answer.removed,
-      },
-      (seat, _previous, keep) =>
-        sendAwaited(api.messages.removeRead, { org_id: seat.org }, 'none', { keep }),
+      { ref: api.messages.removeRead, count: (answer) => answer.removed },
+      (seat) => sendAwaited(api.messages.removeRead, { org_id: seat.org }, 'none'),
       shown,
     )
   },
@@ -17039,58 +16686,11 @@ export const PLANNER = {
       answer?.(false)
     }
   },
-  markMessageRead: (id: string) => {
-    void PLANNER.markMessagesRead([id])
-  },
-  deleteMessage: (id: string) => {
-    PLANNER.deleteMessages([id])
-  },
-  /* Snooze an item until an ISO instant, or bring it back now (null). Both
-     leave it UNREAD, as a reminder returns bold. The ids name the item; the
-     server stamps every row of the (recipient, task) pair, so the paint
-     walks the loaded rows of the same pairs rather than just the ids. The
-     timed return is the server's scheduled wake (messages.wake), never a
-     client timer, so every device shows it at the same instant. Since both
-     leave it unread, either on the open task holds off its read on open
-     for the rest of the visit, unless the server refuses it or it fails
-     (holdUnreadOf). */
-  snoozeMessages: (ids: string[], until: string | null) => {
-    const hit = ids.filter((id) => rows.messages.has(id))
-    if (!hit.length || refusePausedWrite(api.messages.snooze)) return
-    const pairOf = (r: Row<'messages'>) => `${r.recipient_id}\n${r.issue_id}`
-    messagesByOrg(hit).forEach((list, org) => {
-      // the items, named before the paint
-      const pairs = new Set(
-        list.flatMap((id) => {
-          const row = rows.messages.get(id)
-          return row ? [pairOf(row)] : []
-        }),
-      )
-      const view: View = {
-        workspace: () =>
-          rows.messages
-            .where((r) => pairs.has(pairOf(r)))
-            .forEach((r) => {
-              if (until === null) {
-                if (r.snoozed_until === undefined) return
-                r.snoozed_until = undefined
-                r.read_at = undefined
-              } else {
-                r.snoozed_until = until
-                r.read_at = undefined
-                r.woke_at = undefined
-              }
-            }),
-      }
-      void send(api.messages.snooze, { org_id: org, ids: list, until }, view, holdUnreadOf(list))
-    })
-  },
-
   /** Marks the person's inbox item about task `task` in organization
       `org` unread (messages.unreadItem), every message of it, loaded or
       not, and answers whether it sent the write. An unread mark turns the
-      Inbox's row, whose cutoff is `through`, unread at once (P.inboxMarks),
-      and the paint marks the item's loaded messages unread. On the watched
+      Inbox's row, whose cutoff is `through`, unread at once (P.inboxMarks).
+      On the watched
       task it holds off the read on open for the rest of the visit, unless
       the server refuses it or it fails (holdUnreadOfItem). The pause
       refuses it first, with no mark. */
@@ -17101,14 +16701,7 @@ export const PLANNER = {
     void send(
       api.messages.unreadItem,
       { org_id: org, issue_id: task },
-      {
-        workspace: () =>
-          rows.messages
-            .where((r) => r.issue_id === task && r.org_id === org)
-            .forEach((r) => {
-              r.read_at = undefined
-            }),
-      },
+      'none',
       settlingMark(org, task, mark, holdUnreadOfItem(org, task)),
     )
     return true
@@ -17117,33 +16710,16 @@ export const PLANNER = {
       `org` (messages.removeItem), every message the server stored up to
       `through`, the row's cutoff, loaded or not, and answers whether it
       sent the write. A message stored after it stays as the item's only
-      one. A removed mark hides the Inbox's row at once (P.inboxMarks), and
-      the paint removes the item's loaded messages no newer than
-      `latestAt`, its newest one at the press. The pause refuses it first,
-      with no mark. */
-  removeItem: (target: {
-    org: string
-    task: string
-    through: number
-    latestAt: string
-  }): boolean => {
+      one. A removed mark hides the Inbox's row at once (P.inboxMarks). The
+      pause refuses it first, with no mark. */
+  removeItem: (target: { org: string; task: string; through: number }): boolean => {
     if (refusePausedWrite(api.messages.removeItem)) return false
     const { org, task } = target
-    const latest = Date.parse(target.latestAt)
     const mark = setInboxMark(org, task, { through: target.through, removed: true })
     void send(
       api.messages.removeItem,
       { org_id: org, issue_id: task, through: target.through },
-      {
-        workspace: () =>
-          rows.messages
-            .where(
-              (r) => r.issue_id === task && r.org_id === org && Date.parse(r.created_at) <= latest,
-            )
-            .forEach((r) => {
-              rows.messages.delete(r.id)
-            }),
-      },
+      'none',
       settlingMark(org, task, mark),
     )
     return true
@@ -17153,8 +16729,8 @@ export const PLANNER = {
       (messages.snoozeItem), and answers whether it sent the write. Both
       leave it unread, as a reminder returns bold, and the timed return is
       the server's scheduled wake. A snooze mark shows the Inbox's row,
-      whose cutoff is `through`, snoozed or woken at once (P.inboxMarks),
-      and the paint stamps the item's loaded messages. On the watched task
+      whose cutoff is `through`, snoozed or woken at once (P.inboxMarks).
+      On the watched task
       either holds off the read on open for the rest of the visit, unless
       the server refuses it or it fails (holdUnreadOfItem). The pause
       refuses it first, with no mark. */
@@ -17168,22 +16744,7 @@ export const PLANNER = {
     void send(
       api.messages.snoozeItem,
       { org_id: org, issue_id: task, until },
-      {
-        workspace: () =>
-          rows.messages
-            .where((r) => r.issue_id === task && r.org_id === org)
-            .forEach((r) => {
-              if (until === null) {
-                if (r.snoozed_until === undefined) return
-                r.snoozed_until = undefined
-                r.read_at = undefined
-              } else {
-                r.snoozed_until = until
-                r.read_at = undefined
-                r.woke_at = undefined
-              }
-            }),
-      },
+      'none',
       settlingMark(org, task, mark, holdUnreadOfItem(org, task)),
     )
     return true
@@ -17234,6 +16795,13 @@ export const PLANNER = {
     sendAwaited(api.appearance.save, preferences, 'none', {
       onError: (e) => toastWriteError(e, false),
     }),
+  /** Saves where the account's desktop alerts appear
+      (notifications.setDelivery), which spends one change on the demo. It
+      changes no local switch and asks for no permission, and the server's
+      settings watch, not its answer, owns what the Notification delivery
+      field shows. A refusal rejects for the field to word, with no toast. */
+  setNotificationDelivery: (delivery: Delivery) =>
+    sendAwaited(api.notifications.setDelivery, { delivery }, 'none'),
   removeAppearanceImage: () =>
     sendAwaited(api.appearance.removeCustom, {}, 'none', {
       onError: (e) => toastWriteError(e, false),
@@ -19032,6 +18600,9 @@ export const PLANNER = {
     }
     if (signingOut) return
     signingOut = true
+    // a deliberate sign-out ends the session itself, so the leader sends no
+    // end at the page's close
+    stopAlerts()
     const leave = () => {
       unconfirmedNote.forgetAll()
       clearAvatarSources()
@@ -19040,8 +18611,11 @@ export const PLANNER = {
     }
     return authSignOut()
       .then(leave, (failure: unknown) => {
-        if (failure instanceof SignOutFailed) toast(failure.message)
-        else leave()
+        if (failure instanceof SignOutFailed) {
+          toast(failure.message)
+          // still signed in, so the desktop alerts go on
+          startAlerts()
+        } else leave()
       })
       .finally(() => {
         signingOut = false
@@ -19326,8 +18900,8 @@ function startParts(
             snapshotCurrent = true
             snapshotDeliveries++
           }
-          noteDelivery(base.stage(snap), snap)
-          tookInbox()
+          base.stage(snap)
+          tookDelivery(snap.delivered_at)
         }
         first?.resolve(snap)
         return
@@ -19357,7 +18931,7 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
   // writes accepted meanwhile stay saved until a complete transition.
   if (ws.state === 'held') {
     snapshotCurrent = false
-    inboxCurrent = false
+    deliveryCurrent = false
     return
   }
   // While the task windows an ask subscribed are on their way, the report
@@ -19369,7 +18943,7 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
   if (ws.state === 'partial') {
     snapshotCurrent = false
     if (stillLoading === null) {
-      inboxCurrent = false
+      deliveryCurrent = false
       return
     }
     stillLoading = ws.loaded
@@ -19377,10 +18951,13 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
     subscribeWaitingThread()
     if (ws.changed) {
       const snap = anchor(ws.value)
-      noteDelivery(base.stage(snap), snap)
+      base.stage(snap)
+      tookDelivery(snap.delivered_at)
       owe('workspace')
-    } else if (troubled) emit()
-    tookInbox()
+    } else {
+      tookDelivery(new Date(at).toISOString())
+      if (troubled) emit()
+    }
     return
   }
   if (ws.state === 'failed') {
@@ -19390,7 +18967,7 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
     if (demoEnded) notifyDemoEnded(ws.error)
     console.error('[qivo] workspace part failed:', ws.error)
     snapshotCurrent = false
-    inboxCurrent = false
+    deliveryCurrent = false
     if (!demoEnded) snapshotFailed(ws.error)
     return
   }
@@ -19400,7 +18977,7 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
   // recovering delivery not painted yet ends no trouble now.
   if (ws.value === null) {
     snapshotCurrent = false
-    inboxCurrent = false
+    deliveryCurrent = false
     if (DEMO_MODE) {
       recoveryHeld = false
       notifyDemoEnded()
@@ -19418,9 +18995,9 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
   if (tasksNext && taskTrouble) endTaskTrouble()
   if (ws.changed) {
     const snap = anchor(ws.value)
-    noteDelivery(base.stage(snap), snap)
-  } else lastDeliveryAt = new Date(at).toISOString()
-  tookInbox()
+    base.stage(snap)
+    tookDelivery(snap.delivered_at)
+  } else tookDelivery(new Date(at).toISOString())
   subscribeWaitingThread()
   // a complete transition holds every write accepted before it
   const dropped = layers.dropSaved('workspace')
@@ -19446,12 +19023,13 @@ function retrySnapshot() {
   }, RETRY_GAP_MS)
   // the parts run again have delivered nothing yet
   snapshotCurrent = false
-  inboxCurrent = false
+  deliveryCurrent = false
   if (parts?.retry()) return
   // nothing failed any more, such as a stall: start every part afresh
   const epoch = storeEpoch
   stopParts()
   parts = startParts(() => epoch === storeEpoch && !demoDisposed)
+  watchFeed()
 }
 
 /** Asks for every task, once per store: the registry subscribes every task
@@ -19515,6 +19093,7 @@ function retryTasks() {
   const epoch = storeEpoch
   stopParts()
   parts = startParts(() => epoch === storeEpoch && !demoDisposed)
+  watchFeed()
 }
 
 /** Stops the live parts and the thread, history and sections riding along.
@@ -19563,6 +19142,7 @@ export function disposeDemoStore() {
   stopDayWatch = null
   cancelDemoBoot?.()
   cancelDemoBoot = null
+  stopAlerts()
   stopParts()
   resetSnapshotTrouble()
   watchedComments = null
@@ -19604,9 +19184,7 @@ export function disposeDemoStore() {
   syncPaused = false
   PLANNER.lastComments = new Map()
   PLANNER.lastCommentsCut = []
-  pendingRestores.clear()
-  inboxCurrent = false
-  lastMessageTasks = new Set()
+  deliveryCurrent = false
   tookCreates.clear()
   pendingCreates.clear()
   refusedCreates.clear()
@@ -19659,10 +19237,6 @@ export function disposeDemoStore() {
   workspaceRows.reset()
   rows.comments = new Map()
   rows.threadEvents = []
-  hiddenReadMessages = 0
-  unexaminedUnread = false
-  unexaminedRead = false
-  messagesCut = false
   // the demo's seats end with it, and its sign-out is this disposal
   unconfirmedNote.forgetAll()
   unconfirmedReport = null
@@ -19673,7 +19247,6 @@ export function disposeDemoStore() {
   tasks.clear()
   committedByOwner.clear()
   agentKeyOrg.clear()
-  announcedMessages = null
   lastDeliveryAt = null
   snapshotCurrent = false
   reapAfterPause.clear()
@@ -19686,80 +19259,6 @@ export function disposeDemoStore() {
   PLANNER.historyLoaded = false
   rebuild(new Date(), true)
   emit()
-}
-
-/* The tasks the previous live delivery held messages of (noteDelivery). */
-let lastMessageTasks: ReadonlySet<string> = new Set()
-
-/* How long a message's commit can trail its created_at. A mutation reads
-   the clock when it starts and commits later, so a delivery can carry a
-   delivered_at past a message's created_at and still not hold it. A
-   message made this close before the previous delivery counts as new. */
-const COMMIT_SLACK_MS = 60_000
-
-/* The arrival bookkeeping of live delivery `snap`, once per delivery and
-   never on a repaint: the stored messages of tasks that a restore brought
-   back, or that newly came into view, raise no desktop notification, and
-   new messages do. Once the workspace holds every task, the tasks that
-   newly came into view are `newlyVisibleIssueIds`, the tasks it holds that
-   the previous delivery did not (base.stage), not the tasks the painted
-   rows lacked. Before that no task enters the delivery's rows, so they are
-   the tasks with a message in this delivery and none in the previous one,
-   as when access returns or a task moves back into view, and the Inbox
-   part brings its stored messages back. A message made within
-   COMMIT_SLACK_MS before the previous delivery, but whose commit reached
-   only this one, still counts as new, so a task's first mention notifies;
-   one made earlier than that counts as stored. */
-function noteDelivery(newlyVisibleIssueIds: ReadonlySet<string>, snap: Snapshot) {
-  const byRows = tasksAll
-  const messageTasks = new Set(snap.messages.map((message) => message.issue_id))
-  const newly = byRows
-    ? newlyVisibleIssueIds
-    : new Set([...messageTasks].filter((id) => !lastMessageTasks.has(id)))
-  lastMessageTasks = messageTasks
-  const arrived = [...pendingRestores.keys()].filter((id) => newly.has(id))
-  if (arrived.length > 0) {
-    /* A child restore can also surface archived ancestors. Suppress the
-       restored tasks and the ancestors that entered with them, so their
-       historical messages that are still unread do not trigger desktop
-       notifications. Every other task that entered with the delivery, such
-       as the rest of the tasks a load brings in the same delivery, keeps
-       the rule below, so its new messages still notify. Before every task
-       is held no ancestor enters, and the rule below covers their stored
-       messages. */
-    const parentOf = new Map(snap.issues.map((issue) => [issue.id, issue.parent_id]))
-    const restored = new Set<string>()
-    for (const id of arrived) {
-      for (let at: string | undefined = id; at !== undefined && !restored.has(at); ) {
-        if (!newly.has(at)) break
-        restored.add(at)
-        at = byRows ? (parentOf.get(at) ?? undefined) : undefined
-      }
-      pendingRestores.delete(id)
-    }
-    if (announcedMessages !== null) {
-      for (const message of snap.messages) {
-        if (restored.has(message.issue_id)) announcedMessages.set(message.id, message.woke_at)
-      }
-    }
-  }
-  /* A task also enters the working set when access returns or it moves back
-     into view, and its stored messages come with it. Those created before the
-     previous delivery, less the slack a commit can trail its clock read by,
-     raise no desktop notification; newer ones still do. */
-  if (announcedMessages !== null && lastDeliveryAt !== null) {
-    const storedBefore = Date.parse(lastDeliveryAt) - COMMIT_SLACK_MS
-    for (const message of snap.messages) {
-      if (
-        newly.has(message.issue_id) &&
-        Date.parse(message.created_at) <= storedBefore &&
-        !announcedMessages.has(message.id)
-      )
-        announcedMessages.set(message.id, message.woke_at)
-    }
-  }
-  lastDeliveryAt = snap.delivered_at
-  announceNewMessages(snap)
 }
 
 /* Takes the identity from the server's rows (base). The snapshot says which
@@ -19783,21 +19282,6 @@ function adoptIdentity() {
   const home = mine.find((p) => p.org_role !== 'guest') || mine[0] || null
   HOME_ORG = home && home.org_role !== 'guest' ? home.org_id : ''
   CURRENT_USER = home ? home.id : ''
-}
-
-/* Sets the inbox counters from the server's rows (base), as a repaint
-   starts; paints change them from there. */
-function countInbox() {
-  const scalars = base.scalars()
-  const messages = base.list('messages')
-  // the server's predicate: read rows minus snoozed ones (removeRead's scope)
-  const loadedReadCount = messages.filter(
-    (message) => message.read_at !== undefined && message.snoozed_until === undefined,
-  ).length
-  hiddenReadMessages = Math.max(0, (scalars?.readMessageCount ?? loadedReadCount) - loadedReadCount)
-  unexaminedUnread = scalars?.unreadTruncated === true
-  unexaminedRead = scalars?.readTruncated === true
-  messagesCut = scalars?.messagesCut === true
 }
 
 /** Load the blended snapshot for the signed-in user. Returns the HOME profile
@@ -19867,7 +19351,7 @@ export async function initStore(
   // the new parts have delivered nothing yet; what shows stays partial, if
   // it is, until their first delivery paints
   snapshotCurrent = false
-  inboxCurrent = false
+  deliveryCurrent = false
   // New parts start from a clean state; their first complete transition
   // settles the boot, so it never reports recovery from earlier trouble.
   if (snapshotTrouble) {
@@ -19898,8 +19382,11 @@ export async function initStore(
   }
   // a thread and its history watched before a re-init ride along with the
   // new parts, and ones watched during the boot hear what the boot's
-  // transitions brought, which repaints once
+  // transitions brought, which repaints once; the desktop alerts' feed
+  // rides along again too, and starts at the first boot with a seat
   subscribeWaitingThread()
+  watchFeed()
+  startAlerts()
   const bootNews = [...bootSideNews]
   bootSideNews.clear()
   together(() => {

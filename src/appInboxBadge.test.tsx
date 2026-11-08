@@ -13,10 +13,8 @@ import type { Row } from './store/rows'
    tab and the phone's bottom Inbox tab show the server's unread summary
    (store/planner.ts P.inboxSummary, lib/inboxBadge.ts), which the live
    double answers from the server's messages through its stand-in
-   (store/inboxStandIn.setup.ts), never the groups the workspace loaded.
-   The server here holds more unread tasks than the workspace loaded, past
-   the inbox part's cut, so the two always say different things. An emit
-   of the Inbox's section alone repaints both badges. */
+   (store/inboxStandIn.setup.ts); the store holds no message. An emit of
+   the Inbox's section alone repaints both badges. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 type Double = ReturnType<typeof import('./store/guard/liveDouble.setup').liveOver>
@@ -82,13 +80,13 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-/** The fixture's organization with `loaded` unread tasks the workspace's
-    Inbox loaded, and `beyond` more the server holds past its cut. */
-function fixture(loaded: number, beyond: number) {
+/** The fixture's organization with `unread` unread tasks the server
+    holds. */
+function fixture(unread: number) {
   const snap = plannerFixture()
   const me = snap.profiles[0].id
   const messages: Row<'messages'>[] = []
-  for (let n = 0; n < loaded + beyond; n++) {
+  for (let n = 0; n < unread; n++) {
     const id = `task-${String(n).padStart(2, '0')}`
     snap.issues.push({
       id,
@@ -116,9 +114,9 @@ function fixture(loaded: number, beyond: number) {
       created_at: AT,
     })
   }
-  snap.orgs[0].next_issue_num = loaded + beyond
-  snap.messages = messages.slice(0, loaded)
-  return { snap, beyondCut: messages.slice(loaded) }
+  snap.orgs[0].next_issue_num = unread
+  snap.messages = messages
+  return { snap }
 }
 
 /** Boots the real store on `server` and renders App, with the inbox reads
@@ -129,8 +127,7 @@ async function app(server: ReturnType<typeof fixture>, force?: ForcedInbox) {
   history.replaceState(null, '', '/app/~/board/mine')
   network.onUpdate.mockImplementation((ref, args, next) => {
     const name = getFunctionName(ref)
-    if (name === 'workspace:whole')
-      next(structuredClone({ ...server.snap, beyondCut: server.beyondCut }))
+    if (name === 'workspace:whole') next(structuredClone(server.snap))
     else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name === 'tasks:board') next(boardStandIn(server.snap, args as BoardArgs))
     return () => {}
@@ -183,19 +180,18 @@ const shows = (read: () => unknown, want: unknown) =>
   vi.waitFor(() => expect(read()).toEqual(want), { timeout: 10_000 })
 
 describe('the Inbox badge', { timeout: 30_000 }, () => {
-  it("counts the server's unread tasks, not the groups the workspace loaded", async () => {
-    const P = await app(fixture(3, 9))
+  it("counts the server's unread tasks", async () => {
+    await app(fixture(12))
     await shows(desktopBadge, {
       name: 'Inbox, 12 unread',
       chip: '12',
       state: 'count',
       refreshing: false,
     })
-    expect(P.unreadMessages).toBe(3)
   })
 
   it('shows 99+ for more than 99 and 12+ for an incomplete count, with their names', async () => {
-    await app(fixture(3, 9), 'more')
+    await app(fixture(12), 'more')
     await shows(desktopBadge, {
       name: 'Inbox, more than 99 unread',
       chip: '99+',
@@ -204,7 +200,7 @@ describe('the Inbox badge', { timeout: 30_000 }, () => {
     })
     await act(async () => root.unmount())
     root = createRoot(container)
-    await app(fixture(3, 9), 'incomplete')
+    await app(fixture(12), 'incomplete')
     await shows(desktopBadge, {
       name: 'Inbox, at least 12 unread',
       chip: '12+',
@@ -214,14 +210,13 @@ describe('the Inbox badge', { timeout: 30_000 }, () => {
   })
 
   it('shows the ellipsis while it loads and after it failed, and nothing only for zero', async () => {
-    const P = await app(fixture(3, 9), 'loading')
+    await app(fixture(12), 'loading')
     await shows(desktopBadge, {
       name: 'Inbox, unread count loading',
       chip: '…',
       state: 'unknown',
       refreshing: false,
     })
-    expect(P.unreadMessages).toBe(3)
     // an emit of the Inbox's section alone repaints the bar
     await act(async () => double.live?.forceInbox('failed'))
     await shows(desktopBadge, {
@@ -239,13 +234,13 @@ describe('the Inbox badge', { timeout: 30_000 }, () => {
     })
     await act(async () => root.unmount())
     root = createRoot(container)
-    await app(fixture(0, 0))
+    await app(fixture(0))
     await shows(desktopBadge, { name: 'Inbox', chip: null, state: null, refreshing: false })
   })
 
   it("shows the same on the phone's Inbox tab, and nothing on the others", async () => {
     phone = true
-    await app(fixture(3, 9))
+    await app(fixture(12))
     await shows(phoneBadge, { name: '12 unread', chip: '12', state: 'count' })
     expect(document.querySelectorAll('.mobile-unread-badge')).toHaveLength(1)
     await act(async () => double.live?.forceInbox('incomplete'))
@@ -256,11 +251,11 @@ describe('the Inbox badge', { timeout: 30_000 }, () => {
     await shows(phoneBadge, { name: 'Unread count unavailable', chip: '…', state: 'unknown' })
     await act(async () => root.unmount())
     root = createRoot(container)
-    await app(fixture(3, 9), 'loading')
+    await app(fixture(12), 'loading')
     await shows(phoneBadge, { name: 'Unread count loading', chip: '…', state: 'unknown' })
     await act(async () => root.unmount())
     root = createRoot(container)
-    await app(fixture(0, 0))
+    await app(fixture(0))
     await shows(phoneBadge, { name: null, chip: null, state: null })
   })
 })

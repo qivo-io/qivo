@@ -169,7 +169,6 @@ describe('view model identity across repaints', () => {
         created_at: AT,
       })
     })
-    expect(P().unreadMessages).toBe(1)
     expect(P().issues).toBe(issues)
     expect(P().issueById).toBe(byId)
   })

@@ -2,7 +2,7 @@
  * groups across the caller's seats, ordered, filtered and searched before
  * the page is cut, with honest stops and a sealed cursor. A page answers
  * only the caller's own items about tasks they are shown, the groups the
- * workspace inbox part shows, says when a seat is not ready or a check a
+ * caller's messages make (inboxOracle.setup.ts), says when a seat is not ready or a check a
  * bound stopped left a group out, and never answers an unfinished read as
  * an empty Inbox. The reads at the design size are logged as
  * inboxReads.test.ts logs the summary's. Every case that writes ends with
@@ -59,6 +59,7 @@ import {
   reader,
   type Sent,
 } from './inboxItems.setup'
+import { oracleInbox } from './inboxOracle.setup'
 import { plantNorthstar } from './northstar.setup'
 import { DAY, deleteTask, installTrashTimers, runSteps, START } from './trash.setup'
 
@@ -335,21 +336,14 @@ describe('the arguments', () => {
 
 /* ------------------------------------------------------------- parity */
 
-describe('parity with the workspace inbox part', () => {
-  it('pages the groups the part shows, with their counts, kinds, snooze and newest message, for every person of Northstar', async () => {
+describe('parity with the messages', () => {
+  it('pages the groups the messages make, with their counts, kinds, snooze and newest message, for every person of Northstar', async () => {
     const t = newT()
     const { org, profiles } = await plantNorthstar(t)
     INBOX_PAGE.rows = 3
     let compared = 0
     for (const person of profiles.filter((p) => p.auth_user_id !== undefined)) {
-      const caller = t.withIdentity({ subject: person.auth_user_id as string })
-      const part = await caller.query(api.workspace.inbox, { org_id: org.id })
-      if (part.state !== 'ok') throw new Error(part.state)
-      // Northstar holds far fewer than 500 messages a person, so the part is complete
-      expect(part.truncated, person.name).toBe(false)
-      const byTask = new Map<string, (typeof part.unread)[number][]>()
-      for (const m of [...part.unread, ...part.read])
-        byTask.set(m.issue_id, [...(byTask.get(m.issue_id) ?? []), m])
+      const { byTask } = await oracleInbox(t, person)
       const facts = new Map(
         await t.run(async (ctx) => {
           const out = new Map<

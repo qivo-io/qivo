@@ -44,9 +44,14 @@ const notifications = {
   supported: Boolean(
     process.platform === 'win32' || process.platform === 'darwin' || process.platform === 'linux',
   ),
+  // contextBridge copies a getter's value when it exposes the bridge, so
+  // `permission` holds the value at the page's load; currentPermission()
+  // reads it again, as the notification leader needs after a settings save
   get permission(): NotificationPermission {
     return ipcRenderer.sendSync('qivo:notifications:permission') as NotificationPermission
   },
+  currentPermission: (): NotificationPermission =>
+    ipcRenderer.sendSync('qivo:notifications:permission') as NotificationPermission,
   requestPermission: async (): Promise<NotificationPermission> =>
     (await ipcRenderer.invoke('qivo:notifications:request-permission')) as NotificationPermission,
   show: async (payload: NotificationPayload): Promise<boolean> =>
@@ -78,6 +83,15 @@ const updates = {
   },
 }
 
+// The computer woke from sleep (main.ts forwards powerMonitor's resume).
+const power = {
+  onResume: (listener: () => void): Unsubscribe => {
+    const handler = () => listener()
+    ipcRenderer.on('qivo:power:resume', handler)
+    return () => ipcRenderer.removeListener('qivo:power:resume', handler)
+  },
+}
+
 const auth = {
   beginOAuth: async (): Promise<{ callbackURL: string }> =>
     (await ipcRenderer.invoke('qivo:auth:begin-oauth')) as { callbackURL: string },
@@ -91,5 +105,6 @@ contextBridge.exposeInMainWorld('qivoDesktop', {
   settings,
   notifications,
   updates,
+  power,
   auth,
 })

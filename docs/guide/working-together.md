@@ -305,11 +305,31 @@ actions button provides read, snooze and removal controls. There is no inbox sea
 tasks and projects. A desktop inbox search does not filter the phone list.
 
 **Desktop notifications.** In a browser, choose **Enable notifications** in
-Inbox to receive a notification for each new event. Clicking one opens Qivo.
-In supported Windows and Linux desktop builds, **Settings → User account →
-Desktop app → Show notifications** controls native Inbox and update alerts
-and is on by default. Turning it off leaves your Inbox messages available.
-Your operating system's notification settings also apply.
+Inbox to turn on a notification for each new event in that browser while Qivo
+runs, also with the Inbox closed and the tab in the background. In supported
+Windows and Linux desktop builds, **Settings → User account → Desktop app →
+Show notifications** turns them on for the desktop app and is on by default.
+**Settings → Your preferences → Notifications → Notification delivery**
+chooses where they appear. With **Most recently active session**, the default,
+they appear only in the browser or desktop app you used last that can show
+them, and the next one takes over when it closes or goes offline. With **All
+enabled sessions** they appear in every browser and desktop app that can show
+them, once in each, so a computer with both may show both. Qivo counts pointer,
+key, touch and wheel use as using it, never what you type. Only one tab of a
+browser shows a notification, and clicking it opens your Inbox in that tab.
+Choosing where notifications appear turns nothing on and asks for no
+permission. Phones and tablets show no desktop notifications. Signing in or
+reloading shows no notification for each message already there. After your
+computer sleeps or Qivo loses its connection, when a burst of updates is too
+large to show one by one, and after you enable notifications or they move to
+another of your browsers or devices, one notification may say that new unread
+activity arrived, with no count; it opens your Inbox. So after you move to
+another device, its first notification is often that summary. In the desktop
+app, a wake from sleep checks for missed activity at once. Notifications and
+their clicks mark nothing read, and the unread count stays current in every
+tab and device. **Show notifications** also controls update alerts, and
+turning it off leaves your Inbox messages available. Your operating system's
+notification settings also apply.
 
 **Managing messages.** Right-click a row, or use its phone actions button, for
 **Mark as read / unread** and **Remove notification**, and **Open task in
