@@ -23,6 +23,7 @@ import { P } from '../store/planner'
 import { ChoiceEnd, PickerSearch } from './pickerParts'
 import { type ChoiceWords, TARGET_WORDS } from './pickerWords'
 import { navCursors, seedNavRow } from './projectNavRows'
+import { Input } from './ui/input'
 
 /** The most targets Load more gathers, past which the list asks for a
     search. */
@@ -146,7 +147,7 @@ export function TargetPicker({
                     on && 'bg-selected font-medium',
                   )}
                 >
-                  <input
+                  <Input
                     type="radio"
                     name={group}
                     className="sr-only"
