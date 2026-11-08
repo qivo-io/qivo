@@ -126,9 +126,32 @@ describe('projectNav.page with team_id', () => {
     await ready(t, f)
     const first = ok(await page(t, [pia], { org_id: f.org.id, team_id: red }))
     expect(first.next).not.toBeNull()
+    const cursor = first.next ?? ''
+    expect(await badRequest(page(t, [pia], { org_id: f.org.id, after: cursor }))).toContain(
+      'projectNav.page',
+    )
+    // nor for another team of the organization, nor for the same team id
+    // under another organization where the caller has a seat
+    const blue = await plantTeam(t, f.org.id, 'Blue', [pia])
+    await plantShares(t, blue, shares)
+    await ready(t, f)
     expect(
-      await badRequest(page(t, [pia], { org_id: f.org.id, after: first.next ?? '' })),
+      await badRequest(page(t, [pia], { org_id: f.org.id, team_id: blue, after: cursor })),
     ).toContain('projectNav.page')
+    const elsewhere = await plantSeat(t, {
+      org_id: f.otherOrg.id,
+      name: 'Pia',
+      auth_user_id: pia.auth_user_id,
+    })
+    expect(
+      await badRequest(
+        page(t, [pia, elsewhere], { org_id: f.otherOrg.id, team_id: red, after: cursor }),
+      ),
+    ).toContain('projectNav.page')
+    // the cursor still opens its own list, the last two of Red's 27 shares
+    expect(
+      ok(await page(t, [pia], { org_id: f.org.id, team_id: red, after: cursor })).rows,
+    ).toHaveLength(2)
   })
 })
 
