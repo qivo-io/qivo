@@ -42,6 +42,7 @@ import { countersOf, countersRow, type OrgCounters } from '../model/orgs'
 import { shownAvatarColor } from '../model/people'
 import { memberCount } from '../model/teamCounts'
 import schema from '../schema'
+import { type OracleProjects, projectsOracle } from './projectsOracle.setup'
 import { teamJson } from './teamMembers.setup'
 
 export type T = TestConvex<typeof schema>
@@ -1262,14 +1263,34 @@ export async function restArchivedPage(
 /* A caller as as() gives one. */
 type Caller = ReturnType<typeof as>
 
-/** The workspace the app holds for `caller` once every part answered
+/** The workspace the app holds for `caller`, read through the workspace
+ * parts that still run, with the projects the caller sees beside it: the
+ * root and every organization's tasks and inbox once every part answered
  * (lib/workspaceJoin.ts readWorkspace), its delivery time blank so two
- * reads of the same data compare equal. Null without a seat. */
-export async function workspaceOf(caller: Caller): Promise<Workspace | null> {
+ * reads of the same data compare equal, and the caller's projects with
+ * their team grants and the caller's own grants on them from the test
+ * oracle (projectsOracle.setup.ts), which no part sends since the app
+ * reads its projects by id and a batch at a time. wholeOf adds everyone's
+ * grants. Null without a seat. */
+export async function workspaceOf(caller: Caller): Promise<(Workspace & OracleProjects) | null> {
   const snap = await readWorkspace((name, args) =>
     caller.query(makeFunctionReference<'query'>(name), args),
   )
-  return snap && { ...snap, delivered_at: '' }
+  if (snap === null) return null
+  const projects = await caller.run(async (ctx) => {
+    const seats: Doc<'profiles'>[] = []
+    for (const id of snap.myProfileIds) {
+      const seat = await ctx.db
+        .query('profiles')
+        .withIndex('by_uuid', (q) => q.eq('id', id))
+        .unique()
+      if (seat !== null) seats.push(seat)
+    }
+    return await projectsOracle(ctx, seats)
+  })
+  const own = new Set(snap.myProfileIds)
+  const access = projects.access.filter((g) => own.has(g.profile_id))
+  return { ...snap, ...projects, access, delivered_at: '' }
 }
 
 /* A stored row as the app would receive it, without Convex's system fields
@@ -1298,9 +1319,7 @@ export async function wholeOf(t: T, profile: Doc<'profiles'>) {
     const teams = []
     const teamMembers = []
     const labels = []
-    // every grant on the projects the workspace shows, as the projects part
-    // sends them; the app keeps only the caller's own (workspaceJoin.ts
-    // joinParts)
+    // every grant on the projects the caller sees, as the oracle reads them
     const access = []
     for (const project_id of projectIds)
       for (const grant of await ctx.db
@@ -1366,7 +1385,10 @@ export async function wholeOf(t: T, profile: Doc<'profiles'>) {
  * ownerInOrg): the fixtures these serve hold their owners, and the
  * server's own fence checks them (lib/workspaceParts.ts). A test with an
  * owner who is no profile of the organization passes them in `gone`. */
-export function appLoadRows(snap: Workspace, gone: ReadonlySet<string> = new Set()): OrgLoadRow[] {
+export function appLoadRows(
+  snap: Workspace & OracleProjects,
+  gone: ReadonlySet<string> = new Set(),
+): OrgLoadRow[] {
   const parents = new Set(snap.issues.flatMap((task) => task.parent_id ?? []))
   const projects = new Map(snap.projects.map((project) => [project.id, project]))
   const shown = snap.issues.flatMap((task) => {
@@ -1400,7 +1422,7 @@ export type AppPausedRow = {
  * passes them to pausedWeeksByPerson, the owner counted as one of the
  * task's organization as appLoadRows counts them. The workspace holds only
  * tasks of projects the reader can see. */
-export function appPausedRows(snap: Workspace): AppPausedRow[] {
+export function appPausedRows(snap: Workspace & OracleProjects): AppPausedRow[] {
   const parents = new Set(snap.issues.flatMap((task) => task.parent_id ?? []))
   const projects = new Map(snap.projects.map((project) => [project.id, project]))
   return snap.issues.flatMap((task) => {
