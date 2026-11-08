@@ -539,7 +539,6 @@ describe('bulk notification actions through the client store', () => {
       org: unread.org_id,
       task: unread.issue_id,
       through: Date.parse(unread.created_at),
-      latestAt: unread.created_at,
     })
     await asked()
     // the read goes out and is never answered
@@ -781,7 +780,6 @@ describe('bulk notification actions through the client store', () => {
       org: seat,
       task: unread.issue_id,
       through: Date.parse(unread.created_at),
-      latestAt: unread.created_at,
     })
     const removal = P.deleteReadMessages()
     await asked()

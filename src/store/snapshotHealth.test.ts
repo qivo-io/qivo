@@ -67,7 +67,6 @@ describe('snapshot trouble', () => {
         org: snapshot.orgs[0].id,
         task: 'task-a',
         through: Date.parse('2026-09-14T08:00:00.000Z'),
-        latestAt: '2026-09-14T08:00:00.000Z',
       },
       { quiet: true },
     )
@@ -77,7 +76,6 @@ describe('snapshot trouble', () => {
       org: snapshot.orgs[0].id,
       task: 'task-a',
       through: Date.parse('2026-09-14T08:00:00.000Z'),
-      latestAt: '2026-09-14T08:00:00.000Z',
     })
   /* Whether task-a's Inbox row shows read, by its mark. */
   const readMark = () => store.P.inboxMarks.get(`${snapshot.orgs[0].id}:task-a`)?.read

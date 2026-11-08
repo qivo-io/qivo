@@ -1194,7 +1194,6 @@ export const recipes: Recipe[] = [
         org: ORG,
         task: 'task-a',
         through: Date.parse('2026-10-19T08:00:00.000Z'),
-        latestAt: '2026-10-19T08:00:00.000Z',
       }),
     truth: (snap) => {
       snap.messages[0].read_at = SERVER
@@ -1225,7 +1224,6 @@ export const recipes: Recipe[] = [
         org: ORG,
         task: 'task-b',
         through: Date.parse('2026-10-19T08:00:00.000Z'),
-        latestAt: '2026-10-19T08:00:00.000Z',
       }),
     truth: (snap) => {
       snap.messages = [snap.messages[0]]

@@ -49,7 +49,6 @@ describe("the store's read of one inbox item", () => {
     org: snapshot.orgs[0].id,
     task: 'task-a',
     through: Date.parse(at(latest)),
-    latestAt: at(latest),
   })
 
   function message(id: string, task: string, minute: number, over: Partial<Row<'messages'>> = {}) {

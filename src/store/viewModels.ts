@@ -23,10 +23,6 @@ import type { Row } from './rows'
 
 type TeamAccessLevel = Row<'project_team_access'>['level']
 
-/** Match server ordering, including ties, before converting timestamps to milliseconds. */
-export const isNewer = (aStamp: string, aId: string, bStamp: string, bId: string) =>
-  bStamp > aStamp || (bStamp === aStamp && bId > aId)
-
 export const shapeUser = (
   u: Row<'profiles'>,
   teams: string[],
@@ -552,8 +548,7 @@ export type InboxMark = {
    (convex/lib/inbox.ts messageLine, which the server and the stand-in
    write the same), the newest message's kind and the item's kinds, its
    list time in ms, its counts, whether it is read, its snooze's end in ms
-   or null, and the cutoff the item actions take (`through`) with the
-   newest message's created_at (`latestAt`). */
+   or null, and the cutoff the item actions take (`through`). */
 export const shapeInboxRow = (row: InboxPageRow) => ({
   key: inboxMarkKey(row.org_id, row.issue_id),
   org: row.org_id,
@@ -572,7 +567,6 @@ export const shapeInboxRow = (row: InboxPageRow) => ({
   read: row.unread_count === 0,
   snoozedUntil: row.snoozed_until === null ? null : Date.parse(row.snoozed_until),
   through: row.through,
-  latestAt: row.latest_at,
 })
 export type InboxRowVM = ReturnType<typeof shapeInboxRow>
 

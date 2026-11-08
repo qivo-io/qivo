@@ -146,7 +146,7 @@ describe('an Inbox row action', () => {
     const through = Date.parse(at(5))
     expect(P().unreadItem({ org: org(), task: 'task-b', through })).toBe(true)
     expect(markOf('task-b')).toMatchObject({ through, read: false })
-    expect(P().removeItem({ org: org(), task: 'task-a', through, latestAt: at(1) })).toBe(true)
+    expect(P().removeItem({ org: org(), task: 'task-a', through })).toBe(true)
     expect(markOf('task-a')).toMatchObject({ through, removed: true })
     expect(P().snoozeItem({ org: org(), task: 'task-b', through }, at(600))).toBe(true)
     expect(markOf('task-b')).toMatchObject({ through, snoozedUntil: at(600) })
@@ -164,9 +164,9 @@ describe('an Inbox row action', () => {
 
   it('marks its row from the moment it goes out, keeps an accepted mark until an Inbox ends it, and ends a refused one', async () => {
     const through = Date.parse(at(5))
-    P().readItem({ org: org(), task: 'task-a', through, latestAt: at(5) })
+    P().readItem({ org: org(), task: 'task-a', through })
     expect(markOf('task-a')).toEqual({ through, read: true, settled: false })
-    P().removeItem({ org: org(), task: 'task-b', through: 7, latestAt: at(1) })
+    P().removeItem({ org: org(), task: 'task-b', through: 7 })
     expect(markOf('task-b')).toEqual({ through: 7, removed: true, settled: false })
     answer(0)
     refuse(1)
@@ -184,7 +184,7 @@ describe('an Inbox row action', () => {
 
   it('settles only its own mark, and an Inbox ends no mark a later write set', async () => {
     const through = Date.parse(at(5))
-    P().readItem({ org: org(), task: 'task-a', through, latestAt: at(5) })
+    P().readItem({ org: org(), task: 'task-a', through })
     const first = markOf('task-a')
     P().unreadItem({ org: org(), task: 'task-a', through })
     const second = markOf('task-a')
@@ -207,9 +207,9 @@ describe('an Inbox row action', () => {
     await settle()
     const target = { org: org(), task: 'task-a', through: 5 }
     expect(P().unreadItem(target)).toBe(false)
-    expect(P().removeItem({ ...target, latestAt: at(5) })).toBe(false)
+    expect(P().removeItem(target)).toBe(false)
     expect(P().snoozeItem(target, at(600))).toBe(false)
-    expect(P().readItem({ ...target, latestAt: at(5) })).toBe(false)
+    expect(P().readItem(target)).toBe(false)
     expect(sent).toEqual([])
     expect(P().inboxMarks.size).toBe(0)
   })
@@ -257,7 +257,7 @@ describe("the hold on the watched task's read on open", () => {
     answer(0)
     await settle()
     expect(P().readOnOpen('task-a')).toBe(false)
-    P().readItem({ org: org(), task: 'task-a', through: Date.parse(at(5)), latestAt: at(5) })
+    P().readItem({ org: org(), task: 'task-a', through: Date.parse(at(5)) })
     // news past the read's cutoff comes while it waits, and the hold turns
     // its read on open away
     await news(7)
@@ -285,7 +285,7 @@ describe("the hold on the watched task's read on open", () => {
     await settle()
     // the row's Mark as read goes out, then Mark as unread, which the
     // server refuses before it accepts the read
-    P().readItem({ ...target, latestAt: at(5) })
+    P().readItem(target)
     P().unreadItem(target)
     refuse(2)
     await settle()
@@ -300,7 +300,7 @@ describe("the hold on the watched task's read on open", () => {
     P().unreadItem({ ...target, through: Date.parse(at(9)) })
     answer(4)
     await settle()
-    P().readItem({ ...target, through: Date.parse(at(9)), latestAt: at(9) })
+    P().readItem({ ...target, through: Date.parse(at(9)) })
     P().unreadItem({ ...target, through: Date.parse(at(9)) })
     answer(5)
     await settle()
@@ -320,7 +320,7 @@ describe("the hold on the watched task's read on open", () => {
     await watchTaskA()
     // the row's Mark as read goes out, then Mark as unread, and the server
     // answers them in that order
-    P().readItem({ org: org(), task: 'task-a', through: Date.parse(at(5)), latestAt: at(5) })
+    P().readItem({ org: org(), task: 'task-a', through: Date.parse(at(5)) })
     P().unreadItem({ org: org(), task: 'task-a', through: Date.parse(at(5)) })
     answer(0)
     await settle()

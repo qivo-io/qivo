@@ -1137,12 +1137,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
                     runOnItem((row) =>
                       row.read
                         ? P.unreadItem({ org: row.org, task: row.uuid, through: row.through })
-                        : P.readItem({
-                            org: row.org,
-                            task: row.uuid,
-                            through: row.through,
-                            latestAt: row.latestAt,
-                          }),
+                        : P.readItem({ org: row.org, task: row.uuid, through: row.through }),
                     )
                   }
                 >
@@ -1153,12 +1148,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
                   data-msg-menu-remove
                   onClick={() =>
                     runOnItem((row) => {
-                      P.removeItem({
-                        org: row.org,
-                        task: row.uuid,
-                        through: row.through,
-                        latestAt: row.latestAt,
-                      })
+                      P.removeItem({ org: row.org, task: row.uuid, through: row.through })
                       if (lit(row)) closeTask() // its pane just went away
                     })
                   }

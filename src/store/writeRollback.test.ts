@@ -47,7 +47,6 @@ describe('rollback during snapshot trouble', () => {
     org: snapshot.orgs[0].id,
     task,
     through: Date.parse('2026-09-14T08:00:00.000Z'),
-    latestAt: '2026-09-14T08:00:00.000Z',
   })
   const task = (title: string) => P().issues.find((issue) => issue.title === title)!
   const user = (name: string) => P().users.find((u) => u.name === name)

@@ -85,7 +85,6 @@ describe('the pause while Qivo cannot save', () => {
         org: snapshot.orgs[0].id,
         task: 'task-a',
         through: Date.parse('2026-09-14T08:00:00.000Z'),
-        latestAt: '2026-09-14T08:00:00.000Z',
       },
       { quiet: true },
     )
@@ -212,7 +211,6 @@ describe('the pause while Qivo cannot save', () => {
         org: snapshot.orgs[0].id,
         task: 'task-a',
         through: Date.parse('2026-09-14T08:00:00.000Z'),
-        latestAt: '2026-09-14T08:00:00.000Z',
       }),
     ).toBe(false)
     P.setIssueSubscribed(task.id, true)

@@ -3671,7 +3671,7 @@ const MESSAGE_RETENTION_DAYS = [1, 7, 30, 90]
    server accepted it and its paint settled, so `confirmed` may send
    another write. Answers false when the pause refuses it, with no mark. */
 function sendItemRead(
-  target: { org: string; task: string; through: number; latestAt: string },
+  target: { org: string; task: string; through: number },
   quiet: boolean,
   confirmed?: () => void,
 ): boolean {
@@ -16381,7 +16381,7 @@ export const PLANNER = {
       issue_id: issueUuid,
       author: profileIn(org),
       body: text,
-      created_at: new Date().toISOString(), // ISO-Z, the isNewer format
+      created_at: new Date().toISOString(), // ISO-Z, as the server stamps it
     }
     return send(
       api.comments.create,
@@ -16519,7 +16519,7 @@ export const PLANNER = {
       holds nothing once refused or failed. The read on open never frees
       it. */
   readItem: (
-    target: { org: string; task: string; through: number; latestAt: string },
+    target: { org: string; task: string; through: number },
     { quiet = false } = {},
   ): boolean => {
     const before = holdWrites
@@ -16593,17 +16593,13 @@ export const PLANNER = {
       confirmed: false,
       again,
     }
-    const sent = sendItemRead(
-      { org: shown.org, task, through: item.through, latestAt: item.latest_at },
-      true,
-      () => {
-        if (itemRead !== read) return
-        read.confirmed = true
-        // the answer that came with the confirmation may still hold a
-        // message committed after the read
-        PLANNER.readOnOpen(task)
-      },
-    )
+    const sent = sendItemRead({ org: shown.org, task, through: item.through }, true, () => {
+      if (itemRead !== read) return
+      read.confirmed = true
+      // the answer that came with the confirmation may still hold a
+      // message committed after the read
+      PLANNER.readOnOpen(task)
+    })
     if (sent) itemRead = read
     return sent
   },
@@ -16707,12 +16703,7 @@ export const PLANNER = {
       sent the write. A message stored after it stays as the item's only
       one. A removed mark hides the Inbox's row at once (P.inboxMarks). The
       pause refuses it first, with no mark. */
-  removeItem: (target: {
-    org: string
-    task: string
-    through: number
-    latestAt: string
-  }): boolean => {
+  removeItem: (target: { org: string; task: string; through: number }): boolean => {
     if (refusePausedWrite(api.messages.removeItem)) return false
     const { org, task } = target
     const mark = setInboxMark(org, task, { through: target.through, removed: true })

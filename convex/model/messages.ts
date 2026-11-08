@@ -244,12 +244,11 @@ function oldestFirst(
  * "an item holds every UNREAD message it has been sent, plus its newest
  * message when that one has been read." Deletes every READ message of the
  * (recipient, issue) pair except the pair's newest message, read or not.
- * Newest = max by (created_at desc, id desc) — raw string compare, the same
- * total order as the client's isNewer mirror (planner.ts), so client and
- * server keep the same survivor. The one exception to "every UNREAD
- * message" is the item cap below (trimUnreadMessages). A writer passes its
- * `edits` (model/inboxItems.ts), which it flushes; without one the prune
- * flushes its own. */
+ * Newest is the max by (created_at desc, id desc) in raw string order, the
+ * order the item's newest message follows (lib/inbox.ts newestFirst). The
+ * one exception to "every UNREAD message" is the item cap below
+ * (trimUnreadMessages). A writer passes its `edits` (model/inboxItems.ts),
+ * which it flushes; without one the prune flushes its own. */
 export async function pruneReadMessages(
   ctx: MutationCtx,
   a: { recipient_id: string; issue_id: string },

@@ -835,7 +835,7 @@ describe('pruneReadMessages — the 0109 pair invariant', () => {
       read_at: READ,
     })
 
-    // pair C: identical instants — the id breaks the tie, same as the client's isNewer
+    // pair C: identical instants, where the id breaks the tie (lib/inbox.ts newestFirst)
     const issueC = uuid()
     await plantMessage(t, { ...base, issue_id: issueC, id: 'aaaa', created_at: NOW, read_at: READ })
     const c2 = await plantMessage(t, {

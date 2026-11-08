@@ -26,12 +26,12 @@
  * Write level for issues/links is has_project_level 'user' — the 0003
  * policies' 'member', renamed by 0013.
  *
- * markRead/markUnread (+ the prune-per-pair statement-trigger successor) and
- * comments.create/update/remove live in phase 5's messages.ts / comments.ts —
- * NOT here. The archive reason-comment is the
- * one comment this file posts (the old client posted it gated on the
- * archive landing); it shares the archive's `now` and goes through
- * model/comments.ts postArchiveReason, as the machine archive does.
+ * The Inbox item writes (messages.ts readItem and unreadItem, with the prune
+ * per pair) and comments.create/update/remove live in messages.ts and
+ * comments.ts, not here. The archive reason-comment is the one comment this
+ * file posts (the old client posted it gated on the archive landing); it
+ * shares the archive's `now` and goes through model/comments.ts
+ * postArchiveReason, as the machine archive does.
  *
  * Each write checks Edit here first with the app's own sentence; the model
  * cores repeat that check as defense in depth (model/issues.ts
