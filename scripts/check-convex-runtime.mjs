@@ -17,7 +17,7 @@
  * Node's types. Tests, which Convex skips, keep Node's globals. Whatever the
  * check cannot settle, such as an import it cannot follow, fails too.
  *
- * The bundler rules below copy those of convex 1.48, which are 1.47's: its
+ * The bundler rules below copy those of convex 1.49, which are 1.47's: its
  * entryPoints, hasUseNodeDirective (with useNodeDirectiveRegex) and
  * mustBeIsolate in convex/src/bundler/index.ts, the schema, auth config and
  * component bundles, the names of a component's definition file, and the
