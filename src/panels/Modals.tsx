@@ -1135,9 +1135,11 @@ function MoveIssueModal({
     }
   }, [crossing, it?.uuid, target])
   if (!it) return null
-  // a target the project cache answers gone, as a concurrently deleted
-  // one, must not leave Move enabled
-  const targetValid = !!target && P.projectState(target) !== 'gone' && !!P.project(target)
+  // Move waits for the project cache's answer of the chosen row, one round
+  // trip after the pick, as the store moves only into a target it answered
+  // (P.moveIssue); one it answers gone, as a concurrently deleted one,
+  // never enables Move
+  const targetValid = !!target && P.projectState(target) === 'ok' && !!P.project(target)
   const moving = targetValid && target !== it.project
   // whoever works on the task or its subtasks must keep access after the
   // move: the server checks every one at full scope and refuses the move

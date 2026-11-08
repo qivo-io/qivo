@@ -22,7 +22,6 @@ import { DEFAULT_PLANNABLE_HOURS } from '../lib/workload'
 import type { ProjectSeed } from './projectCache'
 import type { Row } from './rows'
 
-
 export const shapeUser = (
   u: Row<'profiles'>,
   teams: string[],

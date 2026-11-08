@@ -219,6 +219,16 @@ async function load(edit?: (next: Snapshot) => void) {
   store = await import('./planner')
   P = store.P
   await store.initStore()
+  // the Move window names its targets with the project cache, which a move
+  // waits for (P.moveIssue)
+  P.nameProjects('the move window', ['work', 'bench', 'manuals'])
+  await vi.waitFor(() =>
+    expect(['work', 'bench', 'manuals'].map((id) => P.projectState(id))).toEqual([
+      'ok',
+      'ok',
+      'ok',
+    ]),
+  )
 }
 
 const open = (name: string) => subs.filter((s) => s.name === name && !s.closed)
@@ -1015,6 +1025,23 @@ describe('Move, Archive and delete from the window’s own answer', { timeout: 3
       detach_parent: true,
       expected: { project_id: 'work', parent_id: null, has_hidden_parent: true },
     })
+  })
+
+  it('moves only into a target the project cache answered, never one it only seeded', async () => {
+    await load()
+    await openBoard([viewRow(far()), viewRow(kid(FAR_KID, 42))])
+    await openFar(family())
+    P.showSections({}, true)
+    await turn()
+    // a target a targets row seeded but the cache has not answered
+    P.seedProjects([{ id: 'tools', org_id: ORG, name: 'Tools', num: 9, parent_id: 'plan' }])
+    expect(P.project('tools')).toBeDefined()
+    expect(P.projectState('tools')).not.toBe('ok')
+    expect(P.moveIssue(H, 'tools')).toBeNull()
+    expect(sent('issues:move')).toEqual([])
+    // an answered one moves
+    expect(P.moveIssue(H, 'bench')).toBe(H)
+    expect(sent('issues:move')).toHaveLength(1)
   })
 
   it('deletes with the chosen subtasks’ uuids from the answer and archives, painting nothing before the server answers', async () => {

@@ -8290,6 +8290,10 @@ function clearAvatarSources() {
   minted.clear()
   inlineImages.clear()
   profileCache.clear()
+  // the held tasks' projects go with the tasks, so the cache's next sync
+  // reads only what a view still names, never the old session's tasks'
+  projectCache.name('held tasks', [])
+  heldTasksNamed = null
   projectCache.clear()
   cachedFacts = new Map()
   personViews = new Map()
@@ -10323,11 +10327,12 @@ function moveAnswerTask(
   projectId: string,
   onSaved?: (saved: boolean) => void,
 ): string | null {
-  // the target from the project cache, a sub-project the Move window
-  // named and seeded from its targets row, never one it does not know yet
+  // the target from the project cache's current answer, a sub-project the
+  // Move window named from its targets row, never one it only seeded or
+  // has not answered yet
   const target = PLANNER.project(projectId)
   const row = a.answer.task
-  if (target?.type !== 'project' || PLANNER.projectState(projectId) === 'gone') return null
+  if (target?.type !== 'project' || PLANNER.projectState(projectId) !== 'ok') return null
   if (row.project_id === projectId) return null
   const family = PLANNER.familyOf(a.model)
   if (!family || refusePausedEdit()) return null
@@ -14465,7 +14470,9 @@ export const PLANNER = {
       (MOVE_HOLDER_RULE, MOVE_SUBTREE_HOLDER_RULE, ASSIGNEE_RULE or
       REVIEWER_RULE) is toasted with its sentence and the move taken back,
       and `onSaved` hears whether the server took it, so a caller says the
-      task moved only then. */
+      task moved only then. The target must be a sub-project the project
+      cache answers `ok`: a seeded or loading one sends nothing, so the
+      Move window keeps Move off until the cache answers its chosen row. */
   moveIssue: (id: string, projectId: string, onSaved?: (saved: boolean) => void) => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
@@ -14474,7 +14481,8 @@ export const PLANNER = {
       const shown = answerTaskOf(id)
       return shown ? moveAnswerTask(shown, projectId, onSaved) : null
     }
-    // the target from the project cache, as moveAnswerTask reads it
+    // the target from the project cache's current answer, as
+    // moveAnswerTask reads it
     const target = PLANNER.project(projectId)
     const it = PLANNER.issueById[id]
     if (
@@ -14483,7 +14491,7 @@ export const PLANNER = {
       !it ||
       !target ||
       target.type !== 'project' ||
-      PLANNER.projectState(projectId) === 'gone' ||
+      PLANNER.projectState(projectId) !== 'ok' ||
       row.project_id === projectId ||
       refusePausedEdit()
     )

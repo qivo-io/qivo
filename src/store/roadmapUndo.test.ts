@@ -224,10 +224,27 @@ describe('roadmap undo through the client store', () => {
 
   it('takes back a Roadmap milestone move refused over an occupied week, and keeps the history', async () => {
     await savePlan()
+    // milestones sit on a top-level project, here one the planner leads
+    // above the fixture's project, which the Roadmap names with the project
+    // cache, so a flag's move finds its organization
+    const program = {
+      ...snap.projects[0],
+      id: crypto.randomUUID(),
+      type: 'meta' as const,
+      key: 'PROG',
+      num: 9,
+      name: 'Planning program',
+      lead_id: snap.profiles[0].id,
+    }
+    snap.projects[0].parent_id = program.id
+    snap.projects.push(program)
+    publish(structuredClone(snap))
+    P.nameProjects('the roadmap', [program.id])
+    await vi.waitFor(() => expect(P.projectState(program.id)).toBe('ok'))
     const id = crypto.randomUUID()
     snap.milestones.push({
       id,
-      project_id: snap.projects[0].id,
+      project_id: program.id,
       name: 'Beta',
       week: '2026-09-21',
       created_at: NOW,
@@ -237,7 +254,7 @@ describe('roadmap undo through the client store', () => {
     const slot = roadmapSlots[0]
     P.watchMilestones(slot, {
       kind: 'between',
-      projects: [snap.projects[0].id],
+      projects: [program.id],
       from: '2026-09-07',
       to: '2026-10-05',
     })
