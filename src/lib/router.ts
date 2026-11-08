@@ -55,6 +55,7 @@ import type { AddressedTask } from '../store/liveParts'
 import { ISSUE_PREFIX, MINE_SCOPE, P, type ProjectAsk } from '../store/planner'
 import type { IssueVM } from '../store/viewModels'
 import { refParts, taskRef } from './taskReference'
+import { syncProjectNumber } from './teamSync'
 
 export type Route = {
   scope?: string
@@ -366,8 +367,11 @@ function parseSegments(seg: string[], org: string | undefined, orgUnknown: boole
        rule issue() follows, applied to the whole address). A project by
        uuid is the scope `project:<uuid>`; one by number stays
        `unresolved:<segment>`, as typed, which the page resolves through
-       projectNav.resolve into `project:<id>`, and which asks to choose
-       where no project answers, never the saved scope or All projects. */
+       projectNav.resolve into `project:<id>` in the organization the
+       number reads in (numberOrgOf; `<n>@<org_id>` where that is not the
+       home organization, lib/teamSync.ts syncProjectNumber), and which asks
+       to choose where no project answers, never the saved scope or All
+       projects. */
     r.sync = {}
     if (orgUnknown) return r
     let i = 1
@@ -377,7 +381,12 @@ function parseSegments(seg: string[], org: string | undefined, orgUnknown: boole
     } else if (seg[1] === 'p' || seg[1] === 'team') {
       if (seg[1] === 'p') {
         const s = seg[2] ?? ''
-        r.sync.scope = UUID.test(s) ? `project:${s.toLowerCase()}` : `unresolved:${s}`
+        const at = /^\d+$/.test(s) ? numberOrgOf(org) : undefined
+        r.sync.scope = UUID.test(s)
+          ? `project:${s.toLowerCase()}`
+          : at && at !== P.homeOrg
+            ? `unresolved:${s}@${at}`
+            : `unresolved:${s}`
       } else if (seg[2]) r.sync.scope = `team:${seg[2].toLowerCase()}`
       i = 3
     }
@@ -766,9 +775,16 @@ function syncPath(sync: { scope: string; step: string }, openIssue?: string | nu
   // segment it was typed as, encoded as parsePath decodes it, so a '/', '?'
   // or '#' in it stays inside the segment
   let rest = sync.scope === 'all' ? '/sync/all' : '/sync'
-  if (sync.scope.indexOf('unresolved:') === 0)
-    rest = `/sync/p/${encodeURIComponent(sync.scope.slice(11))}`
-  else if (sync.scope.indexOf('project:') === 0) {
+  if (sync.scope.indexOf('unresolved:') === 0) {
+    // a number read in another organization, under that organization's
+    // slug while it can be named, as `~` would read it at home
+    const segment = sync.scope.slice(11)
+    const asked = syncProjectNumber(segment)
+    if (asked?.org_id && orgSegment(asked.org_id) !== ORG_NONE) {
+      org = asked.org_id
+      rest = `/sync/p/${String(asked.num)}`
+    } else rest = `/sync/p/${encodeURIComponent(segment)}`
+  } else if (sync.scope.indexOf('project:') === 0) {
     const id = sync.scope.slice(8)
     const p = P.project(id)
     if (p) org = p.org
@@ -945,5 +961,16 @@ export function pathMatchesState(path: string, s: UiState): boolean {
     // normalizes in place to the canonical view-prefixed form
     return (r.view || s.view || 'overview') === (s.view || 'overview')
   }
-  return (r.scope || s.scope) === s.scope && (r.view || 'overview') === (s.view || 'overview')
+  const sameView = (r.view || 'overview') === (s.view || 'overview')
+  const ask = r.unheld
+  if (ask && typeof ask === 'object') {
+    /* A project by number (Route.unheld) is the state's scope only where
+       the project cache names that scope by the same organization and
+       number, as once App opened the project the address asked for. One
+       no read can ask about (null), as under a stale slug, normalizes in
+       place below. */
+    const p = s.scope ? P.project(s.scope) : undefined
+    return sameView && !!p && p.org === ask.org_id && p.num === ask.num
+  }
+  return (r.scope || s.scope) === s.scope && sameView
 }

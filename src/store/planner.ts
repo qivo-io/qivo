@@ -2464,8 +2464,12 @@ let refRead: RefRead | null = null
    over. */
 let refLast: { args: string; news: SideNews } | null = null
 /* Whether a rebuild since the last syncRefRead changed who can open what:
-   the projects, the seats' profiles, or a grant to a person or a team. */
+   the seats' profiles, their teams, or the levels of the projects the
+   project cache answers, which follow the grants the server reads (the
+   workspace sends no grant): a level that changed, a project that arrived
+   or one that left, as refLevels last listed them. */
 let refAccessMoved = false
+let refLevels = ''
 
 /* The key a reference read's arguments compare by. */
 const refKey = (args: { org_id?: unknown; ref?: unknown }) =>
@@ -8677,7 +8681,32 @@ const levelOnDraft = (p: DraftGrants): string | null => {
     without a page's, else the home one. */
 function orgOfProject(pid: string | null | undefined): string {
   if (!pid) return ''
-  return cachedFacts.get(pid)?.org ?? ''
+  return factsOfProject(pid)?.org ?? ''
+}
+
+/* The facts of project `pid` as the project cache knows it now: its row,
+   else its seed, each shaped once as the same object the rebuild keeps in
+   cachedFacts, so a lookup reads an answer or a seed the cache took since
+   the last rebuild (a view a navigation row just opened, a rename, a
+   project gone) rather than the facts that rebuild shaped. */
+function factsOfProject(pid: string): ProjectFacts | undefined {
+  const row = projectCache.look(pid).row
+  if (row) {
+    let shaped = factsOfRow.get(row)
+    if (!shaped) {
+      shaped = shapeCachedProject(row)
+      factsOfRow.set(row, shaped)
+    }
+    return shaped
+  }
+  const seed = projectCache.seedOf(pid)
+  if (!seed) return undefined
+  let shaped = factsOfSeed.get(seed)
+  if (!shaped) {
+    shaped = shapeSeededProject(seed)
+    factsOfSeed.set(seed, shaped)
+  }
+  return shaped
 }
 
 /** What an off control says while its project loads, has failed, or is
@@ -8933,7 +8962,14 @@ function rebuild(now = new Date(), full = false) {
   const changes = taskChangesOf(dirty)
   // who can open what, which a uuid every seat said unavailable for is
   // read again after (syncRefRead)
-  refAccessMoved ||= whole || dirty.keys.has('profiles') || dirty.lists.has('teamMembers')
+  const levels = projectCache
+    .rows()
+    .map((row) => `${row.id}:${row.level}`)
+    .sort()
+    .join('\n')
+  refAccessMoved ||=
+    whole || dirty.keys.has('profiles') || dirty.lists.has('teamMembers') || levels !== refLevels
+  refLevels = levels
   // the tasks taken for groups with subtasks to come, and for subtasks of
   // parents to come, change while loading
   if (
@@ -8959,16 +8995,16 @@ function rebuild(now = new Date(), full = false) {
     tasks.renew(shown.map(([uuid]) => uuid))
   }
   rebuiltLoading = !tasksAll
-  P.issues = tasks.issues()
+  const heldTasks = tasks.issues()
+  P.issues = heldTasks
   P.issueById = tasks.issueById()
-  // the projects of the tasks the workspace holds, which it holds only
-  // after something asked for every task: named with the project cache, so
-  // every held task's place, delay rule and rights read their project. They
-  // are the person's live projects, within PROJECT_CACHE.most at the design
-  // size (700 of one organization)
-  if (P.issues !== heldTasksNamed) {
-    heldTasksNamed = P.issues
-    projectCache.name('held tasks', [...new Set(P.issues.map((it) => it.project))])
+  // the projects of the tasks the workspace holds, named with the project
+  // cache, so every held task's place, delay rule and rights read their
+  // project. They are the person's live projects, within PROJECT_CACHE.most
+  // at the design size (700 of one organization)
+  if (heldTasks !== heldTasksNamed) {
+    heldTasksNamed = heldTasks
+    projectCache.name('held tasks', [...new Set(heldTasks.map((it) => it.project))])
   }
   if (STRICT_LAYERS && !unchecked) checkTasks(sources)
 
@@ -9894,6 +9930,20 @@ function reviewHoursForProject(projectId: string): number | null {
   return known.state === 'ok' && known.row ? known.row.review_hours : null
 }
 
+/* What a review time lookup answers for one write's paints: each
+   project's review time as reviewHoursForProject first answers it, kept
+   for the write's later paints, so a repaint of the write's layer paints
+   the same rows once the project cache answers (checkLayers) and the
+   delivery brings the server's value. */
+type ReviewHours = (projectId: string) => number | null
+function reviewHoursOfWrite(): ReviewHours {
+  const seen = new Map<string, number | null>()
+  return (projectId) => {
+    if (!seen.has(projectId)) seen.set(projectId, reviewHoursForProject(projectId))
+    return seen.get(projectId) ?? null
+  }
+}
+
 /* The fields updateViewTask writes: the Board's drop and owner picker
    (status, assignee and reviewer), Team sync's Remaining box and Pause
    (remaining and paused), and the Roadmap's drag, Cancel and Auto-move
@@ -9960,20 +10010,21 @@ function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
   if (it.isGroup) delete paintDb.status
   const at = new Date().toISOString()
   const uuid = it.uuid
+  const hours = reviewHoursOfWrite()
   const view: View = {
     view: viewPaint([uuid], () => {
-      for (const copy of viewRows.edit(uuid)) stampTaskPatch(copy, paintDb, at)
+      for (const copy of viewRows.edit(uuid)) stampTaskPatch(copy, paintDb, at, hours)
     }),
     // the window's own answer of the task, while a window shows it
     detail: {
       task: uuid,
       paint: () => {
         const shown = detailRows.task
-        if (shown?.task.id === uuid) stampTaskPatch(shown.task, paintDb, at)
+        if (shown?.task.id === uuid) stampTaskPatch(shown.task, paintDb, at, hours)
       },
     },
     // skips until the workspace holds the task, then paints it there too
-    workspace: () => patchIssueRow(uuid, paintDb, at),
+    workspace: () => patchIssueRow(uuid, paintDb, at, hours),
   }
   const over = overOf('issues', row, Object.keys(wire))
   const planningOnly = Object.keys(wire).every((key) => ['start_week', 'end_week'].includes(key))
@@ -10678,9 +10729,10 @@ function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions)
   const at = new Date().toISOString()
   // the new parent's short row as the window's next answer holds it
   const parentShort = newParent && parentRow ? parentShortOf(parentRow, at) : null
+  const hours = reviewHoursOfWrite()
   const viewPart = viewPaint([uuid], () => {
     for (const copy of viewCopiesIn(uuid, a.org)) {
-      stampTaskPatch(copy, viewDb, at)
+      stampTaskPatch(copy, viewDb, at, hours)
       if (parentChange) copy.has_hidden_parent = false
     }
   })
@@ -10691,7 +10743,7 @@ function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions)
       paint: () => {
         const shown = detailRows.task
         if (!shown || shown.task.id !== uuid) return
-        stampTaskPatch(shown.task, paintDb, at)
+        stampTaskPatch(shown.task, paintDb, at, hours)
         // the parent goes, a hidden one too, or the new one shows
         if (parentChange) {
           shown.task.has_hidden_parent = false
@@ -10705,7 +10757,7 @@ function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions)
     workspace: () => {
       clearParentHours(newParent, at, a.org)
       if (!holdsIn(uuid, a.org)) return
-      patchIssueRow(uuid, paintDb, at)
+      patchIssueRow(uuid, paintDb, at, hours)
       if (parentChange) rows.hiddenParentTasks.delete(uuid)
       if ('description' in paintDb)
         paintDescriptionImages(uuid, prevDesc, String(paintDb.description || ''), at)
@@ -10778,9 +10830,14 @@ function parentShortOf(row: RelationCandidate, at: string): ShortRow {
    the row it paints. The wire carries null-to-clear; the STORED row carries
    absence as undefined (the snapshot's own shape), so nulls translate on
    the way in. Skips a task that is gone. */
-function patchIssueRow(uuid: string, db: IssueWirePatch, at: string) {
+function patchIssueRow(
+  uuid: string,
+  db: IssueWirePatch,
+  at: string,
+  hours: ReviewHours = reviewHoursForProject,
+) {
   const row = rows.issues.get(uuid)
-  if (row) stampTaskPatch(row, db, at)
+  if (row) stampTaskPatch(row, db, at, hours)
 }
 
 /* The task fields issues.update's stamps touch, of a workspace row or a
@@ -10800,8 +10857,15 @@ type PatchedTask = Pick<
 >
 
 /* Paints wire patch `db` on task row `row` at `at` with the server's touch
-   and stamp rules (patchIssueRow). */
-function stampTaskPatch(row: PatchedTask, db: IssueWirePatch, at: string) {
+   and stamp rules (patchIssueRow), a move into Review with the review time
+   `hours` answers for the task's project (reviewHoursOfWrite for a write
+   whose layer repaints). */
+function stampTaskPatch(
+  row: PatchedTask,
+  db: IssueWirePatch,
+  at: string,
+  hours: ReviewHours = reviewHoursForProject,
+) {
   const prevStatus = row.status
   const before = { status: row.status, reviewer_id: row.reviewer_id, review_at: row.review_at }
   const oldRem = row.remaining_hours == null ? null : Number(row.remaining_hours)
@@ -10826,7 +10890,7 @@ function stampTaskPatch(row: PatchedTask, db: IssueWirePatch, at: string) {
   // status from a group's paint patch. The wire patch is never touched.
   const reviewHours =
     db.status === 'review' && prevStatus !== 'review' && db.remaining_hours == null
-      ? reviewHoursForProject(row.project_id)
+      ? hours(row.project_id)
       : null
   if (reviewHours !== null) {
     row.remaining_hours = reviewHours
@@ -11901,7 +11965,7 @@ export const PLANNER = {
       until one names it (P.nameProjects). An archived project answers
       undefined, as the cache never holds one. */
   project: (id: string | null | undefined): ProjectFacts | undefined =>
-    id ? cachedFacts.get(id) : undefined,
+    id ? factsOfProject(id) : undefined,
   /** Where project `id` stands in the project cache (`ok`, `loading`,
       `failed`, `unchecked`, `gone`), or null for no id. A project no open
       view names reads `loading` until one names it. */
@@ -14077,6 +14141,7 @@ export const PLANNER = {
       }
     }
     const at = new Date().toISOString()
+    const hours = reviewHoursOfWrite()
     // attaching a sub-issue clears the new parent's own hours (0066 mirror)
     const newParent = parentUuid ?? undefined
     const prevDesc = String(row.description || '') // pre-patch, for the image paint below
@@ -14127,7 +14192,7 @@ export const PLANNER = {
         : {}),
       workspace: () => {
         clearParentHours(newParent, at, row.org_id)
-        patchIssueRow(uuid, paintDb, at)
+        patchIssueRow(uuid, paintDb, at, hours)
         // a new visible parent or a detach replaces a hidden one
         if ('parent_id' in paintDb && rows.issues.has(uuid)) rows.hiddenParentTasks.delete(uuid)
         if ('description' in paintDb) {

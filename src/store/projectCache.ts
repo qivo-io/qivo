@@ -595,6 +595,8 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     seeds(): ProjectSeed[] {
       return [...seeds.values()]
     },
+    /** The seed of project `id` while the cache keeps no row for it. */
+    seedOf: (id: string): ProjectSeed | undefined => seeds.get(id),
     /** Seeds the facts of `list`, projects a navigation row showed, where
         the cache keeps no row for them, a later seed replacing an earlier
         one. A seed reads as `loading` until an answer brings the

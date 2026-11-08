@@ -35,6 +35,7 @@ import { EmptyState, Icon } from '../components/qivo'
 import { RoadmapUndo } from '../components/RoadmapUndo'
 import { useHolds } from '../components/useHolds'
 import { sortName, usePeople } from '../components/usePeople'
+import { useProjects } from '../components/useProjects'
 import { WorkspaceToolbar } from '../components/WorkspaceShell'
 import { isoToWeek, winWeeks } from '../lib/dates'
 import { isIssueGroup } from '../lib/issueGroups'
@@ -1023,6 +1024,9 @@ function Roadmap({
   })()
   const planLoadRef = useRefR<LoadItem[] | null>(null)
   planLoadRef.current = planLoad?.items ?? null
+  // the projects of the owner's work, which the panel names (PlanCard), at
+  // most the owner's open tasks' projects
+  useProjects(planLoad?.items?.map((item) => item.projectId) ?? [])
   const autoFitEnd = (id, startW, load, capacity, uuid, remaining) => {
     // same measurement-week anchor as the drag commit and the delay projection
     const rs = taskOf(id)?.remainingSet

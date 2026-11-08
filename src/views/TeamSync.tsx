@@ -54,6 +54,7 @@ import {
   type SyncVerdict,
   stampLabel,
   syncDay,
+  syncProjectNumber,
   waitingOnReview,
 } from '@/lib/teamSync'
 import { useLatest } from '@/lib/useLatest'
@@ -467,16 +468,18 @@ export function TeamSync({
   // whether the person sees no project of the home organization, which the
   // server confirms (projectNav.holds) while no meeting shows
   const noProject = useHolds(!meeting.shows, P.homeOrg) === 'none'
-  // a Team sync address names a project by its number (`unresolved:<n>`),
-  // which the server resolves in the home organization into the project's
+  // a Team sync address names a project by its number (`unresolved:<n>`,
+  // or `<n>@<org_id>` for one the address pinned to another organization),
+  // which the server resolves in that organization into the project's
   // scope, its facts seeded, so the page never asks to choose a project the
   // person can open
-  const unresolvedNum =
-    scope.kind === 'unresolved' && /^\d+$/.test(scope.segment) ? Number(scope.segment) : null
+  const asked = scope.kind === 'unresolved' ? syncProjectNumber(scope.segment) : null
+  const askedNum = asked?.num ?? null
+  const askedOrg = asked ? (asked.org_id ?? P.homeOrg) : ''
   useEffect(() => {
-    if (unresolvedNum === null || !P.homeOrg) return
+    if (askedNum === null || !askedOrg) return
     let live = true
-    const stop = openResolved({ org_id: P.homeOrg, num: unresolvedNum }, (opening) => {
+    const stop = openResolved({ org_id: askedOrg, num: askedNum }, (opening) => {
       if (!live || opening.state !== 'open') return
       onCorrectRef.current({ scope: `project:${opening.id}`, step: place.step })
     })
@@ -484,7 +487,7 @@ export function TeamSync({
       live = false
       stop()
     }
-  }, [unresolvedNum])
+  }, [askedNum, askedOrg])
   const { humans, agents } = meeting
   // the people the page shows, named while it shows: the walk's people and
   // the meeting's tasks' assignees and reviewers, in the walk's order
