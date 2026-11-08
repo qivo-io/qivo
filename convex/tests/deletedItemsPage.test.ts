@@ -1087,6 +1087,31 @@ describe('stops', () => {
     expect(cut.missing).toBe('matches')
   })
 
+  it("says only that matches may be missing when a member's gathering runs out between its search sources", async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const org_id = f.org.id
+    // the user leads Testbed: their own deletes and Testbed's items are two
+    // sources, each a search query
+    for (let i = 0; i < 3; i++) {
+      const task = await plantIssue(t, { org_id, project_id: f.sub.id, title: `Damper ${i}` })
+      await deleteTask(t, f.user, task.id)
+      later()
+    }
+    const args = { scope: { org_id, all: true as const }, search: 'damper' }
+    const whole = await page(t, f.user, args)
+    expect(whole.entries).toHaveLength(3)
+    expect(whole.missing).toBe('matches')
+    // a gathering whose room runs out before its next source stops there,
+    // which says nothing more than that matches may be missing
+    for (const ranges of [1, 2, 3]) {
+      Object.assign(DELETED_PAGE, { gather: { ...DEFAULT_PAGE.gather, ranges } })
+      const cut = await page(t, f.user, args)
+      expect(cut.missing, `${ranges}`).toBe('matches')
+      expect(cut.entries.length, `${ranges}`).toBeLessThanOrEqual(3)
+    }
+  })
+
   it('ends a browse page early on a lowered budget, and pages on to the end with no entry twice', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
