@@ -48,6 +48,7 @@ const threads: { stopped: boolean }[] = []
 // the milestone reads the store subscribed to, and whether each stopped
 const milestoneWatches: { name: string; stopped: boolean }[] = []
 const realTimeout = globalThis.setTimeout
+const realClearTimeout = globalThis.clearTimeout
 
 let container: HTMLDivElement
 let root: Root
@@ -66,6 +67,27 @@ beforeEach(() => {
     if (typeof options === 'object') this.scrollTop = options.top ?? 0
   }
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  /* Frames on the real clock: jsdom schedules its frames on the timer
+     functions it found first, so once a case faked them and the clock
+     moved, a later case would wait for frames that never come, and no page
+     that leaves (components/KeptView.tsx) would ever go. */
+  const frames = new Map<number, ReturnType<typeof realTimeout>>()
+  let frame = 0
+  vi.stubGlobal('requestAnimationFrame', (step: FrameRequestCallback) => {
+    const id = ++frame
+    frames.set(
+      id,
+      realTimeout(() => {
+        frames.delete(id)
+        step(performance.now())
+      }, 16),
+    )
+    return id
+  })
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => {
+    realClearTimeout(frames.get(id))
+    frames.delete(id)
+  })
   vi.stubGlobal(
     'matchMedia',
     vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
