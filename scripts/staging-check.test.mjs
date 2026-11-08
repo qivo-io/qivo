@@ -1306,6 +1306,14 @@ describe('staging check REST contract', () => {
     expect(step).toContain('await routeBypass(own)')
     expect(step).toContain('signInBrowser(first, cfg.nora)')
     expect(step).toContain("getByRole('button', { name: 'Sign out', exact: true })")
+    // a sign-in counts once it went through, before the app shows, so a
+    // session whose app never loads is signed out too, by the account
+    // page or the app's own sign-out request
+    const signedIn = step.indexOf('authenticated = true')
+    expect(signedIn).toBeGreaterThan(step.indexOf('signInBrowser(first, cfg.nora)'))
+    expect(signedIn).toBeLessThan(step.indexOf("waitForSelector('[data-all-nav]'"))
+    expect(step).toContain('const page = !authenticated')
+    expect(step).toContain('window.PLANNER?.signOut?.()')
     expect(step).toContain('restoreDelivery(control, noted)')
     expect(step).toContain('removeInboxRow(page, t0)')
     expect(step).toContain('await own.close()')

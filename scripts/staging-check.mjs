@@ -7142,8 +7142,11 @@ async function restoreDelivery(page, mode) {
  *  to the one it noted through the control and waits for the control to
  *  show it ready from the server, once the control showed it,
  *  removes t0's item from Nora's Inbox once the agent mentioned her, signs
- *  the context out from any of its pages once it signed in, so no session
- *  or notification row stays behind, and closes the context. A cleanup
+ *  the context out from any of its pages once its sign-in went through,
+ *  also when the app then never loaded, so no session or notification row
+ *  stays behind, and closes the context. It signs out with the account
+ *  page's Sign out, or with the app's own sign-out request where that page
+ *  does not render. A cleanup
  *  that could not do one of those fails a step that passed, and is noted
  *  beside a failure. It needs a backend from the release
  *  after v0.1.161 on, since the leader's note comes from inbox.feed;
@@ -7159,7 +7162,9 @@ async function notificationDeliveryCheck() {
     await own.grantPermissions(['notifications'], { origin })
     let noted = null
     let control = null
-    let signedIn = false
+    // the sign-in went through, which may have made a session even when
+    // the app then never loads
+    let authenticated = false
     let mentioned = false
     // the step's note once it passed, and what its cleanup could not do
     let result = null
@@ -7168,8 +7173,8 @@ async function notificationDeliveryCheck() {
       const first = await own.newPage()
       await first.goto(`${origin}/app/~/projects`, { waitUntil: 'domcontentloaded' })
       await signInBrowser(first, cfg.nora)
+      authenticated = true
       await first.waitForSelector('[data-all-nav]', { timeout: 60_000 })
-      signedIn = true
       const second = await own.newPage()
       await second.goto(`${origin}/app/~/projects`, { waitUntil: 'domcontentloaded' })
       await second.waitForSelector('[data-all-nav]', { timeout: 60_000 })
@@ -7248,9 +7253,10 @@ async function notificationDeliveryCheck() {
           if (!restored) left.push(`Nora's mode was not set back to ${noted}`)
         }
         // the session's cookie signs in every page of the context, so any
-        // open page, or a new one, signs it out, wherever the step stopped
+        // open page, or a new one, signs it out, wherever the step stopped,
+        // also after a sign-in whose app never loaded
         const open = own.pages().find((page) => !page.isClosed())
-        const page = !signedIn
+        const page = !authenticated
           ? null
           : control && !control.isClosed()
             ? control
@@ -7261,8 +7267,29 @@ async function notificationDeliveryCheck() {
           await page.goto(`${origin}/app/${ORG_SLUG}/settings/account`, {
             waitUntil: 'domcontentloaded',
           })
-          await page.getByRole('button', { name: 'Sign out', exact: true }).click()
-          await page.waitForSelector('input[type="email"]', { timeout: 60_000 })
+          const signOut = page.getByRole('button', { name: 'Sign out', exact: true })
+          const shown = await signOut.waitFor({ timeout: 60_000 }).then(
+            () => true,
+            () => false,
+          )
+          if (shown) {
+            await signOut.click()
+            await page.waitForSelector('input[type="email"]', { timeout: 60_000 })
+          } else {
+            // the app's own sign-out request, as the run's last cleanup
+            // sends it, which needs the app's code but not its workspace
+            const answered = page
+              .waitForResponse((r) => r.url().includes('/sign-out'), { timeout: 10_000 })
+              .then(
+                (r) => r.ok(),
+                () => false,
+              )
+            await evaluate(page, () => window.PLANNER?.signOut?.()).catch(() => {})
+            if (!(await answered))
+              left.push(
+                "Nora's session stayed, since the account page did not render and the app's sign-out request got no answer",
+              )
+          }
         }
       } catch (error) {
         left.push(`the sign-out failed: ${describe(error)}`)
