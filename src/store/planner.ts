@@ -18089,9 +18089,9 @@ export const PLANNER = {
     // teams: the membership the server diffs to, exactly
     const teams = 'teams' in patch ? [...(patch.teams || [])] : null
     if (teams) wire.teams = teams
-    // the role select sends orgRole even when it is unchanged, and only a
-    // real change clears the right; worked out on the row the paint finds,
-    // before the role lands, as the server does
+    // a patch may name orgRole unchanged, and only a real change clears
+    // the right; worked out on the row the paint finds, before the role
+    // lands, as the server does
     const rightUpdate = {
       org_role: patch.orgRole,
       can_create_projects: 'canCreateProjects' in patch ? !!patch.canCreateProjects : undefined,
@@ -18121,8 +18121,9 @@ export const PLANNER = {
     // billing has paused editing. Every other change, reactivation included,
     // goes through update.
     // a field sent with the value the page showed changes nothing the
-    // person chose, such as the role select's active: true, so it goes
-    // unsent and unchecked, and cannot undo a change someone else made to it
+    // person chose, such as active: true for someone shown active, so it
+    // goes unsent and unchecked, and cannot undo a change someone else made
+    // to it
     for (const key of ['org_role', 'active', 'email', 'can_create_projects'] as const)
       if (key in wire && (wire[key] ?? null) === (shownRow[key] ?? null)) delete wire[key]
     const deactivateOnly = wire.active === false && Object.keys(wire).length === 1

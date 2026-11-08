@@ -717,9 +717,12 @@ export function ProjectRightHeader() {
 
 // Role and active status share one selector; deactivation removes access.
 // `waiting` shows the role, unchangeable, while the page's read is not
-// current. `onAccepted` hears an accepted change with the project right
-// the server keeps with it, which a real role change clears
-// (convex/lib/projectCreators.ts projectRightAfterUpdate).
+// current. A choice sends only what differs from the row shown, and
+// `onAccepted` hears just that once the server accepted it: the role with
+// the project right a role change clears (convex/lib/projectCreators.ts
+// projectRightAfterUpdate), the reactivation, or both. So a deactivation
+// and a role change sent before either answers leave the row inactive
+// with the new role, as the server does.
 export function UserRoleSelect({
   user,
   isSelf,
@@ -773,17 +776,22 @@ export function UserRoleSelect({
             user,
           )
         else {
-          const right = projectRightAfterUpdate(
-            { org_role: user.orgRole, can_create_projects: user.canCreateProjects },
-            { org_role: v },
-          )
-          const fields = { org_role: v, active: true, can_create_projects: right === true }
-          P.updateUser(
-            user.id,
-            { orgRole: v, active: true },
-            learning({}, fields, onAccepted),
-            user,
-          )
+          const patch: UserPatch = {}
+          const fields: Partial<SettingsPersonRow> = {}
+          if (v !== user.orgRole) {
+            patch.orgRole = v
+            fields.org_role = v
+            fields.can_create_projects =
+              projectRightAfterUpdate(
+                { org_role: user.orgRole, can_create_projects: user.canCreateProjects },
+                { org_role: v },
+              ) === true
+          }
+          if (!user.active) {
+            patch.active = true
+            fields.active = true
+          }
+          P.updateUser(user.id, patch, learning({}, fields, onAccepted), user)
         }
       }}
       style={{ opacity: lastAdmin || waiting ? 0.55 : 1 }}

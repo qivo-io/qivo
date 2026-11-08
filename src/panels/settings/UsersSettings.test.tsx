@@ -757,6 +757,58 @@ describe('kept rows', () => {
     })
   })
 
+  it('keeps a kept row inactive when a role change follows its deactivation before either answers', async () => {
+    await load((s) => s.profiles.push(...people(30)))
+    await show()
+    await type(find<HTMLInputElement>('input[aria-label="New person name"]'), 'Zed New')
+    await type(find<HTMLInputElement>('[data-add-email]'), 'zed@example.test')
+    await click(find('[data-add-user]'))
+    const create = pending.find((p) => p.name === 'profiles:create')
+    const id = String(create?.args.id)
+    // the server holds them past the first page
+    snap.profiles.push(person(id, 'Zed New', { auth_user_id: undefined }))
+    await act(async () => server.rerun())
+    await act(async () => create?.resolve(null))
+    await settle()
+    expect(keptRows()).toEqual([[id, 'added']])
+    const role = () => find<HTMLSelectElement>(`[data-user-role="${id}"]`)
+    const choose = async (value: string) => {
+      await act(async () => {
+        role().value = value
+        role().dispatchEvent(new Event('change', { bubbles: true }))
+      })
+      await settle()
+    }
+    await choose('inactive')
+    const deactivation = pending.at(-1)
+    expect(deactivation).toMatchObject({ name: 'profiles:deactivate', args: { id } })
+    // the row still shows them active, so the role goes out alone
+    await choose('viewer')
+    const update = pending.at(-1)
+    expect(update).toMatchObject({ name: 'profiles:update', args: { id } })
+    expect(update?.args.patch).toEqual({ org_role: 'viewer' })
+    // the server stores both, then answers them
+    Object.assign(snap.profiles.find((p) => p.id === id) ?? {}, {
+      active: false,
+      org_role: 'viewer',
+    })
+    await act(async () => server.rerun())
+    await act(async () => deactivation?.resolve(null))
+    await act(async () => update?.resolve(null))
+    await settle()
+    // the kept row shows what the server holds, an inactive Viewer
+    expect(keptRows()).toEqual([[id, 'added']])
+    expect(role().value).toBe('inactive')
+    expect(has(`[data-user-row="${id}"] [data-viewer-chip]`)).toBe(true)
+    // so the next role change sends the reactivation with it
+    await choose('user')
+    expect(pending.at(-1)).toMatchObject({ name: 'profiles:update', args: { id } })
+    expect(pending.at(-1)?.args).toMatchObject({
+      patch: { org_role: 'user', active: true },
+      expected: { org_role: 'viewer', active: false },
+    })
+  })
+
   it('keeps a drafted name, address and hours through a search and a page move, and lets them go once settled', async () => {
     await load((s) => s.profiles.push(...people(30)))
     await show()
