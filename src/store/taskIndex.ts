@@ -26,8 +26,9 @@
    capacity come from `ownerFacts` (store/planner.ts ownerFacts), the
    profile cache's face of them. A shown task's span is filed for its owner
    unless those facts place the owner in another organization or say they
-   are gone, and a task whose verdict reads its owner's unknown capacity is
-   unknown (delayUnknown), never judged against a default week. When
+   are gone, and a task whose verdict reads its owner's unknown capacity
+   has none while their face is on its way and is unknown after that
+   (unknownDelays, P.delayUnknown), never judged against a default week. When
    `factsVersion` turns, as a face arrives, the index asks again for the
    facts of every owner it filed and refiles and judges again the tasks of
    each whose facts changed. */

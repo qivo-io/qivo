@@ -242,14 +242,33 @@ describe('the store without the people and catalog parts', () => {
       await P().askTasks('script')
       await vi.waitFor(() => expect(P().tasksHeld()).toBe(true))
       const key = P().handleOf('task-1') ?? ''
-      // the face is on its way: no verdict, and none against 40 hours
+      // the face is on its way, so no verdict, none against 40 hours and
+      // no Delay unknown before the face could tell
       expect(P().delayOf(key)).toBeNull()
+      expect(P().delayUnknown(key)).toBe(false)
       P().namePeople('the board', [{ org: snap.orgs[0].id, id: 'person-0001' }])
       await vi.waitFor(() => expect(byIds.length).toBeGreaterThan(0))
       const read = byIds.at(-1)
       read?.next(peopleSettingsStandIn(snap, 'people:byIds', read.args))
       // the face's 10 hours judge it late, once the cache turns
       await vi.waitFor(() => expect(P().delayOf(key)?.status).toBe('late'))
+    })
+
+    it('says Delay unknown for a held task whose owner’s face could not be read, never on track', async () => {
+      const snap = withOwner(planned('person-0001'))
+      await boot(snap, { faces: false })
+      await P().askTasks('script')
+      await vi.waitFor(() => expect(P().tasksHeld()).toBe(true))
+      const key = P().handleOf('task-1') ?? ''
+      P().namePeople('the board', [{ org: snap.orgs[0].id, id: 'person-0001' }])
+      await vi.waitFor(() => expect(byIds.length).toBeGreaterThan(0))
+      byIds.at(-1)?.fail(new Error('people.byIds is down'))
+      await vi.waitFor(() =>
+        expect(P().person('person-0001', snap.orgs[0].id)?.state).toBe('failed'),
+      )
+      // no verdict against a default week, and the card says it cannot tell
+      await vi.waitFor(() => expect(P().delayUnknown(key)).toBe(true))
+      expect(P().delayOf(key)).toBeNull()
     })
 
     it('judges an owner a current answer leaves out against the default week', async () => {

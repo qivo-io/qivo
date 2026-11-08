@@ -13726,17 +13726,17 @@ export const PLANNER = {
       }
     return boardLookup.map
   },
-  /** Whether task `x`'s delay is unknown: a task only a view holds, in a
-      project that shows delays, whose verdict needs its owner's load, which
-      came back unavailable, failed or past the cap (ownerLoadCache.ts). */
+  /** Whether task `x`'s delay is unknown, in a project that shows delays:
+      a task only a view holds whose verdict needs its owner's load, which
+      came back unavailable, failed or past the cap (ownerLoadCache.ts), or
+      their capacity, which could not be read; or, once the workspace holds
+      every task, a held one whose verdict reads its owner's capacity the
+      store could not read (taskIndex.ts unknownDelays). */
   delayUnknown: (x: IssueVM | string): boolean => {
     const it = typeof x === 'string' ? PLANNER.anyTask(x) : x
-    return (
-      !!it &&
-      !!viewRows.factsOf(it) &&
-      PLANNER.tracksDelay(it) &&
-      viewDelays.get(it.uuid) === DELAY_UNKNOWN
-    )
+    if (!it || !PLANNER.tracksDelay(it)) return false
+    if (viewRows.factsOf(it)) return viewDelays.get(it.uuid) === DELAY_UNKNOWN
+    return tasksAll && tasks.unknownDelays.has(it.uuid)
   },
   /** Whether task `x`'s card shows a delay band: Slipping, Delayed or Delay
       unknown (views/kanbanCards.tsx DelayBanner), as the card's height and
