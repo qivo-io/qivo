@@ -24,6 +24,7 @@ import { ChoiceEnd, PickerSearch } from './pickerParts'
 import { type ChoiceWords, TARGET_WORDS } from './pickerWords'
 import { navCursors, seedNavRow } from './projectNavRows'
 import { Input } from './ui/input'
+import { Label } from './ui/label'
 
 /** The most targets Load more gathers, past which the list asks for a
     search. */
@@ -138,12 +139,12 @@ export function TargetPicker({
               const isCurrent = row.id === current
               const on = row.id === value
               return (
-                <label
+                <Label
                   key={row.id}
                   data-target={row.id}
                   data-target-current={isCurrent ? '' : undefined}
                   className={cn(
-                    'flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-text-1 hover:bg-hover has-[:disabled]:cursor-default has-[:disabled]:text-text-3 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-ring',
+                    'flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm leading-normal font-normal text-text-1 select-auto hover:bg-hover has-[:disabled]:cursor-default has-[:disabled]:text-text-3 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-ring',
                     on && 'bg-selected font-medium',
                   )}
                 >
@@ -159,7 +160,7 @@ export function TargetPicker({
                     {P.projectLabel({ id: row.id, name: row.name })}
                   </span>
                   {isCurrent && <span className="text-xs text-text-3">Current</span>}
-                </label>
+                </Label>
               )
             })}
           </div>
