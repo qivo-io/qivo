@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 import type { TiptapEditorHTMLElement } from '@tiptap/core'
 import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { act, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest'
 import { descriptionForm, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
+import { MOVE_HOLDER_RULE } from '../../convex/model/issues'
 import { TooltipProvider } from '../components/ui/tooltip'
 import {
   type LabelsByIdsArgs,
@@ -2253,5 +2255,68 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
     const sent = sentArgs('issues:update').length
     await click(leo)
     expect(sentArgs('issues:update')).toHaveLength(sent)
+  })
+})
+
+describe('the task window’s Move', { timeout: 30_000 }, () => {
+  /* Opens the Move window from Task actions and chooses Bench, beside
+     Work under Plan, which Mira leads. */
+  async function moveToBench() {
+    const item = await taskActions()
+    await click(item('Move to sub-project…'))
+    const select = document.querySelector<HTMLSelectElement>('select[aria-label="Move to"]')
+    if (!select) throw new Error('the Move window did not open')
+    await act(async () => {
+      select.value = 'bench'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await click(buttonNamed('Move'))
+  }
+  const movedToasts = () =>
+    vi
+      .mocked(window.showToast)
+      .mock.calls.filter(([text]) => typeof text === 'string' && text.startsWith('Moved '))
+  const settle = async () => {
+    for (let i = 0; i < 3; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
+  }
+
+  it('says the task moved only once the server took the move, and never after its refusal', async () => {
+    await load()
+    await openWindow('QN-27')
+    // the server refuses: a holder of the task would lose access, which
+    // the store logs
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    network.mutation.mockImplementation((ref) =>
+      getFunctionName(ref) === 'issues:move'
+        ? Promise.reject(new ConvexError({ code: 'rule', message: MOVE_HOLDER_RULE }))
+        : Promise.resolve(null),
+    )
+    await moveToBench()
+    await settle()
+    expect(sentArgs('issues:move')).toEqual([
+      { org_id: snap.orgs[0].id, id: FAM, project_id: 'bench', expected: { project_id: 'work' } },
+    ])
+    expect(window.showToast).toHaveBeenCalledWith(
+      expect.stringContaining('has no access to that sub-project'),
+      'error',
+    )
+    expect(movedToasts()).toEqual([])
+    // the server takes the next move, which is not said while it is on
+    // its way, and is once it saved
+    let save: (value: null) => void = () => {}
+    network.mutation.mockImplementation((ref) =>
+      getFunctionName(ref) === 'issues:move'
+        ? new Promise((resolve) => {
+            save = resolve
+          })
+        : Promise.resolve(null),
+    )
+    await moveToBench()
+    await settle()
+    expect(sentArgs('issues:move')).toHaveLength(2)
+    expect(movedToasts()).toEqual([])
+    await act(async () => save(null))
+    await settle()
+    expect(movedToasts()).toEqual([['Moved QN-27 to Bench']])
   })
 })

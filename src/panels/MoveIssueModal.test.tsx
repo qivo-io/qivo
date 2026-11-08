@@ -228,9 +228,10 @@ describe('the Move window over a task the window shows from its own answer', () 
     await chooseTarget(ids.fw)
     expect(notes()).toEqual(['Its subtasks move with it, archived ones included.'])
     // the store holds nobody but the signed-in person, so it cannot tell
-    // whether Pat, who holds the subtask, may work there: Move stays on,
-    // and the server checks every holder at full scope
-    expect(document.querySelector('[data-move-blockers]')).toBeNull()
+    // whether Pat, who holds the subtask, may work there: the notes name
+    // nobody, Move stays on, and the server checks every holder at full
+    // scope
+    expect(document.querySelector('[data-move-notes]')?.textContent ?? '').not.toContain('Pat Lee')
     const move = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
       (b) => b.textContent === 'Move',
     )
