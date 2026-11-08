@@ -1065,7 +1065,11 @@ type Held = { teams: string[]; onRoot: string[]; seat: boolean }
  * answers (machine/projects.ts projectPage and projectRead, which refuse
  * the whole call, and roll a write back, where a check of a row or of the
  * project's level stopped, and whose completion answers it unavailable,
- * lib/core.ts projectCompletion) apply this one rule, each with its own
+ * lib/core.ts projectCompletion), the REST and MCP Inbox's pages
+ * (machine/discussion.ts inboxPage, through the Inbox's walk, which refuse
+ * the whole page where a check stopped) and the answer of its bulk change
+ * with `all` (lib/core.ts machineShown, which refuses the change, rolled
+ * back, where a check stopped) apply this one rule, each with its own
  * answer for that refusal. */
 export function accessOf(
   ctx: QueryCtx,
@@ -1322,7 +1326,7 @@ export const orgProjects = (ctx: QueryCtx, orgId: string): Promise<Doc<'projects
     .collect()
 
 /* Amortized counterpart of projectLevel, used by REST and MCP access flags
- * and lists (lib/core.ts accessFlags and orgReach), Deleted items
+ * and lists (lib/core.ts accessFlags), Deleted items
  * (model/deletedItems.ts seenBy) and projectLevelsForPeople for people of
  * another organization. Evaluate actual projects rather than reusing the
  * parent's answer for all siblings. Navigation-only parent visibility is
@@ -1368,8 +1372,7 @@ export async function projectLevelsForOrg(
  * beside levelsFrom for sizes the design size says not to build for (agent
  * decision, 5 November 2026, closing t3/limits-machine-access-rows). Its
  * readers are the REST and MCP task routes' access flags (lib/core.ts
- * accessFlags), the REST and MCP Inbox's bulk change (lib/core.ts
- * orgReach), both through projectLevelsForOrg, and Deleted items
+ * accessFlags), through projectLevelsForOrg, and Deleted items
  * (model/deletedItems.ts sightOf, pendingAccess and seenBy). Callers that ask for many people at
  * once keep their own bounds: projectLevelsForPeople with LEVELS_READ, and
  * Deleted items' steps with SIGHT_READ and the step budget. */

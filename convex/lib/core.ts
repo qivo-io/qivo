@@ -758,20 +758,6 @@ export async function taskListRequest(
   }
 }
 
-/* The organization's whole roster, people and agents alike, ordered by
- * name. Not gated on a project grant, because the roster belongs to the org
- * the credential authenticates. REST GET /v1/users and MCP list_users page it
- * with userPage instead, and a project's users with projectUserPage; only
- * the REST and MCP inbox's actor names (machine/discussion.ts) read it
- * whole, until t3/limits-machine-inbox replaces that read. */
-export async function listUsersCore(ctx: QueryCtx, me: Caller): Promise<Doc<'profiles'>[]> {
-  const rows = await ctx.db
-    .query('profiles')
-    .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
-    .collect()
-  return rows.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
-}
-
 /* The list name a users cursor seals (lib/listCursor.ts). REST and MCP
  * answer the same rows, so they share it, and a cursor of one continues on
  * the other. */
@@ -1127,74 +1113,12 @@ const isGroupIn = (index: ChildIndex, task: Doc<'issues'>, live: ProjectLive): b
  * lib/workingSet.ts with this Shown, as the app's snapshot passes its
  * working set. */
 
-/** How many projects a read without the surface's flags checks one at a
- * time (lazyReach) before it answers for the whole organization at once
- * (orgReach). A check costs about three index ranges for a caller who is not
- * an admin, and orgReach reads the organization's projects. Only the REST
- * and MCP inbox's bulk change reads through it (projectReader), until
- * t3/limits-machine-inbox asks accessOf there too. Tests change `checks`. */
-export const ACCESS_POINT_CHECKS = { checks: 16 }
-
-/** Each project and whether the caller can read it, for a read without the
- * surface's flags. */
-type ProjectReach = {
-  project: (projectId: string) => Promise<Doc<'projects'> | null>
-  reads: (projectId: string) => Promise<boolean>
-}
-
-/* A ProjectReach that reads each project and checks it (seesProject),
- * once each, until it has met ACCESS_POINT_CHECKS projects, and answers the
- * rest from the organization's projects and the caller's levels at once
- * (orgReach), the same rule (accessFlags), which a link or a family with
- * many sub-projects needs. */
-function lazyReach(ctx: QueryCtx, me: Caller): ProjectReach {
-  const projects = new Map<string, Promise<Doc<'projects'> | null>>()
-  const reads = new Map<string, Promise<boolean>>()
-  let reach: ReturnType<typeof orgReach> | undefined
-  const project = (projectId: string) => {
-    let result = projects.get(projectId)
-    if (result === undefined) {
-      if (projects.size >= ACCESS_POINT_CHECKS.checks) reach ??= orgReach(ctx, me)
-      result =
-        reach !== undefined
-          ? reach.then((r) => r.projectOf(projectId) ?? null)
-          : byId(ctx, 'projects', projectId)
-      projects.set(projectId, result)
-    }
-    return result
-  }
-  return {
-    project,
-    reads: (projectId) => {
-      let result = reads.get(projectId)
-      if (result === undefined) {
-        result = project(projectId).then(async (p) => {
-          if (p === null) return false
-          if (reach !== undefined) return (await reach).readable(p.id)
-          return await seesProject(ctx, me, p)
-        })
-        reads.set(projectId, result)
-      }
-      return result
-    },
-  }
-}
-
-/** The caller's project read access, from the surface's flags when it holds
- * them, else canSeeProject, read once per project, or past
- * ACCESS_POINT_CHECKS projects from the caller's levels in the whole
- * organization (lazyReach). */
-export function projectReader(
-  ctx: QueryCtx,
-  me: Caller,
-  readable?: (projectId: string) => boolean,
-): (projectId: string) => Promise<boolean> {
-  if (readable !== undefined) return async (projectId) => readable(projectId)
-  return lazyReach(ctx, me).reads
-}
-
 /** The Shown of a machine read over these tasks: the ones in the caller's
- * organization whose project it can read. */
+ * organization whose project `reads` answers true for, asked only for a
+ * task of the caller's organization, since lib/access.ts accessOf reads a
+ * project of any. Its callers are parentOut and the REST and MCP Inbox's
+ * bulk change (machine/discussion.ts changeInbox), both with an accessOf
+ * instance's `visible` or the surface's flags. */
 export async function machineShown(
   tasks: Iterable<Doc<'issues'>>,
   me: Caller,
@@ -1209,25 +1133,27 @@ export async function machineShown(
 
 /* The parent link on both surfaces (lib/workingSet.ts parentLink): the
  * parent's uuid only when this caller can read the parent, else only that a
- * parent exists. `o.readable` is the caller's project flags when the
- * surface already holds them, which saves the visibility walk per row,
- * `o.reads` the single-task read's accessOf, and `o.tasks` the rows a list
- * already read, which saves the parent's read. */
+ * parent exists. `o.reads` is the single-task read's accessOf, `o.readable`
+ * the caller's project flags when the surface holds them, and `o.tasks` the
+ * rows a list already read, which saves the parent's read. A row with
+ * neither reader is a caller's mistake, and throws rather than read the
+ * caller's access some other way, as counterOf does. */
 async function parentOut(
   ctx: QueryCtx,
   me: Caller,
   issue: Doc<'issues'>,
   o: Pick<Reader, 'readable' | 'reads'> & Pick<IssueOutPre, 'tasks'>,
 ): Promise<{ parent_id: string | null; has_hidden_parent: boolean }> {
+  const readable = o.readable
+  const reads = o.reads ?? (readable === undefined ? undefined : async (id: string) => readable(id))
+  if (reads === undefined) {
+    throw new Error("a parent link needs the single-task read's access or the surface's catalogue")
+  }
   const parent =
     issue.parent_id === undefined
       ? null
       : (o.tasks?.get(issue.parent_id) ?? (await byId(ctx, 'issues', issue.parent_id)))
-  const shown = await machineShown(
-    parent === null ? [] : [parent],
-    me,
-    o.reads ?? projectReader(ctx, me, o.readable),
-  )
+  const shown = await machineShown(parent === null ? [] : [parent], me, reads)
   const link = parentLink(issue, shown)
   return { parent_id: link.parent_id ?? null, has_hidden_parent: link.has_hidden_parent }
 }
@@ -2519,29 +2445,6 @@ export async function taskOut(
     followers: followers.rows,
     attachments_next_cursor: attachments.next_cursor,
     attachments: attachments.rows,
-  }
-}
-
-/* Which projects `me` can read, and each of the organization's projects by
- * id, from one read of its projects and the caller's grants and team
- * shares (projectLevelsForOrg), the read flag accessFlags gives lists. Only
- * lazyReach, behind the REST and MCP inbox's bulk change, reads it now. */
-async function orgReach(
-  ctx: QueryCtx,
-  me: Caller,
-): Promise<{
-  readable: (projectId: string) => boolean
-  projectOf: (projectId: string) => Doc<'projects'> | undefined
-}> {
-  const cat = await loadCatalogue(ctx, me)
-  const { levelOf } = await projectLevelsForOrg(ctx, me, cat.projects)
-  const projectOf = (projectId: string) => cat.byUuid.get(projectId)
-  return {
-    readable: (projectId) => {
-      const p = projectOf(projectId)
-      return p !== undefined && levelOf(p) !== null
-    },
-    projectOf,
   }
 }
 
