@@ -25,8 +25,10 @@ import { taskRow } from './views/boardFixture.setup'
    or a project the person did not pick. A pick opens that project's view
    filtered to the person in place of the chooser's entry; Back returns to
    Team sync and Forward to the chooser, with its line, on a phone too,
-   where the front door otherwise opens the Inbox. A project sync's jump
-   opens that project. The person, Planner, holds an admin seat in
+   where the front door otherwise opens the Inbox, also after a Back past
+   Team sync to a project, as the chooser's entry carries the person,
+   while the filters still hold them. A project sync's jump opens that
+   project. The person, Planner, holds an admin seat in
    Testbed Labs, with Luma Sensor and its sub-projects Firmware and
    Electronics and one open task of theirs in Firmware, and Ops, a team of
    them that Luma Sensor is shared with. Everyday values, no figure at its
@@ -357,4 +359,45 @@ describe("Team sync's person jumps", { timeout: 60_000 }, () => {
       'The project you choose opens on the Overview.',
     )
   })
+
+  /** Jumps from Team sync over all projects on the Board, then goes Back
+      past Team sync to the project the drive booted on, `path`. */
+  async function backPastSync(path: string) {
+    await jump(`/app/testbed/sync/all/people/${ME}`, 'board')
+    await until(() => chooserState() === 'choose', 'the chooser')
+    await step(-1)
+    await until(() => location.pathname === `/app/testbed/sync/all/people/${ME}`, 'Team sync')
+    await step(-1)
+    await until(() => shown() === 'kanban' && location.pathname === path, 'the project')
+    expect(q('[data-project-chooser]')).toBeNull()
+  }
+
+  for (const device of ['desktop', 'phone'] as const)
+    it(`on a ${device}, Forward past Team sync after Back past it to a project shows the chooser again with its line, not the remembered project${device === 'phone' ? ' or the Inbox' : ''}`, async () => {
+      phone = device === 'phone'
+      // the person opened Firmware last, which the startup rule would open
+      await app(world(), '/app/testbed/board/p/11', {
+        lastProject: { org_id: ORG, project_id: FW },
+      })
+      await until(() => shown() === 'kanban', "Firmware's Board")
+      const entries = history.length
+      await backPastSync('/app/testbed/board/p/11')
+      const reads = taskReads().length
+      await step(1)
+      await until(() => location.pathname === `/app/testbed/sync/all/people/${ME}`, 'Team sync')
+      await step(1)
+      await until(() => chooserState() === 'choose', 'the chooser again')
+      expect(purpose()).toBe(
+        phone
+          ? "Choose a project to see Planner's tasks in its task list."
+          : "Choose a project to see Planner's tasks on the Board.",
+      )
+      expect(location.pathname).toBe('/app/testbed')
+      expect(shown()).toBeUndefined()
+      expect(q('[data-inbox-page-state]')).toBeNull()
+      expect(history.length).toBe(entries + 2)
+      // no check of the remembered project, and no task read
+      expect(asks).toEqual([])
+      expect(taskReads()).toHaveLength(reads)
+    })
 })

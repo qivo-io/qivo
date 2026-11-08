@@ -105,6 +105,7 @@ import {
   workspaceModules,
 } from './lib/workspaceChunks'
 import {
+  type IssueFilters,
   type NewProjectInput,
   P,
   type ProjectAsk,
@@ -691,6 +692,45 @@ function startupOpening(n: number): Opening {
   return { kind: 'checking', n, check: { ask: id, name, of: 'remembered', address: null } }
 }
 
+/** The person a Team sync jump opened the chooser for (App showPersonOn):
+    their profile id and first name, for the chooser's line. */
+type PersonJump = { id: string; first: string }
+
+/** Whether `filters` hold what a person jump set: the one person `id` and
+    nothing else, Focus aside. */
+function holdsPerson(filters: Omit<IssueFilters, 'focus'>, id: string): boolean {
+  return (
+    filters.search === '' &&
+    !filters.mine &&
+    filters.priority === null &&
+    !filters.stale &&
+    filters.assignees.length === 1 &&
+    filters.assignees[0] === id
+  )
+}
+
+/** The person a history entry's state marks as the one its chooser was
+    opened for (qivoJump, which App's address sync writes on a person
+    jump's entry), else null. */
+function jumpMarkOf(state: unknown): PersonJump | null {
+  const mark: unknown =
+    state && typeof state === 'object' ? Reflect.get(state, 'qivoJump') : undefined
+  if (!mark || typeof mark !== 'object') return null
+  const id: unknown = Reflect.get(mark, 'id')
+  const first: unknown = Reflect.get(mark, 'first')
+  return typeof id === 'string' && typeof first === 'string' ? { id, first } : null
+}
+
+/** `state` with the person jump mark `mark` (jumpMarkOf), or without one
+    for null, as a copy when that changes it. */
+function withJumpMark(state: unknown, mark: PersonJump | null): unknown {
+  const was = jumpMarkOf(state)
+  if (mark === null ? was === null : was?.id === mark.id && was.first === mark.first) return state
+  const entry: Record<string, unknown> = state && typeof state === 'object' ? { ...state } : {}
+  const { qivoJump: _mark, ...rest } = entry
+  return mark === null ? rest : { ...rest, qivoJump: mark }
+}
+
 /** What the chooser shows for `opening`, which waits for no task. */
 function chooserShows(opening: Exclude<Opening, { kind: 'task' }>): ChooserShows {
   if (opening.kind === 'choose') return { kind: 'choose', note: opening.note }
@@ -1271,24 +1311,20 @@ function App() {
   const chooserShown = viewShown && scope === undefined
   /* The person a Team sync jump over all projects or a team opened the
      chooser for (showPersonOn), while the filters hold exactly what the
-     jump set, one person and nothing else. The chooser then says whose
-     tasks a pick will show (jumpLine), also after Back to Team sync and
-     Forward to the chooser, and a Back or Forward onto the front door
-     shows the chooser rather than the startup rule or, on a phone, the
-     Inbox (onPop). Any filter change and any chosen scope end it. */
-  const [personJump, setPersonJump] = useState<{ id: string; first: string } | null>(null)
+     jump set, one person and nothing else (holdsPerson). The chooser then
+     says whose tasks a pick will show (jumpLine). Any filter change and any
+     chosen scope end it. The jump's history entry carries the person
+     (qivoJump, the address sync below), so a Back or Forward onto it
+     shows the chooser with its line again while the filters still hold
+     that person, also after a Back past Team sync to a project ended the
+     jump, rather than the startup rule or, on a phone, the Inbox (onPop). */
+  const [personJump, setPersonJump] = useState<PersonJump | null>(null)
   const jumpHolds =
-    personJump !== null &&
-    scope === undefined &&
-    filters.search === '' &&
-    !filters.mine &&
-    filters.priority === null &&
-    !filters.stale &&
-    filters.assignees.length === 1 &&
-    filters.assignees[0] === personJump.id
+    personJump !== null && scope === undefined && holdsPerson(filters, personJump.id)
   if (personJump !== null && !jumpHolds) setPersonJump(null)
-  const jumpHoldsRef = useRef(jumpHolds)
-  jumpHoldsRef.current = jumpHolds
+  // the filters for onPop, which reads them against a jump's entry
+  const filtersRef = useRef(filters)
+  filtersRef.current = filters
   /* What the chooser says a pick will show after a person jump: that
      person's tasks on the Board or the Roadmap, which show the person
      filter, or on a phone in the project's task list, which a pick opens
@@ -1353,8 +1389,19 @@ function App() {
       return
     }
     const inPlace = pathMatchesState(location.pathname, state)
-    if (replaceNextHistory.current || inPlace) history.replaceState(history.state, '', p)
-    else pushPage({ qivoPrevious: location.pathname }, p)
+    // a person jump's chooser marks its entry with the person, and every
+    // other page's entry carries no mark, also one that replaces the
+    // chooser's in place, as a pick does (onPop)
+    const mark = jumpHolds ? personJump : null
+    if (replaceNextHistory.current || inPlace)
+      history.replaceState(withJumpMark(history.state, mark), '', p)
+    else
+      pushPage(
+        mark
+          ? { qivoPrevious: location.pathname, qivoJump: mark }
+          : { qivoPrevious: location.pathname },
+        p,
+      )
     replaceNextHistory.current = false
   }, [
     scope,
@@ -1442,6 +1489,11 @@ function App() {
         isFrontDoor(location.pathname) &&
         (!!parsePath(buildPath(was)) || checkedOn(openingRef.current, page) !== null)
       if (!parsed && !door) return
+      /* A person jump's entry (its qivoJump mark) while the filters still
+         hold that person: the chooser with its line, never a project the
+         person did not pick. */
+      const mark = door ? jumpMarkOf(history.state) : null
+      const jump = mark && holdsPerson(filtersRef.current, mark.id) ? mark : null
       const r: Route = parsed ?? {}
       /* Issue URLs carry no scope: keep the current scope when the issue is
          inside it, else re-scope to the issue's own sub-project. One case
@@ -1498,9 +1550,8 @@ function App() {
           ? was.settingsPage
           : r.settings || null,
         // the phone opens the Inbox at the front door, as on a boot, but
-        // not over a person jump's chooser (personJump), whose entry shows
-        // the chooser again
-        inboxOpen: door ? mobileRef.current && !jumpHoldsRef.current : !!r.inbox,
+        // not on a person jump's entry (jump), which shows the chooser again
+        inboxOpen: door ? mobileRef.current && jump === null : !!r.inbox,
         projectsOpen: !!r.projects,
         sync: r.sync && P.homeOrg ? syncPlaceFor(r.sync, mobileRef.current) : null,
       }
@@ -1575,15 +1626,14 @@ function App() {
             : { kind: 'choose', n, note: ADDRESS_UNAVAILABLE, lost: null },
         )
       }
-      /* A person jump's chooser (personJump) shows the chooser again,
-         with its line, as the filters still hold the person, so its entry
-         never opens a project the person did not pick. */
-      if (door)
-        showOpening(
-          jumpHoldsRef.current
-            ? (n) => ({ kind: 'choose', n, note: null, lost: null })
-            : startupOpening,
-        )
+      /* A person jump's entry shows the chooser again, with its line, as
+         the filters still hold the person (jump), so it never opens a
+         project the person did not pick. Any other front door takes the
+         startup rule, and no line. */
+      if (door) {
+        setPersonJump(jump)
+        showOpening(jump ? (n) => ({ kind: 'choose', n, note: null, lost: null }) : startupOpening)
+      }
       // a task the workspace does not hold, reached with no scope, waits
       // for its answer to name its project, as on a boot, never for a
       // check the move dropped
