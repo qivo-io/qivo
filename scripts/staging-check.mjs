@@ -1124,6 +1124,36 @@ export const PROJECTS_MAX = 2000
  *  that never ends still fails the check. */
 export const projectPagesMax = (limit) => Math.ceil(PROJECTS_MAX / limit) + 2
 
+/** The most pages of 200 a check reads to take in a whole Inbox, so a
+ *  next_cursor that never ends fails the check instead of holding up the
+ *  run. */
+export const INBOX_PAGES_MAX = TASK_PAGES_MAX
+
+/** Every item of one Inbox, `read(cursor)` answering the page of 200 after
+ *  `cursor` (movingPages over `items`, at most INBOX_PAGES_MAX pages), with
+ *  how many pages that took. */
+export async function inboxWhole(read, what) {
+  let pages = 0
+  const items = await movingPages(
+    (cursor) => {
+      pages += 1
+      return read(cursor)
+    },
+    what,
+    'items',
+    INBOX_PAGES_MAX,
+  )
+  return { items, pages }
+}
+
+/** The most pages a walk of the Inbox `whole` took in reads at a smaller
+ *  limit: one for each item, one for each page of 200, and two more. A
+ *  page ends short or empty where its read budget ran out among items the
+ *  caller cannot see, and a walk at any limit meets at most as many of
+ *  those as the pages of 200 did, since each of its pages starts with the
+ *  whole budget. */
+export const inboxPagesMax = (whole) => whole.items.length + whole.pages + 2
+
 /** `path` with the query parameters of `q` that are set, URL-encoded. */
 export const withQuery = (path, q) => {
   const set = Object.entries(q).filter(([, value]) => value !== undefined && value !== null)
@@ -3375,10 +3405,10 @@ async function projectDetailChecks() {
 /** The Standard agent's inbox a page at a time over REST GET /v1/inbox and
  *  MCP list_inbox (machine/inbox). With the run's write token it makes
  *  three tagged tasks in Alpha and mentions the agent in a comment on each,
- *  so the agent holds three unread items. With the agent's key it reads
- *  GET /v1/inbox at limit 200 for the count, then pages both surfaces at
- *  limit 1 to their ends, within that count and two pages more, every page
- *  moving on, and checks that each of the three tasks comes exactly once on
+ *  so the agent holds three unread items. With the agent's key it pages
+ *  GET /v1/inbox at limit 200 to its end for the count (inboxWhole), then
+ *  pages both surfaces at limit 1 to their ends, within inboxPagesMax of
+ *  that count, every page moving on, and checks that each of the three tasks comes exactly once on
  *  each surface, in the same order, newest first, and that a REST cursor
  *  continues on MCP. unread_only lists the three; after POST
  *  /v1/inbox/read with their keys an unread_only list holds none of them.
@@ -3408,13 +3438,11 @@ async function inboxChecks() {
     }
     const newest = [...keys].reverse()
     const ours = (items) => items.map((i) => i.task.key).filter((key) => keys.includes(key))
-    const whole = await readOk(s, '/inbox?limit=200')
-    expect(
-      Array.isArray(whole?.items) &&
-        (whole.next_cursor === null || typeof whole.next_cursor === 'string'),
-      'GET /v1/inbox answered no {next_cursor, items} page',
+    const whole = await inboxWhole(
+      (cursor) => readOk(s, withQuery('/inbox', { limit: 200, cursor })),
+      'GET /v1/inbox at 200',
     )
-    const most = whole.items.length + 2
+    const most = inboxPagesMax(whole)
     const viaRest = await movingPages(
       (cursor) => readOk(s, withQuery('/inbox', { limit: 1, cursor })),
       'GET /v1/inbox',

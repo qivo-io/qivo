@@ -61,8 +61,11 @@ import {
   INBOX_LIST_MARKS,
   INBOX_LIST_STEP,
   INBOX_PAGE_QUERY,
+  INBOX_PAGES_MAX,
   INBOX_REFUSALS,
   imageDownloads,
+  inboxPagesMax,
+  inboxWhole,
   inDefaultWindow,
   isSiteOf,
   LABEL_MENTION_NAMES,
@@ -2477,6 +2480,24 @@ describe('task list pages', () => {
     await expect(taskPages(reader([{ tasks: [] }]).read, 'the list')).rejects.toThrow(
       'the list answered no {next_cursor, tasks} page',
     )
+  })
+  it('takes in a whole Inbox through short and empty pages, and sizes the walks at a smaller limit from it', async () => {
+    const { read, cursors } = reader([
+      { next_cursor: 'i1', items: [{ id: 'a' }, { id: 'b' }] },
+      { next_cursor: 'i2', items: [] },
+      { next_cursor: null, items: [{ id: 'c' }] },
+    ])
+    const whole = await inboxWhole(read, 'the Inbox')
+    expect(whole.items.map((i) => i.id)).toEqual(['a', 'b', 'c'])
+    expect(whole.pages).toBe(3)
+    expect(cursors).toEqual([null, 'i1', 'i2'])
+    // an item a page, a page for each short or empty one, and two more
+    expect(inboxPagesMax(whole)).toBe(3 + 3 + 2)
+    const endless = async (cursor) => ({ next_cursor: `${cursor ?? ''}x`, items: [] })
+    await expect(inboxWhole(endless, 'the Inbox')).rejects.toThrow(
+      `the Inbox still had a next_cursor after ${INBOX_PAGES_MAX} pages`,
+    )
+    expect(INBOX_PAGES_MAX).toBe(TASK_PAGES_MAX)
   })
   it('gives up on a next_cursor that never ends', async () => {
     const endless = async () => ({ next_cursor: 'again', tasks: [] })
