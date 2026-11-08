@@ -898,14 +898,14 @@ const REST_MISSING = { code: 'not_found', message: 'project not found' }
  * caller manages without reading it. */
 type Shown = { answered: number; refused: number; managedOnly: number }
 
-/* For `me` on each of `projects`, by key: REST GET /v1/projects/{ref} and
- * get_project answer what the catalogue answered, and so do the grant
- * lists (GET /access/users and /access/teams, list_project_related's
- * grants), where the catalogue showed the project as read or managed
- * (oracleSight), and refuse it as an unknown project exactly where it did
- * not; the milestone lists and the project users routes answer only where
- * the caller reads it. The organization's names are keyed, which the grant
- * lists and the users read. */
+/* For `me` on each of `projects`, by key, REST GET /v1/projects/{ref} and
+ * get_project answer what the catalogue answered where it showed the
+ * project as read or managed (oracleSight). The grant lists (GET
+ * /access/users and /access/teams, list_project_related's grants) answer
+ * there too, and all of them refuse it as an unknown project exactly where
+ * it did not. The milestone lists and the project users routes answer
+ * exactly where the caller reads it. The organization's names are keyed,
+ * which the grant lists and the users read. */
 async function sameSight(
   t: T,
   me: Doc<'profiles'>,
