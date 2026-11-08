@@ -24,6 +24,13 @@ console.log('email inputs:', hasEmail)
 if (hasEmail) {
   logs.length = 0
   await signInDemo(page, demo)
+  // sign-in lands on the project directory, which shows no task, so the
+  // drive opens Luma Sensor's Board for its cards
+  const num = await page.evaluate(
+    () => window.PLANNER.projects.find((p) => p.name === 'Luma Sensor' && !p.parent)?.num,
+  )
+  if (num == null) throw new Error('Northstar holds no Luma Sensor')
+  await page.goto(`${demo.base}/app/${demo.orgSlug}/board/p/${num}`)
   await page.waitForSelector('[data-card]', { timeout: 30000 })
   await page.screenshot({ path: 'scripts/shots/dbg-2-after-signin.png' })
   console.log('--- after sign-in click:')
