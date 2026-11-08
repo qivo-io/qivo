@@ -1,4 +1,7 @@
 /* Read-only swimlane wheel and panel-paint regression against the Northstar development demo.
+ * It drives the sub-project lanes of Luma Sensor's Board: the lane boundary
+ * legs in a pane short enough for two neighbouring lanes to outgrow it, then
+ * the short and tall lanes at full height.
  * Usage: node scripts/board-scroll-smoke.mjs [baseURL]
  * Requires the running dev server; never seeds, resets, or edits demo data. */
 import assert from 'node:assert/strict'
@@ -22,6 +25,15 @@ const panel = (name) =>
   page.locator('[data-swimlane-panel]').filter({
     has: page.getByRole('button', { name, exact: true }),
   })
+/* The lane boundary legs drive two tall neighbouring lanes, Testing &
+   Compliance above Manufacturing, the Board's last lane, in a pane of
+   BOUNDARY's height, where both outgrow it by more than the drive's 80px
+   margins. No Board shows lanes of two top-level projects any more but My
+   view, whose lanes of Nora's own tasks are shorter than any such pane
+   (Luma Cloud's is one row). */
+const UPPER = 'Testing & Compliance'
+const LOWER = 'Manufacturing'
+const BOUNDARY = { width: 1556, height: 450 }
 
 async function geometry(name) {
   return panel(name).evaluate((lane) => {
@@ -245,10 +257,10 @@ async function wheel(deltaY) {
 }
 
 async function reverseDuringSnap(direction) {
-  const sensor = await geometry('Luma Sensor')
-  const cloud = await geometry('Luma Cloud')
-  const start = sensor.scrollTop
-  const target = start + (direction > 0 ? cloud.offset : sensor.bottomOffset)
+  const upper = await geometry(UPPER)
+  const lower = await geometry(LOWER)
+  const start = upper.scrollTop
+  const target = start + (direction > 0 ? lower.offset : upper.bottomOffset)
   await page.mouse.wheel(0, direction * 120)
   // Observe actual animation progress instead of assuming a fixed dispatch
   // delay. Keep clear of the endpoints so this cannot pass after settlement.
@@ -314,7 +326,13 @@ async function scrollDownTo(name, nextName) {
 async function steadyWheelTicks(deltaY, interval, count) {
   await page.locator(SCROLL).evaluate((scroll) => {
     const lanes = [...scroll.querySelectorAll('[data-swimlane-panel]')]
-    const proof = { ticks: [], unreadCrossings: [], seenLast: [], active: -1 }
+    const proof = {
+      names: lanes.map((lane) => lane.querySelector('[data-lane-open]').textContent),
+      ticks: [],
+      unreadCrossings: [],
+      seenLast: [],
+      active: -1,
+    }
     const sample = () => {
       const pane = scroll.getBoundingClientRect()
       const line = pane.top + Number.parseFloat(getComputedStyle(scroll).scrollPaddingTop)
@@ -385,13 +403,13 @@ async function assertSteadyResponse({ short = false, motion, interval, deltaY = 
     if (short) {
       await positionAt('Electronics')
     } else {
-      await positionAt('Luma Cloud')
+      await positionAt(LOWER)
       if (!up) {
         await wheel(-120)
-        await assertAtBottom('Luma Sensor')
+        await assertAtBottom(UPPER)
       }
     }
-    const destination = short ? 'Firmware' : up ? 'Luma Sensor' : 'Luma Cloud'
+    const destination = short ? 'Firmware' : up ? UPPER : LOWER
     const target = await geometry(destination)
     const destinationTop = target.scrollTop + (up ? target.bottomOffset : target.offset)
     // Keep the full uninterrupted burst, but budget travel inside tall lanes.
@@ -421,17 +439,21 @@ async function assertSteadyResponse({ short = false, motion, interval, deltaY = 
       `${motion} ${interval}ms ticks stopped after reaching ${destination}`,
     )
     if (up) {
-      assert.ok(proof.seenLast[0], 'The upward sequence must show Sensor’s final task')
-      assert.ok(after.offset < -unreadMargin, 'Steady upward ticks skipped to Sensor’s heading')
+      assert.ok(
+        proof.seenLast[proof.names.indexOf(UPPER)],
+        `The upward sequence must show ${UPPER}’s final task`,
+      )
+      assert.ok(after.offset < -unreadMargin, `Steady upward ticks skipped to ${UPPER}’s heading`)
       return
     }
     assert.deepEqual(proof.unreadCrossings, [], 'Steady scrolling skipped a lane’s final task')
+    // the last lane has no heading after it to skip to; its later tasks
+    // left unread show the burst stayed inside it
     if (!short) {
       assert.ok(
         after.lastCardBottom > after.visibleBottom + 2,
-        'The steady sequence should leave later Cloud tasks to read',
+        `The steady sequence should leave later ${LOWER} tasks to read`,
       )
-      assert.ok((await geometry('Pilot & Launch')).offset > 2, 'Skipped unread Cloud tasks')
     }
     return
   }
@@ -441,71 +463,80 @@ let initialLayout
 
 try {
   await signInDemo(page, demo)
+  // Luma Sensor's Board, by its number
+  const luma = await page.evaluate(
+    () => window.PLANNER.projects.find((p) => p.name === 'Luma Sensor' && !p.parent)?.num,
+  )
+  assert.ok(luma != null, 'Northstar holds no Luma Sensor')
+  await page.goto(`${demo.base}/app/${demo.orgSlug}/board/p/${luma}`, {
+    waitUntil: 'domcontentloaded',
+  })
+  await page.getByRole('heading', { name: 'Luma Sensor', exact: true }).waitFor()
   // the drive reads project lanes; a saved by-assignee layout is put back at the end
   initialLayout = await page.evaluate(() => window.PLANNER.loadUI().metaViz || 'swimlanes')
   if (initialLayout !== 'swimlanes') {
     await page.locator('[data-group-menu]').click()
     await page.getByRole('button', { name: 'Swimlanes by project', exact: true }).click()
   }
-  await panel('Luma Sensor').waitFor()
+  await panel(UPPER).waitFor()
   // a large Board mounts in slices; these are small, so this only guards
   await page.waitForFunction(
     () => !document.querySelector('[data-workspace-view] [data-board-mount="pending"]'),
   )
   await page.evaluate(() => document.fonts.ready)
-  await positionAt('Luma Sensor')
-  await scrollDownTo('Luma Sensor', 'Luma Cloud')
+  await page.setViewportSize(BOUNDARY)
+  await positionAt(UPPER)
+  await scrollDownTo(UPPER, LOWER)
   await wheel(-120)
-  await assertAtBottom('Luma Sensor')
-  log('All projects: wheel down reaches Luma Cloud; reversing reveals Luma Sensor’s last tasks')
+  await assertAtBottom(UPPER)
+  log(`Wheel down reaches ${LOWER}; reversing reveals ${UPPER}’s last tasks`)
 
   for (let round = 0; round < 3; round++) {
     await wheel(120)
-    await assertAt('Luma Cloud')
+    await assertAt(LOWER)
     await wheel(-120)
-    await assertAtBottom('Luma Sensor')
+    await assertAtBottom(UPPER)
   }
   log('Repeated mouse detents alternate between the next heading and the previous final tasks')
 
   for (const offset of [2, 8, 20, 60]) {
     // Other scrolling can leave the heading just below its pin line or expose
     // part of the previous panel. Up must still enter that panel at its end.
-    await positionAt('Luma Cloud', offset)
+    await positionAt(LOWER, offset)
     await wheel(-120)
-    await assertAtBottom('Luma Sensor')
+    await assertAtBottom(UPPER)
 
-    await positionAt('Luma Cloud', -offset)
+    await positionAt(LOWER, -offset)
     await wheel(-120)
-    await assertAt('Luma Cloud')
+    await assertAt(LOWER)
     await wheel(-120)
-    await assertAtBottom('Luma Sensor')
+    await assertAtBottom(UPPER)
   }
-  log(
-    'Upward snaps handle near-heading offsets, panel gaps, and partially exposed previous projects',
-  )
+  log('Upward snaps handle near-heading offsets, panel gaps, and partially exposed previous lanes')
 
-  await positionAt('Luma Sensor')
+  await positionAt(UPPER)
   await wheel(80)
   await wheel(5000)
-  await assertAtBottom('Luma Sensor')
+  await assertAtBottom(UPPER)
   assert.ok(
-    (await geometry('Luma Cloud')).offset > 2,
-    'A large downward tick skipped the current project’s final tasks',
+    (await geometry(LOWER)).offset > 2,
+    'A large downward tick skipped the current lane’s final tasks',
   )
   await wheel(120)
-  await assertAt('Luma Cloud')
+  await assertAt(LOWER)
   await wheel(80)
   await wheel(-5000)
-  await assertAt('Luma Cloud')
+  await assertAt(LOWER)
   await wheel(-120)
-  await assertAtBottom('Luma Sensor')
-  log('Large ticks stop at the last row or current heading before another tick changes project')
+  await assertAtBottom(UPPER)
+  log('Large ticks stop at the last row or current heading before another tick changes lane')
 
   // Switch input while the interior wheel operation is still fresh. Keyboard
-  // and scrollbar navigation must be able to pass its project boundary.
-  await positionAt('Luma Cloud')
-  await panel('Luma Cloud').getByRole('button', { name: 'Luma Cloud', exact: true }).focus()
-  const beforeKeyboard = await geometry('Luma Cloud')
+  // and scrollbar navigation must be able to pass its lane boundary, so they
+  // start in the upper lane, whose boundary is not the Board's end.
+  await positionAt(UPPER)
+  await panel(UPPER).getByRole('button', { name: UPPER, exact: true }).focus()
+  const beforeKeyboard = await geometry(UPPER)
   await page.mouse.wheel(0, 80)
   await page.waitForFunction(
     (top) => document.querySelector('[data-scroll]').scrollTop > top + 2,
@@ -522,8 +553,8 @@ try {
     'End was trapped at the wheel boundary',
   )
 
-  await positionAt('Luma Cloud')
-  const beforeScrollbar = await geometry('Luma Cloud')
+  await positionAt(UPPER)
+  const beforeScrollbar = await geometry(UPPER)
   await page.mouse.wheel(0, 80)
   await page.waitForFunction(
     (top) => document.querySelector('[data-scroll]').scrollTop > top + 2,
@@ -547,43 +578,40 @@ try {
   await page.mouse.move(scrollbar.x, scrollbar.toY, { steps: 8 })
   await page.mouse.up()
   await settle()
-  const afterScrollbar = await geometry('Luma Cloud')
-  assert.ok(
-    afterScrollbar.bottomOffset < -80,
-    'Scrollbar drag was trapped inside the wheeled project',
-  )
-  log('Keyboard End and a real scrollbar drag can leave the project after interior wheel input')
-  await positionAt('Luma Cloud')
+  const afterScrollbar = await geometry(UPPER)
+  assert.ok(afterScrollbar.bottomOffset < -80, 'Scrollbar drag was trapped inside the wheeled lane')
+  log('Keyboard End and a real scrollbar drag can leave the lane after interior wheel input')
+  await positionAt(LOWER)
   await wheel(-120)
-  await assertAtBottom('Luma Sensor')
+  await assertAtBottom(UPPER)
 
   const downInterrupted = await reverseDuringSnap(1)
-  const returned = await geometry('Luma Sensor')
+  const returned = await geometry(UPPER)
   assert.ok(
     returned.scrollTop <= downInterrupted.start + 2 &&
       returned.scrollTop < downInterrupted.reversedAt - 2,
-    'Reversing a downward snap must return to the previous project’s lower tasks',
+    'Reversing a downward snap must return to the previous lane’s lower tasks',
   )
   assert.ok(returned.offset < -80, 'Interrupted reversal must not skip to the previous heading')
-  assert.ok((await geometry('Luma Cloud')).offset > 2, 'The interrupted downward snap continued')
+  assert.ok((await geometry(LOWER)).offset > 2, 'The interrupted downward snap continued')
 
-  await positionAt('Luma Cloud')
+  await positionAt(LOWER)
   const upInterrupted = await reverseDuringSnap(-1)
-  const stayed = await geometry('Luma Cloud')
+  const stayed = await geometry(LOWER)
   assert.ok(
     stayed.scrollTop >= upInterrupted.start - 2 && stayed.scrollTop > upInterrupted.reversedAt + 2,
-    'Reversing an upward snap must stay at the current project instead of continuing upward',
+    'Reversing an upward snap must stay at the current lane instead of continuing upward',
   )
   log('Reversing real wheel input during either smooth transition cancels its old direction')
-  await positionAt('Luma Cloud')
+  await positionAt(LOWER)
   await wheel(-120)
-  await assertAtBottom('Luma Sensor')
+  await assertAtBottom(UPPER)
 
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await wheel(120)
-  await assertAt('Luma Cloud')
+  await assertAt(LOWER)
   await wheel(-120)
-  await assertAtBottom('Luma Sensor')
+  await assertAtBottom(UPPER)
   log('Reduced motion preserves both directional destinations for individual detents')
 
   for (const motion of ['no-preference', 'reduce']) {
@@ -597,18 +625,15 @@ try {
     'Steady ticks and 30ms momentum remain responsive after arrival without skipping unread tasks',
   )
 
-  await page.setViewportSize({ width: 1024, height: 900 })
-  await positionAt('Luma Cloud')
-  assert.ok(
-    (await geometry('Luma Cloud')).horizontalOverflow,
-    'Narrow board must overflow horizontally',
-  )
+  await page.setViewportSize({ width: 1024, height: BOUNDARY.height })
+  await positionAt(LOWER)
+  assert.ok((await geometry(LOWER)).horizontalOverflow, 'Narrow board must overflow horizontally')
   await wheel(-120)
-  await assertAtBottom('Luma Sensor')
+  await assertAtBottom(UPPER)
   await wheel(120)
-  await assertAt('Luma Cloud')
+  await assertAt(LOWER)
   await wheel(-120)
-  await assertAtBottom('Luma Sensor')
+  await assertAtBottom(UPPER)
   log('Narrow boards align the previous panel above the horizontal scrollbar')
   await page.mouse.wheel(180, 0)
   await settle()
@@ -619,8 +644,9 @@ try {
   await assertPanelPaint()
   log('Horizontal scrolling keeps the separate status header aligned with every task column')
 
+  // the sub-project legs start on a freshly loaded Board at full height
   await page.setViewportSize({ width: 1556, height: 1286 })
-  await page.locator('aside').getByText('Luma Sensor', { exact: true }).click()
+  await page.reload({ waitUntil: 'domcontentloaded' })
   await page.getByRole('heading', { name: 'Luma Sensor', exact: true }).waitFor()
   // the closed switcher names the layout in a word
   await page.locator('[data-group-menu]', { hasText: 'Project' }).waitFor()
@@ -688,11 +714,19 @@ try {
   )
   assert.ok((await geometry('Manufacturing')).offset > 2, 'The next heading snapped prematurely')
 
-  // Separate, modest gestures reveal the final task before the next lane can win.
+  // Separate, modest gestures read the lane to its bottom, its final task
+  // included, before the next lane can win. The last task can show while the
+  // lane's foot is still below the pane, and a gesture then finishes the lane
+  // rather than advancing (Kanban useLaneWheelSnap), so the lane counts as
+  // read once its bottom reaches the pane's.
   let revealed = false
   for (let gesture = 0; gesture < 30; gesture++) {
     const state = await geometry('Testing & Compliance')
-    if (state.lastCardBottom <= state.visibleBottom + 2) {
+    if (Math.abs(state.bottomOffset) <= 2) {
+      assert.ok(
+        state.lastCardBottom <= state.visibleBottom + 2,
+        'The lane ended before its last task was shown',
+      )
       revealed = true
       break
     }

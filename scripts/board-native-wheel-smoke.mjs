@@ -1,5 +1,8 @@
 /* Read-only Northstar regression using native OS wheel input, including the
  * Chromium imprecise mouse path that Playwright/CDP wheel events do not use.
+ * It drives the sub-project lanes of Luma Sensor's Board: the lane boundary
+ * legs in a pane short enough for two neighbouring lanes to outgrow it, then
+ * the short lanes at full height.
  * Run: xvfb-run -a -s '-screen 0 1800x1500x24' node scripts/board-native-wheel-smoke.mjs [baseURL]
  * Requires Xvfb and xdotool. Never seeds, resets or changes demo records. */
 import assert from 'node:assert/strict'
@@ -27,6 +30,14 @@ const browser = await chromium.launch({
   }),
   page = await browser.newPage({ viewport: { width: 1556, height: 1000 } })
 page.on('pageerror', (e) => errors.push(e.message))
+/* The lane boundary legs drive two tall neighbouring lanes, Testing &
+   Compliance above Manufacturing, the Board's last lane, in a pane of
+   BOUNDARY's height, where both outgrow it. No Board shows lanes of two
+   top-level projects any more but My view, whose lanes of Nora's own tasks
+   are shorter than any such pane. */
+const UPPER = 'Testing & Compliance'
+const LOWER = 'Manufacturing'
+const BOUNDARY = { width: 1556, height: 450 }
 async function settle() {
   await page.evaluate(
     () =>
@@ -246,19 +257,27 @@ const click = (button, count = 1, interval = 100) =>
   run('xdotool', ['click', '--repeat', String(count), '--delay', String(interval), String(button)])
 try {
   await signInDemo(page, demo)
-  await page
-    .locator('[data-lane]')
-    .getByRole('button', { name: 'Luma Cloud', exact: true })
-    .waitFor()
+  // Luma Sensor's Board, by its number, in Swimlanes by project
+  const luma = await page.evaluate(
+    () => window.PLANNER.projects.find((p) => p.name === 'Luma Sensor' && !p.parent)?.num,
+  )
+  assert.ok(luma != null, 'Northstar holds no Luma Sensor')
+  await page.goto(`${demo.base}/app/${demo.orgSlug}/board/p/${luma}`, {
+    waitUntil: 'domcontentloaded',
+  })
+  await page.getByRole('heading', { name: 'Luma Sensor', exact: true }).waitFor()
+  await page.locator('[data-group-menu]', { hasText: 'Project' }).waitFor()
+  await page.locator('[data-lane]').getByRole('button', { name: UPPER, exact: true }).waitFor()
   await page.evaluate(() => document.fonts.ready)
+  await page.setViewportSize(BOUNDARY)
   await aim()
   for (const motion of ['no-preference', 'reduce']) {
     await page.emulateMedia({ reducedMotion: motion })
     for (const pause of [150, 100, 220]) {
-      await position('Luma Cloud', 'middle')
+      await position(UPPER, 'middle')
       await start()
       // Five physical detents per burst; short pauses preserve the native wheel
-      // sequence while it crosses a project boundary and then changes direction.
+      // sequence while it crosses a lane boundary and then changes direction.
       await click(5, 5, 100)
       await wait(pause)
       await click(5, 5, 100)
@@ -266,80 +285,78 @@ try {
       await click(4, 5, 100)
       await wait(pause)
       await click(4, 5, 100)
-      await finish(`${motion}: pause ${pause}ms across Cloud and Pilot`, 20)
+      await finish(`${motion}: pause ${pause}ms across ${UPPER} and ${LOWER}`, 20)
     }
   }
   for (const motion of ['no-preference', 'reduce']) {
     await page.emulateMedia({ reducedMotion: motion })
     for (const interval of [60, 100, 220]) {
-      await position('Pilot & Launch')
-      const sensorBottom = await page.evaluate(() => {
+      // from the Board's end, up through the last lane into the one above
+      await position(LOWER, 'bottom')
+      const upperBottom = await page.evaluate((name) => {
         const pane = document.querySelector('[data-scroll]')
-        const sensor = [...pane.querySelectorAll('[data-swimlane-panel]')].find(
-          (lane) => lane.querySelector('[data-lane-open]').textContent === 'Luma Sensor',
+        const upper = [...pane.querySelectorAll('[data-swimlane-panel]')].find(
+          (lane) => lane.querySelector('[data-lane-open]').textContent === name,
         )
         return (
           pane.scrollTop +
-          sensor.getBoundingClientRect().bottom -
+          upper.getBoundingClientRect().bottom -
           pane.getBoundingClientRect().top -
           pane.clientHeight
         )
-      })
+      }, UPPER)
       await start()
       await click(4, 35, interval)
-      const result = await finish(
-        `${motion}: continuous upward ${interval}ms project transitions`,
-        35,
-      )
+      const result = await finish(`${motion}: continuous upward ${interval}ms lane transitions`, 35)
       assert.ok(
         result.calls.some((call) => {
           const options = call.args[0]
-          return options?.behavior !== 'instant' && Math.abs(options?.top - sensorBottom) <= 2
+          return options?.behavior !== 'instant' && Math.abs(options?.top - upperBottom) <= 2
         }),
-        'Upward scrolling through Cloud must snap to Sensor’s final tasks',
+        `Upward scrolling through ${LOWER} must snap to ${UPPER}’s final tasks`,
       )
       // A pinned heading alone cannot prove the transition was entered at its
       // readable end. Observe the actual last card at the destination before
       // later ticks continue upward into earlier task rows.
       const arrived = result.frames.findIndex((frame) => {
-        const sensor = frame.lanes.find((lane) => lane.name === 'Luma Sensor')
+        const upper = frame.lanes.find((lane) => lane.name === UPPER)
         return (
-          Math.abs(frame.top - sensorBottom) <= 2 &&
-          sensor.lastTop >= sensor.headingBottom - 2 &&
-          sensor.lastBottom <= sensor.visibleBottom + 2
+          Math.abs(frame.top - upperBottom) <= 2 &&
+          upper.lastTop >= upper.headingBottom - 2 &&
+          upper.lastBottom <= upper.visibleBottom + 2
         )
       })
-      const earlierRows = result.frames.findIndex((frame) => frame.top < sensorBottom - 80)
+      const earlierRows = result.frames.findIndex((frame) => frame.top < upperBottom - 80)
       assert.ok(
         arrived >= 0,
-        'Native upward transition must show Sensor’s last task at the pane bottom',
+        `Native upward transition must show ${UPPER}’s last task at the pane bottom`,
       )
       assert.ok(
         earlierRows > arrived,
-        'Native ticks must read Sensor’s final tasks before its earlier rows',
+        `Native ticks must read ${UPPER}’s final tasks before its earlier rows`,
       )
     }
   }
   await page.emulateMedia({ reducedMotion: 'no-preference' })
   for (const direction of [1, -1]) {
-    await position(
-      direction > 0 ? 'Luma Sensor' : 'Luma Cloud',
-      direction > 0 ? 'bottom' : 'heading',
+    await position(direction > 0 ? UPPER : LOWER, direction > 0 ? 'bottom' : 'heading')
+    const { initial, target } = await page.evaluate(
+      ({ direction, UPPER, LOWER }) => {
+        const p = document.querySelector('[data-scroll]')
+        const r = p.getBoundingClientRect()
+        const name = direction > 0 ? LOWER : UPPER
+        const lane = [...p.querySelectorAll('[data-swimlane-panel]')].find(
+          (l) => l.querySelector('[data-lane-open]').textContent === name,
+        )
+        const b = lane.getBoundingClientRect()
+        const offset =
+          direction > 0
+            ? b.top - r.top - parseFloat(getComputedStyle(p).scrollPaddingTop)
+            : b.bottom - r.top - p.clientHeight
+        return { initial: p.scrollTop, target: p.scrollTop + offset }
+      },
+      { direction, UPPER, LOWER },
     )
-    const { initial, target } = await page.evaluate((direction) => {
-      const p = document.querySelector('[data-scroll]')
-      const r = p.getBoundingClientRect()
-      const name = direction > 0 ? 'Luma Cloud' : 'Luma Sensor'
-      const lane = [...p.querySelectorAll('[data-swimlane-panel]')].find(
-        (l) => l.querySelector('[data-lane-open]').textContent === name,
-      )
-      const b = lane.getBoundingClientRect()
-      const offset =
-        direction > 0
-          ? b.top - r.top - parseFloat(getComputedStyle(p).scrollPaddingTop)
-          : b.bottom - r.top - p.clientHeight
-      return { initial: p.scrollTop, target: p.scrollTop + offset }
-    }, direction)
     await start()
     await click(direction > 0 ? 5 : 4)
     await page.waitForFunction(
@@ -363,15 +380,16 @@ try {
     )
   }
   await page.setViewportSize({ width: 1024, height: 700 })
-  await position('Luma Sensor')
+  await position('Electronics')
   await aim()
   await start()
   await click(5, 40, 100)
   await wait(150)
   await click(4, 40, 100)
   await finish('narrow board: 40 detents down and back up', 80)
+  // the short lanes start on a freshly loaded Board at full height
   await page.setViewportSize({ width: 1556, height: 1286 })
-  await page.locator('aside').getByText('Luma Sensor', { exact: true }).click()
+  await page.reload({ waitUntil: 'domcontentloaded' })
   await page.getByRole('heading', { name: 'Luma Sensor', exact: true }).waitFor()
   await page
     .locator('[data-lane]')
