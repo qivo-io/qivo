@@ -427,6 +427,10 @@ describe('New sub-project', { timeout: 30_000 }, () => {
     )
     await press(await find('Add sub-project'))
     await finish(true)
+    // the row shows once the create answers, never before, as the store
+    // paints nothing
+    expect(document.querySelector('[data-subproject-row]')).toBeNull()
+    await save()
     const row = await waitFor(
       () => document.querySelector<HTMLElement>('[data-subproject-row] button'),
       'the new row',
@@ -435,22 +439,17 @@ describe('New sub-project', { timeout: 30_000 }, () => {
     expect(document.activeElement).toBe(row)
   })
 
-  it('stays where it is after a create under a parent the workspace does not hold, with no starter task', async () => {
+  it("stays in Settings › Projects after a create from a row's menu there, painting nothing before the create answers", async () => {
     history.replaceState(null, '', '/app/testbed/settings/projects')
-    // the server holds Ops, which the workspace leaves out, as after the
-    // admin access split for a project an admin only manages
-    await boot(
-      (snap) =>
-        snap.projects.push({ ...snap.projects[0], id: 'ops', key: 'OPS', num: 3, name: 'Ops' }),
-      (copy) => {
-        copy.projects = copy.projects.filter((p) => p.id !== 'ops' && p.parent_id !== 'ops')
-      },
+    // the server holds Ops, which the person leads, and the store holds no
+    // project, so no parent is the workspace's
+    await boot((snap) =>
+      snap.projects.push({ ...snap.projects[0], id: 'ops', key: 'OPS', num: 3, name: 'Ops' }),
     )
     const row = await waitFor(
       () => document.querySelector('[data-settings-projects] [data-project-row="ops"]'),
       "Ops's row",
     )
-    // its own right offers New sub-project, held by the workspace or not
     await press(await find('Project actions', row))
     const menu = await waitFor(
       () => document.querySelector('[data-slot="popover-content"]'),
@@ -458,27 +457,29 @@ describe('New sub-project', { timeout: 30_000 }, () => {
     )
     await press(await find('New sub-project…', menu))
     await waitFor(() => document.querySelector('[data-new-subproject-parent="ops"]'), 'the check')
-    // no starter task under a parent the workspace does not hold
-    expect(document.querySelector('#subproject-starter')).toBeNull()
+    // the parent's check says the person edits Ops, so the starter task is
+    // offered
+    expect(document.querySelector('#subproject-starter')).not.toBeNull()
     await finish(true)
     const create = sent.find((w) => w.name === 'projects:create')
     expect(create?.args).toMatchObject({ type: 'project', parent_id: 'ops', name: 'Docs' })
     expect(create?.args).not.toHaveProperty('sort_order')
-    // nothing paints under a parent the workspace does not hold, neither
-    // as the create goes nor once it is answered
+    // nothing paints as the create goes
     const id = String(create?.args.id)
     const { P } = await import('./store/planner')
     expect(P.project(id)).toBeUndefined()
+    expect(document.querySelector(`[data-subproject-row="${id}"]`)).toBeNull()
     const saves = vi.spyOn(P, 'saveUINow')
     await save()
     expect(document.body.textContent).toContain('Sub-project “Docs” created')
-    expect(P.project(id)).toBeUndefined()
-    // App stays in Settings › Projects, never moves into the sub-project,
-    // so it never remembers it, and creates no task
+    // App stays in Settings › Projects and never remembers the sub-project,
+    // and its starter task goes to Docs once the server's read by id
+    // showed the creator Docs with Edit
     expect(document.querySelector('[data-settings-projects]')).not.toBeNull()
+    expect(location.pathname).toBe('/app/testbed/settings/projects')
     expect(saves.mock.calls.some(([patch]) => patch.lastProject?.project_id === id)).toBe(false)
-    expect(P.loadUI().lastProject?.project_id).not.toBe(id)
-    expect(sent.some((w) => w.name.startsWith('issues:'))).toBe(false)
+    await waitFor(() => sent.find((w) => w.name === 'issues:create'), 'the starter task')
+    expect(sent.find((w) => w.name === 'issues:create')?.args).toMatchObject({ project_id: id })
   })
 
   /* The Planner, an organization admin, creates Docs, led by Leo, under
@@ -488,12 +489,11 @@ describe('New sub-project', { timeout: 30_000 }, () => {
      (projectSettings.get) stopped before it knew their level, as past a
      read bound, and answers level and accessible null to a manager, so the
      dialog cannot tell whether they will see Docs: it warns of nothing and
-     offers no starter task, as an unknown level gives no Edit. The
-     workspace then holds Docs, as the create's kept paint under a held
-     parent does, so only App's check that the creator sees it
-     (P.resolveProject) keeps App from opening it. `resolve` answers that
-     check from the navigation stand-in, which finds no level of theirs on
-     Docs, or fails it. She opens Settings from Plan's Overview, so App
+     offers no starter task, as an unknown level gives no Edit. So only
+     App's check that the creator sees it, one projectNav.byIds read of it
+     (P.projectsByIds), keeps App from opening it. `resolve` answers that
+     check from the navigation stand-in, which leaves Docs out as the
+     Planner holds no level on it, or fails it. She opens Settings from Plan's Overview, so App
      shows and remembers Plan beneath it. Answers the way out of Settings,
      which checks that Plan shows again as it did, since App writes no
      preference while Settings shows and a move into Docs there would show
@@ -554,7 +554,7 @@ describe('New sub-project', { timeout: 30_000 }, () => {
     const ask = network.query.getMockImplementation()
     network.query.mockImplementation((ref, args) => {
       const name = getFunctionName(ref)
-      if (resolve === 'failed' && name === 'projectNav:resolve')
+      if (resolve === 'failed' && name === 'projectNav:byIds')
         return Promise.reject(new Error('the navigation read failed'))
       return isProjectSettingsRead(name) ? reads.query(name, args) : ask?.(ref, args)
     })
@@ -600,16 +600,15 @@ describe('New sub-project', { timeout: 30_000 }, () => {
     const id = String(create?.args.id)
     const saves = vi.spyOn(P, 'saveUINow')
     await save()
-    // App asked the server whether the creator sees Docs, which the
-    // workspace holds
+    // App asked the server whether the creator sees Docs, by one read of
+    // its id
     expect(
       network.query.mock.calls.some(
         ([ref, args]) =>
-          getFunctionName(ref) === 'projectNav:resolve' &&
-          (args as { project_id?: string }).project_id === id,
+          getFunctionName(ref) === 'projectNav:byIds' &&
+          (args as { ids?: string[] }).ids?.includes(id),
       ),
     ).toBe(true)
-    expect(P.project(id)).toBeDefined()
     // it stays in Settings › Projects and makes no starter task
     expect(document.querySelector('[data-settings-projects]')).not.toBeNull()
     expect(sent.some((w) => w.name.startsWith('issues:'))).toBe(false)
