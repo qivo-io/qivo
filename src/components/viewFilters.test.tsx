@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { getFunctionName } from 'convex/server'
-import { act, useState } from 'react'
+import { act, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MENTION_BATCH } from '../../convex/lib/limits'
@@ -90,7 +90,10 @@ async function render(initial: Partial<IssueFilters> = {}) {
       search: '',
       ...initial,
     })
-    shown = filters
+    // the filters on screen, for the cases to read once the render settled
+    useEffect(() => {
+      shown = filters
+    })
     return (
       <ui.ViewFilters
         info={info as NonNullable<typeof info>}

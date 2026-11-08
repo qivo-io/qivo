@@ -34,7 +34,6 @@ export function RowAvatar({
       {...(named ? { 'data-avatar': row.id } : { 'data-row-avatar': row.id })}
       role="img"
       aria-label={row.name}
-      title={row.name}
       style={{ width: size, height: size, backgroundColor: row.color }}
       className={cn(
         'relative flex shrink-0 items-center justify-center rounded-[5px] font-semibold text-white',

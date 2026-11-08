@@ -23,7 +23,7 @@ import { RowAvatar } from './RowAvatar'
 import { usePeople } from './usePeople'
 
 /** The words of the follower popover's Add list. */
-export const FOLLOWER_WORDS: ChoiceWords = {
+const FOLLOWER_WORDS: ChoiceWords = {
   held: (held) => heldLine(held, true),
   failed: "Couldn't load people.",
   stopped: 'Showing the people found so far.',

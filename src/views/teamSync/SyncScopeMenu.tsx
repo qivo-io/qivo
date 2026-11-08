@@ -47,7 +47,7 @@ import { type ChoiceWords, ESCAPE_CLEARS, escapeClearsFirst } from '../../compon
 const SCOPE_SEARCH = 'data-sync-scope-search'
 
 /** The words of the scope menu's teams. */
-export const SCOPE_TEAM_WORDS: ChoiceWords = {
+const SCOPE_TEAM_WORDS: ChoiceWords = {
   held: (held) =>
     held?.state === 'refused' && held.message ? held.message : "Teams can't be listed yet.",
   failed: "Couldn't load teams.",
@@ -57,7 +57,7 @@ export const SCOPE_TEAM_WORDS: ChoiceWords = {
 }
 
 /** What the trigger says while it cannot name the scope (scopeName). */
-export const SCOPE_WORDS = {
+const SCOPE_WORDS = {
   choose: 'Choose a scope',
   loading: 'Loading…',
   unavailable: 'Team not available',

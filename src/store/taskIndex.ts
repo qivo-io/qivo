@@ -859,7 +859,8 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
       const owners = new Set<string>()
       if (from.factsVersion !== factsVersion) {
         factsVersion = from.factsVersion
-        for (const [id, was] of [...factsOf]) {
+        // setting an existing key while iterating a Map visits each entry once
+        for (const [id, was] of factsOf) {
           const now = from.ownerFacts(id)
           if (sameData(was, now)) continue
           factsOf.set(id, now)

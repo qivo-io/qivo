@@ -19,6 +19,10 @@
     "count": 15,
     "reason": "Qivo calendar geometry and data colors, configurable control sizes and forwarded caller styles; popup anchor coordinates, menu widths and measured landscape height"
   },
+  "src/components/RowAvatar.tsx": {
+    "count": 1,
+    "reason": "a row portrait's size and the data color the server sends for the person"
+  },
   "src/components/rowElements.tsx": {
     "count": 3,
     "reason": "priority glyph geometry and data color; the avatar chip's geometry and data color pass to its root as props; a mask glyph's size and color"
