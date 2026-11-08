@@ -583,16 +583,18 @@ export const PROJECTS_LIST = 'machine.projects'
 export type ProjectTie = readonly [rootId: string, subKey: string, subId: string]
 
 /** The tie of position `at` of the project list, or null where it is not
- * one: three strings, the first a project id, the other two both empty or
- * a key and a project id. */
+ * one. A tie is three strings, the last two both empty or both set. This
+ * checks the shape alone, as model/nameKeys.ts idTieOf does for the other
+ * lists. The cursor is sealed, so only this list's own positions open, and
+ * they hold stored project ids, which app creates once wrote in any form
+ * the client sent (lib/db.ts assertNewRowId came later), so a position at
+ * an id that is not a UUID still continues its list. */
 export function projectTieOf({ tie }: NamedAt): ProjectTie | null {
   if (tie.length !== 3) return null
   const [rootId, subKey, subId] = tie
   if (typeof rootId !== 'string' || typeof subKey !== 'string' || typeof subId !== 'string')
     return null
-  if (!UUID.test(rootId)) return null
-  if (subKey === '' && subId === '') return [rootId, '', '']
-  return subKey !== '' && UUID.test(subId) ? [rootId, subKey, subId] : null
+  return (subKey === '') === (subId === '') ? [rootId, subKey, subId] : null
 }
 
 /** What a page of the project list is asked, checked (machine/shared.ts

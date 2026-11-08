@@ -380,7 +380,6 @@ describe('the cursors', () => {
       await tie([page.projects[0].id, '']),
       await tie([page.projects[0].id, 'A10', '']),
       await tie([page.projects[0].id, '', page.projects[1].id]),
-      await tie(['not-an-id', '', '']),
       `${cursor.slice(0, -2)}${cursor.slice(-2) === 'aa' ? 'bb' : 'aa'}`,
       'junk',
     ])
@@ -427,6 +426,22 @@ describe('the cursors', () => {
       cursor: café.next_cursor as string,
     })
     expect(keys(rest.projects)).toEqual(['B2'])
+  })
+
+  it('continue past a stored project and sub-project whose ids are not UUIDs', async () => {
+    const { t, f, mara, order } = await tree()
+    // ids an app create stored as the client sent them, before
+    // lib/db.ts assertNewRowId
+    const legacy = await meta(t, f.org.id, 'L', { id: 'legacy-project' })
+    await sub(t, legacy, 'L1', { id: 'Legacy sub 1' })
+    await sub(t, legacy, 'L2')
+    await grant(t, legacy, mara)
+    await withReach(t)
+    const expected = [...order]
+    expected.splice(expected.indexOf('NAV'), 0, 'L', 'L1', 'L2')
+    // every page cut, at limit 1, also at the two ids
+    for (const all of [restAll, mcpAll])
+      expect(keys((await all(t, mara, 'read', { limit: 1 })).rows)).toEqual(expected)
   })
 })
 
