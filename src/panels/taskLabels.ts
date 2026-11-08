@@ -7,7 +7,8 @@
    label picker (LabelPicker.tsx) lists them first. Its bounded map of
    names (keepNamed) keeps the labels a picker put on a task and the ones
    the picker and Settings › Labels created, so a new label's chip names it
-   at once; the store's profile cache holds people, not labels. */
+   at once, also while labels.byIds answers before the picker's create
+   commits; the store's profile cache holds people, not labels. */
 
 import { api } from '../../convex/_generated/api'
 import { BY_IDS_MAX } from '../../convex/lib/limits'
@@ -23,15 +24,26 @@ const NAMED_KEPT = 1000
    and a label picked from a batch shows its name at once. */
 const named = new Map<string, LabelChoice>()
 
+/* The labels whose create, from the picker, the server has not answered
+   yet, by organization and id. */
+const creating = new Set<string>()
+
 /** Keeps `row` of organization `org` named for the task window, as the
-    label picker does for a label it put on a task. */
-export function keepNamed(org: string, row: LabelChoice) {
+    label picker does for a label it put on a task. With `saved`, the
+    label's create on its way, a labels.byIds answer that leaves it out
+    does not show it as deleted until the create answered, as the read may
+    run before the create commits. */
+export function keepNamed(org: string, row: LabelChoice, saved?: Promise<boolean>) {
   const key = `${org}\n${row.id}`
   named.delete(key)
   named.set(key, row)
   for (const oldest of named.keys()) {
     if (named.size <= NAMED_KEPT) break
     named.delete(oldest)
+  }
+  if (saved) {
+    creating.add(key)
+    void saved.finally(() => creating.delete(key))
   }
 }
 
@@ -68,7 +80,8 @@ export function inNameOrder(labels: readonly TaskLabel[]): TaskLabel[] {
  * task's labels and the rows its answer may hold before the cap stay
  * within 200), in name order (inNameOrder). A label an answer holds is
  * `ok`; one the answer for the current ids leaves out is `gone`, as byIds
- * looked it up. Rows an earlier answer or the picker named stay `ok` while
+ * looked it up, unless the picker's create of it has not answered yet.
+ * Rows an earlier answer or the picker named stay `ok` while
  * the current read has no answer, so a hidden tab or a new set of ids
  * turns no named label back to loading. Otherwise a label is `loading`, or
  * `failed` after a failed read. `failed` says that a current read failed,
@@ -106,7 +119,7 @@ export function useTaskLabels(it: { org: string; labels?: readonly string[] } | 
   const labels = ids.map((id): TaskLabel => {
     const row = answered.get(id)
     if (row) return { id, state: 'ok', name: row.name, color: row.color }
-    if (row === null) return { id, state: 'gone' }
+    if (row === null && !creating.has(`${org}\n${id}`)) return { id, state: 'gone' }
     const kept = named.get(`${org}\n${id}`)
     if (kept) return { id, state: 'ok', name: kept.name, color: kept.color }
     return { id, state: failedIds.has(id) ? 'failed' : 'loading' }

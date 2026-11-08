@@ -186,8 +186,9 @@ export function LabelPickerPopup({
     const name = typed
     const made = P.addLabel({ name })
     if (!made) return
-    // its chip names it at once, as the store holds no label to name it
-    keepNamed(it.org, { id: made.id, name: name.trim(), color: made.color })
+    // its chip names it at once, as the store holds no label to name it,
+    // also while the create is on its way
+    keepNamed(it.org, { id: made.id, name: name.trim(), color: made.color }, made.saved)
     if (!onTask.has(made.id)) P.toggleIssueLabel(it.id, made.id, made.saved)
     setText('')
     void made.saved.then((saved) => {

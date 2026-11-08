@@ -528,6 +528,22 @@ describe("the label picker's Create new label", () => {
     expect(rows()[0]).toMatchObject({ name: 'Bench', on: true, current: true })
   })
 
+  it('names a label it made while its create waits, though the read by id answers before it commits', async () => {
+    await load()
+    // the create waits; the window's read of the new label answers first,
+    // from a server that does not hold it yet
+    let commit: (value: unknown) => void = () => {}
+    answers['labels:create'] = () => new Promise((resolve) => (commit = resolve))
+    const input = await open()
+    await type(input, 'Bench')
+    await enter(input)
+    await rest()
+    const made = String(sent.find((s) => s.name === 'labels:create')?.args.id)
+    expect(task().labels).toEqual([made])
+    expect(rows()[0]).toMatchObject({ id: made, name: 'Bench', on: true, current: true })
+    await act(async () => commit(null))
+  })
+
   it('still picks the one label a typed search matches', async () => {
     await load()
     const input = await open()
