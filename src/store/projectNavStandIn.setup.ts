@@ -44,9 +44,13 @@
    byIds answers each asked id once by the same rule, each opened
    sub-project's top-level project as a row of its own, with the seat's
    level where it reaches the project for a reason of its own and `viewer`
-   for a top-level project it sees only for navigation, and refuses more
-   than BY_IDS_MAX ids with the server's sentence. `force.unchecked` lists
-   every asked id apart with that sentence, `force.fail` fails it, and
+   for a top-level project it sees only for navigation, in the server's
+   order, and refuses more than BY_IDS_MAX ids with the server's sentence.
+   `force.notReady` lists apart an asked top-level project the seat sees
+   only for navigation, as the server does while the organization's reach
+   rows are not complete, unless a sub-project it answers brings it.
+   `force.unchecked` lists every asked id of an organization with the
+   caller's seat apart with that sentence, `force.fail` fails it, and
    `force.byIdsLoading` leaves a subscription without an answer, so a
    project the store's project cache names reads as loading.
 
@@ -235,6 +239,7 @@ function navRule(w: NavWorkspace, favorites: ReadonlySet<string>) {
     seats,
     seatIn,
     sees,
+    levelOf,
     byIdRow,
     visible,
     liveChildren,
@@ -475,21 +480,52 @@ export function projectNavStandIn(
     if (ids.length > BY_IDS_MAX)
       throw new ConvexError({ code: 'bad_request', message: NAV_BY_IDS_LIMIT })
     if (force.fail) throw new Error('the navigation read fails, as the stand-in was asked')
-    const asked = [...new Set(ids)]
+    // the asked projects of an organization with the caller's seat, in
+    // the order first asked, as the server reads them
+    const found = [...new Set(ids)].flatMap((id) => {
+      const p = rule.byId.get(id)
+      const seat = p ? rule.seatIn(p.org_id) : undefined
+      return p && seat ? [{ p, seat }] : []
+    })
     if (force.unchecked !== undefined) {
-      const apart = asked.filter((id) => rule.byId.has(id))
+      const apart = found.map(({ p }) => p.id)
       return { rows: [], unchecked: apart, message: apart.length > 0 ? force.unchecked : null }
     }
     const rows = new Map<string, NavByIdRow>()
-    for (const id of asked) {
-      const p = rule.byId.get(id)
-      const seat = p ? rule.seatIn(p.org_id) : undefined
-      if (!p || !seat || !rule.sees(seat, p)) continue
+    const apart = new Set<string>()
+    for (const { p, seat } of found) {
+      // without complete reach rows, a top-level project the seat sees
+      // only for navigation cannot be proven (convex/model/projectNavReads.ts
+      // Unproven)
+      if (
+        force.notReady &&
+        p.parent_id === undefined &&
+        p.type === 'meta' &&
+        p.archived_at === undefined &&
+        p.org_id === seat.org_id &&
+        rule.levelOf(seat, p) === null
+      ) {
+        if (rule.visible(seat, p)) apart.add(p.id)
+        continue
+      }
+      if (!rule.sees(seat, p)) continue
       rows.set(p.id, rule.byIdRow(seat, p))
       const parent = p.parent_id === undefined ? undefined : rule.byId.get(p.parent_id)
       if (parent && !rows.has(parent.id)) rows.set(parent.id, rule.byIdRow(seat, parent))
     }
-    return { rows: [...rows.values()], unchecked: [], message: null }
+    // each asked project's row, then its parent's, each once, a row winning
+    // over the list apart
+    const out: NavByIdRow[] = []
+    const give = (id: string | null | undefined) => {
+      const row = id ? rows.get(id) : undefined
+      if (row && !out.includes(row)) out.push(row)
+    }
+    for (const { p } of found) {
+      give(p.id)
+      give(rows.get(p.id)?.parent_id)
+    }
+    const unchecked = [...apart].filter((id) => !rows.has(id))
+    return { rows: out, unchecked, message: unchecked.length > 0 ? NAV_UNCHECKED : null }
   }
 
   if (name === 'projectNav:resolve') {
