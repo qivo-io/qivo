@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { getFunctionName } from 'convex/server'
-import { Activity, act, useReducer } from 'react'
+import { Activity, act, useEffect, useReducer } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
@@ -9,7 +9,6 @@ import {
   type ForcedProjectNav,
   isProjectNavRead,
   NAV_UNCHECKED,
-  queryProjectNav,
 } from '../store/projectNavStandIn.setup'
 import type { FocusRow } from './SidebarProjects'
 import { TooltipProvider } from './ui/tooltip'
@@ -27,10 +26,16 @@ import { TooltipProvider } from './ui/tooltip'
    that the tree asks for none. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', async () => ({
-  convex: network,
-  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
+// the live double of the store that loaded last, whose project cache reads
+// a case can hold
+const double = vi.hoisted(() => ({
+  live: null as null | { forceProjectNav(force: { byIdsLoading?: boolean } | null): void },
 }))
+vi.mock('../lib/convex', async () => {
+  const live = (await import('../store/guard/liveDouble.setup')).liveOver(network)
+  double.live = live
+  return { convex: network, live }
+})
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -159,6 +164,18 @@ const republish = async () => {
   await settle()
 }
 
+/** Seeds project `id`'s facts as a navigation row that showed it does
+    (P.seedProjects), and holds the project cache's reads, so a scope
+    opened from that row reads as loading with the row's facts. */
+function seeded(id: string) {
+  const p = snap.projects.find((x) => x.id === id)
+  if (!p) throw new Error('no project')
+  double.live?.forceProjectNav({ byIdsLoading: true })
+  store.P.seedProjects([
+    { id: p.id, org_id: p.org_id, name: p.name, num: p.num, parent_id: p.parent_id ?? null },
+  ])
+}
+
 /** Loads the store from `next`, with the reads answered by their stand-in. */
 async function load(next: Snapshot) {
   vi.resetModules()
@@ -183,6 +200,9 @@ async function load(next: Snapshot) {
   network.query.mockResolvedValue(null)
   network.mutation.mockResolvedValue(null)
   store = await import('../store/planner')
+  // the project cache's reads answer from the whole, whatever a case
+  // held before
+  double.live?.forceProjectNav(null)
   await store.initStore()
   tree = await import('./SidebarProjects')
   pickLib = await import('../lib/projectPick')
@@ -190,10 +210,17 @@ async function load(next: Snapshot) {
 }
 
 /** The tree on the store's version, one component for every render, with
-    App's focus request, which ends once the tree is done with it. */
+    App's focus request, which ends once the tree is done with it. It names
+    the scope's project and its top-level project with the project cache,
+    as App's access guard does, since the tree places the scope by the
+    cache's facts. */
 function Harness({ scope }: { scope: string }) {
   version.usePlannerVersion()
   const [, redraw] = useReducer((n: number) => n + 1, 0)
+  const topId = store.P.scopeInfo(scope).topId
+  useEffect(() => {
+    store.P.nameProjects('scope', topId && topId !== scope ? [scope, topId] : [scope])
+  }, [scope, topId])
   return (
     <tree.SidebarProjects
       scope={scope}
@@ -232,6 +259,10 @@ async function render(scope: string, o: { mode?: 'visible' | 'hidden'; focusRow?
       </TooltipProvider>,
     ),
   )
+  await settle()
+  // the project cache's answer for the scope paints in the store's next
+  // frame, and the reads it starts land after it
+  await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
   await settle()
 }
 
@@ -452,15 +483,15 @@ describe('the order', { timeout: 60_000 }, () => {
     const next0 = base(false, 'admin')
     const mine = top(next0, 'Mine by grant')
     const led = top(next0, 'Led by me', { lead: true })
-    // a project the admin only manages, which a workspace no longer
-    // holds; held here, the store gives it no level, as the server's rule
-    // does, and only the management rule knows it
+    // a project the admin only manages: the navigation reads leave it out
+    // by ordinary access, as the server's rule does, so the store knows
+    // nothing of it and offers no management of it, failing closed
     const managed = top(next0, 'Managed only', { grant: false })
     await load(next0)
     await render(mine)
-    expect(store.P.project(managed)).toBeDefined()
+    expect(store.P.project(managed)).toBeUndefined()
     expect(store.P.levelOn(managed)).toBeNull()
-    expect(store.P.canManageOwnProjectAccess(managed)).toBe(true)
+    expect(store.P.canManageOwnProjectAccess(managed)).toBe(false)
     expect(rowIds()).toEqual([led, mine])
     // the row menu of a project they see by a grant offers New sub-project…,
     // as they manage every project
@@ -587,13 +618,17 @@ describe('the projects figure', { timeout: 60_000 }, () => {
   it('stops the scope rule at the bound, at the end, and once the rows passed its place', async () => {
     const next0 = base()
     // the projects figure at its design size: 198 projects the person
-    // reads and two the reads leave out, which the workspace holds, one
-    // that sorts last and one that sorts among the others by name
+    // reads and two the reads leave out, as a project whose share went
+    // after a row showed it, one that sorts last and one that sorts among
+    // the others by name
     const ids = projects(next0, 198, 20)
     const last = top(next0, 'Zulu without access', { grant: false })
     const middle = top(next0, `${named(60)} without access`, { grant: false })
     await load(next0)
-    // a scope the list never holds reads to its end and lights nothing
+    // a scope opened from such a row, whose seeded facts place it while
+    // the project cache checks it, reads to the end of a list that never
+    // holds it and lights nothing
+    seeded(last)
     await render(last)
     expect(rowIds()).toHaveLength(198)
     expect(asked('page').filter((s) => s.open)).toHaveLength(8)
@@ -604,6 +639,7 @@ describe('the projects figure', { timeout: 60_000 }, () => {
     await act(async () => root.unmount())
     root = createRoot(container)
     await load(next0)
+    seeded(middle)
     await render(middle)
     expect(rowIds()).toHaveLength(75)
     expect(lit()).toEqual([])
@@ -881,12 +917,12 @@ describe('the states', { timeout: 60_000 }, () => {
 })
 
 describe('rows', { timeout: 60_000 }, () => {
-  it('offers New sub-project… where the person leads, and opens a project the workspace does not hold through the server', async () => {
+  it('offers New sub-project… where the person leads, and opens every row at once with its facts seeded', async () => {
     const next0 = base()
     const led = top(next0, 'Led by me', { lead: true })
     const used = top(next0, 'Used by me')
     await load(next0)
-    // a project the server lists that the workspace has not delivered yet
+    // a project the server lists that no row showed before
     const late = top(snap, 'Late arrival')
     await republish()
     await render('mine')
@@ -897,55 +933,29 @@ describe('rows', { timeout: 60_000 }, () => {
       await click([...menu.querySelectorAll('button')].at(-1))
       return out
     }
-    // a menu pick also moves the scope to a held project, as it always
-    // has, and says nothing for one the workspace does not hold
+    // the menu names its row's project with the project cache, so New
+    // sub-project… shows where the person leads it, and a pick also moves
+    // the scope to its row's project, for every row, saying nothing
     expect(await items(led)).toEqual(['New sub-project…', 'Project settings', 'Archived tasks'])
     expect(await items(used)).toEqual(['Project settings', 'Archived tasks'])
     expect(await items(late)).toEqual(['Project settings', 'Archived tasks'])
     expect(actions.openArchivedTasks).toHaveBeenCalledWith(late)
-    expect(actions.openProject.mock.calls).toEqual([[led], [used]])
-    expect(window.showToast).not.toHaveBeenCalled()
-    // a press opens the project as the sidebar always has
+    expect(actions.openProject.mock.calls).toEqual([[led], [used], [late]])
+    // a press opens any row's project at once, as it does a project the
+    // cache answered, with the row's facts seeded so its views ask while
+    // the cache checks it: no check of the server and no toast
     await click(find('button', row(used)))
     expect(actions.openProject).toHaveBeenLastCalledWith(used)
     await click(row(led))
     expect(actions.openProject).toHaveBeenLastCalledWith(led)
-    // one the workspace does not hold opens through the server's check,
-    // saying so in one toast; a second press waits for the same answer,
-    // and a failed check says so and moves nothing
-    let fail = () => {}
-    network.query.mockImplementation(
-      () =>
-        new Promise((_, reject) => {
-          fail = () => reject(new Error('the read failed'))
-        }),
-    )
     await click(find('button', row(late)))
-    await click(row(late))
-    expect(
-      network.query.mock.calls
-        .filter(([ref]) => getFunctionName(ref) === 'projectNav:resolve')
-        .map(([, args]) => args),
-    ).toEqual([{ project_id: late }])
-    await act(async () => fail())
-    await settle()
-    expect(actions.openProject).toHaveBeenCalledTimes(4)
-    expect(vi.mocked(window.showToast).mock.calls).toEqual([
-      ['Opening Late arrival…', 'info', { key: 'sidebar-open' }],
-      ["Couldn't open Late arrival. Try again.", 'info', { key: 'sidebar-open' }],
-    ])
-    // the server's ok, with the delivery that brings the project, opens it
-    // and takes the toast away
-    window.dismissToast = vi.fn()
-    const whole = subs.find((s) => s.name === 'workspace:whole')
-    network.query.mockImplementation(async (_ref, args) => {
-      whole?.next(structuredClone({ ...snap, delivered_at: '2026-09-15T09:00:00.000Z' }))
-      return queryProjectNav(snap, 'projectNav:resolve', args)
-    })
-    await click(find('button', row(late)))
-    await settle()
     expect(actions.openProject).toHaveBeenLastCalledWith(late)
-    expect(window.dismissToast).toHaveBeenCalledExactlyOnceWith('sidebar-open')
+    expect(actions.openProject).toHaveBeenCalledTimes(6)
+    expect(store.P.project(late)).toMatchObject({ id: late, name: 'Late arrival', type: 'meta' })
+    expect(
+      network.query.mock.calls.filter(([ref]) => getFunctionName(ref) === 'projectNav:resolve'),
+    ).toEqual([])
+    expect(window.showToast).not.toHaveBeenCalled()
   })
 })
 

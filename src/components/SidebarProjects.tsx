@@ -17,8 +17,9 @@
      25 more as its end scrolls into view or Load more is pressed, at most
      SIDEBAR_MOST.list (lib/projectPick.ts), past which it points to All
      projects.
-   - The scope's top-level project, from the workspace (P.project), is the
-     one expanded project once a loaded row holds it. Its sub-projects come
+   - The scope's top-level project, from the project cache (P.project),
+     which App names the scope with, the facts a navigation row seeded
+     included, is the one expanded project once a loaded row holds it. Its sub-projects come
      from projectNav.children the same way, at most SIDEBAR_MOST.children,
      past which it asks for a search. A scope move to another project, My
      view or All projects unmounts that list, which stops its read.
@@ -36,17 +37,16 @@
      organization's name on a second line inside the name button, so a
      foreign row's accessible name includes it, number tags for equal
      names among the rows shown, and the open rule (useNavOpen), which
-     opens a project the workspace holds as the sidebar always has, and
-     one it does not hold yet through projectNav.resolve, saying "Opening
-     <name>…" in a toast until it opens, or why it cannot. The tree stays
-     over every page but Settings, so any navigation the person makes
-     meanwhile drops the wait with its toast (navMoved), and so does the
-     tree hiding under Settings.
+     seeds the row's facts into the project cache and opens its project at
+     once, with no check of its own: App says "Opening <name>…" until the
+     cache answers for it. A pick in a row's menu opens the row's project
+     too.
    - New sub-project… in a row's menu, and Add sub-project at a confirmed
      empty end of the expanded list, show where the person manages the
-     project in the workspace (P.canManageOwnProjectAccess, its lead or an
-     organization admin), which answers nothing for a project the workspace
-     does not hold, so such a row offers neither.
+     project (P.canManageOwnProjectAccess, its lead or an organization
+     admin) by the project cache's answer, which the open menu and the
+     expanded list name the project with. A project the cache has not
+     answered offers neither.
    - No list says it is empty or ended before the server said so: not
      ready, the access_unchecked refusal, a stopped batch, a failure and
      the bound each show as themselves, the refusal and a failure with
