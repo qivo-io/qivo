@@ -416,17 +416,58 @@ describe('access', () => {
     })
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     const shared = await post(t, f, { to: me, task, minute: 1 })
-    expect(keys(await feedOf(t, me, 0))).toEqual([shared?.id])
-    Object.assign(OWN_READS, { projectShares: 0, rows: 0, lookups: 0, teamReads: 0 })
-    expect(await feedOf(t, me, 0)).toEqual({ events: [], through: 0, more: true })
-    // an item from before the floor whose check stops asks for no summary
-    expect(await feedOf(t, me, minute(3))).toEqual({
-      events: [],
-      through: minute(3),
-      more: false,
+    // the login's second seat, read after the first, an admin who leads its
+    // project, as admin status alone shows no project, with two events
+    const later = await laterOrg(t, f.org.id)
+    const second = await plantSeat(t, {
+      org_id: later.id,
+      auth_user_id: me.auth_user_id,
+      org_role: 'admin',
+      accepted_at: NOW,
     })
+    const elsewhere = await plantProject(t, { org_id: later.id, lead_id: second.id })
+    const there: (Doc<'messages'> | null)[] = []
+    for (const minutes of [4, 5]) {
+      const other = await plantIssue(t, { org_id: later.id, project_id: elsewhere.id })
+      there.push(
+        await post(t, { org: later, admin: f.admin }, { to: second, task: other, minute: minutes }),
+      )
+    }
+    const theirs = [there[1]?.id, there[0]?.id]
+    expect(keys(await feedOf(t, me, 0))).toEqual([...theirs, shared?.id])
+    Object.assign(OWN_READS, { projectShares: 0, rows: 0, lookups: 0, teamReads: 0 })
+    // the stopped check ends its own seat only, and the next seat answers
+    const stopped = await feedOf(t, me, 0)
+    expect(keys(stopped)).toEqual(theirs)
+    expect(stopped).toMatchObject({ through: minute(5), more: true })
+    // an item from before the floor, read back in its minute, whose check
+    // stops asks for no summary
+    const before = await feedOf(t, me, minute(1.5))
+    expect(keys(before)).toEqual(theirs)
+    expect(before).toMatchObject({ through: minute(5), more: false })
   })
 })
+
+/** A new organization whose id sorts after `than`, so the feed reads a
+ * seat of it after one of `than`'s. */
+async function laterOrg(t: T, than: string) {
+  let id = uuid()
+  while (id <= than) id = uuid()
+  return await t.run(async (ctx) => {
+    const _id = await ctx.db.insert('organizations', {
+      id,
+      name: 'Later',
+      slug: `later-${id.slice(0, 8)}`,
+      created_at: NOW,
+      date_format: 'iso',
+      week_start: 1,
+      week_one_rule: 'first4day',
+      default_plannable_hours: 40,
+    })
+    await ctx.db.insert('org_counters', { org_id: id, next_issue_num: 1, next_project_num: 2 })
+    return (await ctx.db.get(_id)) as Doc<'organizations'>
+  })
+}
 
 /* ------------------------------------------------------------------ seats */
 
@@ -614,8 +655,14 @@ describe('the cap, the budgets and more', () => {
     })
     FEED.items = 3
     expect(await feedOf(t, f.guest, 0)).toEqual({ events: [], through: 0, more: true })
-    // a stop at an item from before the floor asks for nothing
-    expect(await feedOf(t, f.guest, minute(5.5))).toMatchObject({ more: false })
+    // a stop at an item from before the floor asks for nothing: the read
+    // from minute 2.9 examines the items of minutes 6, 5 and 4 and stops at
+    // minute 3's, which sorts before the floor
+    expect(await feedOf(t, f.guest, minute(3.9))).toEqual({
+      events: [],
+      through: minute(3.9),
+      more: false,
+    })
     Object.assign(FEED, structuredClone(DEFAULT_FEED))
     // a budget with no room from the start
     FEED.room = 0
