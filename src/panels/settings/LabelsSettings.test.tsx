@@ -955,6 +955,26 @@ describe('a label name on the draft model', () => {
       { id: 'l29', name: 'Label 29', count: '0 active tasks' },
     ])
   })
+
+  it('drops a kept row with an unsaved name, and its unsaved mark, once someone else deletes the label', async () => {
+    await load(many(30))
+    await render()
+    // a name over the cap stays typed and unsent, and a search hides it
+    await rename('l03', 'f'.repeat(41))
+    await type(find<HTMLInputElement>('[data-labels-search]'), 'label 29')
+    await rest()
+    await settle()
+    expect(rows().map((row) => row.id)).toEqual(['l03', 'l29'])
+    const { hasUnsaved } = await import('../../lib/leaveGuard')
+    expect(hasUnsaved()).toBe(true)
+    // another admin deletes it, and the kept row's by-id read leaves it out
+    await elsewhere((snap) => {
+      snap.labels = snap.labels.filter((label) => label.id !== 'l03')
+    })
+    expect(rows()).toEqual([{ id: 'l29', name: 'Label 29', count: '0 active tasks' }])
+    expect(hasUnsaved()).toBe(false)
+    expect(labelReads().some((args) => 'ids' in args)).toBe(false)
+  })
 })
 
 describe('leaving the page and hiding the tab', () => {

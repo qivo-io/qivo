@@ -503,7 +503,9 @@ export function OrgLabelsPage() {
   )
   // the kept labels read by id while they show, so one deleted here or by
   // someone else, which no batch lists, leaves the kept rows once the
-  // server's answer leaves it out
+  // server's answer leaves it out, also one holding an unsaved name, whose
+  // row then goes with its text, its unsaved mark and what the page knew
+  // of it
   const keptIds = [...kept].sort().slice(0, BY_IDS_MAX)
   const keptKey = keptIds.length ? JSON.stringify({ org_id: org, ids: keptIds }) : null
   const keptRead = useLiveView<{ rows: { id: string }[] }>(api.labels.byIds, keptKey)
@@ -514,6 +516,7 @@ export function OrgLabelsPage() {
     const gone = (id: string) => keptIds.includes(id) && !there.has(id)
     setMade((s) => without(s, gone))
     setRenamed((s) => without(s, gone))
+    setDrafts((s) => without(s, gone))
   }, [keptAnswer])
   // forget the labels neither a batch, a kept row nor a delete on its way
   // shows
