@@ -1629,11 +1629,23 @@ function App() {
           : task
             ? scopeForIssue(task, preferred)
             : undefined
-      /* A project address the workspace does not hold (Route.unheld) shows
-         no scope while startup checks it through projectNav.resolve, as on
-         a boot, and its entry keeps the address until the answer takes it
-         in place; one no read can ask about shows the chooser with a note. */
-      const unheld = !r.sync && !r.issue && !liveScope(r.scope) && r.unheld !== undefined
+      /* A project address by number (Route.unheld) shows no scope while
+         startup checks it through projectNav.resolve, as on a boot, and its
+         entry keeps the address until the answer takes it in place; one no
+         read can ask about shows the chooser with a note. The number of the
+         scope on screen, as Back or Forward between its views reaches, is
+         that scope, as pathMatchesState reads it: the project cache names
+         the scope by the address's organization and number, and it goes on
+         checking the scope, so the scope and its kept pages stay. */
+      const ask = r.unheld
+      const shownScope = was.scope && !P.isMineScope(was.scope) ? P.project(was.scope) : undefined
+      const sameScope =
+        typeof ask === 'object' &&
+        ask !== null &&
+        shownScope?.org === ask.org_id &&
+        shownScope.num === ask.num
+      const unheld =
+        !r.sync && !r.issue && !liveScope(r.scope) && r.unheld !== undefined && !sameScope
       const next = {
         scope: door
           ? jump
@@ -1732,7 +1744,6 @@ function App() {
             }
           : null
       if (unheld) {
-        const ask = r.unheld
         const address = { pathname: location.pathname, hash: location.hash, page: pageKey(next) }
         showOpening((n) =>
           ask
