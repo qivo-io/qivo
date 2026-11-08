@@ -8,11 +8,20 @@ import { createProjectCache, PROJECT_CACHE } from './projectCache'
    which projectNav.byIds reads it holds for the projects the owners name,
    and what it says of each project. No store is involved. */
 
-type Sub = { args: { ids: string[] }; value?: unknown; error?: unknown }
+type Sub = {
+  args: { ids: string[] }
+  value?: unknown
+  error?: unknown
+  watches: number
+  answered: boolean
+}
 
 /** A transport whose reads the test answers, a projects part that holds
-    the projects in `held`, and a page whose visibility the test sets. */
-function setup(held: Set<string> = new Set()) {
+    the projects in `held`, and a page whose visibility the test sets. With
+    `share`, watches of the same ids share one read and its token, as
+    Convex shares them, and a watch is `joined` once a transition named
+    that token, on any connection, as lib/liveQueries.ts says. */
+function setup(held: Set<string> = new Set(), { share = false } = {}) {
   const subs = new Map<string, Sub>()
   const handlers = new Set<(t: LiveTransition) => void>()
   const visibility = new Set<(v: Visibility) => void>()
@@ -23,9 +32,21 @@ function setup(held: Set<string> = new Set()) {
   const cache = createProjectCache({
     live: {
       watch: (_ref, args) => {
-        const token = `t${++next}`
-        subs.set(token, { args: args as Sub['args'] })
-        return { token, joined: false, stop: () => subs.delete(token) }
+        const token = share ? `ids:${JSON.stringify(args)}` : `t${++next}`
+        const known = subs.get(token)
+        if (known) known.watches++
+        else subs.set(token, { args: args as Sub['args'], watches: 1, answered: false })
+        let stopped = false
+        return {
+          token,
+          joined: known?.answered ?? false,
+          stop: () => {
+            if (stopped) return
+            stopped = true
+            const sub = subs.get(token)
+            if (sub && --sub.watches === 0) subs.delete(token)
+          },
+        }
       },
       read: (token) => {
         const sub = subs.get(token)
@@ -46,6 +67,10 @@ function setup(held: Set<string> = new Set()) {
     },
   })
   const tell = (...tokens: string[]) => {
+    for (const token of tokens) {
+      const sub = subs.get(token)
+      if (sub) sub.answered = true
+    }
     for (const fn of handlers) fn({ tokens: new Set(tokens), at: 0, connection })
   }
   const reads = () => [...subs].map(([token, sub]) => ({ token, ids: sub.args.ids }))
@@ -302,6 +327,42 @@ describe('the project cache', () => {
     s.answer(subRead.token, subRows)
     expect(s.cache.look('sub')).toMatchObject({ state: 'ok', row: { level: 'user' } })
     expect(s.cache.look('meta')).toMatchObject({ state: 'ok', row: { level: 'lead' } })
+  })
+
+  it('takes no state from a read a chunk joins that answered before a reconnect, until it answers on the new connection', () => {
+    const s = setup(new Set(), { share: true })
+    PROJECT_CACHE.chunk = 2
+    s.cache.name('board', ['p0', 'p1'])
+    const [first] = s.reads()
+    s.answer(first.token)
+    // the Board names two other projects, and its answered read of p0 and
+    // p1 runs beside the read of the new ones
+    s.cache.name('board', ['p2', 'p3'])
+    expect(s.reads().map((r) => r.ids)).toEqual([
+      ['p0', 'p1'],
+      ['p2', 'p3'],
+    ])
+    // the socket connects again, and neither read has answered on it
+    s.reconnect()
+    // the task window names p0 and p1 in that order, so its chunk joins the
+    // Board's answered read
+    s.cache.name('task', ['p0', 'p1'])
+    expect(s.reads().map((r) => r.ids)).toEqual([
+      ['p0', 'p1'],
+      ['p2', 'p3'],
+    ])
+    expect(s.cache.look('p0')).toEqual({ state: 'loading', row: project('p0'), message: null })
+    expect(s.cache.look('p1')).toEqual({ state: 'loading', row: project('p1'), message: null })
+    // the read answers on the new connection, p0 read-only now and p1 gone
+    s.answer(first.token, [project('p0', { level: 'viewer' })])
+    expect(s.cache.look('p0')).toMatchObject({ state: 'ok', row: { level: 'viewer' } })
+    expect(s.cache.look('p1')).toEqual({ state: 'gone', row: null, message: null })
+    // the task window closes and opens again on them, and its new chunk
+    // takes at once the answer of the read it joins, which came on this
+    // connection
+    s.cache.name('task', [])
+    s.cache.name('task', ['p0', 'p1'])
+    expect(s.cache.look('p1')).toEqual({ state: 'gone', row: null, message: null })
   })
 
   it("drops a parent row only a named sub-project's answer brought once that answer stops bringing it", () => {

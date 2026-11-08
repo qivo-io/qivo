@@ -31,13 +31,15 @@
      new one arrives. A reconnect leaves every answer to arrive again
      before it counts (lib/liveQueries.ts), so from a transition of a newer
      connection a chunk's answer gives no state but `loading` until its
-     read answers on that connection, a parent row it brought included. A
-     row kept from an earlier answer still names the project in every state
-     but `gone`, never with a right, so stale rights are never kept. An
-     answer that makes a project `gone` drops its row, so nothing the cache
-     keeps names it any more, and with it the row of a parent it stopped
-     bringing, or of the gone project's parent, that no owner names, no
-     chunk reads and no current answer holds.
+     read answers on that connection, a parent row it brought included,
+     and a chunk that joins a read another chunk holds takes that read's
+     answer only if it arrived on the newest connection. A row kept from
+     an earlier answer still names the project in every state but `gone`,
+     never with a right, so stale rights are never kept. An answer that
+     makes a project `gone` drops its row, so nothing the cache keeps names
+     it any more, and with it the row of a parent it stopped bringing, or
+     of the gone project's parent, that no owner names, no chunk reads and
+     no current answer holds.
    - A project no owner names stays `loading` until one names it: the cache
      has no safety net for an unnamed miss, so every reader's host names
      what it shows.
@@ -103,8 +105,16 @@ export type ProjectCacheDeps = {
 
 const QUERY = api.projectNav.byIds as FunctionReference<'query'>
 
-/** A chunk's subscription: the ids it asked, as JSON too. */
-type Sub = { token: string; stop: () => void; ids: readonly string[]; args: string }
+/** A chunk's subscription: the ids it asked, as JSON too, and the
+    connection on which its token last answered, the same for every chunk
+    that holds the token (`answeredOn`, null before its first answer). */
+type Sub = {
+  token: string
+  stop: () => void
+  ids: readonly string[]
+  args: string
+  answeredOn: number | null
+}
 
 /** One live read: its ids in the order first named, its subscription while
     the page shows, the subscription of its new ids while that has not
@@ -280,7 +290,8 @@ export function createProjectCache(deps: ProjectCacheDeps) {
   /** Hears every transition once for every chunk, so the answers one
       transition brings repaint once. A transition of a newer connection
       first makes every chunk's answer stale until its read answers again
-      (Chunk `fresh`). */
+      (Chunk `fresh`), and each read a transition names records its
+      connection (Sub `answeredOn`). */
   function listen() {
     stopTransitions ??= deps.live.onTransition(
       (transition) => {
@@ -291,6 +302,9 @@ export function createProjectCache(deps: ProjectCacheDeps) {
             touch()
           }
         connection = transition.connection
+        for (const chunk of chunks)
+          for (const sub of [chunk.sub, chunk.next])
+            if (sub && transition.tokens.has(sub.token)) sub.answeredOn = transition.connection
         for (const chunk of chunks) {
           if (chunk.next && transition.tokens.has(chunk.next.token)) promote(chunk)
           if (chunk.sub && transition.tokens.has(chunk.sub.token)) take(chunk)
@@ -301,13 +315,20 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     )
   }
 
-  /** A live read of `ids`. */
+  /** A live read of `ids`, `joined` when it shares the token of another
+      chunk's read whose answer arrived on the newest connection the cache
+      heard. The transport says `joined` of an answer from any connection
+      (lib/liveQueries.ts), so a read that joins one answered before a
+      reconnect waits for the transition that brings its answer again. */
   function watchIds(ids: readonly string[]): { sub: Sub; joined: boolean } {
     listen()
     const w = deps.live.watch(QUERY, { ids: [...ids] } as Record<string, Value>)
+    const answeredOn =
+      chunks.flatMap((chunk) => [chunk.sub, chunk.next]).find((sub) => sub?.token === w.token)
+        ?.answeredOn ?? null
     return {
-      sub: { token: w.token, stop: w.stop, ids: [...ids], args: JSON.stringify(ids) },
-      joined: w.joined,
+      sub: { token: w.token, stop: w.stop, ids: [...ids], args: JSON.stringify(ids), answeredOn },
+      joined: w.joined && answeredOn !== null && answeredOn === connection,
     }
   }
 
