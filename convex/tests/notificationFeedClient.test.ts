@@ -443,6 +443,45 @@ describe('a fresh start', () => {
   })
 })
 
+describe('a leadership after another', () => {
+  it('runs its summary as soon as a claim the last one sent answers, with the beat it just sent', async () => {
+    const t = newT()
+    const { f, s, task } = await fixture(t)
+    // another session moved the checkpoint last, so the baseline claim
+    // answers summarize_first
+    const other = openTab(await signIn(t, f.guest.auth_user_id as string))
+    await startTabs([other])
+    jump(1)
+    await news(t, f, task)
+    await settle([other], true)
+    jump(1)
+    const tab = openTab(s)
+    tab.holdNext = 'notifications:claimAlerts'
+    startLeader(tab)
+    await vi.advanceTimersByTimeAsync(0)
+    await quiet(tab)
+    const first = await tab.s.as.query(api.inbox.feed, { after: tab.after as number })
+    tab.client.receive({ value: first }, tab.connection)
+    await sent(tab, 'notifications:claimAlerts')
+    // the capability turns off and on while the baseline claim waits
+    tab.can = false
+    tab.permissionChanged()
+    tab.can = true
+    const from = tab.calls.length
+    tab.permissionChanged()
+    await Promise.allSettled([...tab.pending].filter((p) => p !== tab.held))
+    await vi.advanceTimersByTimeAsync(0)
+    // the claim answers summarize_first to a leadership that ended
+    tab.release()
+    await sent(tab, 'notifications:claimSummary', from)
+    await quiet(tab)
+    expect(names(tab, from).slice(0, 2)).toEqual([
+      'notifications:beat',
+      'notifications:claimSummary',
+    ])
+  })
+})
+
 /* --------------------------------------------------------------- tabs */
 
 describe('tabs and sessions', () => {

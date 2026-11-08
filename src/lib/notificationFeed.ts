@@ -280,8 +280,12 @@ export function createNotificationFeed(deps: FeedDeps) {
   /** A beat, then claimSummary, showing the summary only on `summary`,
       then the floor at least that beat's `now`. */
   async function summarize(mine: number): Promise<void> {
-    const beaten = freshBeat ?? (await beat(mine))
-    freshBeat = null
+    // the beat the leader just sent belongs to its own leadership
+    let beaten: Beat
+    if (freshBeat !== null && mine === epoch) {
+      beaten = freshBeat
+      freshBeat = null
+    } else beaten = await beat(mine)
     const answer = await sendAs(mine, () => convex.mutation(api.notifications.claimSummary, {}))
     if (mine !== epoch) return
     if (answer.state === 'summary')
@@ -356,11 +360,15 @@ export function createNotificationFeed(deps: FeedDeps) {
 
   /** Runs what is due, one call at a time: a pending resume first, then the
       newest answer. A failed call leaves a resume pending and its answer
-      waiting, and the next answer, trigger or tick runs them. */
+      waiting, and the next answer, trigger or tick runs them. A run left
+      over from an earlier leadership makes this one's work wait only until
+      it ends. */
   function pump(): Promise<void> {
     if (running || !link) return current ?? Promise.resolve()
-    const run = drain(epoch).finally(() => {
+    const mine = epoch
+    const run = drain(mine).finally(() => {
       if (current === run) current = null
+      if (mine !== epoch && link && (resumePending || waiting !== null)) void pump()
     })
     current = run
     return run
@@ -379,7 +387,8 @@ export function createNotificationFeed(deps: FeedDeps) {
           } finally {
             resuming = false
           }
-          resumedAt = Date.now()
+          // the quiet time after a resume is its own leadership's
+          if (mine === epoch) resumedAt = Date.now()
           continue
         }
         feed = waiting
