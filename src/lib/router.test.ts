@@ -526,6 +526,36 @@ describe('buildPath', () => {
     expect(buildPath(page)).toBe(`/app/~/settings/project/${far}`)
   })
 
+  it('names the page of a project last opened by its number by that number, also by its id', () => {
+    const far = '7e1c2a4e-0000-4000-8000-0000000000dd'
+    const numbered = { settingsPage: numberedProjectPage(ACME, 41) }
+    const byId = { settingsPage: `project:${far}` }
+    // the numbered page's read names the project and the number it opened by
+    noteProjectPage(far, { org: ACME, num: 41 })
+    expect(buildPath(numbered)).toBe('/app/acme/settings/project/41')
+    expect(buildPath(byId)).toBe('/app/acme/settings/project/41')
+    // so a sub-project's Back to it by id finds the address it came from,
+    // and that address names the page by id in place
+    expect(namesProjectPage('/app/acme/settings/project/41', byId.settingsPage)).toBe(true)
+    expect(pathMatchesState('/app/acme/settings/project/41', byId)).toBe(true)
+    expect(namesProjectPage('/app/acme/settings/project/42', byId.settingsPage)).toBe(false)
+    // a read of the page by id keeps the number, in the same organization
+    noteProjectPage(far, { org: ACME })
+    expect(buildPath(byId)).toBe('/app/acme/settings/project/41')
+    // once its organization cannot be named, by its uuid, as `~` would read
+    // the number at home
+    const orgs = store.orgs
+    store.orgs = orgs.filter((o) => o.id !== ACME)
+    expect(buildPath(byId)).toBe(`/app/~/settings/project/${far}`)
+    expect(namesProjectPage('/app/~/settings/project/41', byId.settingsPage)).toBe(false)
+    store.orgs = orgs
+    // a page opened by id alone keeps its uuid
+    noteProjectPage(far, null)
+    noteProjectPage(far, { org: ACME })
+    expect(buildPath(byId)).toBe(`/app/acme/settings/project/${far}`)
+    noteProjectPage(far, null)
+  })
+
   it('moves a held page whose project left the workspace to its uuid once its read names it', () => {
     const near = '7e1c2a4e-0000-4000-8000-0000000000cc'
     let held = true

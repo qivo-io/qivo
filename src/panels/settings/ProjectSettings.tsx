@@ -152,18 +152,24 @@ export function ProjectPage({
     )
   }
   const answer = read.answer
-  /* The address names a project the workspace does not hold by its uuid
-     under the organization this read found it in, so a reload, Back and
-     Forward open it again (lib/router.ts noteProjectPage). The note stays
-     as it was while the Archive or delete window is open, so the address
-     under the window does not change. A project the workspace does not
-     hold keeps its uuid there, and a held one that leaves meanwhile keeps
-     its number until the window closes. */
+  /* The address names a project the workspace does not hold under the
+     organization this read found it in, by the number a numbered page
+     opened it by, else by its uuid, so a reload, Back and Forward open it
+     again (lib/router.ts noteProjectPage). The note stays as it was while
+     the Archive or delete window is open, so the address under the window
+     does not change. A project the workspace does not hold keeps its
+     address there, and a held one that leaves meanwhile keeps its number
+     until the window closes. */
   const unheldIn = answer && !gone && !P.project(answer.project.id) ? answer.project.org_id : null
+  const openedBy =
+    typeof project !== 'string' && 'num' in project && project.org_id === unheldIn
+      ? project.num
+      : undefined
   const holding = removing !== null
   React.useEffect(() => {
-    if (answer && !holding) noteProjectPage(answer.project.id, unheldIn ? { org: unheldIn } : null)
-  }, [answer?.project.id, unheldIn, holding])
+    if (answer && !holding)
+      noteProjectPage(answer.project.id, unheldIn ? { org: unheldIn, num: openedBy } : null)
+  }, [answer?.project.id, unheldIn, openedBy, holding])
   return (
     <div
       data-project-settings-state={read.state}

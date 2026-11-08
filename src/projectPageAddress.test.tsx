@@ -21,7 +21,7 @@ import { isProjectSettingsRead, projectSettingsServer } from './store/projectSet
    organization and number and keeps the address it was opened by, and an
    unpinned one reads the number in the home organization only, never as
    the project of that number another organization holds in the
-   workspace. */
+   workspace. Away docs, its sub-project, opens from its page. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => ({
@@ -37,6 +37,7 @@ vi.mock('./lib/auth', () => ({
 }))
 
 const AWAY = '9b0e4c1a-0000-4000-8000-00000000a1a1'
+const DOCS = '9b0e4c1a-0000-4000-8000-00000000a1a2'
 const PARTNER = '9b0e4c1a-0000-4000-8000-00000000b2b2'
 
 let container: HTMLDivElement
@@ -46,15 +47,22 @@ let server: Snapshot
 let rerun: () => void
 // the arguments of every projectSettings.get the page asked
 let gets: unknown[]
+// whether matchMedia answers as a phone (lib/useMobile.ts)
+let phone = false
 
 beforeEach(() => {
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
   Range.prototype.getBoundingClientRect = () => new DOMRect()
   Element.prototype.scrollIntoView = () => {}
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  phone = false
   vi.stubGlobal(
     'matchMedia',
-    vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+    vi.fn((query: string) => ({
+      matches: phone && query === '(max-width: 760px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
   )
   vi.stubGlobal(
     'ResizeObserver',
@@ -118,9 +126,9 @@ function partnerSeven(snap: Snapshot) {
   snap.access.push({ project_id: PARTNER, profile_id: seat, level: 'user' })
 }
 
-/** Boots App at `address`, the server holding Away and the workspace
-    leaving it out. `shape` changes the workspace first, which the server
-    then holds too. */
+/** Boots App at `address`, the server holding Away and its sub-project
+    Away docs and the workspace leaving both out. `shape` changes the
+    workspace first, which the server then holds too. */
 async function boot(address: string, shape?: (snap: Snapshot) => void) {
   vi.resetModules()
   history.replaceState(null, '', address)
@@ -134,6 +142,15 @@ async function boot(address: string, shape?: (snap: Snapshot) => void) {
     key: 'AWAY',
     num: 7,
     name: 'Away',
+  })
+  server.projects.push({
+    ...snap.projects[0],
+    id: DOCS,
+    type: 'project',
+    parent_id: AWAY,
+    key: 'DOCS',
+    num: 8,
+    name: 'Away docs',
   })
   const settings = projectSettingsServer(() => server)
   const lists = projectListsServer(() => server)
@@ -353,5 +370,37 @@ describe('the numbered address of a project page the workspace does not hold', {
       expect(gets).toEqual([])
       expect(heading()).not.toContain('Partner')
     }
+  })
+
+  it("on a phone, Back from a sub-project returns to its project's numbered entry, and the next Back leaves it", async () => {
+    phone = true
+    await boot('/app/testbed/settings/project/7')
+    await waitFor(() => heading().includes('Away'), 'the page')
+    const at = history.state?.qivoAt
+    const entries = history.length
+    const docs = await waitFor(
+      () => document.querySelector<HTMLElement>(`[data-project-subproject="${DOCS}"]`),
+      'Away docs',
+    )
+    await act(async () => docs.click())
+    await waitFor(() => heading().includes('Away docs'), 'the sub-project')
+    await waitFor(
+      () => location.pathname === `/app/testbed/settings/project/${DOCS}` || null,
+      "the sub-project's address",
+    )
+    expect(history.length).toBe(entries + 1)
+    const back = () => document.querySelector<HTMLElement>('[data-settings-back]')
+    // Back returns to the entry the project was opened on, by its number
+    await act(async () => back()?.click())
+    await settle()
+    await waitFor(() => heading().includes('Away') && !heading().includes('docs'), 'Away again')
+    expect(location.pathname).toBe('/app/testbed/settings/project/7')
+    expect(history.state?.qivoAt).toBe(at)
+    expect(history.length).toBe(entries + 1)
+    // and the next Back leaves it for Projects in place, as a direct link
+    await act(async () => back()?.click())
+    await settle()
+    await waitFor(() => location.pathname === '/app/testbed/settings/projects' || null, 'Projects')
+    expect(history.state?.qivoAt).toBe(at)
   })
 })

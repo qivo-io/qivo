@@ -34,9 +34,9 @@
    what it shows, so a reload, Back and Forward open it again. A numbered
    address of a project the workspace does not hold opens a numbered page,
    which the page reads by its organization and number and which keeps
-   the address it was opened by. A number reads only in the organization
-   the address names, or under `~` in the home organization, held project
-   or not.
+   the address it was opened by, and the project's page by id then takes
+   that number too. A number reads only in the organization the address
+   names, or under `~` in the home organization, held project or not.
    A task the workspace holds resolves to its handle, and one it does not
    to a reference (lib/taskReference.ts) that the task window reads from
    the server, in the organization the address names. Tasks resolve their
@@ -631,10 +631,12 @@ const unnamedRef = (open: string | null | undefined): boolean =>
 const namedProjects = new Map<string, { org: string; seg: string; num: number }>()
 
 /* The project settings pages whose project the workspace does not hold,
-   each with the organization its page's read named (noteProjectPage).
-   buildPath names such a page by its uuid under that organization, which
+   each with the organization its page's read named (noteProjectPage) and,
+   for a project last opened by its number, that number. buildPath names
+   such a page by that number under that organization, which parses back to
+   the project's numbered page, and otherwise by its uuid there, which
    parses back to the page, so a reload, Back and Forward open it again. */
-const unheldPages = new Map<string, { org: string }>()
+const unheldPages = new Map<string, { org: string; num?: number }>()
 
 /* The revision of unheldPages, which App's address follows (projectPagesRev),
    so an answer that names a page's organization rewrites the address at
@@ -655,36 +657,55 @@ export const projectPagesRev = (): number => pagesRev
 /** Tells the address that the settings page of project `id` shows a
     project its read (projectSettings.get) found in organization `org`,
     while the workspace does not hold it and no window holds the page, or,
-    with null, that it no longer does. The address then names the page by
-    the project's uuid under that organization, in place. */
-export function noteProjectPage(id: string, at: { org: string } | null): void {
+    with null, that it no longer does. `num` is the number a numbered page
+    opened it by (numberedProjectPage); a later note in the same
+    organization without one keeps it. The address then names the page by
+    that number, as a numbered page names itself, else by the project's
+    uuid, under that organization, in place. So a phone's Back from a
+    sub-project to its project opened by number finds the entry it came
+    from (App backOrSet). */
+export function noteProjectPage(id: string, at: { org: string; num?: number } | null): void {
   const was = unheldPages.get(id)
   if (at === null) {
     if (!was) return
     unheldPages.delete(id)
   } else {
-    if (was?.org === at.org) return
+    const num = at.num ?? (was?.org === at.org ? was.num : undefined)
+    if (was?.org === at.org && was.num === num) return
     unheldPages.delete(id)
-    unheldPages.set(id, { org: at.org })
+    unheldPages.set(id, num === undefined ? { org: at.org } : { org: at.org, num })
     if (unheldPages.size > NAMED_MAX) unheldPages.delete(unheldPages.keys().next().value ?? id)
   }
   pagesRev++
   for (const listener of pagesListeners) listener()
 }
 
+/* The number a project settings page the workspace does not hold was last
+   opened by, with the org segment its organization takes now, while that
+   organization can be named; `~` would read the number in the home
+   organization, so then none and the page keeps its uuid. */
+function numberedUnheld(id: string): { seg: string; num: number } | undefined {
+  const was = unheldPages.get(id)
+  if (was?.num === undefined) return undefined
+  const seg = orgSegment(was.org)
+  return seg === ORG_NONE ? undefined : { seg, num: was.num }
+}
+
 /** Whether `path` names the settings page of the project `page` names by
     the organization and number it was last named by: the page's own
     address, also once its project left the store while the page is held
-    (App onPop keeps the page then), and a numbered page's own number
-    under its organization, also once the workspace has come to hold the
-    project, whose address then parses to the page by id. */
+    (App onPop keeps the page then), the number a project the workspace
+    does not hold was last opened by (noteProjectPage), and a numbered
+    page's own number under its organization, also once the workspace has
+    come to hold the project, whose address then parses to the page by
+    id. */
 export function namesProjectPage(path: string, page: string | null | undefined) {
   const ref = projectPageRef(page)
   const was =
     ref === null
       ? undefined
       : 'id' in ref
-        ? namedProjects.get(ref.id)
+        ? (namedProjects.get(ref.id) ?? numberedUnheld(ref.id))
         : { seg: orgSegment(ref.org_id), num: ref.num }
   const seg = path.split('/').filter(Boolean)
   return (
@@ -822,10 +843,15 @@ export function buildPath(state: UiState): string {
           namedProjects.delete(namedProjects.keys().next().value ?? id)
         return at(p.org, `/settings/project/${String(p.num)}`)
       }
-      // a page whose read found its project outside the workspace, by its
-      // uuid under the organization that read named (noteProjectPage)
+      // a page whose read found its project outside the workspace, under
+      // the organization that read named, by the number it was last opened
+      // by, else by its uuid (noteProjectPage)
       const unheld = p ? undefined : unheldPages.get(id)
-      if (unheld) return at(unheld.org, `/settings/project/${encodeURIComponent(id)}`)
+      if (unheld) {
+        const byNum = numberedUnheld(id)
+        const seg = byNum ? String(byNum.num) : encodeURIComponent(id)
+        return at(unheld.org, `/settings/project/${seg}`)
+      }
       // a project that left while its page shows with a window open keeps
       // the page's address, by its id once its organization left too, as
       // `~` would read the number in the home organization
