@@ -156,7 +156,7 @@ export function NotificationDeliveryField() {
             const choice = CHOICES.find((c) => c.value === e.target.value)
             if (choice) void choose(choice.value)
           }}
-          className="h-control w-60 bg-surface-1 font-sans text-base"
+          className="h-control min-w-60 bg-surface-1 font-sans text-base"
         >
           {CHOICES.map((choice) => (
             <option key={choice.value} value={choice.value}>
@@ -165,21 +165,21 @@ export function NotificationDeliveryField() {
           ))}
         </NativeSelect>
       </SettingsField>
-      <p data-notification-capability className="-mt-3 mb-4 text-sm text-text-2">
+      <p data-notification-capability className="-mt-3 text-sm text-text-2">
         {capability}
       </p>
       {saving !== null && (
-        <p role="status" className="text-sm text-text-2">
+        <p role="status" className="mt-3 text-sm text-text-2">
           Saving…
         </p>
       )}
       {error && (
-        <p role="alert" data-notification-delivery-error className="text-sm text-danger">
+        <p role="alert" data-notification-delivery-error className="mt-3 text-sm text-danger">
           {error}
         </p>
       )}
       {notice && (
-        <p role="status" data-notification-delivery-saved className="text-sm text-text-2">
+        <p role="status" data-notification-delivery-saved className="mt-3 text-sm text-text-2">
           {notice}
         </p>
       )}
