@@ -22,10 +22,13 @@
  * projects their own leads, grants and team shares reach, so the gate lets
  * them in by management, as the Settings project lists list every project
  * of an admin's organization by management (model/projectSettingsLists.ts).
- * An unknown id, a project of another organization, one in Deleted items,
- * one outside a meta tree and one the caller neither manages nor sees all
- * answer `unavailable`, so an answer tells nothing about a project the
- * caller cannot reach.
+ * get names its project by id or by its organization and number
+ * (projectSettingsOf), and either form goes through the same gate with the
+ * caller's seat in that organization. An unknown id, a free number, a
+ * project of another organization, one in Deleted items, one outside a meta
+ * tree and one the caller neither manages nor sees all answer
+ * `unavailable`, so an answer tells nothing about a project the caller
+ * cannot reach.
  *
  * Rights come from the writes' own rules (settingsRights), computed with
  * canManageOwnProjectAccess, the predicate those writes ask, never from the
@@ -397,21 +400,59 @@ async function memberOf(
   return profile !== null && profile.org_id === orgId ? profile : null
 }
 
+/** How projectSettings.get names its project: by `id` alone, or by its
+ * organization `org_id` and its number `num` there. */
+export type SettingsAsk = { id?: string; org_id?: string; num?: number }
+
+/** The refusal of any other form of get's arguments, in the words of
+ * projectNav.resolve's (model/projectNavReads.ts RESOLVE_FORM). */
+export const SETTINGS_FORM = 'get takes id alone, or org_id with num, a whole number of at least 1'
+
+/* Whether `n` is a whole number of at least 1. */
+const wholeNumber = (n: number | undefined): n is number =>
+  n !== undefined && Number.isInteger(n) && n >= 1
+
 /**
- * projectSettings.get: the settings of project `id` for the caller's seat in
- * its organization (`myProfiles`, the caller's active seats by organization),
- * as `milestones.get` resolves a seat. No seat there answers `unavailable`,
- * as settingsGate does. It reads the project, its parent, the caller's level
- * and management right and the lead's profile, never a task.
+ * projectSettings.get: the settings of the project `ask` names for the
+ * caller's seat in its organization (`myProfiles`, the caller's active
+ * seats by organization), as `milestones.get` resolves a seat. Refuses with
+ * badRequest, before it reads anything, every form but `id` alone and
+ * `org_id` with `num`, a whole number of at least 1, as projectNav.resolve
+ * does. By id it reads the project and takes the seat in its organization.
+ * By number it takes the seat in `org_id` first, reads nothing without
+ * one, and then reads the project by its number there (projects
+ * by_org_num, which the organization's counter keeps unique, so a second
+ * row throws rather than choose one). Either way settingsGate decides with
+ * that seat, so whoever sees the project or manages it reads it, and the
+ * answer has the same shape. No seat, no project and every project the
+ * gate answers `unavailable` for answer alike, so a hidden number tells
+ * nothing a free one would not. It reads the project, its parent, the
+ * caller's level and management right and the lead's profile, never a
+ * task.
  */
 export async function projectSettingsOf(
   ctx: QueryCtx,
   myProfiles: ReadonlyMap<string, Doc<'profiles'>>,
-  id: string,
+  ask: SettingsAsk,
 ): Promise<ProjectSettings> {
-  const project = await byId(ctx, 'projects', id)
-  const me = project === null ? undefined : myProfiles.get(project.org_id)
-  if (me === undefined) return { state: 'unavailable' }
+  const byNumber = ask.org_id !== undefined || ask.num !== undefined
+  if (ask.id !== undefined ? byNumber : !wholeNumber(ask.num) || ask.org_id === undefined)
+    throw badRequest(SETTINGS_FORM)
+  let project: Doc<'projects'> | null = null
+  let me: Doc<'profiles'> | undefined
+  if (ask.id !== undefined) {
+    project = await byId(ctx, 'projects', ask.id)
+    me = project === null ? undefined : myProfiles.get(project.org_id)
+  } else if (ask.org_id !== undefined && ask.num !== undefined) {
+    const { org_id, num } = ask
+    me = myProfiles.get(org_id)
+    if (me !== undefined)
+      project = await ctx.db
+        .query('projects')
+        .withIndex('by_org_num', (q) => q.eq('org_id', org_id).eq('num', num))
+        .unique()
+  }
+  if (me === undefined || project === null) return { state: 'unavailable' }
   const gate = await settingsGate(ctx, me, project)
   if (gate.state === 'unavailable') return gate
   const p = gate.project

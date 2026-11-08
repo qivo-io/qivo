@@ -1780,10 +1780,26 @@ describe('the benchmark server', () => {
         answer: answer.error ? { error: answer.error } : JSON.parse(answer.text),
       }
     }
-    const byId = (_, project) => ({ id: project.id, project_id: undefined })
+    // get takes the project by id, or by its organization and number, and
+    // no other organization beside an id
+    const byId = (_, project) => ({ id: project.id, project_id: undefined, org_id: undefined })
+    const byNum = (snap, project) => ({
+      org_id: snap.orgs[0].id,
+      num: project.num,
+      project_id: undefined,
+    })
     const get = await ask('', 'projectSettings:get', byId)
     expect(get.answer).toMatchObject({ state: 'ok', can_manage_users: true })
     expect(get.answer.project.name).toBe('Testbed program')
+    expect((await ask('', 'projectSettings:get', byNum)).answer).toEqual(get.answer)
+    const free = (snap) => ({ org_id: snap.orgs[0].id, num: 999_999, project_id: undefined })
+    expect((await ask('', 'projectSettings:get', free)).answer).toEqual({ state: 'unavailable' })
+    const both = (snap, project) => ({
+      id: project.id,
+      org_id: snap.orgs[0].id,
+      project_id: undefined,
+    })
+    expect((await ask('', 'projectSettings:get', both)).answer.error).toBeDefined()
     // the signed-in admin's own grant only, unless the page asks for more
     const plain = await ask('', 'projectSettings:users')
     expect(plain.answer.rows).toHaveLength(1)
@@ -1840,6 +1856,13 @@ describe('the benchmark server', () => {
       unheld.snap.profiles[3].id,
       'viewer',
     ])
+    // a page read by its number leaves the project it found out as well
+    const numbered = await ask('projectsettings=unheld', 'projectSettings:get', byNum)
+    expect(numbered.answer).toMatchObject({ state: 'ok', project: { id: numbered.project.id } })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    await numbered.send({ type: 'query', id: 'after', name: 'snapshot:forMe', args: {} })
+    const afterNum = JSON.parse(numbered.posted.find((m) => m.to === 'after').text)
+    expect(afterNum.projects.some((p) => p.id === numbered.project.id)).toBe(false)
   }, 60_000)
 
   it("answers Settings' project lists from the workspace, with the archive, the hidden projects and the states the page asks for", async () => {
@@ -1884,7 +1907,10 @@ describe('the benchmark server', () => {
     const hiddenRow = asAdmin.answer.rows.find((r) => r.name === 'Hidden program')
     expect(hiddenRow).toMatchObject({ can_create_sub_project: true })
     expect(asAdmin.snap.projects.some((p) => p.id === hiddenRow.id)).toBe(false)
-    const page = await ask('role=admin&hidden=4', 'projectSettings:get', { id: hiddenRow.id })
+    const page = await ask('role=admin&hidden=4', 'projectSettings:get', {
+      id: hiddenRow.id,
+      org_id: undefined,
+    })
     expect(page.answer).toMatchObject({ state: 'ok', project: { name: 'Hidden program' } })
     const subs = await ask('role=admin&hidden=4', 'projectSettings:subProjects', {
       project_id: hiddenRow.id,

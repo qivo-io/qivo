@@ -41,6 +41,8 @@ import {
   type ProjectSettings,
   projectSettingsOf,
   projectUsersOf,
+  SETTINGS_FORM,
+  type SettingsAsk,
   type SettingsRights,
   UNKEYED_MOST,
 } from '../model/projectSettings'
@@ -539,7 +541,9 @@ describe('projectSettings.get', () => {
     const f = await withOrg(t)
     const reads = () =>
       t.run(async (ctx) => {
-        const answer = await projectSettingsOf(ctx, new Map([[f.org.id, f.guest]]), f.sub.id)
+        const answer = await projectSettingsOf(ctx, new Map([[f.org.id, f.guest]]), {
+          id: f.sub.id,
+        })
         const m = await ctx.meta.getTransactionMetrics()
         return { answer, documents: m.documentsRead.used, ranges: m.databaseQueries.used }
       })
@@ -569,6 +573,159 @@ describe('projectSettings.get', () => {
     const after = await reads()
     expect(after).toEqual(before)
     expect(before.answer.state).toBe('ok')
+  })
+})
+
+/* ------------------------------------------------------- get by number */
+
+describe('projectSettings.get by organization and number', () => {
+  /** get with `a` for `who`, called through the public function. */
+  const byNum = (t: T, who: Doc<'profiles'>, a: SettingsAsk) =>
+    as(t, who).query(api.projectSettings.get, a)
+
+  it('answers as by id for the same project, and refuses any other form before it reads', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    // the lead, a guest, and an admin who only manages TBED
+    for (const who of [f.user, f.guest, f.admin])
+      for (const p of [f.meta, f.sub, f.hidden]) {
+        const byId = await read.get(t, who, p.id)
+        expect(await byNum(t, who, { org_id, num: p.num }), `${who.name}: ${p.key}`).toEqual(byId)
+      }
+    expect(await byNum(t, f.admin, { org_id, num: f.meta.num })).toMatchObject({
+      state: 'ok',
+      level: null,
+      can_edit: true,
+    })
+    for (const a of [
+      {},
+      { id: f.meta.id, org_id, num: f.meta.num },
+      { id: f.meta.id, org_id },
+      { id: f.meta.id, num: f.meta.num },
+      { org_id },
+      { num: f.meta.num },
+      { org_id, num: 0 },
+      { org_id, num: 1.5 },
+      { org_id, num: -1 },
+      { org_id, num: Number.NaN },
+    ]) {
+      expect(await refusal(byNum(t, f.user, a), 'bad_request'), JSON.stringify(a)).toBe(
+        SETTINGS_FORM,
+      )
+      // the refusal comes before any read
+      const ranges = await t.run(async (ctx) => {
+        await expect(projectSettingsOf(ctx, new Map([[org_id, f.user]]), a)).rejects.toThrow()
+        return (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+      })
+      expect(ranges, JSON.stringify(a)).toBe(0)
+    }
+  })
+
+  it('answers unavailable alike for every number the caller cannot open, and only in the organization it names', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    // a legacy top-level project that is not a meta, granted to the guest
+    const legacy = await plantProject(t, { org_id, type: 'project' })
+    await grant(t, legacy, f.guest.id, nameKey(f.guest.name))
+    // a sub-project moved to Deleted items
+    const trashed = await plantProject(t, { org_id, type: 'project', parent_id: f.meta.id })
+    await as(t, f.admin).mutation(api.projects.deleteDeep, { org_id, id: trashed.id })
+    // a number only the other organization holds, which the user also
+    // reads there through a guest seat
+    const far = await plantProject(t, { org_id: f.otherOrg.id, num: 77, lead_id: f.otherAdmin.id })
+    const guestSeat = await plantSeat(t, {
+      org_id: f.otherOrg.id,
+      name: 'user',
+      org_role: 'guest',
+      auth_user_id: f.user.auth_user_id,
+    })
+    await grant(t, far, guestSeat.id, 'user')
+    await keyOrg(t, org_id)
+    const unavailable = { state: 'unavailable' }
+    // a free number, and the other organization's number under this one
+    for (const who of [f.admin, f.user, f.guest]) {
+      expect(await byNum(t, who, { org_id, num: 999 }), who.name).toEqual(unavailable)
+      expect(await byNum(t, who, { org_id, num: far.num }), who.name).toEqual(unavailable)
+    }
+    // no seat in the organization the number is asked in
+    expect(await byNum(t, f.admin, { org_id: f.otherOrg.id, num: far.num })).toEqual(unavailable)
+    expect(await byNum(t, f.admin, { org_id: f.otherOrg.id, num: 1 })).toEqual(unavailable)
+    // outside a meta tree, in Deleted items, neither seen nor managed
+    for (const who of [f.admin, f.guest])
+      for (const p of [legacy, trashed])
+        expect(await byNum(t, who, { org_id, num: p.num }), `${who.name}: ${p.key}`).toEqual(
+          unavailable,
+        )
+    expect(await byNum(t, f.guest, { org_id, num: f.hidden.num })).toEqual(unavailable)
+    expect(await byNum(t, f.viewer, { org_id, num: f.hidden.num })).toEqual(unavailable)
+    // the user's guest seat reads the other organization's number there
+    expect(await byNum(t, f.user, { org_id: f.otherOrg.id, num: far.num })).toMatchObject({
+      state: 'ok',
+      project: { id: far.id, org_id: f.otherOrg.id },
+      level: 'user',
+    })
+    // an archived project answers its names, by number as by id
+    await t.run((ctx) => ctx.db.patch(f.sub2._id, { archived_at: NOW }))
+    expect(await byNum(t, f.guest, { org_id, num: f.sub2.num })).toEqual(
+      await read.get(t, f.guest, f.sub2.id),
+    )
+    expect((await byNum(t, f.guest, { org_id, num: f.sub2.num })).state).toBe('archived')
+  })
+
+  it('opens a top-level project of 30 live and 40 archived sub-projects for an admin who reaches none of them, and only for a manager once the level check stops', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    await keyOrg(t, org_id)
+    const top = await meta(t, f, f.user)
+    // a member who sees the top only for navigation, through one sub-project
+    const member = await seat(t, f, 'Mira')
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 70; i++)
+        await ctx.db.insert('projects', {
+          id: uuid(),
+          org_id,
+          type: 'project',
+          parent_id: top.id,
+          key: `S${i}`,
+          name: `Sub ${String(i).padStart(2, '0')}`,
+          description: '',
+          sort_order: i,
+          num: 5000 + i,
+          track_delay: false,
+          created_at: NOW,
+          window_key: newWindowKey(),
+          ...(i >= 30 ? { archived_at: NOW } : {}),
+        })
+    })
+    const first = await t.run((ctx) =>
+      ctx.db
+        .query('projects')
+        .withIndex('by_org_num', (q) => q.eq('org_id', org_id).eq('num', 5000))
+        .unique(),
+    )
+    if (first === null) throw new Error('no first sub-project')
+    await grant(t, first, member.id, nameKey('Mira'))
+    const ask = { org_id, num: top.num }
+    const got = await measured(t, (ctx) =>
+      projectSettingsOf(ctx, new Map([[org_id, f.admin]]), ask),
+    )
+    console.log('get by number, an admin over 30 live and 40 archived sub-projects', got.read)
+    expect(got.out).toMatchObject({ state: 'ok', level: null, accessible: false, can_edit: true })
+    expect(await byNum(t, f.admin, ask)).toEqual(await read.get(t, f.admin, top.id))
+    expect(await byNum(t, member, ask)).toMatchObject({ state: 'ok', level: 'viewer' })
+    // a stopped level check keeps the manager and refuses anyone else
+    OWN_READS.subProjects = 1
+    expect(await byNum(t, f.admin, ask)).toMatchObject({
+      state: 'ok',
+      level: null,
+      accessible: null,
+      can_edit: true,
+    })
+    expect(await byNum(t, member, ask)).toEqual({ state: 'unavailable' })
+    expect(await byNum(t, f.user, ask)).toMatchObject({ state: 'ok', level: 'lead' })
   })
 })
 
@@ -634,7 +791,7 @@ describe('rights', () => {
             const me = { ...subject, org_role, kind }
             for (const p of projects) {
               const label = `${name}: ${org_role} ${kind} on ${p.key}`
-              const answer = await projectSettingsOf(ctx, new Map([[f.org.id, me]]), p.id)
+              const answer = await projectSettingsOf(ctx, new Map([[f.org.id, me]]), { id: p.id })
               const sees = p.org_id === me.org_id && (await projectLevel(ctx, me, p)) !== null
               const manages = p.org_id === me.org_id && (await canManageProjectUsers(ctx, me, p))
               if (!sees && !manages) {
@@ -835,7 +992,7 @@ describe('rights', () => {
     const f = await withOrg(t)
     // a public call on the demo needs a demo session, so these call the readers
     const settings = () =>
-      t.run((ctx) => projectSettingsOf(ctx, new Map([[f.org.id, f.user]]), f.meta.id))
+      t.run((ctx) => projectSettingsOf(ctx, new Map([[f.org.id, f.user]]), { id: f.meta.id }))
     const lookup = (me: Doc<'profiles'>) =>
       t.run((ctx) =>
         inviteTargetOf(ctx, me, { project_id: f.meta.id, email: 'guest@testbed.test' }),
@@ -900,7 +1057,7 @@ describe('rights', () => {
     await t.run((ctx) => ctx.db.patch(f.hidden._id, { lead_id: f.agent.id }))
     const project = (await t.run((ctx) => ctx.db.get(f.hidden._id))) as Doc<'projects'>
     const answer = await t.run((ctx) =>
-      projectSettingsOf(ctx, new Map([[f.org.id, f.agent]]), project.id),
+      projectSettingsOf(ctx, new Map([[f.org.id, f.agent]]), { id: project.id }),
     )
     expect(answer).toMatchObject({
       state: 'ok',
@@ -1820,7 +1977,7 @@ describe('real limits', () => {
       /Too many index ranges/,
     )
     const got = await measured(t, (ctx) =>
-      projectSettingsOf(ctx, new Map([[f.org.id, me]]), top.id),
+      projectSettingsOf(ctx, new Map([[f.org.id, me]]), { id: top.id }),
     )
     console.log(
       'get, a parent shown for navigation, 30 sub-projects with three shares each',
@@ -1828,6 +1985,13 @@ describe('real limits', () => {
     )
     expect(got.out).toMatchObject({ state: 'ok', level: 'viewer', can_edit: false })
     expect(got.read.ranges).toBeLessThan(100)
+    // by its number, with the same gate and one read of the number index
+    const byNum = await measured(t, (ctx) =>
+      projectSettingsOf(ctx, new Map([[f.org.id, me]]), { org_id: f.org.id, num: top.num }),
+    )
+    console.log('get by number, the same parent', byNum.read)
+    expect(byNum.out).toEqual(got.out)
+    expect(byNum.read.ranges).toBeLessThan(100)
     // every read behind the gate answers within the limits
     expect(await read.get(t, me, top.id)).toMatchObject({ state: 'ok', level: 'viewer' })
     expect((await read.users(t, me, top.id)).state).toBe('ready')
