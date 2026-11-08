@@ -761,7 +761,9 @@ export function startNotificationLeader(deps: LeaderDeps) {
           electing = false
           if (stopped) return undefined
           if (lock === null) {
-            follow(mine)
+            // a page whose capability turned off meanwhile waits outside
+            if (deps.canNotify()) follow(mine)
+            else standBy()
             return undefined
           }
           return hold(mine)

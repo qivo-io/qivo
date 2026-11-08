@@ -797,6 +797,28 @@ describe('the capability', () => {
     expect(c.leader.role()).toBe('leader')
     expect(c.feed.leads).toEqual([{ kind: 'resume' }])
   })
+
+  it('keeps a page whose capability turns off while its election waits out of the queue, so the leader still ends', async () => {
+    const p = profile()
+    const a = openTab(p)
+    await flush()
+    // b asks for the lock, and turns off before the answer comes
+    const b = openTab(p)
+    b.state.can = false
+    b.capabilityChanged()
+    await flush()
+    expect(b.leader.role()).toBe('follower')
+    expect((await p.manager?.query())?.pending).toEqual([])
+    a.page.win.fire('pagehide', { persisted: false })
+    await flush()
+    expect(a.ends()).toHaveLength(1)
+    expect(b.sent).toEqual([])
+    // it joins at its next reading once it can notify
+    b.state.can = true
+    await vi.advanceTimersByTimeAsync(NOTIFY_CLIENT.tick_ms)
+    await flush()
+    expect(b.leader.role()).toBe('leader')
+  })
 })
 
 /* ---------------------------------------------------------------- failures */
