@@ -654,7 +654,7 @@ describe('people the workspace does not hold, on each page', () => {
       settingsReads(board)
       const { ProjectPage } = await import('./panels/settings/ProjectSettings')
       const project = board.snapshot.projects[0].id
-      await board.renderView(root, () => <ProjectPage projectId={project} setPage={vi.fn()} />)
+      await board.renderView(root, () => <ProjectPage project={project} setPage={vi.fn()} />)
       await repaint()
       expect(portraits(GINA).length).toBeGreaterThan(0)
       expect(names.unnamed()).toEqual([])
