@@ -276,9 +276,8 @@ once you pause typing, so it finds every task in your Inbox. A search can
 be at most 200 characters ([Limits](./limits.md)).
 
 On desktop, selecting a row opens the task's discussion pane and marks the
-row read. The pane opens the task at once, read from the server, also before
-it has loaded into the workspace, and says so while it loads or when the task
-can't be opened. Click
+row read. The pane opens the task at once, read from the server, and says
+so while it loads or when the task can't be opened. Click
 **Description** to expand its collapsed description. The pane shows the
 current assignee or reviewer, Activity and comment box. Use the pop-out button
 for editable details, attachments and links; a related task opened there

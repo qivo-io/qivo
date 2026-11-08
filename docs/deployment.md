@@ -961,7 +961,11 @@ subscribes, so that app cannot load against it, and the app from that
 release needs its backend's `teams.picker`, `pickers.taskFollowers` and the
 root part's own rows. Never return the backend to a commit before that
 release, and never return the app or the demo alone to a release before
-it; roll forward.
+it; roll forward. From the release after v0.1.161 the backend has no
+`workspace.projects`, which every earlier app subscribes at boot, so that
+app cannot load against it: never return the app or the demo alone,
+Vercel Instant Rollback included, to a release before that one; roll
+forward.
 
 An app from before the release after v0.1.159 joins the milestones of every
 workspace projects part it reads, which later backends no longer send, so
@@ -2277,6 +2281,16 @@ the removed part and fails to load as a whole. From it on, never return
 the backend to a commit before it, and never return the app alone to a
 release before it; roll forward instead. There is no schema change, no
 backfill and no release step.
+
+From the release after v0.1.161, the app holds no project. It reads every
+project it shows from the navigation reads, `projectNav.byIds`,
+`projectNav.targets`, `projectNav.holds` and the views' own reads, and the
+release removes `workspace.projects` and the root part's `live_projects`
+and `next_project_num`. Every earlier app subscribes the removed part at
+boot, so this release is the app floor that "Rollback and hotfixes" names.
+The backend floor for these reads is the one the paragraph on
+`projectNav.byIds` above sets. The release changes no table, field or
+index, and needs no backfill and no release step.
 
 ## Node.js version
 

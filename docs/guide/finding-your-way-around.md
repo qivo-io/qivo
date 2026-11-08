@@ -23,11 +23,10 @@ its sub-projects, 25 at first and more as you scroll or press **Load more**,
 up to 100, after which it asks you to search. One project stays expanded at
 a time, the one you are in. When you open a project from elsewhere, such as
 **All projects**, Search or a link, the tree loads on until it shows that
-project and brings its row into view. A project Qivo has not loaded yet
-opens once the server confirms that you can open it, with a note that
-says **Opening** and its name meanwhile, or that you can no longer open
-it. If you switch views, go elsewhere or open another project first, Qivo
-stops opening it. The tree loads no tasks.
+project and brings its row into view. A project opens at once. While Qivo
+checks that you can open it, the page says **Opening** and its name, and
+it says so if you can no longer open it, or that Qivo couldn't open it,
+with **Retry**. The tree loads no tasks.
 
 The tree says so when its list is not ready yet, when Qivo could not finish
 checking which projects you can see, with **Retry**, and when it checked
@@ -100,10 +99,9 @@ restored or your access returns. Removing your seat removes its stars.
 **Sub-projects** under a project lists its sub-projects, 25 at first and
 more as you scroll or press **Load more**, up to 100, and then asks you to
 search. One project's list is open at a time. Selecting a project or a
-sub-project opens it as the sidebar does. One Qivo has not loaded yet opens
-once the server confirms that you can open it, and the line above the list
-says **Opening** and its name meanwhile, or says that you can no longer
-open it. A project's **…** menu opens its
+sub-project opens it as the sidebar does, at once, and the page says
+**Opening** and its name while Qivo checks that you can open it. A
+project's **…** menu opens its
 **Archived tasks** and, for those who may add one, **New sub-project…**.
 
 The field at the top finds projects and sub-projects by their own names,
