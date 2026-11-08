@@ -27,8 +27,8 @@ import { taskRow } from './views/boardFixture.setup'
    Team sync and Forward to the chooser, with its line, on a phone too,
    where the front door otherwise opens the Inbox, also after a Back past
    Team sync to a project, as the chooser's entry carries the person,
-   while the filters still hold them. A project sync's jump opens that
-   project. The person, Planner, holds an admin seat in
+   while the filters still hold them; once they do not, that entry takes
+   the startup rule. A project sync's jump opens that project. The person, Planner, holds an admin seat in
    Testbed Labs, with Luma Sensor and its sub-projects Firmware and
    Electronics and one open task of theirs in Firmware, and Ops, a team of
    them that Luma Sensor is shared with. Everyday values, no figure at its
@@ -341,7 +341,7 @@ describe("Team sync's person jumps", { timeout: 60_000 }, () => {
     expect(owners().at(-1)).toEqual([ME])
   })
 
-  it('shows the chooser without a line once nothing holds the person filter', async () => {
+  it('shows the chooser without a line on the Overview, which has no person filter', async () => {
     await app(world(), '/app/testbed/board/p/11')
     await until(() => shown() === 'kanban', 'the Board')
     await jump(`/app/testbed/sync/all/people/${ME}`, 'board')
@@ -400,4 +400,52 @@ describe("Team sync's person jumps", { timeout: 60_000 }, () => {
       expect(asks).toEqual([])
       expect(taskReads()).toHaveLength(reads)
     })
+
+  it('takes the startup rule on Forward onto the jump once a filter change on the Board left the person filter, with no line', async () => {
+    await app(world(), '/app/testbed/board/p/11', {
+      lastProject: { org_id: ORG, project_id: FW },
+    })
+    await until(() => shown() === 'kanban', "Firmware's Board")
+    await backPastSync('/app/testbed/board/p/11')
+    // the Board shows the person filter the jump set; clearing it changes
+    // the filters, which no control on the chooser can
+    await until(() => q('[data-filter-x="assignee"]'), 'the person filter')
+    await click(q('[data-filter-x="assignee"]'))
+    expect(q('[data-filter-x="assignee"]')).toBeNull()
+    await step(1)
+    await until(() => location.pathname === `/app/testbed/sync/all/people/${ME}`, 'Team sync')
+    await step(1)
+    // the remembered project, once the server checked it
+    await until(
+      () => shown() === 'kanban' && location.pathname === '/app/testbed/board/p/11',
+      'the remembered Board',
+    )
+    expect(asks).not.toEqual([])
+    expect(purpose()).toBeNull()
+    expect(q('[data-project-chooser]')).toBeNull()
+  })
+
+  it("on a phone, takes the startup rule's Inbox on Forward onto the jump once Show all tasks left the person filter", async () => {
+    phone = true
+    // Electronics holds no task of the person, so its list offers Show all tasks
+    await app(world(), '/app/testbed/board/p/12')
+    await until(() => shown() === 'kanban', "Electronics' task list")
+    await backPastSync('/app/testbed/board/p/12')
+    const all = await vi.waitFor(
+      () => {
+        const button = [...document.querySelectorAll('button')].find(
+          (b) => b.textContent?.trim() === 'Show all tasks',
+        )
+        if (!button) throw new Error('missing Show all tasks')
+        return button
+      },
+      { timeout: 10_000 },
+    )
+    await click(all)
+    await step(1)
+    await until(() => location.pathname === `/app/testbed/sync/all/people/${ME}`, 'Team sync')
+    await step(1)
+    await until(() => q('[data-inbox-page-state]'), 'the Inbox')
+    expect(purpose()).toBeNull()
+  })
 })
