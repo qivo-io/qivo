@@ -4363,13 +4363,20 @@ export const AGENDA_MILESTONE_SLOTS = {
 
 /** The Overview's reads by query. The health table's rows are projects
     with figures, not tasks, so its answer brings no rows and holds no
-    write. */
+    write; it names its rows' projects with the project cache, which give
+    each row its organization (the leads it names) and its name. */
 const OVERVIEW_QUERIES: Record<OverviewQuery, ViewQuery> = {
   summary: { ref: api.overview.summary },
   risk: { ref: api.overview.risk },
   attention: listQuery(api.overview.attention),
   paused: listQuery(api.overview.paused),
-  health: { ref: api.overview.health },
+  health: {
+    ref: api.overview.health,
+    projects: (value) => {
+      const answer = value as { state?: string; rows?: { project_id: string }[] }
+      return answer.state === 'ok' && answer.rows ? answer.rows.map((r) => r.project_id) : null
+    },
+  },
 }
 
 /** Team sync's view slot (P.watchSync), its agenda's read and rows. */
