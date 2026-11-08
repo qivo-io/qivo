@@ -410,7 +410,9 @@ describe('the details', () => {
   it('answer a sub-project created and a top-level project archived with their first pages', async () => {
     const t = newT()
     const f = await withOrg(t)
-    await plantSubs(t, f.meta, names('Live sub ', 28))
+    // withOrg's FW and PCB, 27 more and the one created make the design
+    // size's 30 live sub-projects under TBED
+    await plantSubs(t, f.meta, names('Live sub ', 27))
     await milestone(t, f.meta, 'Freeze', '2026-03-09')
     await keyOrg(t, f.org.id)
     await countOrg(t, f.org.id)
@@ -424,6 +426,15 @@ describe('the details', () => {
     )
     expect(created.milestones.map((m: Row) => m.name)).toEqual(['Freeze'])
     expect(created.completion).toEqual(NO_TASKS)
+    const live = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query('projects')
+          .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+          .collect()
+      ).filter((p) => p.parent_id === f.meta.id && p.archived_at === undefined),
+    )
+    expect(live).toHaveLength(30)
     const archived = await t.mutation(internal.machine.projects.restUpdateProject, {
       callerId: f.user.id,
       access: 'write',
