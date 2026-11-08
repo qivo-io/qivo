@@ -65,6 +65,7 @@ import {
   canChangeAccess,
   canHoldWork,
   canSeeProject,
+  isAccessUnchecked,
   levelRank,
   liveCredentialRow,
   machineAccess,
@@ -95,6 +96,7 @@ import {
 import { byId } from './db'
 import { refuseDemoFeature } from './demo'
 import {
+  type AccessLevel,
   type CredentialAccess,
   ISSUE_STATUSES,
   type IssuePriority,
@@ -126,7 +128,7 @@ import {
   taskForecaster,
 } from './machineDelay'
 import { type ReadTally, type ReadTotals, readTally, totalsOf } from './machineSubtree'
-import { compareNamed, NAMED_RESERVE, type NamedAt } from './namedPages'
+import { compareNamed, NAMED_RESERVE, type NamedAt, readGuard } from './namedPages'
 import { nameKey } from './nameKey'
 import { canCreateProjects } from './projectCreators'
 import { taskOwnerId } from './review'
@@ -344,13 +346,20 @@ export function findProjectRef(cat: Catalogue, ref: string): Doc<'projects'> | u
 /* ------------------------------------------------------------ access flags
  * What the caller holds on each project of its organization (core.ts:307-318's
  * successor). `read` is canSeeProject and `write` is hasProjectLevel 'user'
- * through a credential that may write (machineAccess). projectLevelsForOrg,
- * the batched form of those rules, answers both for every project from the
- * caller's grants and team shares. With the catalogue that is a read at the
- * design size's sum, 15 index ranges, 3,711 documents and 1.15 MiB as
- * convex-test counts them for REST GET /v1/projects of a person who reads 700
- * sub-projects by grants in 5 teams of 200 shares (lib/access.ts accessRowsOf
- * says why it stays). Asking the predicates project by project read about
+ * through a credential that may write (machineAccess), the rule of flagOf.
+ * projectLevelsForOrg, the batched form of those rules, answers both for
+ * every project from the caller's grants and team shares. The task routes
+ * read it, REST GET /v1/tasks with its archived tasks, POST /v1/tasks and a
+ * task move in PATCH /v1/tasks/{ref}, and MCP list_tasks, create_task and
+ * update_task (machine/rest.ts catalogueAccess, machine/mcp.ts
+ * catalogueFlags). With the catalogue that is a read at the design size's
+ * sum, 15 index ranges, 3,711 documents and 1.15 MiB as convex-test counted
+ * it for a person who reads 700 sub-projects by grants in 5 teams of 200
+ * shares (lib/access.ts accessRowsOf says why it stays). The project routes
+ * read no catalogue: the lists page the caller's reach rows
+ * (machine/projects.ts projectPage) and the single read and the project
+ * write answers ask one lib/access.ts accessOf instance about the project
+ * they name (machine/projects.ts projectRead). Asking the predicates project by project read about
  * three ranges per project for a writer who is not an admin, so such a
  * writer's every call passed Convex's 4,096 at about 1,300 projects. A project
  * outside a top-level meta, such as one whose parent is missing, gets neither
@@ -362,25 +371,33 @@ export function findProjectRef(cat: Catalogue, ref: string): Doc<'projects'> | u
 
 export type AccessFlag = { read: boolean; write: boolean }
 
+/** The flag of a caller whose level on a project is `level` (projectLevel,
+ * null where they cannot see it) through a credential of `access`: `read`
+ * where they see it, `write` where the credential may write
+ * (machineAccess) and the level is User or Lead. accessFlags, the project
+ * lists (machine/projects.ts projectPage) and the single-project read
+ * (projectRead) all take their flags from it, so they cannot drift. */
+export const flagOf = (
+  me: Caller,
+  access: CredentialAccess,
+  level: AccessLevel | null,
+): AccessFlag => ({
+  read: level !== null,
+  write: machineAccess(me, access) === 'write' && levelRank(level) >= LEVEL_RANK.user,
+})
+
 /** The caller's flags on every project of `cat`, which must be its
  * organization's whole catalogue, because a sub-project's level comes from
- * its parent's row. */
+ * its parent's row. The task routes read them. */
 export async function accessFlags(
   ctx: QueryCtx,
   me: Caller,
   cat: Catalogue,
   access: CredentialAccess,
 ): Promise<Map<string, AccessFlag>> {
-  const writes = machineAccess(me, access) === 'write'
   const { levelOf } = await projectLevelsForOrg(ctx, me, cat.projects)
   const out = new Map<string, AccessFlag>()
-  for (const p of cat.projects) {
-    const level = levelOf(p)
-    out.set(p.id, {
-      read: level !== null,
-      write: writes && levelRank(level) >= LEVEL_RANK.user,
-    })
-  }
+  for (const p of cat.projects) out.set(p.id, flagOf(me, access, levelOf(p)))
   return out
 }
 
@@ -639,19 +656,6 @@ export async function listArchivedIssuesCore(
 }
 
 const byKeyOrder = (a: Doc<'projects'>, b: Doc<'projects'>): number => a.key.localeCompare(b.key)
-
-/** The catalogue's readable projects on ONE side of the archived axis,
- * (archived_at set) === archived, ordered by key. REST GET /v1/projects and
- * MCP list_projects both list them. */
-export function listProjectsCore(
-  cat: Catalogue,
-  archived: boolean,
-  readable: (projectId: string) => boolean,
-): Doc<'projects'>[] {
-  return cat.projects
-    .filter((p) => (p.archived_at !== undefined) === archived && readable(p.id))
-    .sort(byKeyOrder)
-}
 
 /* core.ts childProjects, visibility applied (the Deno one ran under RLS):
  * the readable children of a meta, ordered by key. includeArchived follows
@@ -2726,13 +2730,23 @@ const countsRead = (subProjects: number): ReadCeiling => ({
  * The Completion the app's Overview shows for `project`, as the caller
  * sees it, which is how many of the active tasks without subtasks are Done,
  * in the project, or for a top-level project in its live sub-projects that
- * the caller can read (`view.readable`), from the counts every task writer
- * keeps (model/overviewCounts.ts familyCounts). It reads the
+ * the caller can read, from the counts every task writer keeps
+ * (model/overviewCounts.ts familyCounts). `access` is the call's one
+ * lib/access.ts accessOf instance of the caller (machine/projects.ts
+ * projectRead). A sub-project counts itself where `access` shows it. A
+ * top-level project reads its sub-projects (projects by_parent, live and
+ * archived, which needs no archive state) under a read guard on the room
+ * COMPLETION_RESERVE leaves, and counts the live ones: every one of them
+ * where the caller sees the project for a reason of its own (accessible),
+ * as each then inherits that level, and otherwise each one that `access`
+ * shows, asked one by one under that guard. It then reads the
  * organization's readiness, three ranges, and each counted sub-project's
  * count rows, a range and up to OVERVIEW_SHARDS documents each, and never
- * a task, so a project of 30 sub-projects reads 33 ranges and at most 125
- * documents whatever its tasks. Null for an archived project, whose tasks
- * are outside the working plan; NO_TASKS where it counts no sub-project.
+ * a task, so a project of 30 sub-projects that the caller reads for a
+ * reason of its own reads 34 ranges and at most 153 documents beside the
+ * access check whatever its tasks (convex/tests/projectCompletion.test.ts). Null for an archived project, whose
+ * tasks are outside the working plan; NO_TASKS where it counts no
+ * sub-project.
  *
  * The leaf rule is the stored one, the Overview's and the app's
  * (P.isGroup). A task with an active subtask in any live project of the
@@ -2750,29 +2764,35 @@ const countsRead = (subProjects: number): ReadCeiling => ({
  * another top-level project counts too, because it can reconcile a parent
  * here whose subtask older code stored there (countsReady).
  * UNAVAILABLE_COMPLETION where the request has no room for those reads
- * beside COMPLETION_RESERVE, which inside the design size never happens.
- * It keeps the public promise that completion never fails a project's
- * read or update (docs/rest-api.md, docs/mcp.md). In an update_project or
- * PATCH mutation the read conflicts with writes to the family's count rows
- * and the organization's readiness rows, a regroup's steps in any family
- * included, which Convex retries.
+ * beside COMPLETION_RESERVE, where the sub-projects did not fit the guard,
+ * or where a bound of lib/access.ts OWN_READS stopped a check of which of
+ * them the caller sees (accessUnchecked), which inside the design size
+ * never happens. It keeps the public promise that completion never fails
+ * a project's read or update (docs/rest-api.md, docs/mcp.md). In an
+ * update_project or PATCH mutation the read conflicts with writes to the
+ * family's count rows and the organization's readiness rows, a regroup's
+ * steps in any family included, which Convex retries.
  */
 export async function projectCompletion(
   ctx: QueryCtx,
   project: Doc<'projects'>,
-  view: Pick<ListView, 'cat' | 'readable'>,
+  access: Access,
 ): Promise<CompletionJson | null> {
   if (project.archived_at !== undefined) return null
-  const { cat, readable } = view
   const familyId = project.parent_id ?? project.id
-  const subs =
-    project.parent_id === undefined
-      ? cat.projects.filter(
-          (c) => c.parent_id === project.id && c.archived_at === undefined && readable(c.id),
-        )
-      : readable(project.id)
-        ? [project]
-        : []
+  let subs: Doc<'projects'>[] | null
+  try {
+    subs =
+      project.parent_id === undefined
+        ? await countedSubProjects(ctx, project, access)
+        : (await access.visible(project.id))
+          ? [project]
+          : []
+  } catch (e) {
+    if (isAccessUnchecked(e)) return UNAVAILABLE_COMPLETION
+    throw e
+  }
+  if (subs === null) return UNAVAILABLE_COMPLETION
   if (subs.length === 0) return NO_TASKS
   const metrics = await ctx.meta.getTransactionMetrics()
   const room = roomOf(metrics, COMPLETION_RESERVE)
@@ -2792,6 +2812,36 @@ export async function projectCompletion(
     for (const status of ISSUE_STATUSES) total += c.leaves[status]
   }
   return { status: 'ok', done, total, percent: total === 0 ? 0 : Math.round((done / total) * 100) }
+}
+
+/* The live sub-projects of top-level project `project` that `access` shows,
+ * read under a guard on the room COMPLETION_RESERVE leaves, or null where
+ * they did not fit it. Where the caller sees `project` for a reason of its
+ * own every live sub-project inherits that level, so none is asked about;
+ * otherwise each is asked visible, which rejects with accessUnchecked
+ * where a bound stopped it. */
+async function countedSubProjects(
+  ctx: QueryCtx,
+  project: Doc<'projects'>,
+  access: Access,
+): Promise<Doc<'projects'>[] | null> {
+  const own = await access.accessible(project.id)
+  const guard = readGuard(ctx, roomOf(await ctx.meta.getTransactionMetrics(), COMPLETION_RESERVE))
+  if (!(await guard.range())) return null
+  const out: Doc<'projects'>[] = []
+  const subs = ctx.db.query('projects').withIndex('by_parent', (q) => q.eq('parent_id', project.id))
+  for await (const sub of subs) {
+    if (!(await guard.document(sub))) return null
+    if (sub.org_id !== project.org_id || sub.archived_at !== undefined) continue
+    if (own) {
+      out.push(sub)
+      continue
+    }
+    access.seen(sub)
+    if (await access.visible(sub.id)) out.push(sub)
+    if (!(await guard.settle())) return null
+  }
+  return out
 }
 
 /* REST userJson (rest:229-234) == the MCP list_users row: NO email, auth id

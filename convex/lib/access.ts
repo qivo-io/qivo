@@ -1057,11 +1057,16 @@ type Held = { teams: string[]; onRoot: string[]; seat: boolean }
  * access_unchecked as well), a member's task history
  * (lib/activityVisibility.ts, whose pages in the task window, REST and MCP
  * refuse a page whose check stopped, and whose receivedRows leaves such a
- * row out, so model/issues.ts taskWriters names nobody for it) and the REST
+ * row out, so model/issues.ts taskWriters names nobody for it), the REST
  * and MCP single-task read with its related lists (lib/core.ts taskOut and
  * relatedPage, which refuse the whole call where a check stopped, and whose
- * delay answers it unavailable, lib/machineDelay.ts taskForecaster) apply
- * this one rule, each with its own answer for that refusal. */
+ * delay answers it unavailable, lib/machineDelay.ts taskForecaster), and
+ * the REST and MCP project lists, single-project read and project write
+ * answers (machine/projects.ts projectPage and projectRead, which refuse
+ * the whole call, and roll a write back, where a check of a row or of the
+ * project's level stopped, and whose completion answers it unavailable,
+ * lib/core.ts projectCompletion) apply this one rule, each with its own
+ * answer for that refusal. */
 export function accessOf(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
@@ -1362,8 +1367,9 @@ export async function projectLevelsForOrg(
  * where a bounded design would add refusal paths and a second level rule
  * beside levelsFrom for sizes the design size says not to build for (agent
  * decision, 5 November 2026, closing t3/limits-machine-access-rows). Its
- * readers are REST and MCP access flags and lists (lib/core.ts accessFlags
- * and orgReach, through projectLevelsForOrg) and Deleted items
+ * readers are the REST and MCP task routes' access flags (lib/core.ts
+ * accessFlags), the REST and MCP Inbox's bulk change (lib/core.ts
+ * orgReach), both through projectLevelsForOrg, and Deleted items
  * (model/deletedItems.ts sightOf, pendingAccess and seenBy). Callers that ask for many people at
  * once keep their own bounds: projectLevelsForPeople with LEVELS_READ, and
  * Deleted items' steps with SIGHT_READ and the step budget. */

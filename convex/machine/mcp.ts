@@ -65,15 +65,15 @@ import {
   credentialVia,
   destinationOf,
   findIssue,
+  findProject,
   findProjectRef,
   issueKey,
   listArchivedIssuesCore,
   listCommentsCore,
-  listProjectsCore,
   listProjectUsersCore,
   loadCatalogue,
   meCore,
-  projectJson,
+  seesProject,
   taskListRequest,
   taskOut,
   userJson,
@@ -156,7 +156,7 @@ import { assertRemainingShape } from '../model/taskValues'
 import { memberPage, teamPage } from '../model/teams'
 import { authenticateSecret, goneWithDeletion, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
 import { DISCUSSION_TOOLS } from './discussion'
-import { orgTeam, PROJECT_TOOLS } from './projects'
+import { orgTeam, PROJECT_TOOLS, projectPage } from './projects'
 import { RECORD_TOOLS, TASK_RELATED_TOOL } from './records'
 import {
   conflictRetrying,
@@ -359,14 +359,31 @@ export const TOOLS: McpTool[] = [
     def: {
       name: 'list_projects',
       title: 'List projects',
-      description:
-        'Projects visible to your account. type "meta" projects are products with sub-projects (parent_id); both project types are controlled by a lead and have no owning team. `num` is the durable per-org project number (usable as a ref). `access.write` says whether you may create and change tasks in that project. Active projects only by default; `archived: true` lists the archived ones instead. An archived project is one that has been put away, keeps everything it had, takes no new tasks, and does not appear in `list_tasks` unless you name it.',
+      description: `Projects you can see, one page at a time in tree order: each top-level project by key, followed by its sub-projects you can see by key. type "meta" projects are products with sub-projects (parent_id); both project types are controlled by a lead and have no owning team. \`num\` is the durable per-org project number (usable as a ref). \`access.write\` says whether you may create and change tasks in that project. Active projects by default; \`archived: true\` lists the archived ones instead, an archived sub-project of an active project at its parent's place without the parent. \`search\` keeps projects whose own name holds every word of it, in any order, ignoring case and accents, or whose key it is; it does not bring a match's sub-projects along. The answer is \`{next_cursor, projects}\`; pass \`next_cursor\` back as \`cursor\`, with the same \`archived\` and \`search\`, until it is null, because a page may hold fewer than \`limit\` projects (${DEFAULT_PAGE_SIZE} by default, at most ${LIMITS.listProjects.max}), even none. \`offset\` is refused unless 0. An archived project is one that has been put away, keeps everything it had, takes no new tasks, and does not appear in \`list_tasks\` unless you name it.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
         properties: {
           archived: {
             type: 'boolean',
+          },
+          search: {
+            type: 'string',
+            maxLength: LIMITS.search.max,
+          },
+          limit: {
+            type: 'integer',
+            minimum: LIMITS.listProjects.min,
+            maximum: LIMITS.listProjects.max,
+          },
+          offset: {
+            type: 'integer',
+            minimum: 0,
+            maximum: 0,
+          },
+          cursor: {
+            type: 'string',
+            minLength: 1,
           },
         },
       },
@@ -375,7 +392,13 @@ export const TOOLS: McpTool[] = [
       r.runQuery(internal.machine.mcp.listProjects, {
         callerId,
         access,
-        ...(args as { archived?: boolean }),
+        ...(args as {
+          archived?: boolean
+          search?: string
+          limit?: number
+          offset?: number
+          cursor?: string
+        }),
       }),
   },
   {
@@ -492,7 +515,7 @@ export const TOOLS: McpTool[] = [
     def: {
       name: 'list_tasks',
       title: 'List tasks',
-      description: `Tasks you can see, optionally filtered, oldest first by creation. \`is_group: true\` identifies a parent whose stored status is dormant; status filters exclude groups. Every task identifies its reporter (\`reporter_id\`, \`reporter_name\`), assignee (\`assignee_id\`, \`assignee_name\`) and reviewer (\`reviewer_id\`, \`reviewer_name\`); while a task is in \`review\` with a reviewer set, it is the reviewer's to act on, and \`owner_id\` names whose work it is. A group's \`progress\` counts the done and total tasks without subtasks under it that you can see, \`delay\` is the app's projected delay when the task's project tracks it, \`unavailable\` where the page could not read the owner's other work (get_task reads it for one task), and \`last_comment_at\` is when a task was last commented on. \`project\` accepts a project number, a key like ENC, or a uuid; a meta project includes its sub-projects. \`status\` takes one status or a list. \`search\` matches every whitespace-separated fragment across task ID, title, description, status, priority, assignee name and label names, case-insensitively and in any order. The answer is \`{next_cursor, tasks}\`; pass \`next_cursor\` back as \`cursor\` until it is null, because a page may hold fewer than \`limit\` tasks (${DEFAULT_PAGE_SIZE} by default, at most ${LIMITS.listTasks.max}), even none. \`offset\` is refused unless 0. Active tasks only by default. \`archived: true\` lists archived tasks instead, most recently archived first, and needs \`project\`, which then includes all its sub-projects you can read, archived ones too; to cover them all, name each top-level project that \`list_projects\` returns with and without \`archived: true\`. Tasks in an ARCHIVED PROJECT are left out of active lists unless \`project\` names that project. Archiving a project and archiving a task are separate things, and only the second has a flag here.`,
+      description: `Tasks you can see, optionally filtered, oldest first by creation. \`is_group: true\` identifies a parent whose stored status is dormant; status filters exclude groups. Every task identifies its reporter (\`reporter_id\`, \`reporter_name\`), assignee (\`assignee_id\`, \`assignee_name\`) and reviewer (\`reviewer_id\`, \`reviewer_name\`); while a task is in \`review\` with a reviewer set, it is the reviewer's to act on, and \`owner_id\` names whose work it is. A group's \`progress\` counts the done and total tasks without subtasks under it that you can see, \`delay\` is the app's projected delay when the task's project tracks it, \`unavailable\` where the page could not read the owner's other work (get_task reads it for one task), and \`last_comment_at\` is when a task was last commented on. \`project\` accepts a project number, a key like ENC, or a uuid; a meta project includes its sub-projects. \`status\` takes one status or a list. \`search\` matches every whitespace-separated fragment across task ID, title, description, status, priority, assignee name and label names, case-insensitively and in any order. The answer is \`{next_cursor, tasks}\`; pass \`next_cursor\` back as \`cursor\` until it is null, because a page may hold fewer than \`limit\` tasks (${DEFAULT_PAGE_SIZE} by default, at most ${LIMITS.listTasks.max}), even none. \`offset\` is refused unless 0. Active tasks only by default. \`archived: true\` lists archived tasks instead, most recently archived first, and needs \`project\`, which then includes all its sub-projects you can read, archived ones too; to cover them all, name each top-level project that \`list_projects\` pages, with and without \`archived: true\`. Tasks in an ARCHIVED PROJECT are left out of active lists unless \`project\` names that project. Archiving a project and archiving a task are separate things, and only the second has a flag here.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -1742,16 +1765,17 @@ async function mustFindParent(ctx: QueryCtx, me: Caller, ref: string): Promise<D
   return parent
 }
 
-/* The caller's flags and readable/writable predicates over the whole org
- * catalogue, from one by_org scan and the caller's batched project levels
- * (accessFlags), shared by every scoped read. Writable also needs a
- * credential that may write. */
+/* The caller's readable/writable predicates over the whole org catalogue,
+ * from one by_org scan and the caller's batched project levels
+ * (accessFlags), which the task tools read: list_tasks, create_task and
+ * update_task's move, accepted at the design size's sum. The project tools
+ * read none of it (machine/projects.ts projectPage and projectRead).
+ * Writable also needs a credential that may write. */
 async function catalogueFlags(ctx: QueryCtx, me: Caller, access: CredentialAccess) {
   const cat = await loadCatalogue(ctx, me)
   const flags = await accessFlags(ctx, me, cat, access)
   return {
     cat,
-    flags,
     readable: (id: string) => flags.get(id)?.read === true,
     writable: (id: string) => flags.get(id)?.write === true,
   }
@@ -1823,16 +1847,20 @@ export const listTeamMembers = internalQuery({
   },
 })
 
-/* list_projects: REST GET /v1/projects' rows, with the caller's access flags. */
+/* list_projects runs machine/projects.ts projectPage, shared with REST's
+ * GET /v1/projects, the cursor first. */
 export const listProjects = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess, archived: v.optional(v.boolean()) },
-  handler: async (ctx, { callerId, access, archived }) => {
-    const me = await asMachineCaller(ctx, callerId, access)
-    const { cat, flags, readable } = await catalogueFlags(ctx, me, access)
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    archived: v.optional(v.boolean()),
+    ...vNamedPaging,
+  },
+  handler: async (ctx, a): Promise<string> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const paging = namedPaging(LIMITS.listProjects, 'projects', a)
     return pretty(
-      listProjectsCore(cat, archived === true, readable).map((p) =>
-        projectJson(p, flags.get(p.id) ?? { read: false, write: false }),
-      ),
+      await projectPage(ctx, me, a.access, { ...paging, archived: a.archived === true }),
     )
   },
 })
@@ -1847,13 +1875,14 @@ export const listUsers = internalQuery({
   },
 })
 
+/* list_project_users: a project the caller can read (lib/core.ts
+ * findProject and seesProject), its people with `assignable`. */
 export const listProjectUsers = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, project: v.string() },
   handler: async (ctx, { callerId, access, project }) => {
     const me = await asMachineCaller(ctx, callerId, access)
-    const { cat, readable } = await catalogueFlags(ctx, me, access)
-    const target = findProjectRef(cat, project)
-    if (target === undefined || !readable(target.id)) {
+    const target = await findProject(ctx, me, project)
+    if (target === null || !(await seesProject(ctx, me, target))) {
       throw notFound(`project "${project}" not found (or not visible to you)`)
     }
     return pretty(await listProjectUsersCore(ctx, me, target))

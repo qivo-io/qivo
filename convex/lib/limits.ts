@@ -815,6 +815,7 @@ export const LIMITS = {
     MACHINE,
     'machine',
   ),
+  listProjects: whole('Projects per list page', 1, 200, 'projects', 'limit', MACHINE, 'machine'),
   inboxTasks: {
     label: 'Tasks per inbox change',
     group: 'machine',

@@ -11,9 +11,11 @@
  * teamPage and memberPage), and REST GET /v1/tasks/{ref}/subtasks, /links,
  * /followers and /attachments and MCP list_task_related a task's related
  * lists, whose first pages REST GET /v1/tasks/{ref} and MCP get_task answer
- * with a cursor each (lib/core.ts relatedPage and taskOut). REST GET
- * /v1/inbox and MCP list_inbox (t3/limits-machine-inbox) are to page with
- * them too. A cursor is a position in one list's order, sealed with the
+ * with a cursor each (lib/core.ts relatedPage and taskOut), and REST GET
+ * /v1/projects and MCP list_projects the projects a caller sees, in tree
+ * order (machine/projects.ts projectPage). REST GET /v1/inbox and MCP
+ * list_inbox (t3/limits-machine-inbox) are to page with them too. A
+ * cursor is a position in one list's order, sealed with the
  * list's name and its scope (lib/namedPages.ts namedCursor over
  * lib/archiveCursorSeal.ts), so it shows nothing and opens only for the list
  * and scope it came from. A cursor of another list, organization, caller or
@@ -31,9 +33,13 @@
  * machine.task_links, machine.task_followers and machine.task_attachments,
  * check their paging with machine/shared.ts cursorPaging and seal the
  * organization, the caller, the task and, for subtasks, whether the task
- * was archived. A cursor never grants access by itself, since every page
- * checks the caller's access again. Archived task lists keep their own `2~`
- * cursors (lib/archivedTasks.ts). */
+ * was archived. The project list, machine.projects, checks its paging
+ * with namedPaging and seals the organization, the caller, the side of the
+ * archive axis and the search's name key (namedScope), at a position of
+ * three strings, the top-level project's id and, inside its sub-projects,
+ * a sub-project's key and id. A cursor never grants access by itself,
+ * since every page checks the caller's access again. Archived task lists
+ * keep their own `2~` cursors (lib/archivedTasks.ts). */
 
 import type { GenericDocument } from 'convex/server'
 import type { QueryCtx } from '../_generated/server'
@@ -69,6 +75,15 @@ export const offsetRefusal = (noun: string): string =>
  * ordinary call meets. */
 export const NAMES_NOT_READY =
   "this list cannot be read until this organization's names are ready; try again in a few minutes"
+
+/** The refusal of REST GET /v1/projects and MCP list_projects while their
+ * organization's reach rows and archive states are not all written
+ * (model/projectNav.ts reachReady), so a page is never answered from rows
+ * that are not there yet. New organizations hold them from their creation
+ * and internal/navBackfill writes them for the others, so it is a
+ * fail-closed branch that no ordinary call meets. */
+export const PROJECTS_NOT_READY =
+  "this list cannot be read until this organization's projects are ready; try again in a few minutes"
 
 /** A digest of a list's filters, as 64 hex characters, so a cursor's scope
  * keeps one length whatever the filters and search hold. `filters` must be

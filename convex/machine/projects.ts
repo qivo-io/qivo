@@ -1,4 +1,5 @@
-/* Projects over REST and MCP: reading one project, creating projects and
+/* Projects over REST and MCP: the project lists a page at a time
+ * (projectPage), reading one project, creating projects and
  * sub-projects, changing their settings and lead, archiving and restoring
  * them, giving and removing access one person or one team at a time, and
  * milestones.
@@ -9,7 +10,12 @@
  * This module imports only types from those two, so neither is loaded
  * through it. The provenance, key name validator, body parsers and MCP text
  * it shares with them come from machine/shared.ts. machine/rest.ts uses
- * projectDetailJson for GET /v1/projects/{ref}.
+ * projectPage for GET /v1/projects and projectRead for GET
+ * /v1/projects/{ref}, and machine/mcp.ts projectPage for list_projects.
+ * No project route reads the organization's catalogue (lib/core.ts
+ * loadCatalogue): the lists read the caller's own reach rows and the
+ * projects they name, and the single read and the write answers one
+ * lib/access.ts accessOf instance asked about the project they name.
  *
  * Each action is one shared model function the app runs too
  * (model/projects.ts createProjectCore, updateProjectCore, archiveProjectCore
@@ -50,18 +56,18 @@ import {
   accessOf,
   canManageOwnProjectAccess,
   canSeeProject,
+  inMetaTree,
   isAccessUnchecked,
   rootMetaOf,
 } from '../lib/access'
 import {
   type AccessFlag,
-  accessFlags,
   asMachineCaller,
   type Caller,
   type CompletionJson,
   findProject,
+  flagOf,
   issueKey,
-  loadCatalogue,
   NO_TASKS,
   projectCompletion,
   projectJson,
@@ -70,6 +76,7 @@ import {
 } from '../lib/core'
 import { byId } from '../lib/db'
 import {
+  type ArchiveState,
   type CredentialAccess,
   type GrantLevel,
   vCredentialAccess,
@@ -77,6 +84,22 @@ import {
 } from '../lib/enums'
 import { badRequest, notFound, type Refusal, rule } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
+import { CURSOR_REFUSAL, namedScope, PROJECTS_NOT_READY } from '../lib/listCursor'
+import {
+  indexAfter,
+  listBatch,
+  mergeNamed,
+  type Named,
+  type NamedAt,
+  type NamedReads,
+  type NamedStream,
+  namedCeiling,
+  openNamedCursor,
+  type ReadGuard,
+  STOPPED,
+} from '../lib/namedPages'
+import { nameKey } from '../lib/nameKey'
+import { allWordsMatcher } from '../lib/search'
 import {
   createExpectedSentence,
   EXPECTED_DELETE_SENTENCE,
@@ -95,6 +118,7 @@ import {
   removeMilestoneCore,
   updateMilestoneCore,
 } from '../model/milestones'
+import type { IdTie } from '../model/nameKeys'
 import { newUuid } from '../model/orgs'
 import {
   type AccessRemoval,
@@ -108,7 +132,8 @@ import {
   setProjectGrantCore,
   vHeldTasks,
 } from '../model/projectAccess'
-import { settleFavorites, treeBudget } from '../model/projectNav'
+import { reachReady, settleFavorites, treeBudget } from '../model/projectNav'
+import { childKeyIndex, rootKeyIndex, seatSight, subKeyIndex } from '../model/projectNavReads'
 import {
   archiveProjectCore,
   createProjectCore,
@@ -251,27 +276,357 @@ export async function projectDetailJson(
   return { ...projectJson(project, flag), ...(await projectDetail(ctx, project, known, flag.read)) }
 }
 
-/* projectDetailJson for one project the caller resolved itself, such as one
- * it just changed, with the caller's flags read over the organization's
- * catalogue, which a sub-project's flags need for its parent. A project
- * the call `created` holds no tasks, so its completion reads none. */
-async function projectOut(
+/** projectDetailJson for one project the caller resolved itself, such as
+ * one it just changed, for REST GET /v1/projects/{ref}, MCP get_project and
+ * the answers of project creates and updates. It reads the project and the
+ * caller's access to it alone, through one lib/access.ts accessOf
+ * instance: the flag from the caller's level on it (lib/core.ts flagOf),
+ * `read` false for a project the caller manages without reading, and the
+ * completion from what that instance shows (lib/core.ts
+ * projectCompletion). A check a bound of OWN_READS stopped while it reads
+ * the level rejects with accessUnchecked, which refuses the whole call and
+ * rolls back a write, since a flag cannot be guessed; one inside the
+ * completion answers it `unavailable`. A project the call `created` holds
+ * no tasks, so its completion reads none. */
+export async function projectRead(
   ctx: QueryCtx,
   me: Caller,
   project: Doc<'projects'>,
   access: CredentialAccess,
   o: { created?: boolean } = {},
 ) {
-  const cat = await loadCatalogue(ctx, me)
-  const flags = await accessFlags(ctx, me, cat, access)
-  const readable = (id: string) => flags.get(id)?.read === true
-  return await projectDetailJson(
-    ctx,
-    project,
-    flags.get(project.id) ?? { read: false, write: false },
-    async () =>
-      o.created === true ? NO_TASKS : await projectCompletion(ctx, project, { cat, readable }),
+  const sight = accessOf(ctx, me, [project])
+  const flag = flagOf(me, access, await sight.level(project.id))
+  return await projectDetailJson(ctx, project, flag, async () =>
+    o.created === true ? NO_TASKS : await projectCompletion(ctx, project, sight),
   )
+}
+
+/* ------------------------------------------------------------- the lists */
+
+/** The list name REST GET /v1/projects and MCP list_projects seal their
+ * cursors with (lib/listCursor.ts). Both answer the same rows, so a cursor
+ * of one continues on the other. */
+export const PROJECTS_LIST = 'machine.projects'
+
+/** A position's tie in the project list: the top-level project's id and,
+ * inside its sub-projects, a sub-project's key and id, else two empty
+ * strings, so a top-level project comes before its sub-projects. */
+export type ProjectTie = readonly [rootId: string, subKey: string, subId: string]
+
+/** The tie of position `at` of the project list, or null where it is not
+ * one: three strings, the first a project id, the other two both empty or
+ * a key and a project id. */
+export function projectTieOf({ tie }: NamedAt): ProjectTie | null {
+  if (tie.length !== 3) return null
+  const [rootId, subKey, subId] = tie
+  if (typeof rootId !== 'string' || typeof subKey !== 'string' || typeof subId !== 'string')
+    return null
+  if (!UUID.test(rootId)) return null
+  if (subKey === '' && subId === '') return [rootId, '', '']
+  return subKey !== '' && UUID.test(subId) ? [rootId, subKey, subId] : null
+}
+
+/** What a page of the project list is asked, checked (machine/shared.ts
+ * namedPaging and the archived flag). */
+export type ProjectPageArgs = {
+  archived: boolean
+  search: string
+  limit: number
+  cursor: string | null
+}
+
+/** One page of the project list, as REST GET /v1/projects and MCP
+ * list_projects answer it, the cursor first. */
+export type ProjectsPageJson = {
+  next_cursor: string | null
+  projects: ReturnType<typeof projectJson>[]
+}
+
+/* A top-level project the walk passed, with whether the caller sees it for
+ * a reason of their own (lib/access.ts accessible), which decides where its
+ * sub-projects come from. */
+type WalkRoot = { project: Doc<'projects'>; own: boolean }
+
+/* A row the walk hands out: a reach row of the caller or one of their
+ * teams, or a sub-project of a top-level project they see for a reason of
+ * their own. */
+type WalkRow = Doc<'project_reach'> | Doc<'projects'>
+
+/* `stream`'s rows at the positions `at` gives them. */
+async function* placed<Row>(
+  stream: NamedStream<Row>,
+  at: (inner: NamedAt) => NamedAt,
+): AsyncGenerator<Named<Row> | typeof STOPPED> {
+  for await (const item of stream)
+    yield item === STOPPED ? STOPPED : { row: item.row, at: at(item.at) }
+}
+
+/**
+ * One page of the projects `me` can see for REST GET /v1/projects and MCP
+ * list_projects, on one side of the archive axis, after `p.cursor`, the
+ * next_cursor of an earlier page, at most `p.limit` of them, each as
+ * lib/core.ts projectJson with the caller's flags (flagOf, through a
+ * credential of `access`).
+ *
+ * The order is the tree's: each top-level project by key, followed by its
+ * sub-projects on the list by key, the project ids breaking ties (owner,
+ * 28 October 2026). Keys compare by their UTF-8 bytes (lib/namedPages.ts
+ * compareNamed), so digits come before capital letters and a key before
+ * the longer keys it begins. A position is the top-level project's key
+ * with a tie of its id and, inside its sub-projects, a sub-project's key
+ * and id (ProjectTie).
+ *
+ * Who is listed. The active list (`archived` false) holds every live
+ * top-level project the caller sees by lib/access.ts canSeeProject's rule
+ * (accessOf visible), navigation included, so also one seen only through
+ * an archived sub-project, and every live sub-project they see. The
+ * archived list holds every archived top-level project they see, each
+ * followed by its archived sub-projects they see, and the archived
+ * sub-projects they see of a live top-level project, at that project's
+ * place without its row. That is the membership the organization's
+ * catalogue gave (lib/core.ts accessFlags), so an organization admin's
+ * pages hold only what their own leads, grants and team shares reach, as
+ * anyone's.
+ *
+ * `p.search`, when not blank, keeps the projects whose own name holds
+ * every whitespace-separated word of it in any order, ignoring case and
+ * accents (lib/search.ts allWordsMatcher over lib/nameKey.ts nameKey of
+ * both), or whose key is the whole search, ignoring case, over the whole
+ * list on the server before the page is cut. Each row is matched on its
+ * own, so a matching top-level project brings none of its sub-projects and
+ * a matching sub-project shows at its place without its parent's row. It
+ * reads no task and no file.
+ *
+ * What a page reads. The organization's readiness (model/projectNav.ts
+ * reachReady, refused with PROJECTS_NOT_READY until its reach rows and
+ * archive states are written), the seat's memberships (seatSight, refused
+ * past PROJECT_NAV.teams), and the root reach rows of the seat and of its
+ * teams in key order (model/projectNavReads.ts rootKeyIndex), the live
+ * ones and in the archived list the archived ones too, merged with one row
+ * for a project several of them reach. Each row is handed out at its
+ * position and judged in `keep`, which reads its project, checks that the
+ * row holds its copies (organization, a root row of a top-level meta, live
+ * state, key and name key), asks accessible and, for one seen only for
+ * navigation, visible, so a failing row shows nothing and still moves the
+ * page. Then that project's sub-projects of the list's archive state:
+ * where the caller sees it for a reason of their own every one of them
+ * inherits that level, so they come from the project's own index
+ * (subKeyIndex); otherwise only from the child reach rows of the seat and
+ * its teams under it (childKeyIndex), each row's project read and its
+ * copies checked, so the walk never reads a sub-project the caller cannot
+ * see. Every row on a page passes visible on this call, whatever the
+ * cursor and the reach rows say. It never reads the organization's project
+ * set or a task.
+ *
+ * The page reads within NAMED_READ past what the call read before it
+ * (lib/namedPages.ts namedCeiling), always reads its first row, and stops
+ * early with a cursor once the budget is spent, so a short or empty page
+ * is never the end and next_cursor is null only once the walk ended. A
+ * check a bound of OWN_READS stopped rejects with accessUnchecked, which
+ * refuses the whole call, never a page missing a project. Where a page
+ * stops can reflect how many top-level projects the caller reaches
+ * through their own and their teams' rows, including projects whose check
+ * says no, as for the navigation reads; never a project they do not reach.
+ *
+ * The cursor is sealed with the organization, `me`, the side and the
+ * search's name key (lib/listCursor.ts namedScope), so it opens only for
+ * that list, on either surface, and "Café" and "cafe" share cursors; any
+ * other cursor, or a changed one, is refused with CURSOR_REFUSAL. Pages
+ * are not a snapshot: a project created, renamed in its key, archived,
+ * restored, shared or unshared while a caller pages can be missed or shown
+ * on a later page until the caller starts again. A cursor's own top-level
+ * project is read again by id and its sub-projects after the cursor
+ * follow; one gone, no longer a top-level meta of the organization, given
+ * another key or archived under the active list is passed over.
+ *
+ * What a page read at the design size, in index ranges and documents as
+ * Convex counts them (convex/tests/machineProjects.test.ts, "reads at the
+ * design size"), every page answered and none refused:
+ * - grants on 200 top-level projects and the 200 sub-projects the person
+ *   reads beneath 67 of them: at limit 200, 337 ranges and 464 documents,
+ *   then 542 and 665; at 50, at most 190 and 187 a page; a search that
+ *   matches nothing, one page of 637 and 963;
+ * - 200 sub-projects through grants on them beneath 67 projects seen only
+ *   for navigation: at 200, 589 ranges and 982 documents, then 228 and 354;
+ *   a search that matches nothing, 437 and 568;
+ * - the archived list at its sum, 200 live and 300 archived top-level
+ *   projects with grants and 500 archived sub-projects, half beneath each:
+ *   at 200, at most 638 ranges and 761 documents a page; a search that
+ *   matches nothing, one page of 1,538 and 2,163, the most of any case;
+ *   through grants on the 500 sub-projects alone, at most 738 and 1,166, and
+ *   1,288 and 1,663 for a search that matches nothing;
+ * - one team sharing 50 live and 150 archived projects of 3 sub-projects
+ *   each: at 200, 171 ranges and 463 documents active, at most 273 and 587
+ *   archived;
+ * - a member of 5 teams each sharing 20 sub-projects: 495 and 578, and 415
+ *   and 382 for a search that matches nothing;
+ * - one project with 30 live and 40 archived sub-projects: at most 10
+ *   ranges a page of one, 67 and 70 at 200;
+ * - an everyday person reads the same in an organization at the
+ *   catalogue's sum (2,000 projects) as in an everyday one, 33 ranges and
+ *   19 documents active and 16 and 10 archived.
+ * The largest answer, 200 rows, is about 57 KB on REST and 82 KB as MCP's
+ * pretty text.
+ */
+export async function projectPage(
+  ctx: QueryCtx,
+  me: Caller,
+  access: CredentialAccess,
+  p: ProjectPageArgs,
+): Promise<ProjectsPageJson> {
+  if (!(await reachReady(ctx, me.org_id))) throw rule(PROJECTS_NOT_READY)
+  const scope = await namedScope(me, p.search, [p.archived ? 'archived' : 'active'])
+  let after: NamedAt<ProjectTie> | null = null
+  if (p.cursor !== null) {
+    const at = await openNamedCursor(p.cursor, PROJECTS_LIST, scope)
+    const tie = at === null ? null : projectTieOf(at)
+    if (at === null || tie === null) throw badRequest(CURSOR_REFUSAL)
+    after = { key: at.key, tie }
+  }
+  const sight = seatSight(ctx, me, true)
+  const words = allWordsMatcher(nameKey(p.search))
+  const whole = nameKey(p.search.trim())
+  const matches = (q: Doc<'projects'>) =>
+    words(nameKey(q.name)) || (whole !== '' && whole === nameKey(q.key))
+  const onSide = (q: Doc<'projects'>) => (q.archived_at !== undefined) === p.archived
+  // the top-level projects the walk passed, recorded as they are judged
+  const roots = new Map<string, WalkRoot>()
+  const judge = async (project: Doc<'projects'>): Promise<WalkRoot> => {
+    const root = { project, own: await sight.access.accessible(project.id) }
+    roots.set(project.id, root)
+    return root
+  }
+  // the sub-projects on the list of `root` after `subAfter`, at their
+  // places, or null where it has none on this side
+  const subs = (
+    root: WalkRoot,
+    subAfter: NamedAt<IdTie> | null,
+    reads: NamedReads,
+  ): NamedStream<WalkRow> | null => {
+    const parent = root.project
+    const live = parent.archived_at === undefined
+    // a live project never sits under an archived one
+    if (!p.archived && !live) return null
+    const state: ArchiveState = !p.archived ? 'live' : live ? 'listed' : 'under'
+    const inner: NamedStream<WalkRow> = root.own
+      ? indexAfter(subKeyIndex(ctx, parent, state), subAfter)(reads)
+      : (async function* () {
+          const grantees = await sight.grantees()
+          yield* mergeNamed(
+            grantees.map((g) =>
+              indexAfter(childKeyIndex(ctx, g, parent.id, !p.archived), subAfter)(reads),
+            ),
+            { ties: 'first', reads },
+          )
+        })()
+    return placed(inner, (at) => ({ key: parent.key, tie: [parent.id, at.key, ...at.tie] }))
+  }
+  const stream = (reads: NamedReads): NamedStream<WalkRow> =>
+    (async function* () {
+      if (after !== null) {
+        // the cursor's own top-level project, read again and never handed
+        // out again, then its sub-projects after the cursor
+        const [rootId, subKey, subId] = after.tie
+        const r0 = await sight.project(rootId)
+        if (
+          r0 !== null &&
+          r0.org_id === me.org_id &&
+          inMetaTree(r0, r0) &&
+          r0.key === after.key &&
+          (p.archived || r0.archived_at === undefined)
+        ) {
+          const subAfter = subKey === '' ? null : { key: subKey, tie: [subId] as const }
+          const rest = subs(await judge(r0), subAfter, reads)
+          if (rest !== null)
+            for await (const item of rest) {
+              yield item
+              if (item === STOPPED) return
+            }
+        }
+      }
+      const rootAfter = after === null ? null : { key: after.key, tie: [after.tie[0]] as const }
+      const lives = p.archived ? [true, false] : [true]
+      const grantees = await sight.grantees()
+      const rows = mergeNamed(
+        grantees.flatMap((g) =>
+          lives.map((live) => indexAfter(rootKeyIndex(ctx, g, live), rootAfter)(reads)),
+        ),
+        { ties: 'first', reads },
+      )
+      for await (const item of rows) {
+        if (item === STOPPED) {
+          yield STOPPED
+          return
+        }
+        const row = item.row
+        yield { row, at: { key: row.key, tie: [row.project_id, '', ''] } }
+        // keep judged the row before the batch asked for more (readBatch)
+        const root = roots.get(row.project_id)
+        const rest = root === undefined ? null : subs(root, null, reads)
+        if (rest !== null)
+          for await (const sub of rest) {
+            yield sub
+            if (sub === STOPPED) return
+          }
+      }
+    })()
+  // the project a root reach row names, when the row holds its copies
+  const rootOf = async (row: Doc<'project_reach'>): Promise<Doc<'projects'> | null> => {
+    if (row.org_id !== me.org_id || row.kind !== 'root' || row.root_id !== row.project_id)
+      return null
+    const project = await sight.project(row.project_id)
+    if (project === null || project.id !== row.project_id || project.org_id !== row.org_id)
+      return null
+    if (!inMetaTree(project, project) || (project.archived_at === undefined) !== row.live)
+      return null
+    return project.key === row.key && nameKey(project.name) === row.name_key ? project : null
+  }
+  // the sub-project a child reach row under `parent` names, when the row
+  // holds its copies
+  const childOf = async (
+    parent: Doc<'projects'>,
+    row: Doc<'project_reach'>,
+  ): Promise<Doc<'projects'> | null> => {
+    if (row.org_id !== me.org_id || row.kind !== 'child' || row.root_id !== parent.id) return null
+    const sub = await sight.project(row.project_id)
+    if (sub === null || sub.id !== row.project_id || (sub.archived_at === undefined) !== row.live)
+      return null
+    return sub.key === row.key && nameKey(sub.name) === row.name_key ? sub : null
+  }
+  const shown = async (q: Doc<'projects'>) =>
+    projectJson(q, flagOf(me, access, await sight.access.level(q.id)))
+  const judged = async (row: WalkRow, at: NamedAt) => {
+    if (at.tie[1] === '') {
+      // a top-level project's own row, always a root reach row
+      if (!('grantee_kind' in row)) return null
+      const project = await rootOf(row)
+      if (project === null) return null
+      const root = await judge(project)
+      if (!onSide(project) || !matches(project)) return null
+      if (!root.own && !(await sight.access.visible(project.id))) return null
+      return await shown(project)
+    }
+    const root = roots.get(String(at.tie[0]))
+    if (root === undefined) return null
+    const sub = 'grantee_kind' in row ? await childOf(root.project, row) : row
+    if (sub === null || sub.org_id !== me.org_id || sub.parent_id !== root.project.id) return null
+    if (!onSide(sub) || !matches(sub)) return null
+    sight.access.seen(sub)
+    return (await sight.access.visible(sub.id)) ? await shown(sub) : null
+  }
+  const keep = async (row: WalkRow, guard: ReadGuard, at: NamedAt) => {
+    const out = await judged(row, at)
+    // the access checks' reads are not counted one at a time
+    await guard.settle()
+    return out
+  }
+  const batch = await listBatch(
+    ctx,
+    { list: PROJECTS_LIST, scope, after, through: null },
+    { stream, keep, limit: p.limit, ceiling: await namedCeiling(ctx) },
+  )
+  return { next_cursor: batch.next, projects: batch.rows }
 }
 
 /* ------------------------------------------------------------------ refs */
@@ -561,7 +916,7 @@ export const mcpGetProject = internalQuery({
   handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const project = await mcpManaged(ctx, me, a.project)
-    return pretty(await projectOut(ctx, me, project, a.access))
+    return pretty(await projectRead(ctx, me, project, a.access))
   },
 })
 
@@ -588,7 +943,7 @@ export const mcpCreateProject = internalMutation({
     const lead_id = await mcpLead(ctx, me, a.lead_id)
     const input = { name: a.name, parent, lead_id, description: a.description }
     const project = await createFrom(ctx, me, input, MCP_PROVENANCE)
-    return pretty(await projectOut(ctx, me, project, a.access, { created: true }))
+    return pretty(await projectRead(ctx, me, project, a.access, { created: true }))
   },
 })
 
@@ -617,7 +972,7 @@ export const mcpUpdateProject = internalMutation({
     if (Object.keys(input).length === 0) throw badRequest('no fields to update')
     if (expected !== undefined) input.expected = expected
     const after = await applyUpdate(ctx, me, project, input, MCP_PROVENANCE)
-    return pretty(await projectOut(ctx, me, after, a.access))
+    return pretty(await projectRead(ctx, me, after, a.access))
   },
 })
 
@@ -862,7 +1217,7 @@ export const restCreateProject = internalMutation({
       description: restDescription(b),
     }
     const project = await createFrom(ctx, me, input, restProvenance(a.keyName))
-    return await projectOut(ctx, me, project, a.access, { created: true })
+    return await projectRead(ctx, me, project, a.access, { created: true })
   },
 })
 
@@ -926,7 +1281,7 @@ export const restUpdateProject = internalMutation({
     if (Object.keys(input).length === 0) throw badRequest('no recognized fields to update')
     if (expected !== undefined) input.expected = expected
     const after = await applyUpdate(ctx, me, project, input, restProvenance(a.keyName))
-    return await projectOut(ctx, me, after, a.access)
+    return await projectRead(ctx, me, after, a.access)
   },
 })
 
