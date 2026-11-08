@@ -11,8 +11,8 @@
      page or the tab is hidden (lib/viewVisibility.ts), so a kept page stops
      its reads and reads afresh when it shows again. The store names the
      projects the answer names with its project cache (store/planner.ts
-     ROADMAP_QUERY `projects`), so a bar's rights and a row's place read a
-     project the workspace's projects part does not hold from the cache.
+     ROADMAP_QUERY `projects`), so a bar's rights and a row's place read
+     their project from the cache, the store's only source of projects.
    - The answer decides which tasks a Roadmap shows. Each shows as the
      workspace's view model where the workspace holds the task, else as the
      model the store shaped from the answer's row (store/viewRows.ts), with

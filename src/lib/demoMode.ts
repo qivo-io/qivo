@@ -27,7 +27,7 @@ export function assertDemoFileSize(size: number, demo = DEMO_MODE): void {
 }
 
 /** The sentence for a file over `limit`, the attachment cap the app applies
- * (store/planner.ts projectAttachmentLimit). It names the demo's limit when
+ * (store/planner.ts attachmentLimit). It names the demo's limit when
  * that is the one that refused the file, else the organization's. */
 export function attachmentTooLarge(name: string, limit: number, demo = DEMO_MODE): string {
   const which = demo && limit === DEMO_FILE_BYTES ? 'demo' : 'organization'

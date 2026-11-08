@@ -1,12 +1,11 @@
 /* The groups a view shows its scope in, from the view's own answer: the
-   Board's lanes and side-boards, the Roadmap's tracks and the Overview's
-   sub-project notes. The store holds no list of a scope's sub-projects
-   (store/planner.ts P.scopeInfo answers only the scope's identity and
-   state), so every view takes them from the answer the server decided by
-   ordinary access, which names them whole, empty ones and refusals
-   included, and names each through the project cache, which the store
-   names the answer's projects with (store/planner.ts BOARD_QUERY,
-   ROADMAP_QUERY, OVERVIEW_QUERIES `projects`). A group whose project the
+   Board's lanes and side-boards and the Roadmap's tracks. The store holds
+   no list of a scope's sub-projects (store/planner.ts P.scopeInfo answers
+   only the scope's identity and state), so each view takes them from the
+   answer the server decided by ordinary access, which names them whole,
+   empty ones and refusals included, and names each through the project
+   cache, which the store names the answer's projects with
+   (store/planner.ts BOARD_QUERY, ROADMAP_QUERY `projects`). A group whose project the
    cache has not answered keeps its rows under a heading that says it is
    loading (`proj` null), never drops them and never shows as complete. */
 
@@ -54,8 +53,10 @@ export type GroupSource = {
  *   not answered stands for itself in a loading group until it does, so its
  *   rows show, never under a wrong heading.
  *
- * Each view sorts the groups as it always has (the Board by number, the
- * Roadmap by name).
+ * Each view orders the groups itself: the Board keeps the answer's order
+ * for a project's selection and in My view puts the home organization
+ * first, then by organization name and number (views/board/useBoardView.ts),
+ * and the Roadmap sorts its tracks by name.
  */
 export function scopeGroups(
   scope: GroupedScope,

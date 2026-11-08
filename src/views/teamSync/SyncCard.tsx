@@ -834,8 +834,8 @@ type SyncCardProps = {
     To Do row planned past this week. */
 function SyncCardView({ it, ctx, later, verdict, blockedBy }: SyncCardProps) {
   const ownerRef = useRef<HTMLSpanElement>(null)
-  // the project's level decides (the projects part holds every level a
-  // card reads), and a stale meeting turns the task controls off
+  // the agenda's `editable` decides, the projects the person may write in
+  // that answer, and a stale meeting turns the task controls off
   const canWrite = ctx.editable(it.project)
   const editable = canWrite && ctx.frozen === null
   const offTitle = canWrite ? (ctx.frozen ?? READ_ONLY) : READ_ONLY

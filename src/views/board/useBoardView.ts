@@ -10,8 +10,8 @@
      hidden (lib/viewVisibility.ts), so a kept page stops its read and reads
      afresh when it shows again. The store names the projects the answer
      names with its project cache (store/planner.ts BOARD_QUERY `projects`),
-     so a card's place and rights read a project the workspace's projects
-     part does not hold from the cache.
+     so a card's place and rights read their project from the cache, the
+     store's only source of projects.
    - The answer decides the Board's groups and their order (`groups`,
      store/scopeGroups.ts): a project selection's sub-projects as the
      answer's `projects` names them, in its order, and My view's top-level
