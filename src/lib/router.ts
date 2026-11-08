@@ -966,10 +966,12 @@ export function pathMatchesState(path: string, s: UiState): boolean {
   if (ask && typeof ask === 'object') {
     /* A project by number (Route.unheld) is the state's scope only where
        the project cache names that scope by the same organization and
-       number, as once App opened the project the address asked for. One
-       no read can ask about (null), as under a stale slug, normalizes in
-       place below. */
-    const p = s.scope ? P.project(s.scope) : undefined
+       number, as once App opened the project the address asked for. With
+       no scope it is the chooser's own address, as after a check that
+       found nothing, which normalizes in place. One no read can ask about
+       (null), as under a stale slug, normalizes in place below. */
+    if (!s.scope) return sameView
+    const p = P.project(s.scope)
     return sameView && !!p && p.org === ask.org_id && p.num === ask.num
   }
   return (r.scope || s.scope) === s.scope && sameView
