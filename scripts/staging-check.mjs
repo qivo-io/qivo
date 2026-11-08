@@ -184,10 +184,6 @@
  * it by name (projectNav.setFavorite), lists Alpha and Zulu under it
  * (projectNav.children), opens Zulu, and unstars the project again
  * (ui/project-directory).
- * It reads the run's project, Alpha and Zulu, an id of no project and a
- * project the run archived by id through the store's read of
- * projectNav.byIds, and checks the level, the parent row and the ids left
- * out (ui/project-by-ids).
  * It opens its project's Board by its address, waits for the sidebar's
  * tree from the deployment's navigation reads (projectNav.page) to light
  * the project wherever it sorts, with Alpha and Zulu under it
@@ -266,6 +262,10 @@
  * and subscribe no task window, find it by a search on the server, send
  * the row's read, unread, snooze and remove by organization and task,
  * and open Alpha's Board on it (ui/inbox-list).
+ * It reads the run's project, Alpha and Zulu, an id of no project and a
+ * project the run archived by id through the store's read of
+ * projectNav.byIds, and checks the level, the parent row and the ids left
+ * out (ui/project-by-ids).
  * Every task, comment,
  * grant and file lives in projects the run creates and names with its run
  * tag. It revokes every credential in the app, checks that the next call is
@@ -8960,11 +8960,11 @@ export function byIdsProblems(answer, { M, A, Z, unknown, archived }) {
 
 /** projectNav.byIds on the deployment, through the store's one-shot read
  *  (window.PLANNER.projectsByIds), signed in as Nora: the run's M, which
- *  she leads, its sub-projects Alpha and Zulu, an id of no project and a
- *  project the run archived (`<tag> Lists B`, which Settings › Projects
- *  left archived on its own), checked by byIdsProblems. It writes nothing.
- *  It runs while M is active, and needs a backend from the release that
- *  adds projectNav.byIds on. */
+ *  she leads, its sub-projects Alpha and Zulu, an id of no project and an
+ *  archived project of the run, the first with the run's tag that
+ *  GET /projects?archived=true lists, checked by byIdsProblems. It writes
+ *  nothing. It runs while M is active, and needs a backend from the
+ *  release that adds projectNav.byIds on. */
 async function projectByIdsCheck() {
   await check(PROJECT_BY_IDS_STEP, async () => {
     const { M, A, Z } = run.projects
