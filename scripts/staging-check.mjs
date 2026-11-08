@@ -7097,6 +7097,35 @@ export const NOTIFICATION_DELIVERY_MARKS = {
   summaryTag: 'qivo:catch-up',
 }
 
+/** The mode the Notification delivery control on `page` shows once it is
+ *  ready, the server's answer, or null while it loads, refreshes or saves,
+ *  since the select shows a choice while it saves. */
+function deliveryShown(page) {
+  return evaluate(
+    page,
+    (m) => {
+      const field = document.querySelector(`[${m.state}]`)
+      if (field?.getAttribute(m.state) !== 'ready') return null
+      return document.querySelector(`select[${m.control}]`)?.value ?? null
+    },
+    NOTIFICATION_DELIVERY_MARKS,
+  )
+}
+
+/** Sets Notification delivery to `mode` through the control on `page` and
+ *  answers whether the control then shows it ready from the server within
+ *  30 seconds. */
+async function restoreDelivery(page, mode) {
+  await page.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/account`, {
+    waitUntil: 'domcontentloaded',
+  })
+  const select = page.locator(`select[${NOTIFICATION_DELIVERY_MARKS.control}]`)
+  await select.waitFor({ timeout: 60_000 })
+  if (!(await until(async () => (await deliveryShown(page)) !== null, 60_000))) return false
+  if ((await deliveryShown(page)) !== mode) await select.selectOption(mode)
+  return await until(async () => (await deliveryShown(page)) === mode, 30_000)
+}
+
 /** The leader tab of a browser profile and the Notification delivery
  *  control on the deployment. A fresh browser context for Nora, with the
  *  run's bypass route and notifications granted for the app's origin,
@@ -7110,10 +7139,13 @@ export const NOTIFICATION_DELIVERY_MARKS = {
  *  mention's message, or with the generic summary's tag where the server
  *  answered the handoff to this new session with summarize_first. Then the
  *  leader page closes and the other must lead. A finally sets the mode back
- *  to the one it noted through the control, once the control showed it,
+ *  to the one it noted through the control and waits for the control to
+ *  show it ready from the server, once the control showed it,
  *  removes t0's item from Nora's Inbox once the agent mentioned her, signs
  *  the context out from any of its pages once it signed in, so no session
- *  or notification row stays behind, and closes the context. It needs a backend from the release
+ *  or notification row stays behind, and closes the context. A cleanup
+ *  that could not do one of those fails a step that passed, and is noted
+ *  beside a failure. It needs a backend from the release
  *  after v0.1.161 on, since the leader's note comes from inbox.feed;
  *  v0.1.154 first shipped only the session calls it makes. */
 async function notificationDeliveryCheck() {
@@ -7129,6 +7161,9 @@ async function notificationDeliveryCheck() {
     let control = null
     let signedIn = false
     let mentioned = false
+    // the step's note once it passed, and what its cleanup could not do
+    let result = null
+    const left = []
     try {
       const first = await own.newPage()
       await first.goto(`${origin}/app/~/projects`, { waitUntil: 'domcontentloaded' })
@@ -7156,17 +7191,7 @@ async function notificationDeliveryCheck() {
       })
       const select = follower.locator(`select[${marks.control}]`)
       await select.waitFor({ timeout: 60_000 })
-      /** The mode the control shows once it is ready, or null meanwhile. */
-      const shown = () =>
-        evaluate(
-          follower,
-          (m) => {
-            const field = document.querySelector(`[${m.state}]`)
-            if (field?.getAttribute(m.state) !== 'ready') return null
-            return document.querySelector(`select[${m.control}]`)?.value ?? null
-          },
-          marks,
-        )
+      const shown = () => deliveryShown(follower)
       expect(await until(async () => (await shown()) !== null, 60_000), 'the control never showed')
       noted = await shown()
       for (const mode of ['all', 'recent']) {
@@ -7215,19 +7240,12 @@ async function notificationDeliveryCheck() {
         await until(async () => (await role(follower)) === 'leader', 30_000),
         `the follower did not take over: ${await role(follower)}`,
       )
-      return `one leader of two pages, the control round trip from ${noted}, one note in the leader tagged ${note.tag === message ? "with the mention's message" : 'as the summary'}, and a takeover`
+      result = `one leader of two pages, the control round trip from ${noted}, one note in the leader tagged ${note.tag === message ? "with the mention's message" : 'as the summary'}, and a takeover`
     } finally {
       try {
         if (control && !control.isClosed() && noted !== null) {
-          await control.goto(`${origin}/app/${ORG_SLUG}/settings/account`, {
-            waitUntil: 'domcontentloaded',
-          })
-          const select = control.locator(`select[${marks.control}]`)
-          await select.waitFor({ timeout: 60_000 })
-          if ((await select.inputValue()) !== noted) {
-            await select.selectOption(noted)
-            await until(async () => (await select.inputValue()) === noted, 30_000)
-          }
+          const restored = await restoreDelivery(control, noted).catch(() => false)
+          if (!restored) left.push(`Nora's mode was not set back to ${noted}`)
         }
         // the session's cookie signs in every page of the context, so any
         // open page, or a new one, signs it out, wherever the step stopped
@@ -7238,17 +7256,25 @@ async function notificationDeliveryCheck() {
             ? control
             : (open ?? (await own.newPage()))
         if (page) {
-          if (mentioned) await removeInboxRow(page, t0).catch(() => {})
+          if (mentioned)
+            await removeInboxRow(page, t0).catch(() => left.push(`${t0.key}'s Inbox item stayed`))
           await page.goto(`${origin}/app/${ORG_SLUG}/settings/account`, {
             waitUntil: 'domcontentloaded',
           })
           await page.getByRole('button', { name: 'Sign out', exact: true }).click()
           await page.waitForSelector('input[type="email"]', { timeout: 60_000 })
         }
+      } catch (error) {
+        left.push(`the sign-out failed: ${describe(error)}`)
       } finally {
         await own.close()
       }
+      if (left.length > 0 && result === null)
+        say('NOTE', NOTIFICATION_DELIVERY_STEP, `the cleanup left: ${left.join('; ')}`)
     }
+    // reached only once the step passed, which a cleanup that failed fails
+    expect(left.length === 0, `the cleanup left: ${left.join('; ')}`)
+    return result
   })
 }
 
