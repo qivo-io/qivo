@@ -11,6 +11,7 @@ import { chromium } from 'playwright'
 import {
   inspectBrowserDemo,
   loadBrowserDemo,
+  navProject,
   purgeDeletedTasks,
   signInDemo,
 } from './browser-demo.mjs'
@@ -270,9 +271,10 @@ try {
   // Sign-in opens the project directory over the Overview, and a sidebar
   // project keeps the view, so the drive opens Luma Sensor's Board by its
   // number
-  const luma = await page.evaluate(
-    () => window.PLANNER.projects.find((p) => p.name === 'Luma Sensor' && !p.parent)?.num,
-  )
+  // Luma Sensor and its sub-projects from the navigation reads, as the
+  // store holds no project list
+  const lumaProject = await navProject(page, 'Luma Sensor')
+  const luma = lumaProject.num
   assert.ok(luma != null, 'Northstar holds no Luma Sensor')
   await page.goto(`${demo.base}/app/${demo.orgSlug}/board/p/${luma}`, {
     waitUntil: 'domcontentloaded',
@@ -290,50 +292,46 @@ try {
     await page.getByRole('button', { name: 'Swimlanes by project', exact: true }).click()
   }
 
-  const fixture = await page.evaluate(async (tasks) => {
-    const P = window.PLANNER
-    const meta = P.projects.find(
-      (project) => project.name === 'Luma Sensor' && project.type === 'meta',
-    )
-    const electronics = P.projects.find(
-      (project) => project.parent === meta?.id && project.name === 'Electronics',
-    )
-    const firmware = P.projects.find(
-      (project) => project.parent === meta?.id && project.name === 'Firmware',
-    )
-    // the store holds the signed-in person alone, so Leo is found through
-    // the mention popup's read
-    const nora = P.users.find((user) => user.id === P.CURRENT_USER)
-    const found = await P.mentionChoices(P.org.id, 'Leo Martins', null)
-    const leo =
-      found?.state === 'ready' ? found.rows.find((row) => row.name === 'Leo Martins') : undefined
-    if (!meta || !electronics || !firmware || !nora || !leo)
-      throw new Error('Northstar fixture projects or assignees are unavailable')
-    const { convex } = await import('/src/lib/convex.ts')
-    const create = (task, extra) =>
-      convex.mutation('issues:create', {
-        org_id: P.org.id,
-        id: task.id,
-        title: task.title,
-        project_id: electronics.id,
-        status: 'todo',
-        priority: 'high',
-        ...extra,
+  const fixture = await page.evaluate(
+    async ({ tasks, children }) => {
+      const P = window.PLANNER
+      const electronics = children.find((project) => project.name === 'Electronics')
+      const firmware = children.find((project) => project.name === 'Firmware')
+      // the store holds the signed-in person alone, so Leo is found through
+      // the mention popup's read
+      const nora = P.users.find((user) => user.id === P.CURRENT_USER)
+      const found = await P.mentionChoices(P.org.id, 'Leo Martins', null)
+      const leo =
+        found?.state === 'ready' ? found.rows.find((row) => row.name === 'Leo Martins') : undefined
+      if (!electronics || !firmware || !nora || !leo)
+        throw new Error('Northstar fixture projects or assignees are unavailable')
+      const { convex } = await import('/src/lib/convex.ts')
+      const create = (task, extra) =>
+        convex.mutation('issues:create', {
+          org_id: P.org.id,
+          id: task.id,
+          title: task.title,
+          project_id: electronics.id,
+          status: 'todo',
+          priority: 'high',
+          ...extra,
+        })
+      await create(tasks[0], { status: 'done', assignee_id: nora.id })
+      await create(tasks[1], {
+        parent_id: tasks[0].id,
+        assignee_id: nora.id,
+        paused: true,
       })
-    await create(tasks[0], { status: 'done', assignee_id: nora.id })
-    await create(tasks[1], {
-      parent_id: tasks[0].id,
-      assignee_id: nora.id,
-      paused: true,
-    })
-    await create(tasks[2], { parent_id: tasks[0].id })
-    await create(tasks[3], {
-      project_id: firmware.id,
-      parent_id: tasks[0].id,
-      assignee_id: leo.id,
-    })
-    return { electronics: electronics.id, firmware: firmware.id, nora: nora.id, leo: leo.id }
-  }, fixtures)
+      await create(tasks[2], { parent_id: tasks[0].id })
+      await create(tasks[3], {
+        project_id: firmware.id,
+        parent_id: tasks[0].id,
+        assignee_id: leo.id,
+      })
+      return { electronics: electronics.id, firmware: firmware.id, nora: nora.id, leo: leo.id }
+    },
+    { tasks: fixtures, children: lumaProject.children },
+  )
   await everyTask()
   await page.waitForFunction(
     (uuids) => uuids.every((uuid) => window.PLANNER.issues.some((issue) => issue.uuid === uuid)),

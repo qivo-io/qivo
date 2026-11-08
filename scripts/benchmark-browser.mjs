@@ -836,24 +836,27 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
     }),
   )
   assert.notEqual(await page.evaluate((id) => window.PLANNER.anyTask(id).start, taskId), initial)
-  // The person's own create into the first sub-project, on a workspace that
-  // holds no task, from its send (P.addIssue) to its confirmation
-  // (P.hasUnconfirmed). The stand-in stores and answers it (issues:create),
-  // and deletes it again, untimed, so the phases after it find the tasks
-  // they found before. A build that creates without an ask (P.createOnItsWay)
-  // still holds no task after it; an older one asks for every task here.
+  // The person's own create into the sub-project of the task the drag
+  // moved, which the person may write and the Roadmap's answer names, so
+  // a build that holds no project list finds it answered in its project
+  // cache, on a workspace that holds no task, from its send (P.addIssue)
+  // to its confirmation (P.hasUnconfirmed). The stand-in stores and
+  // answers it (issues:create), and deletes it again, untimed, so the
+  // phases after it find the tasks they found before. A build that
+  // creates without an ask (P.createOnItsWay) still holds no task after
+  // it; an older one asks for every task here.
   phase('create')
   metrics.create.push(
     await timed(async () => {
-      const made = await page.evaluate(() => {
-        const sub = window.PLANNER.projects.find((p) => p.type === 'project')
+      const made = await page.evaluate((id) => {
+        const sub = window.PLANNER.anyTask(id).project
         return window.PLANNER.addIssue({
-          project: sub.id,
+          project: sub,
           title: 'Check the spare sensors on the north bench before the cold week',
           status: 'todo',
           priority: 'medium',
         })
-      })
+      }, taskId)
       assert.ok(made, 'The create must go out')
       await page.waitForFunction(() => !window.PLANNER.hasUnconfirmed(), null, {
         timeout: timeout * 10,

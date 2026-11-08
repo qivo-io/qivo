@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import { chromium } from 'playwright'
-import { inspectBrowserDemo, loadBrowserDemo, signInDemo } from './browser-demo.mjs'
+import { inspectBrowserDemo, loadBrowserDemo, navProject, signInDemo } from './browser-demo.mjs'
 
 const demo = loadBrowserDemo(process.argv[2] ?? 'http://localhost:5199')
 const before = await inspectBrowserDemo(demo)
@@ -342,9 +342,7 @@ try {
   await sweep(page.locator('body'), 'Organization settings switches and selectors')
 
   // Luma Sensor's Board, as no view shows a scope over all projects
-  const luma = await page.evaluate(
-    () => window.PLANNER.projects.find((p) => p.name === 'Luma Sensor' && !p.parent)?.num,
-  )
+  const luma = (await navProject(page, 'Luma Sensor')).num
   await route(`board/p/${luma}`, '[data-view-switch]')
   const newProject = page.getByRole('button', { name: 'New project', exact: true })
   await newProject.click()

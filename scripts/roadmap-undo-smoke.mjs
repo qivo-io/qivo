@@ -22,6 +22,7 @@ import { chromium } from 'playwright'
 import {
   inspectBrowserDemo,
   loadBrowserDemo,
+  navRows,
   purgeDeletedTasks,
   signInDemo,
 } from './browser-demo.mjs'
@@ -231,8 +232,14 @@ async function cleanup() {
           if (snapshot.issues.some((row) => row.id === id && row.org_id === org.id))
             await convex.mutation('issues:deleteDeep', { org_id: org.id, id })
         }
+        // each milestone's project by id (projectNav.byIds), as the store
+        // holds no project list
+        const asked = [...new Set(milestones.map((row) => row.project_id))]
+        const known = asked.length
+          ? (await convex.query('projectNav:byIds', { ids: asked })).rows
+          : []
         for (const row of milestones) {
-          const project = snapshot.projects.find((project) => project.id === row.project_id)
+          const project = known.find((project) => project.id === row.project_id)
           if (project?.org_id === org.id)
             await convex.mutation('projects:removeMilestone', { org_id: org.id, id: row.id })
         }
@@ -265,8 +272,13 @@ async function cleanup() {
 try {
   await signInDemo(page, demo)
   initialUI = await page.evaluate(() => window.PLANNER.loadUI())
+  // the demo organization's live top-level projects from the navigation
+  // reads, as the store holds no project list
+  const listed = await navRows(page, 'projectNav:page', {
+    org_id: await page.evaluate(() => window.PLANNER.org.id),
+  })
   fixture = await page.evaluate(
-    async ({ tasks, milestone }) => {
+    async ({ tasks, milestone, listed }) => {
       const P = window.PLANNER
       const { convex } = await import('/src/lib/convex.ts')
       const today = P.TODAY_WEEK
@@ -274,10 +286,9 @@ try {
       // A top-level project holds one milestone a week, so the run uses a
       // Northstar project, Luma Sensor when it can, whose milestones leave
       // this week and the next free for the milestones it adds and moves,
-      // as the server's range read of those weeks answers them. P.projects
-      // holds only active projects; the demo organization's own.
-      const candidates = P.projects
-        .filter((p) => p.type === 'meta' && p.org === P.org.id)
+      // as the server's range read of those weeks answers them, among the
+      // demo organization's live top-level projects.
+      const candidates = [...listed]
         .sort((a, b) => Number(b.name === 'Luma Sensor') - Number(a.name === 'Luma Sensor'))
         .slice(0, 200)
       const taken = await convex.query('milestones:between', {
@@ -289,7 +300,18 @@ try {
       const project = whole
         ? candidates.find((p) => !taken.rows.some((m) => m.project_id === p.id))
         : undefined
-      const subs = P.projects.filter((p) => p.parent === project?.id)
+      // its live sub-projects, every batch of projectNav.children
+      const subs = []
+      for (let after; project; ) {
+        const batch = await convex.query('projectNav:children', {
+          project_id: project.id,
+          ...(after ? { after } : {}),
+        })
+        if (batch.state !== 'ok') break
+        subs.push(...batch.rows)
+        if (batch.next === null || batch.stopped) break
+        after = batch.next
+      }
       const sub = subs.find((p) => p.name === 'Electronics') ?? subs[0]
       if (!project || !sub)
         throw new Error('No Northstar project has this week and the next free for milestones')
@@ -332,7 +354,7 @@ try {
         weeks: { from: iso(today), to: iso(today + 3) },
       }
     },
-    { tasks, milestone },
+    { tasks, milestone, listed },
   )
   // tasks load on demand: the page's store holds the new tasks once it
   // asked for every task, as the Roadmap does when it opens

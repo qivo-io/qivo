@@ -27,6 +27,8 @@ import {
   cleanupDemoArtifacts,
   inspectBrowserDemo,
   loadBrowserDemo,
+  navProject,
+  navRows,
   signInDemo,
 } from './browser-demo.mjs'
 
@@ -94,9 +96,7 @@ let browser, pageA, pageB
    `page`'s store: no view shows a scope over all projects, and an address
    that ended in /all now opens the startup rule's page. */
 async function lumaPath(page, view = 'board') {
-  const num = await page.evaluate(
-    () => window.PLANNER.projects.find((p) => p.name === 'Luma Sensor' && !p.parent)?.num,
-  )
+  const num = (await navProject(page, 'Luma Sensor')).num
   if (num == null) throw new Error('Northstar holds no Luma Sensor')
   return `${BASE}/app/${demo.orgSlug}/${view}/p/${num}`
 }
@@ -632,10 +632,12 @@ try {
   // and the bare address opens it again after one check with the server
   // (projectNav.resolve), showing no project chooser but its checking line
   {
-    const target = await pageA.evaluate(() => {
-      const project = window.PLANNER.visibleProjects()[0]
-      return project ? { id: project.id, name: project.name, num: project.num } : null
+    // the first of Northstar's top-level projects in the sidebar's list
+    // (projectNav.page), as the store holds no project list
+    const [first] = await navRows(pageA, 'projectNav:page', {
+      org_id: await pageA.evaluate(() => window.PLANNER.org.id),
     })
+    const target = first ? { id: first.id, name: first.name, num: first.num } : null
     if (!target) await fail('Northstar has no visible project for the startup check')
     await pageA.goto(`${BASE}/app/${demo.orgSlug}/board/p/${target.num}`, {
       waitUntil: 'domcontentloaded',
@@ -847,12 +849,14 @@ try {
   // three task titles or project names hold: "firm" finds the Firmware
   // project and its firmware tasks.
   await everyTask(pageA)
-  const paletteQuery = await pageA.evaluate(() => {
+  // the projects whose names hold "firm", from the navigation search, as
+  // the store holds no project list
+  const firmNames = (await navRows(pageA, 'projectNav:search', { search: 'firm' })).map(
+    (project) => project.name,
+  )
+  const paletteQuery = await pageA.evaluate((projectNames) => {
     const words = (text) => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
-    const texts = [
-      ...window.PLANNER.issues.map((issue) => issue.title),
-      ...window.PLANNER.projects.map((project) => project.name),
-    ]
+    const texts = [...window.PLANNER.issues.map((issue) => issue.title), ...projectNames]
     const holding = (start) => texts.filter((t) => words(t).some((w) => w.startsWith(start)))
     if (holding('firm').length >= 3) return 'firm'
     // else the word of four letters or more that most titles hold
@@ -862,7 +866,7 @@ try {
         if (word.length >= 4) counts.set(word, (counts.get(word) ?? 0) + 1)
     const [word, count] = [...counts].sort((a, b) => b[1] - a[1])[0] ?? [null, 0]
     return count >= 3 ? word : null
-  })
+  }, firmNames)
   if (!paletteQuery) await fail('Northstar has too few tasks for the search keyboard check')
   const searchButton = pageA.locator('button[data-sidebar-search]')
   const palette = pageA.getByRole('dialog', { name: 'Search tasks and projects', exact: true })
@@ -1365,10 +1369,11 @@ try {
   await checkSearchReturnedToMyTasks()
   await checkNoSearchHistoryStep()
 
-  const searchProject = await pageA.evaluate(() => {
-    const project = window.PLANNER.visibleProjects()[0]
-    return project ? { id: project.id, name: project.name, num: project.num } : null
+  // the first of Northstar's top-level projects in the sidebar's list
+  const [listed] = await navRows(pageA, 'projectNav:page', {
+    org_id: await pageA.evaluate(() => window.PLANNER.org.id),
   })
+  const searchProject = listed ? { id: listed.id, name: listed.name, num: listed.num } : null
   if (!searchProject) await fail('Northstar has no visible project for the phone Search check')
   await openPhoneSearch()
   await searchInput.fill(searchProject.name)
@@ -2528,14 +2533,14 @@ try {
         )
         const task = snapshot.issues.find((row) => row.title === title)
         if (task && task.reviewer_id === me && task.status === 'review') {
-          const sub = snapshot.projects.find((row) => row.id === task.project_id)
-          const parent = sub?.parent_id
-            ? snapshot.projects.find((row) => row.id === sub.parent_id)
-            : undefined
+          // the sub-project's resolved Review time (projectNav.byIds), its
+          // own, else its parent's, else the default
+          const { rows } = await convex.query('projectNav:byIds', { ids: [task.project_id] })
+          const sub = rows.find((row) => row.id === task.project_id)
           return {
             remaining: task.remaining_hours ?? null,
             stamped: !!task.remaining_set_at,
-            expected: sub?.review_hours ?? parent?.review_hours ?? 2,
+            expected: sub?.review_hours ?? null,
           }
         }
         if (Date.now() > deadline) return null

@@ -12,7 +12,7 @@ import { mkdirSync, readdirSync, readFileSync } from 'node:fs'
 import { basename, extname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
-import { inspectBrowserDemo, loadBrowserDemo, signInDemo } from './browser-demo.mjs'
+import { inspectBrowserDemo, loadBrowserDemo, navProject, signInDemo } from './browser-demo.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const DIST = resolve(ROOT, 'dist')
@@ -207,9 +207,7 @@ async function assertPhoneDialogBounds(width) {
 
 async function verifyLazyLoading() {
   // Luma Sensor's Board, as no view shows a scope over all projects
-  const num = await page.evaluate(
-    () => window.PLANNER.projects.find((p) => p.name === 'Luma Sensor' && !p.parent)?.num,
-  )
+  const num = (await navProject(page, 'Luma Sensor')).num
   assert.ok(num != null, 'Northstar holds no Luma Sensor')
   const boardURL = `${demo.base}/app/${demo.orgSlug}/board/p/${num}`
   // the sign-in document, the directory, downloaded every view already;

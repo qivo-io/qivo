@@ -12,6 +12,7 @@ import {
   cleanupDemoArtifacts,
   inspectBrowserDemo,
   loadBrowserDemo,
+  navProject,
   signInDemo,
 } from './browser-demo.mjs'
 
@@ -121,14 +122,18 @@ async function assertWithinViewport(page) {
 
 try {
   await signInDemo(manager, demo)
+  // Luma Sensor and its Electronics from the navigation reads, as the store
+  // holds no project list
+  const luma = await navProject(manager, 'Luma Sensor')
   const setup = await manager.evaluate(
-    async ({ task, accounts }) => {
+    async ({ task, accounts, project, subproject }) => {
       const P = window.PLANNER
-      const project = P.projects.find((item) => item.name === 'Luma Sensor' && item.type === 'meta')
-      const subproject = P.projects.find(
-        (item) => item.parent === project?.id && item.name === 'Electronics',
-      )
-      if (!project || !subproject || !P.canManageOwnProjectAccess(project.id))
+      // the project cache reads Luma Sensor for the manager's level and lead
+      P.nameProjects('subscriber-smoke', [project.id])
+      const deadline = Date.now() + 15000
+      while (P.projectState(project.id) === 'loading' && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      if (!subproject || !P.canManageOwnProjectAccess(project.id))
         throw new Error('Northstar manager or Luma Sensor project is unavailable')
       const { convex } = await import('/src/lib/convex.ts')
       await convex.mutation('issues:create', {
@@ -143,7 +148,7 @@ try {
       // found on the server: among the people who may follow the new task
       // (pickers.taskFollowers) by address, with its role from its face
       // (people.byIds); one who leads the project manages its followers
-      const lead = P.projects.find((item) => item.id === project.id)?.lead
+      const lead = P.project(project.id)?.lead
       const found = []
       for (const account of accounts) {
         const batch = await P.followerChoices({
@@ -173,6 +178,8 @@ try {
     {
       task: fixture,
       accounts: demo.credentials.value.accounts.map(({ key, email }) => ({ key, email })),
+      project: { id: luma.id },
+      subproject: luma.children.find((item) => item.name === 'Electronics'),
     },
   )
   orgId = setup.orgId

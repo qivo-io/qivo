@@ -6,7 +6,7 @@
  * Requires the running dev server; never seeds, resets, or edits demo data. */
 import assert from 'node:assert/strict'
 import { chromium } from 'playwright'
-import { inspectBrowserDemo, loadBrowserDemo, signInDemo } from './browser-demo.mjs'
+import { inspectBrowserDemo, loadBrowserDemo, navProject, signInDemo } from './browser-demo.mjs'
 
 const demo = loadBrowserDemo(process.argv[2] ?? 'http://localhost:5199')
 const before = await inspectBrowserDemo(demo)
@@ -464,9 +464,7 @@ let initialLayout
 try {
   await signInDemo(page, demo)
   // Luma Sensor's Board, by its number
-  const luma = await page.evaluate(
-    () => window.PLANNER.projects.find((p) => p.name === 'Luma Sensor' && !p.parent)?.num,
-  )
+  const luma = (await navProject(page, 'Luma Sensor')).num
   assert.ok(luma != null, 'Northstar holds no Luma Sensor')
   await page.goto(`${demo.base}/app/${demo.orgSlug}/board/p/${luma}`, {
     waitUntil: 'domcontentloaded',
