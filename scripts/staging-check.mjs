@@ -8961,16 +8961,17 @@ export function byIdsProblems(answer, { M, A, Z, unknown, archived }) {
 /** projectNav.byIds on the deployment, through the store's one-shot read
  *  (window.PLANNER.projectsByIds), signed in as Nora: the run's M, which
  *  she leads, its sub-projects Alpha and Zulu, an id of no project and an
- *  archived project of the run, the first with the run's tag that
- *  GET /projects?archived=true lists, checked by byIdsProblems. It writes
+ *  archived project of the run, the first with the run's tag that the
+ *  paged GET /projects?archived=true lists (projectRows), checked by
+ *  byIdsProblems. It writes
  *  nothing. It runs while M is active, and needs a backend from the
  *  release that adds projectNav.byIds on. */
 async function projectByIdsCheck() {
   await check(PROJECT_BY_IDS_STEP, async () => {
     const { M, A, Z } = run.projects
-    const archived = (await restOk(run.creds.writeToken, 'GET', '/projects?archived=true')).find(
-      (p) => p.name.startsWith(run.tag),
-    )
+    const archived = (
+      await projectRows(run.creds.writeToken, { archived: true, search: run.tag })
+    ).find((p) => p.name.startsWith(run.tag))
     if (!archived) throw new Error('no archived project of the run')
     const ids = { M: M.id, A: A.id, Z: Z.id, unknown: randomUUID(), archived: archived.id }
     const answer = await evaluate(app, (asked) => window.PLANNER.projectsByIds(asked), [
