@@ -428,7 +428,16 @@ task after the step, also after a failure, and reports that delete as
 `cleanup/admin-management`; the control sub-project goes with its first
 project in the cleanup. Against a backend from before the release after
 v0.1.159, where admin status still gives access to project work, that
-step fails. It then makes a sub-project of its
+step fails. After the startup step it opens `/board/all`, an address that
+once named all projects, which must give way to the startup rule's page
+with **All projects** unlit, makes `<tag> Old paths`, led by the Standard
+agent, takes Nora's automatic User grant there away, and opens its
+numbered **Settings** address, which must show the project's page and
+keep that address through a reload, and a number no project holds, which
+must open **Your preferences** (`ui/old-paths`). It deletes the project
+after the step, also after a failure, as `cleanup/old-paths`. Against a
+backend from before the release after v0.1.160, which reads a project's
+settings by id alone, that step fails. It then makes a sub-project of its
 own under its first project, uploads one file of 2,048 bytes over REST to a
 task there, opens **Billing**, checks that current storage shows a figure
 rather than **Being counted**, finds the sub-project alone with **2.0 KB ·
@@ -882,6 +891,12 @@ open when the release deploys, until it reloads. Never return the app or
 the demo alone to a deployment of a commit before that release; return the
 backend with it, or roll forward.
 
+The app before v0.1.149 lists **Settings → Projects → Deleted items**
+through `deletedItems.list` and searches it through `deletedItems.matches`,
+which the release after v0.1.160 removed, so its Deleted items page cannot
+load against a later backend. Never return the app or the demo alone to a
+deployment of a commit before v0.1.149.
+
 REST `GET /v1/tasks` and MCP `list_tasks` page active tasks with a cursor
 from the release that made them answer `{next_cursor, tasks}`. Returning the
 backend to a commit before it makes active lists answer an array again,
@@ -1030,13 +1045,11 @@ the first delete after the deploy for as long as Deleted items keeps such a
 row, so from that release on never return the backend to a commit before it;
 roll forward instead. Returning the app alone to an earlier release is safe,
 because no app of that release calls the page. Rows stored before the release keep none of
-the fields and need no step. The page finds their tasks by key, and by title
-as far as the older `search_title` index reaches, and says so (`legacy`)
-until they leave Deleted items. Convex builds the page's new indexes of
-`deleted_items` and `deleted_tasks` at deploy. `deletedItems.list`, `item`
-and `matches` and the `search_title` index stay. Once an app reads the page
-they stay through that app's release, and a later release may remove them
-and adds them to the Instant Rollback list above.
+the fields and need no step. The page finds their tasks by key only since
+the release after v0.1.160, and says so (`legacy`) until they leave Deleted
+items. Convex builds the page's new indexes of `deleted_items` and
+`deleted_tasks` at deploy. The release after v0.1.160 removed `list`,
+`matches` and the `search_title` index; `item` stays.
 
 The Inbox's pages, `inbox.page`, first ship in the release after v0.1.122.
 When it shipped no app, REST or MCP caller read them, so that release set no
@@ -1573,10 +1586,10 @@ The floors above, the release after v0.1.140's v0.1.141 (`e79e1db9`) and
 the newer ones, already hold v0.1.131, so this release sets no new floor.
 From it on, as from them, never return the backend to a commit before the
 newest floor above; roll forward instead.
-Returning the app alone to an earlier release is safe against a later
-backend, because that app reads `deletedItems.list`, `matches` and `item`,
-which stay through this release. A later release may remove `list` and
-`matches`, and adds them to the Instant Rollback list then. The app now
+Returning the app alone to an earlier release was safe against a later
+backend while `deletedItems.list`, `matches` and `item` stayed; the release
+after v0.1.160 removed `list` and `matches`, so from it on the app alone
+never goes below v0.1.149. The app now
 sends a restore of more than 25 items of one organization, or of items in
 more than two organizations, as several `deletedItems.restore` calls one
 after another, and sends a deferred item again once its project is back,
@@ -2093,6 +2106,16 @@ for references to people who were removed, so the floors above already
 hold this app and the release sets no new rollback floor. There is no
 schema change, no backfill and no release step.
 
+From the release after v0.1.160, the app opens a numbered project page the
+workspace does not hold through `projectSettings.get` by organization and
+number, which that release first takes, so its app needs a backend from that
+release on; never return the backend below it, roll forward instead. The
+release removes `deletedItems.list` and `matches`, which no app from v0.1.149
+on reads, so never return the app alone below v0.1.149. It drops the
+`search_title` index of `deleted_tasks`, which Convex builds again for an
+earlier backend, and has no schema field change, no backfill and no release
+step.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
@@ -2207,8 +2230,9 @@ rollback floor (see Rollback and hotfixes). Later changes keep the rule,
 with one exception. By the owner's decision of 7 November 2026, while
 nobody uses the app, a change removes an old function, part or answer field
 in the same release that stops using it, as the release after v0.1.159
-removes the milestones of the workspace projects part, and its deployment
-paragraph names only the floor a later rollback needs.
+removes the milestones of the workspace projects part and the release
+after v0.1.160 removes `deletedItems.list` and `matches`, and its
+deployment paragraph names only the floor a later rollback needs.
 Test migrations with representative synthetic data and retain verified
 production backups before destructive changes.
 
