@@ -365,6 +365,25 @@ must read its `projects` and follow `next_cursor` until it is `null`, and
 its model learns the new arguments only after the client refreshes its tool
 list.
 
+Later in November 2026 `get_project` and the answers of `create_project`
+and `update_project` began to hold at most 50 of a project's milestones, of
+its user grants and of its team grants, each with its cursor,
+`milestones_next_cursor`, `user_grants_next_cursor` and
+`team_grants_next_cursor`, `null` where the list ends there, and the new
+`list_project_related` pages each of those lists. `list_project_users`
+began to answer one page at a time, as `{next_cursor, users}`, in name
+order, and took `limit`, `cursor` and `offset` (refused unless `0`), see
+[Projects, access and milestones](#projects-access-and-milestones).
+Milestones now come by date, then by name ignoring case and accents, and
+grants and users by name in the same way, compared by UTF-8 bytes, which
+differs from the earlier order for some names. A client holding the older
+catalogue gets the new answers too. The details kept their arrays, so code
+that read one of them as the whole list now reads its first 50 rows without
+any error, and code that read `list_project_users` as an array must read
+its `users`; such code must follow the cursors until they are `null`, and
+its model learns the new arguments and tool only after the client refreshes
+its tool list.
+
 ## Access model: the credential is a user
 
 MCP authenticates as **one user**, with three connection options. **OAuth is
@@ -712,6 +731,10 @@ the range.
 | Followers per list page | 1 to 200 followers | limit must be a whole number of followers from 1 to 200. |
 | Attachments per list page | 1 to 200 attachments | limit must be a whole number of attachments from 1 to 200. |
 | Projects per list page | 1 to 200 projects | limit must be a whole number of projects from 1 to 200. |
+| Project users per list page | 1 to 200 users | limit must be a whole number of users from 1 to 200. |
+| Milestones per list page | 1 to 200 milestones | limit must be a whole number of milestones from 1 to 200. |
+| User grants per list page | 1 to 200 user grants | limit must be a whole number of user grants from 1 to 200. |
+| Team grants per list page | 1 to 200 team grants | limit must be a whole number of team grants from 1 to 200. |
 | Tasks per inbox change | 100 tasks | tasks must name at most 100 tasks per call. Send the rest in another call. |
 | Webhook subscription lifetime | 60,000 to 604,800,000 milliseconds | ttlMs must be a whole number of milliseconds from 60,000 (1 minute) to 604,800,000 (7 days), or null for no expiry. |
 | Webhook subscriptions per organization | 100 subscriptions | an organization can have at most 100 unexpired webhook subscriptions, and one agent key, token or OAuth connection at most 20. Delete an unused subscription first. |
@@ -1297,8 +1320,9 @@ followers and files, `set_task_link` for links between tasks, `list_labels` and
 a task's files, `list_task_activity` for its history, `get_workload` for
 planned hours per person, `update_comment` and `delete_comment` for comments,
 `list_inbox` and `update_inbox` for your inbox, `set_following` to follow a
-task, `get_project`, `create_project`, `update_project`,
-`set_project_access`, `set_milestone` and `delete_milestone` for projects,
+task, `get_project`, `list_project_related`, `create_project`,
+`update_project`, `set_project_access`, `set_milestone` and
+`delete_milestone` for projects,
 and `list_team_members`, `set_team` and `set_team_member` for teams. This
 pre-launch rename replaces the former tool names; clients with a cached tool
 catalogue must refresh discovery or reconnect.
@@ -1362,16 +1386,17 @@ as `a task title must be at most 255 characters. Shorten it.`
 | `list_team_members` | One page of the members of `team_id`, as `{next_cursor, team, members}`, each member `{id, name, leader}`, in name order, with `search`, `limit` (50 by default, at most 200) and `cursor`. `team` is the team as `list_teams` lists it, its `member_count` the whole team's whatever the search. See [Teams](#teams) |
 | `list_projects` | One page of the projects (meta + sub) you can see, `{next_cursor, projects}`, in tree order, each with its durable `num`; both types have a lead and a nullable legacy `team_id` that is `null` for new rows, while team sharing remains explicit access; ACTIVE ones by default — `archived: true` lists the ones that have been put away instead (0106). `search` finds projects by their own name or key; follow `next_cursor` until it is `null`. Each row has `archived` and your `access` (`read`, `write`) on that project, as REST's rows do. See [Projects, access and milestones](#projects-access-and-milestones) |
 | `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `cursor`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Every result also has `progress` (for a group, the done and total tasks without subtasks under it that you can see), `delay` (the app's projected delay when the task's project tracks it, `unavailable` when Qivo did not read the owner's other work) and `last_comment_at`. Answers `{next_cursor, tasks}`; pass `next_cursor` back as `cursor` until it is `null`, even after a short or empty page. `offset` is refused unless `0`. Active tasks only by default, oldest first by creation. `archived: true` lists archived tasks instead (0070), one `project` at a time with all its sub-projects you can read (see [Task results](#task-results)). Tasks in an ARCHIVED PROJECT are left out of active lists unless `project` names that project (0106). That is a different axis, and the one without a flag |
-| `get_project` | One `project` (number/key/uuid) you read or manage, as the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, `completion` (the Overview's done and total tasks, `status: "counting"` for a moment after any project is archived or restored, or `status: "unavailable"` in a project with very many sub-projects or one you manage without reading), the top-level project's `milestones` (`null` for a project you manage without reading) and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
+| `get_project` | One `project` (number/key/uuid) you read or manage, as the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, `completion` (the Overview's done and total tasks, `status: "counting"` for a moment after any project is archived or restored, or `status: "unavailable"` in a project with very many sub-projects or one you manage without reading), the first 50 of the top-level project's `milestones` (`null` for a project you manage without reading) and of its own `grants`, each list with its cursor (`milestones_next_cursor`, `user_grants_next_cursor`, `team_grants_next_cursor`) that `list_project_related` continues. See [Projects, access and milestones](#projects-access-and-milestones) |
+| `list_project_related` | One page of one of a `project`'s lists, which `list` names: `milestones`, `user_grants` or `team_grants`, as `{next_cursor, <list>}`, with `limit` (50 by default, at most 200) and `cursor`, such as `get_project`'s `user_grants_next_cursor`. Milestones are the top-level project's by date; grants are the project's own by name, each with its `level`. See [Projects, access and milestones](#projects-access-and-milestones) |
 | `create_project` | Create a top-level project from `name` (at most 80 characters), or with `parent` (number/key/uuid) a sub-project; optional `lead_id` (you by default) and `description`. Answers like `get_project` |
 | `update_project` | Change a project you manage, as its lead or an organization admin: `name` (at most 80 characters), `description`, `review_hours`, `track_delay`, `archived: true/false` to archive or restore it, and `lead_id` to hand over the lead (people only). An archive or restore and a rename in one call share one budget of 2,000 sub-projects and access entries (see [Limits](#limits)) and of the data one change can read; a project tree past that data is refused with `this project, or the top-level project above it, has sub-projects that hold more data than one change can read, so it cannot be archived or restored at once. Shorten the longest project names or descriptions there, or delete some of those sub-projects first.` and nothing changes. When a call that archives or restores and renames is refused on that budget, make the archive or restore and the rename two calls, which each get the whole budget. A top-level project that more people have among their favorites than one change can update is refused with `more people have this project among their favorites than one change can update, so it cannot be archived, restored or renamed at once. Contact support@qivo.io so we can help.` and nothing changes; one call that archives or restores and renames it updates each favorite once, so two calls would meet the same refusal. Answers like `get_project`. It takes no `archive_reason`, which only tasks take. `expected` holds what you last read of the fields it changes, `lead_id` as `get_project` shows it. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
-| `set_project_access` | Give one `user_id` or `team_id` `level` `user` or `viewer` on a `project`, or with `level: null` remove it, settling the open tasks it hides by `on_held_tasks`. People only, as the project's lead or an organization admin. With a level, `expected` holds the `level` you last read in `get_project`'s `grants`, `null` for none; with `level: null` it is refused. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
+| `set_project_access` | Give one `user_id` or `team_id` `level` `user` or `viewer` on a `project`, or with `level: null` remove it, settling the open tasks it hides by `on_held_tasks`. People only, as the project's lead or an organization admin. With a level, `expected` holds the `level` you last read in `get_project`'s `grants` or `list_project_related`, `null` for none; with `level: null` it is refused. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `set_milestone` | Add a milestone (`name` of at most 80 characters, `date`) to a `project`'s top-level project, or with `milestone` rename or move one; then `expected` holds the `name` and `date` you last read of the fields it changes. A top-level project holds at most one milestone a week. See [Projects, access and milestones](#projects-access-and-milestones) and [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `delete_milestone` | Delete a `milestone` of a `project`. `expected` holds the `name` and `date` you last read, either or both. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `set_team` | Without `team_id`, create a team called `name` (at most 80 characters, organization admins only); with `team_id`, rename it (an organization admin or a leader of the team), and then `expected` holds the `name` you last read. Answers the team as `list_teams` lists it, `{id, name, member_count}`, with `created`. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `set_team_member` | Add (`member: true`) or remove (`member: false`) one `user_id` in a team, and with `member: true` make or unmake them a leader (`leader`). People only, as an organization admin or a leader of the team. A removal settles the user's open tasks by `on_held_tasks` |
 | `list_users` | One page of the Qivo users in the organization, for general roster discovery, as `{next_cursor, users}` in name order, with `search`, `limit` (50 by default, at most 200) and `cursor` (see [Lists of users, labels and teams](#lists-of-users-labels-and-teams)). The row is `id`, `name`, `org_role`, `kind`, `active` and `plannable_hours`, with no email address and no profile picture. Presence here does **not** prove access to a destination project; use `list_project_users` before writing `reporter_id`, `assignee_id` or `reviewer_id`. `plannable_hours` is the **whole** hours a week that user has for **planned project work** (the work week minus meetings and other overhead). It is what the planner divides by, so plan someone at most that many hours in a week, shared across every project they work on (0092). It is **`null` for an agent** (0103), whose capacity is unbounded, never zero. A user missing from the pages you have read is not gone until `next_cursor` is `null` |
-| `list_project_users` | Users with access to `project` (number/key/uuid), and therefore valid non-null `reporter_id` values. On a parent project these are the people with access to the parent itself (its lead and the people its individual or team grants reach, an organization admin only through these); someone who reaches the parent only through one of its sub-projects is listed under that sub-project. It returns the `list_users` shape plus `assignable`: only active users with effective project Edit (`user`) or Lead access have `assignable: true` and are valid new `assignee_id` or `reviewer_id` selections. Inactive users and users with only View access remain valid reporters when they can see the project, because reporter is attribution rather than work or permission |
+| `list_project_users` | One page of the users with access to `project` (number/key/uuid), and therefore valid non-null `reporter_id` values, as `{next_cursor, users}` in name order, with `limit` (50 by default, at most 200) and `cursor`; a user missing from the pages you have read is not ineligible until `next_cursor` is `null`. On a parent project these are the people with access to the parent itself (its lead and the people its individual or team grants reach, an organization admin only through these); someone who reaches the parent only through one of its sub-projects is listed under that sub-project. It returns the `list_users` shape plus `assignable`: only active users with effective project Edit (`user`) or Lead access have `assignable: true` and are valid new `assignee_id` or `reviewer_id` selections. Inactive users and users with only View access remain valid reporters when they can see the project, because reporter is attribution rather than work or permission |
 | `get_task` | One task with full description and reporter, assignee and reviewer, `progress` for a group, `delay` and `last_comment_at`, plus its `labels`, whether you follow it (`following`), the first 50 of each of its `subtasks`, `links`, `followers` and `attachments` (with download links), each with its cursor before it (`subtasks_next_cursor` and so on, `null` when the list ends there, and `has_more_subtasks` when the subtasks go on), and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
 | `list_task_related` | One page of one of a task's lists, `list` being `subtasks`, `links`, `followers` or `attachments`, as `{next_cursor, <list>}` with the rows of `get_task`'s same list, in its order, `limit` of them (50 by default, at most 200). Pass `get_task`'s `<list>_next_cursor`, or the page's `next_cursor`, as `cursor` with the same `ref` and `list` until it is `null`. An archived group's subtask page can hold fewer rows than `limit`, or none, while `next_cursor` is set. `offset` is refused unless `0`. Download links are minted for the page's files alone. See [Task results](#task-results) |
 | `list_comments` | The task's newest comments, oldest first, with author and edit attribution. `limit` (50 by default, at most 50) caps how many, and `before`, a comment's `id`, reads the comments posted before it. See [Comments, inbox and following](#comments-inbox-and-following) |
@@ -1706,7 +1731,10 @@ once, as an array in key order, and took only `archived`.
   "lead_id": "…uuid…", "lead_name": "Leo Martins",
   "review_hours": null, "effective_review_hours": 2, "track_delay": true,
   "completion": { "status": "ok", "done": 12, "total": 30, "percent": 40 },
+  "milestones_next_cursor": null,
   "milestones": [{ "id": "…uuid…", "name": "Prototype validated", "date": "2026-11-02" }],
+  "user_grants_next_cursor": "…",
+  "team_grants_next_cursor": null,
   "grants": {
     "users": [{ "id": "…uuid…", "name": "Emil Strand", "level": "user" }],
     "teams": [{ "id": "…uuid…", "name": "Hardware", "level": "viewer" }]
@@ -1744,10 +1772,69 @@ under a project they only manage with someone else as its lead, which
 answers `unavailable` as described below. `status` arrived in
 November 2026, and `counting` later that month, so treat a `status` you do
 not know as no completion.
-`milestones` belong to the top-level
-project, so a sub-project shows its parent's, ordered by date. `grants` are
-the project's own individual and team grants, as its **Project access** list
-shows them; a sub-project also inherits its parent's.
+`milestones` are the first 50 milestones of the top-level project, which
+they belong to, so a sub-project shows its parent's, by date, then by name
+ignoring case and accents, then by id; an archived project's are listed
+too. `grants` are the first 50 of the project's own individual grants and
+the first 50 of its team grants, as its **Project access** list shows them,
+each by name ignoring case and accents, then by id, a row placed by a name
+that changed a moment ago at the earlier name's place; a sub-project also
+inherits its parent's. Each list's cursor comes right before it in the
+text, and `team_grants_next_cursor`, which continues `grants.teams`, comes
+before `grants` with the users' cursor: pass one as `cursor` to
+`list_project_related` with the same `project` and its `list` for the
+rest, and stop when it is `null`. A page of grants lists the explicit
+grants, not who can work in the project, which `list_project_users` answers.
+The first pages read within a bound of their own, so a read or an
+`update_project` never fails for them. Where that bound, or a moment while
+Qivo prepares the organization's names, leaves a list no room, it answers
+no rows and a cursor at its start, never an empty list as complete.
+
+`list_project_related` answers one page of one list, `{next_cursor,
+milestones}`, `{next_cursor, user_grants}` or `{next_cursor, team_grants}`,
+the cursor first, rows as in `get_project`, at most `limit` (50 by default,
+1 to 200). A page can hold fewer than `limit` rows, or none, while
+`next_cursor` is set. The milestones are for a project you read; the grants
+for one you read or manage, as `get_project` resolves it. A cursor works
+only for its list, organization, caller and project, on MCP and REST alike,
+so a cursor of `get_project` or of `GET /v1/projects/{ref}/access/users`
+continues here. Pages are not a snapshot.
+
+`list_project_users` answers one page of a project's users, `{next_cursor,
+users}`, the cursor first, in name order, ignoring case and accents, then
+by id, at most `limit` (50 by default, 1 to 200), paged as above. Who is
+listed and `assignable` are decided from the project's own access before
+`limit`, so a user missing from the pages you have read is not ineligible
+until `next_cursor` is `null`.
+
+These calls are refused. The schema refuses a `list` it does not name and a
+`limit` or `offset` that is not a whole number first; then, in this order:
+
+- `limit` that is not a whole number from 1 to 200: `limit must be a whole
+  number of users from 1 to 200.` for users, and `limit must be a whole
+  number of milestones from 1 to 200.`, `limit must be a whole number of
+  user grants from 1 to 200.` and `limit must be a whole number of team
+  grants from 1 to 200.` for `list_project_related`'s lists
+- `offset` other than `0`: `offset does not apply to project users; pass
+  next_cursor as cursor`, `offset does not apply to milestones; pass
+  next_cursor as cursor`, `offset does not apply to user grants; pass
+  next_cursor as cursor` and `offset does not apply to team grants; pass
+  next_cursor as cursor`, each on its list
+- a `project` you cannot use the call for: `project "<ref>" not found (or
+  not visible to you)`
+- for users and grants, a page before Qivo has prepared the organization's
+  names for name order: `this list cannot be read until this
+  organization's names are ready; try again in a few minutes`
+- a `cursor` that is not the `next_cursor` of an earlier page of the same
+  list, project and caller, an empty one included: `cursor must be the
+  next_cursor of an earlier page`
+- for users, a project whose access is too large to check in one request:
+  `this project's access is too large to check in one request, so Qivo
+  cannot list its users. Contact support@qivo.io so we can help.`
+
+Until November 2026 `get_project` held every milestone and grant, and
+`list_project_users` answered every user at once, as an array, and took
+only `project`.
 
 An organization admin manages every project of the organization, also one
 they take no part in. Admin status gives no access to a project's work, so
@@ -1847,7 +1934,7 @@ remove. `on_held_tasks` with a level is refused, and so is a misspelled
 
 **Milestones.** `set_milestone` without `milestone` adds one from `name` and
 `date` (`YYYY-MM-DD`, a real calendar day) to the top-level project of
-`project`; with `milestone` (an id from `get_project`) it renames or moves it.
+`project`; with `milestone` (an id from `get_project` or `list_project_related`) it renames or moves it.
 `delete_milestone` removes one. A milestone that is not on the top-level
 project of `project` answers `milestone "<id>" not found (or not visible to
 you)`. Both need Edit access on the top-level project, and an archived
@@ -2889,9 +2976,9 @@ The reporter is fixed at creation; task results contain no separate creator
 fields. The activity trail still records the authenticated user who actually
 performed each operation.
 
-For an import, resolve the destination project first, call
-`list_project_users` for that project, and map source identities only to IDs
-returned by that tool. Then pass the mapped ID as `reporter_id` to
+For an import, resolve the destination project first, page
+`list_project_users` for that project until its `next_cursor` is `null`,
+and map source identities only to IDs returned by that tool. Then pass the mapped ID as `reporter_id` to
 `create_task`. A source name, email address, or external-system user ID is
 never accepted in a Qivo user field. Omit `reporter_id` to use the importing
 credential's user when there is no suitable mapping; an explicit `null` is

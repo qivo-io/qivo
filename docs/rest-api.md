@@ -416,6 +416,10 @@ into the range.
 | Followers per list page | 1 to 200 followers | limit must be a whole number of followers from 1 to 200. |
 | Attachments per list page | 1 to 200 attachments | limit must be a whole number of attachments from 1 to 200. |
 | Projects per list page | 1 to 200 projects | limit must be a whole number of projects from 1 to 200. |
+| Project users per list page | 1 to 200 users | limit must be a whole number of users from 1 to 200. |
+| Milestones per list page | 1 to 200 milestones | limit must be a whole number of milestones from 1 to 200. |
+| User grants per list page | 1 to 200 user grants | limit must be a whole number of user grants from 1 to 200. |
+| Team grants per list page | 1 to 200 team grants | limit must be a whole number of team grants from 1 to 200. |
 | Tasks per inbox change | 100 tasks | tasks must name at most 100 tasks per call. Send the rest in another call. |
 | Webhook subscription lifetime | 60,000 to 604,800,000 milliseconds | ttlMs must be a whole number of milliseconds from 60,000 (1 minute) to 604,800,000 (7 days), or null for no expiry. |
 | Webhook subscriptions per organization | 100 subscriptions | an organization can have at most 100 unexpired webhook subscriptions, and one agent key, token or OAuth connection at most 20. Delete an unused subscription first. |
@@ -508,12 +512,20 @@ GET   /v1/projects?search=&limit=&cursor=
 GET   /v1/projects?archived=true  → the archived ones instead (0106)
 GET   /v1/projects/{id|num|KEY}   → one project you read or manage
                                     (uuid, per-org number, or key) with
-                                    its lead, settings, completion,
-                                    milestones and grants; an explicit
-                                    ref resolves an archived project too
-GET   /v1/projects/{ref}/users    → users with access to that project, for
-                                    reporter, assignee and reviewer
-                                    selection
+                                    its lead, settings, completion and
+                                    the first 50 of its milestones and
+                                    grants; an explicit ref resolves an
+                                    archived project too
+GET   /v1/projects/{ref}/users?limit=&cursor=
+                                  → one page of the users with access to
+                                    that project, for reporter, assignee
+                                    and reviewer selection
+GET   /v1/projects/{ref}/milestones?limit=&cursor=
+                                  → one page of its milestones
+GET   /v1/projects/{ref}/access/users?limit=&cursor=
+                                  → one page of its user grants
+GET   /v1/projects/{ref}/access/teams?limit=&cursor=
+                                  → one page of its team grants
 POST  /v1/projects                → create a project or sub-project (write)
 PATCH /v1/projects/{ref}          → change its settings or lead, archive or
                                     restore it (write)
@@ -611,7 +623,10 @@ finds an object; read its `projects` and follow `next_cursor` until it is
   "lead_id": "…uuid…", "lead_name": "Leo Martins",
   "review_hours": null, "effective_review_hours": 2, "track_delay": true,
   "completion": { "status": "ok", "done": 12, "total": 30, "percent": 40 },
+  "milestones_next_cursor": null,
   "milestones": [{ "id": "…uuid…", "name": "Prototype validated", "date": "2026-11-02" }],
+  "user_grants_next_cursor": "…",
+  "team_grants_next_cursor": null,
   "grants": {
     "users": [{ "id": "…uuid…", "name": "Emil Strand", "level": "user" }],
     "teams": [{ "id": "…uuid…", "name": "Hardware", "level": "viewer" }]
@@ -653,11 +668,24 @@ finds an object; read its `projects` and follow `next_cursor` until it is
   `unavailable` as described below. `status` arrived in November 2026,
   and `counting` later that month, so treat a `status` you do not know as
   no completion.
-- `milestones` are the milestones of the top-level project, ordered by date.
-  A sub-project shows its parent's, because milestones live on the top-level
-  project's roadmap.
-- `grants` are the project's own individual and team grants, as its
-  **Project access** list shows them, ordered by name. A sub-project also
+- `milestones` are the first 50 milestones of the top-level project, by
+  date, then by name ignoring case and accents, then by id. A sub-project
+  shows its parent's, because milestones live on the top-level project's
+  roadmap, and an archived project's are listed too.
+  `milestones_next_cursor` is `null` where they end on this page; else page
+  the rest with `GET /v1/projects/{ref}/milestones` (see
+  [Milestones](#milestones)).
+- `grants` are the first 50 of the project's own individual grants and the
+  first 50 of its team grants, as its **Project access** list shows them,
+  each ordered by name, ignoring case and accents, then by id; a row placed
+  by a name that changed a moment ago can come at the earlier name's place.
+  `user_grants_next_cursor` continues `grants.users` and
+  `team_grants_next_cursor` continues `grants.teams`, `null` where the list
+  ends on this page; page the rest with `GET
+  /v1/projects/{ref}/access/users` and `/access/teams` (see [Project
+  access](#project-access)). A page of grants lists the explicit grants, not
+  who can work in the project, which `GET /v1/projects/{ref}/users` answers.
+  A sub-project also
   inherits its parent's grants, which the parent's own read lists. Anyone who
   can read or manage the project sees its grants, as in the app.
 
@@ -690,7 +718,25 @@ number added when another project already holds it (`TES`, then `TES2`).
 retained as a nullable compatibility field for legacy rows; team sharing is
 reported through the access model, not project ownership.
 
-The project-user route has the same rows as `GET /v1/users`, plus
+The first pages of the details and their next pages read within a bound
+of their own, so a project read or a project write never fails for them.
+Where that bound, or a moment while Qivo prepares the organization's names,
+leaves a list no room, it answers no rows and a cursor at its start, never
+an empty list as complete; follow the cursor with its list's route.
+
+The project-user route answers one page of users at a time, `{next_cursor,
+users}`, `limit` of them at most, 50 by default and 1 to 200, as for
+[users](#users): pass `next_cursor` unchanged, URL-encoded, as `cursor` for
+the next page, and stop when it is `null`. A page can hold fewer than
+`limit` users, or none, while `next_cursor` is set. Users come in name
+order, ignoring case and accents, then by id, compared by their UTF-8
+bytes. Who is listed and `assignable` are decided from the project's own
+access before `limit`, so a user missing from the pages you have read is
+not ineligible until `next_cursor` is `null`. A cursor works only for the
+organization, caller and project it came from, on REST and MCP alike.
+Pages are not a snapshot.
+
+Its rows are the rows of `GET /v1/users`, plus
 `"assignable": true | false`. Every returned row is an existing Qivo profile
 that can see the named project. Any row may be used as `reporter_id`;
 `assignee_id` and `reviewer_id` additionally require `assignable: true` (the
@@ -706,7 +752,40 @@ itself: its lead and its individual or team grants. These
 are the people its **Project access** list shows in the app. Someone who
 reaches the parent only through one of its sub-projects is listed under that
 sub-project, not under the parent. A caller that sees the parent only through
-one of its sub-projects may still call this route for the parent.
+one of its sub-projects may still call this route for the parent. An
+organization admin is listed, and assignable, only through their own lead,
+grants and team shares, as anyone.
+
+The list routes of a project, `/users`, `/milestones`, `/access/users` and
+`/access/teams`, are a `400` for these requests, checked in this order
+after any unknown query parameter, and an unknown project or one you cannot
+use them for is a `404`, checked after the first two:
+
+- `limit` that is not a whole number from 1 to 200: `limit must be a whole
+  number of users from 1 to 200.` for users, and `limit must be a whole
+  number of milestones from 1 to 200.`, `limit must be a whole number of
+  user grants from 1 to 200.` and `limit must be a whole number of team
+  grants from 1 to 200.` for the other lists
+- `offset` other than `0`: `offset does not apply to project users; pass
+  next_cursor as cursor`, `offset does not apply to milestones; pass
+  next_cursor as cursor`, `offset does not apply to user grants; pass
+  next_cursor as cursor` and `offset does not apply to team grants; pass
+  next_cursor as cursor`, each on its list
+- for users and grants, a page before Qivo has prepared the organization's
+  names for name order: `this list cannot be read until this
+  organization's names are ready; try again in a few minutes`
+- a `cursor` that is not the `next_cursor` of an earlier page of the same
+  list, project and caller: `cursor must be the next_cursor of an earlier
+  page`
+- for users, a project whose access is too large to check in one request:
+  `this project's access is too large to check in one request, so Qivo
+  cannot list its users. Contact support@qivo.io so we can help.`
+
+Until November 2026 these routes answered every row at once, the details
+held every milestone and grant, and `/users` refused `limit`, `cursor` and
+`offset` as unknown query parameters. Code that read the users array now
+finds an object; read its `users` and follow `next_cursor` until it is
+`null`, and follow the details' cursors for the rest of each list.
 
 **Archived projects** (migration 0106) are projects that have been put away
 in the app. They keep every task, comment and attachment they had, but they
@@ -833,6 +912,10 @@ A request that renames a project and hands over its lead writes only
 ### Project access
 
 ```
+GET    /v1/projects/{ref}/access/users?limit=&cursor=
+                                               → one page of its user grants
+GET    /v1/projects/{ref}/access/teams?limit=&cursor=
+                                               → one page of its team grants
 PUT    /v1/projects/{ref}/access/users/{user}  {"level": "user" | "viewer",
                                                 "expected"?: {"level": …}}
 DELETE /v1/projects/{ref}/access/users/{user}  [{"on_held_tasks": …}]
@@ -841,7 +924,17 @@ PUT    /v1/projects/{ref}/access/teams/{team}  {"level": "user" | "viewer",
 DELETE /v1/projects/{ref}/access/teams/{team}  [{"on_held_tasks": …}]
 ```
 
-These give, change or remove one person's or one team's grant on a project
+The two lists answer `{next_cursor, user_grants}` and `{next_cursor,
+team_grants}`, each row `{id, name, level}` as in the single-project read,
+by name, ignoring case and accents, then by id, 50 by default and 1 to 200,
+paged as the [project users](#projects) are. They list the project's own
+grants of people and teams of its organization, which anyone who can read or
+manage the project may page, and a sub-project's list leaves out what it
+inherits from its parent. The single-project read's `user_grants_next_cursor`
+and `team_grants_next_cursor` continue here, and a cursor of one list does
+not open another.
+
+The writes give, change or remove one person's or one team's grant on a project
 or sub-project, as the app's **Project access** list does. `{user}` and
 `{team}` are uuids from `GET /v1/users` and `GET /v1/teams`; one outside the
 organization answers `404` (`user not found`, `team not found`).
@@ -931,10 +1024,19 @@ curl -X DELETE -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: applicatio
 ### Milestones
 
 ```
+GET    /v1/projects/{ref}/milestones?limit=&cursor=
+                                           → one page of its milestones
 POST   /v1/projects/{ref}/milestones       {"name": "…", "date": "2026-11-02"}
 PATCH  /v1/projects/{ref}/milestones/{id}  {"name"?, "date"?, "expected"?}
 DELETE /v1/projects/{ref}/milestones/{id}  [{"expected": {"name"?, "date"?}}]
 ```
+
+`GET` answers `{next_cursor, milestones}`, each row `{id, name, date}`, the
+milestones of the top-level project by date, then by name ignoring case and
+accents, then by id, 50 by default and 1 to 200, paged as the [project
+users](#projects) are, for a project you can read. The single-project
+read's `milestones_next_cursor` continues here. A milestone stored on a
+sub-project before 14 October 2026 is left out, as in the app.
 
 Milestones live on a top-level project's roadmap. Naming a sub-project in
 `{ref}` adds the milestone to its top-level project, as the app does, and a
@@ -966,7 +1068,7 @@ requests that claim the same week at the same time cannot both succeed.
 Different projects can each have a milestone in the same week. `POST` answers `201` and `PATCH` `200` with
 `{"id", "name", "date", "project_id"}`, where `project_id` is the top-level project;
 `DELETE` answers `{"deleted": true, "id"}`.
-`GET /v1/projects/{ref}` lists them. Each write narrates `added milestone`,
+`GET /v1/projects/{ref}` lists the first 50. Each write narrates `added milestone`,
 `renamed milestone`, `moved milestone` or `deleted milestone`. A `PATCH` that
 changes neither the name nor the date writes no row.
 
@@ -3108,8 +3210,13 @@ curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/projects?search=enc"
 # null. Who may be assigned work in a project is /projects/{ref}/users.
 curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/users?limit=200"
 
-# valid reporters and assignees for Enclosure
-curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/projects/ENC/users"
+# valid reporters and assignees for Enclosure, a page at a time; repeat
+# with the answer's next_cursor as cursor until it is null
+curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/projects/ENC/users?limit=200"
+
+# the next page of Enclosure's user grants after its details' first 50
+curl -G -H "Authorization: Bearer $QIVO_KEY" \
+  --data-urlencode "cursor=<user_grants_next_cursor>" "$BASE/projects/ENC/access/users"
 
 # open high-priority tasks in Enclosure, a page at a time. Repeat with the
 # answer's next_cursor as cursor until it is null.

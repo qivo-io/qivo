@@ -149,7 +149,9 @@ one organization; use the credential for the intended organization.
 
 Before writing `assignee_id`, `reviewer_id` or `reporter_id`, call
 `list_project_users` with the destination project, or REST
-`GET /v1/projects/{ref}/users`. Any returned profile may be the reporter; only
+`GET /v1/projects/{ref}/users`, which answer `{next_cursor, users}` a page
+at a time; follow `next_cursor` until it is null, as a user missing from the
+pages read so far is not ineligible. Any returned profile may be the reporter; only
 `assignable: true` profiles may be assignees or reviewers. On a subtask, the
 assignee or reviewer must also be able to see every task above it, which
 `assignable` does not show; Qivo refuses the write otherwise.
@@ -433,6 +435,7 @@ Useful field rules:
 | Operation | MCP tool | REST request |
 | --- | --- | --- |
 | Read a project | `get_project` | `GET /v1/projects/{ref}` |
+| Page a project's milestones, user grants or team grants | `list_project_related` | `GET /v1/projects/{ref}/milestones`, `…/access/users`, `…/access/teams` |
 | Create a project or sub-project | `create_project` | `POST /v1/projects` |
 | Change, archive or restore a project, hand over its lead | `update_project` | `PATCH /v1/projects/{ref}` |
 | Give, change or remove one user's or team's access | `set_project_access` | `PUT` and `DELETE /v1/projects/{ref}/access/users/{user}` or `…/teams/{team}` |
@@ -462,7 +465,9 @@ Useful field rules:
   Confirm the choice with the user when it is not clear. A misspelled
   `on_held_tasks` is refused, on MCP and on these REST routes.
 - **Milestones:** they live on the top-level project; naming a sub-project
-  adds them there. `date` is `YYYY-MM-DD`. `get_project` lists them. A
+  adds them there. `date` is `YYYY-MM-DD`. `get_project` lists the first 50
+  of them, and of the project's user and team grants, each with a cursor
+  that `list_project_related` continues until it is null. A
   top-level project holds at most one milestone in each calendar week of its
   organization, so a date in a week that holds another of its milestones is
   refused; pick another week or move that milestone first.
