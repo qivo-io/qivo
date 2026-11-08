@@ -1306,10 +1306,21 @@ describe('staging check REST contract', () => {
     expect(step).toContain('await routeBypass(own)')
     expect(step).toContain('signInBrowser(first, cfg.nora)')
     expect(step).toContain("getByRole('button', { name: 'Sign out', exact: true })")
-    expect(step).toContain('selectOption(noted)')
+    expect(step).toContain('restoreDelivery(control, noted)')
     expect(step).toContain('removeInboxRow(page, t0)')
     expect(step).toContain('await own.close()')
-    expect(step.indexOf('} finally {')).toBeLessThan(step.indexOf('selectOption(noted)'))
+    expect(step.indexOf('} finally {')).toBeLessThan(
+      step.indexOf('restoreDelivery(control, noted)'),
+    )
+    // the mode put back is the one the control shows ready from the server,
+    // and a cleanup that could not do its part fails a step that passed
+    const restore = script.slice(
+      script.indexOf('async function restoreDelivery('),
+      script.indexOf('/** The leader tab of a browser profile and the Notification delivery'),
+    )
+    expect(restore).toContain('selectOption(mode)')
+    expect(restore).toContain('(await deliveryShown(page)) === mode')
+    expect(step).toContain('expect(left.length === 0')
     // the leader closes so its beforeunload runs, as a person's close does
     expect(step).toContain('leader.close({ runBeforeUnload: true })')
   })
@@ -1341,6 +1352,10 @@ describe('staging check REST contract', () => {
     expect(step.indexOf('page.routeWebSocket(')).toBeGreaterThan(0)
     expect(step.indexOf('page.routeWebSocket(')).toBeLessThan(step.indexOf('page.goto('))
     expect(step).toContain('context.clearPermissions()')
+    // the app page comes back to the app for the steps and the cleanup after
+    expect(step.indexOf('await showApp()')).toBeGreaterThan(
+      step.indexOf('context.clearPermissions()'),
+    )
     // a notification call's name and arguments, and nothing for any other frame
     const frame = (udfPath, args) =>
       JSON.stringify({ type: 'Mutation', requestId: 4, udfPath, args: [args] })
