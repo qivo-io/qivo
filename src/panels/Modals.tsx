@@ -346,8 +346,8 @@ function NewIssueModal({
      parent list is only the hierarchy picker, so a navigation-only parent is
      still included when it contains a writable child. A project with no
      sub-project has nowhere to put a task, so it isn't offered.
-     Phone My tasks and All projects can open without a project context;
-     they use the same writable roster and explicit project picker. */
+     Phone My tasks can open without a project context; it uses the same
+     writable roster and explicit project picker. */
   const subsOf = (metaId: string) =>
     P.projects.filter((p) => p.type === 'project' && p.parent === metaId)
   const writableSubsOf = (metaId: string) => subsOf(metaId).filter((p) => P.canWrite(p.id))

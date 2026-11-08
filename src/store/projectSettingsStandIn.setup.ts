@@ -14,6 +14,10 @@
      cannot load that module; `unavailable` alike for an unknown project,
      one of another organization, one outside a meta tree and one the
      caller neither sees nor manages, and `archived` with names only;
+   - get by id, or by org_id with num, a whole number from 1, with the
+     caller's seat in org_id alone; a free number and no seat there answer
+     unavailable as an unknown id does, and any other form is a bad_request
+     (convex/model/projectSettings.ts SETTINGS_FORM);
    - get's fields, its parent, its effective lead and every right
      (settingsRights);
    - the Users and Teams lists: the explicit grants and team shares, the

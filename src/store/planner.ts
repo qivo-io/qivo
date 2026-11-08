@@ -13497,8 +13497,7 @@ export const PLANNER = {
   /** Forgets the Overview's reads and rows, its milestone reads
       (OVERVIEW_MILESTONE_SLOTS) among them: its page left. A kept page's
       reads only stop while it hides; App calls this once the page is no
-      longer kept, and an All projects Overview, which reads none, when it
-      takes the place of another scope's. */
+      longer kept. */
   releaseOverview: () => {
     overviewStep(() => overview.release())
     for (const slot of [
