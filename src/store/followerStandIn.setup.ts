@@ -112,6 +112,9 @@ export function taskFollowersStandIn(
       (p) =>
         p.org_id === args.org_id &&
         p.active &&
+        // a Viewer agent keeps no inbox, so it never follows a task
+        // (convex/lib/access.ts keepsInbox, mirrored without importing it)
+        !(p.kind === 'agent' && p.org_role === 'viewer') &&
         !me.has(p.id) &&
         !following.has(p.id) &&
         (o.sees ?? (() => true))(p.id) &&
