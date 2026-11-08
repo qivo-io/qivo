@@ -1044,8 +1044,10 @@ delete those rows of the tasks it brought back, which that code does not
 accept either. That holds from
 the first delete after the deploy for as long as Deleted items keeps such a
 row, so from that release on never return the backend to a commit before it;
-roll forward instead. Returning the app alone to an earlier release is safe,
-because no app of that release calls the page. Rows stored before the release keep none of
+roll forward instead. Returning the app alone to an earlier release was
+safe then, because no app of that release called the page; the release after
+v0.1.160 removed `list` and `matches`, so from it on the app alone never goes
+below v0.1.149. Rows stored before the release keep none of
 the fields and need no step. The page finds their tasks by key only since
 the release after v0.1.160, and says so (`legacy`) until they leave Deleted
 items. Convex builds the page's new indexes of `deleted_items` and
