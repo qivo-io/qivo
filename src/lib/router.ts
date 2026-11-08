@@ -34,7 +34,9 @@
    what it shows, so a reload, Back and Forward open it again. A numbered
    address of a project the workspace does not hold opens a numbered page,
    which the page reads by its organization and number and which keeps
-   the address it was opened by.
+   the address it was opened by. A number reads only in the organization
+   the address names, or under `~` in the home organization, held project
+   or not.
    A task the workspace holds resolves to its handle, and one it does not
    to a reference (lib/taskReference.ts) that the task window reads from
    the server, in the organization the address names. Tasks resolve their
@@ -112,27 +114,30 @@ const VIEW_TO_URL: Record<string, string> = {
   roadmap: 'roadmap',
 }
 
-/* `org` (a uuid, resolved from the address's org segment) pins which
-   organization a bare number is read in. Without it both finders resolve HOME
-   first, so a guest's colliding number can never hijack an unpinned link —
-   which is what `~` and every legacy hash rely on. */
+/* The organization a project number of an address reads in: the one the
+   address pins, or, unpinned (`~` and a legacy hash without one), the home
+   organization, never another organization's; none for a login without a
+   home organization. The held project of that number (findProject),
+   Route.unheld and a numbered project page all read a number here, so
+   they cannot drift. */
+const numberOrgOf = (org: string | undefined): string | undefined => org ?? (P.homeOrg || undefined)
+
+/* The project the workspace holds that segment `s` names: by its uuid, or
+   by its number in the organization numberOrgOf reads it in (`org`, a
+   uuid resolved from the address's org segment, pins it). A number never
+   names another organization's project, so a guest's colliding number
+   cannot take over an unpinned link, which is what `~` and every legacy
+   hash rely on, and a login without a home organization holds no project
+   by an unpinned number, as findIssueKey reads a task number. */
 const findProject = (s: string | undefined, org?: string) => {
   if (!s) return undefined
   if (/^\d+$/.test(s)) {
     const n = Number(s)
-    const all = P.projects.filter((p) => p.num === n)
-    if (org) return all.find((p) => p.org === org)
-    return all.find((p) => p.org === P.homeOrg) || all[0]
+    const at = numberOrgOf(org)
+    return at ? P.projects.find((p) => p.num === n && p.org === at) : undefined
   }
   return P.projects.find((p) => p.id === s.toLowerCase())
 }
-/* The organization a project number of an address reads in, where the
-   workspace does not hold the project: the one the address pins, or,
-   unpinned (`~` and a legacy hash without one), the home organization,
-   never another organization's; none for a login without a home
-   organization. Route.unheld and a numbered project page both read a
-   number here, so the two cannot drift. */
-const numberOrgOf = (org: string | undefined): string | undefined => org ?? (P.homeOrg || undefined)
 
 /* The project number segment `s` names: a whole number from 1 to
    Number.MAX_SAFE_INTEGER in digits, else null. */
@@ -348,13 +353,13 @@ function parseSegments(seg: string[], org: string | undefined, orgUnknown: boole
   if (seg[0] === 'settings') {
     if (seg[1] === 'project') {
       /* A uuid names the page whether the workspace holds the project or
-         not, and the page's own read decides what it shows. A number names
-         the project the workspace holds, as findProject reads it, and
-         otherwise a numbered page in the organization numberOrgOf reads
-         the number in, which the page reads by organization and number,
-         never another organization's project. A number outside 1 to
-         Number.MAX_SAFE_INTEGER, one with no organization to read it in
-         and any other segment name the account page. Under a slug this
+         not, and the page's own read decides what it shows. A number reads
+         in the organization numberOrgOf names first: it names the project
+         the workspace holds there (findProject), and otherwise a numbered
+         page of that organization, which the page reads by organization
+         and number, never another organization's project. A number outside
+         1 to Number.MAX_SAFE_INTEGER, one with no organization to read it
+         in and any other segment name the account page. Under a slug this
          login cannot resolve, nothing does, as for every segment past the
          page. */
       const s = seg[2] ?? ''

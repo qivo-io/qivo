@@ -389,6 +389,33 @@ describe('parsePath — scopes and pages', () => {
     })
   })
 
+  it("reads an unpinned number in the home organization before any project the workspace holds, never as another organization's project of that number", () => {
+    // Acme's project 99 is held, Home's project 99 is not
+    store.projects = [...store.projects, project('p-acme-99', 99, ACME)]
+    expect(parsePath('/app/~/settings/project/99')).toEqual({
+      settings: numberedProjectPage(HOME, 99),
+    })
+    expect(parseHash('#/settings/project/99')).toEqual({ settings: numberedProjectPage(HOME, 99) })
+    // pinned to Acme, the number is Acme's held project
+    expect(parsePath('/app/acme/settings/project/99')).toEqual({ settings: 'project:p-acme-99' })
+    expect(parseHash('#/o/acme/settings/project/99')).toEqual({ settings: 'project:p-acme-99' })
+    // a view's project address and Team sync's read it the same way
+    expect(parsePath('/app/~/board/p/99')).toEqual({
+      view: 'kanban',
+      unheld: { org_id: HOME, num: 99 },
+    })
+    expect(parseHash('#/board/p/99')).toEqual({ view: 'kanban', unheld: { org_id: HOME, num: 99 } })
+    expect(parsePath('/app/~/sync/p/99')).toEqual({ sync: { scope: 'unresolved:99' } })
+    // a login without a home organization holds no project by an unpinned
+    // number, though projects 1 of Home and of Acme are both held
+    store.homeOrg = ''
+    expect(parsePath('/app/~/settings/project/1')).toEqual({ settings: 'account' })
+    expect(parseHash('#/settings/project/1')).toEqual({ settings: 'account' })
+    expect(parsePath('/app/~/board/p/1')).toEqual({ view: 'kanban', unheld: null })
+    expect(parsePath('/app/acme/settings/project/1')).toEqual({ settings: 'project:p-acme-1' })
+    store.homeOrg = HOME
+  })
+
   it('names a numbered page by the number it was opened by, through a reload, Back and Forward', () => {
     const page = { settingsPage: numberedProjectPage(ACME, 7) }
     expect(buildPath(page)).toBe('/app/acme/settings/project/7')

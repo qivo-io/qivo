@@ -18,7 +18,10 @@ import { isProjectSettingsRead, projectSettingsServer } from './store/projectSet
    so a reload, Back and Forward open it again, and the server's
    `unavailable` sends the page to Your preferences. A numbered address of
    it opens a numbered page, which reads projectSettings.get by its
-   organization and number and keeps the address it was opened by. */
+   organization and number and keeps the address it was opened by, and an
+   unpinned one reads the number in the home organization only, never as
+   the project of that number another organization holds in the
+   workspace. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => ({
@@ -34,6 +37,7 @@ vi.mock('./lib/auth', () => ({
 }))
 
 const AWAY = '9b0e4c1a-0000-4000-8000-00000000a1a1'
+const PARTNER = '9b0e4c1a-0000-4000-8000-00000000b2b2'
 
 let container: HTMLDivElement
 let root: Root
@@ -92,12 +96,36 @@ function waitFor<T>(find: () => T | null | undefined, what: string) {
 }
 const heading = () => document.querySelector('[data-settings-page] h1')?.textContent ?? ''
 
+/** Gives the login a guest seat in Partner Co, whose project number 7,
+    Partner launch, the workspace holds, beside the home organization's
+    Away of the same number, which it does not. */
+function partnerSeven(snap: Snapshot) {
+  const org = crypto.randomUUID()
+  const seat = crypto.randomUUID()
+  snap.orgs.push({ ...snap.orgs[0], id: org, name: 'Partner Co', slug: 'partner' })
+  snap.profiles.push({ ...snap.profiles[0], id: seat, org_id: org, org_role: 'guest' })
+  snap.myProfileIds.push(seat)
+  snap.projects.push({
+    ...snap.projects[0],
+    id: PARTNER,
+    org_id: org,
+    type: 'meta',
+    key: 'PART',
+    num: 7,
+    name: 'Partner launch',
+    lead_id: seat,
+  })
+  snap.access.push({ project_id: PARTNER, profile_id: seat, level: 'user' })
+}
+
 /** Boots App at `address`, the server holding Away and the workspace
-    leaving it out. */
-async function boot(address: string) {
+    leaving it out. `shape` changes the workspace first, which the server
+    then holds too. */
+async function boot(address: string, shape?: (snap: Snapshot) => void) {
   vi.resetModules()
   history.replaceState(null, '', address)
   const snap = plannerFixture()
+  shape?.(snap)
   server = structuredClone(snap)
   server.projects.push({
     ...snap.projects[0],
@@ -301,6 +329,29 @@ describe('the numbered address of a project page the workspace does not hold', {
       await boot(`/app/testbed/settings/project/${n}`)
       await waitFor(() => location.pathname === '/app/~/settings/account' || null, `the reset ${n}`)
       expect(gets, n).toEqual([])
+    }
+  })
+
+  it('reads an unpinned number in the home organization, never as the project of that number the workspace holds in another organization', async () => {
+    for (const address of ['/app/~/settings/project/7', '/app#/settings/project/7']) {
+      const P = await boot(address, partnerSeven)
+      expect(P.project(PARTNER)?.num).toBe(7)
+      await waitFor(() => heading().includes('Away'), `the page at ${address}`)
+      expect(gets).toEqual([{ org_id: P.homeOrg, num: 7 }])
+      expect(location.pathname).toBe('/app/testbed/settings/project/7')
+      expect(heading()).not.toContain('Partner')
+    }
+    // a login without a home organization reads no number under `~`
+    for (const address of ['/app/~/settings/project/7', '/app#/settings/project/7']) {
+      const P = await boot(address, (snap) => {
+        partnerSeven(snap)
+        snap.profiles[0].org_role = 'guest'
+      })
+      expect(P.homeOrg).toBe('')
+      expect(P.project(PARTNER)?.num).toBe(7)
+      await waitFor(() => location.pathname === '/app/~/settings/account' || null, 'the reset')
+      expect(gets).toEqual([])
+      expect(heading()).not.toContain('Partner')
     }
   })
 })
