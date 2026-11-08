@@ -265,8 +265,12 @@ async function noteTask(row: Task) {
 }
 
 /* Opens the window on handle `first`, which follows the tasks it opens
-   and, as App does, the moves of their handles (P.watchHandles). */
-async function openWindow(first: string) {
+   and, as App does, the moves of their handles (P.watchHandles), with
+   `onShowOnBoard` for its crumb's press where given. */
+async function openWindow(
+  first: string,
+  onShowOnBoard?: (projectId: string, issueKey?: string, keepOpen?: boolean) => void,
+) {
   const { IssueDetail } = await import('./IssueDetail')
   const { usePlannerVersion } = await import('../store/usePlannerVersion')
   function Host() {
@@ -287,6 +291,7 @@ async function openWindow(first: string) {
           onOpen(id)
           setIssueId(id)
         }}
+        onShowOnBoard={onShowOnBoard}
       />
     )
   }
@@ -2418,6 +2423,53 @@ describe('the task window on a task whose project the workspace does not hold', 
     await act(() => vi.waitFor(() => expect(P.canWrite('lab-work')).toBe(true)))
     expect(await offersNewSubtask(held, 'Wire the mast')).toBe(false)
     expect(sentArgs('issues:create')).toEqual([])
+  })
+
+  it("opens a crumb's project only the project cache holds through the server's check, never moving to it unheld", async () => {
+    await load(false, withLab)
+    const resolved = {
+      state: 'ok',
+      project: {
+        id: 'lab-work',
+        org_id: snap.orgs[0].id,
+        name: 'Lab work',
+        num: 7,
+        parent: { id: 'lab', org_id: snap.orgs[0].id, name: 'Lab', num: 6 },
+        favorite: null,
+      },
+    }
+    network.query.mockImplementation(async (ref) =>
+      getFunctionName(ref) === 'projectNav:resolve' ? resolved : null,
+    )
+    const shown = vi.fn()
+    await openWindow(await noteTask(inLab()), shown)
+    await answer('taskWindow:task', okAnswer(inLab()))
+    await answer('snapshot:threadComments', { comments: [], earlier: false })
+    await answer('projectNav:byIds', labRows())
+    const crumb = await act(() =>
+      vi.waitFor(() => {
+        const found = document.querySelector('[data-task-crumb-project="lab-work"]')
+        if (!found) throw new Error('no crumb of Lab work')
+        return found
+      }),
+    )
+    const press = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 })
+    await act(async () => crumb.dispatchEvent(press))
+    // the window keeps the page, and asks the server whether it may open
+    expect(press.defaultPrevented).toBe(true)
+    expect(
+      network.query.mock.calls.filter(([ref]) => getFunctionName(ref) === 'projectNav:resolve'),
+    ).toHaveLength(1)
+    // the workspace, current, does not hold it, so the window says so and
+    // moves nowhere
+    await act(() =>
+      vi.waitFor(() =>
+        expect(window.showToast).toHaveBeenCalledWith(
+          'Lab work has not loaded yet. Try again in a moment.',
+        ),
+      ),
+    )
+    expect(shown).not.toHaveBeenCalled()
   })
 
   it("says it is read-only where the task's answer gives View, while the project loads", async () => {

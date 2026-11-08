@@ -28,6 +28,7 @@ import type { DescEditorHandle } from '../components/descEditor'
 import { IssueSubscribers } from '../components/IssueSubscribers'
 import { LimitedTextarea } from '../components/LimitedField'
 import { Markdown } from '../components/markdown'
+import { useNavOpen } from '../components/projectNavRows'
 import {
   Avatar,
   DateInput,
@@ -2313,6 +2314,18 @@ function IssueDetail({
       : P.shownParent(held.uuid)
     : (detail?.parent ?? null)
   const meta = it ? P.metaOf(it.project) : null
+  // a crumb's press shows its project on the Board: one the workspace
+  // holds at once, and one only the project cache holds through the lists'
+  // open rule, which asks the server and shows it once the workspace holds
+  // it, else toasts why it cannot (components/projectNavRows.tsx)
+  const crumbOpen = useNavOpen(
+    (id) => {
+      if (it) onShowOnBoard?.(id, it.id, !mobile)
+    },
+    (line) => {
+      if (line) window.showToast?.(line)
+    },
+  )
   // A task lives in its sub-project. The parent may be navigation-only for a
   // child grant, so all task edits must follow the task's own write level.
   const canLabel = !!held && P.canWrite(held.project)
@@ -3230,7 +3243,7 @@ function IssueDetail({
                         )
                           return
                         e.preventDefault()
-                        onShowOnBoard(p.id, it.id, !mobile)
+                        crumbOpen.open(p)
                       }}
                       className="max-w-60 overflow-hidden text-ellipsis whitespace-nowrap rounded-sm px-1 py-0.5 text-sm text-text-3 no-underline hover:bg-hover hover:text-text-1 focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
                     >
@@ -4729,6 +4742,9 @@ function IssueDetail({
             )
           }
           createLabel="Create new subtask:"
+          // a new subtask goes into this task's project, which P.addIssue
+          // needs the workspace to hold, so a project only the project
+          // cache holds offers no create row
           onCreate={
             noSubtask || !canRelate || !P.heldProject(it.project)
               ? undefined
@@ -4742,9 +4758,6 @@ function IssueDetail({
         <RelationPicker
           key={`link-${taskKey}`}
           kind="link"
-          // a new subtask goes into this task's project, which P.addIssue
-          // needs the workspace to hold, so a project only the project
-          // cache holds offers no create row
           task={it}
           anchor={linkAnchor}
           onDone={() => setLinkAnchor(null)}
