@@ -8,6 +8,11 @@ import { TooltipProvider } from './components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
+import {
+  answerProjectNav,
+  isProjectNavRead,
+  queryProjectNav,
+} from './store/projectNavStandIn.setup'
 import { isProjectSettingsRead, projectSettingsServer } from './store/projectSettingsStandIn.setup'
 import { answerRoadmap } from './store/roadmapStandIn.setup'
 
@@ -178,6 +183,11 @@ async function boot(address: string, phone: boolean, second = false) {
     else if (name.startsWith('overview:')) answerOverview(server, name, args, next, fail)
     else if (name === 'tasks:roadmap' || name === 'tasks:roadmapDependencies')
       next(answerRoadmap(server, name, args))
+    // the navigation lists the views and the New task dialog's picker read,
+    // as the server answers them; the store's project cache reads go
+    // through the live double
+    else if (isProjectNavRead(name) && name !== 'projectNav:byIds')
+      answerProjectNav(server, name, args, next, fail)
     else if (name === 'taskWindow:task') {
       // the server's answer, a moment later, as from Convex: an archived
       // task with its text, or the task the workspace holds, by its uuid or
@@ -225,6 +235,8 @@ async function boot(address: string, phone: boolean, second = false) {
   unheld = []
   network.query.mockImplementation(async (ref, args) => {
     const name = getFunctionName(ref)
+    // a project address by number resolves through projectNav.resolve
+    if (name === 'projectNav:resolve') return queryProjectNav(snap, 'projectNav:resolve', args)
     if (name !== 'search:page') return null
     const words: string[] = args.text.toLowerCase().split(/\s+/).filter(Boolean)
     const rows = [...snap.issues, ...unheld, ...(args.include_archived ? archive : [])]
@@ -323,14 +335,8 @@ describe('a phone layer that closes with the move it started', { timeout: 30_000
     await waitFor(() => document.querySelector('[data-modal-shell]'), 'the dialog')
     await settle()
     expect(history.state?.qivoLayer).toBeTruthy()
-    const where = document.querySelector<HTMLSelectElement>('[data-modal-shell] select')
-    if (where) {
-      const next = [...where.options].find((o) => !o.disabled && o.value)
-      if (next) {
-        where.value = next.value
-        await act(async () => where.dispatchEvent(new Event('change', { bubbles: true })))
-      }
-    }
+    // the Sub-project picker (projectNav.targets) opens on the scope's
+    // sub-project, which the person may write
     await type(
       await waitFor(
         () => document.querySelector<HTMLInputElement>('input[aria-label="Title"]'),
