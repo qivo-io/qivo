@@ -4,7 +4,6 @@
    (components/ProjectAccessEditor.tsx), and a top-level project's live
    sub-projects as Settings › Projects lists them (ProjectLists.tsx), and
    sends every write with what it showed, so it works the same for a
-   project the workspace does not hold, whose address then names it by its
    project the workspace does not hold, whose address then names it under
    its organization by the number it was last opened by in this visit, on
    a numbered page or on its page by id afterwards, and otherwise by its
