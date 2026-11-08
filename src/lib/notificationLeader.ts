@@ -41,9 +41,11 @@
      after NOTIFY_CLIENT.retry_ms in turn, and so does a beat refused for
      a missing sign-in, which the Convex client sends while it arms the
      socket again after it dropped the sign-in (lib/authSession.ts
-     recover). A refusal of the session (it ended, the login was banned, a
-     demo that is not active) stops the leader and lets go of the lock, so
-     another tab, such as one loaded after a new sign-in, may lead; it
+     recover), for as long as those retries last; a sign-in still missing
+     after them counts as lost for good. A refusal of the session (it
+     ended, the login was banned, a demo that is not active, or its
+     sign-in was lost for good) stops the leader and lets go of the lock,
+     so another tab, such as one loaded after a new sign-in, may lead; it
      stays stopped until the store starts a new one (refused). A bad
      request does the same and is a defect it reports.
    - Use. The first trusted pointer, key, touch or wheel input
@@ -278,17 +280,18 @@ function randomInstance(): string {
 /* How the server refused the session, if it did: 'stop' for a session
    that ended or a ban (Better Auth's 'Unauthenticated'), another login's
    session row and a demo that is not active, 'defect' for a bad request,
-   else null for a failure worth trying again. A call without a sign-in
-   (convex/lib/functions.ts loadSession's forbidden 'not signed in') is one
-   to try again: the Convex client sends calls without one while it arms
-   the socket again, and the beat goes on once it is armed. */
-function refusalOf(e: unknown): 'stop' | 'defect' | null {
+   'signin' for a call without a sign-in (convex/lib/functions.ts
+   loadSession's forbidden 'not signed in'), else null for a failure worth
+   trying again. A missing sign-in is tried again for a while: the Convex
+   client sends calls without one while it arms the socket again, and the
+   beat goes on once it is armed. */
+function refusalOf(e: unknown): 'stop' | 'defect' | 'signin' | null {
   if (!(e instanceof ConvexError)) return null
   const data: unknown = e.data
   if (data === 'Unauthenticated') return 'stop'
   if (typeof data === 'object' && data !== null) {
     const { code, message } = data as { code?: unknown; message?: unknown }
-    if (code === 'forbidden') return message === 'not signed in' ? null : 'stop'
+    if (code === 'forbidden') return message === 'not signed in' ? 'signin' : 'stop'
     if (code === 'bad_request') return 'defect'
   }
   return null
@@ -339,6 +342,8 @@ export function startNotificationLeader(deps: LeaderDeps) {
   let ends = 0
   let beatTimer: ReturnType<typeof setTimeout> | null = null
   let retry = 0
+  // the beats refused in a row for a missing sign-in
+  let unsigned = 0
   let inFlight = false
   // the local time the in-flight beat went out
   let sentAt = 0
@@ -466,7 +471,10 @@ export function startNotificationLeader(deps: LeaderDeps) {
       if (e instanceof CallOffline) socketWait = true
       else {
         const refusal = refusalOf(e)
-        if (refusal) refuse(refusal, e)
+        if (refusal === 'signin') unsigned += 1
+        if (refusal === 'stop' || refusal === 'defect') refuse(refusal, e)
+        // a sign-in still missing after every retry is lost for good
+        else if (refusal === 'signin' && unsigned > NOTIFY_CLIENT.retry_ms.length) refuse('stop', e)
         else if (can && capable) {
           // the retries in turn, then the server's pace, or the last retry's
           // wait before the server named one
@@ -481,6 +489,7 @@ export function startNotificationLeader(deps: LeaderDeps) {
     inFlight = false
     if (mine !== leadership || stopped) return answer
     retry = 0
+    unsigned = 0
     socketWait = false
     beats += 1
     beatenSinceGain = true

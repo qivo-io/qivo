@@ -831,6 +831,28 @@ describe('failures', () => {
     expect(tab.beats()).toHaveLength(3)
   })
 
+  it('takes a sign-in still missing after every retry as lost for good, and lets the next tab lead', async () => {
+    const p = profile()
+    const [a, b] = [openTab(p), openTab(p)]
+    await flush()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    a.state.fail = () => new ConvexError({ code: 'forbidden', message: 'not signed in' })
+    b.state.fail = a.state.fail
+    // the periodic beat, then the retries after 5, 30 and 120 seconds
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    for (const wait of [5_000, 30_000, MINUTE]) await vi.advanceTimersByTimeAsync(wait)
+    await flush()
+    expect(a.beats()).toHaveLength(5)
+    expect(a.leader.refused()).toBe(true)
+    expect(a.leader.role()).toBe('stopped')
+    // the next tab of the profile leads, and is refused in turn
+    expect(b.beats().length).toBeGreaterThan(0)
+    await vi.advanceTimersByTimeAsync(10 * MINUTE)
+    expect(a.beats()).toHaveLength(5)
+    expect(b.leader.refused()).toBe(true)
+    expect(await p.manager?.query()).toEqual({ held: [], pending: [] })
+  })
+
   it('sends no beat while the socket is down, and the reconnect runs the resume order', async () => {
     const tab = openTab(profile())
     await flush()
