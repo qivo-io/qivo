@@ -380,14 +380,7 @@ describe('the Roadmap from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(rows()).toEqual(['QN-2'])
   })
 
-  it('asks All projects to choose a project, and a text filter past its limit to shorten', async () => {
-    const board = await loadBoard(network, plan, { scope: 'all' })
-    await renderRoadmap(board)
-    expect(state()).toBe('choose')
-    expect(title()).toBe('Choose a project')
-    expect(document.querySelector('[data-roadmap-choice="plan"]')).not.toBeNull()
-    expect(roadmapAsks(board)).toEqual([])
-    await act(async () => root.render(null))
+  it('asks a text filter past its limit to shorten', async () => {
     const project = await loadBoard(network, plan, { scope: 'plan' })
     await renderRoadmap(project, { filters: { ...ROW, search: 'x'.repeat(201) } })
     expect(state()).toBe('search_limit')

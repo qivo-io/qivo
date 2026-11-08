@@ -4293,9 +4293,14 @@ describe('a project item and the sub-project cap', () => {
     await runSteps(t)
     const item = await itemFor(t, f.meta.id)
     expect(item.state).toBe('ready')
-    // its lead lists it and restores it, reading only their own grants
-    const listed = await as(t, f.user).query(api.deletedItems.list, {})
-    expect(JSON.stringify(listed)).toContain(item.id)
+    // its lead lists it on the page, which reads within its budgets, and
+    // restores it, reading only their own grants
+    const listed = await as(t, f.user).query(api.deletedItems.page, {
+      scope: { org_id: f.org.id, all: true },
+      kind: 'project',
+    })
+    expect(listed.entries).toEqual([{ item_id: item.id }])
+    expect(listed).not.toHaveProperty('missing')
     expect(await restore(t, f.user, [item.id])).toMatchObject({ restored: [item.id] })
     await runSteps(t)
     expect(await itemById(t, item.id)).toBeNull()

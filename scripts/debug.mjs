@@ -13,7 +13,7 @@ page.on('pageerror', (e) => logs.push(`PAGEERROR: ${e}`))
 page.on('console', (m) => logs.push(`${m.type().toUpperCase()}: ${m.text()}`))
 page.on('requestfailed', (r) => logs.push(`REQFAIL: ${r.url()} ${r.failure()?.errorText}`))
 
-await page.goto(`${demo.base}/app/~/board/all`)
+await page.goto(`${demo.base}/app/~/projects`)
 await page.waitForSelector('input[type=email]', { timeout: 20000 })
 await page.screenshot({ path: 'scripts/shots/dbg-1-initial.png' })
 console.log('--- after load:')
@@ -24,6 +24,13 @@ console.log('email inputs:', hasEmail)
 if (hasEmail) {
   logs.length = 0
   await signInDemo(page, demo)
+  // sign-in lands on the project directory, which shows no task, so the
+  // drive opens Luma Sensor's Board for its cards
+  const num = await page.evaluate(
+    () => window.PLANNER.projects.find((p) => p.name === 'Luma Sensor' && !p.parent)?.num,
+  )
+  if (num == null) throw new Error('Northstar holds no Luma Sensor')
+  await page.goto(`${demo.base}/app/${demo.orgSlug}/board/p/${num}`)
   await page.waitForSelector('[data-card]', { timeout: 30000 })
   await page.screenshot({ path: 'scripts/shots/dbg-2-after-signin.png' })
   console.log('--- after sign-in click:')

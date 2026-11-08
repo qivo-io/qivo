@@ -232,8 +232,6 @@ connectedApps:list query public {"type":"object","value":{"search":{"fieldType":
 deletedItems:detachArchived mutation internal {"type":"object","value":{"job_id":{"fieldType":{"type":"id","tableName":"archived_detaches"},"optional":false}}}
 deletedItems:expire mutation internal {"type":"object","value":{"cursor":{"fieldType":{"type":"string"},"optional":true},"now":{"fieldType":{"type":"number"},"optional":true}}}
 deletedItems:item query public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
-deletedItems:list query public {"type":"object","value":{"deleted_by":{"fieldType":{"type":"string"},"optional":true}}}
-deletedItems:matches query public {"type":"object","value":{"text":{"fieldType":{"type":"string"},"optional":false}}}
 deletedItems:page query public {"type":"object","value":{"scope":{"fieldType":{"type":"union","value":[{"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"project_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}},{"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"all":{"fieldType":{"type":"literal","value":true},"optional":false}}}]},"optional":true},"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"task"},{"type":"literal","value":"project"}]},"optional":true},"search":{"fieldType":{"type":"string"},"optional":true},"deleted_by":{"fieldType":{"type":"string"},"optional":true},"via":{"fieldType":{"type":"string"},"optional":true},"someone":{"fieldType":{"type":"literal","value":true},"optional":true},"assignee":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true},"limit":{"fieldType":{"type":"number"},"optional":true}}}
 deletedItems:people query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true}}}
 deletedItems:purge mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -364,6 +362,7 @@ internal/navBackfill:run action internal {"type":"object","value":{"dry_run":{"f
 internal/navBackfill:stamp mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 internal/navBackfill:step mutation internal {"type":"object","value":{"table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"projects"},{"type":"literal","value":"project_access"},{"type":"literal","value":"project_team_access"},{"type":"literal","value":"project_reach"}]},"optional":false},"at":{"fieldType":{"type":"union","value":[{"type":"null"},{"type":"object","value":{"after":{"fieldType":{"type":"number"},"optional":false},"seen":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}]},"optional":false}}}
 internal/oauthSmoke:cleanup mutation internal {"type":"object","value":{"expected_site_url":{"fieldType":{"type":"string"},"optional":false},"client_id":{"fieldType":{"type":"string"},"optional":false},"client_name":{"fieldType":{"type":"string"},"optional":false}}}
+internal/olderDeletedTasks:count query internal {"type":"object","value":{"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"page_size":{"fieldType":{"type":"number"},"optional":true},"row_cap":{"fieldType":{"type":"number"},"optional":true}}}
 internal/operator:provisionOperator mutation internal {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false},"password_hash":{"fieldType":{"type":"string"},"optional":false}}}
 internal/operator:retireLegacyFixtures mutation internal {"type":"object","value":{"expected_site_url":{"fieldType":{"type":"string"},"optional":false},"dry_run":{"fieldType":{"type":"boolean"},"optional":true}}}
 internal/operator:testOperator action internal {"type":"object","value":{}}
@@ -716,7 +715,7 @@ projectNav:setFavorite mutation public {"type":"object","value":{"project_id":{"
 projectSettings:archived query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projectSettings:archivedSubProjects query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projectSettings:candidates query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":true},"lead_id":{"fieldType":{"type":"string"},"optional":true},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-projectSettings:get query public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
+projectSettings:get query public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":true},"num":{"fieldType":{"type":"number"},"optional":true}}}
 projectSettings:inviteTarget query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projectSettings:leadCandidates query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":true},"parent_id":{"fieldType":{"type":"string"},"optional":true},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projectSettings:projects query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"sub_project_parents":{"fieldType":{"type":"boolean"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -1006,16 +1005,14 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     // starts a task's comment count after a post was refused while it counts
     countThread: 'orgMutation',
   },
-  // Deleted items spans organizations like Archived projects: page, list,
-  // item and matches read every active seat, or page the seat its scope
-  // names, and judge each item with the seat in its organization. restore
-  // acts in one organization; Delete now (purge) is for its admins. Each
-  // loads items through the same not_found fence.
+  // Deleted items spans organizations like Archived projects: page and
+  // item read every active seat, or page the seat its scope names, and
+  // judge each item with the seat in its organization. restore acts in one
+  // organization; Delete now (purge) is for its admins. Each loads items
+  // through the same not_found fence.
   deletedItems: {
     page: 'authedQuery',
-    list: 'authedQuery',
     item: 'authedQuery',
-    matches: 'authedQuery',
     // each active seat's own role in its own organization, nothing about
     // anyone else's
     roles: 'authedQuery',
@@ -1374,7 +1371,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 256
+const PUBLIC_COUNT = 254
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

@@ -18,7 +18,6 @@ const ROW: IssueFilters = {
 }
 const project = { wide: false, mine: false, id: 'plan', proj: { org: 'org-1' } }
 const mine = { wide: true, mine: true, id: 'mine', proj: null }
-const all = { wide: true, mine: false, id: 'all', proj: null }
 const win = { w0: TODAY_WEEK - 2, w1: TODAY_WEEK + 6 }
 
 /** The arguments of a request that asks. */
@@ -76,8 +75,8 @@ describe("the Roadmap's request", () => {
     expect(roadmapRequest(project, { ...ROW, search: at }, win, null).kind).toBe('ask')
   })
 
-  it('asks All projects to choose a project, sending nothing', () => {
-    expect(roadmapRequest(all, ROW, win, null)).toEqual({ kind: 'choose' })
+  it('asks for My view as the mine scope, and never asks to choose a project', () => {
+    expect(roadmapRequest(mine, ROW, win, null).kind).toBe('ask')
   })
 
   it('sends the first days of the window’s first and last weeks, on a grid whose week starts on Sunday too', () => {

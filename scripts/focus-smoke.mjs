@@ -112,14 +112,27 @@ async function pickerFocus(trigger, popup, message) {
 
 try {
   await signInDemo(page, demo)
-  initialUI = await page.evaluate(() => {
+  // the view preferences as sign-in found them, before the drive opens a
+  // project
+  initialUI = await page.evaluate(() => window.PLANNER.loadUI())
+  // Sign-in opens the project directory over the Overview, which has no
+  // task filters, and a sidebar project keeps the view, so the drive opens
+  // Luma Sensor's Board by its number before it picks a sidebar project
+  const luma = await page.evaluate(
+    () => window.PLANNER.projects.find((p) => p.name === 'Luma Sensor' && !p.parent)?.num,
+  )
+  assert.ok(luma != null, 'Northstar holds no Luma Sensor')
+  await page.goto(`${demo.base}/app/${demo.orgSlug}/board/p/${luma}`, {
+    waitUntil: 'domcontentloaded',
+  })
+  await page.getByRole('heading', { name: 'Luma Sensor', exact: true }).waitFor()
+  await page.evaluate(() => {
     const P = window.PLANNER
     // Opening a task reads its inbox item (P.readOnOpen). Preserve the
     // demo's Inbox for this visual-only drive; the original function is
     // restored below.
     window.__focusSmokeReadOnOpen = P.readOnOpen
     P.readOnOpen = () => false
-    return P.loadUI()
   })
 
   const project = page.locator('aside').getByRole('button', { name: 'Pilot & Launch', exact: true })

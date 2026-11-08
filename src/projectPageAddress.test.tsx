@@ -16,7 +16,12 @@ import { isProjectSettingsRead, projectSettingsServer } from './store/projectSet
    access split. Its page reads from the server
    (projectSettings.get) and names it by its uuid under its organization,
    so a reload, Back and Forward open it again, and the server's
-   `unavailable` sends the page to Your preferences. */
+   `unavailable` sends the page to Your preferences. A numbered address of
+   it opens a numbered page, which reads projectSettings.get by its
+   organization and number and keeps the address it was opened by, and an
+   unpinned one reads the number in the home organization only, never as
+   the project of that number another organization holds in the
+   workspace. Away docs, its sub-project, opens from its page. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => ({
@@ -32,21 +37,32 @@ vi.mock('./lib/auth', () => ({
 }))
 
 const AWAY = '9b0e4c1a-0000-4000-8000-00000000a1a1'
+const DOCS = '9b0e4c1a-0000-4000-8000-00000000a1a2'
+const PARTNER = '9b0e4c1a-0000-4000-8000-00000000b2b2'
 
 let container: HTMLDivElement
 let root: Root
 /* What the server holds, and the way to answer its open reads again. */
 let server: Snapshot
 let rerun: () => void
+// the arguments of every projectSettings.get the page asked
+let gets: unknown[]
+// whether matchMedia answers as a phone (lib/useMobile.ts)
+let phone = false
 
 beforeEach(() => {
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
   Range.prototype.getBoundingClientRect = () => new DOMRect()
   Element.prototype.scrollIntoView = () => {}
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  phone = false
   vi.stubGlobal(
     'matchMedia',
-    vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+    vi.fn((query: string) => ({
+      matches: phone && query === '(max-width: 760px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
   )
   vi.stubGlobal(
     'ResizeObserver',
@@ -88,12 +104,36 @@ function waitFor<T>(find: () => T | null | undefined, what: string) {
 }
 const heading = () => document.querySelector('[data-settings-page] h1')?.textContent ?? ''
 
-/** Boots App at `address`, the server holding Away and the workspace
-    leaving it out. */
-async function boot(address: string) {
+/** Gives the login a guest seat in Partner Co, whose project number 7,
+    Partner launch, the workspace holds, beside the home organization's
+    Away of the same number, which it does not. */
+function partnerSeven(snap: Snapshot) {
+  const org = crypto.randomUUID()
+  const seat = crypto.randomUUID()
+  snap.orgs.push({ ...snap.orgs[0], id: org, name: 'Partner Co', slug: 'partner' })
+  snap.profiles.push({ ...snap.profiles[0], id: seat, org_id: org, org_role: 'guest' })
+  snap.myProfileIds.push(seat)
+  snap.projects.push({
+    ...snap.projects[0],
+    id: PARTNER,
+    org_id: org,
+    type: 'meta',
+    key: 'PART',
+    num: 7,
+    name: 'Partner launch',
+    lead_id: seat,
+  })
+  snap.access.push({ project_id: PARTNER, profile_id: seat, level: 'user' })
+}
+
+/** Boots App at `address`, the server holding Away and its sub-project
+    Away docs and the workspace leaving both out. `shape` changes the
+    workspace first, which the server then holds too. */
+async function boot(address: string, shape?: (snap: Snapshot) => void) {
   vi.resetModules()
   history.replaceState(null, '', address)
   const snap = plannerFixture()
+  shape?.(snap)
   server = structuredClone(snap)
   server.projects.push({
     ...snap.projects[0],
@@ -103,14 +143,25 @@ async function boot(address: string) {
     num: 7,
     name: 'Away',
   })
+  server.projects.push({
+    ...snap.projects[0],
+    id: DOCS,
+    type: 'project',
+    parent_id: AWAY,
+    key: 'DOCS',
+    num: 8,
+    name: 'Away docs',
+  })
   const settings = projectSettingsServer(() => server)
   const lists = projectListsServer(() => server)
+  gets = []
   rerun = () => {
     settings.rerun()
     lists.rerun()
   }
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
+    if (name === 'projectSettings:get') gets.push(args)
     if (isProjectSettingsRead(name)) return settings.watch(name, args, next, fail)
     if (isProjectListRead(name)) return lists.watch(name, args, next, fail)
     if (name === 'workspace:whole') next(structuredClone(snap))
@@ -210,5 +261,146 @@ describe('the address of a project page the workspace does not hold', { timeout:
     await boot(`/app/elsewhere/settings/project/${AWAY}`)
     await waitFor(() => location.pathname === '/app/~/settings/account' || null, 'the reset')
     expect(heading()).not.toContain('Away')
+  })
+})
+
+describe('the numbered address of a project page the workspace does not hold', {
+  timeout: 30_000,
+}, () => {
+  it('opens the page of a project an admin only manages by its organization and number, keeping its numbered address through a reload, Back and Forward', async () => {
+    let P = await boot('/app/testbed/settings/project/7')
+    expect(P.project(AWAY)).toBeUndefined()
+    await waitFor(() => heading().includes('Away'), 'the page')
+    const org = P.homeOrg
+    expect(gets).toEqual([{ org_id: org, num: 7 }])
+    expect(location.pathname).toBe('/app/testbed/settings/project/7')
+    expect(
+      document
+        .querySelector('[data-project-settings-state]')
+        ?.getAttribute('data-project-settings-state'),
+    ).toBe('ok')
+    // a reload opens it again by its number, in the fixture's organization
+    // of this boot
+    P = await boot('/app/testbed/settings/project/7')
+    await waitFor(() => heading().includes('Away'), 'the page after a reload')
+    const home = P.homeOrg
+    expect(gets).toEqual([{ org_id: home, num: 7 }])
+    expect(location.pathname).toBe('/app/testbed/settings/project/7')
+    // to Settings › Projects, and Back and Forward
+    const all = await waitFor(
+      () => document.querySelector<HTMLElement>('[data-settings-item="projects"]'),
+      'All projects',
+    )
+    await act(async () => all.click())
+    await waitFor(() => document.querySelector(`[data-project-row="${AWAY}"]`), 'Away’s row')
+    expect(location.pathname).toBe('/app/testbed/settings/projects')
+    await go(-1)
+    await waitFor(() => heading().includes('Away'), 'the page again')
+    expect(location.pathname).toBe('/app/testbed/settings/project/7')
+    await go(1)
+    await waitFor(() => document.querySelector('[data-settings-projects]'), 'the list again')
+    await go(-1)
+    await waitFor(() => heading().includes('Away'), 'the page once more')
+    expect(location.pathname).toBe('/app/testbed/settings/project/7')
+    expect(gets.every((a) => JSON.stringify(a) === JSON.stringify({ org_id: home, num: 7 }))).toBe(
+      true,
+    )
+  })
+
+  it('keeps the page while its Archive or delete window holds it after the project leaves, and then goes to Your preferences', async () => {
+    await boot('/app/testbed/settings/project/7')
+    await waitFor(() => heading().includes('Away'), 'the page')
+    const remove = await waitFor(
+      () => document.querySelector<HTMLButtonElement>(`[data-remove-project="${AWAY}"]`),
+      'Archive or delete…',
+    )
+    await act(async () => remove.click())
+    await settle()
+    const shell = await waitFor(() => document.querySelector('[data-modal-shell]'), 'the window')
+    // someone else deletes Away while the window is open
+    server.projects = server.projects.filter((p) => p.id !== AWAY)
+    await act(async () => rerun())
+    await settle()
+    expect(document.querySelector('[data-modal-shell]')).not.toBeNull()
+    expect(heading()).toContain('Away')
+    expect(location.pathname).toBe('/app/testbed/settings/project/7')
+    // the window says the project went, and closes on Close
+    const close = await waitFor(
+      () =>
+        [...shell.querySelectorAll<HTMLButtonElement>('button')].find(
+          (b) => b.textContent?.trim() === 'Close',
+        ),
+      "the window's Close",
+    )
+    await act(async () => close.click())
+    await settle()
+    await waitFor(() => location.pathname === '/app/~/settings/account' || null, 'the reset')
+  })
+
+  it('goes to Your preferences for a number no project holds, and reads nothing for one outside the numbers a project can have', async () => {
+    await boot('/app/testbed/settings/project/99')
+    await waitFor(() => location.pathname === '/app/~/settings/account' || null, 'the reset')
+    expect(heading()).not.toContain('Away')
+    expect(gets.length).toBeGreaterThan(0)
+    for (const n of ['0', String(Number.MAX_SAFE_INTEGER + 1)]) {
+      await boot(`/app/testbed/settings/project/${n}`)
+      await waitFor(() => location.pathname === '/app/~/settings/account' || null, `the reset ${n}`)
+      expect(gets, n).toEqual([])
+    }
+  })
+
+  it('reads an unpinned number in the home organization, never as the project of that number the workspace holds in another organization', async () => {
+    for (const address of ['/app/~/settings/project/7', '/app#/settings/project/7']) {
+      const P = await boot(address, partnerSeven)
+      expect(P.project(PARTNER)?.num).toBe(7)
+      await waitFor(() => heading().includes('Away'), `the page at ${address}`)
+      expect(gets).toEqual([{ org_id: P.homeOrg, num: 7 }])
+      expect(location.pathname).toBe('/app/testbed/settings/project/7')
+      expect(heading()).not.toContain('Partner')
+    }
+    // a login without a home organization reads no number under `~`
+    for (const address of ['/app/~/settings/project/7', '/app#/settings/project/7']) {
+      const P = await boot(address, (snap) => {
+        partnerSeven(snap)
+        snap.profiles[0].org_role = 'guest'
+      })
+      expect(P.homeOrg).toBe('')
+      expect(P.project(PARTNER)?.num).toBe(7)
+      await waitFor(() => location.pathname === '/app/~/settings/account' || null, 'the reset')
+      expect(gets).toEqual([])
+      expect(heading()).not.toContain('Partner')
+    }
+  })
+
+  it("on a phone, Back from a sub-project returns to its project's numbered entry, and the next Back leaves it", async () => {
+    phone = true
+    await boot('/app/testbed/settings/project/7')
+    await waitFor(() => heading().includes('Away'), 'the page')
+    const at = history.state?.qivoAt
+    const entries = history.length
+    const docs = await waitFor(
+      () => document.querySelector<HTMLElement>(`[data-project-subproject="${DOCS}"]`),
+      'Away docs',
+    )
+    await act(async () => docs.click())
+    await waitFor(() => heading().includes('Away docs'), 'the sub-project')
+    await waitFor(
+      () => location.pathname === `/app/testbed/settings/project/${DOCS}` || null,
+      "the sub-project's address",
+    )
+    expect(history.length).toBe(entries + 1)
+    const back = () => document.querySelector<HTMLElement>('[data-settings-back]')
+    // Back returns to the entry the project was opened on, by its number
+    await act(async () => back()?.click())
+    await settle()
+    await waitFor(() => heading().includes('Away') && !heading().includes('docs'), 'Away again')
+    expect(location.pathname).toBe('/app/testbed/settings/project/7')
+    expect(history.state?.qivoAt).toBe(at)
+    expect(history.length).toBe(entries + 1)
+    // and the next Back leaves it for Projects in place, as a direct link
+    await act(async () => back()?.click())
+    await settle()
+    await waitFor(() => location.pathname === '/app/testbed/settings/projects' || null, 'Projects')
+    expect(history.state?.qivoAt).toBe(at)
   })
 })

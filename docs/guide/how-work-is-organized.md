@@ -117,12 +117,10 @@ New tasks start unassigned with Low priority. A column's **+** uses that
 status; other entry points start in Backlog. Creating in **In Review** sets
 Remaining to the project's review time ([Review time](./will-it-be-ready-in-time-the-delay-status.md#review-time)).
 
-**My view** columns have no **+**, and the Board over all projects, at an
-address that ends in `/all`, asks you to choose a project ([All projects](./finding-your-way-around.md#all-projects)).
-Use a project heading's **+** in My view's Swimlanes by project or
-Side-by-side boards, or open the project first. A task you create over all
-projects opens in its sub-project, on the Board, the Overview or the Roadmap
-you were on, which ask to choose a project there.
+**My view** columns have no **+**. Use a project heading's **+** in My
+view's Swimlanes by project or Side-by-side boards, or open the project
+first. A task you create in My view that is not yours opens in its
+sub-project, on the Board, the Overview or the Roadmap you were on.
 Phones use the same project/sub-project picker. Relationship
 pickers keep their separate quick-create flow for subtasks, linked tasks and
 parents. Use **Move** to relocate an existing task while keeping its ID.
@@ -260,9 +258,10 @@ with **Someone no longer in the organization**, and under a person the way
 they deleted, in the app, through a personal token or through a connected
 app. **Assigned to** lists the tasks assigned to one person and needs
 projects chosen. In a login with seats in several organizations, **Deleted
-by** needs projects chosen too. Some notes say that matching tasks might not
-be listed, or that tasks deleted before this version of Qivo are found by
-their key or title only. A task inside a deleted project can only come back
+by** needs projects chosen too. A search always notes that matching tasks
+might not be listed. Tasks deleted on or before 5 November 2026 are found by
+their key only, and **Assigned to** may miss them, which a note says while such
+tasks may be in Deleted items. A task inside a deleted project can only come back
 with its project, and a subtask deleted with its task only with that task and
 its other subtasks. When search finds such a task, it shows on a line of its
 own, and its **Restore** first says what comes back with it.

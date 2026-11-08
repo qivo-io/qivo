@@ -65,11 +65,19 @@ const mcpDelete = (t: T, who: Doc<'profiles'>, credential: EventOwner, task: Doc
     ref: task.id,
   })
 
-/** The Deleted items rows `who` sees, by item id. */
+/** The Deleted items rows `who` sees, by item id: each stored item's row
+ * as deletedItems.item answers it, without those `who` does not see. */
 async function rowsOf(t: T, who: Doc<'profiles'>) {
-  const { items } = await as(t, who).query(api.deletedItems.list, {})
-  return new Map(items.map((row) => [row.id, row]))
+  const stored = await t.run((ctx) => ctx.db.query('deleted_items').collect())
+  const rows = new Map<string, NonNullable<Awaited<ReturnType<typeof itemRow>>>>()
+  for (const d of stored) {
+    const row = await itemRow(t, who, d.id)
+    if (row !== null) rows.set(row.id, row)
+  }
+  return rows
 }
+const itemRow = (t: T, who: Doc<'profiles'>, id: string) =>
+  as(t, who).query(api.deletedItems.item, { id })
 
 describe('REST and MCP deletes in Deleted items', () => {
   it('record each kind of credential, and keep the provenance the activity row always had', async () => {

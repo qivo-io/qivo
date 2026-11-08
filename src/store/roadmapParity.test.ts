@@ -1114,11 +1114,12 @@ function teamDiffers(
   })
 }
 
-/** Every selection a Team case compares for store `P`, All projects, My
- * view, each top-level project the store shows and each of their
- * sub-projects it shows. */
+/** Every selection a Team case compares for store `P`, My view, each
+ * top-level project the store shows and each of their sub-projects it
+ * shows. No view has a selection over all projects; the strip's All
+ * projects mode covers them for each of these. */
 function teamScopes(P: Store): string[] {
-  const out = [P.ALL_SCOPE, P.MINE_SCOPE]
+  const out = [P.MINE_SCOPE]
   for (const meta of P.visibleProjects()) {
     out.push(meta.id)
     for (const id of meta.children ?? []) if (P.canSee(id)) out.push(id)

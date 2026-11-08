@@ -77,8 +77,8 @@ vi.mock('./lib/auth', () => ({
 }))
 
 const AT = '2026-09-14T08:00:00.000Z'
-// All projects' Board, which names no organization
-const ALL_BOARD = '/app/~/board/all'
+// My view's Board, which names no organization
+const MINE_BOARD = '/app/~/board/mine'
 // 12,800 task numbers make 64 task windows; the last starts at fc000000
 const LAST_WINDOW = 'fc000000'
 
@@ -320,8 +320,8 @@ const arrive = () =>
 describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
   it('holds its address in a window that shows, and opens the task in its own scope once it arrives', async () => {
     const { store, org } = await bootLoading()
-    // from All projects, which Back to a task address leaves
-    await back(`/app/${org}/board/all`)
+    // from My view, which Back to a task address leaves
+    await back(`/app/${org}/board/mine`)
     const address = `/app/${org}/board/tasks/qn-2`
     await back(address)
     const waiting = await waitFor(
@@ -342,14 +342,14 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     expect(document.querySelector('[data-task-loading]')).toBeNull()
     expect(location.pathname).toBe(address)
     // it opened in its own project, so closing it shows that project's
-    // Board, not All projects
+    // Board, not My view
     await close()
     expect(location.pathname).toBe(`/app/${org}/board/p/1`)
   })
 
   it('closes from the waiting window, and the task does not open when it arrives', async () => {
     const { store, org } = await bootLoading()
-    await back(`/app/${org}/board/all`)
+    await back(`/app/${org}/board/mine`)
     await back(`/app/${org}/board/tasks/qn-2`)
     const waiting = await waitFor(
       () => document.querySelector('[data-task-loading]'),
@@ -358,17 +358,17 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     const closing = [...waiting.querySelectorAll('button')].find((b) => b.textContent === 'Close')
     await act(async () => closing?.click())
     expect(document.querySelector('[data-task-loading]')).toBeNull()
-    expect(location.pathname).toBe(ALL_BOARD)
+    expect(location.pathname).toBe(MINE_BOARD)
 
     await arrive()
     expect(store.P.stillLoading()).toBeNull()
     expect(document.body.textContent).not.toContain('Run the soak test')
-    expect(location.pathname).toBe(ALL_BOARD)
+    expect(location.pathname).toBe(MINE_BOARD)
   })
 
   it('keeps the window and the address once every task has loaded without the task, until the server says', async () => {
     const { store, org } = await bootLoading()
-    await back(`/app/${org}/board/all`)
+    await back(`/app/${org}/board/mine`)
     // no task has number 3
     const address = `/app/${org}/board/tasks/qn-3`
     await back(address)
@@ -395,14 +395,14 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
 
   it('names a page moved to while it waits, with the task, then keeps it once it arrives', async () => {
     const { org } = await bootLoading()
-    await back(`/app/${org}/board/all`)
+    await back(`/app/${org}/board/mine`)
     await back(`/app/${org}/board/tasks/qn-2`)
     await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
     const entries = history.length
     // the page moves under the waiting window, which stays
     await switchView('Overview')
     expect(document.querySelector('[data-task-loading]')).not.toBeNull()
-    expect(location.pathname).toBe(`/app/${org}/overview/all/tasks/qn-2`)
+    expect(location.pathname).toBe(`/app/${org}/overview/mine/tasks/qn-2`)
     expect(history.length).toBe(entries + 1)
 
     await arrive()
@@ -410,19 +410,19 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
       () => document.body.textContent?.includes('Run the soak test'),
       "the task's window",
     )
-    expect(location.pathname).toBe(`/app/${org}/overview/all/tasks/qn-2`)
+    expect(location.pathname).toBe(`/app/${org}/overview/mine/tasks/qn-2`)
     // the task joined the moved page's entry, as it would have opened there
     expect(history.length).toBe(entries + 1)
   })
 
   it('names the page it moved back to while it waits, then opens the task there', async () => {
     const { org } = await bootLoading()
-    await back(`/app/${org}/board/all`)
+    await back(`/app/${org}/board/mine`)
     await back(`/app/${org}/board/tasks/qn-2`)
     await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
     await switchView('Overview')
     await switchView('Board')
-    expect(location.pathname).toBe(`/app/${org}/board/all/tasks/qn-2`)
+    expect(location.pathname).toBe(`/app/${org}/board/mine/tasks/qn-2`)
 
     await arrive()
     await waitFor(
@@ -511,7 +511,7 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
 
   it('names the task that arrived while a refused Back stepped back, once it landed', async () => {
     const { org } = await bootLoading()
-    await back(`/app/${org}/board/all`)
+    await back(`/app/${org}/board/mine`)
     await back(`/app/${org}/board/tasks/QN-2`)
     await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
     // a refused Back returns to this entry, and the task arrives meanwhile
@@ -552,7 +552,7 @@ describe("Back to another organization's task still to arrive", { timeout: 30_00
     const first = when === 'Back' ? undefined : () => address
     const { org } = await bootLoading(true, first, partner)
     if (when === 'Back') {
-      await back(`/app/${org}/board/all`)
+      await back(`/app/${org}/board/mine`)
       await back(address)
     }
     await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
@@ -818,7 +818,7 @@ describe('Back and Forward in a session that never asked for every task', {
           if (read.args.ref === 'QN-2' || read.args.ref === row.id) read.next(okAnswer)
       })
     const title = () => document.querySelector('[data-task-title]')?.textContent
-    const board = `/app/${org}/board/all`
+    const board = `/app/${org}/board/mine`
     const address = `/app/${org}/board/tasks/qn-2`
     await back(board)
     await back(address)
@@ -845,8 +845,8 @@ describe('Back and Forward in a session that never asked for every task', {
 describe('Back to an address that is gone', { timeout: 30_000 }, () => {
   it('checks a project address the workspace does not hold on Back, keeping its entry, and shows the chooser where it is not available', async () => {
     const { store, org } = await bootLoading(false)
-    await back(`/app/${org}/board/all`)
-    expect(location.pathname).toBe(ALL_BOARD)
+    await back(`/app/${org}/board/mine`)
+    expect(location.pathname).toBe(MINE_BOARD)
     const entries = history.length
     // the server is asked by the address's organization and number; a
     // failed check keeps the address, with Retry, and no other page
@@ -884,7 +884,7 @@ describe('Back to an address that is gone', { timeout: 30_000 }, () => {
 
   it("keeps the address of a task the workspace does not hold and asks the server, which says it can't be opened", async () => {
     const { store, org } = await bootLoading(false)
-    await back(`/app/${org}/board/all`)
+    await back(`/app/${org}/board/mine`)
     const entries = history.length
     const address = `/app/${org}/board/tasks/qn-3`
     await back(address)

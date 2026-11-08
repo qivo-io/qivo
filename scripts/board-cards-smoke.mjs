@@ -71,6 +71,19 @@ async function assertActualCards(ids) {
   assert.deepEqual(actual.sort(), [...ids].sort(), 'A filtered-out task entered the board')
 }
 
+/* A column's count on the shown Board. It shows … until the Board's answer
+   for the filters on screen arrives (Kanban.tsx ColHeaderRow), which can
+   come after the cards, since the Board narrows its last answer by the
+   new text first. */
+async function statusCount(status) {
+  const selector = `${SHOWN} [data-status-count="${status}"]`
+  await page.waitForFunction((selector) => {
+    const text = document.querySelector(selector)?.textContent.trim()
+    return text !== undefined && text !== '…'
+  }, selector)
+  return (await page.locator(selector).innerText()).trim()
+}
+
 async function assertGroup(parentId, laneId, status, children) {
   const wrapper = cell(laneId, status).locator(`[data-parent-card="${parentId}"]`)
   await wrapper.waitFor({ state: 'visible' })
@@ -254,7 +267,16 @@ try {
   await signInDemo(page, demo)
   initialLayout = await page.evaluate(() => window.PLANNER.loadUI().metaViz || 'swimlanes')
   initialFocus = await page.evaluate(() => !!window.PLANNER.loadUI().focus)
-  await page.locator('aside').getByText('Luma Sensor', { exact: true }).click()
+  // Sign-in opens the project directory over the Overview, and a sidebar
+  // project keeps the view, so the drive opens Luma Sensor's Board by its
+  // number
+  const luma = await page.evaluate(
+    () => window.PLANNER.projects.find((p) => p.name === 'Luma Sensor' && !p.parent)?.num,
+  )
+  assert.ok(luma != null, 'Northstar holds no Luma Sensor')
+  await page.goto(`${demo.base}/app/${demo.orgSlug}/board/p/${luma}`, {
+    waitUntil: 'domcontentloaded',
+  })
   await page.getByRole('heading', { name: 'Luma Sensor', exact: true }).waitFor()
   if (initialFocus) await page.locator('[data-filter-focus]').click()
   // a large Board mounts in slices; this one is small, so this only guards
@@ -329,8 +351,8 @@ try {
     2,
     'Only columns with visible children need a family card',
   )
-  assert.equal((await page.locator(`${SHOWN} [data-status-count="todo"]`).innerText()).trim(), '3')
-  assert.equal((await page.locator(`${SHOWN} [data-status-count="done"]`).innerText()).trim(), '0')
+  assert.equal(await statusCount('todo'), '3')
+  assert.equal(await statusCount('done'), '0')
   log('Siblings share one card per column and swimlane; parent status contributes no card or count')
 
   await card(assigned).locator(`[data-avatar="${fixture.nora}"]`).waitFor({ state: 'visible' })
@@ -491,7 +513,7 @@ try {
     await cell(fixture.electronics, 'done').locator(`[data-card="${parent}"]`).count(),
     1,
   )
-  assert.equal((await page.locator(`${SHOWN} [data-status-count="done"]`).innerText()).trim(), '1')
+  assert.equal(await statusCount('done'), '1')
   await card(parent).click()
   const status = page.locator('[aria-label="Status"]')
   await status.waitFor({ state: 'visible' })

@@ -586,15 +586,7 @@ describe('what the page reads', () => {
 
   it('reads nothing of the workspace’s roster, projects or admin rule', async () => {
     const source = readFileSync('src/panels/settings/DeletedItems.tsx', 'utf8')
-    for (const read of [
-      'P.isAdmin',
-      'P.users',
-      'P.projects',
-      'P.archivedProjects',
-      'P.levelOn',
-      'deletedItems.list',
-      'deletedItems.matches',
-    ])
+    for (const read of ['P.isAdmin', 'P.users', 'P.projects', 'P.archivedProjects', 'P.levelOn'])
       expect(source, read).not.toContain(read)
     await load(world())
     const isAdmin = vi.spyOn(store.P, 'isAdmin')

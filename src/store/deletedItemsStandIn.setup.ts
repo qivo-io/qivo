@@ -26,10 +26,9 @@
    - `kind`, `deleted_by` with `via`, `someone`, `assignee` and the search
      (convex/lib/searchTerms.ts, whole words, the last also as a prefix,
      accents exact) apply before the page is cut, which `limit` sets;
-   - `missing: 'matches'` on every search page of a seat whose role does
-     not read every task, `legacy` on the scoped search and assignee pages
-     of a seat that is not an admin's, and an admin's while the fixture
-     holds older rows;
+   - `missing: 'matches'` on every search page, `legacy` on the scoped
+     search and assignee pages of a seat that is not an admin's, and an
+     admin's while the fixture holds older rows;
    - the refusals of an argument the page does not take, as bad_request,
      and of a search past LIMITS.search, as the rule.
    Its cursors are plain JSON of the arguments and the position, refused
@@ -104,16 +103,13 @@ export type DeletedFixtureItem = {
   purge?: PurgeSummary | null
 }
 
-/** One seat of the login. `reads_all` says its role reads every task,
-    which no role does since the admin access split, so the fixtures answer
-    false for every seat, an admin's included. */
+/** One seat of the login. */
 export type DeletedSeat = {
   org_id: string
   org_name: string
   me: string
   role: DeletedRole['role']
   can_purge: boolean
-  reads_all: boolean
 }
 
 /** The deleted items one login sees, its seats, the projects each seat
@@ -123,7 +119,8 @@ export type DeletedFixture = {
   items: DeletedFixtureItem[]
   projects: { id: string; org_id: string; parent_id?: string }[]
   people: (DeletedPerson & { org_id: string })[]
-  /** an admin's organization holds rows stored before the page's release */
+  /** an admin's organization holds rows stored before v0.1.122, the first
+      release that wrote the page's fields */
   older?: boolean
 }
 
@@ -348,7 +345,8 @@ export function deletedPageOf(
     next_cursor: next === null ? null : JSON.stringify([key, next]),
   }
   if (scope === undefined && args.kind !== 'project') page.scope_needed = true
-  const searchNote = terms.length > 0 && seats.some((s) => !s.reads_all) ? 'matches' : undefined
+  // matches may be missing from every search page
+  const searchNote = terms.length > 0 ? 'matches' : undefined
   const missing = force.missing ?? searchNote
   if (missing !== undefined) page.missing = missing
   const legacy =
@@ -648,9 +646,7 @@ export function deletedFixtureOf(
     const admin = me.org_role === 'admin'
     const lead = ws.projects.some((p) => p.org_id === org.id && p.lead_id === me.id)
     const role: DeletedRole['role'] = admin ? 'admin' : lead ? 'lead' : 'user'
-    return [
-      { org_id: org.id, org_name: org.name, me: me.id, role, can_purge: admin, reads_all: false },
-    ]
+    return [{ org_id: org.id, org_name: org.name, me: me.id, role, can_purge: admin }]
   })
   const seatOf = (org: string) => seats.find((s) => s.org_id === org)
   const projectById = new Map(ws.projects.map((p) => [p.id, p]))

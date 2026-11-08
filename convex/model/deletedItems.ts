@@ -54,11 +54,10 @@
  * live projects it goes back to, a project item over its stored rows
  * (storedLevels), each with the seat in the item's organization. An
  * organization admin keeps every item that is not purging, with its
- * metadata and Delete now, and reads its tasks as their role reads them
- * (roleReadsEveryTask), which since the admin access split is only those
- * their ordinary access reaches, so no title, hit or count comes from a
- * project they cannot read. A Memo keeps the reads they
- * repeat; a list read seeds one per seat (sightOf).
+ * metadata and Delete now, and reads only the tasks their ordinary access
+ * reaches (adminView), with no shortcut for the role, so no title, hit or
+ * count comes from a project they cannot read. A Memo keeps the reads
+ * they repeat; a page read seeds one per seat (sightOf).
  *
  * The step machine. Each step spends one budget, TRASH_BUDGET scaled by the
  * job's budget_scale: rows moved, their bytes, task rows moved and index
@@ -2061,39 +2060,27 @@ export type ItemView = {
   projects: Item['projects']
   /** The entries whose tasks the person may read, which every task a row,
    * hit or count shows comes from. They are `projects` for anyone but an
-   * organization admin whose role does not read every task (after the
-   * admin access split, roleReadsEveryTask), and for such an admin the
-   * entries their ordinary access reaches (adminView). */
+   * organization admin, and for an admin the entries their ordinary access
+   * reaches (adminView). */
   readable: Item['projects']
   /** A task item whose root's project the person cannot see. It is listed
    * only through a task they can see, without the root, its path or the
    * reason, and cannot be restored by them. Never an admin's. */
   redacted: boolean
-  /** An admin's task item whose root's project they cannot read, which
-   * only the admin access split brings. Its row keeps the item's key,
-   * path, counts, deleter and state, for Delete now, and shows no title,
-   * status or reason (model/deletedItemsList.ts rowOf). */
+  /** An admin's task item whose root's project they cannot read. Its row
+   * keeps the item's key, path, counts, deleter and state, for Delete now,
+   * and shows no title, status or reason (model/deletedItemsList.ts
+   * rowOf). */
   hidden: boolean
-}
-
-/** Whether `me`'s role alone gives a level on every project of their
- * organization. Asked of levelsFrom itself, with no grant on a top-level
- * project without a lead, and it reads nothing. Since the admin access
- * split no role does, so it is false for every seat and adminView's
- * read-everything branch never runs; t3/limits-project-old-paths removes
- * it with that branch. tests/adminSplit.test.ts and
- * tests/deletedItemsAdminView.test.ts fail if it answers true again. */
-export function roleReadsEveryTask(me: Doc<'profiles'>): boolean {
-  const probe = { id: '', org_id: me.org_id, type: 'meta' as const }
-  return levelsFrom(me, [probe], [], []).levelOf(probe) !== null
 }
 
 /**
  * What `me` sees of `item`, or null when it is hidden from them (design
  * 6.1). `me` is their seat in the item's organization, never another one.
  * Organization admins see every item that is not purging, stuck ones and
- * those whose project or parent is no longer live included, and read its
- * tasks as their role reads them (adminView). Nobody else sees a stuck
+ * those whose project or parent is no longer live included, with its
+ * metadata and Delete now, and read only the tasks their ordinary access
+ * reaches (adminView). Nobody else sees a stuck
  * item, or one whose project (a task item) or parent (a sub-project item)
  * is no longer live: those wait for an admin.
  *
@@ -2121,9 +2108,9 @@ export async function viewOf(
   return item.kind === 'task' ? await taskItemView(s, me) : await projectItemView(s, me)
 }
 
-/* An organization admin's view holds every entry of the item, read as their
- * role reads it. While the role reads every task (roleReadsEveryTask) it
- * reads all of it, with no read. Otherwise a task item's entry is readable
+/* An organization admin's view holds every entry of the item, and reads
+ * its entries by the admin's own levels, with no shortcut for the role: a
+ * task item's entry is readable
  * when its project is live by the reference predicate and the admin has a
  * level on it (liveLevel), so one whose project is in Deleted items, gone
  * or outside a valid tree is not, as no one else sees such an entry, and
@@ -2140,7 +2127,6 @@ export async function viewOf(
 async function adminView(s: Scope, me: Doc<'profiles'>): Promise<ItemView> {
   const { item } = s
   const whole = { projects: item.projects, readable: item.projects, redacted: false, hidden: false }
-  if (roleReadsEveryTask(me)) return whole
   if (item.kind === 'project') {
     const levels = await storedLevels(s, me)
     const readable = item.projects.filter(

@@ -6,9 +6,9 @@
    it, newest first, 25 at a time with a search, each one live read
    (views/useMilestoneSection.ts) of convex/milestones.ts section on a kept
    page's two fixed slots. A project or sub-project reads its top-level
-   project's milestones, My view reads `mine`, which the server resolves to
-   the projects that hold the person's own work, and All projects reads
-   none (coordinator, 7 November 2026). The agenda lists the Overview's
+   project's milestones, and My view reads `mine`, which the server
+   resolves to the projects that hold the person's own work (coordinator,
+   7 November 2026). The agenda lists the Overview's
    sections, an agent decision of 7 November 2026 that confirms the
    coordinator's assumption of 28 October 2026.
 
@@ -37,13 +37,12 @@ export type ScopeMilestoneBase = { projects: readonly string[] } | { mine: true 
     its top-level project, `info.metas[0]?.id ?? info.id`, so a sub-project
     whose parent the store does not hold names itself and the server folds
     it, as the Roadmap's flags name it (roadmap/roadmapMilestones.ts
-    markerProjects); `mine` for My view, so the app never names My view's
-    projects; and none for All projects, which asks to choose a project. */
+    markerProjects); and `mine` for My view, so the app never names My
+    view's projects. */
 export function scopeMilestoneBase(
-  info: Pick<ScopeInfo, 'id' | 'wide' | 'mine' | 'metas'>,
-): ScopeMilestoneBase | null {
+  info: Pick<ScopeInfo, 'id' | 'mine' | 'metas'>,
+): ScopeMilestoneBase {
   if (info.mine) return { mine: true }
-  if (info.wide) return null
   return { projects: [info.metas[0]?.id ?? info.id] }
 }
 

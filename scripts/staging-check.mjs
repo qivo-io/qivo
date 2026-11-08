@@ -186,6 +186,12 @@
  * the project, opens the bare address again, which must show the chooser
  * saying the project is no longer available, and opens the run's main
  * project from it (ui/startup-selection).
+ * It opens /board/all, an address that once named all projects, which
+ * must give way to the startup rule's page with the All projects row
+ * unlit, makes a project of its own that Nora only manages and opens its
+ * numbered Settings address, which the deployment's projectSettings.get
+ * answers by organization and number, through a reload, and a number no
+ * project holds, which opens the account page (ui/old-paths).
  * It makes 26 tasks of its own in Alpha and deletes them over REST,
  * searches its tag in Settings › Projects › Deleted items, from the
  * deployment's page (deletedItems.page), and waits until the page answers
@@ -1500,7 +1506,7 @@ async function shot(page, name) {
 }
 
 async function signIn(account) {
-  const response = await app.goto(`${cfg.appOrigin}/app/~/board/all`, {
+  const response = await app.goto(`${cfg.appOrigin}/app/~/projects`, {
     waitUntil: 'domcontentloaded',
   })
   if (response && response.status() === 401)
@@ -4254,7 +4260,7 @@ async function earlierThreadChecks(task, comments, ends, changes) {
     })
   // leave the task, so its thread is not open while the run changes it
   await check('thread-pages/ui/leave', async () => {
-    await app.goto(`${cfg.appOrigin}/app/~/board/all`, { waitUntil: 'domcontentloaded' })
+    await app.goto(`${cfg.appOrigin}/app/~/projects`, { waitUntil: 'domcontentloaded' })
     await app.waitForSelector('[data-all-nav]', { timeout: 60_000 })
   })
 }
@@ -7693,7 +7699,7 @@ async function adminManagementCheck() {
     )
     // Search has answered once it holds the control task, and then must
     // not hold the managed one
-    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/all`, {
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/projects`, {
       waitUntil: 'domcontentloaded',
     })
     const open = app.locator('button[data-sidebar-search]')
@@ -8675,6 +8681,107 @@ async function archivedTasksPageCheck(target) {
   })
 }
 
+/** The step that checks the old All projects addresses and a numbered
+ *  project page (oldPathsCheck). */
+export const OLD_PATHS_STEP = 'ui/old-paths'
+
+/** The step's own cleanup, reported apart from the step. */
+export const OLD_PATHS_CLEANUP = 'cleanup/old-paths'
+
+/** The marks the step waits for: the sidebar's All projects row and its
+ *  lit mark (src/App.tsx), the project chooser, a project page's state
+ *  (src/panels/settings/ProjectSettings.tsx) and a Settings page
+ *  (src/panels/Settings.tsx). */
+export const OLD_PATHS_MARKS = {
+  allNav: 'data-all-nav',
+  lit: 'data-on',
+  chooser: 'data-project-chooser',
+  projectPage: 'data-project-settings-state',
+  settingsPage: 'data-settings-page',
+}
+
+/** The old addresses and a numbered project page on the deployment's
+ *  answers. In the app as Nora it opens `/board/all`, an address that once
+ *  named all projects, which must give way to the startup rule's page, a
+ *  project's view or the project chooser, with the All projects row unlit.
+ *  Over REST with Nora's write token it makes `<tag> Old paths` led by the
+ *  Standard agent and removes Nora's automatic User grant (DELETE with
+ *  on_held_tasks leave), so she only manages it, then opens its numbered
+ *  Settings address, which the deployment's projectSettings.get must answer
+ *  by organization and number: the page shows the project's name and keeps
+ *  the numbered address, also after a reload. A number no project holds,
+ *  the run's largest plus 100,000, opens the account page. The project is
+ *  deleted at the end by the app's store, also after a failure
+ *  (deleteProjectInApp), under OLD_PATHS_CLEANUP, and the sweep finds one
+ *  left behind as it finds ui/admin-management's. It must run before the
+ *  run archives M and needs a backend from the release that takes get by
+ *  number; against an older one the numbered page shows its failure and
+ *  the step fails. */
+async function oldPathsCheck() {
+  const w = run.creds.writeToken
+  const std = run.agents.std
+  const m = OLD_PATHS_MARKS
+  const path = () => new URL(app.url()).pathname
+  let project = null
+  await check(OLD_PATHS_STEP, async () => {
+    // 1. the old address takes the startup rule, with the row unlit
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/all`, {
+      waitUntil: 'domcontentloaded',
+    })
+    expect(
+      await until(
+        async () =>
+          !path().endsWith('/all') &&
+          ((await app.locator(`[${m.chooser}]`).count()) > 0 ||
+            (await app.locator('[data-workspace-view] [data-board-root]').count()) > 0),
+        60_000,
+      ),
+      `the old address did not give way to the startup rule, at ${path()}`,
+    )
+    eq(
+      await app.locator(`aside [${m.allNav}]`).getAttribute(m.lit),
+      null,
+      'the All projects row after the old address',
+    )
+    const landed = path()
+    // 2. a project Nora only manages, by its numbered Settings address
+    const name = `${run.tag} Old paths`
+    project = await restOk(w, 'POST', '/projects', { name, lead_id: std.id })
+    await restOk(w, 'DELETE', `/projects/${project.id}/access/users/${run.nora.id}`, {
+      on_held_tasks: 'leave',
+    })
+    expect(Number.isInteger(project.num), 'the run project has no number')
+    const address = `/app/${ORG_SLUG}/settings/project/${project.num}`
+    const showsPage = async () => {
+      await app.locator(`[${m.projectPage}="ok"]`).waitFor({ timeout: 60_000 })
+      expect(
+        await until(
+          async () =>
+            ((await app.locator(`[${m.settingsPage}] h1`).textContent()) ?? '').includes(name),
+          30_000,
+        ),
+        `the numbered page does not name ${name}`,
+      )
+      eq(path(), address, "the numbered page's address")
+    }
+    await app.goto(`${cfg.appOrigin}${address}`, { waitUntil: 'domcontentloaded' })
+    await showsPage()
+    await app.reload({ waitUntil: 'domcontentloaded' })
+    await showsPage()
+    // 3. a number no project holds opens the account page
+    const nums = (await readList(w, '/projects')).map((p) => p.num ?? 0)
+    const free = Math.max(project.num, ...nums) + 100_000
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/project/${free}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    await app.locator(`[${m.settingsPage}="account"]`).waitFor({ timeout: 60_000 })
+    eq(path(), '/app/~/settings/account', 'the address of a number no project holds')
+    return `/board/all gave way to ${landed}, ${name} opened by its number ${project.num} and kept it through a reload, and number ${free} opened the account page`
+  })
+  // the step's own cleanup, also after a failure, under its own id
+  if (project) await check(OLD_PATHS_CLEANUP, () => deleteProjectInApp(w, project))
+}
+
 /** The step that checks startup selection (startupSelectionCheck). */
 export const STARTUP_SELECTION_STEP = 'ui/startup-selection'
 
@@ -8888,7 +8995,7 @@ async function projectPickerCheck(tasks) {
     expect(await exactly([one.id, three.id]), 'the page lost its rows when the window closed')
     eq(await page.locator(`[${PICKER_EXPECTED.chip}="${A.id}"]`).count(), 1, "Alpha's chip")
     // Search narrowed to Zulu finds only the task archived there
-    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/all`, {
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/projects`, {
       waitUntil: 'domcontentloaded',
     })
     const search = app.locator('button[data-sidebar-search]')
@@ -8939,7 +9046,7 @@ const archivedNotes = () => `${run.tag} notes kept with the archived task`
  *  accepted and still returns active matches. */
 async function paletteSearchCheck(target, active) {
   await check('ui/search-archived', async () => {
-    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/all`, {
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/projects`, {
       waitUntil: 'domcontentloaded',
     })
     const open = app.locator('button[data-sidebar-search]')
@@ -10410,6 +10517,10 @@ async function main() {
   // address after the server's check, and the project chooser once its
   // project is archived, with a project and a sub-project of its own
   await startupSelectionCheck()
+  // the old All projects address, which takes the startup rule, and a
+  // numbered Settings page of a project Nora only manages, opened by
+  // organization and number
+  await oldPathsCheck()
   // Deleted items on the server's page, with tasks and a sub-project of its
   // own, restored past 25 in steps and deleted for good
   await deletedItemsCheck()

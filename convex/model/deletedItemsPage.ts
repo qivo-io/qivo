@@ -2,10 +2,10 @@
  * DELETED_PAGE.rows entries, project entries first and then task entries,
  * each part newest first, with the type, deleter, search and assignee
  * filters applied before the page is cut, and a sealed next_cursor that
- * continues after its last entry. The app reads it in place of
- * deletedItems.list and matches (model/deletedItemsList.ts) from the release
- * after v0.1.148, and it builds its rows with that module's rowOf, so it
- * shows nothing the list would not show the same caller.
+ * continues after its last entry. The app reads it from the release after
+ * v0.1.148, and it builds its rows with model/deletedItemsList.ts rowOf,
+ * the row deletedItems.item answers, so it shows nothing of an item that
+ * the item's row would not show the same caller.
  *
  * Scope. Without one the page reads every active seat of the login and
  * lists project entries only, and says that task entries need a scope
@@ -19,9 +19,9 @@
  * task in one of its projects and, for a search or the assignee filter, the
  * tasks inside its project items, each an entry of its own.
  *
- * Sources. A seat reads only the ranges model/deletedItemsList.ts
- * candidatesOf reads for it, split by kind and narrowed to the scope
- * (projectPlan, taskPlan). An organization admin reads the organization's
+ * Sources. A seat reads only the ranges that can hold what it sees, split
+ * by kind and narrowed to the scope (projectPlan, taskPlan). An
+ * organization admin reads the organization's
  * items of a kind, one person's, or those under the scope's projects. Anyone
  * else reads their own deletes, the project items whose stored rows name
  * them as lead, and the items under projects of the scope (live or
@@ -77,14 +77,12 @@
  * `missing` says that entries sorting before the page's last one may be
  * missing: `reads` when the budget cut an unordered range or the opening of
  * a seat's sources, or the page went past an entry whose row its budget
- * could not build, and for the search of a seat whose role reads every
- * task (model/deletedItems.ts roleReadsEveryTask, which no role does since
- * the admin access split) also the gathering; `matches` when such a seat's
- * search source read its whole allowance. A search page of any other seat,
- * an admin's included, always says `matches`,
- * never computed from a stop, since its search sources hold tasks hidden
- * from it (owner, 2026-10-28, as main Search). Rows stored before the
- * page's release hold none of its fields; `legacy` says so (olderRows). */
+ * could not build, and `matches` on every search page, an admin's
+ * included, never computed from a stop, since every seat's search sources
+ * hold tasks hidden from it (owner, 2026-10-28, as main Search). Rows
+ * stored before v0.1.122, the first release that wrote the page's fields,
+ * hold none of them, so only their number finds them; `legacy` says so
+ * (olderRows). */
 
 import type { IndexRange } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
@@ -104,16 +102,8 @@ import {
   searchTerms,
 } from '../lib/searchTerms'
 import { issueKey } from '../lib/taskRefs'
+import { type ItemView, type Sight, sameReference, sightOf, viewOf } from './deletedItems'
 import {
-  type ItemView,
-  roleReadsEveryTask,
-  type Sight,
-  sameReference,
-  sightOf,
-  viewOf,
-} from './deletedItems'
-import {
-  type DeletedMatch,
   type DeletedRow,
   hitPath,
   howOf,
@@ -193,32 +183,35 @@ type Profile = Doc<'profiles'>
  * `call`, `build`, `find` and `gather` whole rather than change their
  * fields.
  *
- * Measured on 5 November 2026 in convex-test at the design size with
+ * Measured on 8 November 2026 in convex-test at the design size with
  * ordinary text, one figure raised a case
- * (tests/deletedItemsPageReads.test.ts), as the page counts its reads,
- * `call` and `build` together, each search result a range. Every case
- * answered whole. The rows of each page's entries (`build`) read one range
- * and no document, as judging the items had read what the rows show. A project item of
- * 30 live and 40 archived sub-projects with 800 open tasks: an admin's
- * search for a word every task holds reads its 256 results and 269 ranges,
- * 271 documents and 0.20 MiB in all, since no older row shares its
- * allowance, and says `matches`; its lead's search 234 ranges and 0.22
- * MiB. A sub-project item of 300 tasks: the same search 269 ranges and
- * 0.21 MiB, an admin's assignee page 12 ranges and 39 documents, a lead's
- * scan 24 and 42. A lead of 234 top-level projects with 200 live and 500
- * archived sub-projects under them: a browse's first page opens 236
- * ranges for the project entries and 935 for the task entries, and reads
- * 1,178 ranges, 1,030 documents and 0.41 MiB for its 25 entries, the next
- * page 942 ranges and 0.40 MiB; its search, past `searches`, reads the
- * organization in one query, 845 ranges and 0.80 MiB. A member who leads
- * the same 700 sub-projects one by one: a browse's first page reads 1,410
- * ranges, 1,146 documents and 0.53 MiB, the next page 1,408 ranges and
- * 0.51 MiB, an assignee page 1,434 ranges and 0.55 MiB, and the search,
- * past `searches`, 611 ranges and 0.85 MiB. The sight of a seat beside
- * the catalogue of 2,000 projects reads 2,010 documents and 0.70 MiB,
- * beside 1,000 people 1,011 and 0.32 MiB, and for a person whose team
- * shares 50 live and 150 archived sub-projects, three a top-level project,
- * 483 and 0.13 MiB.
+ * (tests/deletedItemsPageReads.test.ts), with the page's ranges as it
+ * counts them, `call` and `build` together, each search result a range,
+ * and its documents and bytes as convex-test counts them. Every case
+ * answered whole. No search source reads rows stored before v0.1.122, so
+ * each search query's allowance is its own. The rows of each page's
+ * entries (`build`) read one range and no document, as judging the items
+ * had read what the rows show. A project item of 30 live and 40 archived
+ * sub-projects with 800 open tasks: an admin who reads none of it searches
+ * for a word every task holds in its 256 results, 274 ranges, 345
+ * documents and 0.24 MiB in all, and the page says `matches` with no
+ * entry; its lead's search 157 ranges and 0.17 MiB. A sub-project item of
+ * 300 tasks: an admin's search 277 ranges and 0.21 MiB, a member's 368
+ * ranges and 0.27 MiB, an admin's assignee page 20 ranges and 44
+ * documents, a lead's scan 24 and 42. A lead of 234 top-level projects
+ * with 200 live and 500 archived sub-projects under them: a browse's
+ * first page opens 236 ranges for the project entries and 935 for the
+ * task entries, and reads 1,178 ranges, 1,030 documents and 0.41 MiB for
+ * its 25 entries, the next page 942 ranges and 0.40 MiB; its search, past
+ * `searches`, reads the organization in one query, 644 ranges and 0.65
+ * MiB. A member who leads the same 700 sub-projects one by one: a browse's
+ * first page reads 1,410 ranges, 1,146 documents and 0.53 MiB, the next
+ * page 1,408 ranges and 0.51 MiB, an assignee page 1,434 ranges and 0.55
+ * MiB, and the search, past `searches`, 410 ranges and 0.69 MiB. The
+ * sight of a seat beside the catalogue of 2,000 projects reads 2,010
+ * documents and 0.70 MiB, beside 1,000 people 1,011 and 0.32 MiB, and for
+ * a person whose team shares 50 live and 150 archived sub-projects, three
+ * a top-level project, 483 and 0.13 MiB.
  *
  * Timed on 7 November 2026 on a local backend (8 vCPU, one call at a time),
  * in one quiet session and one beside 8 busy loops, an organization admin's
@@ -237,6 +230,27 @@ type Profile = Doc<'profiles'>
  * `matches`, in at most 30 ms quiet. An everyday project item, for an admin
  * in 5 teams, reads 29, 43 and 0.01 to browse and 121, 134 and 0.08 to
  * search, with 25 entries, in at most 30 ms quiet and 54 ms busy.
+ *
+ * Timed on 8 November 2026 at 8e501d53 on a local backend on Boat (8 vCPU,
+ * one call at a time), in one quiet session and one beside 8 busy loops,
+ * with the search_title index of deleted_tasks gone, counted for the whole
+ * call with its sign-in. Every search page says missing `matches`. On the
+ * project item of 30 live and 40 archived sub-projects with 800 open tasks,
+ * its lead's search reads 281 ranges, 358 documents and 0.26 MiB for 25
+ * entries, and an admin who reads none of it reads 279, 355 and 0.25 for
+ * none, in 35 to 66 ms of JavaScript quiet and at most 122 ms busy. On a
+ * sub-project item of 300 tasks, its lead reads 284, 544 and 0.41 and an
+ * admin with a User grant on its parent 283, 289 and 0.21, in at most 81 ms
+ * quiet and 93 ms busy. A member who leads 200 live and 500 archived
+ * sub-projects one by one, searching past `searches`, reads 419, 1,356 and
+ * 0.76 in 76 to 113 ms of JavaScript quiet and 134 to 161 ms busy, with a
+ * total of 245 to 340 ms quiet and 524 to 611 ms busy. An everyday project
+ * item of 90 tasks, its lead's search and an admin's, reads 115 ranges, 240
+ * to 244 documents and 0.12 MiB in at most 60 ms quiet and 109 ms busy. The
+ * admins' searches and the member's come within 10 ranges of the
+ * convex-test counts above. The two leads' searches do not, against the
+ * project item lead's 157 ranges and the sub-project item member's 368
+ * there, and the timing did not find why.
  */
 export const DELETED_PAGE = {
   rows: 25,
@@ -260,11 +274,23 @@ const LOOKUP: Reads = { ranges: 16, rows: 128, bytes: 256 << 10 }
 
 /** A task the search or the assignee filter found, where its item's row
  * does not show it: a subtask of a task item, or a task of a project item.
- * As deletedItems.matches answers it, without the item's fields. */
-export type DeletedHit = Pick<
-  DeletedMatch,
-  'key' | 'title' | 'root_key' | 'root_title' | 'archived' | 'path' | 'redacted'
->
+ * `key`, `title`, `archived` and `path` are the task's own; `path` is where
+ * it sat, its project after the top-level or parent project, empty for a
+ * redacted task item as on its row. `root_key` and `root_title` name a task
+ * item's root when the task found is one of its subtasks, as the item's row
+ * would, so the page can say that the root and its other subtasks come back
+ * too. A redacted item's hit has neither, since its row never names the
+ * root, and a hidden item's has `root_key` without `root_title`, as its row
+ * shows the key without the title (hitOf). */
+export type DeletedHit = {
+  key: string
+  title: string
+  root_key?: string
+  root_title?: string
+  archived: boolean
+  path: string[]
+  redacted?: true
+}
 
 /** One line of the page: an item, or a task found inside one. */
 export type DeletedEntry = {
@@ -284,12 +310,11 @@ export type DeletedPage = {
   /** the scope needs more sources than one page merges; choose fewer projects */
   too_wide?: true
   /** entries that sort before the last one may be missing, `reads` after
-   * a budget stop and `matches` on every search page of a seat whose role
-   * does not read every task, or after a search source of one whose role
-   * does read its whole allowance */
+   * a budget stop and `matches` on every search page */
   missing?: 'matches' | 'reads'
-  /** the search or the assignee filter may miss tasks deleted before the
-   * page's release, unless the search names their key */
+  /** the search or the assignee filter may miss tasks deleted before
+   * v0.1.122, the first release that wrote the page's fields, which only a
+   * search for their key finds (olderRows) */
   legacy?: true
 }
 
@@ -463,11 +488,9 @@ const keyOf = (a: Asked): Promise<string> =>
 /** One seat the page reads, with its sight of its organization. `admin`
  * decides the management parts, since an organization admin keeps every
  * item, which are the organization's ranges, heldFor, the admin's assignee
- * index and olderRows' probe. `readsAll`, whether the seat's role reads
- * every task (model/deletedItems.ts roleReadsEveryTask), decides the
- * search's notes. It is false for everyone since the admin access split,
- * and t3/limits-project-old-paths removes it. */
-type Seat = { me: Profile; sight: Sight; orgName: string; admin: boolean; readsAll: boolean }
+ * index and olderRows' probe. Which tasks the seat reads is its view of
+ * each item (model/deletedItems.ts viewOf), an admin's included. */
+type Seat = { me: Profile; sight: Sight; orgName: string; admin: boolean }
 
 /** What a scope holds in one seat's sight: every project, or the named
  * projects the seat sees with the sub-projects it sees of the top-level
@@ -605,12 +628,10 @@ type Run = {
   seats: Map<string, Seat>
   entries: Placed[]
   next: Place | null
-  /** an unordered range, a seat's opening or the gathering of seats whose
-   * role reads every task was cut, or the page went past an entry whose
-   * row it could not build */
+  /** an unordered range or a seat's opening was cut, or the page went
+   * past an entry whose row it could not build */
   reads: boolean
-  /** a search source of a seat whose role reads every task read its whole
-   * allowance, or the search is another seat's */
+  /** the page has search terms, so matches may be missing */
   matches: boolean
   path: Path
 }
@@ -642,13 +663,7 @@ async function seatOf(run: Run, me: Profile): Promise<Seat> {
   const reader = spending(run.ctx, run.call)
   const sight = await sightOf(reader, me)
   const orgName = (await byId(reader, 'organizations', me.org_id))?.name ?? ''
-  const seat = {
-    me,
-    sight,
-    orgName,
-    admin: me.org_role === 'admin',
-    readsAll: roleReadsEveryTask(me),
-  }
+  const seat = { me, sight, orgName, admin: me.org_role === 'admin' }
   run.seats.set(me.org_id, seat)
   return seat
 }
@@ -1291,9 +1306,11 @@ type Query = {
 }
 
 /** What a scoped seat's search reads: its queries, and the cross-project
- * items no query covers, which it reads whole. `cut` when the gathering's
- * room ran out while it read the unordered ranges that name those items. */
-type SearchPlan = { queries: Query[]; crossItems: Item[]; cut?: true }
+ * items no query covers, which it reads whole. When the gathering's room
+ * runs out while it reads the unordered ranges that name those items, it
+ * holds those it read, and the page says `matches` as every search page
+ * does. */
+type SearchPlan = { queries: Query[]; crossItems: Item[] }
 
 /** The search over a seat's whole organization, which judges every
  * candidate: an admin's All projects, an admin's search past the bounds,
@@ -1357,7 +1374,7 @@ async function searchPlan(run: Run, seat: Seat, scope: Scoped): Promise<SearchPl
     projects.has(item.project_id)
   const reader = spending(run.ctx, run.gather, run.call)
   const out = () => spent(run.gather) || spent(run.call)
-  const { found, cut } = await unorderedItems(reader, seat, unordered, new Map(), out)
+  const { found } = await unorderedItems(reader, seat, unordered, new Map(), out)
   const crossItems: Item[] = []
   for (const item of found) {
     if (covered(item) || !holdsTasks(scope, item)) continue
@@ -1365,7 +1382,7 @@ async function searchPlan(run: Run, seat: Seat, scope: Scoped): Promise<SearchPl
     else crossItems.push(item)
   }
   if (queries.length > DELETED_PAGE.searches) return WHOLE
-  return cut ? { queries, crossItems, cut } : { queries, crossItems }
+  return { queries, crossItems }
 }
 
 /**
@@ -1378,23 +1395,16 @@ async function searchPlan(run: Run, seat: Seat, scope: Scoped): Promise<SearchPl
  * is split into equal allowances (DELETED_PAGE.results across the queries,
  * at most DELETED_PAGE.candidates each), and each lookup of a task number
  * counts as LOOKUP, so what one source reads does not change how many
- * results another may read. The older rows' title source (search_title)
- * is read only when `older` (olderRows), has an allowance of its own and
- * adds nothing to `missing`. A candidate counts when its item passes
+ * results another may read. A candidate counts when its item passes
  * viewOf, is not purging and meets the scope and filters, its project is
  * one the seat may read in its view of the item (ItemView readable), and
  * its number, title and readable description hold every term
- * (matchesTerms). A stop of the gathering sets `reads` only when every
- * seat's role reads every task (Seat readsAll); any other search page says
- * `matches` whatever it read.
+ * (matchesTerms). A row stored before v0.1.122 holds no search_text, so
+ * only its number finds it (olderRows). A stop of the gathering adds
+ * nothing to `missing`, since every search page says `matches` whatever it
+ * read.
  */
-async function gatherTasks(
-  run: Run,
-  seats: Seat[],
-  scope: Scoped | null,
-  from: At | null,
-  older: boolean,
-) {
+async function gatherTasks(run: Run, seats: Seat[], scope: Scoped | null, from: At | null) {
   const { a } = run
   const text = convexText(a.terms)
   const refs = a.terms.filter((t) => t.num != null)
@@ -1403,7 +1413,6 @@ async function gatherTasks(
   const groups = new Map<string, Pending>()
   const items = new Map<string, Promise<{ item: Item; view: ItemView } | null>>()
   const out = (): boolean => spent(run.gather) || spent(run.call)
-  let cut = false
 
   const judged = (seat: Seat, id: string, ctx: QueryCtx) => {
     let known = items.get(id)
@@ -1444,50 +1453,31 @@ async function gatherTasks(
   const planned: { seat: Seat; plan: SearchPlan }[] = []
   if (scope !== null)
     for (const seat of seats) {
-      if (out()) {
-        cut = true
-        break
-      }
-      const plan = await searchPlan(run, seat, scope)
-      if (plan.cut) cut = true
-      planned.push({ seat, plan })
+      if (out()) break
+      planned.push({ seat, plan: await searchPlan(run, seat, scope) })
     }
-  const sources =
-    planned.reduce((n, p) => n + p.plan.queries.length, 0) + (older ? planned.length : 0)
+  const sources = planned.reduce((n, p) => n + p.plan.queries.length, 0)
   const allowance = Math.max(
     1,
     Math.min(DELETED_PAGE.candidates, Math.floor(DELETED_PAGE.results / Math.max(1, sources))),
   )
   /* Reads `query` a result at a time up to the allowance, each result a
-   * range more, as Convex counts it. Answers whether it read its whole
-   * allowance. */
-  const readQuery = async (
-    seat: Seat,
-    query: AsyncIterable<Task>,
-    keep: (task: Task) => boolean,
-  ): Promise<boolean> => {
+   * range more, as Convex counts it, or until the room runs out. */
+  const readQuery = async (seat: Seat, query: AsyncIterable<Task>): Promise<void> => {
     let read = 0
     for await (const task of query) {
       run.gather.ranges -= 1
       run.call.ranges -= 1
-      if (keep(task)) await consider(seat, task, reader)
-      if (++read >= allowance) return true
-      if (out()) {
-        cut = true
-        return false
-      }
+      await consider(seat, task, reader)
+      if (++read >= allowance || out()) return
     }
-    return false
   }
 
   try {
     // the task numbers the text names, in every seat, at a fixed size each
     for (const seat of seats)
       for (const ref of refs) {
-        if (out()) {
-          cut = true
-          throw new Stop()
-        }
+        if (out()) throw new Stop()
         for (const b of [run.gather, run.call]) {
           b.ranges -= LOOKUP.ranges
           b.rows -= LOOKUP.rows
@@ -1502,23 +1492,17 @@ async function gatherTasks(
     for (const { seat, plan } of planned) {
       const org = seat.me.org_id
       for (const q of plan.queries) {
-        if (out()) {
-          cut = true
-          throw new Stop()
-        }
+        if (out()) throw new Stop()
         const query = reader.db.query('deleted_tasks').withSearchIndex('search_text', (s) => {
           let f = s.search('search_text', text).eq('org_id', org)
           if (q.field !== undefined) f = f.eq(q.field, q.value)
           if (a.assignee !== undefined) f = f.eq('assignee_id', a.assignee)
           return f
         })
-        if (await readQuery(seat, query, () => true)) run.matches ||= seat.readsAll
+        await readQuery(seat, query)
       }
       for (const item of plan.crossItems) {
-        if (out()) {
-          cut = true
-          throw new Stop()
-        }
+        if (out()) throw new Stop()
         // a family hidden from the seat, whose tasks it need not read
         if ((await judged(seat, item.id, reader)) === null) continue
         const tasks = reader.db
@@ -1527,24 +1511,13 @@ async function gatherTasks(
         for await (const task of tasks) {
           await consider(seat, task, reader)
           // each task's row holds its searchable text
-          if (out()) {
-            cut = true
-            throw new Stop()
-          }
+          if (out()) throw new Stop()
         }
-      }
-      if (older) {
-        // rows stored before the page's release, which only this index holds
-        const titles = reader.db
-          .query('deleted_tasks')
-          .withSearchIndex('search_title', (s) => s.search('title', text).eq('org_id', org))
-        await readQuery(seat, titles, (task) => task.deleted_at === undefined)
       }
     }
   } catch (e) {
     if (!(e instanceof Stop)) throw e
   }
-  if (cut && seats.every((s) => s.readsAll)) run.reads = true
   const found = [...groups.values()]
     .filter((p) => from === null || before(from, p.at))
     .sort((x, y) => order(x.at, y.at))
@@ -1564,17 +1537,15 @@ class Stop extends Error {}
 
 /**
  * Whether the page says that its search or assignee filter may miss tasks
- * stored before its release (`legacy`). Such rows hold none of the page's
- * fields, so only their number and their title (search_title) find them,
- * and no backfill writes the fields (owner, 2026-10-28). Items expire in
- * 30 days, but a stuck item never does, so no date stands in for a look:
- * an admin's page asks the organization once whether it holds such a row
- * (by_org_assignee with neither field), and anyone else's always says so
- * while this path exists, as the look also sees rows hidden from them.
- * The same answer decides whether a search reads the older rows' title
- * source (gatherTasks), so an admin's search reads it only while such a
- * row exists. A later release removes the path, its search_title source
- * and this flag once a read-only count finds no such row on any
+ * stored before v0.1.122, the first release that wrote the page's fields
+ * (`legacy`). Such rows hold none of them, so only their number finds
+ * them, and no backfill writes the fields (owner, 2026-10-28). Items
+ * expire in 30 days, but a stuck item never does, so no date stands in for
+ * a look: an admin's page asks the organization once whether it holds such
+ * a row (by_org_assignee with neither field), and anyone else's always says
+ * so, as the look also sees rows hidden from them. This probe and `legacy`
+ * go once the closing review's read-only count
+ * (internal/olderDeletedTasks.ts count) finds no such row on any
  * deployment.
  */
 async function olderRows(run: Run, seat: Seat): Promise<boolean> {
@@ -1667,7 +1638,8 @@ async function unscoped(
   if (cursor !== null && cursor.path !== 'items') throw notThisPath()
   const from = cursor?.place ?? null
   const refs = a.kind !== 'project' && a.terms.some((t) => t.num != null)
-  if (a.terms.length > 0 && profiles.some((p) => !roleReadsEveryTask(p))) run.matches = true
+  // matches may be missing from every search page
+  if (a.terms.length > 0) run.matches = true
   if (a.kind !== 'task' && (from === null || from.part === 0)) {
     if (refs) run.floor = DELETED_PAGE.gather
     const plans: { seat: Seat; plan: Plan }[] = []
@@ -1697,8 +1669,7 @@ async function unscoped(
     }
     all.push(await seatOf(run, me))
   }
-  // a task reference finds older rows by number, so no title source reads
-  await gatherTasks(run, all, null, from?.part === 1 ? from.at : null, false)
+  await gatherTasks(run, all, null, from?.part === 1 ? from.at : null)
 }
 
 /** The page of one scope in the seat `me`. Answers a whole answer of its
@@ -1729,7 +1700,8 @@ async function scoped(
   // probe's answer for an admin, always for anyone else
   const legacy = tasks && (search || a.assignee !== undefined) && (await olderRows(run, seat))
   if (legacy) head.legacy = true
-  if (search && !seat.readsAll) run.matches = true
+  // matches may be missing from every search page
+  if (search) run.matches = true
   const first = project !== null && (from === null || from.part === 0)
   if (first) {
     if (tasks && search) run.floor = DELETED_PAGE.gather
@@ -1746,8 +1718,7 @@ async function scoped(
   }
   if (!tasks || room(run) === 0) return null
   const after = from?.part === 1 ? from.at : null
-  // the older rows' title source only while such a row may exist
-  if (search) await gatherTasks(run, [seat], scope, after, legacy && a.assignee === undefined)
+  if (search) await gatherTasks(run, [seat], scope, after)
   else if (viaIndex) await assigneeEntries(run, seat, scope, after)
   else if (scan !== null) {
     const judge = a.assignee === undefined ? taskEntry(run, scope) : scanEntry(run, scope)

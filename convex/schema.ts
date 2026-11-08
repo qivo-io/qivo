@@ -2461,7 +2461,8 @@ export default defineSchema({
     storage_id: v.optional(v.id('_storage')), // issue_attachments: the bytes
     project_key: v.optional(v.string()), // projects: the key
     // projects: the stored lead, so a lead finds the projects they led in
-    // Deleted items (model/deletedItemsList.ts)
+    // Deleted items (model/deletedItemsPage.ts projectPlan) and keeps the
+    // lead role there (model/deletedItemsChoices.ts)
     lead_id: v.optional(v.string()),
     // project_access: the profile, project_team_access: the team, so a level
     // check reads one person's grants of an item (model/deletedItems.ts)
@@ -2559,8 +2560,8 @@ export default defineSchema({
    * text of the task's description, so a row is no longer light, and the
    * task's assignee and copies of its item's fields, which the page's
    * search and assignee sources filter on. A row stored before that release
-   * has none of them, and the page finds it by its number and its title
-   * (search_title). */
+   * (v0.1.122) has none of them, and the page finds it by its number alone
+   * (by_org_num). */
   deleted_tasks: defineTable({
     org_id: v.string(),
     item_id: v.string(),
@@ -2570,9 +2571,10 @@ export default defineSchema({
     project_id: v.string(),
     archived: v.boolean(),
     // a task item's subtask in another project than the item's root: that
-    // project, so its lead finds the item (model/deletedItemsList.ts). It is
-    // a sibling sub-project of the root's, or, for a subtask from before the
-    // subtask rule (model/issues.ts sameTopLevel), any other project.
+    // project, so its lead finds the item (model/deletedItemsPage.ts
+    // taskPlan). It is a sibling sub-project of the root's, or, for a
+    // subtask from before the subtask rule (model/issues.ts sameTopLevel),
+    // any other project.
     cross_project_id: v.optional(v.string()),
     // the title, a newline and the readable text of the description
     // (model/descriptions.ts deletedSearchText)
@@ -2597,9 +2599,6 @@ export default defineSchema({
     .index('by_org_assignee', ['org_id', 'assignee_id', 'deleted_at'])
     // one item's tasks of one assignee, by number
     .index('by_item_assignee', ['item_id', 'assignee_id', 'num'])
-    // matches and the page's rows stored before its release; search_text
-    // replaces it once no such row is left
-    .searchIndex('search_title', { searchField: 'title', filterFields: ['org_id'] })
     // the page's search, each query filtered to the items of one source
     .searchIndex('search_text', {
       searchField: 'search_text',

@@ -292,13 +292,16 @@ function PersonColumns({
 }
 
 /* The way out to where re-planning happens: the Board and the Roadmap,
-   filtered to the person. */
+   filtered to the person, on the sync's project, or, over all projects or
+   a team, with no project chosen, where the project chooser says whose
+   tasks a pick will show. The jump passes the person's first name for that
+   line, as the agenda names them. */
 function PersonJumps({
   person,
   onShowPerson,
 }: {
   person: SyncPerson
-  onShowPerson: (view: 'kanban' | 'roadmap', profileId: string) => void
+  onShowPerson: (view: 'kanban' | 'roadmap', profileId: string, first: string) => void
 }) {
   const first = person.name.split(' ')[0]
   return (
@@ -310,7 +313,7 @@ function PersonJumps({
         data-sync-person-board={person.id}
         title={`${first}'s tasks on the Board`}
         aria-label={`${first}'s tasks on the Board`}
-        onClick={() => onShowPerson('kanban', person.id)}
+        onClick={() => onShowPerson('kanban', person.id, first)}
       >
         <Icon name="board" size={15} color="var(--text-2)" />
       </Button>
@@ -321,7 +324,7 @@ function PersonJumps({
         data-sync-person-roadmap={person.id}
         title={`${first}'s tasks on the Roadmap`}
         aria-label={`${first}'s tasks on the Roadmap`}
-        onClick={() => onShowPerson('roadmap', person.id)}
+        onClick={() => onShowPerson('roadmap', person.id, first)}
       >
         <Icon name="timeline" size={15} color="var(--text-2)" />
       </Button>
@@ -465,7 +468,8 @@ export function TeamSync({
       (P.openTarget), so a task only the agenda brings opens too */
   onOpenTask: (target: string) => void
   onShowTask: (view: 'kanban' | 'roadmap', handle: string) => void
-  onShowPerson: (view: 'kanban' | 'roadmap', profileId: string) => void
+  /** a person's Board or Roadmap jump, with their first name */
+  onShowPerson: (view: 'kanban' | 'roadmap', profileId: string, first: string) => void
   /** a sub-project's Board, for one past Team sync's limits */
   onShowBoard: (projectId: string) => void
 }) {

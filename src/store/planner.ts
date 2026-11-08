@@ -3623,22 +3623,17 @@ function announceNewMessages(snap: Snapshot) {
    case-insensitive everywhere. */
 export const ISSUE_PREFIX = 'QN'
 
-/* The sidebar's "All projects" entry is a SCOPE, not a page (deviation #47): the same
-   Overview / Board / Roadmap render, scoped to every project this login can
-   reach instead of one. It rides in the app's `scope` state as this sentinel,
-   so it persists (user_prefs), routes (#/<view>/all) and switches views like
-   any project scope. It is deliberately NOT a projects row: `P.project('all')`
-   stays undefined, and every consumer goes through `P.scopeInfo`. */
-export const ALL_SCOPE = 'all'
-
-/* …and "My view" (deviation #49) is the second such sentinel: the same three
-   views over the same set of projects, narrowed to the tasks owned by me (the
-   assignee, or the reviewer while the task waits In Review; #314) —
-   on ANY seat I hold (0081), not just the home profile. Everything that is
-   true of 'all' because it names no project (no lead, no settings page, no
-   archive, nowhere to create) is true of this one too, which is what
-   `P.isWideScope` asks; `P.isAllScope` / `P.isMineScope` stay for the few
-   rules that mean one specific sentinel. */
+/* "My view" (deviation #49) is a SCOPE, not a project row: the same three
+   views over the projects this login reaches, narrowed to the tasks owned by
+   me (the assignee, or the reviewer while the task waits In Review; #314),
+   on ANY seat I hold (0081), not just the home profile. It rides in the
+   app's `scope` state as this sentinel, routes as <view>/mine and switches
+   views like any project scope. It names no project, so it has no lead, no
+   settings page, no archive and nowhere to create, which is what
+   `P.isWideScope` asks; `P.project('mine')` stays undefined, and every
+   consumer goes through `P.scopeInfo`. It is the only such sentinel: the
+   views have no scope over all projects, which the All projects directory
+   (components/ProjectDirectory.tsx) and main Search serve instead. */
 export const MINE_SCOPE = 'mine'
 
 /* An issue's HANDLE is the string the whole client threads around — component
@@ -12194,26 +12189,24 @@ export const PLANNER = {
         return 0 // inside one org the projects keep their sort_order
       }),
 
-  ALL_SCOPE,
   MINE_SCOPE,
-  isAllScope: (id: string | null | undefined) => id === ALL_SCOPE,
   isMineScope: (id: string | null | undefined) => id === MINE_SCOPE,
-  /* Most rules that used to ask `isAllScope` mean THIS: "the scope names no
-     projects row". `P.project(id)` is undefined for both sentinels, so there
-     is no lead, no settings page, no archive and nowhere to create. The two
-     narrower questions stay for the handful of rules that mean one specific
-     sentinel (which glyph, which empty-state copy, whether the scope already
-     holds a given task). */
-  isWideScope: (id: string | null | undefined) => id === ALL_SCOPE || id === MINE_SCOPE,
+  /* The scope that names no projects row, which is My view (MINE_SCOPE):
+     `P.project(id)` is undefined for it, so there is no lead, no settings
+     page, no archive and nowhere to create. isMineScope asks the same now
+     that My view is the only sentinel; the rules that mean "names no
+     project" ask this one. */
+  isWideScope: (id: string | null | undefined) => id === MINE_SCOPE,
   /* Shared scope for Overview, Board and Roadmap; null means it disappeared.
      subIds names task-holding sub-projects. Groups are sub-projects within a
-     project, top-level projects in wide scopes, or the single selected sub.
+     project, top-level projects in My view, or the single selected sub.
      Its milestones are the milestone reads' (P.watchMilestones), not here.
-     wide covers both All projects and My view; mine narrows tasks to me.
-     Rollups use the only predicate but ignore transient toolbar filters. */
+     wide is the scope that names no project row, My view, and mine narrows
+     its tasks to me. Rollups use the only predicate but ignore transient
+     toolbar filters. */
   scopeInfo: (scopeId: string) => {
-    if (scopeId === ALL_SCOPE || scopeId === MINE_SCOPE) {
-      const mine = scopeId === MINE_SCOPE
+    if (scopeId === MINE_SCOPE) {
+      const mine = true
       const metas = PLANNER.visibleProjects()
       const groups = metas.map((m) => ({
         proj: m,
@@ -12223,9 +12216,9 @@ export const PLANNER = {
       return {
         wide: true,
         mine,
-        only: mine ? PLANNER.isMine : null,
+        only: PLANNER.isMine,
         id: scopeId,
-        name: mine ? 'My view' : 'All projects',
+        name: 'My view',
         proj: null as ProjectVM | null,
         isMeta: false,
         metas,
@@ -13504,8 +13497,7 @@ export const PLANNER = {
   /** Forgets the Overview's reads and rows, its milestone reads
       (OVERVIEW_MILESTONE_SLOTS) among them: its page left. A kept page's
       reads only stop while it hides; App calls this once the page is no
-      longer kept, and an All projects Overview, which reads none, when it
-      takes the place of another scope's. */
+      longer kept. */
   releaseOverview: () => {
     overviewStep(() => overview.release())
     for (const slot of [

@@ -85,7 +85,18 @@ const patch = (
 
 const page = (t: T, who: Doc<'profiles'>, args: PageArgs = {}): Promise<DeletedPage> =>
   as(t, who).query(api.deletedItems.page, args)
-const list = (t: T, who: Doc<'profiles'>) => as(t, who).query(api.deletedItems.list, {})
+/** Every stored item's row for `who`'s login as deletedItems.item answers
+ * it (model/deletedItemsList.ts rowFor), the row the page builds each entry
+ * with, without those the login does not see. */
+async function listed(t: T, who: Doc<'profiles'>): Promise<DeletedRow[]> {
+  const stored = await t.run((ctx) => ctx.db.query('deleted_items').collect())
+  const rows: DeletedRow[] = []
+  for (const d of stored) {
+    const row = await as(t, who).query(api.deletedItems.item, { id: d.id })
+    if (row !== null) rows.push(row)
+  }
+  return rows
+}
 const deleteTask = (t: T, who: Doc<'profiles'>, id: string, extra: object = {}) =>
   as(t, who).mutation(api.issues.deleteDeep, { org_id: who.org_id, id, ...extra })
 const deleteProject = (t: T, who: Doc<'profiles'>, id: string) =>
@@ -182,14 +193,15 @@ const plantItems = (t: T, f: OrgFixture, count: number, from = START) =>
     return ids
   })
 
-/** Expects the page to give each of `people` exactly the items the list
- * gives them, each once, with the same rows: All projects of each
- * organization they hold a seat in, paged to the end, and each project
- * they see there as a scope of its own (expectScopedAsListed). */
+/** Expects the page to give each of `people` exactly the items whose row
+ * deletedItems.item gives them (listed), each once, with the same rows:
+ * All projects of each organization they hold a seat in, paged to the end,
+ * and each project they see there as a scope of its own
+ * (expectScopedAsListed). */
 async function expectAsListed(t: T, people: Doc<'profiles'>[]) {
   const seats = await t.run((ctx) => ctx.db.query('profiles').collect())
   for (const who of people) {
-    const listed = (await list(t, who)).items
+    const rowsOf = await listed(t, who)
     const mine = seats.filter((s) => s.auth_user_id === who.auth_user_id && s.active)
     const ids: string[] = []
     const rows: DeletedRow[] = []
@@ -199,18 +211,18 @@ async function expectAsListed(t: T, people: Doc<'profiles'>[]) {
       rows.push(...walked.items)
     }
     expect(ids.length, who.name).toBe(new Set(ids).size)
-    expect([...ids].sort(), who.name).toEqual(listed.map((r) => r.id).sort())
-    for (const row of listed)
+    expect([...ids].sort(), who.name).toEqual(rowsOf.map((r) => r.id).sort())
+    for (const row of rowsOf)
       expect(
         rows.find((r) => r.id === row.id),
         who.name,
       ).toEqual(row)
-    for (const seat of mine) await expectScopedAsListed(t, seat, listed)
+    for (const seat of mine) await expectScopedAsListed(t, seat, rowsOf)
   }
 }
 
 /** Expects the page of each project `seat` sees, as the only project of a
- * scope, to give each once the items of `listed` (the list's rows for its
+ * scope, to give each once the items of `listed` (the item rows of its
  * login) that scope holds: a project item under it, and a task item with a
  * project in it, or in a sub-project of it the seat sees, among the
  * projects its row shows. An admin's row shows every project of the item,
@@ -323,7 +335,7 @@ describe('arguments', () => {
 })
 
 describe('who sees what', () => {
-  it('gives each caller exactly the items the list gives them, each once, with the same rows', async () => {
+  it('gives each caller exactly the items whose row deletedItems.item gives them, each once, with the same rows', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
@@ -432,7 +444,7 @@ describe('who sees what', () => {
     )
   })
 
-  it("keeps the list's answer for view-only deleters, lost access, deleted projects, stuck and moving items", async () => {
+  it("keeps the item rows' answer for view-only deleters, lost access, deleted projects, stuck and moving items", async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
@@ -1045,8 +1057,7 @@ describe('stops', () => {
     const capped = await page(t, f.admin, args)
     expect(capped.missing).toBe('matches')
     expect(capped.entries).toHaveLength(2)
-    // with no older row in the organization the one query takes all of
-    // results, as no title source for older rows shares it
+    // the one query takes all of results
     Object.assign(DELETED_PAGE, { candidates: 256, results: 4 })
     const shared = await page(t, f.admin, args)
     expect(shared.entries).toHaveLength(3)
@@ -1074,6 +1085,31 @@ describe('stops', () => {
     const cut = await page(t, f.admin, solenoid)
     expect(cut.entries.map((e) => e.item_id)).toEqual([item])
     expect(cut.missing).toBe('matches')
+  })
+
+  it("says only that matches may be missing when a member's gathering runs out between its search sources", async () => {
+    const t = newT()
+    const f = await withReadingAdmin(t)
+    const org_id = f.org.id
+    // the user leads Testbed: their own deletes and Testbed's items are two
+    // sources, each a search query
+    for (let i = 0; i < 3; i++) {
+      const task = await plantIssue(t, { org_id, project_id: f.sub.id, title: `Damper ${i}` })
+      await deleteTask(t, f.user, task.id)
+      later()
+    }
+    const args = { scope: { org_id, all: true as const }, search: 'damper' }
+    const whole = await page(t, f.user, args)
+    expect(whole.entries).toHaveLength(3)
+    expect(whole.missing).toBe('matches')
+    // a gathering whose room runs out before its next source stops there,
+    // which says nothing more than that matches may be missing
+    for (const ranges of [1, 2, 3]) {
+      Object.assign(DELETED_PAGE, { gather: { ...DEFAULT_PAGE.gather, ranges } })
+      const cut = await page(t, f.user, args)
+      expect(cut.missing, `${ranges}`).toBe('matches')
+      expect(cut.entries.length, `${ranges}`).toBeLessThanOrEqual(3)
+    }
   })
 
   it('ends a browse page early on a lowered budget, and pages on to the end with no entry twice', async () => {
@@ -1624,7 +1660,7 @@ describe('deleted by', () => {
 })
 
 describe('rows stored before the page', () => {
-  it('finds them by key and title, not by description or assignee, and says so while they last', async () => {
+  it('finds them by their key alone, never by title, description or assignee, and says so while they last', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const org_id = f.org.id
@@ -1640,10 +1676,14 @@ describe('rows stored before the page', () => {
     const scope = { org_id, all: true as const }
     const find = (who: Doc<'profiles'>, extra: Partial<PageArgs>) =>
       page(t, who, { scope, ...extra })
+    const scopes = [scope, { org_id, project_ids: [f.sub.id] }]
     // stored by this release: found by every field, and no older row
     expect((await find(f.admin, { search: 'borrowed' })).entries).toEqual([{ item_id: item }])
-    expect((await find(f.admin, { search: 'thermal' })).legacy).toBeUndefined()
-    expect((await find(f.guest, { search: 'thermal' })).legacy).toBe(true)
+    for (const s of scopes) {
+      expect((await page(t, f.admin, { scope: s, search: 'thermal' })).legacy).toBeUndefined()
+      expect((await page(t, f.admin, { scope: s, assignee: f.guest.id })).legacy).toBeUndefined()
+      expect((await page(t, f.guest, { scope: s, search: 'thermal' })).legacy).toBe(true)
+    }
     // as the release before stored it, but for an empty search text: Convex
     // leaves a row without the field out of the search index, while
     // convex-test reads the field of every row and fails on one without it
@@ -1662,16 +1702,24 @@ describe('rows stored before the page', () => {
         item_parent_id: undefined,
       })
     })
-    for (const who of [f.admin, f.guest]) {
-      for (const search of ['thermal', 'camera', `QN-${task.num}`]) {
-        const found = await find(who, { search })
-        expect(found.entries, `${who.name} ${search}`).toEqual([{ item_id: item }])
-        expect(found.legacy).toBe(true)
+    // the admin, the guest who deleted it, and the user, who leads Testbed
+    for (const who of [f.admin, f.guest, f.user])
+      for (const s of scopes) {
+        const label = `${who.name} in ${'all' in s ? 'All projects' : 'Firmware'}`
+        for (const search of [`QN-${task.num}`, String(task.num)]) {
+          const found = await page(t, who, { scope: s, search })
+          expect(found.entries, `${label} ${search}`).toEqual([{ item_id: item }])
+          expect(found.legacy, label).toBe(true)
+        }
+        // no title source finds it any more
+        for (const search of ['thermal', 'camera', 'borrowed']) {
+          const found = await page(t, who, { scope: s, search })
+          expect(found.entries, `${label} ${search}`).toEqual([])
+          expect(found).toMatchObject({ legacy: true, missing: 'matches' })
+        }
+        const assignee = await page(t, who, { scope: s, assignee: f.guest.id })
+        expect(assignee, label).toMatchObject({ entries: [], legacy: true })
       }
-      expect((await find(who, { search: 'borrowed' })).entries).toEqual([])
-      const assignee = await find(who, { assignee: f.guest.id })
-      expect(assignee).toMatchObject({ entries: [], legacy: true })
-    }
     // browsing needs no note
     expect((await find(f.admin, {})).legacy).toBeUndefined()
     // once the row is gone, only the admin's note goes

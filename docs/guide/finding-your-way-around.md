@@ -123,24 +123,25 @@ An organization admin's directory holds the projects they take part in, as
 anyone else's, and so does their sidebar's **Projects** tree. **Settings ›
 Projects › All projects** lists every project of the organization.
 
-The Board, the Overview and the Roadmap show one project at a time
-([Which tasks a Board shows](./the-board.md#which-tasks-a-board-shows),
+The Board, the Overview and the Roadmap show one project, one sub-project or
+My view ([Which tasks a Board shows](./the-board.md#which-tasks-a-board-shows),
 [The Overview](./the-overview-project-health-at-a-glance.md),
-[The Roadmap](./the-roadmap.md)). Over all projects they still show in
-two places, each asking you to choose a project: an address that ends in
-`/all`, such as `…/board/all`, and a person's Board or Roadmap jump from
-Team sync across all projects. **All projects** in the sidebar lights there
-too. **My view** shows your own tasks across every project on all three
-views. A task link that
-names no project, such as `…/tasks/qn-12`, opens the Board, the Overview or
-the Roadmap of the task's sub-project instead when it would open over all
-projects. A link that names all projects, such as `…/board/all/tasks/qn-12`,
-keeps it, with the task's window over the list.
+[The Roadmap](./the-roadmap.md)). **My view** shows your own tasks across
+every project on all three views. An address that once named all projects,
+such as `…/board/all`, opens like the view's own address: the project you
+opened last once Qivo has checked you can still open it, else the project
+list, and a task after it opens nothing. **All projects** in the sidebar
+lights only for this directory. A person's **Board** or **Roadmap** button
+on Team sync across all projects or a team opens the project list with that
+person's filter kept and a line saying whose tasks a pick will show; the
+project you choose opens filtered to them
+([Team sync](./planning-against-real-capacity.md#team-sync)). A task link
+that names no project, such as `…/tasks/qn-12`, keeps the project you are
+on or opened last when that project holds the task, and otherwise opens the
+task's sub-project ([Links you can share](#links-you-can-share)).
 
-To create a task, open its project first. On a desktop, the Board's project
-list and empty states offer no way to create a task; on a phone, **New
-task** in the task list lets you choose its project. The Team strip omits
-**This project only** because the scope already includes all projects.
+To create a task, open its project first. On a phone, **New task** in the
+task list lets you choose its project.
 
 When you can see no active project, Qivo opens on the project list. It says
 that you have no active projects and that an organization admin or a
@@ -173,7 +174,9 @@ hidden. Completion counts and remaining-hour totals cover only your work.
 
 **My tasks** and **Assignee** filters are absent because this scope already
 selects your work. Text and Priority filters remain on desktop Board and
-Roadmap; Stale and Focus remain Board-only.
+Roadmap; Stale and Focus remain Board-only. The Team strip has no **All
+projects / This project** toggle here, because My view already spans every
+project.
 
 To create a task, use a project's **+** in Swimlanes by project or
 Side-by-side boards, or open that project first. A new task starts
@@ -205,7 +208,7 @@ Inbox.
 ## Pages stay as you left them
 
 Each page you open stays loaded while you use Qivo: the Overview, the Board,
-the Roadmap, the Inbox, Team sync and All projects. Going back to one shows it
+the Roadmap, the Inbox, Team sync and the All projects directory. Going back to one shows it
 at once, scrolled where you left it, and changes made while it was out of
 sight follow right after. All projects shows the page it was on and asks
 for it again. The Board checks which tasks it shows again when it
@@ -361,7 +364,7 @@ confirms that you can open the project. If you switch views or go elsewhere
 before that, Qivo does not open it. A project link you cannot open shows the
 project list and says that the project is not available to you. All
 projects is `…/projects`, and My view has its own paths, such as
-`…/board/mine`; `…/board/all` shows the views over all projects. Opening a
+`…/board/mine`. Opening a
 task adds `/tasks/qn-482`, so a reload preserves both task and scope.
 
 Copying a task link uses its short permanent address. Opening that link

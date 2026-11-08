@@ -36,9 +36,12 @@
  * refuse. An unknown id, a project of another organization, one in Deleted
  * items and one the caller neither sees nor manages answer `unavailable`
  * alike, as does one whose access check the bounds of the caller's own
- * reads stopped (lib/access.ts accessUnchecked). get addresses a project by id alone and resolves the caller's seat
- * in its organization; the others take the organization from the app, which
- * has it from get. They are live queries, like the page they serve, and
+ * reads stopped (lib/access.ts accessUnchecked). get addresses a project by
+ * id, or by its organization and number for a numbered Settings address
+ * the app's workspace does not hold, and judges it with the caller's seat
+ * in that organization either way, so a free number answers as a hidden
+ * one does; the others take the organization from the app, which has it
+ * from get. They are live queries, like the page they serve, and
  * read no task, comment, file or milestone. The lists answer `not_ready`
  * until the organization's rows hold their name keys, and every list cursor
  * opens only for the list, arguments and search it came from.
@@ -92,15 +95,22 @@ const vListArgs = {
   through: v.optional(v.string()),
 }
 
-/** The settings of project `id` for the caller's seat in its organization
+/** The settings of the project `id` names, or `num` in organization
+ * `org_id`, for the caller's seat in its organization
  * (model/projectSettings.ts projectSettingsOf): `unavailable`, `archived`
  * with the project's and its parent's names, or `ok` with the project's
  * stored fields, its parent, `inherited_review_hours`, the effective `lead`
  * (`inherited` for a legacy sub-project led by its parent's lead), the
- * caller's `level` and the `can_*` rights (SettingsRights). */
+ * caller's `level` and the `can_*` rights (SettingsRights). Any form but
+ * `id` alone and `org_id` with `num`, a whole number of at least 1, is a
+ * bad_request. */
 export const get = authedQuery({
-  args: { id: v.string() },
-  handler: (ctx, { id }): Promise<ProjectSettings> => projectSettingsOf(ctx, ctx.myProfiles, id),
+  args: {
+    id: v.optional(v.string()),
+    org_id: v.optional(v.string()),
+    num: v.optional(v.number()),
+  },
+  handler: (ctx, a): Promise<ProjectSettings> => projectSettingsOf(ctx, ctx.myProfiles, a),
 })
 
 /** One batch of the user grants on project `project_id`, in name order,

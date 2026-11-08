@@ -69,7 +69,7 @@
       "slug": "planning-against-real-capacity",
       "title": "Planning against real capacity",
       "order": 9,
-      "description": "Plan on roadmap opens the timeline and highlights the task. From the views over all projects it opens the task's top-level project. The task stays on the…"
+      "description": "Plan on roadmap opens the timeline and highlights the task, on the Roadmap of the project, sub-project or My view you are on when that holds the task, else on…"
     },
     {
       "file": "the-task-window.md",

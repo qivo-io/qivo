@@ -125,8 +125,8 @@ function fixture(loaded: number, beyond: number) {
     answering `force` from the start. */
 async function app(server: ReturnType<typeof fixture>, force?: ForcedInbox) {
   vi.resetModules()
-  // All projects' Board, under the top bar
-  history.replaceState(null, '', '/app/~/board/all')
+  // My view's Board, under the top bar
+  history.replaceState(null, '', '/app/~/board/mine')
   network.onUpdate.mockImplementation((ref, args, next) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole')

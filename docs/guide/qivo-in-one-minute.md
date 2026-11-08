@@ -213,8 +213,7 @@ and a search once there are more than 10. **Roadmap** starts on milestones,
 listed as the Overview lists them, 10 upcoming at a time with **Load more**
 and a collapsed **Past** ([Overview
 milestones](./the-overview-project-health-at-a-glance.md)), My view's from
-the projects that hold your own tasks, and none in All projects;
-**Task schedule** lists planned and unplanned work; a very long schedule
+the projects that hold your own tasks; **Task schedule** lists planned and unplanned work; a very long schedule
 fills in below the first screen as **My tasks** does. Backlog is hidden, and
 Done appears only when its planned period overlaps the Roadmap window ([The Roadmap](./the-roadmap.md)).
 When a scope has nothing to schedule, for example a project without

@@ -14,8 +14,8 @@ import { answerRoadmap } from './store/roadmapStandIn.setup'
 /* Where the main All projects entry goes, on the real store and App. The
    sidebar's All projects row and the phone's Projects tab open the project
    directory (`/app/~/projects`), which leaves the remembered project
-   (UIPrefs.lastProject) as it was. The row lights for the directory and
-   for the All projects scope the old paths still reach, and no project row
+   (UIPrefs.lastProject) as it was. The row lights for the directory alone,
+   never for an address that once named all projects, and no project row
    or My view lights under the directory. The views' reads answer from
    their stand-ins, and the directory's from the navigation reads'
    stand-in. */
@@ -167,7 +167,7 @@ describe('the All projects entry', () => {
     expect(lit('[data-all-nav]')).toBe(false)
   })
 
-  it('keeps My view unlit under the directory, and lights All projects for the old scope', async () => {
+  it('keeps My view unlit under the directory, and lights All projects for the directory alone', async () => {
     const snap = member()
     await app(snap, '/app/~/board/mine')
     await vi.waitFor(() => expect(lit('[data-mine-nav]')).toBe(true))
@@ -180,10 +180,14 @@ describe('the All projects entry', () => {
     expect(remembered(snap)).toBeUndefined()
     await act(async () => root.unmount())
     root = createRoot(container)
-    // an address ending in /all still names the scope, which lights the row
+    // an address that once named all projects names no scope: the startup
+    // rule shows the chooser, and the row stays unlit
     await app(snap, '/app/~/overview/all')
-    await vi.waitFor(() => expect(lit('[data-all-nav]')).toBe(true))
+    await element('[data-project-chooser]')
+    expect(lit('[data-all-nav]')).toBe(false)
+    expect(lit('[data-mine-nav]')).toBe(false)
     expect(document.querySelector('[data-project-directory]')).toBeNull()
+    expect(location.pathname).toBe('/app/testbed')
   })
 
   it("opens the same directory from the phone's Projects tab", async () => {

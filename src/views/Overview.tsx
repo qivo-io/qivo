@@ -15,8 +15,8 @@ import { HoverTooltip } from '@/components/ui/tooltip'
    table the server's rows, in the server's order, never sorted or cut
    here (views/overview/HealthTable.tsx). The milestones come from the
    server too (convex/milestones.ts section): Upcoming 10 at a time and a
-   collapsed Past 25 at a time, of the scope's top-level project, of My
-   view's projects with `mine`, and none in All projects
+   collapsed Past 25 at a time, of the scope's top-level project or of My
+   view's projects with `mine`
    (views/useScopeMilestones.ts, views/overview/OverviewMilestones.tsx),
    with Next milestone from Upcoming's first row. The lists' rows still
    read the workspace where it holds their tasks. */
@@ -1040,8 +1040,6 @@ type OverviewActions = {
 
 /** Where the Overview stands, as its root's data-overview-state names it. */
 type OverviewState =
-  /** All projects, where the Overview asks to choose a project */
-  | 'choose'
   /** no answer of the summary for these arguments yet */
   | 'loading'
   /** the answers kept for these arguments while the reads stopped, or
@@ -1061,9 +1059,7 @@ let overviewReaders = 0
     `table` (null for none, as for one sub-project), registered apart so a
     new sort, search or Load more asks the health read alone; the store's
     answers for the arguments on screen. Renders again on the store's
-    `views` news. In All projects, which asks for none, it releases the
-    reads and rows of the page it replaced, which only stopped them: App
-    mounts one Overview page for one scope, so no other page holds them. */
+    `views` news. */
 function useOverviewRead(info: ScopeInfo, table: HealthTable | null) {
   const { visible } = useViewVisibility()
   const [attempt, setAttempt] = useStateO(0)
@@ -1071,16 +1067,12 @@ function useOverviewRead(info: ScopeInfo, table: HealthTable | null) {
   const [owner] = useStateO(() => ++overviewReaders)
   useViewsNews()
   const request = overviewRequest(info)
-  const key = request.kind === 'ask' ? request.key : null
+  const key = request.key
   const ask = visible ? key : null
   useEffect(() => {
-    if (request.kind === 'choose') {
-      P.releaseOverview()
-      return
-    }
     P.watchOverview(ask, owner, attempt)
     return () => P.watchOverview(null, owner, attempt)
-  }, [ask, owner, attempt, request.kind])
+  }, [ask, owner, attempt])
   /* The table, registered again after each registration of the scope's
      reads. The store takes a table only from the page that owns the reads,
      and a page that mounts while hidden, or on a day the store has not
@@ -1091,14 +1083,13 @@ function useOverviewRead(info: ScopeInfo, table: HealthTable | null) {
   const dir = table?.dir
   const search = table?.search
   useEffect(() => {
-    if (request.kind === 'choose') return
     P.watchOverviewTable(
       sort === undefined || dir === undefined || search === undefined
         ? null
         : { sort, dir, search },
       owner,
     )
-  }, [sort, dir, search, owner, request.kind, ask])
+  }, [sort, dir, search, owner, ask])
   const view: OverviewView = P.overviewRead()
   // answers count only for the arguments on screen
   const mine = key !== null && view.key === key
@@ -1177,8 +1168,8 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
       ),
       project,
     )
-  // `wide` = a scope that names no project (All projects, My view); `mine` is
-  // the one of those that also narrows to my own tasks. The Overview renders
+  // `wide` = the scope that names no project, My view; `mine` is the same
+  // scope, the one that narrows to my own tasks. The Overview renders
   // no filter row, so it takes no `filters`: the scope's own `only` predicate
   // is the whole narrowing, and nothing invisible can be left switched on.
   const wide = info.wide
@@ -1200,8 +1191,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
 
   const summaryAnswer = read.summary?.value
   let state: OverviewState
-  if (read.request.kind === 'choose') state = 'choose'
-  else if (read.summary === null) state = 'loading'
+  if (read.summary === null) state = 'loading'
   else if (read.summary.error !== undefined) state = 'error'
   else if (summaryAnswer?.state === 'unavailable') state = 'unavailable'
   else if (summaryAnswer?.state === 'over_budget') state = 'over_budget'
@@ -1212,7 +1202,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
   const anyTask = shownOf(read.summary, (s) => s.any_task)
   const projected = shownOf(read.risk, (r) => r.projected)
   // the day the answers were asked for
-  const day = read.request.kind === 'ask' ? read.request.base.clock.day : P.TODAY_ISO
+  const day = read.request.base.clock.day
 
   /* Why a scope has no task to summarize, once the answer that decides it
      arrived: a project without sub-projects, one without tasks, My view
@@ -1222,8 +1212,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
      the scope holds a past milestone, or Upcoming failed, was refused or
      stopped before a row, the note takes the place of the task sections
      and the Milestones section stays under it (useScopeMilestones
-     `stands`), as the Roadmap keeps its flags behind the same note. All
-     projects reads no milestone, so its chooser is always the page. The
+     `stands`), as the Roadmap keeps its flags behind the same note. The
      note says why nothing is counted, not that the scope plans nothing. */
   let emptyNote: ReactNode = null
   // a kept answer still decides it while it refreshes, so the note stays
@@ -1273,29 +1262,10 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
       )
   }
 
-  // a project the chooser and the narrowing offer opens its own Overview
+  // a project the narrowing offers opens its own Overview
   const open = (id: string) => actions.setScope(id)
   let note: ReactNode = null
-  if (state === 'choose')
-    note =
-      info.metas.length === 0 ? (
-        <NoProjects
-          icon="chart"
-          title="Nothing to summarize yet"
-          onNewProject={() => actions.newProject({ kind: 'program' })}
-        />
-      ) : (
-        <ViewNote
-          hooks="ov"
-          phone={mobile}
-          icon="chart"
-          title="Choose a project"
-          hint="The Overview shows one project at a time. Pick one to see its summary."
-          projects={info.metas}
-          onProject={open}
-        />
-      )
-  else if (state === 'unavailable')
+  if (state === 'unavailable')
     note = (
       <ViewNote
         hooks="ov"
@@ -1344,8 +1314,8 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
         action={{ label: 'Try again', onClick: read.retry }}
       />
     )
-  // without a milestone the note is the page, as the chooser of All
-  // projects and the note for a person who sees no project are too
+  // without a milestone the note is the page, as the note for a person who
+  // sees no project is too
   const replaced = note ?? emptyNote
   const alone = replaced !== null && !ms.stands
   const c = given(counts)

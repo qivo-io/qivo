@@ -4,13 +4,16 @@
    (components/ProjectAccessEditor.tsx), and a top-level project's live
    sub-projects as Settings › Projects lists them (ProjectLists.tsx), and
    sends every write with what it showed, so it works the same for a
-   project the workspace does not hold, whose address then names it by its
-   uuid (lib/router.ts noteProjectPage). A removal names its person or team
-   as the page showed them (the change's label). It reads the workspace
-   only to know whether it holds the project, for the address and the page
-   a delete returns to, and for the names the Archive or delete window
-   gives. Its portraits come from P.person, which the access editor names
-   its people for (components/usePeople.ts). */
+   project the workspace does not hold, whose address then names it under
+   its organization by the number it was last opened by in this visit, on
+   a numbered page or on its page by id afterwards, and otherwise by its
+   uuid (lib/router.ts noteProjectPage). A numbered page reads it by its
+   organization and number (lib/router.ts numberedProjectPage). A removal
+   names its person or team as the page showed them (the change's label).
+   It reads the workspace only to know whether it holds the project, for
+   the address and the page a delete returns to, and for the names the
+   Archive or delete window gives. Its portraits come from P.person, which
+   the access editor names its people for (components/usePeople.ts). */
 import React, { useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -33,7 +36,7 @@ import { focusAround } from '../../lib/focusWhenGone'
 import { useUnsaved } from '../../lib/leaveGuard'
 import { useLoadMore } from '../../lib/loadMore'
 import { listEnd } from '../../lib/pagedList'
-import { noteProjectPage } from '../../lib/router'
+import { noteProjectPage, type ProjectPageRef } from '../../lib/router'
 import { REVIEW_HOURS, useSavedDraft } from '../../lib/savedDraft'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import type { AccessLevel } from '../../store/planner'
@@ -57,14 +60,17 @@ type RemovalShown = {
 }
 
 export function ProjectPage({
-  projectId,
+  project,
   read: given,
   setPage,
   onBackPage = setPage,
   onProjectGone,
   onHolding,
 }: {
-  projectId: string
+  /** the project the page shows, by id or as Settings' page reference
+      (lib/router.ts projectPageRef), which only a page rendered on its own
+      reads; every move inside the page uses its answer's ids */
+  project: string | ProjectPageRef
   /** the read of the project's settings that Settings holds for this page
       (useProjectSettings), so Settings' check and the page follow one
       read; a page rendered on its own reads its own */
@@ -89,7 +95,7 @@ export function ProjectPage({
      (useProjectSettings). It takes Settings' read when Settings passes
      one and watches its own only when rendered on its own, so Settings'
      check and the page follow one read. */
-  const own = useProjectSettings(given ? null : projectId)
+  const own = useProjectSettings(given ? null : project)
   const read = given ?? own
   /* The Archive or delete window, from the section at the end of the page.
      It holds the project as it was when the window opened, so it stays up
@@ -145,18 +151,24 @@ export function ProjectPage({
     )
   }
   const answer = read.answer
-  /* The address names a project the workspace does not hold by its uuid
-     under the organization this read found it in, so a reload, Back and
-     Forward open it again (lib/router.ts noteProjectPage). The note stays
-     as it was while the Archive or delete window is open, so the address
-     under the window does not change. A project the workspace does not
-     hold keeps its uuid there, and a held one that leaves meanwhile keeps
-     its number until the window closes. */
+  /* The address names a project the workspace does not hold under the
+     organization this read found it in, by the number a numbered page
+     opened it by, else by its uuid, so a reload, Back and Forward open it
+     again (lib/router.ts noteProjectPage). The note stays as it was while
+     the Archive or delete window is open, so the address under the window
+     does not change. A project the workspace does not hold keeps its
+     address there, and a held one that leaves meanwhile keeps its number
+     until the window closes. */
   const unheldIn = answer && !gone && !P.project(answer.project.id) ? answer.project.org_id : null
+  const openedBy =
+    typeof project !== 'string' && 'num' in project && project.org_id === unheldIn
+      ? project.num
+      : undefined
   const holding = removing !== null
   React.useEffect(() => {
-    if (answer && !holding) noteProjectPage(answer.project.id, unheldIn ? { org: unheldIn } : null)
-  }, [answer?.project.id, unheldIn, holding])
+    if (answer && !holding)
+      noteProjectPage(answer.project.id, unheldIn ? { org: unheldIn, num: openedBy } : null)
+  }, [answer?.project.id, unheldIn, openedBy, holding])
   return (
     <div
       data-project-settings-state={read.state}

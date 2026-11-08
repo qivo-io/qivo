@@ -314,7 +314,7 @@ async function boot(address: string, phone: boolean, second = false) {
 
 describe('a phone layer that closes with the move it started', { timeout: 30_000 }, () => {
   it("gives a created task the create dialog's entry, and Back returns to the Board", async () => {
-    // a project's Board: All projects asks to choose a project instead
+    // a project's Board, which holds the task list
     await boot('/app/testbed/board/p/1', true)
     await waitFor(() => document.querySelector('.mobile-task-row'), 'the task list')
     await settle()
@@ -349,82 +349,6 @@ describe('a phone layer that closes with the move it started', { timeout: 30_000
     expect(location.pathname).toBe('/app/testbed/board/p/1')
     expect(document.querySelector('[data-task-chrome]')).toBeNull()
   })
-
-  it("opens a task created from All projects' chooser on its sub-project's Board", async () => {
-    await boot('/app/~/board/all', true)
-    await waitFor(() => document.querySelector('[data-board-choice]'), 'the project chooser')
-    await settle()
-    await press('New task')
-    await waitFor(() => document.querySelector('[data-modal-shell]'), 'the dialog')
-    await settle()
-    const where = document.querySelector<HTMLSelectElement>('[data-modal-shell] select')
-    const next = where && [...where.options].find((o) => !o.disabled && o.value)
-    if (where && next) {
-      where.value = next.value
-      await act(async () => where.dispatchEvent(new Event('change', { bubbles: true })))
-    }
-    await type(
-      await waitFor(
-        () => document.querySelector<HTMLInputElement>('input[aria-label="Title"]'),
-        'the Title field',
-      ),
-      'Run the soak test',
-    )
-    await press('Create')
-    await waitFor(() => !document.querySelector('[data-modal-shell]'), 'the dialog to close')
-    await settle()
-    // the project form of its address, not All projects' (board/all), and
-    // the sub-project's task list in place of the chooser; this stand-in
-    // server never holds the new task, so its window is not checked here
-    expect(location.pathname).toBe('/app/testbed/board/tasks/qn-2')
-    await waitFor(
-      () =>
-        document
-          .querySelector('[data-workspace-view="kanban"] [data-board-root]')
-          ?.getAttribute('data-board-state') === 'ok',
-      "the sub-project's task list",
-    )
-    expect(document.querySelector('[data-board-choice]')).toBeNull()
-  })
-
-  it.each([
-    ['Roadmap', 'roadmap'],
-    ['Overview', 'overview'],
-  ])(
-    "opens a task created from the %s's All projects chooser on its sub-project's page",
-    async (_, view) => {
-      await boot(`/app/~/${view}/all`, true)
-      const state = () =>
-        document
-          .querySelector(`[data-workspace-view="${view}"] [data-${view}-root]`)
-          ?.getAttribute(`data-${view}-state`)
-      await waitFor(() => state() === 'choose', 'the project chooser')
-      await settle()
-      await press('New task')
-      await waitFor(() => document.querySelector('[data-modal-shell]'), 'the dialog')
-      await settle()
-      const where = document.querySelector<HTMLSelectElement>('[data-modal-shell] select')
-      const next = where && [...where.options].find((o) => !o.disabled && o.value)
-      if (where && next) {
-        where.value = next.value
-        await act(async () => where.dispatchEvent(new Event('change', { bubbles: true })))
-      }
-      await type(
-        await waitFor(
-          () => document.querySelector<HTMLInputElement>('input[aria-label="Title"]'),
-          'the Title field',
-        ),
-        'Run the soak test',
-      )
-      await press('Create')
-      await waitFor(() => !document.querySelector('[data-modal-shell]'), 'the dialog to close')
-      await settle()
-      // the sub-project's page in place of the chooser, under the task's
-      // address, not All projects' (roadmap/all or overview/all)
-      expect(location.pathname).toBe(`/app/testbed/${view}/tasks/qn-2`)
-      await waitFor(() => state() === 'ok', "the sub-project's page")
-    },
-  )
 
   it("gives a search result's task the search's entry, and Back returns to the page the search began on", async () => {
     await boot('/app/testbed/board/p/1', true)

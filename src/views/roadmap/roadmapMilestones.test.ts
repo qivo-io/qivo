@@ -23,7 +23,6 @@ import {
 const W = TODAY_WEEK
 const project = (id: string) => ({ wide: false, mine: false, id, metas: [{ id: 'plan' }] })
 const MINE = { wide: true, mine: true, id: 'mine', metas: [{ id: 'plan' }, { id: 'luma' }] }
-const ALL = { wide: true, mine: false, id: 'all', metas: [{ id: 'plan' }, { id: 'luma' }] }
 const TRACKS = [
   { proj: { id: 'plan' }, subIds: ['plan-a', 'plan-b'] },
   { proj: { id: 'luma' }, subIds: ['luma-a'] },
@@ -68,8 +67,7 @@ describe('markerProjects', () => {
     expect(markerProjects(MINE, TRACKS, held)).not.toContain('cloud')
   })
 
-  it('names nothing in All projects, or in My view before an answer names its tracks', () => {
-    expect(markerProjects(ALL, TRACKS, new Set(['plan-a']))).toBeNull()
+  it('names nothing in My view before an answer names its tracks', () => {
     expect(markerProjects(MINE, TRACKS, null)).toBeNull()
     expect(markerProjects(MINE, TRACKS, new Set())).toBeNull()
   })

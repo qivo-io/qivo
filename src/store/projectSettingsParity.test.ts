@@ -169,6 +169,33 @@ describe('the project settings stand-in', () => {
     const { t, org, nora, project, sub, ws } = await northstar()
     for (const id of [project.id, sub.id, 'no-such-project'])
       await same(t, nora, ws, 'projectSettings:get', { id })
+    // by organization and number, a free number included, and the forms
+    // both refuse before they read
+    for (const num of [project.num, sub.num, 99_999])
+      await same(t, nora, ws, 'projectSettings:get', { org_id: org.id, num })
+    const code = async (read: () => unknown) => {
+      try {
+        await read()
+        return null
+      } catch (error) {
+        return (error as { data?: { code?: string } }).data?.code ?? 'error'
+      }
+    }
+    for (const a of [
+      {},
+      { id: project.id, org_id: org.id, num: project.num },
+      { org_id: org.id },
+      { num: project.num },
+      { org_id: org.id, num: 0 },
+      { org_id: org.id, num: 1.5 },
+    ]) {
+      const get = makeFunctionReference<'query'>('projectSettings:get')
+      expect(await code(() => as(t, nora).query(get, a)), JSON.stringify(a)).toBe('bad_request')
+      expect(
+        await code(() => projectSettingsStandIn(ws, 'projectSettings:get', a)),
+        JSON.stringify(a),
+      ).toBe('bad_request')
+    }
     const base = { org_id: org.id, project_id: project.id }
     // both lists, every batch, in the server's order, which neither
     // localeCompare nor JavaScript's `<` gives
@@ -265,6 +292,11 @@ async function compareShape(
     const server = await as(t, subject).query(api.projectSettings.get, { id: p.id })
     const stand = projectSettingsStandIn(ws, 'projectSettings:get', { id: p.id })
     expect(stand, `${label} on ${p.key}`).toEqual(server)
+    // by its organization and number, the same answer
+    const byNum = { org_id: p.org_id, num: p.num }
+    const serverNum = await as(t, subject).query(api.projectSettings.get, byNum)
+    expect(serverNum, `${label} on ${p.key} by number`).toEqual(server)
+    expect(projectSettingsStandIn(ws, 'projectSettings:get', byNum)).toEqual(serverNum)
     states.push(server.state)
   }
   return states

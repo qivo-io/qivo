@@ -273,18 +273,18 @@ const hiddenPages = () =>
 describe('the main pages kept while the person uses the app', { timeout: 30_000 }, () => {
   it('keeps each page opened, unloads Settings, and releases the hidden pages after 30 idle minutes', async () => {
     const org = await boot()
-    await go(`/app/${org}/board/all`)
+    await go(`/app/${org}/board/mine`)
     const board = await shownPage('kanban')
-    await go(`/app/${org}/overview/all`)
+    await go(`/app/${org}/overview/mine`)
     const overview = await shownPage('overview')
-    await go(`/app/${org}/roadmap/all`)
+    await go(`/app/${org}/roadmap/mine`)
     await shownPage('roadmap')
     await go(`/app/${org}/inbox`)
     const inbox = await shownPage('inbox')
     expect(hiddenPages().sort()).toEqual(['kanban', 'overview', 'roadmap'])
 
     // back to a kept page: the same elements show again
-    await go(`/app/${org}/board/all`)
+    await go(`/app/${org}/board/mine`)
     expect(await shownPage('kanban')).toBe(board)
     expect(board.isConnected && overview.isConnected && inbox.isConnected).toBe(true)
 
@@ -313,7 +313,7 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     expect(board.isConnected).toBe(true)
 
     // a released page opens anew, as on a first visit
-    await go(`/app/${org}/overview/all`)
+    await go(`/app/${org}/overview/mine`)
     const again = await shownPage('overview')
     expect(again).not.toBe(overview)
     expect(hiddenPages()).toEqual(['kanban'])
@@ -349,7 +349,7 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     // a jump to the Board keeps the page, which reads no comment while it
     // hides and keeps its marks for its return
     const marks = P.lastComments.size
-    await go(`/app/${org}/board/all`)
+    await go(`/app/${org}/board/mine`)
     await shownPage('kanban')
     expect(sync.dataset.hiddenView).toBe('sync')
     expect(P.lastComments.size).toBe(marks)
@@ -408,7 +408,7 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     const live = () => milestoneWatches.filter((w) => !w.stopped).map((w) => w.name)
     expect(live().sort()).toEqual(['milestones:between', 'milestones:section'])
     // hidden behind the Board, the reads stop and keep their answers
-    await go(`/app/${org}/board/all`)
+    await go(`/app/${org}/board/mine`)
     await shownPage('kanban')
     await waitFor(() => live().length === 0, 'the stopped milestone reads')
     expect(P.milestoneRead(SYNC_MILESTONE_SLOTS.next)).toMatchObject({
@@ -596,7 +596,7 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     )
     await act(async () => roadmap.click())
     const page = await shownPage('roadmap')
-    // All projects has no Roadmap, so the jump opens the task's sub-project
+    // the jump opens the task's sub-project
     expect(location.pathname).toBe(`/app/${org}/roadmap/p/1`)
     await waitFor(
       () =>
@@ -611,7 +611,7 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     )
     await act(async () => board.click())
     await shownPage('kanban')
-    // the project form of a task's address, not All projects' (board/all)
+    // the project form of a task's address
     expect(location.pathname).toBe(`/app/${org}/board/tasks/qn-1`)
     await waitFor(
       () =>
@@ -649,8 +649,8 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
       // the scope beneath the Inbox is not remembered
       await shownPage('inbox')
       expect(P.loadUI().lastProject).toEqual(other)
-      // nor All projects
-      await go(`/app/${org}/board/all`)
+      // nor My view
+      await go(`/app/${org}/board/mine`)
       await shownPage('kanban')
       await go(`/app/${org}/inbox/tasks/qn-4`)
       await shownPage('inbox')
@@ -707,7 +707,7 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     // here, by the row's number too, which its loading note names
     await pick('gone')
     expect(inbox.textContent).toContain('Loading QN-99…')
-    await go(`/app/${org}/board/all`)
+    await go(`/app/${org}/board/mine`)
     await shownPage('kanban')
     await go(`/app/${org}/inbox`)
     expect(await shownPage('inbox')).toBe(inbox)
@@ -724,24 +724,23 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     expect(inbox.querySelector('[data-unread-divider]')).toBeNull()
   })
 
-  it('opens the Roadmap of All projects on its chooser at once, asking for no task', async () => {
+  it('opens an address that once named all projects on the project chooser at once, asking for no task', async () => {
     // 12,800 task numbers make 64 task windows; the last starts at fc000000
     const org = await boot((snap) => {
       underProgram(snap)
       snap.orgs[0].next_issue_num = 64 * 200
+      // at the front door, with no scope chosen
+      history.replaceState(null, '', '/app/testbed')
     }, 'fc000000')
     const { __layerProbe } = await import('./store/planner')
+    await waitFor(() => document.querySelector('[data-project-chooser]'), 'the chooser')
     // what the boot asked for
     __layerProbe?.asks()
     await go(`/app/${org}/roadmap/all`)
-    const roadmap = await shownPage('roadmap')
-    await waitFor(() => roadmap.querySelector('[data-roadmap-choices]'), 'the chooser')
-    expect(roadmap.querySelector('[data-roadmap-root]')?.getAttribute('data-roadmap-state')).toBe(
-      'choose',
-    )
-    expect(roadmap.textContent).toContain('The Roadmap shows one project at a time.')
-    expect(roadmap.textContent).not.toContain('opens once every task has loaded')
-    // the Roadmap asks for no task of the workspace
+    await waitFor(() => document.querySelector('[data-project-chooser]'), 'the chooser')
+    expect(document.querySelector('[data-workspace-view="roadmap"]')).toBeNull()
+    expect(document.body.textContent).not.toContain('opens once every task has loaded')
+    // no view and no task of the workspace is asked for
     expect(__layerProbe?.asks()).toEqual([])
   })
 
@@ -749,7 +748,7 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     const org = await boot()
     await go(`/app/${org}/inbox`)
     const inbox = await shownPage('inbox')
-    await go(`/app/${org}/board/all`)
+    await go(`/app/${org}/board/p/1`)
     const board = await shownPage('kanban')
     await go(`/app/${org}/board/mine`)
     const mine = await shownPage('kanban')
@@ -902,7 +901,7 @@ describe('Plan on roadmap while the Roadmap reads its answer', { timeout: 30_000
 
   it('starts no planning session at a later visit when the person left the Roadmap while it waited', async () => {
     const org = await planWhileLoading()
-    await go(`/app/${org}/board/all`)
+    await go(`/app/${org}/board/mine`)
     await shownPage('kanban')
     await loadTheAnswer()
     await go(`/app/${org}/roadmap/p/99`)
@@ -935,7 +934,7 @@ describe('Plan on roadmap while the Roadmap reads its answer', { timeout: 30_000
 
   it('shows no task at a later visit when the person left the Roadmap while a Show on roadmap waited', async () => {
     const org = await planWhileLoading(true)
-    await go(`/app/${org}/overview/all`)
+    await go(`/app/${org}/overview/mine`)
     await shownPage('overview')
     await loadTheAnswer()
     await go(`/app/${org}/roadmap/p/99`)

@@ -47,9 +47,6 @@ export function boardFilters(
 
 /** What the Board asks for. */
 export type BoardRequest =
-  /** All projects, which the server has no selection for: the Board asks
-      to choose a project */
-  | { kind: 'choose' }
   /** a text filter past LIMITS.search, which the server refuses */
   | { kind: 'search_limit' }
   /** the arguments, as their key (JSON in a fixed key order) */
@@ -68,7 +65,6 @@ export function boardRequest(
   cutoff: string,
   search: string = filters.search,
 ): BoardRequest {
-  if (info.wide && !info.mine) return { kind: 'choose' }
   const text = search.trim()
   if (overLimit(LIMITS.search, text)) return { kind: 'search_limit' }
   const scope: BoardScope = info.mine

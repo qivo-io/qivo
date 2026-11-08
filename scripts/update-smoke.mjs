@@ -206,7 +206,17 @@ async function assertPhoneDialogBounds(width) {
 }
 
 async function verifyLazyLoading() {
-  const boardURL = `${demo.base}/app/${demo.orgSlug}/board/all`
+  // Luma Sensor's Board, as no view shows a scope over all projects
+  const num = await page.evaluate(
+    () => window.PLANNER.projects.find((p) => p.name === 'Luma Sensor' && !p.parent)?.num,
+  )
+  assert.ok(num != null, 'Northstar holds no Luma Sensor')
+  const boardURL = `${demo.base}/app/${demo.orgSlug}/board/p/${num}`
+  // the sign-in document, the directory, downloaded every view already;
+  // routing turns Playwright's cache off, so the cold Board requests its
+  // own chunks again and only those count
+  requestedAssets.clear()
+  await page.goto(boardURL, { waitUntil: 'domcontentloaded' })
   await page.locator('[data-card]').first().waitFor()
   // a large Board mounts in slices; this one is small, so this only guards
   await page.waitForFunction(() => !document.querySelector('[data-board-mount="pending"]'))

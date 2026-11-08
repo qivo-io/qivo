@@ -234,6 +234,11 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
         title: 'Elsewhere ledger',
         project_id: f.otherProject.id,
         archived: false,
+        // the page's fields, as every delete since v0.1.122 writes them
+        search_text: 'Elsewhere ledger\n',
+        deleted_at: NOW,
+        deleted_by: f.otherAdmin.id,
+        item_project_id: f.otherProject.id,
       })
     })
   })
@@ -737,18 +742,28 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
       }),
     ),
     // Deleted items: myItem answers a foreign item like an unknown one, and
-    // the list and the search read only the caller's own seats
+    // the page and the item row read only the caller's own seats
     {
-      name: 'deletedItems.list (foreign deleter)',
+      name: 'deletedItems.page (foreign deleter)',
       ref: () => f.otherAdmin.id,
-      call: (ref) => as(t, f.admin).query(api.deletedItems.list, { deleted_by: ref }),
-      value: { items: [], capped: false },
+      call: (ref) => as(t, f.admin).query(api.deletedItems.page, { deleted_by: ref }),
+      value: { entries: [], items: [], next_cursor: null, scope_needed: true },
     },
     {
-      name: 'deletedItems.matches (a foreign task title)',
+      name: 'deletedItems.page (a foreign task title)',
       ref: () => 'Elsewhere ledger',
-      call: (ref) => as(t, f.admin).query(api.deletedItems.matches, { text: ref }),
-      value: { matches: [], capped: false },
+      call: (ref) =>
+        as(t, f.admin).query(api.deletedItems.page, {
+          scope: { org_id: f.org.id, all: true },
+          search: ref,
+        }),
+      value: { entries: [], items: [], next_cursor: null, missing: 'matches' },
+    },
+    {
+      name: 'deletedItems.item',
+      ref: () => otherItemId,
+      call: (ref) => as(t, f.admin).query(api.deletedItems.item, { id: ref }),
+      value: null,
     },
     {
       name: 'deletedItems.restore',

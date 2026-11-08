@@ -14,6 +14,10 @@
      cannot load that module; `unavailable` alike for an unknown project,
      one of another organization, one outside a meta tree and one the
      caller neither sees nor manages, and `archived` with names only;
+   - get by id, or by org_id with num, a whole number from 1, with the
+     caller's seat in org_id alone; a free number and no seat there answer
+     unavailable as an unknown id does, and any other form is a bad_request
+     (convex/model/projectSettings.ts SETTINGS_FORM);
    - get's fields, its parent, its effective lead and every right
      (settingsRights);
    - the Users and Teams lists: the explicit grants and team shares, the
@@ -299,11 +303,34 @@ const profileIn = (ws: SettingsWorkspace, orgId: string, id: string | undefined)
 
 /* --------------------------------------------------------------- get */
 
-/** What projectSettings.get answers for project `id`. */
-export function projectSettingsGet(ws: SettingsWorkspace, args: { id: string }): ProjectSettings {
-  const project = ws.projects.find((p) => p.id === args.id)
-  const me = project ? seatIn(ws, project.org_id) : undefined
-  if (!project || !me) return { state: 'unavailable' }
+/* The refusal of any other form of get's arguments (convex/model/
+   projectSettings.ts SETTINGS_FORM). */
+const SETTINGS_FORM = 'get takes id alone, or org_id with num, a whole number of at least 1'
+
+/** What projectSettings.get answers for the project `id` names, or `num`
+    in organization `org_id`, refusing any other form as the server does
+    before it reads: by number with the caller's seat in `org_id` alone,
+    and either way through the same gate. */
+export function projectSettingsGet(
+  ws: SettingsWorkspace,
+  args: { id?: string; org_id?: string; num?: number },
+): ProjectSettings {
+  const byNumber = args.org_id !== undefined || args.num !== undefined
+  const whole = args.num !== undefined && Number.isInteger(args.num) && args.num >= 1
+  if (args.id !== undefined ? byNumber : !whole || args.org_id === undefined)
+    throw badRequest(SETTINGS_FORM)
+  const me = args.id === undefined ? seatIn(ws, args.org_id ?? '') : undefined
+  const project =
+    args.id !== undefined
+      ? ws.projects.find((p) => p.id === args.id)
+      : me && ws.projects.find((p) => p.org_id === args.org_id && p.num === args.num)
+  const seat = args.id !== undefined && project ? seatIn(ws, project.org_id) : me
+  if (!project || !seat) return { state: 'unavailable' }
+  return settingsFor(ws, seat, project)
+}
+
+/* get's answer for `me`, the caller's seat in `project`'s organization. */
+function settingsFor(ws: SettingsWorkspace, me: Profile, project: Project): ProjectSettings {
   const gate = gateOf(ws, me, project.id)
   if (gate.state === 'unavailable') return gate
   const p = gate.project

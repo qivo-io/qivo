@@ -503,7 +503,7 @@ describe('rename toasts', () => {
     await render(() => (
       <>
         <pages.general.OrgGeneralPage setPage={vi.fn()} />
-        <pages.project.ProjectPage projectId="sensor" setPage={vi.fn()} />
+        <pages.project.ProjectPage project="sensor" setPage={vi.fn()} />
         <PlannableHoursInput user={{ id: me.id, ...personShownOf(me) }} canEdit />
       </>
     ))
@@ -538,7 +538,7 @@ describe('rename toasts', () => {
   })
 
   it('refuses a review time outside 0 to 999 before rounding it', async () => {
-    await render(() => <pages.project.ProjectPage projectId="sensor" setPage={vi.fn()} />)
+    await render(() => <pages.project.ProjectPage project="sensor" setPage={vi.fn()} />)
     const field = input('[data-project-review-hours]')
     const sentence = 'Review hours must be a number from 0 to 999. Enter a number in that range.'
     for (const typed of ['-0.04', '999.04']) {
@@ -568,7 +568,7 @@ describe('rename toasts', () => {
   })
 
   it('says a project setting changed only once the server saved it', async () => {
-    await render(() => <pages.project.ProjectPage projectId="sensor" setPage={vi.fn()} />)
+    await render(() => <pages.project.ProjectPage project="sensor" setPage={vi.fn()} />)
     const field = input('[data-project-review-hours]')
     await act(async () => field?.focus())
     await type(field, '3')

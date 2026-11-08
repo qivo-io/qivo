@@ -331,9 +331,10 @@
 //                        answers), refused (the pickers and the invite
 //                        lookup answer with the write's refusal), small
 //                        (batches of five) and unheld (once a project's
-//                        page has read it, the workspace's parts leave the
-//                        project and its grants out while the page's reads
-//                        still answer them, as for a project an admin
+//                        page has read it, by its id or by its number, the
+//                        workspace's parts leave the project and its
+//                        grants out while the page's reads still answer
+//                        them, as for a project an admin
 //                        manages without taking part in it); several
 //                        joined by commas. Open it with role=admin
 //   projectlists         states Settings' project lists answer whatever the
@@ -2560,19 +2561,22 @@ const read = (name, args = {}) => {
 }
 /** What a project's Settings page read `name` answers for `args`, through
     the stand-in over the whole workspace, so a project the parts leave
-    out still answers (projectsettings=unheld). */
+    out still answers (projectsettings=unheld). get names its project by
+    id or by organization and number and takes no other organization; the
+    lists take the page's organization. */
 function readSettings(name, args) {
-  if (name === 'projectSettings:get' && settingsStates.has('loading')) return NO_ANSWER
-  if (
-    name === 'projectSettings:get' &&
-    settingsStates.has('unheld') &&
-    !settingsUnheld.has(args.id)
-  ) {
+  if (name !== 'projectSettings:get')
+    return projectSettingsStandIn(serverWorld(), name, { org_id: org, ...args }, forcedSettings)
+  if (settingsStates.has('loading')) return NO_ANSWER
+  const answer = projectSettingsStandIn(serverWorld(), name, args, forcedSettings)
+  // the project the answer names, whichever form named it
+  const id = answer.state === 'unavailable' ? undefined : answer.project.id
+  if (id !== undefined && settingsStates.has('unheld') && !settingsUnheld.has(id)) {
     // the parts leave the project out from the next transition on
-    settingsUnheld.add(args.id)
+    settingsUnheld.add(id)
     setTimeout(() => void emitWorkspace(), 0)
   }
-  return projectSettingsStandIn(serverWorld(), name, { org_id: org, ...args }, forcedSettings)
+  return answer
 }
 /** What a team settings read `name` answers for `args`, through the
     stand-in over the workspace, with every third team uncounted under

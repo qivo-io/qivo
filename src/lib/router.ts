@@ -5,9 +5,11 @@
      <view>/tasks/<ref>        task over that view
      tasks/<ref>               task using saved view/scope
      [<view>/]p/<n>            project/sub-project scope
-     <view>/all|mine           sentinel scope, optionally /tasks/<ref>
+     <view>/mine               My view, optionally /tasks/<ref>
      settings/<page>           account, org-*, projects-* or team:<uuid>
-     settings/project/<n>      project settings, by number or uuid
+     settings/project/<n>      project settings, by number or uuid; a number
+                               the workspace does not hold is a numbered
+                               page (numberedProjectPage)
      projects                  the All projects directory, no task over it
      archive                   old Archive address; opens settings/projects-archived-tasks
      inbox[/tasks/<ref>]       inbox, optionally with a task open
@@ -29,18 +31,26 @@
    number, and one it does not hold by its uuid under the organization the
    page's own read named (noteProjectPage), which parses back to the page
    without the workspace: the page's read (projectSettings.get) decides
-   what it shows, so a reload, Back and Forward open it again.
+   what it shows, so a reload, Back and Forward open it again. A numbered
+   address of a project the workspace does not hold opens a numbered page,
+   which the page reads by its organization and number and which keeps
+   the address it was opened by, and the project's page by id then takes
+   that number too. A number reads only in the organization the address
+   names, or under `~` in the home organization, held project or not.
    A task the workspace holds resolves to its handle, and one it does not
    to a reference (lib/taskReference.ts) that the task window reads from
    the server, in the organization the address names. Tasks resolve their
-   own project scope except under all/mine or inbox, a reference's once
-   its answer names its project (App pendingTask).
+   own project scope except under mine or inbox, a reference's once its
+   answer names its project (App pendingTask). A segment the grammar does
+   not know names nothing, so an address that once named all projects
+   (<view>/all, optionally /tasks/<ref>) reads as its view with no scope,
+   which the startup rule serves.
    Legacy #/ links share parseSegments and are replaced by path routes;
    unrelated hashes, including auth fragments, are ignored. */
 
 import { parseIssueRef, UUID } from '../../convex/lib/taskRefs'
 import type { AddressedTask } from '../store/liveParts'
-import { ALL_SCOPE, ISSUE_PREFIX, MINE_SCOPE, P, type ProjectAsk } from '../store/planner'
+import { ISSUE_PREFIX, MINE_SCOPE, P, type ProjectAsk } from '../store/planner'
 import type { IssueVM } from '../store/viewModels'
 import { refParts, taskRef } from './taskReference'
 
@@ -82,13 +92,12 @@ export const ORG_NONE = '~'
     Archived tasks. */
 export const ARCHIVED_TASKS_PAGE = 'projects-archived-tasks'
 
-/* The scope tokens that name no project row. Both sit where a project number
-   would and share the whole URL grammar, so the parser and the builder ask
-   this rather than testing one sentinel — but they are NOT interchangeable:
-   the answer is the token itself, so callers compare identity (moving between
-   them changes the pane, and that earns a history entry). */
-const sentinelOf = (s?: string | null): string | null =>
-  s === ALL_SCOPE || s === MINE_SCOPE ? s : null
+/* The scope token that names no project row, My view's. It sits where a
+   project number would and shares the whole URL grammar, so the parser and
+   the builder ask this. The answer is the token itself, so callers compare
+   identity: moving in or out of it changes the pane, and that earns a
+   history entry. */
+const sentinelOf = (s?: string | null): string | null => (s === MINE_SCOPE ? s : null)
 
 // "split" and "resources" were folded into the roadmap — old links still parse
 const URL_TO_VIEW: Record<string, string> = {
@@ -105,34 +114,75 @@ const VIEW_TO_URL: Record<string, string> = {
   roadmap: 'roadmap',
 }
 
-/* `org` (a uuid, resolved from the address's org segment) pins which
-   organization a bare number is read in. Without it both finders resolve HOME
-   first, so a guest's colliding number can never hijack an unpinned link —
-   which is what `~` and every legacy hash rely on. */
+/* The organization a project number of an address reads in: the one the
+   address pins, or, unpinned (`~` and a legacy hash without one), the home
+   organization, never another organization's; none for a login without a
+   home organization. The held project of that number (findProject),
+   Route.unheld and a numbered project page all read a number here, so
+   they cannot drift. */
+const numberOrgOf = (org: string | undefined): string | undefined => org ?? (P.homeOrg || undefined)
+
+/* The project the workspace holds that segment `s` names: by its uuid, or
+   by its number in the organization numberOrgOf reads it in (`org`, a
+   uuid resolved from the address's org segment, pins it). A number never
+   names another organization's project, so a guest's colliding number
+   cannot take over an unpinned link, which is what `~` and every legacy
+   hash rely on, and a login without a home organization holds no project
+   by an unpinned number, as findIssueKey reads a task number. */
 const findProject = (s: string | undefined, org?: string) => {
   if (!s) return undefined
   if (/^\d+$/.test(s)) {
     const n = Number(s)
-    const all = P.projects.filter((p) => p.num === n)
-    if (org) return all.find((p) => p.org === org)
-    return all.find((p) => p.org === P.homeOrg) || all[0]
+    const at = numberOrgOf(org)
+    return at ? P.projects.find((p) => p.num === n && p.org === at) : undefined
   }
   return P.projects.find((p) => p.id === s.toLowerCase())
 }
+
+/* The project number segment `s` names: a whole number from 1 to
+   Number.MAX_SAFE_INTEGER in digits, else null. */
+const projectNumberOf = (s: string): number | null => {
+  if (!/^\d+$/.test(s)) return null
+  const n = Number(s)
+  return n >= 1 && n <= Number.MAX_SAFE_INTEGER ? n : null
+}
+
 /* How P.resolveProject asks about the project a segment `s` names that
    the workspace does not hold (Route.unheld): a number in the
-   organization the address pins, or unpinned in the home organization,
-   as findProject reads it, and a uuid alone. Null where no read can ask:
-   under a slug the login cannot resolve, a number with no organization to
-   read it in, or a ref no project can have. */
+   organization numberOrgOf reads it in, and a uuid alone. Null where no
+   read can ask: under a slug the login cannot resolve, a number with no
+   organization to read it in, or a ref no project can have. */
 const unheldProject = (s: string | undefined, org: string | undefined, orgUnknown: boolean) => {
   if (orgUnknown || !s) return null
   if (/^\d+$/.test(s)) {
-    const num = Number(s)
-    const at = org ?? P.homeOrg
-    return num >= 1 && at ? { org_id: at, num } : null
+    const num = projectNumberOf(s)
+    const at = numberOrgOf(org)
+    return num !== null && at ? { org_id: at, num } : null
   }
   return UUID.test(s) ? s.toLowerCase() : null
+}
+
+/** How a project settings page names its project: `{ id }`, or a
+    numbered page's `{ org_id, num }` (numberedProjectPage). */
+export type ProjectPageRef = { id: string } | { org_id: string; num: number }
+
+/** The page key of the settings page of project number `num` in
+    organization `org`, for a numbered address the workspace does not hold:
+    `project:<org>/<num>`, which no project id can be, since ids are uuids.
+    The page reads it by its organization and number (projectSettings.get),
+    and buildPath names it by that number again. */
+export const numberedProjectPage = (org: string, num: number): string => `project:${org}/${num}`
+
+/** The project the settings page `page` names (projectPageRef): its id,
+    or a numbered page's organization and number; null for any other
+    page. */
+export function projectPageRef(page: string | null | undefined): ProjectPageRef | null {
+  if (!page?.startsWith('project:')) return null
+  const rest = page.slice(8)
+  const at = rest.indexOf('/')
+  if (at === -1) return { id: rest }
+  const num = projectNumberOf(rest.slice(at + 1))
+  return num === null ? null : { org_id: rest.slice(0, at), num }
 }
 /* The task an address's task segment `s` names: its handle when the
    workspace holds it, else a reference (lib/taskReference.ts), which the
@@ -272,9 +322,6 @@ export const scopeForIssue = (
   preferred?: string | null,
 ): string | undefined => {
   if (!it) return preferred || undefined
-  // All projects already holds every issue this login can open — nothing to
-  // narrow to, and narrowing would drop the mode on a short issue link
-  if (preferred === ALL_SCOPE) return ALL_SCOPE
   /* My view does NOT hold every issue — only mine. A short link to somebody
      else's task therefore narrows to its own sub-project, keeping the promise
      that a link always lands you on a board that actually shows the task. The
@@ -294,30 +341,6 @@ export const scopeForIssue = (
   return it.project
 }
 
-/* The view a task address `r` shows behind its task window, `view` being
-   the one that stays where the address names none: null under the Inbox,
-   which covers every view. */
-export const viewBehindTask = (r: Route, view: string): string | null =>
-  r.inbox ? null : r.view || view
-
-/* The scope to show behind a task link on `view` (viewBehindTask). The
-   Board, the Overview and the Roadmap have no All projects selection
-   (convex/tasks.ts board and roadmap, convex/overview.ts), so on All
-   projects each asks to choose a project. Where scopeForIssue keeps All
-   projects, they show the task's own sub-project instead, so its card, its
-   figures or its bar can be shown. The Inbox, which shows no view, keeps
-   All projects. */
-export const scopeForIssueOn = (
-  view: string | null,
-  it: ScopeTask | undefined,
-  preferred?: string | null,
-): string | undefined => {
-  const scope = scopeForIssue(it, preferred)
-  return (view === 'kanban' || view === 'overview' || view === 'roadmap') && scope === ALL_SCOPE
-    ? (it?.project ?? scope)
-    : scope
-}
-
 /* ---------------------------------------------------------------------------
    The grammar below the prefix — shared by both parsers, so a path and a
    legacy hash can never come to mean different things.
@@ -330,17 +353,28 @@ function parseSegments(seg: string[], org: string | undefined, orgUnknown: boole
   if (seg[0] === 'settings') {
     if (seg[1] === 'project') {
       /* A uuid names the page whether the workspace holds the project or
-         not, and the page's own read decides what it shows; a number reads
-         through the workspace. Under a slug this login cannot resolve,
-         neither does, as for every segment past the page. */
+         not, and the page's own read decides what it shows. A number reads
+         in the organization numberOrgOf names first: it names the project
+         the workspace holds there (findProject), and otherwise a numbered
+         page of that organization, which the page reads by organization
+         and number, never another organization's project. A number outside
+         1 to Number.MAX_SAFE_INTEGER, one with no organization to read it
+         in and any other segment name the account page. Under a slug this
+         login cannot resolve, nothing does, as for every segment past the
+         page. */
       const s = seg[2] ?? ''
       const p = UUID.test(s) ? null : proj(s)
-      r.settings =
-        !orgUnknown && UUID.test(s)
+      const num = projectNumberOf(s)
+      const at = numberOrgOf(org)
+      r.settings = orgUnknown
+        ? 'account'
+        : UUID.test(s)
           ? `project:${s.toLowerCase()}`
           : p
             ? `project:${p.id}`
-            : 'account'
+            : num !== null && at
+              ? numberedProjectPage(at, num)
+              : 'account'
     } else r.settings = seg[1] || 'account'
     return r
   }
@@ -390,10 +424,10 @@ function parseSegments(seg: string[], org: string | undefined, orgUnknown: boole
     r.view = URL_TO_VIEW[seg[0]]
     i = 1
   }
-  /* "all" and "mine" sit where a project number would: the token IS the
-     scope. Both span every organization, so the org segment in front of this
-     form pins only how the issue reference behind it is read — never which
-     projects are shown. */
+  /* "mine" sits where a project number would: the token IS the scope. It
+     spans every organization, so the org segment in front of this form pins
+     only how the issue reference behind it is read, never which projects
+     are shown. Any other segment there names nothing, as "all" does now. */
   const sen = sentinelOf(seg[i])
   if (sen) {
     r.scope = sen
@@ -597,10 +631,12 @@ const unnamedRef = (open: string | null | undefined): boolean =>
 const namedProjects = new Map<string, { org: string; seg: string; num: number }>()
 
 /* The project settings pages whose project the workspace does not hold,
-   each with the organization its page's read named (noteProjectPage).
-   buildPath names such a page by its uuid under that organization, which
+   each with the organization its page's read named (noteProjectPage) and,
+   for a project last opened by its number, that number. buildPath names
+   such a page by that number under that organization, which parses back to
+   the project's numbered page, and otherwise by its uuid there, which
    parses back to the page, so a reload, Back and Forward open it again. */
-const unheldPages = new Map<string, { org: string }>()
+const unheldPages = new Map<string, { org: string; num?: number }>()
 
 /* The revision of unheldPages, which App's address follows (projectPagesRev),
    so an answer that names a page's organization rewrites the address at
@@ -621,29 +657,56 @@ export const projectPagesRev = (): number => pagesRev
 /** Tells the address that the settings page of project `id` shows a
     project its read (projectSettings.get) found in organization `org`,
     while the workspace does not hold it and no window holds the page, or,
-    with null, that it no longer does. The address then names the page by
-    the project's uuid under that organization, in place. */
-export function noteProjectPage(id: string, at: { org: string } | null): void {
+    with null, that it no longer does. `num` is the number a numbered page
+    opened it by (numberedProjectPage); a later note in the same
+    organization without one keeps it. The address then names the page by
+    that number, as a numbered page names itself, else by the project's
+    uuid, under that organization, in place. So a phone's Back from a
+    sub-project to its project opened by number finds the entry it came
+    from (App backOrSet). */
+export function noteProjectPage(id: string, at: { org: string; num?: number } | null): void {
   const was = unheldPages.get(id)
   if (at === null) {
     if (!was) return
     unheldPages.delete(id)
   } else {
-    if (was?.org === at.org) return
+    const num = at.num ?? (was?.org === at.org ? was.num : undefined)
+    if (was?.org === at.org && was.num === num) return
     unheldPages.delete(id)
-    unheldPages.set(id, { org: at.org })
+    unheldPages.set(id, num === undefined ? { org: at.org } : { org: at.org, num })
     if (unheldPages.size > NAMED_MAX) unheldPages.delete(unheldPages.keys().next().value ?? id)
   }
   pagesRev++
   for (const listener of pagesListeners) listener()
 }
 
+/* The number a project settings page the workspace does not hold was last
+   opened by, with the org segment its organization takes now, while that
+   organization can be named; `~` would read the number in the home
+   organization, so then none and the page keeps its uuid. */
+function numberedUnheld(id: string): { seg: string; num: number } | undefined {
+  const was = unheldPages.get(id)
+  if (was?.num === undefined) return undefined
+  const seg = orgSegment(was.org)
+  return seg === ORG_NONE ? undefined : { seg, num: was.num }
+}
+
 /** Whether `path` names the settings page of the project `page` names by
     the organization and number it was last named by: the page's own
     address, also once its project left the store while the page is held
-    (App onPop keeps the page then). */
+    (App onPop keeps the page then), the number a project the workspace
+    does not hold was last opened by (noteProjectPage), and a numbered
+    page's own number under its organization, also once the workspace has
+    come to hold the project, whose address then parses to the page by
+    id. */
 export function namesProjectPage(path: string, page: string | null | undefined) {
-  const was = page?.startsWith('project:') ? namedProjects.get(page.slice(8)) : undefined
+  const ref = projectPageRef(page)
+  const was =
+    ref === null
+      ? undefined
+      : 'id' in ref
+        ? (namedProjects.get(ref.id) ?? numberedUnheld(ref.id))
+        : { seg: orgSegment(ref.org_id), num: ref.num }
   const seg = path.split('/').filter(Boolean)
   return (
     !!was &&
@@ -762,6 +825,14 @@ export function buildPath(state: UiState): string {
   // same precedence as the render: full-screen pages first, then the inbox
   if (s.settingsPage) {
     const page = s.settingsPage
+    const ref = projectPageRef(page)
+    // a numbered page keeps the number it was opened by, under its
+    // organization; once that organization cannot be named, `~` would read
+    // the number in the home organization, so it names the account page
+    if (ref !== null && 'num' in ref)
+      return orgSegment(ref.org_id) === ORG_NONE && ref.org_id !== P.homeOrg
+        ? at(null, '/settings/account')
+        : at(ref.org_id, `/settings/project/${String(ref.num)}`)
     if (page.indexOf('project:') === 0) {
       const id = page.slice(8)
       const p = P.project(id)
@@ -772,10 +843,15 @@ export function buildPath(state: UiState): string {
           namedProjects.delete(namedProjects.keys().next().value ?? id)
         return at(p.org, `/settings/project/${String(p.num)}`)
       }
-      // a page whose read found its project outside the workspace, by its
-      // uuid under the organization that read named (noteProjectPage)
+      // a page whose read found its project outside the workspace, under
+      // the organization that read named, by the number it was last opened
+      // by, else by its uuid (noteProjectPage)
       const unheld = p ? undefined : unheldPages.get(id)
-      if (unheld) return at(unheld.org, `/settings/project/${encodeURIComponent(id)}`)
+      if (unheld) {
+        const byNum = numberedUnheld(id)
+        const seg = byNum ? String(byNum.num) : encodeURIComponent(id)
+        return at(unheld.org, `/settings/project/${seg}`)
+      }
       // a project that left while its page shows with a window open keeps
       // the page's address, by its id once its organization left too, as
       // `~` would read the number in the home organization
@@ -801,7 +877,7 @@ export function buildPath(state: UiState): string {
   // were, so the address names only the page (and a task over it)
   if (s.sync) return syncPath(s.sync, s.openIssue)
   const viewUrl = VIEW_TO_URL[s.view || ''] || 'overview'
-  /* A sentinel scope is one an issue link must NAME: there is no project to
+  /* My view is a scope an issue link must NAME: there is no project to
      restore it from on the way back (scopeForIssue would land the reload on
      the issue's own sub-project and silently leave the mode). */
   if (sentinelOf(s.scope)) {
@@ -885,16 +961,13 @@ export function pathMatchesState(path: string, s: UiState): boolean {
   if (r.sync || s.sync) return !!r.sync === !!s.sync && issue === (s.openIssue || null)
   if (issue !== (s.openIssue || null)) return false
   if (s.openIssue) {
-    /* Entering or leaving a sentinel scope with the window open changes the
-       pane behind the task, so it earns a history entry. Reading "no scope
+    /* Entering or leaving My view with the window open changes the pane
+       behind the task, so it earns a history entry. Reading "no scope
        segment" as "a different scope" takes a view: the PROJECT form omits the
-       segment too, so an address that names a view but no scope was that form
-       — while a viewless short link names neither and must still normalize in
-       place, or every such boot under a saved sentinel scope would push a junk
-       entry.
-       Compared by IDENTITY, not by "is it a sentinel": All projects → My view
-       swaps the pane exactly as project → All projects does, and a boolean
-       test would call those two the same page. */
+       segment too, so an address that names a view but no scope was that form,
+       while a viewless short link names neither and must still normalize in
+       place, or every such boot under My view would push a junk entry.
+       Compared by identity, as the token is the scope. */
     if ((r.view || r.scope) && sentinelOf(r.scope) !== sentinelOf(s.scope)) return false
     // a viewless short link matches whatever view the state has — the URL
     // normalizes in place to the canonical view-prefixed form

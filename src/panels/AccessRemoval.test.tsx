@@ -929,7 +929,7 @@ describe('the press on the Settings pages', () => {
     )
   async function projectPage() {
     const settings = await import('./settings/ProjectSettings')
-    await show(() => <settings.ProjectPage projectId={work} setPage={vi.fn()} />)
+    await show(() => <settings.ProjectPage project={work} setPage={vi.fn()} />)
   }
 
   it.each([

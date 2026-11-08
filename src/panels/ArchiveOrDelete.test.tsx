@@ -1103,7 +1103,7 @@ describe('the Archive or delete section of project settings', () => {
     const version = await import('../store/usePlannerVersion')
     function Live() {
       version.usePlannerVersion()
-      return <settings.ProjectPage projectId={projectId} setPage={setPage} onHolding={onHolding} />
+      return <settings.ProjectPage project={projectId} setPage={setPage} onHolding={onHolding} />
     }
     await act(async () =>
       root.render(

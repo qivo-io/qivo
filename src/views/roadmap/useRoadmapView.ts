@@ -64,8 +64,6 @@ import { keepsRoadmap, textChanged, useRoadmapRequest } from './roadmapArgs'
 
 /** Where the Roadmap stands, as its root's data-roadmap-state names it. */
 export type RoadmapState =
-  /** All projects, where the Roadmap asks to choose a project */
-  | 'choose'
   /** a text filter past LIMITS.search, which the Roadmap does not send */
   | 'search_limit'
   /** no answer to show for these arguments yet, or a task the answer
@@ -367,7 +365,6 @@ export function useRoadmapView(
   })
   const heldOf = (a: RoadmapAnswer & { state: 'ok' }) =>
     a.held_sub_projects ? new Set(a.held_sub_projects) : null
-  if (want.kind === 'choose') return note('choose')
   if (want.kind === 'search_limit') return note('search_limit')
   if (current?.error !== undefined) return note('error')
   if (answer === null && shownAnswer && joined)
@@ -438,8 +435,6 @@ function handleOfUuid(uuid: string): string {
     or null while it shows tasks or waits. */
 export function cannotPlanReason(view: RoadmapView): string | null {
   switch (view.state) {
-    case 'choose':
-      return 'The Roadmap shows one project at a time.'
     case 'search_limit':
       return limitSentence(LIMITS.search)
     case 'over_ceiling':

@@ -155,7 +155,7 @@ export function DemoGate() {
         if (!cancelled) end('lost', demoEnding(error)?.detail)
       })
       // the demo's own front door, where startup opens the project the
-      // visitor opened last, else the project chooser, never All projects
+      // visitor opened last, else the project chooser
       const openingPath = ['/', '/app', '/app/'].includes(location.pathname)
         ? `/app/${result.orgSlug}`
         : location.pathname
