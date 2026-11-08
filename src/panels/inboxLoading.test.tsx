@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LIMITS } from '../../convex/lib/limits'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
+import { projectNavStandIn } from '../store/projectNavStandIn.setup'
 
 /* An Inbox item whose task the workspace does not hold, while every task
    loads (store/liveParts.ts) or in a session that never asked for them:
@@ -91,7 +92,9 @@ async function loadingInbox(
   vi.resetModules()
   windowReads = []
   threadReads = []
-  const snap: Snapshot = plannerFixture()
+  // the project under a top-level project, as every writer stores one
+  // that holds tasks, so the project cache answers it
+  const snap: Snapshot = underProgram(plannerFixture())
   snap.orgs[0].next_issue_num = 64 * 200
   snap.issues.push({
     id: 'fd000000-b',
@@ -153,6 +156,9 @@ async function loadingInbox(
       next(structuredClone(snap))
     } else if (name === 'taskWindow:task') windowReads.push({ args, next })
     else if (name === 'snapshot:threadComments') threadReads.push(next)
+    // the Move window's targets and the other navigation lists, as the
+    // server answers them
+    else if (name.startsWith('projectNav:')) next(projectNavStandIn(snap, name, args))
     return () => {}
   })
   network.query.mockResolvedValue(null)
@@ -354,7 +360,7 @@ describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () 
   it("saves a field, takes no image past the server's cap and moves a task it shows from its answer", async () => {
     // the task's project and Bench under one top-level project
     const { snap } = await loadingInbox(null, (next) => {
-      const [project] = underProgram(next).projects
+      const [project] = next.projects
       next.projects.push({ ...project, id: 'bench', key: 'BEN', num: 2, name: 'Bench' })
     })
     const open = container.querySelector<HTMLButtonElement>(
@@ -410,9 +416,16 @@ describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () 
     // Move, to another sub-project of the same project
     const item = await paneActions()
     await act(async () => item('Move to sub-project…')?.click())
-    const target = document.querySelector<HTMLSelectElement>('select[aria-label="Move to"]')
-    if (!target) throw new Error('the Move window did not open')
-    await typeInto(target, 'bench')
+    // Bench among the server's targets, which the cache then answers
+    const target = await vi.waitFor(() => {
+      const input = document.querySelector<HTMLInputElement>(
+        '[data-target="bench"] input:not(:disabled)',
+      )
+      if (!input) throw new Error('the Move window did not list Bench')
+      return input
+    })
+    await act(async () => target.click())
+    await vi.waitFor(() => expect(buttonNamed('Move')?.disabled).toBe(false))
     await act(async () => buttonNamed('Move')?.click())
     // against the project the window showed
     expect(sentArgs('issues:move')).toEqual([

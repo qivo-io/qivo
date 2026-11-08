@@ -868,8 +868,13 @@ describe('New sub-project', () => {
     await click(parentButton())
     expect(has('[data-new-subproject-parents]')).toBe(false)
     expect(create().disabled).toBe(true)
-    // the workspace holds the parent, so its Lead may open meanwhile
-    expect(find<HTMLButtonElement>('[data-project-lead-picker]').disabled).toBe(false)
+    // the dialog names the parent with the project cache, whose answer
+    // gives its organization, so its Lead may open meanwhile
+    await act(async () =>
+      vi.waitFor(() =>
+        expect(find<HTMLButtonElement>('[data-project-lead-picker]').disabled).toBe(false),
+      ),
+    )
     expect(server.reads.open()).toEqual([{ name: 'projectSettings:get', args: { id: 'sensor' } }])
     server.reads.hold(false)
     await rerun()
@@ -1008,6 +1013,12 @@ describe('New sub-project', () => {
     })
     await openSub('beam')
     expect(askedFor('projectSettings:projects')).toEqual([])
+    // the dialog names its parent with the project cache, whose answer the
+    // store's own repaint numbers with the tags it keeps; the dialog's rows
+    // read none of them from here on
+    await act(async () => vi.waitFor(() => expect(P.projectState('beam')).not.toBe('loading')))
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)))
+    tagReads = 0
     await click(parentButton())
     expect(askedFor('projectSettings:projects')).toEqual([
       { org_id: home, sub_project_parents: true },
@@ -1163,20 +1174,21 @@ describe('New sub-project', () => {
     )
   })
 
-  it('offers a starter task only under a parent the workspace holds', async () => {
-    // the server holds Test #9, and the store's copy leaves it out
+  it('offers a starter task where the check says the creator may add tasks, whatever the store names', async () => {
+    // the server holds Test #9, and the store's copy leaves it out, so the
+    // project cache answers it gone; the check alone decides
     await load('user', undefined, (copy) => {
       copy.projects = copy.projects.filter((p) => p.id !== 'test-b')
     })
     const onCreate = await openSub('test-b')
-    expect(has('#subproject-starter')).toBe(false)
+    expect(has('#subproject-starter')).toBe(true)
     // the check names the organization, so the popovers wait for it
     expect(parentButton().textContent).toBe('Test')
     await type(nameField(), 'Docs')
     await click(create())
     expect(onCreate).toHaveBeenCalledWith(
       expect.objectContaining({ parent: 'test-b', lead: 'aisha' }),
-      { withStarter: false, shown: { orgId: home }, sees: true },
+      { withStarter: true, shown: { orgId: home }, sees: true },
     )
   })
 

@@ -8,6 +8,7 @@ import { TooltipProvider } from '../components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from '../store/boardStandIn.setup'
 import { answerOverview } from '../store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { projectNavStandIn } from '../store/projectNavStandIn.setup'
 
 /* The New task dialog's Create on App's own create wiring, in a store that
    never asked for every task, as the app boots: the window opens on the
@@ -124,9 +125,17 @@ async function app(path: string) {
       return () => boards.delete(read)
     } else if (name === 'taskWindow:task') taskReads.push({ args, next, fail })
     else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
+    // the navigation reads the New task picker lists from, as the server
+    // answers them
+    else if (name.startsWith('projectNav:')) next(projectNavStandIn(snap, name, args))
     return () => {}
   })
-  network.query.mockResolvedValue(null)
+  // a numbered project address resolves through projectNav.resolve
+  network.query.mockImplementation(async (ref, args) =>
+    getFunctionName(ref) === 'projectNav:resolve'
+      ? projectNavStandIn(snap, 'projectNav:resolve', args)
+      : null,
+  )
   sent = []
   sentArgs = []
   taskReads = []
