@@ -368,7 +368,12 @@ describe('takeover and end', () => {
     await flush()
     // a stale build posts a floor a day ahead, then one that is no time
     const rogue = p.hub.open()
-    rogue.postMessage({ kind: 'state', after: Date.now() + 86_400_000, keys: [], beat_at: Date.now() })
+    rogue.postMessage({
+      kind: 'state',
+      after: Date.now() + 86_400_000,
+      keys: [],
+      beat_at: Date.now(),
+    })
     rogue.postMessage({ kind: 'state', after: 'soon', keys: [], beat_at: Number.NaN })
     rogue.postMessage({ kind: 'reload', everything: true })
     await flush()
