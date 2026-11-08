@@ -118,12 +118,16 @@ import {
   PROJECT_SETTINGS_EXPECTED,
   PROJECT_SETTINGS_STEP,
   PROJECTS_MAX,
+  PROJECTS_PART,
+  PROJECTS_PART_MARKS,
+  PROJECTS_PART_STEP,
   pace,
   parseArgs,
   peoplePagesMax,
   pressSettled,
   projectDeleteRoute,
   projectPagesMax,
+  projectsPartProblems,
   RATE_BUDGET,
   REGROUP_WAIT,
   RELATION_EXPECTED,
@@ -761,6 +765,56 @@ describe('staging check REST contract', () => {
       'the unknown id answered',
     ])
     expect(byIdsProblems({ ...right, unchecked: ['z'] }, ids)).toEqual(['listed apart ["z"]'])
+  })
+  it('checks the boot, the New task picker and the scope menu with no projects part, and finds what wrong frames get wrong', () => {
+    expect(PROJECTS_PART_STEP).toBe('ui/projects-part')
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    // after the reads by id, while M is active, before the archive
+    expect(check.indexOf('await projectsPartCheck()')).toBeGreaterThan(
+      check.indexOf('await projectByIdsCheck()'),
+    )
+    expect(check.indexOf('await projectsPartCheck()')).toBeLessThan(
+      check.indexOf('await archiveChecks()'),
+    )
+    // the searches type the run's tag, so the run's rows show on staging
+    expect(check).toContain('.fill(run.tag)')
+    const picker = readFileSync(
+      new URL('../src/components/TargetPicker.tsx', import.meta.url),
+      'utf8',
+    )
+    const menu = readFileSync(
+      new URL('../src/views/teamSync/SyncScopeMenu.tsx', import.meta.url),
+      'utf8',
+    )
+    for (const mark of Object.values(PROJECTS_PART_MARKS))
+      expect(picker.includes(mark) || menu.includes(mark)).toBe(true)
+    expect(PROJECTS_PART).toBe('workspace:projects')
+    const frame = (udfPath, args) =>
+      JSON.stringify({
+        type: 'ModifyQuerySet',
+        modifications: [{ type: 'Add', udfPath, args: [args] }],
+      })
+    const boot = [frame('workspace:root', {}), frame('projectNav:byIds', { ids: ['m', 'a'] })]
+    expect(projectsPartProblems(boot, { byIdsOf: 'm' })).toEqual([])
+    // the removed part, a byIds read that names another project, none
+    expect(
+      projectsPartProblems([...boot, frame('workspace:projects', {})], { byIdsOf: 'm' }),
+    ).toEqual(['subscribed workspace:projects'])
+    expect(projectsPartProblems(boot, { byIdsOf: 'z' })).toEqual([
+      'no projectNav:byIds frame named z',
+    ])
+    expect(projectsPartProblems([frame('workspace:root', {})], { byIdsOf: 'm' })).toHaveLength(1)
+    // the scope menu's list in the home organization, not every seat's
+    expect(
+      projectsPartProblems([frame('projectNav:page', { org_id: 'h' })], { pageOf: 'h' }),
+    ).toEqual([])
+    expect(projectsPartProblems([frame('projectNav:page', {})], { pageOf: 'h' })).toEqual([
+      'no projectNav:page frame with organization h',
+    ])
+    // the Roadmap's fresh loads hold the same clause
+    const clause = (view) => `\`${view}'s Roadmap subscribed $\{PROJECTS_PART}\``
+    expect(check).toContain(clause('M'))
+    expect(check).toContain(clause('My view'))
   })
   it('checks the All projects directory on its own marks and words, after Settings › Projects', () => {
     const page = readFileSync(
