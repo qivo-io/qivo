@@ -134,8 +134,9 @@ export function subtitleOf(roles: readonly Pick<DeletedRole, 'role'>[]): string 
 
 /** The notes above a page, from its answer: a page without a scope, a
     scope too wide to list, entries a stopped read may have missed, the
-    standing note of a search that does not read every task, and rows from
-    before this release. Each one only where the answer says it. */
+    standing note of every search, and rows stored before v0.1.122, the
+    first release that wrote what the page's search and Assigned to read,
+    which only their key finds. Each one only where the answer says it. */
 export function notesOf(
   page: Pick<DeletedPage, 'entries' | 'scope_needed' | 'missing' | 'legacy'> | null,
   searching: boolean,
@@ -154,7 +155,7 @@ export function notesOf(
   if (page.legacy)
     notes.push({
       key: 'legacy',
-      text: 'Tasks deleted before this version of Qivo are found by their key or title only, and Assigned to may miss them.',
+      text: 'Tasks deleted before 5 November 2026 are found by their key only, and Assigned to may miss them.',
     })
   return notes
 }

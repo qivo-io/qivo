@@ -2559,8 +2559,8 @@ export default defineSchema({
    * text of the task's description, so a row is no longer light, and the
    * task's assignee and copies of its item's fields, which the page's
    * search and assignee sources filter on. A row stored before that release
-   * has none of them, and the page finds it by its number and its title
-   * (search_title). */
+   * (v0.1.122) has none of them, and the page finds it by its number alone
+   * (by_org_num). */
   deleted_tasks: defineTable({
     org_id: v.string(),
     item_id: v.string(),
@@ -2597,9 +2597,6 @@ export default defineSchema({
     .index('by_org_assignee', ['org_id', 'assignee_id', 'deleted_at'])
     // one item's tasks of one assignee, by number
     .index('by_item_assignee', ['item_id', 'assignee_id', 'num'])
-    // matches and the page's rows stored before its release; search_text
-    // replaces it once no such row is left
-    .searchIndex('search_title', { searchField: 'title', filterFields: ['org_id'] })
     // the page's search, each query filtered to the items of one source
     .searchIndex('search_text', {
       searchField: 'search_text',

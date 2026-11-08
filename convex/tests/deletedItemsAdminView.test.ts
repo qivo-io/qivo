@@ -1,12 +1,12 @@
 /* Deleted items as an organization admin reads it (model/deletedItems.ts
- * viewOf and roleReadsEveryTask). An admin keeps every item that is not
- * purging, with its metadata, Restore by the ordinary rule and Delete now,
- * and reads its tasks only as their ordinary access reaches them: admin
- * status gives no level (lib/access.ts levelUnder and levelsFrom), so
- * roleReadsEveryTask is false for every role and a task item whose project
- * the admin cannot read shows as a hidden row. A split that left either
- * admin branch fails these cases, since roleReadsEveryTask asks levelsFrom
- * while a restore asks projectLevel through liveLevel.
+ * viewOf). An admin keeps every item that is not purging, with its
+ * metadata, Restore by the ordinary rule and Delete now, and reads its
+ * tasks only as their ordinary access reaches them, with no shortcut for
+ * the role: admin status gives no level (lib/access.ts levelUnder and
+ * levelsFrom), so a task item whose project the admin cannot read shows as
+ * a hidden row. A view that read an admin's entries whole again fails
+ * these cases. The rows come from deletedItems.item and the page, the only
+ * reads of the items since deletedItems.list and matches went.
  *
  * Two of the review points for this view are agent decisions of the admin
  * access split (7 November 2026): an admin's probe for rows stored before
@@ -14,8 +14,7 @@
  * olderRows), so `legacy` can come from projects they cannot read, and the
  * admin's assignee index can end a short page at a row it dropped, which
  * the next page's cursor moves past. Both say nothing a task they cannot
- * read holds. t3/limits-project-old-paths removes the read-everything
- * branch with the old list.
+ * read holds.
  *
  * The last block reads at the design size, one figure raised a case, and
  * logs its reads as tests/deletedItemsPageReads.test.ts does. */
@@ -29,8 +28,8 @@ import * as access from '../lib/access'
 import { byId } from '../lib/db'
 import type { OrgRole } from '../lib/enums'
 import type { Refusal } from '../lib/functions'
-import { restoreBlock, roleReadsEveryTask, sightOf } from '../model/deletedItems'
-import { LIST } from '../model/deletedItemsList'
+import { restoreBlock, sightOf } from '../model/deletedItems'
+import type { DeletedRow } from '../model/deletedItemsList'
 import {
   DELETED_PAGE,
   type DeletedPage,
@@ -54,7 +53,6 @@ import {
 import { installTrashTimers, itemFor, runSteps, START } from './trash.setup'
 
 installTrashTimers()
-const DEFAULT_LIST = { ...LIST }
 const DEFAULT_PAGE = {
   ...DELETED_PAGE,
   call: { ...DELETED_PAGE.call },
@@ -63,7 +61,6 @@ const DEFAULT_PAGE = {
   gather: { ...DELETED_PAGE.gather },
 }
 afterEach(() => {
-  Object.assign(LIST, DEFAULT_LIST)
   Object.assign(DELETED_PAGE, DEFAULT_PAGE)
 })
 
@@ -122,12 +119,21 @@ const patch = (
     await ctx.db.patch(row._id, fields)
   })
 
-const listOf = (t: T, who: Profile) => as(t, who).query(api.deletedItems.list, {})
-const rowOf = async (t: T, who: Profile, id: string) =>
-  (await listOf(t, who)).items.find((r) => r.id === id)
 const itemRow = (t: T, who: Profile, id: string) => as(t, who).query(api.deletedItems.item, { id })
-const search = (t: T, who: Profile, text: string) =>
-  as(t, who).query(api.deletedItems.matches, { text })
+/** Item `id`'s row for `who`'s login (deletedItems.item), undefined where
+ * the login does not see it. */
+const rowOf = async (t: T, who: Profile, id: string) => (await itemRow(t, who, id)) ?? undefined
+/** Every stored item's row for `who`'s login (deletedItems.item), without
+ * those the login does not see. */
+async function rowsOf(t: T, who: Profile): Promise<DeletedRow[]> {
+  const stored = await t.run((ctx) => ctx.db.query('deleted_items').collect())
+  const rows: DeletedRow[] = []
+  for (const d of stored) {
+    const row = await itemRow(t, who, d.id)
+    if (row !== null) rows.push(row)
+  }
+  return rows
+}
 const page = (t: T, who: Profile, args: FunctionArgs<typeof api.deletedItems.page>) =>
   as(t, who).query(api.deletedItems.page, args)
 const restore = (t: T, who: Profile, ids: string[]) =>
@@ -217,7 +223,7 @@ const byGuest = (f: OrgFixture) => ({
 })
 
 describe('an admin without ordinary access', () => {
-  it("gives an admin every item in the list, the item and the page, a task item as a hidden row and a project item whole, for every shape of the list's cases", async () => {
+  it('gives an admin every item in the item rows and the page, a task item as a hidden row and a project item whole, for every shape of the visibility cases', async () => {
     const t = newT()
     const f = await withOrg(t)
     const dana = await person(t, f.org.id, 'Dana')
@@ -282,7 +288,7 @@ describe('an admin without ordinary access', () => {
     const items = (await t.run((ctx) => ctx.db.query('deleted_items').collect())).filter(
       (i) => i.state !== 'purging',
     )
-    const listed = (await listOf(t, f.admin)).items
+    const listed = await rowsOf(t, f.admin)
     expect(listed.map((r) => r.id).sort()).toEqual(items.map((i) => i.id).sort())
     for (const item of items) {
       const row = listed.find((r) => r.id === item.id)
@@ -300,7 +306,6 @@ describe('an admin without ordinary access', () => {
       ).toEqual(item.projects.map((p) => p.id))
       if (item.kind === 'task') expect(row, item.name).toMatchObject({ hidden: true })
       else expect(row, item.name).not.toHaveProperty('hidden')
-      expect(await itemRow(t, f.admin, item.id), item.name).toEqual(row)
     }
     // the page gives the same rows, each item once
     const walked = await walk(t, f.admin, { scope: { org_id: f.org.id, all: true } })
@@ -310,23 +315,14 @@ describe('an admin without ordinary access', () => {
         walked.items.find((r) => r.id === row.id),
         row.title,
       ).toEqual(row)
-    // neither search finds a task the admin cannot read
-    expect((await search(t, f.admin, 'alpha')).matches).toEqual([])
+    // the search finds no task the admin cannot read
     const scope = { org_id: f.org.id, all: true as const }
     expect((await page(t, f.admin, { scope, search: 'alpha' })).entries).toEqual([])
     // a member who reads them finds them, as before
-    expect((await search(t, f.guest, 'Own alpha')).matches.map((m) => m.title)).toEqual([
+    const guests = await walk(t, f.guest, { scope, search: 'Own alpha' })
+    expect(guests.entries.map((e) => guests.items.find((r) => r.id === e.item_id)?.title)).toEqual([
       'Own alpha',
     ])
-  })
-})
-
-describe('whether a role reads every task', () => {
-  it('is false for every role, an admin included', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    for (const who of [f.admin, f.user, f.guest, f.viewer, f.agent])
-      expect(roleReadsEveryTask(who), who.name).toBe(false)
   })
 })
 
@@ -339,14 +335,16 @@ describe('an admin by ordinary access', () => {
     const item = await itemFor(t, task.id)
     const judged = () =>
       t.run(async (ctx) => ({
-        reads: roleReadsEveryTask(f.admin),
         sight: (await sightOf(ctx, f.admin)).levels.levelOf(f.sub),
         block: await restoreBlock(ctx, f.admin, item),
       }))
-    expect(await judged()).toEqual({ reads: false, sight: null, block: 'no_access' })
+    expect(await judged()).toEqual({ sight: null, block: 'no_access' })
+    // the item's row reads no task of it
+    expect(await itemRow(t, f.admin, item.id)).toMatchObject({ hidden: true, title: '' })
     // a grant of their own reads it, as anyone's
     await grant(t, f.meta.id, f.admin.id, 'user')
-    expect(await judged()).toEqual({ reads: false, sight: 'user', block: null })
+    expect(await judged()).toEqual({ sight: 'user', block: null })
+    expect(await itemRow(t, f.admin, item.id)).not.toHaveProperty('hidden')
   })
 
   it('keeps a task item the admin cannot read as a hidden row, with its key, path, counts and deleter and without its title, status or reason', async () => {
@@ -394,7 +392,7 @@ describe('an admin by ordinary access', () => {
     expect((await walk(t, f.admin, { scope })).items).toEqual([row])
     const searched = await page(t, f.admin, { scope, search: 'term sheet' })
     expect(searched).toMatchObject({ entries: [], missing: 'matches' })
-    expect((await search(t, f.admin, 'Contoso')).matches).toEqual([])
+    expect((await page(t, f.admin, { scope, search: 'Contoso' })).entries).toEqual([])
     // the guest, who deleted it and reads its project, sees it as before
     expect(await rowOf(t, f.guest, item.id)).toMatchObject({
       title: 'Contoso acquisition due diligence',
@@ -500,13 +498,9 @@ describe('an admin by ordinary access', () => {
       },
     ])
     expect(found.missing).toBe('matches')
-    const matched = (await search(t, f.admin, 'Provision')).matches
-    expect(matched).toHaveLength(1)
-    expect(matched[0]).toMatchObject({ key: `QN-${sub.num}`, root_key: `QN-${root.num}` })
-    expect(matched[0]).not.toHaveProperty('root_title')
-    expect(JSON.stringify([found, matched])).not.toContain('Contoso')
+    expect(found.entries[0].task).not.toHaveProperty('root_title')
+    expect(JSON.stringify(found)).not.toContain('Contoso')
     expect((await page(t, f.admin, { scope, search: 'Contoso' })).entries).toEqual([])
-    expect((await search(t, f.admin, 'Contoso')).matches).toEqual([])
     // a scope of a project the admin reads lists it, one they cannot read names nothing
     const opsScope = { org_id: f.org.id, project_ids: [ops.top.id] }
     expect((await walk(t, f.admin, { scope: opsScope })).ids).toEqual([item.id])
@@ -638,20 +632,15 @@ describe('an admin by ordinary access', () => {
     expect(row?.projects.map((p) => p.id)).toEqual(item.projects.map((p) => p.id))
     expect(row).not.toHaveProperty('hidden')
     const scope = { org_id: f.org.id, all: true as const }
-    const titles = async (text: string) => ({
-      page: (await walk(t, f.admin, { scope, search: text })).entries.map((e) => e.task?.title),
-      matches: (await search(t, f.admin, text)).matches.map((m) => m.title),
-    })
-    expect(await titles('samples')).toEqual({
-      page: ['Seal the samples'],
-      matches: ['Seal the samples'],
-    })
-    expect(await titles('trench')).toEqual({ page: [], matches: [] })
+    const titles = async (text: string) =>
+      (await walk(t, f.admin, { scope, search: text })).entries.map((e) => e.task?.title)
+    expect(await titles('samples')).toEqual(['Seal the samples'])
+    expect(await titles('trench')).toEqual([])
     // the stored rows give the admin the top-level project for navigation
     // to Lab, which counts as it does in anyone else's view of a project
     // item, so its own tasks show, as they do to a member, one rule for
     // every seat (agent decision of the admin access split, 7 November 2026)
-    expect(await titles('Kickoff')).toEqual({ page: ['Kickoff notes'], matches: ['Kickoff notes'] })
+    expect(await titles('Kickoff')).toEqual(['Kickoff notes'])
   })
 
   it("finds nothing an admin's search or task reference would read only in a task they cannot read, and always says matches may be missing", async () => {
@@ -681,7 +670,7 @@ describe('an admin by ordinary access', () => {
       ...none,
       scope_needed: true,
     })
-    expect((await search(t, f.admin, 'Vendor')).matches).toEqual([])
+    expect(await page(t, f.admin, { scope, search: 'Vendor' })).toEqual(none)
     // a lowered allowance or room changes nothing for a seat that does not
     // read every task
     lowered()
@@ -778,31 +767,6 @@ describe('an admin by ordinary access', () => {
     const all = await walk(t, f.admin, { scope, kind: 'task' })
     expect(all.ids).toEqual([family.id, ...[...unreadable].reverse(), plain.id])
     expect(all.items.filter((r) => r.hidden === true)).toHaveLength(7)
-  })
-
-  it('says no budget stop of the old search to an admin, who reads no task of these items', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const lena = await person(t, f.org.id, 'Lena')
-    for (let i = 0; i < 4; i++) {
-      const p = await plantProject(t, { org_id: f.org.id, lead_id: lena.id })
-      await plantIssue(t, { org_id: f.org.id, project_id: p.id, title: `Survey the gate ${i}` })
-      await deleteProject(t, lena, p.id)
-      later()
-    }
-    await runSteps(t)
-    // an admin who reads none of them reads each item's stored rows, and
-    // a budget that stops the search is not said, whatever it is
-    for (const ranges of [DEFAULT_LIST.call.ranges, 24, 8]) {
-      LIST.call = { ...DEFAULT_LIST.call, ranges }
-      expect(await search(t, f.admin, 'survey'), `${ranges}`).toEqual({
-        matches: [],
-        capped: false,
-      })
-    }
-    // Lena, who leads them, finds every one
-    Object.assign(LIST, DEFAULT_LIST)
-    expect((await search(t, lena, 'survey')).matches).toHaveLength(4)
   })
 
   it('restores a project item for an admin without stored levels, and clears an admin holder who cannot work there, as the reveal judges every holder', async () => {

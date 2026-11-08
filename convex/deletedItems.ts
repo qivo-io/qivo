@@ -5,18 +5,17 @@
  * the rows, model/deletedItemsPage.ts reads the page, and
  * model/deletedItemsChoices.ts what the page shows beside its entries.
  *
- * page answers the Settings page one page of 25 entries at a time, project
- * entries first, with its filters and search applied on the server, as the
- * app reads it from the release after v0.1.148. list and matches stay for
- * apps loaded before that release, and item for the app's holder of a
- * blocked row and its watch of a deferred item. All four read every active
- * seat of the login
- * (authedQuery), as Archived projects does, and show each item only as the
- * seat in its own organization may see it (model/deletedItems.ts viewOf);
- * page reads one organization's seat when its scope names one. An
- * organization admin keeps every item that is not purging and reads only
- * the tasks their ordinary access reaches, with a hidden row for a task
- * item whose root they cannot read. roles answers each
+ * The page and item are the reads of the items themselves. page answers
+ * the Settings page one page of 25 entries at a time, project entries
+ * first, with its filters and search applied on the server, and item one
+ * item's row, for the app's holder of a blocked row and its watch of a
+ * deferred item. Both read every active seat of the login (authedQuery),
+ * as Archived projects does, and show each item only as the seat in its
+ * own organization may see it (model/deletedItems.ts viewOf); page reads
+ * one organization's seat when its scope names one. An organization admin
+ * keeps every item that is not purging, with its metadata and Delete now,
+ * and reads only the tasks their ordinary access reaches, with a hidden
+ * row for a task item whose root they cannot read. roles answers each
  * seat's role, people the people of one organization a batch at a time for
  * Deleted by and the assignee filter, and purgeSummary what Delete now
  * deletes with a project item, so the page needs no roster or loaded list
@@ -70,7 +69,7 @@ import {
   purgeSummaryOf,
   rolesFor,
 } from './model/deletedItemsChoices'
-import { listFor, matchesFor, rowFor } from './model/deletedItemsList'
+import { rowFor } from './model/deletedItemsList'
 import { type DeletedPage, pageFor } from './model/deletedItemsPage'
 
 /* The items `ids` names that `me` can see, once each, and the other ids,
@@ -106,10 +105,11 @@ async function loadItems(ctx: QueryCtx, me: Doc<'profiles'>, ids: string[]) {
  * `next_cursor` back as `cursor` with the same arguments until it is null;
  * a page may hold fewer entries, even none, while it is not. `too_wide`
  * asks a caller who is no organization admin for a narrower scope,
- * `missing` says that entries before the last one may be missing, and
- * `legacy` that tasks deleted before this release are found by key and
- * title only. An organization without the caller's seat, and a scope that
- * names nothing the caller sees, answer an empty last page alike. */
+ * `missing` says that entries before the last one may be missing, which
+ * every search page says, and `legacy` that tasks deleted before v0.1.122
+ * are found by their key only. An organization without the caller's seat,
+ * and a scope that names nothing the caller sees, answer an empty last page
+ * alike. */
 export const page = authedQuery({
   args: {
     scope: v.optional(
@@ -171,20 +171,8 @@ export const purgeSummary = authedQuery({
     await purgeSummaryOf(ctx, ctx.myProfiles, id),
 })
 
-/* ------------------------------------------------------------------- list
- * The Deleted items page as apps before the release after v0.1.148 read
- * it, kept for them until a later release removes it: the rows every seat
- * of the login sees, newest
- * first, at most 2,000 per organization, fewer once the call spent its read
- * budget (model/deletedItemsList.ts LIST); `capped` when more may exist.
- * `deleted_by` lists one person's deletes only, a profile id. */
-export const list = authedQuery({
-  args: { deleted_by: v.optional(v.string()) },
-  handler: async (ctx, { deleted_by }) => await listFor(ctx, ctx.myProfiles.values(), deleted_by),
-})
-
 /* ------------------------------------------------------------------- item
- * One item's row as the list would show it, or null when the caller does
+ * One item's row as the page shows it, or null when the caller does
  * not see it, the same answer for unknown, hidden and other organizations'
  * ids. For the project item a blocked row waits for, when the page on
  * screen does not hold it, and for the store's watch of an item a restore
@@ -192,22 +180,6 @@ export const list = authedQuery({
 export const item = authedQuery({
   args: { id: v.string() },
   handler: async (ctx, { id }) => await rowFor(ctx, ctx.myProfiles.values(), id),
-})
-
-/* ---------------------------------------------------------------- matches
- * The search of apps before the release after v0.1.148, kept for them
- * until a later release removes it. Deleted tasks the caller sees
- * whose task key or title matches `text`, the
- * roots and subtasks of task items and the tasks inside deleted projects,
- * at most 50, fewer once the call spent the same read budget, and `capped`
- * when more may match. Each comes back with its item, whose kind
- * `item_kind` names, so a capped list still finds older items, and a
- * subtask of a task item with its root's key and title unless the match is
- * redacted, and with the key alone where the item is hidden from an admin
- * after the admin access split. */
-export const matches = authedQuery({
-  args: { text: v.string() },
-  handler: async (ctx, { text }) => await matchesFor(ctx, ctx.myProfiles.values(), text),
 })
 
 /* ---------------------------------------------------------------- restore

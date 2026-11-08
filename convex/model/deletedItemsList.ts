@@ -1,62 +1,21 @@
-/* Deleted items as people read them (design 6.2): the Settings list and the
- * search for deleted tasks by key or title, which the app reads today, and
- * the row of one item, which every reader shares. The page of 25 entries
- * that replaces the list and the search lives in model/deletedItemsPage.ts
- * and builds its rows here (rowOf, deleterOf, hitPath) with this budget's
- * metering (spending), so a later release can delete listFor, matchesFor,
- * LIST and MATCHES without touching the page. The list and the search read
- * every active seat of the login, because Deleted items spans
- * organizations as Archived projects does, and judge each item with the
- * seat in its own organization, never the home one. Rows are projections
- * for that seat (model/deletedItems.ts viewOf), never stored documents.
+/* The row of one Deleted items entry as one person reads it (design 6.2),
+ * which deletedItems.item answers and the page (model/deletedItemsPage.ts)
+ * builds each entry's row with: rowOf for one seat's sight, rowFor across
+ * the login's seats, and their pieces (deleterOf, howOf, hitPath). Each
+ * item is judged with the seat in its own organization, never the home
+ * one. Rows are projections for that seat (model/deletedItems.ts viewOf),
+ * never stored documents. It also holds the metering the page spends its
+ * budgets with (Reads, spent, spending).
  *
- * The search finds any stored task, a task item's root or subtask or a task
- * inside a deleted project, so it reaches the older items a capped list
- * leaves out. Each match names the kind of its item: a task item's match
- * is restored with that item like a row of the list, its root and every
- * subtask together, and a project item's only with its whole project. A
- * match of a task item's subtask names the item's root, as its row does. It
- * judges each item as the list does and shows only tasks in the projects
- * the seat may read in its view of the item (ItemView readable), so the
- * match of a redacted task item never names its root, and that of a hidden
- * one, an admin's after the admin access split, names its key without its
- * title.
- *
- * A seat reads only the index ranges that can hold what it sees. An admin
- * reads the organization's items newest first. Anyone else reads their own
- * deletes, the projects they led that are now in Deleted items (stored
- * leads, deleted_rows.by_org_lead), and for each live project they lead,
- * the items under it (by_org_parent for a top-level project, by_org_project
- * for a sub-project) and the task items with a subtask in it
- * (deleted_tasks.by_org_cross_project). Every range is read newest first up
- * to LIST.cap items, and a seat lists at most LIST.cap; `capped` says when
- * more may exist. The two ranges of stored rows hold a row per project the
- * person led and per subtask, so several of their rows can name one item.
- * They count distinct items and read each new one by id.
- *
- * Every read of one list call, across all its seats, spends one budget
- * (LIST.call): each seat's sight, the ranges that find its items and the
- * reads that build each item's row. The reads that find items also spend
- * LIST.find, a smaller share, so some of the call is always left to build
- * rows. A seat builds its rows newest first. Once a budget is spent the
- * call stops reading and reports `capped`, so it lists the newest items it
- * got to rather than fail. The search (matchesFor) spends a LIST.call
- * budget the same way, and answers the matches it found before it ran out.
- *
- * A `deleted_by` filter keeps one person's deletes, judged by the reference
- * predicate, so a seat that reuses the id of someone removed does not take
- * over their deletes. An admin's seat reads that person's range instead of
- * the newest items, so it reaches older ones. Every other seat filters the
- * ranges it reads anyway: a range of someone else's deletes would hold
- * items hidden from the seat, and `capped` would then tell how many there
- * are. */
+ * deletedItems.list and matches, the list and search of the apps from
+ * before the page, are gone, with their code here and the search_title
+ * index of deleted_tasks that they and the page's older rows read. The
+ * file keeps its name, which the design notes use. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { byId } from '../lib/db'
 import type { CredentialTable } from '../lib/enums'
-import { limitedText } from '../lib/limitRules'
-import { LIMITS } from '../lib/limits'
 import { issueKey } from '../lib/taskRefs'
 import {
   type BlockDetail,
@@ -66,7 +25,6 @@ import {
   namesProfile,
   orgReadOnly,
   restoreBlock,
-  roleReadsEveryTask,
   type Sight,
   sameReference,
   sightOf,
@@ -76,53 +34,9 @@ import { estimateDocumentBytes } from './demoMetrics'
 
 type Item = Doc<'deleted_items'>
 
-/**
- * The most items one organization lists (`cap`), and what one list or
- * search call may read, in estimated `bytes`, documents (`rows`) and index
- * `ranges`, each query read or read by id being one. Convex stops a query
- * at 16 MiB, 32,000 documents or 4,096 ranges.
- *
- * `call` covers every read of the call: each seat's sight (sightOf: the
- * organization's projects, profiles and teams and the person's grants), the
- * reads that find its items (candidatesOf) and those that build its rows
- * (rowOf). It takes five eighths of each limit: 10 MiB, 20,000 documents and
- * 2,560 ranges. The other three eighths hold what can run past the call's
- * last check, which comes before each seat, range, document and row: the
- * sight of the seat it opened last, the reads of the row it built last (a
- * project item's stored projects, grants and shares, or a redacted task
- * item's tasks up to one past the budget, where the row stops unbuilt and
- * the list says `capped`, since each holds its task's searchable text),
- * and the reads authedQuery makes for the login before the call.
- *
- * `find` is the share of `call` the reads that find items may spend: 6 MiB,
- * 12,000 documents and 1,024 ranges. Finding reads mostly bytes and
- * documents, whole items and the stored rows that name them. It leaves the
- * rest, about 4 MiB, 8,000 documents and 1,536 ranges, for sights and rows,
- * which read mostly ranges. A row reads nothing past the sight's memo
- * except reads the memo keeps for the rest of the call (whether the
- * organization is read-only, the person's teams, and a few per deleted
- * project an item names), a redacted task item's tasks up to one the viewer
- * sees, and, for a seat that is not an admin, a project item's stored
- * projects and the person's stored grants (2 ranges) and one range for the
- * stored shares of each team the person is in (model/deletedItems.ts
- * storedLevels). An item deleted before the stored rows named their grantee
- * also reads its rows without one, 2 ranges more and up to 2 x 101
- * documents (LEGACY_READ), which the rows and bytes of the call bound
- * rather than its ranges. So 1,536 ranges
- * build about 500 such rows for a person in one team, and about 48 for one
- * in 30 teams, and more when finding spent less. Since the admin access
- * split an admin's rows of project items read those stored rows too
- * (model/deletedItems.ts viewOf), so an admin's list of many project items
- * says `capped` sooner. A mutable object, so tests can lower it; replace
- * `call` and `find` whole rather than change their fields.
- */
-export const LIST = {
-  cap: 2000,
-  call: { bytes: 10 * 1024 * 1024, rows: 20_000, ranges: 2560 },
-  find: { bytes: 6 * 1024 * 1024, rows: 12_000, ranges: 1024 },
-}
-
-/** What one call has left of a LIST budget. */
+/** What one call has left of a read budget, as the page counts it
+ * (model/deletedItemsPage.ts DELETED_PAGE): estimated `bytes`, documents
+ * (`rows`) and index `ranges`. */
 export type Reads = { bytes: number; rows: number; ranges: number }
 
 /** Whether `reads` has nothing left to open a range or read a document. */
@@ -144,10 +58,6 @@ export const spending = (ctx: QueryCtx, ...budgets: Reads[]): QueryCtx =>
       }
     },
   })
-
-/** The most hits one search returns, and the search results it looks at per
- * organization to find them. */
-export const MATCHES = { max: 50, scan: 256 }
 
 /** Who deleted an item, as one viewer may know it (design 1.6). A
  * personal token's or connected app's name shows only to organization
@@ -200,215 +110,6 @@ export type DeletedRow = {
   can_restore: boolean
   blocked?: BlockDetail
   can_purge: boolean
-}
-
-/** A deleted task that a search found, with what the row of its item says:
- * it can only come back with that item, which `item_kind` names. `key`,
- * `title`, `archived` and `path` are the task's own; `path` is where it
- * sat, its project after the top-level or parent project, empty for a
- * redacted task item as on its row. `root_key` and `root_title` name a task
- * item's root when the task found is one of its subtasks, as the item's row
- * would, so the page can say that the root and its other subtasks come back
- * too. A redacted match has neither, since its row never names the root,
- * and a hidden item's match has `root_key` without `root_title`, as its row
- * shows the key without the title. */
-export type DeletedMatch = {
-  item_id: string
-  item_kind: Item['kind']
-  org_id: string
-  org_name: string
-  key: string
-  title: string
-  root_key?: string
-  root_title?: string
-  archived: boolean
-  path: string[]
-  deleted_at: string
-  deleter: Deleter
-  state: DeletedRow['state']
-  redacted?: true
-  can_restore: boolean
-  blocked?: BlockDetail
-}
-
-const newestFirst = (
-  a: { deleted_at: string; id: string },
-  b: { deleted_at: string; id: string },
-) => (a.deleted_at === b.deleted_at ? (a.id < b.id ? 1 : -1) : a.deleted_at < b.deleted_at ? 1 : -1)
-
-/** The Deleted items of every seat in `seats`, newest first, read while
- * the call's budgets last (LIST). */
-export async function listFor(
-  ctx: QueryCtx,
-  seats: Iterable<Doc<'profiles'>>,
-  deletedBy: string | undefined,
-): Promise<{ items: DeletedRow[]; capped: boolean }> {
-  const items: DeletedRow[] = []
-  let capped = false
-  const call: Reads = { ...LIST.call }
-  const find: Reads = { ...LIST.find }
-  for (const me of seats) {
-    // a seat the budgets cannot read lists nothing, and capped says so
-    if (spent(call) || spent(find)) {
-      capped = true
-      break
-    }
-    const seat = await seatList(ctx, me, deletedBy, call, find)
-    items.push(...seat.items)
-    capped ||= seat.capped
-  }
-  return { items: items.sort(newestFirst), capped }
-}
-
-/** One seat's rows, newest first. Its sight and its rows spend `call`, the
- * reads that find its items `find` too. It builds rows from the newest item
- * on, and stops at LIST.cap rows and one more to tell whether there are
- * more, or once `call` is spent. */
-async function seatList(
-  ctx: QueryCtx,
-  me: Doc<'profiles'>,
-  deletedBy: string | undefined,
-  call: Reads,
-  find: Reads,
-): Promise<{ items: DeletedRow[]; capped: boolean }> {
-  const reader = spending(ctx, call)
-  const sight = await sightOf(reader, me)
-  const orgName = (await byId(reader, 'organizations', me.org_id))?.name ?? ''
-  const found = await candidatesOf(spending(ctx, find, call), sight, deletedBy, [find, call])
-  const deleter = deletedBy === undefined ? undefined : sight.profiles.get(deletedBy)
-  const rows: DeletedRow[] = []
-  let capped = found.truncated
-  for (const item of found.items.sort(newestFirst)) {
-    if (rows.length > LIST.cap) break
-    if (deletedBy !== undefined && !(item.deleted_by === deletedBy && sameReference(deleter, item)))
-      continue
-    if (spent(call)) {
-      capped = true
-      break
-    }
-    const row = await rowOf(reader, sight, orgName, item, () => spent(call))
-    if (row === 'unread') {
-      capped = true
-      break
-    }
-    if (row !== null) rows.push(row)
-  }
-  return { items: rows.slice(0, LIST.cap), capped: capped || rows.length > LIST.cap }
-}
-
-/** The items `sight`'s person may see, from the ranges that can hold them
- * (see the file comment), read through `ctx`, which spends `budgets`, while
- * they last. `truncated` when a range held more than it read, or when a
- * budget ran out first. Only an admin's seat reads `deletedBy`'s range;
- * seatList filters. */
-async function candidatesOf(
-  ctx: QueryCtx,
-  sight: Sight,
-  deletedBy: string | undefined,
-  budgets: Reads[],
-): Promise<{ items: Item[]; truncated: boolean }> {
-  const { me, levels } = sight
-  const org = me.org_id
-  const found = new Map<string, Item>()
-  let truncated = false
-  // Whether a range or a read by id may start, or a budget is spent.
-  const open = (): boolean => {
-    if (!budgets.some(spent)) return true
-    truncated = true
-    return false
-  }
-  // Whether the document just read used up a budget's documents or bytes,
-  // so no further document may be read. A range already open reads on
-  // after the last range is spent.
-  const full = (): boolean => {
-    if (!budgets.some((b) => b.rows <= 0 || b.bytes <= 0)) return false
-    truncated = true
-    return true
-  }
-  // A range of items, up to LIST.cap of them and one more to tell whether
-  // it held more.
-  const take = async (rows: AsyncIterable<Item>): Promise<void> => {
-    if (!open()) return
-    let count = 0
-    for await (const item of rows) {
-      found.set(item.id, item)
-      if (full()) return
-      if (++count > LIST.cap) {
-        truncated = true
-        return
-      }
-    }
-  }
-  // A range of stored rows can name one item several times, so it counts
-  // the items it names, and reads each one it has not found yet.
-  const takeNamed = async (rows: AsyncIterable<{ item_id: string }>): Promise<void> => {
-    if (!open()) return
-    const named = new Set<string>()
-    for await (const row of rows) {
-      if (full()) return
-      if (named.has(row.item_id)) continue
-      named.add(row.item_id)
-      if (named.size > LIST.cap) {
-        truncated = true
-        return
-      }
-      if (found.has(row.item_id)) continue
-      if (!open()) return
-      const item = await byId(ctx, 'deleted_items', row.item_id)
-      if (item === null) continue
-      found.set(item.id, item)
-      if (full()) return
-    }
-  }
-  const items = ctx.db.query('deleted_items')
-  if (me.org_role === 'admin') {
-    await take(
-      deletedBy === undefined
-        ? items.withIndex('by_org_deleted', (q) => q.eq('org_id', org)).order('desc')
-        : items
-            .withIndex('by_org_deleter', (q) => q.eq('org_id', org).eq('deleted_by', deletedBy))
-            .order('desc'),
-    )
-    return { items: [...found.values()], truncated }
-  }
-  await take(
-    items
-      .withIndex('by_org_deleter', (q) => q.eq('org_id', org).eq('deleted_by', me.id))
-      .order('desc'),
-  )
-  await takeNamed(
-    ctx.db
-      .query('deleted_rows')
-      .withIndex('by_org_lead', (q) => q.eq('org_id', org).eq('lead_id', me.id))
-      .order('desc'),
-  )
-  const leads = (p: Doc<'projects'> | undefined) => p !== undefined && levels.levelOf(p) === 'lead'
-  for (const p of sight.projects.values()) {
-    if (p.type === 'meta') {
-      if (leads(p))
-        await take(
-          items
-            .withIndex('by_org_parent', (q) => q.eq('org_id', org).eq('parent_project_id', p.id))
-            .order('desc'),
-        )
-      continue
-    }
-    const topLed = p.parent_id !== undefined && leads(sight.projects.get(p.parent_id))
-    if (!leads(p) && !topLed) continue
-    if (!topLed)
-      await take(
-        items
-          .withIndex('by_org_project', (q) => q.eq('org_id', org).eq('project_id', p.id))
-          .order('desc'),
-      )
-    await takeNamed(
-      ctx.db
-        .query('deleted_tasks')
-        .withIndex('by_org_cross_project', (q) => q.eq('org_id', org).eq('cross_project_id', p.id))
-        .order('desc'),
-    )
-  }
-  return { items: [...found.values()], truncated }
 }
 
 /**
@@ -506,9 +207,9 @@ export async function rowOf(
 
 /** Item `id` as its row would show it to the caller's seat in the item's
  * organization, or null when that seat does not see it: unknown, purging,
- * hidden and other organizations' items alike. The page asks for the
- * project item a blocked row must restore first when no list it holds has
- * that item, since a capped list or one narrowed to one person need not. */
+ * hidden and other organizations' items alike (deletedItems.item). The app
+ * asks for the project item a blocked row must restore first when no page
+ * it holds has that item, and for an item a restore deferred. */
 export async function rowFor(
   ctx: QueryCtx,
   seats: Iterable<Doc<'profiles'>>,
@@ -527,9 +228,9 @@ export async function rowFor(
 
 /** The task a redacted row shows: one of its tasks in a project the viewer
  * can see. It checks the item's tasks itself rather than filter the range,
- * so a metered ctx (seatList) counts every task it passes over, as Convex
- * does, and answers 'unread' once `out` says the reads ran out before it
- * found one. */
+ * so a metered ctx (the page's rows) counts every task it passes over, as
+ * Convex does, and answers 'unread' once `out` says the reads ran out
+ * before it found one. */
 async function shownTask(ctx: QueryCtx, item: Item, view: ItemView, out?: () => boolean) {
   const seen = new Set(view.projects.map((p) => p.id))
   const tasks = ctx.db.query('deleted_tasks').withIndex('by_item', (q) => q.eq('item_id', item.id))
@@ -606,151 +307,6 @@ export function deleterOf(sight: Sight, item: Item): Deleter {
     credential_name: named ? via?.name : undefined,
     who: `${known ? id : ''}|${howOf(me, item)}`,
   }
-}
-
-/** A task reference as the search box takes it: QN-482 or a bare 482. */
-const TASK_REF = /^(?:QN-)?(\d+)$/i
-
-/**
- * The deleted tasks that `text` names, by task key or by title
- * (deleted_tasks search_title), at most MATCHES.max, for every seat in
- * `seats`: the roots and subtasks of task items and the tasks inside
- * project items. Only tasks of items the seat sees (viewOf), in projects
- * their view of the item lets them read (ItemView readable), count, and
- * each match says what the row of its item would: a redacted task item's
- * match has no path and cannot be restored by the seat, as its row
- * (rowOf), and a subtask of any other task item names the item's root, a
- * hidden one by its key alone. Every read of the call spends
- * one LIST.call budget, as a list call's do: the hits, each seat's sight
- * and each item it judges. It reads the hits one at a time and judges each
- * as it comes, checking the budget before the next, so it reads at most
- * one hit past it, which matters since a hit's row holds its task's
- * searchable text (deleted_tasks.search_text). Once the budget is spent,
- * the search answers the matches it found so far. `capped` says that the
- * seats see more matches than MATCHES.max, so the page can ask for a
- * longer text instead of hiding the rest: the search finds one visible
- * match past the cap. It is decided by visible matches alone, but for a
- * login whose every seat's role reads every task (model/deletedItems.ts
- * roleReadsEveryTask, an organization admin's until the admin access
- * split), a budget stop says it too. For anyone else the scan's
- * MATCHES.scan results and the budget also count tasks the seat cannot
- * read, so a stop at either is not reported, or `capped` would tell that
- * hidden deleted tasks match the text. A search past LIMITS.search is
- * refused.
- */
-export async function matchesFor(
-  ctx: QueryCtx,
-  seats: Iterable<Doc<'profiles'>>,
-  text: string,
-): Promise<{ matches: DeletedMatch[]; capped: boolean }> {
-  const query = limitedText(LIMITS.search, text)
-  if (query === '') return { matches: [], capped: false }
-  const ref = TASK_REF.exec(query)
-  const logins = [...seats]
-  const out: DeletedMatch[] = []
-  let capped = false
-  // the budget ran out before the search read every hit it reads
-  let stopped = false
-  const call: Reads = { ...LIST.call }
-  const reader = spending(ctx, call)
-  search: for (const me of logins) {
-    if (spent(call)) {
-      stopped = true
-      break
-    }
-    const org = me.org_id
-    const hits = reader.db.query('deleted_tasks')
-    const sources: AsyncIterable<Doc<'deleted_tasks'>>[] = [
-      hits.withSearchIndex('search_title', (q) => q.search('title', query).eq('org_id', org)),
-    ]
-    if (ref !== null)
-      sources.unshift(
-        hits.withIndex('by_org_num', (q) => q.eq('org_id', org).eq('num', Number(ref[1]))),
-      )
-    // read with the seat's first hit
-    let seat: { sight: Sight; orgName: string } | undefined
-    const items = new Map<string, Promise<{ item: Item; view: ItemView } | null>>()
-    const seen = new Set<string>()
-    // adds the match of `task` when the seat sees it; true once a visible
-    // match past the cap was found, which says there are more
-    const judge = async (task: Doc<'deleted_tasks'>): Promise<boolean> => {
-      if (seen.has(task.task_id)) return false
-      seen.add(task.task_id)
-      seat ??= {
-        sight: await sightOf(reader, me),
-        orgName: (await byId(reader, 'organizations', org))?.name ?? '',
-      }
-      const { sight, orgName } = seat
-      let read = items.get(task.item_id)
-      if (read === undefined) {
-        read = visibleItem(reader, sight, task.item_id)
-        items.set(task.item_id, read)
-      }
-      const visible = await read
-      // a task in a project the seat may not read, a redacted or hidden
-      // item's root too
-      const project = visible?.view.readable.find((p) => p.id === task.project_id)
-      if (visible === null || project === undefined) return false
-      const { item, view } = visible
-      // viewOf never shows a purging item; the check narrows the state
-      if (item.state === 'purging') return false
-      if (out.length === MATCHES.max) return true
-      const ready = item.state === 'ready'
-      const block = view.redacted ? 'no_access' : await restoreBlock(reader, me, item, sight.memo)
-      let blocked: BlockDetail | undefined
-      if (ready && block !== null)
-        blocked = view.redacted
-          ? { reason: block }
-          : await blockDetail(reader, sight.memo, me, item, block)
-      // the row of a task item names its root, unless it is redacted, and
-      // a hidden row by its key alone
-      const subtask = item.kind === 'task' && !view.redacted && task.task_id !== item.target_id
-      const root = view.hidden ? {} : { root_title: item.name }
-      out.push({
-        item_id: item.id,
-        item_kind: item.kind,
-        org_id: org,
-        org_name: orgName,
-        key: issueKey(task.num),
-        title: task.title,
-        ...(subtask ? { root_key: issueKey(item.num), ...root } : {}),
-        archived: task.archived,
-        path: view.redacted ? [] : hitPath(sight, item, project),
-        deleted_at: item.deleted_at,
-        deleter: deleterOf(sight, item),
-        state: item.state,
-        redacted: view.redacted || undefined,
-        can_restore: ready && block === null,
-        blocked,
-      })
-      return false
-    }
-    for (const source of sources) {
-      let read = 0
-      for await (const task of source) {
-        if (await judge(task)) {
-          capped = true
-          break search
-        }
-        if (++read === MATCHES.scan) break
-        if (spent(call)) {
-          stopped = true
-          break search
-        }
-      }
-    }
-  }
-  // a login that reads every task may be told that the budget stopped it
-  if (stopped && logins.every((me) => roleReadsEveryTask(me))) capped = true
-  return { matches: out, capped }
-}
-
-/** Item `id` with what `sight`'s person sees of it, when they see it. */
-async function visibleItem(ctx: QueryCtx, sight: Sight, id: string) {
-  const item = await byId(ctx, 'deleted_items', id)
-  if (item === null) return null
-  const view = await viewOf(ctx, sight.memo, sight.me, item)
-  return view === null ? null : { item, view }
 }
 
 /** Where a task of `item` in its project `project` sat. A project item's

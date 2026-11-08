@@ -7,7 +7,7 @@
  * through a personal token, one task item with a subtask, one sub-project
  * item with its tasks, and one item whose deleter is gone; the stand-in's
  * fixture is built from what the server stored and from each viewer's own
- * deletedItems.list rows. For an admin, the project's lead and a member,
+ * rows, deletedItems.item over every stored item. For an admin, the project's lead and a member,
  * every shape walks both page by page with limit 5 to the end and
  * compares the entries, the rows and the notes; roles and the first people
  * batches compare too. Everyday values: a handful of items, no figure at
@@ -96,9 +96,15 @@ async function world() {
 }
 
 /** The stand-in's fixture for `who`, from what the server stored and the
-    rows deletedItems.list gives them. */
+    rows deletedItems.item gives them for every stored item, the rows the
+    page builds its entries with. */
 async function fixtureFor(t: T, f: OrgFixture, who: Doc<'profiles'>): Promise<DeletedFixture> {
-  const rows = (await as(t, who).query(api.deletedItems.list, {})).items
+  const stored = await t.run((ctx) => ctx.db.query('deleted_items').collect())
+  const rows = []
+  for (const d of stored) {
+    const row = await as(t, who).query(api.deletedItems.item, { id: d.id })
+    if (row !== null) rows.push(row)
+  }
   const { docs, tasks, profiles, seen } = await t.run(async (ctx) => {
     const sight = await sightOf(ctx, who)
     return {
@@ -119,8 +125,6 @@ async function fixtureFor(t: T, f: OrgFixture, who: Doc<'profiles'>): Promise<De
         me: who.id,
         role: admin ? 'admin' : leads ? 'lead' : 'user',
         can_purge: admin,
-        // no role reads every task since the admin access split
-        reads_all: false,
       },
     ],
     items: rows.map((row) => {

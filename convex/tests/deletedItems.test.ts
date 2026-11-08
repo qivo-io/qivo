@@ -2476,8 +2476,7 @@ describe("an organization's deletion", () => {
     await t.run((ctx) => ctx.scheduler.cancel(stalled.scheduled_id!))
     vi.setSystemTime(START + DAY)
     await requestDeletion(t, f)
-    const rowOf = async (who: Doc<'profiles'>) =>
-      (await as(t, who).query(api.deletedItems.list, {})).items.find((row) => row.id === item.id)
+    const rowOf = (who: Doc<'profiles'>) => as(t, who).query(api.deletedItems.item, { id: item.id })
 
     expect(await rowOf(f.user)).toMatchObject({
       can_restore: false,

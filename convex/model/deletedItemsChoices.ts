@@ -9,8 +9,7 @@
  * credential kind (model/deletedItemsPage.ts deletedAsAsked) complete the
  * Deleted by choices, so none of them comes from the rows of a page. Each
  * answer is the login's seat's in the organization it speaks of, as
- * model/deletedItems.ts viewOf judges each item, and none names a task.
- * These readers stay when deletedItems.list and matches go. */
+ * model/deletedItems.ts viewOf judges each item, and none names a task. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'

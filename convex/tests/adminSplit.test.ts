@@ -33,7 +33,6 @@ import {
   projectSightForProfiles,
 } from '../lib/access'
 import type { AccessLevel, GrantLevel } from '../lib/enums'
-import { roleReadsEveryTask } from '../model/deletedItems'
 import { newT, plantProject, plantSeat, type T, uuid } from './helpers.setup'
 
 type Seat = 'admin' | 'twin'
@@ -236,7 +235,6 @@ async function levelsFromReaders(
     canBeAssignedFor: (await canBeAssignedFor(ctx, p))(me),
     canSeeProjectFor: (await canSeeProjectFor(ctx, p))(me),
     projectSightForProfiles: await (await projectSightForProfiles(ctx, p))(me),
-    roleReadsEveryTask: roleReadsEveryTask(me),
   }
 }
 
@@ -268,7 +266,7 @@ describe('the level rule judges an organization admin by their own rows', () => 
     ['levelUnder (projectLevel, the per-project predicates, accessOf level)', levelUnderReaders],
     ["projectLevelsOf's sees (accessOf visible and accessible of a sub-project)", seesReaders],
     [
-      'levelsFrom (projectLevelsForOrg, projectLevelsForProfiles, canBeAssignedFor, canSeeProjectFor, projectSightForProfiles, roleReadsEveryTask)',
+      'levelsFrom (projectLevelsForOrg, projectLevelsForProfiles, canBeAssignedFor, canSeeProjectFor, projectSightForProfiles)',
       levelsFromReaders,
     ],
   ] as const) {
