@@ -349,10 +349,16 @@ describe('the numbered address of a project page the workspace does not hold', {
     }
   })
 
-  it('reads an unpinned number in the home organization, never as the project of that number the workspace holds in another organization', async () => {
+  it('reads an unpinned number in the home organization, never as the project of that number the project cache knows in another organization', async () => {
+    /** Has the project cache read Partner Co's project of number 7, as a
+        view that shows it would. */
+    const knowPartner = async (P: Awaited<ReturnType<typeof boot>>) => {
+      await act(async () => P.nameProjects('a view', [PARTNER]))
+      await waitFor(() => P.project(PARTNER)?.num === 7 || null, "Partner Co's project 7")
+    }
     for (const address of ['/app/~/settings/project/7', '/app#/settings/project/7']) {
       const P = await boot(address, partnerSeven)
-      expect(P.project(PARTNER)?.num).toBe(7)
+      await knowPartner(P)
       await waitFor(() => heading().includes('Away'), `the page at ${address}`)
       expect(gets).toEqual([{ org_id: P.homeOrg, num: 7 }])
       expect(location.pathname).toBe('/app/testbed/settings/project/7')
@@ -365,7 +371,7 @@ describe('the numbered address of a project page the workspace does not hold', {
         snap.profiles[0].org_role = 'guest'
       })
       expect(P.homeOrg).toBe('')
-      expect(P.project(PARTNER)?.num).toBe(7)
+      await knowPartner(P)
       await waitFor(() => location.pathname === '/app/~/settings/account' || null, 'the reset')
       expect(gets).toEqual([])
       expect(heading()).not.toContain('Partner')
