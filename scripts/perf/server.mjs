@@ -2099,7 +2099,6 @@ function windowsOf(orgId) {
     const start = startWindows(snapshot.orgs.find((row) => row.id === orgId) ?? snapshot.orgs[0])
     windows = {
       tasks: idWindows(start.tasks),
-      projects: idWindows(start.projects),
     }
     windowsByOrg.set(orgId, windows)
   }
@@ -2110,12 +2109,11 @@ function windowsOf(orgId) {
 let partsCache = null
 /** The parts of the workspace as convex/workspace.ts answers them. */
 function partsNow() {
-  partsCache ??= splitWorkspace(heldWorkspace(), (orgId, kind) => windowsOf(orgId)[kind])
+  partsCache ??= splitWorkspace(heldWorkspace(), (orgId) => windowsOf(orgId).tasks)
   return partsCache
 }
 const PART_KINDS = {
   'workspace:tasks': 'tasks',
-  'workspace:projects': 'projects',
 }
 /** What workspace part `name` answers for `args`. */
 function readPart(name, args) {

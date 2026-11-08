@@ -2102,11 +2102,9 @@ async function deleteProjectInApp(cred, project, shown) {
   if (projectDeleteRoute(current) === 'archive') {
     if (!current.json?.archived)
       await restOk(cred, 'PATCH', `/projects/${project.id}`, { archived: true })
-    await app.waitForFunction(
-      (id) => window.PLANNER.archivedProjects?.some((x) => x.id === id),
-      project.id,
-      { timeout: 30_000 },
-    )
+    // the app holds no project, so REST says when the archive landed
+    const archived = await rest(cred, 'GET', `/projects/${project.id}`)
+    expect(archived.json?.archived === true, `${project.name} did not archive`)
   }
   const removed = await evaluate(
     app,
