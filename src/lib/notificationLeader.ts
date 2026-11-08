@@ -49,12 +49,12 @@
      lets go of the lock, sends nothing while the sign-in is missing,
      however long the sign-in service takes to answer, and joins the
      election again, with the resume order, once the Convex client
-     confirms the sign-in (watchSignIn). A refusal
-     of the session (it ended, the login was banned, or a demo that is not
-     active) stops the leader and lets go of the lock, so another tab, such
-     as one loaded after a new sign-in, may lead; it stays stopped until
-     the store starts a new one (refused). A bad request does the same and
-     is a defect it reports.
+     confirms the sign-in (watchSignIn). A refusal of the session (it
+     ended, the login was banned, or a demo that is not active) stops the
+     leader and lets go of the lock, so another tab, such as one loaded
+     after a new sign-in, may lead; it stays stopped until the store starts
+     a new one (refused). A bad request does the same and is a defect it
+     reports.
    - Use. The first trusted pointer, key, touch or wheel input
      (lib/inputIdle.ts INPUTS, which the store passes) in a visible page of the profile, a pointer
      move only when it moved, NOTIFY_CLIENT.report_ms or more after the

@@ -932,8 +932,9 @@ describe('resumes', () => {
     await wait([tab], 10 * MINUTE)
     expect(tab.calls).toHaveLength(sent)
     expect(names(tab, from).every((n) => n === 'notifications:beat')).toBe(true)
-    // the sign-in comes back: it leads alone again with the resume order,
-    // a beat the server answers, then claimSummary, and watches the feed
+    // the sign-in comes back, and the tab leads alone again with the
+    // resume order, a beat the server answers, then claimSummary, and
+    // watches the feed
     tab.signedIn = true
     tab.signInConfirmed()
     await settle([tab])

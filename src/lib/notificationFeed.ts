@@ -509,9 +509,9 @@ export function createNotificationFeed(deps: FeedDeps) {
     /** What the client holds, for tests: the keys of the last answer and
         of the baseline, and whether an answer waits. */
     held: () => ({ keys: lastKeys.size, baselined: baselined.size, waiting: waiting !== null }),
-    /** Stops leading: forgets the floor, the answer and its keys, but not
-        the baseline's, stops the watch, and lets no run in progress show
-        or move anything. */
+    /** Stops leading. It forgets the floor, the answer and its keys, but
+        not the baseline's, stops the watch, and lets no run in progress
+        show or move anything. */
     stop() {
       if (!link) return
       link = null
