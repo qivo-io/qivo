@@ -7110,9 +7110,10 @@ export const NOTIFICATION_DELIVERY_MARKS = {
  *  mention's message, or with the generic summary's tag where the server
  *  answered the handoff to this new session with summarize_first. Then the
  *  leader page closes and the other must lead. A finally sets the mode back
- *  to the one it noted through the control, removes t0's item from Nora's
- *  Inbox, signs the context out, so no session or notification row stays
- *  behind, and closes the context. It needs a backend from the release
+ *  to the one it noted through the control, once the control showed it,
+ *  removes t0's item from Nora's Inbox once the agent mentioned her, signs
+ *  the context out from any of its pages once it signed in, so no session
+ *  or notification row stays behind, and closes the context. It needs a backend from the release
  *  after v0.1.161 on, since the leader's note comes from inbox.feed;
  *  v0.1.154 first shipped only the session calls it makes. */
 async function notificationDeliveryCheck() {
@@ -7127,6 +7128,7 @@ async function notificationDeliveryCheck() {
     let noted = null
     let control = null
     let signedIn = false
+    let mentioned = false
     try {
       const first = await own.newPage()
       await first.goto(`${origin}/app/~/projects`, { waitUntil: 'domcontentloaded' })
@@ -7189,6 +7191,7 @@ async function notificationDeliveryCheck() {
       await restOk(s, 'POST', `/tasks/${t0.key}/comments`, {
         body: `${run.tag} notification delivery for @[${nora.name}](user:${nora.id})`,
       })
+      mentioned = true
       const inbox = await restOk(run.creds.readToken, 'GET', '/inbox?limit=100')
       const message = inbox.items.find((it) => it.task.id === t0.id)?.messages.at(-1)?.id
       const notes = (page) => evaluate(page, (name) => window[name] ?? [], marks.notes)
@@ -7226,9 +7229,16 @@ async function notificationDeliveryCheck() {
             await until(async () => (await select.inputValue()) === noted, 30_000)
           }
         }
-        const page = control && !control.isClosed() ? control : null
-        if (page && signedIn) {
-          await removeInboxRow(page, t0).catch(() => {})
+        // the session's cookie signs in every page of the context, so any
+        // open page, or a new one, signs it out, wherever the step stopped
+        const open = own.pages().find((page) => !page.isClosed())
+        const page = !signedIn
+          ? null
+          : control && !control.isClosed()
+            ? control
+            : (open ?? (await own.newPage()))
+        if (page) {
+          if (mentioned) await removeInboxRow(page, t0).catch(() => {})
           await page.goto(`${origin}/app/${ORG_SLUG}/settings/account`, {
             waitUntil: 'domcontentloaded',
           })
