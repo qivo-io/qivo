@@ -1,17 +1,19 @@
-/* accessFlags (lib/core.ts), the read and write flags every REST call and the
- * MCP list tools build over the organization's catalogue. They come from the
+/* accessFlags (lib/core.ts), the read and write flags the REST and MCP task
+ * routes build over the organization's catalogue. They come from the
  * batched project levels (lib/access.ts projectLevelsForOrg) and must equal
  * what canSeeProject and hasProjectLevel answer project by project, which is
  * how they were computed before and how the single-project reads and writes
  * still decide. The per-project walk is kept here as the reference, and the
  * grant shapes are in accessShapes.setup.ts. The last cases read, under
  * convex-test's transaction limits, the reads accepted at the design size's
- * sum: accessRowsOf, projectLevelsForOrg, Deleted items'
- * sightOf and the REST and MCP project lists over the catalogue of 2,000
- * projects for a person's 700 grants and 5 teams of 200 shares beside 1,000
- * people, and projectLevel's navigation walk over the 70 sub-projects of
- * one parent, which hasProjectLevel and canAccessProject do not read. Each
- * prints what it read, the figures the docstrings of those reads quote. */
+ * sum: accessRowsOf, projectLevelsForOrg and Deleted items' sightOf over the
+ * catalogue of 2,000 projects for a person's 700 grants and 5 teams of 200
+ * shares beside 1,000 people, and projectLevel's navigation walk over the 70
+ * sub-projects of one parent, which hasProjectLevel and canAccessProject do
+ * not read. Each prints what it read, the figures the docstrings of those
+ * reads quote. The REST and MCP project lists read no catalogue
+ * (machine/projects.ts projectPage), and machineProjects.test.ts reads them
+ * at the design size. */
 import type { WithoutSystemFields } from 'convex/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
@@ -40,8 +42,6 @@ import { byId, newWindowKey } from '../lib/db'
 import { type CredentialAccess, ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
 import { MIB } from '../lib/limits'
 import { named } from '../lib/nameKey'
-import { listProjects as mcpListProjects } from '../machine/mcp'
-import { listProjects as restListProjects } from '../machine/rest'
 import { meterDb, sightOf } from '../model/deletedItems'
 import { newTeam, SHAPES } from './accessShapes.setup'
 import {
@@ -57,7 +57,6 @@ import {
   uuid,
   withReadingAdmin,
 } from './helpers.setup'
-import { handlerOf } from './pageOrg.setup'
 import { withReach } from './projectReach.setup'
 
 const ACCESS: CredentialAccess[] = ['read', 'write']
@@ -770,11 +769,21 @@ describe('accessFlags', () => {
       'not_found',
       /project not found/,
     )
-    const rows = await t.query(internal.machine.rest.listProjects, {
-      callerId: f.admin.id,
-      access: 'write',
-    })
-    expect(rows.map((p) => p.key).sort()).toEqual(['FW', 'PCB', 'SKNK', 'TBED'])
+    // the project list reads reach rows, which no broken project holds
+    await withReach(t)
+    const rows: string[] = []
+    let cursor: string | undefined
+    do {
+      const page = await t.query(internal.machine.rest.listProjects, {
+        callerId: f.admin.id,
+        access: 'write',
+        limit: '1',
+        cursor,
+      })
+      rows.push(...page.projects.map((p) => p.key))
+      cursor = page.next_cursor ?? undefined
+    } while (cursor !== undefined)
+    expect(rows).toEqual(['SKNK', 'TBED', 'FW', 'PCB'])
     // The per-project predicates hide the projects they can walk to a root
     // too, so the single-project reads and writes agree with the lists.
     await t.run(async (ctx) => {
@@ -893,21 +902,12 @@ describe('accessFlags', () => {
     })
     // the catalogue, the agent's grants and its team memberships
     expect(ranges).toBeLessThan(10)
-    const rest = await t.query(internal.machine.rest.listProjects, {
-      callerId: f.agent.id,
-      access: 'write',
+    // the task routes take their write flags from these
+    const writable = await t.run(async (ctx) => {
+      const flags = await accessFlags(ctx, f.agent, await loadCatalogue(ctx, f.agent), 'write')
+      return [...flags].filter(([, flag]) => flag.write).map(([id]) => id)
     })
-    expect(rest).toHaveLength(2 * parents)
-    expect(
-      rest
-        .filter((p) => p.access.write)
-        .map((p) => p.id)
-        .sort(),
-    ).toEqual([...granted].sort())
-    const mcp: { access: AccessFlag }[] = JSON.parse(
-      await t.query(internal.machine.mcp.listProjects, { callerId: f.agent.id, access: 'write' }),
-    )
-    expect(mcp.filter((p) => p.access.read)).toHaveLength(2 * parents)
+    expect(writable.sort()).toEqual([...granted].sort())
   })
 })
 
@@ -1205,39 +1205,5 @@ describe('the access reads at the design size', () => {
     })
     roomy('sightOf', sight.reads)
     expect(sight.answer).toEqual({ projects: 2000, profiles: 1000 })
-    // REST and MCP project lists, live and archived, answer whole
-    const live = new Set([...liveSubs.slice(0, 200), ...liveTops].map((p) => p.id))
-    const archived = new Set([...archivedSubs.slice(0, 500), ...archivedTops].map((p) => p.id))
-    for (const [state, expected] of [
-      ['live', live],
-      ['archived', archived],
-    ] as const) {
-      const rest = await measured(t, (ctx) =>
-        handlerOf<{ callerId: string; access: 'read'; archived?: string }, { id: string }[]>(
-          restListProjects,
-        )(ctx, {
-          callerId: member.id,
-          access: 'read',
-          ...(state === 'archived' ? { archived: 'true' } : {}),
-        }),
-      )
-      roomy(`REST GET /v1/projects, ${state}`, rest.reads)
-      expect(new Set(rest.answer.map((p) => p.id))).toEqual(expected)
-      const mcp = await measured(
-        t,
-        async (ctx) =>
-          JSON.parse(
-            await handlerOf<{ callerId: string; access: 'read'; archived?: boolean }, string>(
-              mcpListProjects,
-            )(ctx, {
-              callerId: member.id,
-              access: 'read',
-              ...(state === 'archived' ? { archived: true } : {}),
-            }),
-          ) as { id: string }[],
-      )
-      roomy(`MCP list_projects, ${state}`, mcp.reads)
-      expect(new Set(mcp.answer.map((p) => p.id))).toEqual(expected)
-    }
   })
 })

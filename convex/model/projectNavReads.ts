@@ -11,7 +11,12 @@
  * project lists (model/projectSettingsLists.ts) judge every seat but an
  * organization admin's by the same rules, through seatSight, rootShows,
  * ownRoots, restCandidates, childRowShows, inheritedShows and
- * navChildrenOf, with cursors of their own and no favorites group.
+ * navChildrenOf, with cursors of their own and no favorites group. REST
+ * GET /v1/projects and MCP list_projects (machine/projects.ts projectPage)
+ * read the same rows in key order instead (rootKeyIndex, childKeyIndex and
+ * subKeyIndex), with seatSight's access and grantees and a rule of their
+ * own for a top-level project, lib/access.ts visible, which also lists one
+ * seen only through an archived sub-project.
  *
  * Who sees what. Every candidate is judged by ordinary access, lib/access.ts
  * accessOf of the seat, so an organization admin's lists hold only the
@@ -529,6 +534,156 @@ export function subProjectIndex(
         ),
     ],
     at: (p) => keyed(p.name_key, [p.id] as const),
+  }
+}
+
+/** The root reach rows of grantee `g` of one live state in key order
+ * (project_reach by_grantee_key, kind root): the copied key, then the
+ * project id. REST GET /v1/projects and MCP list_projects read them for
+ * the top-level projects a caller reaches (machine/projects.ts
+ * projectPage), the live ones for active projects and both for archived
+ * ones. */
+export function rootKeyIndex(
+  ctx: QueryCtx,
+  g: Grantee,
+  live: boolean,
+): NamedIndex<Doc<'project_reach'>, IdTie> {
+  const rows = () =>
+    ctx.db
+      .query('project_reach')
+      .withIndex('by_grantee_key', (q) =>
+        q
+          .eq('grantee_kind', g.grantee_kind)
+          .eq('grantee_id', g.grantee_id)
+          .eq('kind', 'root')
+          .eq('live', live),
+      )
+  return {
+    all: rows,
+    after: ({ key, tie: [id] }) => [
+      () =>
+        ctx.db
+          .query('project_reach')
+          .withIndex('by_grantee_key', (q) =>
+            q
+              .eq('grantee_kind', g.grantee_kind)
+              .eq('grantee_id', g.grantee_id)
+              .eq('kind', 'root')
+              .eq('live', live)
+              .eq('key', key)
+              .gt('project_id', id),
+          ),
+      () =>
+        ctx.db
+          .query('project_reach')
+          .withIndex('by_grantee_key', (q) =>
+            q
+              .eq('grantee_kind', g.grantee_kind)
+              .eq('grantee_id', g.grantee_id)
+              .eq('kind', 'root')
+              .eq('live', live)
+              .gt('key', key),
+          ),
+    ],
+    at: (row) => ({ key: row.key, tie: [row.project_id] }),
+  }
+}
+
+/** The child reach rows of grantee `g` under top-level project `rootId` of
+ * one live state in key order (project_reach by_grantee_root_key): the
+ * copied key, then the sub-project id, for the same lists as
+ * rootKeyIndex. */
+export function childKeyIndex(
+  ctx: QueryCtx,
+  g: Grantee,
+  rootId: string,
+  live: boolean,
+): NamedIndex<Doc<'project_reach'>, IdTie> {
+  const rows = () =>
+    ctx.db
+      .query('project_reach')
+      .withIndex('by_grantee_root_key', (q) =>
+        q
+          .eq('grantee_kind', g.grantee_kind)
+          .eq('grantee_id', g.grantee_id)
+          .eq('root_id', rootId)
+          .eq('kind', 'child')
+          .eq('live', live),
+      )
+  return {
+    all: rows,
+    after: ({ key, tie: [id] }) => [
+      () =>
+        ctx.db
+          .query('project_reach')
+          .withIndex('by_grantee_root_key', (q) =>
+            q
+              .eq('grantee_kind', g.grantee_kind)
+              .eq('grantee_id', g.grantee_id)
+              .eq('root_id', rootId)
+              .eq('kind', 'child')
+              .eq('live', live)
+              .eq('key', key)
+              .gt('project_id', id),
+          ),
+      () =>
+        ctx.db
+          .query('project_reach')
+          .withIndex('by_grantee_root_key', (q) =>
+            q
+              .eq('grantee_kind', g.grantee_kind)
+              .eq('grantee_id', g.grantee_id)
+              .eq('root_id', rootId)
+              .eq('kind', 'child')
+              .eq('live', live)
+              .gt('key', key),
+          ),
+    ],
+    at: (row) => ({ key: row.key, tie: [row.project_id] }),
+  }
+}
+
+/** The sub-projects of top-level project `parent` of one archive state in
+ * key order (projects by_org_parent_state_key): key, then id, for the same
+ * lists as rootKeyIndex, where the caller sees `parent` for a reason of
+ * their own and so every sub-project of it. */
+export function subKeyIndex(
+  ctx: QueryCtx,
+  parent: Pick<Doc<'projects'>, 'id' | 'org_id'>,
+  state: ArchiveState,
+): NamedIndex<Doc<'projects'>, IdTie> {
+  const projects = () =>
+    ctx.db
+      .query('projects')
+      .withIndex('by_org_parent_state_key', (q) =>
+        q.eq('org_id', parent.org_id).eq('parent_id', parent.id).eq('archive_state', state),
+      )
+  return {
+    all: projects,
+    after: ({ key, tie: [id] }) => [
+      () =>
+        ctx.db
+          .query('projects')
+          .withIndex('by_org_parent_state_key', (q) =>
+            q
+              .eq('org_id', parent.org_id)
+              .eq('parent_id', parent.id)
+              .eq('archive_state', state)
+              .eq('key', key)
+              .gt('id', id),
+          ),
+      () =>
+        ctx.db
+          .query('projects')
+          .withIndex('by_org_parent_state_key', (q) =>
+            q
+              .eq('org_id', parent.org_id)
+              .eq('parent_id', parent.id)
+              .eq('archive_state', state)
+              .gt('key', key),
+          ),
+    ],
+    at: (p) => ({ key: p.key, tie: [p.id] }),
   }
 }
 

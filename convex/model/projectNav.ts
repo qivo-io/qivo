@@ -478,11 +478,12 @@ export async function syncLeads(
  * project TREE_FAVORITES.max favorites more, about 2.9 MB at that cap, so
  * only a name whose key NFKD expands (U+FDFA) brings one alone near it,
  * and otherwise one that a REST or MCP update makes after an archive or a
- * restore, which share one budget. A REST or MCP update that archives or restores then reads
- * every project of the organization for its answer (machine/projects.ts
- * projectOut, lib/core.ts loadCatalogue), which nothing bounds yet, so near
- * this bound at the row bounds it can pass Convex's read limit after its
- * tree change fitted. A mutable object, so tests can lower it. */
+ * restore, which share one budget. A REST or MCP update that archives or
+ * restores then reads, for its answer, the project, the caller's access to
+ * it and its sub-projects (machine/projects.ts projectRead, lib/core.ts
+ * projectCompletion), at most the 70 sub-projects of one project at the
+ * design size, under a guard that keeps lib/core.ts COMPLETION_RESERVE back
+ * from the request's limits. A mutable object, so tests can lower it. */
 export const TREE_READ = { bytes: 7 * MIB }
 
 /** The index ranges a mutation's tree changes may spend on their queries,
@@ -758,7 +759,9 @@ export async function navReady(ctx: QueryCtx, orgId: string): Promise<boolean> {
 /** Whether every project of the organization holds its archive state and
  * every source its reach rows (nav_at), without the name keys navReady also
  * asks for. A search of project names (projects search_name, which filters
- * by archive_state) and projectSight need only these. */
+ * by archive_state), projectSight and the REST and MCP project lists
+ * (machine/projects.ts projectPage, which match names from the projects'
+ * names and the rows' copies) need only these. */
 export async function reachReady(ctx: QueryCtx, orgId: string): Promise<boolean> {
   return (await readyRow(ctx, orgId))?.nav_at !== undefined
 }

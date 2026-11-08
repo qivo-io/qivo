@@ -313,7 +313,37 @@ a subtasks cursor sent to the links route, a cursor of another task and an
 unknown query parameter are refused with their sentences. The run reads
 every task's files a page at a time. Against a backend from before the
 paged task details that step fails, and so do the run's reads of a task's
-files. In the
+files. Its `machine/project-lists` step pages `GET /v1/projects` and
+`list_projects` with the Standard agent's key and the run's tag at limit 1
+to their ends, finds the run's project first and its tagged sub-projects
+after it in key order, the same rows on both surfaces, carries a REST
+cursor into MCP, finds a project by the words of its name and by its key,
+and checks that `offset=1`, `limit=0`, an active list's cursor sent with
+`archived=true`, a users cursor and an unknown query parameter are refused
+with their sentences. The run reads every project list a page at a time.
+Against a backend from before the paged project lists that step fails, and
+so do the run's reads of the project lists. Its `machine/project-details`
+step adds two milestones of its own to the run's project, checks that `GET
+/v1/projects/{ref}` and `get_project` answer its milestones, user grants and
+team grants whole on their first pages with every cursor `null`, each MCP
+cursor before what it continues, pages each list at limit 1 over `GET
+/v1/projects/{ref}/milestones`, `/access/users` and `/access/teams` and
+`list_project_related` to its end, carries a REST cursor into MCP, pages a
+sub-project's users over `/users` and `list_project_users`, and checks
+that `offset=1`, `limit=0`, a milestones cursor sent to the user grants
+route, a cursor of another project and an unknown query parameter are
+refused with their sentences. The run reads every list of a project's grants
+and milestones a page at a time. Against a backend from before the paged
+project details that step fails, as the new routes answer `404`, and so do
+the run's reads of those lists. Its `machine/inbox` step mentions the run's
+Standard agent in a comment on each of three tasks it makes, pages the
+agent's inbox at limit 1 over `GET /v1/inbox` and `list_inbox` to its end,
+where each of the three must come once, newest first, carries a REST cursor
+into MCP, checks `unread_only` before and after `POST /v1/inbox/read`, and
+checks that `offset=1`, `limit=0`, an `unread_only` cursor sent without
+`unread_only`, a users cursor and an unknown query parameter are refused
+with their sentences. Against a backend from before the paged Inbox that
+step fails, as `GET /v1/inbox` answers no `next_cursor`. In the
 browser it then opens the Board of the project it made, waits for the
 deployment's answer for it (`tasks.board`)
 and checks that the cards of its two fixture tasks show, which it makes in
@@ -2155,6 +2185,35 @@ alone to a release before it; roll forward instead. Every earlier
 statement here that returning the app alone to an earlier release is safe
 holds only against a backend from before this release. There is no schema
 change, no backfill and no release step.
+
+From the release after v0.1.161, REST `GET /v1/projects` and MCP
+`list_projects` answer one page of projects at a time as `{next_cursor,
+projects}`, each top-level project by key followed by its sub-projects by
+key, and take `search`, `limit`, `cursor` and `offset`, and the REST and
+MCP project reads and the answers of project creates and updates read the
+named project and the caller's access to it instead of every project of
+the organization. REST `GET /v1/projects/{ref}`, the answers of project
+creates and updates, and MCP `get_project`, `create_project` and
+`update_project` answer at most 50 of a project's milestones, user grants
+and team grants, each with its cursor, and REST `GET
+/v1/projects/{ref}/users`, `/milestones`, `/access/users` and
+`/access/teams` and MCP `list_project_users` and the new
+`list_project_related` page them. REST `GET /v1/inbox` and MCP
+`list_inbox` answer one page of inbox items at a time as `{next_cursor,
+items}`, newest activity first, take `cursor`, refuse an `offset` other
+than `0` and no longer answer `truncated`, each item with every message it
+holds, and a change with `all` asks the caller's access project by project.
+This release is the backend floor for REST and MCP callers that page these
+lists. Returning the backend below it makes both project lists answer every
+project as one array in key order, the project details every milestone and
+grant without the cursors, the project users every row at once and the
+Inbox `{items, truncated}` paged with `offset`, refuses the new arguments
+as unknown, answers `404` for the three new routes, does not know
+`list_project_related`, and drops the indexes
+`projects.by_org_parent_state_key` and `project_reach.by_grantee_root_key`,
+which a deploy forward builds again with no change to data. It sets no
+floor for the app, which calls none of them, and has no backfill and no
+release step.
 
 ## Node.js version
 

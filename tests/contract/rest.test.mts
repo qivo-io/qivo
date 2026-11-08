@@ -111,35 +111,38 @@ afterAll(async () => {
 /* ------------------------------------------------------- 1. routing/mount */
 
 describe('routing and mount', () => {
-  test('GET /v1/projects with the qva key answers the agent-readable catalogue', async () => {
+  test('GET /v1/projects with the qva key answers the agent-readable projects a page at a time', async () => {
     const res = await call('GET', '/v1/projects')
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toBe('application/json')
     expect(res.headers.get('access-control-allow-origin')).toBe('*')
-    const rows = (await res.json()) as {
-      key: string
-      name: string
-      access: { read: boolean; write: boolean }
-    }[]
+    const page = (await res.json()) as {
+      next_cursor: string | null
+      projects: { key: string; name: string; access: { read: boolean; write: boolean } }[]
+    }
+    // fifteen projects fit one page of 50, so the page is the whole list
+    expect(page.next_cursor).toBeNull()
+    const rows = page.projects
     // Atlas sits in both Northstar teams, each a 'user' on the metas it
-    // manages — its key reads and writes all fifteen projects, key-sorted
+    // manages, so its key reads and writes all fifteen projects, in tree
+    // order: each top-level project by key, then its sub-projects by key
     // (the hidden-project 404 lives in the hermetic convex/tests/rest.test.ts)
     expect(rows.map((p) => p.key)).toEqual([
-      'API',
-      'BRAND',
       'CLOUD',
+      'API',
+      'REL',
+      'UX',
+      'WEB',
+      'PILOT',
+      'BRAND',
       'CS',
       'CUST',
+      'SENS',
       'ELEC',
       'FW',
       'MECH',
       'MFG',
-      'PILOT',
-      'REL',
-      'SENS',
       'TEST',
-      'UX',
-      'WEB',
     ])
     const sensor = rows.find((p) => p.key === 'SENS')
     expect(sensor?.name).toBe('Luma Sensor')
@@ -149,7 +152,13 @@ describe('routing and mount', () => {
   test('GET /v1/projects/{ref}/users returns the project-scoped reporter roster', async () => {
     const res = await call('GET', '/v1/projects/ELEC/users')
     expect(res.status).toBe(200)
-    const rows = (await res.json()) as Record<string, unknown>[]
+    // a page, which Northstar's eight people fill to its end
+    const page = (await res.json()) as {
+      next_cursor: string | null
+      users: Record<string, unknown>[]
+    }
+    expect(page.next_cursor).toBeNull()
+    const rows = page.users
     expect(Object.fromEntries(rows.map((user) => [user.name, user.assignable]))).toEqual({
       'Nora Berg': true,
       'Leo Martins': true,

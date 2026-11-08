@@ -21,6 +21,7 @@ import {
   uuid,
   withReadingAdmin,
 } from './helpers.setup'
+import { withReach } from './projectReach.setup'
 
 const AT = Date.parse('2026-10-04T12:00:00.000Z')
 const DAY = 24 * 60 * 60 * 1000
@@ -114,6 +115,8 @@ async function fixture() {
       level: 'user',
     })
   })
+  // the project list the calls read pages the reach rows every deployment holds
+  await withReach(t)
   const loginId = f.admin.auth_user_id!
 
   const token = `qvt_${'b4a7'.repeat(12)}`

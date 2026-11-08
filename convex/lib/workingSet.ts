@@ -30,8 +30,9 @@ export type WorkingSet = {
 /**
  * Whether a task belongs to a member's working set: the task and its own
  * project are not archived, and the member can see the project (`visible`).
- * The app's snapshot applies it through workingSetOf, and the machine inbox
- * applies it to the tasks its messages name.
+ * The app's snapshot applies it through workingSetOf. The machine Inbox
+ * applies the same rule through the Inbox's walk (model/inboxReads.ts
+ * inboxScope).
  */
 export function inWorkingSet(
   task: Pick<Doc<'issues'>, 'archived_at'>,

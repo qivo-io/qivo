@@ -61,7 +61,11 @@ import {
   INBOX_LIST_MARKS,
   INBOX_LIST_STEP,
   INBOX_PAGE_QUERY,
+  INBOX_PAGES_MAX,
+  INBOX_REFUSALS,
   imageDownloads,
+  inboxPagesMax,
+  inboxWhole,
   inDefaultWindow,
   isSiteOf,
   LABEL_MENTION_NAMES,
@@ -96,17 +100,22 @@ import {
   PEOPLE_REFUSALS,
   PICKER_EXPECTED,
   PICKER_STEP,
+  PROJECT_DETAIL_REFUSALS,
   PROJECT_DIALOGS_EXPECTED,
   PROJECT_DIALOGS_STEP,
   PROJECT_DIRECTORY_MARKS,
   PROJECT_DIRECTORY_STEP,
+  PROJECT_LISTS,
+  PROJECT_REFUSALS,
   PROJECT_SETTINGS_EXPECTED,
   PROJECT_SETTINGS_STEP,
+  PROJECTS_MAX,
   pace,
   parseArgs,
   peoplePagesMax,
   pressSettled,
   projectDeleteRoute,
+  projectPagesMax,
   RATE_BUDGET,
   REGROUP_WAIT,
   RELATION_EXPECTED,
@@ -1156,7 +1165,7 @@ describe('staging check REST contract', () => {
     // Leo loses sight over REST before Send, which must post nothing
     const lost = step.indexOf('await until(async () => !(await reaches()))')
     expect(lost).toBeGreaterThan(0)
-    expect(step).toContain('/users`)).some((u) => u.id === leo.id)')
+    expect(step).toContain("/users`, 'users')).some((u) => u.id === leo.id)")
     // a handover leaves the outgoing lead a User grant, which goes too
     expect(step.indexOf("'DELETE', `/projects/")).toBeGreaterThan(0)
     expect(step.indexOf("'DELETE', `/projects/")).toBeLessThan(lost)
@@ -1706,6 +1715,58 @@ describe('staging check REST contract', () => {
     const core = readFileSync(new URL('../convex/lib/core.ts', import.meta.url), 'utf8')
     const lists = core.match(/export const TASK_RELATED_LISTS = \[([^\]]*)\] as const/)
     expect(lists?.[1].split(',').map((name) => name.trim().replaceAll("'", ''))).toEqual(TASK_LISTS)
+  })
+  it("expects the server's sentences for a projects page's offset, limit, cursor and unknown parameter", () => {
+    expect(PROJECT_REFUSALS).toEqual({
+      offset: offsetRefusal('projects'),
+      limit: LIMITS.listProjects.refusal,
+      cursor: CURSOR_REFUSAL,
+      unknown:
+        'unknown query parameter "page"; this request takes archived, search, limit, cursor, offset',
+    })
+    // the REST route's query parameters, in the order its refusal names them
+    const rest = readFileSync(new URL('../convex/machine/rest.ts', import.meta.url), 'utf8')
+    expect(rest).toContain("query: ['archived', 'search', 'limit', 'cursor', 'offset'],")
+    // the design size's projects, and two pages more at any limit
+    expect(PROJECTS_MAX).toBe(2000)
+    expect(projectPagesMax(200)).toBe(12)
+    expect(projectPagesMax(1)).toBe(2002)
+  })
+  it("expects the server's sentences and lists for a project's details", () => {
+    expect(PROJECT_DETAIL_REFUSALS).toEqual({
+      offset: offsetRefusal('milestones'),
+      limit: LIMITS.listMilestones.refusal,
+      usersOffset: offsetRefusal('project users'),
+      usersLimit: LIMITS.listProjectUsers.refusal,
+      cursor: CURSOR_REFUSAL,
+      unknown: 'unknown query parameter "page"; this request takes limit, cursor, offset',
+    })
+    // the lists MCP list_project_related takes, in the details' order, with
+    // the REST routes that page them
+    const projects = readFileSync(new URL('../convex/machine/projects.ts', import.meta.url), 'utf8')
+    const lists = projects.match(/export const PROJECT_RELATED_LISTS = \[([^\]]*)\] as const/)
+    expect(lists?.[1].split(',').map((name) => name.trim().replaceAll("'", ''))).toEqual(
+      PROJECT_LISTS.map((l) => l.list),
+    )
+    for (const { path } of PROJECT_LISTS)
+      expect(projects).toContain(`path: 'projects/:ref/${path}',`)
+  })
+  it("expects the server's sentences for the Inbox's pages", () => {
+    expect(INBOX_REFUSALS).toEqual({
+      offset: offsetRefusal('inbox items'),
+      limit: LIMITS.listInbox.refusal,
+      cursor: CURSOR_REFUSAL,
+      unknown:
+        'unknown query parameter "page"; this request takes unread_only, include_snoozed, limit, cursor, offset',
+    })
+    // the REST route's query parameters, in the order its refusal names them
+    const discussion = readFileSync(
+      new URL('../convex/machine/discussion.ts', import.meta.url),
+      'utf8',
+    )
+    expect(discussion).toContain(
+      "query: ['unread_only', 'include_snoozed', 'limit', 'cursor', 'offset'],",
+    )
   })
   it('names the tools that answer a placeholder sent alone as the server does', () => {
     const mcp = readFileSync(new URL('../convex/machine/mcp.ts', import.meta.url), 'utf8')
@@ -2419,6 +2480,24 @@ describe('task list pages', () => {
     await expect(taskPages(reader([{ tasks: [] }]).read, 'the list')).rejects.toThrow(
       'the list answered no {next_cursor, tasks} page',
     )
+  })
+  it('takes in a whole Inbox through short and empty pages, and sizes the walks at a smaller limit from it', async () => {
+    const { read, cursors } = reader([
+      { next_cursor: 'i1', items: [{ id: 'a' }, { id: 'b' }] },
+      { next_cursor: 'i2', items: [] },
+      { next_cursor: null, items: [{ id: 'c' }] },
+    ])
+    const whole = await inboxWhole(read, 'the Inbox')
+    expect(whole.items.map((i) => i.id)).toEqual(['a', 'b', 'c'])
+    expect(whole.pages).toBe(3)
+    expect(cursors).toEqual([null, 'i1', 'i2'])
+    // an item a page, a page for each short or empty one, and two more
+    expect(inboxPagesMax(whole)).toBe(3 + 3 + 2)
+    const endless = async (cursor) => ({ next_cursor: `${cursor ?? ''}x`, items: [] })
+    await expect(inboxWhole(endless, 'the Inbox')).rejects.toThrow(
+      `the Inbox still had a next_cursor after ${INBOX_PAGES_MAX} pages`,
+    )
+    expect(INBOX_PAGES_MAX).toBe(TASK_PAGES_MAX)
   })
   it('gives up on a next_cursor that never ends', async () => {
     const endless = async () => ({ next_cursor: 'again', tasks: [] })

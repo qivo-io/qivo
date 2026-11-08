@@ -33,6 +33,7 @@ import {
   withReadingAdmin,
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
+import { withReach } from './projectReach.setup'
 
 type FetchInit = { method?: string; headers?: Record<string, string>; body?: string }
 type Res = { status: number; body: Record<string, unknown> }
@@ -137,6 +138,8 @@ async function fixture() {
       }),
     )
   }
+  // the project list pages the reach rows every deployment holds
+  await withReach(t)
   // a task every link request points at, and a label to edit
   const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
   const label = uuid()
@@ -240,6 +243,9 @@ const REQUESTS: Record<
   'GET projects': () => ({ path: '/v1/projects' }),
   'GET projects/:ref': () => ({ path: '/v1/projects/FW' }),
   'GET projects/:ref/users': () => ({ path: '/v1/projects/FW/users' }),
+  'GET projects/:ref/milestones': () => ({ path: '/v1/projects/FW/milestones' }),
+  'GET projects/:ref/access/users': () => ({ path: '/v1/projects/FW/access/users' }),
+  'GET projects/:ref/access/teams': () => ({ path: '/v1/projects/FW/access/teams' }),
   'GET users': () => ({ path: '/v1/users' }),
   'GET users/:ref': (fx) => ({ path: `/v1/users/${fx.f.user.id}` }),
   'PATCH users/:ref': (fx) => ({
@@ -609,9 +615,11 @@ describe('a person writing over REST', () => {
     expect(await flags(fx.viewer)).toEqual({ read: true, write: false })
     expect(await flags(fx.agentKey)).toEqual({ read: true, write: true })
     expect(await flags(fx.viewerKey)).toEqual({ read: true, write: false })
-    const listed = (await call(fx.t, fx.reader, 'GET', '/v1/projects')).body as unknown as {
-      access: { write: boolean }
-    }[]
+    const listed = (
+      (await call(fx.t, fx.reader, 'GET', '/v1/projects')).body as unknown as {
+        projects: { access: { write: boolean } }[]
+      }
+    ).projects
     expect(listed.length).toBeGreaterThan(0)
     expect(listed.every((p) => p.access.write === false)).toBe(true)
   })

@@ -160,6 +160,12 @@ const projectsTable = defineTable({
   // project's live sub-projects for Archived tasks (lib/archivedTasks.ts
   // liveSubProjects).
   .index('by_org_parent_state_name', ['org_id', 'parent_id', 'archive_state', 'name_key', 'id'])
+  // A parent's sub-projects of one archive state in key order, the id
+  // breaking ties: the sub-projects of a top-level project a caller sees
+  // for a reason of their own in REST GET /v1/projects and MCP
+  // list_projects (machine/projects.ts projectPage, through
+  // model/projectNavReads.ts subKeyIndex).
+  .index('by_org_parent_state_key', ['org_id', 'parent_id', 'archive_state', 'key', 'id'])
   // Every project and sub-project of the organization of one archive state
   // in name order, the id breaking ties: an organization admin's Settings
   // search across its live projects and sub-projects in one range
@@ -1637,7 +1643,9 @@ export default defineSchema({
   // with reads bounded by the page, not by the grants, and the directory's
   // name search reads the seats' and teams' live root rows whole, up to
   // model/projectNavReads.ts PROJECT_NAV.rootRows (model/projectNav.ts
-  // writes them, model/projectNavReads.ts pages and searches them).
+  // writes them, model/projectNavReads.ts pages and searches them). REST
+  // GET /v1/projects and MCP list_projects page them in key order
+  // (machine/projects.ts projectPage).
   // A row is a presence fact that finds candidates and grants nothing:
   // every permission check keeps using lib/access.ts, and a reader checks
   // the live project of each row it returns. Admin status alone writes no
@@ -1711,8 +1719,22 @@ export default defineSchema({
       'name_key',
       'project_id',
     ])
-    // as by_grantee_list in key order, for REST and MCP
+    // as by_grantee_list in key order: a grantee's top-level projects for
+    // REST GET /v1/projects and MCP list_projects (machine/projects.ts
+    // projectPage, through model/projectNavReads.ts rootKeyIndex)
     .index('by_grantee_key', ['grantee_kind', 'grantee_id', 'kind', 'live', 'key', 'project_id'])
+    // as by_grantee_root in key order: a grantee's sub-projects under one
+    // top-level project for the same lists (projectNavReads.ts
+    // childKeyIndex)
+    .index('by_grantee_root_key', [
+      'grantee_kind',
+      'grantee_id',
+      'root_id',
+      'kind',
+      'live',
+      'key',
+      'project_id',
+    ])
     // every grantee's row on one project, at most one each
     .index('by_project_grantee', ['project_id', 'grantee_kind', 'grantee_id'])
     // the child rows under one top-level project, live or archived, which

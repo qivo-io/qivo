@@ -28,7 +28,14 @@
  * and member lists with their name search, with a label of its own that it
  * deletes in the app again (machine/people-lists), a task's details with the
  * first page of its subtasks, links, followers and files and those lists'
- * own pages over REST and MCP (machine/task-details), task progress, last
+ * own pages over REST and MCP (machine/task-details), the project lists a
+ * page at a time in tree order with their name and key search
+ * (machine/project-lists), a project's details with the first page of its
+ * milestones and grants, those lists' own pages and a project's users a
+ * page at a time over REST and MCP (machine/project-details), the
+ * Standard agent's inbox a page at a time over REST and MCP
+ * (machine/inbox), task
+ * progress, last
  * comment times, delay and project completion, which it waits to read whole
  * again after an archive or a restore regroups its counts, and the live
  * group rule. It fills one task with a
@@ -394,6 +401,54 @@ export const TASK_LIST_REFUSALS = {
   cursor: LIST_REFUSALS.cursor,
 }
 
+/** The sentences REST GET /v1/projects and MCP list_projects refuse a
+ *  page's `offset`, `limit` and `cursor` with (convex/lib/listCursor.ts and
+ *  the limits registry's listProjects), and REST's unknown query parameter,
+ *  which the script's tests pin. */
+export const PROJECT_REFUSALS = {
+  offset: 'offset does not apply to projects; pass next_cursor as cursor',
+  limit: LIMITS.listProjects.refusal,
+  cursor: LIST_REFUSALS.cursor,
+  unknown:
+    'unknown query parameter "page"; this request takes archived, search, limit, cursor, offset',
+}
+
+/** The sentences a page of a project's milestones and users refuse their
+ *  `offset` and `limit` with on REST and MCP (convex/lib/listCursor.ts and
+ *  the limits registry's listMilestones and listProjectUsers), the cursor
+ *  sentence and REST's unknown query parameter, which the script's tests
+ *  pin. The grant lists name their own rows in the first two. */
+export const PROJECT_DETAIL_REFUSALS = {
+  offset: 'offset does not apply to milestones; pass next_cursor as cursor',
+  limit: LIMITS.listMilestones.refusal,
+  usersOffset: 'offset does not apply to project users; pass next_cursor as cursor',
+  usersLimit: LIMITS.listProjectUsers.refusal,
+  cursor: LIST_REFUSALS.cursor,
+  unknown: 'unknown query parameter "page"; this request takes limit, cursor, offset',
+}
+
+/** The sentences REST GET /v1/inbox and MCP list_inbox refuse a page's
+ *  `offset`, `limit` and `cursor` with (convex/lib/listCursor.ts and the
+ *  limits registry's listInbox), and REST's unknown query parameter, which
+ *  the script's tests pin. */
+export const INBOX_REFUSALS = {
+  offset: 'offset does not apply to inbox items; pass next_cursor as cursor',
+  limit: LIMITS.listInbox.refusal,
+  cursor: LIST_REFUSALS.cursor,
+  unknown:
+    'unknown query parameter "page"; this request takes unread_only, include_snoozed, limit, cursor, offset',
+}
+
+/** A project's lists that its details hold a first page of, as MCP
+ *  list_project_related names them, with the REST route and answer field
+ *  of each, in the order the details read them, which the script's tests
+ *  pin. */
+export const PROJECT_LISTS = [
+  { list: 'milestones', path: 'milestones', field: 'milestones' },
+  { list: 'user_grants', path: 'access/users', field: 'user_grants' },
+  { list: 'team_grants', path: 'access/teams', field: 'team_grants' },
+]
+
 /** The MCP tools that took no arguments before November 2026 and still
  *  answer a call that sends none of their own arguments, such as a
  *  placeholder alone, as a call of the older catalogue (convex/machine/mcp.ts
@@ -725,6 +780,7 @@ const READ_TOOLS = new Set([
   'list_comments',
   'list_inbox',
   'list_labels',
+  'list_project_related',
   'list_project_users',
   'list_projects',
   'list_task_activity',
@@ -977,15 +1033,6 @@ async function readOk(cred, path) {
   }
 }
 
-/** readOk for a route that answers a whole list, as the project list does.
- *  The task, user, label, team and member lists answer pages instead
- *  (taskPages, restRows). */
-async function readList(cred, path) {
-  const rows = await readOk(cred, path)
-  expect(Array.isArray(rows), `GET ${path.split('?')[0]} answered no list`)
-  return rows
-}
-
 /** The most pages a check reads of one task list, so a next_cursor that
  *  never ends fails the check instead of holding up the run. */
 export const TASK_PAGES_MAX = 200
@@ -1065,6 +1112,48 @@ export const workloadPeople = (read, what) => movingPages(read, what, 'people', 
  *  the check. */
 export const peoplePagesMax = (limit) => Math.ceil(WORKLOAD_PEOPLE / limit) + 2
 
+/** The projects of an organization at the design size, live and archived,
+ *  top-level and sub-projects, which the project list checks page
+ *  through. */
+export const PROJECTS_MAX = 2000
+
+/** The most pages a check reads of a project list at `limit` rows a page,
+ *  the pages of PROJECTS_MAX projects and two more. Each page reads its
+ *  first row whatever its read budget says (convex/machine/projects.ts
+ *  projectPage), so a correct deployment never fails it and a next_cursor
+ *  that never ends still fails the check. */
+export const projectPagesMax = (limit) => Math.ceil(PROJECTS_MAX / limit) + 2
+
+/** The most pages of 200 a check reads to take in a whole Inbox, so a
+ *  next_cursor that never ends fails the check instead of holding up the
+ *  run. */
+export const INBOX_PAGES_MAX = TASK_PAGES_MAX
+
+/** Every item of one Inbox, `read(cursor)` answering the page of 200 after
+ *  `cursor` (movingPages over `items`, at most INBOX_PAGES_MAX pages), with
+ *  how many pages that took. */
+export async function inboxWhole(read, what) {
+  let pages = 0
+  const items = await movingPages(
+    (cursor) => {
+      pages += 1
+      return read(cursor)
+    },
+    what,
+    'items',
+    INBOX_PAGES_MAX,
+  )
+  return { items, pages }
+}
+
+/** The most pages a walk of the Inbox `whole` took in reads at a smaller
+ *  limit: one for each item, one for each page of 200, and two more. A
+ *  page ends short or empty where its read budget ran out among items the
+ *  caller cannot see, and a walk at any limit meets at most as many of
+ *  those as the pages of 200 did, since each of its pages starts with the
+ *  whole budget. */
+export const inboxPagesMax = (whole) => whole.items.length + whole.pages + 2
+
 /** `path` with the query parameters of `q` that are set, URL-encoded. */
 export const withQuery = (path, q) => {
   const set = Object.entries(q).filter(([, value]) => value !== undefined && value !== null)
@@ -1083,24 +1172,57 @@ const withCursor = (path, cursor) =>
   cursor === null ? path : `${path}&cursor=${encodeURIComponent(cursor)}`
 
 /** Every row under `field` of the REST list `path` (`/users`, `/labels`,
- *  `/teams` or `/teams/{id}/members`), with `search` when it is set, in
- *  pages of `limit`, each read with readOk, so a cleanup read never takes a
- *  failed answer for an empty list. */
-const restRows = (cred, path, field, { search, limit = 200 } = {}) =>
+ *  `/teams`, `/teams/{id}/members` or `/projects`), with `search` when it
+ *  is set, in pages of `limit`, each read with readOk, so a cleanup read
+ *  never takes a failed answer for an empty list, at most `most` pages. */
+const restRows = (cred, path, field, { search, limit = 200, most = peoplePagesMax(limit) } = {}) =>
   movingPages(
     (cursor) => readOk(cred, withQuery(path, { search, limit, cursor })),
     `GET /v1${path.split('?')[0]}`,
     field,
-    peoplePagesMax(limit),
+    most,
   )
 
-/** Every row under `field` of the MCP list tool `name` for `args`. */
-const mcpRows = (cred, name, field, args = {}) =>
+/** Every row under `field` of the MCP list tool `name` for `args`, at most
+ *  `most` pages. */
+const mcpRows = (cred, name, field, args = {}, most = peoplePagesMax(args.limit ?? 50)) =>
   movingPages(
     (cursor) => toolOk(cred, name, cursor === null ? args : { ...args, cursor }),
     name,
     field,
-    peoplePagesMax(args.limit ?? 50),
+    most,
+  )
+
+/** Every project of REST GET /v1/projects on one side of the archive,
+ *  with `search` when it is set, a page of 200 at a time. */
+const projectRows = (cred, { archived = false, search } = {}) =>
+  restRows(cred, archived ? '/projects?archived=true' : '/projects', 'projects', {
+    search,
+    most: projectPagesMax(200),
+  })
+
+/** Every milestone of project `ref`'s top-level project over REST, a page
+ *  of 200 at a time (GET /v1/projects/{ref}/milestones). */
+const projectMilestones = (cred, ref) => restRows(cred, `/projects/${ref}/milestones`, 'milestones')
+
+/** Every user (`users`) or team (`teams`) grant of project `ref` over
+ *  REST, a page of 200 at a time (GET /v1/projects/{ref}/access/users or
+ *  /access/teams). */
+const projectGrants = (cred, ref, kind) =>
+  restRows(
+    cred,
+    `/projects/${ref}/access/${kind}`,
+    kind === 'users' ? 'user_grants' : 'team_grants',
+  )
+
+/** projectRows over MCP list_projects. */
+const mcpProjectRows = (cred, { archived = false, search } = {}) =>
+  mcpRows(
+    cred,
+    'list_projects',
+    'projects',
+    { ...(archived ? { archived: true } : {}), ...(search ? { search } : {}), limit: 200 },
+    projectPagesMax(200),
   )
 
 /** Every file of `task` over REST, a page at a time
@@ -2219,9 +2341,10 @@ async function sweep(tag, label) {
   try {
     if (cleaner) {
       await step('projects', async () => {
+        const search = searchOf(tag)
         const projects = [
-          ...(await readList(cleaner, '/projects')),
-          ...(await readList(cleaner, '/projects?archived=true')),
+          ...(await projectRows(cleaner, { search })),
+          ...(await projectRows(cleaner, { archived: true, search })),
         ].filter((p) => matches(p.name))
         // the app deletes a top-level project with its sub-projects
         for (const p of projects.filter((p) => !projects.some((q) => q.id === p.parent_id)))
@@ -2329,12 +2452,12 @@ async function sweep(tag, label) {
     // what REST can see must be gone before the token goes
     if (cleaner)
       await step('the check for leftovers over REST', async () => {
+        const search = searchOf(tag)
         const projects = [
-          ...(await readList(cleaner, '/projects')),
-          ...(await readList(cleaner, '/projects?archived=true')),
+          ...(await projectRows(cleaner, { search })),
+          ...(await projectRows(cleaner, { archived: true, search })),
         ].filter((p) => matches(p.name))
         const tasks = await findTasks(cleaner, tag)
-        const search = searchOf(tag)
         const teams = (await restRows(cleaner, '/teams', 'teams', { search })).filter((t) =>
           matches(t.name),
         )
@@ -2445,10 +2568,10 @@ async function findTasks(cred, tag) {
   const readAll = async (path) =>
     take(await taskPages((cursor) => readOk(cred, withCursor(path, cursor)), 'GET /v1/tasks'))
   await readAll(`/tasks?search=${search}&limit=200`)
-  const archivedProjects = await readList(cred, '/projects?archived=true')
+  const archivedProjects = await projectRows(cred, { archived: true })
   for (const p of archivedProjects)
     await readAll(`/tasks?project=${p.id}&search=${search}&limit=200`)
-  const projects = [...(await readList(cred, '/projects')), ...archivedProjects].filter(
+  const projects = [...(await projectRows(cred)), ...archivedProjects].filter(
     (p) => p.parent_id === null,
   )
   for (const p of projects)
@@ -2534,7 +2657,7 @@ async function checkReads(cred) {
   }
   if (cred.kind !== 'oauth') {
     await check(`${cred.id}/rest/reads`, async () => {
-      flagsOk(await restOk(cred, 'GET', '/projects'), 'REST')
+      flagsOk(await projectRows(cred, { search: run.tag }), 'REST')
       const detail = await restOk(cred, 'GET', `/projects/${A.id}`)
       eq(detail.lead_name, run.nora.name, 'project lead')
       const tasks = await restTasks(cred, `/tasks?project=${M.id}&limit=200`)
@@ -2567,7 +2690,7 @@ async function checkReads(cred) {
     })
   }
   await check(`${cred.id}/mcp/reads`, async () => {
-    flagsOk(await toolOk(cred, 'list_projects'), 'MCP')
+    flagsOk(await mcpProjectRows(cred, { search: run.tag }), 'MCP')
     eq((await toolOk(cred, 'get_project', { project: A.id })).id, A.id, 'get_project')
     const tasks = await mcpTasks(cred, { project: M.id, limit: 200 })
     expect(
@@ -2933,6 +3056,460 @@ async function taskDetailChecks() {
       'unknown query parameter "page"; this request takes limit, cursor, offset',
     )
     return `a group with ${want.subtasks.length} subtasks, ${want.links.length} links, ${want.followers.length} followers and ${want.attachments.length} files, whole with null cursors on both surfaces, ${pages} pages of one over each, a REST cursor on MCP; offset, limit=0, another list's and another task's cursors and an unknown parameter refused`
+  })
+}
+
+/** machine/project-lists: REST GET /v1/projects and MCP list_projects page
+ *  the run's projects, found by the run's tag, at limit 1 to their ends
+ *  with the Standard agent's key, in tree order: M first, then its tagged
+ *  sub-projects in key order, Alpha and Zulu among them (the name caps
+ *  step leaves a tagged sub-project of M too), the same rows on both
+ *  surfaces, every page moving on, and a REST cursor goes on over MCP. A
+ *  search for the tag with `project` lists M alone, so a matching parent
+ *  brings none of its sub-projects, one with `Alpha` lists Alpha alone, and
+ *  Alpha's key finds Alpha. The agent's flags are the run's (writes). Then
+ *  the refusals: an offset, a limit of 0, an active list's cursor sent with
+ *  archived=true, a users cursor and an unknown query parameter, each with
+ *  its sentence. A backend before the paged lists answers an array, so the
+ *  step fails there. */
+async function projectListChecks() {
+  const s = run.creds.stdKey
+  await check('machine/project-lists', async () => {
+    const { M, A, Z } = run.projects
+    const search = run.tag
+    const ids = (rows) => rows.map((p) => p.id)
+    const most = projectPagesMax(1)
+    const viaRest = await movingPages(
+      (cursor) => readOk(s, withQuery('/projects', { search, limit: 1, cursor })),
+      'GET /v1/projects',
+      'projects',
+      most,
+    )
+    const viaMcp = await movingPages(
+      (cursor) =>
+        toolOk(
+          s,
+          'list_projects',
+          cursor === null ? { search, limit: 1 } : { search, limit: 1, cursor },
+        ),
+      'list_projects',
+      'projects',
+      most,
+    )
+    same(ids(viaMcp), ids(viaRest), 'the same pages on both surfaces')
+    eq(viaRest[0]?.id, M.id, 'M comes first')
+    const subs = viaRest.slice(1)
+    expect(
+      subs.every((p) => p.parent_id === M.id),
+      "a row after M is not one of M's sub-projects",
+    )
+    const keys = subs.map((p) => p.key)
+    same(
+      keys,
+      [...keys].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+      "M's sub-projects in key order",
+    )
+    for (const p of [A, Z])
+      expect(
+        subs.some((r) => r.id === p.id),
+        `the pages lack ${p.name}`,
+      )
+    for (const [key, p] of Object.entries({ M, A, Z }))
+      eq(
+        viaRest.find((r) => r.id === p.id)?.access.write,
+        writes(s, key),
+        `the Standard agent's write flag on ${key}`,
+      )
+    // a REST cursor goes on over MCP
+    const first = await readOk(s, withQuery('/projects', { search, limit: 1 }))
+    expect(typeof first?.next_cursor === 'string', 'a projects page of one ended the list')
+    const rest = await movingPages(
+      (cursor) =>
+        toolOk(s, 'list_projects', { search, limit: 1, cursor: cursor ?? first.next_cursor }),
+      'list_projects after GET /v1/projects',
+      'projects',
+      most,
+    )
+    same(ids([...first.projects, ...rest]), ids(viaRest), 'a REST cursor continued on MCP')
+    // a project's own name or its key
+    same(
+      ids(await restRows(s, '/projects', 'projects', { search: `${run.tag} project`, most })),
+      [M.id],
+      'a matching parent brings its sub-projects',
+    )
+    same(
+      ids(await mcpRows(s, 'list_projects', 'projects', { search: `${run.tag} Alpha` }, most)),
+      [A.id],
+      'a matching sub-project shows alone',
+    )
+    expect(
+      (await restRows(s, '/projects', 'projects', { search: A.key, most })).some(
+        (p) => p.id === A.id,
+      ),
+      "Alpha's key does not find Alpha",
+    )
+    // the refusals
+    await restRefusal(s, 'GET', '/projects?offset=1', undefined, 400, PROJECT_REFUSALS.offset)
+    await restRefusal(s, 'GET', '/projects?limit=0', undefined, 400, PROJECT_REFUSALS.limit)
+    eq(
+      await toolRefusal(s, 'list_projects', { offset: 1 }),
+      PROJECT_REFUSALS.offset,
+      'list_projects offset 1',
+    )
+    const active = await readOk(s, '/projects?limit=1')
+    expect(typeof active?.next_cursor === 'string', 'a projects page of one ended the list')
+    await restRefusal(
+      s,
+      'GET',
+      withQuery('/projects', { archived: 'true', cursor: active.next_cursor }),
+      undefined,
+      400,
+      PROJECT_REFUSALS.cursor,
+    )
+    const users = await readOk(s, '/users?limit=1')
+    expect(typeof users?.next_cursor === 'string', 'a users page of one ended the list')
+    await restRefusal(
+      s,
+      'GET',
+      withQuery('/projects', { cursor: users.next_cursor }),
+      undefined,
+      400,
+      PROJECT_REFUSALS.cursor,
+    )
+    await restRefusal(s, 'GET', '/projects?page=2', undefined, 400, PROJECT_REFUSALS.unknown)
+    return `${viaRest.length} tagged projects in ${viaRest.length} pages of one on both surfaces, M first and its sub-projects in key order, a REST cursor on MCP, the search by name and by key; offset, limit=0, the active list's cursor with archived=true, a users cursor and an unknown parameter refused`
+  })
+}
+
+/** machine/project-details: two milestones of the run's own on M, in weeks
+ *  M holds none, then REST GET /v1/projects/{M} and MCP get_project must
+ *  answer every list of M whole on its first page with every cursor null,
+ *  the milestones in date order, and on MCP each cursor right before what it
+ *  continues. Each of M's lists then pages at limit 1 over REST GET
+ *  /v1/projects/{ref}/milestones, /access/users and /access/teams and MCP
+ *  list_project_related to its end, within its rows and two pages more,
+ *  every page moving on, in the details' order, a REST cursor continuing on
+ *  MCP, and so do Alpha's user grants. Alpha's users page at 50 over
+ *  /users and list_project_users, the same rows on both surfaces, the
+ *  Standard agent assignable and every Viewer and inactive row not, and a
+ *  REST cursor of one row continues on MCP. Then the refusals: an offset,
+ *  a limit of 0, a milestones cursor sent to the user grants route, a
+ *  cursor of M's milestones sent for Alpha and an unknown query parameter,
+ *  each with its sentence. The step deletes its milestones at the end. A
+ *  backend before the paged details answers 404 for the new routes, so the
+ *  step fails there. */
+async function projectDetailChecks() {
+  const w = run.creds.writeToken
+  await check('machine/project-details', async () => {
+    const { M, A } = run.projects
+    const me = await restOk(w, 'GET', '/me')
+    const held = await projectMilestones(w, M.id)
+    const first = freeMilestoneWeek(
+      held.map((m) => m.date),
+      todayUtc(),
+      me.organization.week_start,
+    )
+    const made = []
+    try {
+      made.push(
+        await restOk(w, 'POST', `/projects/${M.id}/milestones`, {
+          name: `${run.tag} details one`,
+          date: first,
+        }),
+      )
+      const second = freeMilestoneWeek(
+        [...held.map((m) => m.date), first],
+        todayUtc(),
+        me.organization.week_start,
+      )
+      made.push(
+        await restOk(w, 'POST', `/projects/${M.id}/milestones`, {
+          name: `${run.tag} details two`,
+          date: second,
+        }),
+      )
+      const ids = (rows) => rows.map((r) => r.id)
+      const whole = {
+        milestones: await projectMilestones(w, M.id),
+        user_grants: await projectGrants(w, M.id, 'users'),
+        team_grants: await projectGrants(w, M.id, 'teams'),
+      }
+      for (const m of made)
+        expect(
+          whole.milestones.some((r) => r.id === m.id),
+          `M's milestones lack ${m.name}`,
+        )
+      const dates = whole.milestones.map((m) => m.date)
+      same(dates, [...dates].sort(), "M's milestones in date order")
+      const detail = await restOk(w, 'GET', `/projects/${M.id}`)
+      const viaMcp = await tool(w, 'get_project', { project: M.id })
+      expect(!viaMcp.isError, 'get_project refused')
+      const keys = Object.keys(JSON.parse(viaMcp.text))
+      same(
+        keys.slice(-6),
+        [
+          'completion',
+          'milestones_next_cursor',
+          'milestones',
+          'user_grants_next_cursor',
+          'team_grants_next_cursor',
+          'grants',
+        ],
+        "get_project's cursors before their lists",
+      )
+      const mcpDetail = viaMcp.data
+      for (const d of [detail, mcpDetail]) {
+        same(ids(d.milestones), ids(whole.milestones), "the details' milestones")
+        same(ids(d.grants.users), ids(whole.user_grants), "the details' user grants")
+        same(ids(d.grants.teams), ids(whole.team_grants), "the details' team grants")
+        for (const c of [
+          'milestones_next_cursor',
+          'user_grants_next_cursor',
+          'team_grants_next_cursor',
+        ])
+          eq(d[c], null, `the details' ${c} on the run's small project`)
+      }
+      // each list at limit 1 to its end on both surfaces, a REST cursor on MCP
+      let pages = 0
+      for (const [project, lists] of [
+        [M, PROJECT_LISTS],
+        [A, PROJECT_LISTS.filter((l) => l.list === 'user_grants')],
+      ])
+        for (const { list, path, field } of lists) {
+          const want = project === M ? whole[list] : await projectGrants(w, A.id, 'users')
+          const most = want.length + 2
+          const viaRest = await movingPages(
+            (cursor) =>
+              readOk(w, withQuery(`/projects/${project.id}/${path}`, { limit: 1, cursor })),
+            `GET /v1/projects/{ref}/${path}`,
+            field,
+            most,
+          )
+          const viaTool = await movingPages(
+            (cursor) =>
+              toolOk(w, 'list_project_related', {
+                project: project.id,
+                list,
+                limit: 1,
+                ...(cursor === null ? {} : { cursor }),
+              }),
+            'list_project_related',
+            field,
+            most,
+          )
+          same(ids(viaRest), ids(want), `${project.name} ${list} over REST`)
+          same(ids(viaTool), ids(want), `${project.name} ${list} over MCP`)
+          if (want.length > 1) {
+            const one = await readOk(w, withQuery(`/projects/${project.id}/${path}`, { limit: 1 }))
+            const rest = await movingPages(
+              (cursor) =>
+                toolOk(w, 'list_project_related', {
+                  project: project.id,
+                  list,
+                  limit: 1,
+                  cursor: cursor ?? one.next_cursor,
+                }),
+              'list_project_related after REST',
+              field,
+              most,
+            )
+            same(ids([...one[field], ...rest]), ids(want), `${list} with a REST cursor on MCP`)
+          }
+          pages += viaRest.length + viaTool.length
+        }
+      // Alpha's users on both surfaces
+      const users = await movingPages(
+        (cursor) => readOk(w, withQuery(`/projects/${A.id}/users`, { limit: 50, cursor })),
+        'GET /v1/projects/{ref}/users',
+        'users',
+        peoplePagesMax(50),
+      )
+      const mcpUsers = await mcpRows(w, 'list_project_users', 'users', { project: A.id, limit: 50 })
+      same(ids(mcpUsers), ids(users), "Alpha's users on both surfaces")
+      eq(users.find((u) => u.id === run.agents.std.id)?.assignable, true, 'the Standard agent')
+      for (const u of users)
+        if (u.org_role === 'viewer' || !u.active)
+          eq(u.assignable, false, `${u.name}, a Viewer or inactive, is assignable`)
+      const oneUser = await readOk(w, withQuery(`/projects/${A.id}/users`, { limit: 1 }))
+      if (oneUser.next_cursor !== null) {
+        const next = await toolOk(w, 'list_project_users', {
+          project: A.id,
+          limit: 1,
+          cursor: oneUser.next_cursor,
+        })
+        eq(next.users[0]?.id, users[1]?.id, 'list_project_users after a REST cursor')
+      }
+      // the refusals
+      await restRefusal(
+        w,
+        'GET',
+        `/projects/${M.id}/milestones?offset=1`,
+        undefined,
+        400,
+        PROJECT_DETAIL_REFUSALS.offset,
+      )
+      await restRefusal(
+        w,
+        'GET',
+        `/projects/${M.id}/milestones?limit=0`,
+        undefined,
+        400,
+        PROJECT_DETAIL_REFUSALS.limit,
+      )
+      await restRefusal(
+        w,
+        'GET',
+        `/projects/${A.id}/users?offset=1`,
+        undefined,
+        400,
+        PROJECT_DETAIL_REFUSALS.usersOffset,
+      )
+      eq(
+        await toolRefusal(w, 'list_project_users', { project: A.id, limit: 0 }),
+        PROJECT_DETAIL_REFUSALS.usersLimit,
+        'list_project_users limit 0',
+      )
+      const cursor = (await readOk(w, `/projects/${M.id}/milestones?limit=1`)).next_cursor
+      expect(typeof cursor === 'string', "M's milestones ended after one")
+      await restRefusal(
+        w,
+        'GET',
+        withQuery(`/projects/${M.id}/access/users`, { cursor }),
+        undefined,
+        400,
+        PROJECT_DETAIL_REFUSALS.cursor,
+      )
+      await restRefusal(
+        w,
+        'GET',
+        withQuery(`/projects/${A.id}/milestones`, { cursor }),
+        undefined,
+        400,
+        PROJECT_DETAIL_REFUSALS.cursor,
+      )
+      await restRefusal(
+        w,
+        'GET',
+        `/projects/${M.id}/access/teams?page=2`,
+        undefined,
+        400,
+        PROJECT_DETAIL_REFUSALS.unknown,
+      )
+      return `M's ${whole.milestones.length} milestones, ${whole.user_grants.length} user and ${whole.team_grants.length} team grants whole in its details on both surfaces, ${pages} pages of one over the list routes and list_project_related, Alpha's ${users.length} users on both surfaces; offset, limit=0, another list's and another project's cursors and an unknown parameter refused`
+    } finally {
+      for (const m of made) await rest(w, 'DELETE', `/projects/${M.id}/milestones/${m.id}`)
+    }
+  })
+}
+
+/** The Standard agent's inbox a page at a time over REST GET /v1/inbox and
+ *  MCP list_inbox (machine/inbox). With the run's write token it makes
+ *  three tagged tasks in Alpha and mentions the agent in a comment on each,
+ *  so the agent holds three unread items. With the agent's key it pages
+ *  GET /v1/inbox at limit 200 to its end for the count (inboxWhole), then
+ *  pages both surfaces at limit 1 to their ends, within inboxPagesMax of
+ *  that count, every page moving on, and checks that each of the three tasks comes exactly once on
+ *  each surface, in the same order, newest first, and that a REST cursor
+ *  continues on MCP. unread_only lists the three; after POST
+ *  /v1/inbox/read with their keys an unread_only list holds none of them.
+ *  Then the refusals: offset=1, limit=0 on both surfaces, an unread_only
+ *  cursor sent without unread_only, a GET /v1/users cursor and an unknown
+ *  query parameter, each with its sentence. A backend before the paged
+ *  Inbox answers {items, truncated} without next_cursor, so the step fails
+ *  there. The tasks, and with them their messages, are left to the run's
+ *  sweep. */
+async function inboxChecks() {
+  const w = run.creds.writeToken
+  const s = run.creds.stdKey
+  await check('machine/inbox', async () => {
+    const A = run.projects.A
+    const std = run.agents.std
+    const keys = []
+    for (let i = 0; i < 3; i++) {
+      const task = await restOk(w, 'POST', '/tasks', {
+        project: A.id,
+        title: `${run.tag} inbox ${i}`,
+      })
+      run.created.push(task)
+      await restOk(w, 'POST', `/tasks/${task.key}/comments`, {
+        body: `${run.tag} inbox ${i} for @[${std.name}](user:${std.id})`,
+      })
+      keys.push(task.key)
+    }
+    const newest = [...keys].reverse()
+    const ours = (items) => items.map((i) => i.task.key).filter((key) => keys.includes(key))
+    const whole = await inboxWhole(
+      (cursor) => readOk(s, withQuery('/inbox', { limit: 200, cursor })),
+      'GET /v1/inbox at 200',
+    )
+    const most = inboxPagesMax(whole)
+    const viaRest = await movingPages(
+      (cursor) => readOk(s, withQuery('/inbox', { limit: 1, cursor })),
+      'GET /v1/inbox',
+      'items',
+      most,
+    )
+    const viaTool = await movingPages(
+      (cursor) => toolOk(s, 'list_inbox', { limit: 1, ...(cursor === null ? {} : { cursor }) }),
+      'list_inbox',
+      'items',
+      most,
+    )
+    same(ours(viaRest), newest, "the run's three items over REST, newest first")
+    same(ours(viaTool), newest, "the run's three items over MCP, newest first")
+    same(
+      viaTool.map((i) => i.task.key),
+      viaRest.map((i) => i.task.key),
+      'the inbox on both surfaces',
+    )
+    for (const key of keys)
+      eq(viaRest.filter((i) => i.task.key === key).length, 1, `${key} on the REST pages`)
+    const first = await readOk(s, '/inbox?limit=1')
+    expect(typeof first.next_cursor === 'string', 'the inbox ended after one item')
+    const next = await toolOk(s, 'list_inbox', { limit: 1, cursor: first.next_cursor })
+    eq(next.items[0]?.task.key, viaRest[1]?.task.key, 'list_inbox after a REST cursor')
+    const unread = () =>
+      movingPages(
+        (cursor) => readOk(s, withQuery('/inbox', { unread_only: true, limit: 50, cursor })),
+        'GET /v1/inbox?unread_only=true',
+        'items',
+        most,
+      )
+    same(ours(await unread()), newest, "the run's three items, unread")
+    const unreadCursor = (await readOk(s, '/inbox?unread_only=true&limit=1')).next_cursor
+    expect(typeof unreadCursor === 'string', 'the unread inbox ended after one item')
+    const marked = await restOk(s, 'POST', '/inbox/read', { tasks: keys }, 200)
+    same([...marked.tasks].sort(), [...keys].sort(), 'POST /v1/inbox/read names the three')
+    same(ours(await unread()), [], 'unread_only after marking the three read')
+    // the refusals
+    await restRefusal(s, 'GET', '/inbox?offset=1', undefined, 400, INBOX_REFUSALS.offset)
+    await restRefusal(s, 'GET', '/inbox?limit=0', undefined, 400, INBOX_REFUSALS.limit)
+    eq(await toolRefusal(s, 'list_inbox', { limit: 0 }), INBOX_REFUSALS.limit, 'list_inbox limit 0')
+    eq(
+      await toolRefusal(s, 'list_inbox', { offset: 1 }),
+      INBOX_REFUSALS.offset,
+      'list_inbox offset 1',
+    )
+    await restRefusal(
+      s,
+      'GET',
+      withQuery('/inbox', { cursor: unreadCursor }),
+      undefined,
+      400,
+      INBOX_REFUSALS.cursor,
+    )
+    const usersCursor = (await readOk(s, '/users?limit=1')).next_cursor
+    expect(typeof usersCursor === 'string', 'the users ended after one')
+    await restRefusal(
+      s,
+      'GET',
+      withQuery('/inbox', { cursor: usersCursor }),
+      undefined,
+      400,
+      INBOX_REFUSALS.cursor,
+    )
+    await restRefusal(s, 'GET', '/inbox?page=2', undefined, 400, INBOX_REFUSALS.unknown)
+    return `the Standard agent's ${viaRest.length} items a page of one on both surfaces, the run's three once each, newest first, a REST cursor on MCP, unread_only before and after marking them read; offset, limit=0, an unread_only cursor, a users cursor and an unknown parameter refused`
   })
 }
 
@@ -4354,7 +4931,7 @@ async function nameCapChecks() {
       date: '2026-11-02',
     })
     eq(made.name, nameOf(80), 'the 80 character milestone')
-    const listed = (await restOk(w, 'GET', `/projects/${M.id}`)).milestones
+    const listed = await projectMilestones(w, M.id)
     same(
       listed.map((m) => m.name),
       [nameOf(80)],
@@ -4599,7 +5176,7 @@ async function unknownArgumentChecks() {
       schemaText('set_project_access', 'Unrecognized key: "on_held_task"'),
       'misspelled on_held_tasks',
     )
-    const grants = (await restOk(w, 'GET', `/projects/${A.id}`)).grants.users
+    const grants = await projectGrants(w, A.id, 'users')
     eq(grants.find((g) => g.id === std.id)?.level, 'user', 'the grant is still there')
     eq(
       await toolRefusal(w, 'update_task', {
@@ -4689,11 +5266,7 @@ async function unknownArgumentChecks() {
       )
       const project = await restOk(w, 'GET', `/projects/${A.id}`)
       eq(project.grants.users.find((g) => g.id === std.id)?.level, 'user', "the agent's grant")
-      eq(
-        (await restOk(w, 'GET', `/projects/${M.id}`)).grants.teams.length,
-        0,
-        'team grants on the project',
-      )
+      eq((await projectGrants(w, M.id, 'teams')).length, 0, 'team grants on the project')
       // without the run's team only the user routes could be checked
       expect(team, `the run has no team, so only ${routes.length} routes were checked`)
       eq((await restRows(w, `/teams/${team.id}/members`, 'members')).length, 0, 'team members')
@@ -4710,7 +5283,7 @@ async function restoreStandardGrant(id) {
   const w = run.creds.writeToken
   const { A } = run.projects
   return await check(id, async () => {
-    const grants = (await restOk(w, 'GET', `/projects/${A.id}`)).grants.users
+    const grants = await projectGrants(w, A.id, 'users')
     if (grants.find((g) => g.id === run.agents.std.id)?.level === 'user')
       return "the Standard agent's grant on Alpha is in place"
     const r = await restOk(w, 'PUT', `/projects/${A.id}/access/users/${run.agents.std.id}`, {
@@ -5908,9 +6481,9 @@ async function ownerPickersCheck() {
     // and then the User grant a handover leaves the outgoing lead goes
     await restOk(w, 'PATCH', `/projects/${sub.id}`, { lead_id: nora.id })
     await restOk(w, 'DELETE', `/projects/${sub.id}/access/users/${leo.id}`)
-    // the people who can read the sub-project, one array with no paging
+    // the people who can read the sub-project, read a page at a time
     const reaches = async () =>
-      (await restOk(w, 'GET', `/projects/${sub.id}/users`)).some((u) => u.id === leo.id)
+      (await restRows(w, `/projects/${sub.id}/users`, 'users')).some((u) => u.id === leo.id)
     expect(
       await until(async () => !(await reaches())),
       `GET /projects/${sub.key}/users still lists ${leo.name}`,
@@ -6442,7 +7015,7 @@ async function milestoneWindowCheck() {
   const { M } = run.projects
   await check(MILESTONE_STEP, async () => {
     const me = await restOk(w, 'GET', '/me')
-    const held = (await restOk(w, 'GET', `/projects/${M.id}`)).milestones ?? []
+    const held = await projectMilestones(w, M.id)
     const date = freeMilestoneWeek(
       held.map((m) => m.date),
       todayUtc(),
@@ -6460,7 +7033,7 @@ async function milestoneWindowCheck() {
         me.organization.week_start,
       ),
     })
-    const listed = async () => (await restOk(w, 'GET', `/projects/${M.id}`)).milestones ?? []
+    const listed = async () => await projectMilestones(w, M.id)
     await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/overview/p/${M.num}`, {
       waitUntil: 'domcontentloaded',
     })
@@ -6570,7 +7143,7 @@ async function roadmapMilestonesCheck() {
   await check(ROADMAP_MILESTONES_STEP, async () => {
     expect(Number.isInteger(M.num), 'the run project has no number')
     const me = await restOk(w, 'GET', '/me')
-    const held = (await restOk(w, 'GET', `/projects/${M.id}`)).milestones ?? []
+    const held = await projectMilestones(w, M.id)
     const date = freeMilestoneWeek(
       held.map((m) => m.date),
       todayUtc(),
@@ -6651,9 +7224,7 @@ async function roadmapMilestonesCheck() {
       expect(
         await until(
           async () =>
-            ((await restOk(w, 'GET', `/projects/${M.id}`)).milestones ?? []).some(
-              (m) => m.id === made.id && m.date === moved,
-            ),
+            (await projectMilestones(w, M.id)).some((m) => m.id === made.id && m.date === moved),
           30_000,
         ),
         `GET /projects/${M.key} does not show ${made.name} on ${moved}`,
@@ -6743,7 +7314,7 @@ async function overviewMilestonesCheck() {
   await check(OVERVIEW_MILESTONES_STEP, async () => {
     expect(Number.isInteger(M.num), 'the run project has no number')
     const me = await restOk(w, 'GET', '/me')
-    const held = ((await restOk(w, 'GET', `/projects/${M.id}`)).milestones ?? []).map((m) => m.date)
+    const held = (await projectMilestones(w, M.id)).map((m) => m.date)
     const weekStart = me.organization.week_start
     const made = await restOk(w, 'POST', `/projects/${M.id}/milestones`, {
       name: `${run.tag} Overview milestone`,
@@ -7524,7 +8095,7 @@ async function removalWindowCheck() {
       ),
       `${t.key} is not ${run.nora.name}'s`,
     )
-    const grants = (await restOk(w, 'GET', `/projects/${sub.id}`)).grants.users.map((g) => g.id)
+    const grants = (await projectGrants(w, sub.id, 'users')).map((g) => g.id)
     expect(!grants.includes(std.id), `${sub.name} still holds a grant for the agent`)
     return `removed the agent's grant on ${sub.name} in the window from the preview, which listed ${t.key}, and handed it to ${run.nora.name} through the picker`
   })
@@ -7738,7 +8309,7 @@ async function projectDialogsCheck() {
     let project = null
     expect(
       await until(async () => {
-        project = (await readList(w, '/projects')).find((p) => p.name === name) ?? null
+        project = (await projectRows(w, { search: name })).find((p) => p.name === name) ?? null
         return project !== null
       }, 30_000),
       `${name} was not created`,
@@ -7794,7 +8365,7 @@ async function projectDialogsCheck() {
     let child = null
     expect(
       await until(async () => {
-        child = (await readList(w, '/projects')).find((p) => p.name === subName) ?? null
+        child = (await projectRows(w, { search: subName })).find((p) => p.name === subName) ?? null
         return child !== null
       }, 30_000),
       `${subName} was not created`,
@@ -8996,7 +9567,9 @@ async function oldPathsCheck() {
     await app.reload({ waitUntil: 'domcontentloaded' })
     await showsPage()
     // 3. a number no project holds opens the account page
-    const nums = (await readList(w, '/projects')).map((p) => p.num ?? 0)
+    const nums = [...(await projectRows(w)), ...(await projectRows(w, { archived: true }))].map(
+      (p) => p.num ?? 0,
+    )
     const free = Math.max(project.num, ...nums) + 100_000
     await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/project/${free}`, {
       waitUntil: 'domcontentloaded',
@@ -9565,10 +10138,32 @@ async function archiveChecks() {
   })
   for (const cred of [w, run.creds.stdKey]) {
     await check(`archived-projects/${cred.id}/listed`, async () => {
-      const active = await restOk(cred, 'GET', '/projects')
+      const search = run.tag
+      const active = await projectRows(cred, { search })
       expect(!active.some((p) => p.id === M.id), 'an archived project is in the active list')
-      const list = await restOk(cred, 'GET', '/projects?archived=true')
-      const viaMcp = await toolOk(cred, 'list_projects', { archived: true })
+      const list = await projectRows(cred, { archived: true, search })
+      const viaMcp = await mcpProjectRows(cred, { archived: true, search })
+      same(
+        viaMcp.map((p) => p.id),
+        list.map((p) => p.id),
+        'the archived pages on both surfaces',
+      )
+      // the run's archived top-level projects in key order, other steps'
+      // among them, and M followed at once by its sub-projects archived
+      // with it, in key order
+      const byKey = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+      const roots = list.filter((p) => !p.parent_id).map((p) => p.key)
+      same(roots, [...roots].sort(byKey), 'the archived top-level projects in key order')
+      const at = list.findIndex((p) => p.id === M.id)
+      expect(at >= 0, 'M is not in the archived pages')
+      const subs = list.filter((p) => p.parent_id === M.id)
+      same(
+        list.slice(at + 1, at + 1 + subs.length).map((p) => p.id),
+        subs.map((p) => p.id),
+        "M's archived sub-projects right after it",
+      )
+      const subKeys = subs.map((p) => p.key)
+      same(subKeys, [...subKeys].sort(byKey), "M's archived sub-projects in key order")
       for (const p of [M, A, Z]) {
         expect(
           list.some((r) => r.id === p.id && r.archived),
@@ -9876,7 +10471,7 @@ async function completionChecks(f) {
         `${p.name} in get_project`,
       )
     }
-    const row = (await restOk(w, 'GET', '/projects')).find((p) => p.id === N.id)
+    const row = (await projectRows(w, { search: N.name })).find((p) => p.id === N.id)
     expect(row && !('completion' in row), 'a list row carries completion')
     return `${wantN.done} of ${wantN.total} in the project, ${want1.done} of ${want1.total} in ${N1.name}`
   })
@@ -10193,8 +10788,7 @@ async function billingPauseChecks() {
   const viewer = run.agents.viewer
   const std = run.agents.std
   const team = run.team
-  const grants = async () =>
-    (await restOk(w, 'GET', `/projects/${N1.id}`)).grants.users.map((g) => g.id).sort()
+  const grants = async () => (await projectGrants(w, N1.id, 'users')).map((g) => g.id).sort()
   const members = async () =>
     team ? (await restRows(w, `/teams/${team.id}/members`, 'members')).map((m) => m.id).sort() : []
   let before = null
@@ -10684,6 +11278,9 @@ async function main() {
   await workloadPageChecks()
   await peopleListChecks()
   await taskDetailChecks()
+  await projectListChecks()
+  await projectDetailChecks()
+  await inboxChecks()
   await subtaskRuleChecks()
   // task and project facts, the live group rule and the billing pause
   await factChecks()

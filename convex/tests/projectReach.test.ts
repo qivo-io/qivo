@@ -237,7 +237,7 @@ describe('archive states', () => {
     const rest = await t.query(internal.machine.rest.getProject, { ...caller, ref: f.meta.key })
     expect(rest).not.toHaveProperty('archive_state')
     for (const archived of [false, true]) {
-      const listed = await t.query(internal.machine.rest.listProjects, {
+      const { projects: listed } = await t.query(internal.machine.rest.listProjects, {
         ...caller,
         archived: String(archived),
       })

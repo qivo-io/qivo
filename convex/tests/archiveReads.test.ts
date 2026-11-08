@@ -597,15 +597,15 @@ describe('the machine inbox', () => {
           callerId: f.agent.id,
           access: 'read',
         }),
-      ) as { items: { task: { id: string }; unread_count: number }[]; truncated: boolean }
+      ) as { next_cursor: string | null; items: { task: { id: string }; unread_count: number }[] }
     const before = await list()
 
     await archive(t, f.user, gone.id)
     await runSteps(t)
 
     expect(await list()).toEqual({
+      next_cursor: null,
       items: before.items.filter((i) => i.task.id === kept.id),
-      truncated: false,
     })
     expect((await list()).items).toMatchObject([{ task: { id: kept.id }, unread_count: 1 }])
     expect(await item(t, f.agent, gone.id)).toEqual([{ detail: 'Archived', read: true }])

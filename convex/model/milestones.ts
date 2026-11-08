@@ -673,7 +673,9 @@ export async function removeMilestoneCore(
 
 /* ------------------------------------------------------------------ reads */
 
-/** The budget of one of the app's milestone reads (milestones.ts). A call
+/** The budget of one of the app's milestone reads (milestones.ts), and of a
+ * REST or MCP page of one project's milestones (machine/projects.ts
+ * milestonePage). A call
  * names at most `projects` projects. A section answer holds at most `rows`
  * rows, from one batch of 25 to a section the app grew by Load more
  * (lib/limits.ts MILESTONE_READ_ROWS), while a range of days (between) has
@@ -1297,11 +1299,10 @@ type Lane = {
  * order is stored day, then name key (lib/nameKey.ts), then id, ascending,
  * or descending for span.order 'desc'. Within one project that keeps the
  * app's order by week and then name, and across projects milestones of one
- * week sort by day before name, as REST's project detail sorts them
- * (machine/projects.ts), so the order does not depend on the viewer's
- * weeks. REST compares names with localeCompare, so milestones of one day
- * whose names differ in accents or in a non-Latin script can come in
- * another order there than here. A search matches every whitespace-separated fragment of its name
+ * week sort by day before name, so the order does not depend on the
+ * viewer's weeks. REST and MCP read a project's milestones through it too,
+ * in its details' first page and their milestone list (machine/projects.ts
+ * milestonePage), so they share this order. A search matches every whitespace-separated fragment of its name
  * key in the milestone's name key, in any order (lib/search.ts
  * allWordsMatcher), so it ignores case and accents. A blank one lists every
  * milestone.
@@ -1322,13 +1323,16 @@ type Lane = {
  *
  * The reads stop once they used MILESTONE_READ's share, counted from the
  * read's own start, so the caller's access checks before it do not spend
- * it, and never past what the request has left. The rows known to be
+ * it, never past `o.ceiling`, transaction totals a caller that reads other
+ * lists in the same call passes (machine/projects.ts projectDetail), and
+ * never past what the request has left. The app's reads pass no ceiling. The rows known to be
  * complete are then those up to the frontier, the least
  * advanced position among the projects not read to their end, so the batch
  * answers the matches up to it, `next` at it and `stopped` at its stored
  * day. A continuation then answers nothing again and skips nothing. Each
  * project is first read through a day past `after`, whatever the ceiling,
- * within the request's own limits, so every call moves the frontier on; a
+ * `o.ceiling` included, within the request's own limits, so every call
+ * moves the frontier on; a
  * read whose projects' first days do not fit there is refused
  * (MILESTONE_READ_TOO_LARGE), and the caller can ask for fewer projects. A
  * full batch answers `next` null only when no row of the span follows, so a
@@ -1354,6 +1358,7 @@ export async function readMilestones(
     search: string
     limit: number
     pastBefore?: string
+    ceiling?: ReadCeiling
   },
 ): Promise<MilestoneBatch> {
   const { span, after } = o
@@ -1381,10 +1386,19 @@ export async function readMilestones(
   const start = await ctx.meta.getTransactionMetrics()
   const room = roomOf(start, MILESTONE_RESERVE)
   const opening = sizedGuard(ctx, room)
+  const ceiling = o.ceiling ?? room
   const budget = sizedGuard(ctx, {
-    ranges: Math.min(room.ranges, start.databaseQueries.used + MILESTONE_READ.ranges),
-    documents: Math.min(room.documents, start.documentsRead.used + MILESTONE_READ.documents),
-    bytes: Math.min(room.bytes, start.bytesRead.used + MILESTONE_READ.bytes),
+    ranges: Math.min(
+      room.ranges,
+      ceiling.ranges,
+      start.databaseQueries.used + MILESTONE_READ.ranges,
+    ),
+    documents: Math.min(
+      room.documents,
+      ceiling.documents,
+      start.documentsRead.used + MILESTONE_READ.documents,
+    ),
+    bytes: Math.min(room.bytes, ceiling.bytes, start.bytesRead.used + MILESTONE_READ.bytes),
   })
 
   /* Reads the next day of `lane` whole under `guard` and adds its listed

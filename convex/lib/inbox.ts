@@ -1,12 +1,12 @@
-/* The one bounded read of a recipient's inbox, shared by the app's inbox
- * part (lib/workspaceParts.ts readInbox) and the machine inbox
- * (machine/discussion.ts inboxItems). Both read with INBOX_LIMIT, so they
- * walk the same rows in the same order and keep the same ones. The machine
- * inbox folds all of them into items, and the app's inbox part keeps the
- * first INBOX_LIMIT (lib/limits.ts) across a person's seats, unread rows
- * first (blendInbox), for the desktop alerts, so the messages the part
- * sends for a seat are always among the ones the machine inbox lists for
- * that profile. The app's Inbox list reads inbox.page instead.
+/* The one bounded read of a recipient's inbox, which only the app's
+ * workspace inbox part reads (lib/workspaceParts.ts readInbox). The part
+ * keeps the first INBOX_LIMIT (lib/limits.ts) across a person's seats,
+ * unread rows first (blendInbox), for the desktop alerts. loadInbox and
+ * INBOX_LIMIT stay for that part until it goes (t3/limits-inbox-feed,
+ * t3/limits-tasks-part-removal). The app's Inbox list reads inbox.page
+ * instead, and REST GET /v1/inbox and MCP list_inbox page the stored inbox
+ * items through the same walk (model/inboxPage.ts inboxWalk), so no other
+ * read shares this selection.
  *
  * Unread rows are never retired by retention, and read rows stay while a
  * person keeps retention at Never, so an inbox nobody clears grows without
@@ -30,21 +30,21 @@ import type { QueryCtx } from '../_generated/server'
 import type { MessageKind } from './enums'
 
 /* INBOX_LIMIT (lib/limits.ts) is the most unread rows, and separately the
- * most read rows, that one inbox read keeps. The app (per seat) and the
- * machine inbox both read with it, so the two surfaces select alike.
+ * most read rows, that one inbox read keeps. The workspace inbox part reads
+ * with it for each seat.
  *
  * Each walk examines at most 2 * INBOX_LIMIT rows plus one that shows it
- * stopped early, so one read fetches at most 2,002 messages. The app's read
+ * stopped early, so one read fetches at most 2,002 messages. The part's read
  * also looks past a walk's stop at up to INBOX_LIMIT snoozed rows (loadInbox
- * `peek`), so its read fetches at most 3,002. The machine
- * inbox reads a task for each new task id among the examined rows, so at
- * most 2,000 task lookups, plus a handful of access lookups per distinct
- * project, each project checked once. That stays well under Convex's 4,096
- * index ranges per transaction unless the examined rows span a few hundred
- * projects. Raising the limit raises those counts in step. */
+ * `peek`), so its read fetches at most 3,002. Its Shown reads a task for
+ * each new task id among the examined rows, so at most 2,000 task lookups,
+ * plus the access reads of each distinct project, each project checked
+ * once, within the part's own bounds (readInbox). Raising the limit raises
+ * those counts in step. */
 
 /** Whether the reader is shown the task with this id, answered at once or
- * after a read (the machine inbox reads each task as it is asked). */
+ * after a read (the workspace inbox part reads each task as it is
+ * asked). */
 export type InboxShown = (issueId: string) => boolean | Promise<boolean>
 
 /** What one bounded inbox read kept. */
@@ -119,11 +119,12 @@ async function keepShown(
  * same task was not reached, and then both surfaces show that task as read,
  * alike.
  *
- * `peek` (0 by default) is how many snoozed rows a walk that stopped early
+ * `peek` is how many snoozed rows a walk that stopped early
  * reads past its stop, looking for one the bulk actions reach, which decides
  * unreadTruncated and readTruncated. The app's read passes INBOX_LIMIT, so a
  * backlog of snoozed rows alone does not keep those actions available. With
- * 0 they equal each walk's truncation, at no extra read.
+ * 0, the default, which only tests use since the machine Inbox moved to
+ * the Inbox's walk, they equal each walk's truncation, at no extra read.
  */
 export async function loadInbox(
   ctx: QueryCtx,

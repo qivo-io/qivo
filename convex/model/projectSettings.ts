@@ -2,8 +2,8 @@
  * project's fields and the caller's rights on it, its Users and Teams access
  * lists, the Add team or user picker, the lead pickers and the invite form's
  * lookup of one address. The grant readers (userGrantBatch, teamShareBatch)
- * check no access, so REST and MCP project details can page grants with
- * them behind their own gate. Nothing here reads a task, a comment, a file
+ * check no access, so REST and MCP page a project's grants with them behind
+ * their own gate (machine/projects.ts grantPage). Nothing here reads a task, a comment, a file
  * or a milestone. To decide whether a top-level project shows to a caller
  * without a level of their own for navigation, the gate reads the caller's
  * reach rows under it, once the organization's are complete, or else its
@@ -669,7 +669,9 @@ export type TeamShareRow = { id: string; name: string; level: GrantLevel }
  * left out, as a removed person's grants can outlive their profile for a
  * moment. Each kept row reads its profile. `limit` is the batch size.
  *
- * It checks no access: each caller applies its own gate first. It checks
+ * It checks no access: each caller applies its own gate first, Settings'
+ * Users list (projectUsersOf) settingsGate and REST and MCP
+ * (machine/projects.ts grantPage) their project gates. It checks
  * the organization's name keys itself (nameKeysReady), and that every grant
  * without a key is one it would leave out (unkeyedOrphans), so every caller
  * fails closed while keys are missing.

@@ -1,4 +1,5 @@
-/* Projects over REST and MCP: reading one project, creating projects and
+/* Projects over REST and MCP: the project lists a page at a time
+ * (projectPage), reading one project, creating projects and
  * sub-projects, changing their settings and lead, archiving and restoring
  * them, giving and removing access one person or one team at a time, and
  * milestones.
@@ -9,7 +10,12 @@
  * This module imports only types from those two, so neither is loaded
  * through it. The provenance, key name validator, body parsers and MCP text
  * it shares with them come from machine/shared.ts. machine/rest.ts uses
- * projectDetailJson for GET /v1/projects/{ref}.
+ * projectPage for GET /v1/projects and projectRead for GET
+ * /v1/projects/{ref}, and machine/mcp.ts projectPage for list_projects.
+ * No project route reads the organization's catalogue (lib/core.ts
+ * loadCatalogue): the lists read the caller's own reach rows and the
+ * projects they name, and the single read and the write answers one
+ * lib/access.ts accessOf instance asked about the project they name.
  *
  * Each action is one shared model function the app runs too
  * (model/projects.ts createProjectCore, updateProjectCore, archiveProjectCore
@@ -24,20 +30,24 @@
  * Visibility: the management actions (get_project and its REST read,
  * update_project and PATCH with archive and restore, set_project_access and
  * the access routes, and a create's parent) resolve a project the caller
- * reads or manages (managedProject), as the app's Settings pages do; a
- * project the caller neither reads nor manages answers like an unknown one.
+ * reads or manages (managedProject), as the app's Settings pages do, and
+ * so do the user and team grant lists (GET /v1/projects/{ref}/access/users
+ * and /access/teams, list_project_related), whose first pages the details
+ * show; a project the caller neither reads nor manages answers like an
+ * unknown one.
  * An organization admin manages every project of their organization, and
  * anyone else only what they lead, which they read, so management reveals
  * no project to anyone it does not already show. A project the caller
  * manages without reading answers its row with `read` false, its lead,
  * settings and grants, and neither its milestones nor its completion
  * (projectDetailJson). The milestone tools and routes, which change
- * planning data, resolve only a project the caller reads, and so does a
- * milestone on it. Machine creation takes no grant maps; access changes one
+ * planning data, resolve only a project the caller reads, and so do a
+ * milestone on it and the milestone list (GET
+ * /v1/projects/{ref}/milestones, list_project_related). Machine creation takes no grant maps; access changes one
  * person or team at a time, and only a person may change it (lib/access.ts
  * canChangeAccess). */
 
-import { type ConvexError, type ObjectType, v } from 'convex/values'
+import { ConvexError, type ObjectType, v } from 'convex/values'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import {
@@ -50,19 +60,21 @@ import {
   accessOf,
   canManageOwnProjectAccess,
   canSeeProject,
+  inMetaTree,
   isAccessUnchecked,
   rootMetaOf,
 } from '../lib/access'
+import { type ReadCeiling, readsUnder } from '../lib/archivedTasks'
 import {
   type AccessFlag,
-  accessFlags,
   asMachineCaller,
   type Caller,
   type CompletionJson,
   findProject,
+  flagOf,
   issueKey,
-  loadCatalogue,
   NO_TASKS,
+  PROJECT_DETAILS,
   projectCompletion,
   projectJson,
   UNAVAILABLE_COMPLETION,
@@ -70,13 +82,37 @@ import {
 } from '../lib/core'
 import { byId } from '../lib/db'
 import {
+  type ArchiveState,
   type CredentialAccess,
   type GrantLevel,
   vCredentialAccess,
   vGrantLevel,
 } from '../lib/enums'
 import { badRequest, notFound, type Refusal, rule } from '../lib/functions'
-import { LIMITS } from '../lib/limits'
+import { DEFAULT_PAGE_SIZE, LIMITS, type Limit } from '../lib/limits'
+import {
+  CURSOR_REFUSAL,
+  listCursorText,
+  NAMES_NOT_READY,
+  namedScope,
+  openListCursor,
+  PROJECTS_NOT_READY,
+} from '../lib/listCursor'
+import {
+  indexAfter,
+  listBatch,
+  mergeNamed,
+  type Named,
+  type NamedAt,
+  type NamedReads,
+  type NamedStream,
+  namedCeiling,
+  openNamedCursor,
+  type ReadGuard,
+  STOPPED,
+} from '../lib/namedPages'
+import { nameKey } from '../lib/nameKey'
+import { allWordsMatcher } from '../lib/search'
 import {
   createExpectedSentence,
   EXPECTED_DELETE_SENTENCE,
@@ -92,9 +128,12 @@ import {
   changeableMilestone,
   cleanMilestoneDate,
   MILESTONE_MACHINE_FIELDS,
+  MILESTONE_READ_TOO_LARGE,
+  readMilestones,
   removeMilestoneCore,
   updateMilestoneCore,
 } from '../model/milestones'
+import { type IdTie, idTieOf, nameKeysReady } from '../model/nameKeys'
 import { newUuid } from '../model/orgs'
 import {
   type AccessRemoval,
@@ -108,7 +147,14 @@ import {
   setProjectGrantCore,
   vHeldTasks,
 } from '../model/projectAccess'
-import { settleFavorites, treeBudget } from '../model/projectNav'
+import { reachReady, settleFavorites, treeBudget } from '../model/projectNav'
+import { childKeyIndex, rootKeyIndex, seatSight, subKeyIndex } from '../model/projectNavReads'
+import {
+  type ListAsk,
+  teamShareBatch,
+  UNKEYED_MOST,
+  userGrantBatch,
+} from '../model/projectSettings'
 import {
   archiveProjectCore,
   createProjectCore,
@@ -122,6 +168,7 @@ import { ACCESS_PUT_FIELDS, HELD_TASKS_FIELDS } from './bodyFields'
 import type { TOOLS } from './mcp'
 import type { ROUTES, route as restRoute } from './rest'
 import {
+  cursorPaging,
   MCP_PROVENANCE,
   needJson,
   optionalJson,
@@ -143,7 +190,9 @@ const route: typeof restRoute = (declared) => declared
 type MilestoneJson = { id: string; name: string; date: string }
 type GrantJson = { id: string; name: string; level: GrantLevel }
 
-/** What the single-project read adds to a project row. */
+/** What the single-project read adds to a project row. MCP's text keeps
+ * this order, each cursor right before what it continues; REST's answer
+ * crosses the Convex value boundary, which sorts keys. */
 type ProjectDetailJson = {
   lead_id: string | null
   lead_name: string | null
@@ -154,9 +203,19 @@ type ProjectDetailJson = {
    * archived project, `unavailable` for a live one the caller manages
    * without reading */
   completion: CompletionJson | null
-  /** the top-level project's milestones by date, null for a project the
-   * caller manages without reading, as milestones are planning data */
+  /** the cursor of `milestones`' next page, null where the list ends on
+   * this one and for a project the caller manages without reading */
+  milestones_next_cursor: string | null
+  /** the first page of the top-level project's milestones by date, null
+   * for a project the caller manages without reading, as milestones are
+   * planning data */
   milestones: MilestoneJson[] | null
+  /** the cursor of `grants.users`' next page, null where it ends here */
+  user_grants_next_cursor: string | null
+  /** the cursor of `grants.teams`' next page, null where it ends here */
+  team_grants_next_cursor: string | null
+  /** the first page of the project's own user grants and of its team
+   * grants */
   grants: { users: GrantJson[]; teams: GrantJson[] }
 }
 
@@ -167,23 +226,183 @@ const milestoneJson = (m: Doc<'milestones'>): MilestoneJson => ({
   date: m.week,
 })
 
-/* Orders rows by name. Names may repeat, so id breaks ties for a stable order. */
-const byName = (a: { name: string; id: string }, b: { name: string; id: string }) =>
-  a.name.localeCompare(b.name) || a.id.localeCompare(b.id)
+/** A project's lists that its details hold a first page of and that page
+ * on their own, as MCP list_project_related names them and REST GET
+ * /v1/projects/{ref}/milestones, /access/users and /access/teams route
+ * them, in the order the details read them. */
+export const PROJECT_RELATED_LISTS = ['milestones', 'user_grants', 'team_grants'] as const
+
+/** One of PROJECT_RELATED_LISTS. */
+export type ProjectRelatedList = (typeof PROJECT_RELATED_LISTS)[number]
+
+/** The list name each related list seals its cursors with
+ * (lib/listCursor.ts). The details and both surfaces answer the same rows,
+ * so a cursor of the details continues on the list call, and one of REST on
+ * MCP. */
+export const PROJECT_LIST_NAMES: Record<ProjectRelatedList, string> = {
+  milestones: 'machine.project_milestones',
+  user_grants: 'machine.project_user_grants',
+  team_grants: 'machine.project_team_grants',
+}
+
+/* What a related list's cursor seals: the organization, the caller and the
+ * project the call names. */
+const relatedScope = (me: Caller, project: Doc<'projects'>): string[] => [
+  me.org_id,
+  me.id,
+  project.id,
+]
+
+/* Each list's position before its first row: a milestone's position is its
+ * stored day with a tie of its name key and id, a grant's its holder's name
+ * key copy with a tie of the holder's id. */
+const LIST_START: Record<ProjectRelatedList, NamedAt> = {
+  milestones: { key: '', tie: ['', ''] },
+  user_grants: { key: '', tie: [''] },
+  team_grants: { key: '', tie: [''] },
+}
+
+/* A cursor at the start of `list`, for a first page the details had no
+ * room for. */
+const startOf = (me: Caller, project: Doc<'projects'>, list: ProjectRelatedList) =>
+  listCursorText(PROJECT_LIST_NAMES[list], relatedScope(me, project), LIST_START[list])
+
+/** The position `cursor` names in `list` of `project` for `me`, refused
+ * with CURSOR_REFUSAL unless it is one of that list's own: a cursor of
+ * another list, project, caller or organization, a changed one, junk, and a
+ * position of another shape. */
+export async function openRelated(
+  me: Caller,
+  project: Doc<'projects'>,
+  list: ProjectRelatedList,
+  cursor: string,
+): Promise<NamedAt> {
+  const at = await openListCursor(
+    cursor,
+    PROJECT_LIST_NAMES[list],
+    relatedScope(me, project),
+    list === 'milestones' ? 2 : 1,
+  )
+  if (!at.tie.every((field) => typeof field === 'string')) throw badRequest(CURSOR_REFUSAL)
+  return at
+}
+
+/** One page of a related list: its rows and the sealed cursor of the
+ * next, null only where the list ends. */
+type RelatedPage<Row> = { rows: Row[]; next: string | null }
+
+/* One page of the milestones of `project`'s top-level project after
+ * `after`, at most `limit`, in the app's order of stored day, name key and
+ * id (model/milestones.ts readMilestones), within MILESTONE_READ and
+ * `ceiling` when one is given. A sub-project's are its parent's, and a
+ * milestone stored on a sub-project before 14 October 2026 is left out;
+ * an archived project's are listed. */
+async function milestonePage(
+  ctx: QueryCtx,
+  me: Caller,
+  project: Doc<'projects'>,
+  limit: number,
+  after: NamedAt | null,
+  ceiling?: ReadCeiling,
+): Promise<RelatedPage<MilestoneJson>> {
+  const root = await rootMetaOf(ctx, project)
+  const batch = await readMilestones(ctx, [root.id], {
+    span: { order: 'asc' },
+    after:
+      after === null
+        ? null
+        : { week: after.key, key: String(after.tie[0]), id: String(after.tie[1]) },
+    search: '',
+    limit,
+    ...(ceiling === undefined ? {} : { ceiling }),
+  })
+  const next =
+    batch.next === null
+      ? null
+      : await listCursorText(PROJECT_LIST_NAMES.milestones, relatedScope(me, project), {
+          key: batch.next.week,
+          tie: [batch.next.key, batch.next.id],
+        })
+  return { rows: batch.rows.map(milestoneJson), next }
+}
+
+/* One page of `project`'s own user grants or team grants after `after`, at
+ * most `limit`, in the order of their copies of the holder's name key, the
+ * holder's id breaking ties, as Settings' Project access lists show them
+ * (model/projectSettings.ts userGrantBatch and teamShareBatch, whose rows
+ * hold only holders of the project's organization), within `ceiling`. Null
+ * while the organization's name keys are not ready. */
+async function grantPage(
+  ctx: QueryCtx,
+  me: Caller,
+  project: Doc<'projects'>,
+  list: 'user_grants' | 'team_grants',
+  limit: number,
+  after: NamedAt | null,
+  ceiling: ReadCeiling,
+): Promise<RelatedPage<GrantJson> | null> {
+  const tie = after === null ? null : idTieOf(after)
+  const ask: ListAsk = {
+    list: PROJECT_LIST_NAMES[list],
+    scope: relatedScope(me, project),
+    search: '',
+    after: after === null || tie === null ? null : { key: after.key, tie },
+    through: null,
+  }
+  const batch =
+    list === 'user_grants'
+      ? await userGrantBatch(ctx, project, ask, { limit, ceiling })
+      : await teamShareBatch(ctx, project, ask, { limit, ceiling })
+  if (batch.state === 'not_ready') return null
+  return {
+    rows: batch.rows.map((row) => ({ id: row.id, name: row.name, level: row.level })),
+    next: batch.next,
+  }
+}
+
+/* What a grant list's first page reads outside its batch's guard, the
+ * organization's readiness and up to UNKEYED_MOST.rows grants or shares
+ * without a name key, one lookup each (model/projectSettings.ts
+ * unkeyedOrphans), so the details check that it fits before they ask. */
+const preambleOf = (): { ranges: number; documents: number } => ({
+  ranges: UNKEYED_MOST.rows + 2,
+  documents: 2 * UNKEYED_MOST.rows + 2,
+})
 
 /**
- * The fields a single-project read adds: the lead (a sub-project without its
- * own is led by its parent's), the review time it sets and the one its tasks
- * get, delay tracking, its `completion` (lib/core.ts projectCompletion, from
- * the stored counts of what the caller reads), the milestones of the
- * top-level project that stores them, by date, and the project's own
- * grants, as the app's project settings show them to anyone who can read or
- * manage the project. A sub-project also inherits its parent's grants.
- * `milestones` is null where `reads` is false, a project the caller manages
- * without reading, and no milestone is read.
+ * The fields a single-project read adds: the lead (a sub-project without
+ * its own is led by its parent's), the review time it sets and the one its
+ * tasks get, delay tracking, its `completion` (lib/core.ts
+ * projectCompletion), and the first page of each of its related lists, at
+ * most DEFAULT_PAGE_SIZE rows each, with its cursor: the milestones of the
+ * top-level project that stores them, by date, and the project's own user
+ * grants and team grants by name, as the app's project settings show them
+ * to anyone who can read or manage the project. A sub-project also
+ * inherits its parent's grants. A grants page is not a description of
+ * effective access, which the project user list answers.
+ *
+ * The three first pages read in that order within one bound,
+ * lib/core.ts PROJECT_DETAILS, taken as transaction totals before the
+ * first, so a write's answer reads them in the room its write left. A list
+ * that finds the bound reached, a grants list whose readiness checks would
+ * not fit, a grants list of an organization whose name keys are not ready
+ * and a milestones list whose first day does not fit the request
+ * (MILESTONE_READ_TOO_LARGE) answer no rows and a cursor at the list's
+ * start, never a short list as complete, so neither a read nor a write
+ * fails for them. Two grant rows of one holder on the project, which no
+ * writer makes, fail the read as the grant lists do
+ * (lib/namedPages.ts readBatch).
+ *
+ * `reads` false, a project the caller manages without reading, answers
+ * `milestones` and their cursor null and reads no milestone.
+ *
+ * The read at the design size's sum, 1,000 user grants and 5 team shares
+ * under 260 weekly milestones, is measured in lib/core.ts PROJECT_DETAILS'
+ * docstring.
  */
 async function projectDetail(
   ctx: QueryCtx,
+  me: Caller,
   project: Doc<'projects'>,
   completion: CompletionJson | null,
   reads: boolean,
@@ -191,41 +410,56 @@ async function projectDetail(
   const root = await rootMetaOf(ctx, project)
   const leadId = project.lead_id ?? root.lead_id
   const lead = leadId === undefined ? null : await byId(ctx, 'profiles', leadId)
+  const effective = await reviewHoursFor(ctx, project)
+  const ceiling = await namedCeiling(ctx, PROJECT_DETAILS)
+  // the first page of `list`, or no rows and a cursor at its start where
+  // the bound leaves no room for it (with `before` more read outside its
+  // guard) or it cannot be read now
+  const first = async <Row>(
+    list: ProjectRelatedList,
+    read: () => Promise<RelatedPage<Row> | null>,
+    before = { ranges: 0, documents: 0 },
+  ): Promise<RelatedPage<Row>> => {
+    const room = await readsUnder(ctx, {
+      ranges: ceiling.ranges - before.ranges,
+      documents: ceiling.documents - before.documents,
+      bytes: ceiling.bytes,
+    })
+    return (room ? await read() : null) ?? { rows: [], next: await startOf(me, project, list) }
+  }
   const milestones = reads
-    ? await ctx.db
-        .query('milestones')
-        .withIndex('by_project', (q) => q.eq('project_id', root.id))
-        .collect()
+    ? await first('milestones', async () => {
+        try {
+          return await milestonePage(ctx, me, project, DEFAULT_PAGE_SIZE, null, ceiling)
+        } catch (e) {
+          if (e instanceof ConvexError && (e.data as Refusal).reason === MILESTONE_READ_TOO_LARGE)
+            return null
+          throw e
+        }
+      })
     : null
-  milestones?.sort((a, b) => a.week.localeCompare(b.week) || a.name.localeCompare(b.name))
-  const users: GrantJson[] = []
-  const grants = ctx.db
-    .query('project_access')
-    .withIndex('by_project', (q) => q.eq('project_id', project.id))
-  for await (const g of grants) {
-    const p = await byId(ctx, 'profiles', g.profile_id)
-    if (p !== null && p.org_id === project.org_id)
-      users.push({ id: p.id, name: p.name, level: g.level })
-  }
-  const teams: GrantJson[] = []
-  const shares = ctx.db
-    .query('project_team_access')
-    .withIndex('by_project', (q) => q.eq('project_id', project.id))
-  for await (const s of shares) {
-    const team = await byId(ctx, 'teams', s.team_id)
-    if (team !== null && team.org_id === project.org_id) {
-      teams.push({ id: team.id, name: team.name, level: s.level })
-    }
-  }
+  const users = await first(
+    'user_grants',
+    () => grantPage(ctx, me, project, 'user_grants', DEFAULT_PAGE_SIZE, null, ceiling),
+    preambleOf(),
+  )
+  const teams = await first(
+    'team_grants',
+    () => grantPage(ctx, me, project, 'team_grants', DEFAULT_PAGE_SIZE, null, ceiling),
+    preambleOf(),
+  )
   return {
     lead_id: lead?.id ?? null,
     lead_name: lead?.name ?? null,
     review_hours: project.review_hours ?? null,
-    effective_review_hours: await reviewHoursFor(ctx, project),
+    effective_review_hours: effective,
     track_delay: project.track_delay,
     completion,
-    milestones: milestones?.map(milestoneJson) ?? null,
-    grants: { users: users.sort(byName), teams: teams.sort(byName) },
+    milestones_next_cursor: milestones?.next ?? null,
+    milestones: milestones?.rows ?? null,
+    user_grants_next_cursor: users.next,
+    team_grants_next_cursor: teams.next,
+    grants: { users: users.rows, teams: teams.rows },
   }
 }
 
@@ -239,6 +473,7 @@ async function projectDetail(
  * settings and grants, the management data the app's Settings page shows. */
 export async function projectDetailJson(
   ctx: QueryCtx,
+  me: Caller,
   project: Doc<'projects'>,
   flag: AccessFlag,
   completion: () => Promise<CompletionJson | null>,
@@ -248,30 +483,425 @@ export async function projectDetailJson(
     : project.archived_at === undefined
       ? UNAVAILABLE_COMPLETION
       : null
-  return { ...projectJson(project, flag), ...(await projectDetail(ctx, project, known, flag.read)) }
+  return {
+    ...projectJson(project, flag),
+    ...(await projectDetail(ctx, me, project, known, flag.read)),
+  }
 }
 
-/* projectDetailJson for one project the caller resolved itself, such as one
- * it just changed, with the caller's flags read over the organization's
- * catalogue, which a sub-project's flags need for its parent. A project
- * the call `created` holds no tasks, so its completion reads none. */
-async function projectOut(
+/** The limit each related list's page takes and the noun its offset
+ * refusal names (machine/shared.ts cursorPaging). */
+const RELATED_PAGING: Record<ProjectRelatedList, { range: Limit; noun: string }> = {
+  milestones: { range: LIMITS.listMilestones, noun: 'milestones' },
+  user_grants: { range: LIMITS.listUserGrants, noun: 'user grants' },
+  team_grants: { range: LIMITS.listTeamGrants, noun: 'team grants' },
+}
+
+/**
+ * One page of the milestones of `project` for REST GET
+ * /v1/projects/{ref}/milestones and MCP list_project_related, `paging`
+ * checked (cursorPaging) and the project resolved afresh by the call. A
+ * cursor of another list, project, caller or organization is refused with
+ * CURSOR_REFUSAL. The page reads within MILESTONE_READ, so it can hold fewer
+ * than `paging.limit` rows, or none, while its cursor is set, and next is
+ * null only where the list ends. It reads no other list of the project.
+ * Over 260 weekly milestones a page reads 2 index ranges and 202 documents
+ * at limit 200 and 53 at 50 (convex/tests/projectDetails.test.ts, "reads at
+ * the design size").
+ */
+export async function milestoneRows(
+  ctx: QueryCtx,
+  me: Caller,
+  project: Doc<'projects'>,
+  paging: { limit: number; cursor: string | null },
+): Promise<RelatedPage<MilestoneJson>> {
+  const after =
+    paging.cursor === null ? null : await openRelated(me, project, 'milestones', paging.cursor)
+  return await milestonePage(ctx, me, project, paging.limit, after)
+}
+
+/**
+ * One page of the user grants or team grants of `project` for REST GET
+ * /v1/projects/{ref}/access/users and /access/teams and MCP
+ * list_project_related, as milestoneRows pages milestones, within
+ * NAMED_READ. Refused with NAMES_NOT_READY until the organization's names
+ * are keyed, before the cursor is opened. Over 1,000 user grants a page
+ * reads at most 205 index ranges and 403 documents at limit 200, one lookup
+ * a holder, and 55 and 103 at 50; 5 team shares read 9 and 12
+ * (convex/tests/projectDetails.test.ts, "reads at the design size").
+ */
+export async function grantRows(
+  ctx: QueryCtx,
+  me: Caller,
+  project: Doc<'projects'>,
+  list: 'user_grants' | 'team_grants',
+  paging: { limit: number; cursor: string | null },
+): Promise<RelatedPage<GrantJson>> {
+  if (!(await nameKeysReady(ctx, me.org_id))) throw rule(NAMES_NOT_READY)
+  const after = paging.cursor === null ? null : await openRelated(me, project, list, paging.cursor)
+  const page = await grantPage(ctx, me, project, list, paging.limit, after, await namedCeiling(ctx))
+  if (page === null) throw rule(NAMES_NOT_READY)
+  return page
+}
+
+/** projectDetailJson for one project the caller resolved itself, such as
+ * one it just changed, for REST GET /v1/projects/{ref}, MCP get_project and
+ * the answers of project creates and updates. It reads the project and the
+ * caller's access to it alone, through one lib/access.ts accessOf
+ * instance: the flag from the caller's level on it (lib/core.ts flagOf),
+ * `read` false for a project the caller manages without reading, and the
+ * completion from what that instance shows (lib/core.ts
+ * projectCompletion). A check a bound of OWN_READS stopped while it reads
+ * the level rejects with accessUnchecked, which refuses the whole call and
+ * rolls back a write, since a flag cannot be guessed; one inside the
+ * completion answers it `unavailable`. A project the call `created` holds
+ * no tasks, so its completion reads none. What it reads does not grow with
+ * the organization. A lead's read of a top-level project with two
+ * sub-projects, and a PATCH that archives and then restores it, read the
+ * same ranges and documents in an organization at the catalogue's sum as
+ * in an everyday one (convex/tests/machineProjects.test.ts, "reads at the
+ * design size"). */
+export async function projectRead(
   ctx: QueryCtx,
   me: Caller,
   project: Doc<'projects'>,
   access: CredentialAccess,
   o: { created?: boolean } = {},
 ) {
-  const cat = await loadCatalogue(ctx, me)
-  const flags = await accessFlags(ctx, me, cat, access)
-  const readable = (id: string) => flags.get(id)?.read === true
-  return await projectDetailJson(
-    ctx,
-    project,
-    flags.get(project.id) ?? { read: false, write: false },
-    async () =>
-      o.created === true ? NO_TASKS : await projectCompletion(ctx, project, { cat, readable }),
+  const sight = accessOf(ctx, me, [project])
+  const flag = flagOf(me, access, await sight.level(project.id))
+  return await projectDetailJson(ctx, me, project, flag, async () =>
+    o.created === true ? NO_TASKS : await projectCompletion(ctx, project, sight),
   )
+}
+
+/* ------------------------------------------------------------- the lists */
+
+/** The list name REST GET /v1/projects and MCP list_projects seal their
+ * cursors with (lib/listCursor.ts). Both answer the same rows, so a cursor
+ * of one continues on the other. */
+export const PROJECTS_LIST = 'machine.projects'
+
+/** A position's tie in the project list: the top-level project's id and,
+ * inside its sub-projects, a sub-project's key and id, else two empty
+ * strings, so a top-level project comes before its sub-projects. */
+export type ProjectTie = readonly [rootId: string, subKey: string, subId: string]
+
+/** The tie of position `at` of the project list, or null where it is not
+ * one. A tie is three strings, the last two both empty or both set. This
+ * checks the shape alone, as model/nameKeys.ts idTieOf does for the other
+ * lists. The cursor is sealed, so only this list's own positions open, and
+ * they hold stored project ids, which app creates once wrote in any form
+ * the client sent (lib/db.ts assertNewRowId came later), so a position at
+ * an id that is not a UUID still continues its list. */
+export function projectTieOf({ tie }: NamedAt): ProjectTie | null {
+  if (tie.length !== 3) return null
+  const [rootId, subKey, subId] = tie
+  if (typeof rootId !== 'string' || typeof subKey !== 'string' || typeof subId !== 'string')
+    return null
+  return (subKey === '') === (subId === '') ? [rootId, subKey, subId] : null
+}
+
+/** What a page of the project list is asked, checked (machine/shared.ts
+ * namedPaging and the archived flag). */
+export type ProjectPageArgs = {
+  archived: boolean
+  search: string
+  limit: number
+  cursor: string | null
+}
+
+/** One page of the project list, as REST GET /v1/projects and MCP
+ * list_projects answer it, the cursor first. */
+export type ProjectsPageJson = {
+  next_cursor: string | null
+  projects: ReturnType<typeof projectJson>[]
+}
+
+/* A top-level project the walk passed, with whether the caller sees it for
+ * a reason of their own (lib/access.ts accessible), which decides where its
+ * sub-projects come from. */
+type WalkRoot = { project: Doc<'projects'>; own: boolean }
+
+/* A row the walk hands out: a reach row of the caller or one of their
+ * teams, or a sub-project of a top-level project they see for a reason of
+ * their own. */
+type WalkRow = Doc<'project_reach'> | Doc<'projects'>
+
+/* `stream`'s rows at the positions `at` gives them. */
+async function* placed<Row>(
+  stream: NamedStream<Row>,
+  at: (inner: NamedAt) => NamedAt,
+): AsyncGenerator<Named<Row> | typeof STOPPED> {
+  for await (const item of stream)
+    yield item === STOPPED ? STOPPED : { row: item.row, at: at(item.at) }
+}
+
+/**
+ * One page of the projects `me` can see for REST GET /v1/projects and MCP
+ * list_projects, on one side of the archive axis, after `p.cursor`, the
+ * next_cursor of an earlier page, at most `p.limit` of them, each as
+ * lib/core.ts projectJson with the caller's flags (flagOf, through a
+ * credential of `access`).
+ *
+ * The order is the tree's: each top-level project by key, followed by its
+ * sub-projects on the list by key, the project ids breaking ties (owner,
+ * 28 October 2026). Keys compare by their UTF-8 bytes (lib/namedPages.ts
+ * compareNamed), so digits come before capital letters and a key before
+ * the longer keys it begins. A position is the top-level project's key
+ * with a tie of its id and, inside its sub-projects, a sub-project's key
+ * and id (ProjectTie).
+ *
+ * Who is listed. The active list (`archived` false) holds every live
+ * top-level project the caller sees by lib/access.ts canSeeProject's rule
+ * (accessOf visible), navigation included, so also one seen only through
+ * an archived sub-project, and every live sub-project they see. The
+ * archived list holds every archived top-level project they see, each
+ * followed by its archived sub-projects they see, and the archived
+ * sub-projects they see of a live top-level project, at that project's
+ * place without its row. That is the membership the organization's
+ * catalogue gave (lib/core.ts accessFlags), so an organization admin's
+ * pages hold only what their own leads, grants and team shares reach, as
+ * anyone's.
+ *
+ * `p.search`, when not blank, keeps the projects whose own name holds
+ * every whitespace-separated word of it in any order, ignoring case and
+ * accents (lib/search.ts allWordsMatcher over lib/nameKey.ts nameKey of
+ * both), or whose key is the whole search, ignoring case, over the whole
+ * list on the server before the page is cut. Each row is matched on its
+ * own, so a matching top-level project brings none of its sub-projects and
+ * a matching sub-project shows at its place without its parent's row. It
+ * reads no task and no file.
+ *
+ * What a page reads. The organization's readiness (model/projectNav.ts
+ * reachReady, refused with PROJECTS_NOT_READY until its reach rows and
+ * archive states are written), the seat's memberships (seatSight, refused
+ * past PROJECT_NAV.teams), and the root reach rows of the seat and of its
+ * teams in key order (model/projectNavReads.ts rootKeyIndex), the live
+ * ones and in the archived list the archived ones too, merged with one row
+ * for a project several of them reach. Each row is handed out at its
+ * position and judged in `keep`, which reads its project, checks that the
+ * row holds its copies (organization, a root row of a top-level meta, live
+ * state, key and name key), asks accessible and, for one seen only for
+ * navigation, visible, so a failing row shows nothing and still moves the
+ * page. Then that project's sub-projects of the list's archive state:
+ * where the caller sees it for a reason of their own every one of them
+ * inherits that level, so they come from the project's own index
+ * (subKeyIndex); otherwise only from the child reach rows of the seat and
+ * its teams under it (childKeyIndex), each row's project read and its
+ * copies checked, so the walk never reads a sub-project the caller cannot
+ * see. Every row on a page passes visible on this call, whatever the
+ * cursor and the reach rows say. It never reads the organization's project
+ * set or a task.
+ *
+ * The page reads within NAMED_READ past what the call read before it
+ * (lib/namedPages.ts namedCeiling), always reads its first row, and stops
+ * early with a cursor once the budget is spent, so a short or empty page
+ * is never the end and next_cursor is null only once the walk ended. A
+ * check a bound of OWN_READS stopped rejects with accessUnchecked, which
+ * refuses the whole call, never a page missing a project. Where a page
+ * stops can reflect how many top-level projects the caller reaches
+ * through their own and their teams' rows, including projects whose check
+ * says no, as for the navigation reads; never a project they do not reach.
+ *
+ * The cursor is sealed with the organization, `me`, the side and the
+ * search's name key (lib/listCursor.ts namedScope), so it opens only for
+ * that list, on either surface, and "Café" and "cafe" share cursors; any
+ * other cursor, or a changed one, is refused with CURSOR_REFUSAL. Pages
+ * are not a snapshot: a project created, renamed in its key, archived,
+ * restored, shared or unshared while a caller pages can be missed or shown
+ * on a later page until the caller starts again. A cursor's own top-level
+ * project is read again by id and its sub-projects after the cursor
+ * follow; one gone, no longer a top-level meta of the organization, given
+ * another key or archived under the active list is passed over.
+ *
+ * What a page read at the design size, in index ranges and documents as
+ * Convex counts them (convex/tests/machineProjects.test.ts, "reads at the
+ * design size"), every page answered and none refused:
+ * - grants on 200 top-level projects and the 200 sub-projects the person
+ *   reads beneath 67 of them: at limit 200, 337 ranges and 464 documents,
+ *   then 542 and 665; at 50, at most 190 and 187 a page; a search that
+ *   matches nothing, one page of 637 and 963;
+ * - 200 sub-projects through grants on them beneath 67 projects seen only
+ *   for navigation: at 200, 589 ranges and 982 documents, then 228 and 354;
+ *   a search that matches nothing, 437 and 568;
+ * - the archived list at its sum, 200 live and 300 archived top-level
+ *   projects with grants and 500 archived sub-projects, half beneath each:
+ *   at 200, at most 638 ranges and 761 documents a page; a search that
+ *   matches nothing, one page of 1,538 and 2,163, the most of any case;
+ *   through grants on the 500 sub-projects alone, at most 738 and 1,166, and
+ *   1,288 and 1,663 for a search that matches nothing;
+ * - one team sharing 50 live and 150 archived projects of 3 sub-projects
+ *   each: at 200, 171 ranges and 463 documents active, at most 273 and 587
+ *   archived;
+ * - a member of 5 teams each sharing 20 sub-projects: 495 and 578, and 415
+ *   and 382 for a search that matches nothing;
+ * - one project with 30 live and 40 archived sub-projects: at most 10
+ *   ranges a page of one, 67 and 70 at 200;
+ * - an everyday person reads the same in an organization at the
+ *   catalogue's sum (2,000 projects) as in an everyday one, 33 ranges and
+ *   19 documents active and 16 and 10 archived.
+ * The largest answer, 200 rows, is about 57 KB on REST and 82 KB as MCP's
+ * pretty text.
+ */
+export async function projectPage(
+  ctx: QueryCtx,
+  me: Caller,
+  access: CredentialAccess,
+  p: ProjectPageArgs,
+): Promise<ProjectsPageJson> {
+  if (!(await reachReady(ctx, me.org_id))) throw rule(PROJECTS_NOT_READY)
+  const scope = await namedScope(me, p.search, [p.archived ? 'archived' : 'active'])
+  let after: NamedAt<ProjectTie> | null = null
+  if (p.cursor !== null) {
+    const at = await openNamedCursor(p.cursor, PROJECTS_LIST, scope)
+    const tie = at === null ? null : projectTieOf(at)
+    if (at === null || tie === null) throw badRequest(CURSOR_REFUSAL)
+    after = { key: at.key, tie }
+  }
+  const sight = seatSight(ctx, me, true)
+  const words = allWordsMatcher(nameKey(p.search))
+  const whole = nameKey(p.search.trim())
+  const matches = (q: Doc<'projects'>) =>
+    words(nameKey(q.name)) || (whole !== '' && whole === nameKey(q.key))
+  const onSide = (q: Doc<'projects'>) => (q.archived_at !== undefined) === p.archived
+  // the top-level projects the walk passed, recorded as they are judged
+  const roots = new Map<string, WalkRoot>()
+  const judge = async (project: Doc<'projects'>): Promise<WalkRoot> => {
+    const root = { project, own: await sight.access.accessible(project.id) }
+    roots.set(project.id, root)
+    return root
+  }
+  // the sub-projects on the list of `root` after `subAfter`, at their
+  // places, or null where it has none on this side
+  const subs = (
+    root: WalkRoot,
+    subAfter: NamedAt<IdTie> | null,
+    reads: NamedReads,
+  ): NamedStream<WalkRow> | null => {
+    const parent = root.project
+    const live = parent.archived_at === undefined
+    // a live project never sits under an archived one
+    if (!p.archived && !live) return null
+    const state: ArchiveState = !p.archived ? 'live' : live ? 'listed' : 'under'
+    const inner: NamedStream<WalkRow> = root.own
+      ? indexAfter(subKeyIndex(ctx, parent, state), subAfter)(reads)
+      : (async function* () {
+          const grantees = await sight.grantees()
+          yield* mergeNamed(
+            grantees.map((g) =>
+              indexAfter(childKeyIndex(ctx, g, parent.id, !p.archived), subAfter)(reads),
+            ),
+            { ties: 'first', reads },
+          )
+        })()
+    return placed(inner, (at) => ({ key: parent.key, tie: [parent.id, at.key, ...at.tie] }))
+  }
+  const stream = (reads: NamedReads): NamedStream<WalkRow> =>
+    (async function* () {
+      if (after !== null) {
+        // the cursor's own top-level project, read again and never handed
+        // out again, then its sub-projects after the cursor
+        const [rootId, subKey, subId] = after.tie
+        const r0 = await sight.project(rootId)
+        if (
+          r0 !== null &&
+          r0.org_id === me.org_id &&
+          inMetaTree(r0, r0) &&
+          r0.key === after.key &&
+          (p.archived || r0.archived_at === undefined)
+        ) {
+          const subAfter = subKey === '' ? null : { key: subKey, tie: [subId] as const }
+          const rest = subs(await judge(r0), subAfter, reads)
+          if (rest !== null)
+            for await (const item of rest) {
+              yield item
+              if (item === STOPPED) return
+            }
+        }
+      }
+      const rootAfter = after === null ? null : { key: after.key, tie: [after.tie[0]] as const }
+      const lives = p.archived ? [true, false] : [true]
+      const grantees = await sight.grantees()
+      const rows = mergeNamed(
+        grantees.flatMap((g) =>
+          lives.map((live) => indexAfter(rootKeyIndex(ctx, g, live), rootAfter)(reads)),
+        ),
+        { ties: 'first', reads },
+      )
+      for await (const item of rows) {
+        if (item === STOPPED) {
+          yield STOPPED
+          return
+        }
+        const row = item.row
+        yield { row, at: { key: row.key, tie: [row.project_id, '', ''] } }
+        // keep judged the row before the batch asked for more (readBatch)
+        const root = roots.get(row.project_id)
+        const rest = root === undefined ? null : subs(root, null, reads)
+        if (rest !== null)
+          for await (const sub of rest) {
+            yield sub
+            if (sub === STOPPED) return
+          }
+      }
+    })()
+  // the project a root reach row names, when the row holds its copies
+  const rootOf = async (row: Doc<'project_reach'>): Promise<Doc<'projects'> | null> => {
+    if (row.org_id !== me.org_id || row.kind !== 'root' || row.root_id !== row.project_id)
+      return null
+    const project = await sight.project(row.project_id)
+    if (project === null || project.id !== row.project_id || project.org_id !== row.org_id)
+      return null
+    if (!inMetaTree(project, project) || (project.archived_at === undefined) !== row.live)
+      return null
+    return project.key === row.key && nameKey(project.name) === row.name_key ? project : null
+  }
+  // the sub-project a child reach row under `parent` names, when the row
+  // holds its copies
+  const childOf = async (
+    parent: Doc<'projects'>,
+    row: Doc<'project_reach'>,
+  ): Promise<Doc<'projects'> | null> => {
+    if (row.org_id !== me.org_id || row.kind !== 'child' || row.root_id !== parent.id) return null
+    const sub = await sight.project(row.project_id)
+    if (sub === null || sub.id !== row.project_id || (sub.archived_at === undefined) !== row.live)
+      return null
+    return sub.key === row.key && nameKey(sub.name) === row.name_key ? sub : null
+  }
+  const shown = async (q: Doc<'projects'>) =>
+    projectJson(q, flagOf(me, access, await sight.access.level(q.id)))
+  const judged = async (row: WalkRow, at: NamedAt) => {
+    if (at.tie[1] === '') {
+      // a top-level project's own row, always a root reach row
+      if (!('grantee_kind' in row)) return null
+      const project = await rootOf(row)
+      if (project === null) return null
+      const root = await judge(project)
+      if (!onSide(project) || !matches(project)) return null
+      if (!root.own && !(await sight.access.visible(project.id))) return null
+      return await shown(project)
+    }
+    const root = roots.get(String(at.tie[0]))
+    if (root === undefined) return null
+    const sub = 'grantee_kind' in row ? await childOf(root.project, row) : row
+    if (sub === null || sub.org_id !== me.org_id || sub.parent_id !== root.project.id) return null
+    if (!onSide(sub) || !matches(sub)) return null
+    sight.access.seen(sub)
+    return (await sight.access.visible(sub.id)) ? await shown(sub) : null
+  }
+  const keep = async (row: WalkRow, guard: ReadGuard, at: NamedAt) => {
+    const out = await judged(row, at)
+    // the access checks' reads are not counted one at a time
+    await guard.settle()
+    return out
+  }
+  const batch = await listBatch(
+    ctx,
+    { list: PROJECTS_LIST, scope, after, through: null },
+    { stream, keep, limit: p.limit, ceiling: await namedCeiling(ctx) },
+  )
+  return { next_cursor: batch.next, projects: batch.rows }
 }
 
 /* ------------------------------------------------------------------ refs */
@@ -561,7 +1191,37 @@ export const mcpGetProject = internalQuery({
   handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const project = await mcpManaged(ctx, me, a.project)
-    return pretty(await projectOut(ctx, me, project, a.access))
+    return pretty(await projectRead(ctx, me, project, a.access))
+  },
+})
+
+/* list_project_related: one page of a project's milestones (a project the
+ * caller reads, as the milestone tools resolve it) or of its user or team
+ * grants (one the caller reads or manages, as get_project resolves it),
+ * the cursor first (milestoneRows and grantRows). */
+export const mcpProjectRelated = internalQuery({
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    project: v.string(),
+    list: v.union(v.literal('milestones'), v.literal('user_grants'), v.literal('team_grants')),
+    limit: v.optional(v.number()),
+    offset: v.optional(v.number()),
+    cursor: v.optional(v.string()),
+  },
+  handler: async (ctx, a): Promise<string> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const { range, noun } = RELATED_PAGING[a.list]
+    const paging = cursorPaging(range, noun, a)
+    const project =
+      a.list === 'milestones'
+        ? await mcpProject(ctx, me, a.project)
+        : await mcpManaged(ctx, me, a.project)
+    const page =
+      a.list === 'milestones'
+        ? await milestoneRows(ctx, me, project, paging)
+        : await grantRows(ctx, me, project, a.list, paging)
+    return pretty({ next_cursor: page.next, [a.list]: page.rows })
   },
 })
 
@@ -588,7 +1248,7 @@ export const mcpCreateProject = internalMutation({
     const lead_id = await mcpLead(ctx, me, a.lead_id)
     const input = { name: a.name, parent, lead_id, description: a.description }
     const project = await createFrom(ctx, me, input, MCP_PROVENANCE)
-    return pretty(await projectOut(ctx, me, project, a.access, { created: true }))
+    return pretty(await projectRead(ctx, me, project, a.access, { created: true }))
   },
 })
 
@@ -617,7 +1277,7 @@ export const mcpUpdateProject = internalMutation({
     if (Object.keys(input).length === 0) throw badRequest('no fields to update')
     if (expected !== undefined) input.expected = expected
     const after = await applyUpdate(ctx, me, project, input, MCP_PROVENANCE)
-    return pretty(await projectOut(ctx, me, after, a.access))
+    return pretty(await projectRead(ctx, me, after, a.access))
   },
 })
 
@@ -771,6 +1431,62 @@ async function restManaged(ctx: QueryCtx, me: Caller, ref: string): Promise<Doc<
   return project
 }
 
+/* The paging of a REST list of a project, as text. */
+const vRestPaging = {
+  limit: v.optional(v.string()),
+  cursor: v.optional(v.string()),
+  offset: v.optional(v.string()),
+}
+
+/* GET /v1/projects/{ref}/milestones: one page of the top-level project's
+ * milestones of a project the caller reads, `{next_cursor, milestones}`
+ * (milestoneRows). An empty cursor is taken as absent. */
+export const restListMilestones = internalQuery({
+  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string(), ...vRestPaging },
+  handler: async (ctx, a): Promise<{ next_cursor: string | null; milestones: MilestoneJson[] }> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const paging = cursorPaging(LIMITS.listMilestones, 'milestones', {
+      ...a,
+      cursor: a.cursor || undefined,
+    })
+    const project = await restProject(ctx, me, a.ref)
+    const page = await milestoneRows(ctx, me, project, paging)
+    return { next_cursor: page.next, milestones: page.rows }
+  },
+})
+
+/* GET /v1/projects/{ref}/access/users: one page of the user grants of a
+ * project the caller reads or manages, `{next_cursor, user_grants}`. */
+export const restListUserGrants = internalQuery({
+  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string(), ...vRestPaging },
+  handler: async (ctx, a): Promise<{ next_cursor: string | null; user_grants: GrantJson[] }> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const paging = cursorPaging(LIMITS.listUserGrants, 'user grants', {
+      ...a,
+      cursor: a.cursor || undefined,
+    })
+    const project = await restManaged(ctx, me, a.ref)
+    const page = await grantRows(ctx, me, project, 'user_grants', paging)
+    return { next_cursor: page.next, user_grants: page.rows }
+  },
+})
+
+/* GET /v1/projects/{ref}/access/teams: one page of the team grants of a
+ * project the caller reads or manages, `{next_cursor, team_grants}`. */
+export const restListTeamGrants = internalQuery({
+  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string(), ...vRestPaging },
+  handler: async (ctx, a): Promise<{ next_cursor: string | null; team_grants: GrantJson[] }> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const paging = cursorPaging(LIMITS.listTeamGrants, 'team grants', {
+      ...a,
+      cursor: a.cursor || undefined,
+    })
+    const project = await restManaged(ctx, me, a.ref)
+    const page = await grantRows(ctx, me, project, 'team_grants', paging)
+    return { next_cursor: page.next, team_grants: page.rows }
+  },
+})
+
 /* A project's parent never changes. A subtask stays in its parent task's
  * top-level project (model/issues.ts parentChainCheck), so allowing a
  * sub-project to change parent would have to carry that rule along, because
@@ -862,7 +1578,7 @@ export const restCreateProject = internalMutation({
       description: restDescription(b),
     }
     const project = await createFrom(ctx, me, input, restProvenance(a.keyName))
-    return await projectOut(ctx, me, project, a.access, { created: true })
+    return await projectRead(ctx, me, project, a.access, { created: true })
   },
 })
 
@@ -926,7 +1642,7 @@ export const restUpdateProject = internalMutation({
     if (Object.keys(input).length === 0) throw badRequest('no recognized fields to update')
     if (expected !== undefined) input.expected = expected
     const after = await applyUpdate(ctx, me, project, input, restProvenance(a.keyName))
-    return await projectOut(ctx, me, after, a.access)
+    return await projectRead(ctx, me, after, a.access)
   },
 })
 
@@ -1151,7 +1867,7 @@ export const PROJECT_TOOLS: McpTool[] = [
       name: 'get_project',
       title: 'Get project',
       description:
-        'One project you can see or manage, by number, key or uuid: its lead, review time, delay tracking, its completion (done and total tasks, `status: "counting"` with null counts for a moment after any project is archived or restored, so ask again later, or `status: "unavailable"` in a project with very many sub-projects), its milestones (kept on the top-level project) and the users and teams given access to it. A project you manage without reading it, as an organization admin who takes no part in it, has `access.read` false, completion `unavailable` and milestones null.',
+        'One project you can see or manage, by number, key or uuid: its lead, review time, delay tracking, its completion (done and total tasks, `status: "counting"` with null counts for a moment after any project is archived or restored, so ask again later, or `status: "unavailable"` in a project with very many sub-projects), the first 50 of its milestones (kept on the top-level project, by date) and the first 50 of the users and of the teams given access to it (`grants`, by name). Each list has its cursor right before it, `milestones_next_cursor`, `user_grants_next_cursor` and `team_grants_next_cursor` (which continues `grants.teams`), null where the list ends there; pass it to list_project_related for the rest. A project you manage without reading it, as an organization admin who takes no part in it, has `access.read` false, completion `unavailable` and milestones and their cursor null.',
       inputSchema: {
         type: 'object',
         $schema: SCHEMA,
@@ -1168,6 +1884,54 @@ export const PROJECT_TOOLS: McpTool[] = [
         callerId,
         access,
         ...(args as { project: string }),
+      }),
+  },
+  {
+    access: 'read',
+    def: {
+      name: 'list_project_related',
+      title: 'List project related',
+      description: `One page of one of a project's lists, which \`list\` names as "milestones", "user_grants" or "team_grants". get_project answers the first ${DEFAULT_PAGE_SIZE} of each with a cursor, such as \`user_grants_next_cursor\`; pass it as \`cursor\` with the same \`project\` and \`list\`, then this tool's \`next_cursor\`, until it is null. Milestones are the top-level project's, by date; grants are the project's own, people or teams by name, each with its \`level\`; a sub-project also inherits its parent's grants, and who can work in a project is list_project_users. A page holds at most \`limit\` rows (${DEFAULT_PAGE_SIZE} by default, at most ${LIMITS.listMilestones.max}) and can hold fewer, even none, while \`next_cursor\` is set. \`offset\` is refused unless 0.`,
+      inputSchema: {
+        type: 'object',
+        $schema: SCHEMA,
+        properties: {
+          project: {
+            type: 'string',
+          },
+          list: {
+            type: 'string',
+            enum: [...PROJECT_RELATED_LISTS],
+          },
+          limit: {
+            type: 'integer',
+            minimum: LIMITS.listMilestones.min,
+            maximum: LIMITS.listMilestones.max,
+          },
+          offset: {
+            type: 'integer',
+            minimum: 0,
+            maximum: 0,
+          },
+          cursor: {
+            type: 'string',
+            minLength: 1,
+          },
+        },
+        required: ['project', 'list'],
+      },
+    },
+    run: (r, { callerId, access, args }) =>
+      r.runQuery(internal.machine.projects.mcpProjectRelated, {
+        callerId,
+        access,
+        ...(args as {
+          project: string
+          list: ProjectRelatedList
+          limit?: number
+          offset?: number
+          cursor?: string
+        }),
       }),
   },
   {
@@ -1285,7 +2049,7 @@ export const PROJECT_TOOLS: McpTool[] = [
       description:
         'Give one user (`user_id`) or one team (`team_id`) `user` or `viewer` access to a project, or with `level: null` remove it. `on_held_tasks` settles open tasks a removal hides from the people working on them: `leave` (the default; the result lists those you can see and counts the others in `hidden`), `keep_as_viewer`, or `{"reassign_to": user id or null}`. Needs managing the project, as its lead or an organization admin, and only a person may change access. ' +
         EXPECTED_SENTENCE +
-        ' Its `level` is the access get_project shows, null for none, and takes no removal.',
+        ' Its `level` is the access get_project or list_project_related shows, null for none, and takes no removal.',
       inputSchema: {
         type: 'object',
         $schema: SCHEMA,
@@ -1335,7 +2099,7 @@ export const PROJECT_TOOLS: McpTool[] = [
       name: 'set_milestone',
       title: 'Set milestone',
       description:
-        "Without `milestone`, add one to `project` from `name` and `date` (YYYY-MM-DD); a sub-project's goes on its top-level project. With `milestone` (an id from get_project), rename or move it. Needs Edit access on the top-level project. A top-level project holds at most one milestone in each calendar week of its organization, so a `date` in a week that holds another of its milestones is refused. " +
+        "Without `milestone`, add one to `project` from `name` and `date` (YYYY-MM-DD); a sub-project's goes on its top-level project. With `milestone` (an id from get_project or list_project_related), rename or move it. Needs Edit access on the top-level project. A top-level project holds at most one milestone in each calendar week of its organization, so a `date` in a week that holds another of its milestones is refused. " +
         EXPECTED_SENTENCE,
       inputSchema: {
         type: 'object',
@@ -1389,7 +2153,7 @@ export const PROJECT_TOOLS: McpTool[] = [
       name: 'delete_milestone',
       title: 'Delete milestone',
       description:
-        'Delete a milestone (an id from get_project) of `project`. Needs Edit access on the top-level project. ' +
+        'Delete a milestone (an id from get_project or list_project_related) of `project`. Needs Edit access on the top-level project. ' +
         EXPECTED_DELETE_SENTENCE,
       inputSchema: {
         type: 'object',
@@ -1457,6 +2221,38 @@ export const PROJECT_ROUTES: RestRoute[] = [
       }),
   }),
   route({
+    method: 'GET',
+    path: 'projects/:ref/access/users',
+    access: 'read',
+    status: 200,
+    query: ['limit', 'cursor', 'offset'],
+    run: (r, { callerId, access, param, query }) =>
+      r.runQuery(internal.machine.projects.restListUserGrants, {
+        callerId,
+        access,
+        ref: param('ref'),
+        limit: query('limit'),
+        cursor: query('cursor'),
+        offset: query('offset'),
+      }),
+  }),
+  route({
+    method: 'GET',
+    path: 'projects/:ref/access/teams',
+    access: 'read',
+    status: 200,
+    query: ['limit', 'cursor', 'offset'],
+    run: (r, { callerId, access, param, query }) =>
+      r.runQuery(internal.machine.projects.restListTeamGrants, {
+        callerId,
+        access,
+        ref: param('ref'),
+        limit: query('limit'),
+        cursor: query('cursor'),
+        offset: query('offset'),
+      }),
+  }),
+  route({
     method: 'PUT',
     path: 'projects/:ref/access/users/:subject',
     access: 'write',
@@ -1514,6 +2310,22 @@ export const PROJECT_ROUTES: RestRoute[] = [
         ref: param('ref'),
         subject: param('subject'),
         body,
+      }),
+  }),
+  route({
+    method: 'GET',
+    path: 'projects/:ref/milestones',
+    access: 'read',
+    status: 200,
+    query: ['limit', 'cursor', 'offset'],
+    run: (r, { callerId, access, param, query }) =>
+      r.runQuery(internal.machine.projects.restListMilestones, {
+        callerId,
+        access,
+        ref: param('ref'),
+        limit: query('limit'),
+        cursor: query('cursor'),
+        offset: query('offset'),
       }),
   }),
   route({

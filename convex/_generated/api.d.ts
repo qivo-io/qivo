@@ -53,6 +53,7 @@ import type * as internal_demoCleanup from "../internal/demoCleanup.js";
 import type * as internal_demoMetrics from "../internal/demoMetrics.js";
 import type * as internal_demoTest from "../internal/demoTest.js";
 import type * as internal_descriptionsBackfill from "../internal/descriptionsBackfill.js";
+import type * as internal_duplicateGrants from "../internal/duplicateGrants.js";
 import type * as internal_favoritesRepair from "../internal/favoritesRepair.js";
 import type * as internal_guestOrg from "../internal/guestOrg.js";
 import type * as internal_inboxItemsBackfill from "../internal/inboxItemsBackfill.js";
@@ -345,6 +346,7 @@ declare const fullApi: ApiFromModules<{
   "internal/demoMetrics": typeof internal_demoMetrics;
   "internal/demoTest": typeof internal_demoTest;
   "internal/descriptionsBackfill": typeof internal_descriptionsBackfill;
+  "internal/duplicateGrants": typeof internal_duplicateGrants;
   "internal/favoritesRepair": typeof internal_favoritesRepair;
   "internal/guestOrg": typeof internal_guestOrg;
   "internal/inboxItemsBackfill": typeof internal_inboxItemsBackfill;

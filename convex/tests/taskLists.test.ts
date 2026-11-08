@@ -45,6 +45,7 @@ import {
   withReadingAdmin,
 } from './helpers.setup'
 import { countOrg } from './overviewCounts.setup'
+import { withReach } from './projectReach.setup'
 import { lowered, mcpPage, mcpPages, restPage, restPages } from './taskPages.setup'
 
 /* Archive cursors are sealed with a key derived from BETTER_AUTH_SECRET
@@ -1274,20 +1275,46 @@ describe('archived task lists page one project with a cursor', () => {
     const reader = await plantSeat(fx.t, { org_id: fx.org.id, name: 'Reader', org_role: 'guest' })
     await grant(fx.t, fx.sub.id, reader.id)
     await grant(fx.t, oldSub.id, reader.id)
+    // the project lists read the reach rows every deployment holds
+    await withReach(fx.t)
 
-    /* The two steps the docs describe. List projects with and without the
+    /* The two steps the docs describe. Page projects with and without the
      * archived flag, then page each top-level project's archived tasks. */
     const found = async (callerId: string) => {
-      const restProjects = async (archived: string) =>
-        await fx.t.query(internal.machine.rest.listProjects, { callerId, access: 'read', archived })
-      const mcpProjects = async (archived: boolean) =>
-        JSON.parse(
-          await fx.t.query(internal.machine.mcp.listProjects, {
+      const restProjects = async (archived: string) => {
+        const rows: { key: string; parent_id: string | null }[] = []
+        let cursor: string | undefined
+        do {
+          const page = await fx.t.query(internal.machine.rest.listProjects, {
             callerId,
             access: 'read',
             archived,
-          }),
-        ) as { key: string; parent_id: string | null }[]
+            limit: '2',
+            cursor,
+          })
+          rows.push(...page.projects)
+          cursor = page.next_cursor ?? undefined
+        } while (cursor !== undefined)
+        return rows
+      }
+      const mcpProjects = async (archived: boolean) => {
+        const rows: { key: string; parent_id: string | null }[] = []
+        let cursor: string | undefined
+        do {
+          const page = JSON.parse(
+            await fx.t.query(internal.machine.mcp.listProjects, {
+              callerId,
+              access: 'read',
+              archived,
+              limit: 2,
+              cursor,
+            }),
+          ) as { next_cursor: string | null; projects: { key: string; parent_id: string | null }[] }
+          rows.push(...page.projects)
+          cursor = page.next_cursor ?? undefined
+        } while (cursor !== undefined)
+        return rows
+      }
       const tops = [...(await restProjects('false')), ...(await restProjects('true'))]
         .filter((p) => p.parent_id === null)
         .map((p) => p.key)

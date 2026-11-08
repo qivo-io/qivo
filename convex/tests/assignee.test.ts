@@ -17,6 +17,7 @@ import {
   withOrg,
   withReadingAdmin,
 } from './helpers.setup'
+import { keyOrg } from './nameKeys.setup'
 
 const ASSIGNEE_SENTENCE =
   /^a task can only be assigned to an active user with Edit permission or higher on its project$/
@@ -256,20 +257,24 @@ describe('assignee project permission', () => {
           level: 'viewer',
         })
       })
+      // the list walks the roster in name order, which every deployment keys
+      await keyOrg(t, f.org.id)
       const rows: { id: string; assignable: boolean }[] =
         surface === 'REST'
-          ? await t.query(internal.machine.rest.listProjectUsers, {
-              callerId: f.agent.id,
-              access: 'read',
-              ref: f.sub.id,
-            })
+          ? (
+              await t.query(internal.machine.rest.listProjectUsers, {
+                callerId: f.agent.id,
+                access: 'read',
+                ref: f.sub.id,
+              })
+            ).users
           : JSON.parse(
               await t.query(internal.machine.mcp.listProjectUsers, {
                 callerId: f.agent.id,
                 access: 'read',
                 project: f.sub.id,
               }),
-            )
+            ).users
       expect(rows.find((row) => row.id === recipient.id)?.assignable).toBe(false)
       expect(rows.find((row) => row.id === f.viewer.id)?.assignable).toBe(false)
       expect(rows.find((row) => row.id === f.guest.id)?.assignable).toBe(true)
