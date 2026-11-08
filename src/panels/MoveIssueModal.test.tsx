@@ -93,8 +93,13 @@ async function load() {
     has_hidden_subtasks: false,
     has_hidden_parent: false,
   })
-  network.onUpdate.mockImplementation((ref, _args, next, fail) => {
-    if (getFunctionName(ref) === 'workspace:whole') next(structuredClone(snap))
+  const { projectNavStandIn } = await import('../store/projectNavStandIn.setup')
+  network.onUpdate.mockImplementation((ref, args, next, fail) => {
+    const name = getFunctionName(ref)
+    if (name === 'workspace:whole') next(structuredClone(snap))
+    // the window's targets, the sub-projects the person may add tasks to in
+    // the task's organization, as the server lists them
+    if (name === 'projectNav:targets') next(projectNavStandIn(snap, name, args))
     if (getFunctionName(ref) === 'taskWindow:task') {
       windowRead = next
       windowFail = fail
@@ -146,13 +151,18 @@ async function openFor(key: string) {
   )
 }
 
+/* Picks sub-project `projectId` among the window's targets once the
+   server listed it, then waits for the project cache's answer of it,
+   which Move waits for. */
 async function chooseTarget(projectId: string) {
-  const select = document.querySelector<HTMLSelectElement>('select[aria-label="Move to"]')
-  if (!select) throw new Error('Missing the Move to select')
-  await act(async () => {
-    select.value = projectId
-    select.dispatchEvent(new Event('change', { bubbles: true }))
+  const row = () =>
+    document.querySelector<HTMLInputElement>(`[data-target="${projectId}"] input:not(:disabled)`)
+  await vi.waitFor(() => {
+    if (!row()) throw new Error(`Missing the target ${projectId}`)
   })
+  await act(async () => row()?.click())
+  await vi.waitFor(() => expect(P.projectState(projectId)).toBe('ok'))
+  await act(async () => {})
 }
 
 const notes = () => [...document.querySelectorAll('[data-move-note]')].map((n) => n.textContent)
@@ -238,11 +248,15 @@ describe('the Move window over a task the window shows from its own answer', () 
     expect(move?.disabled).toBe(false)
     // and asks the server by the task's organization and uuid
     expect(asked.at(-1)).toEqual({ org_id: orgId, id: 'far', project_id: ids.fw })
-    // within WEB nothing goes along, and the move is open
+    // within WEB nothing goes along, and the move is open once the project
+    // cache answered BE, which the task window draws again on
     await chooseTarget(ids.be)
+    await showMove()
     expect(notes()).toEqual([])
     expect(move?.disabled).toBe(false)
-    // the server refuses a move whose subtask holder cannot work there
+    // the server refuses a move whose subtask holder cannot work there,
+    // into FW chosen again, which the cache answers for the move
+    await chooseTarget(ids.fw)
     network.mutation.mockImplementation((ref) =>
       getFunctionName(ref) === 'identity:claimMySeats'
         ? Promise.resolve(null)

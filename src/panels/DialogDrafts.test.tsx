@@ -256,6 +256,12 @@ describe('closing a dialog with typed text', { timeout: 20_000 }, () => {
     await render(<dialogs.MilestoneModal init={{ project: 'roadmap' }} onClose={onClose} />)
     await press('Done')
     expect(onClose).toHaveBeenCalledTimes(1)
+    // the window names its project with the project cache, and shows its
+    // add row once the cache answers that the person may add milestones,
+    // as App draws it again on the store's change
+    const { P } = await import('../store/planner')
+    await vi.waitFor(() => expect(P.projectState('roadmap')).toBe('ok'))
+    await render(<dialogs.MilestoneModal init={{ project: 'roadmap' }} onClose={onClose} />)
     await type('New milestone', 'Beta')
     await press('Done')
     expect(question()).toBe('Discard your unsent milestone name?')

@@ -763,10 +763,13 @@ const summary = (over: Partial<ProjectRemovalSummary> = {}): ProjectRemovalSumma
   ...over,
 })
 
-/* Opens the project window on Plan, wired to the store as project settings is. */
+/* Opens the project window on Plan, wired to the store as project settings
+   is: the project as the page's answer showed it, with its organization,
+   which the count and the delete send to. */
 async function openProject(
   deleteOnly = false,
-  onDelete = (reason: string) => P.removeProject('plan', reason),
+  onDelete = (reason: string) =>
+    P.removeProject('plan', reason, { orgId: P.project('plan')?.org ?? '' }),
 ) {
   const onClose = vi.fn()
   const onArchive = vi.fn()
@@ -776,7 +779,7 @@ async function openProject(
     root.render(
       <TooltipProvider>
         <dialogs.ArchiveOrDeleteProjectModal
-          project={plan}
+          project={{ id: plan.id, name: plan.name, type: plan.type, orgId: plan.org }}
           deleteOnly={deleteOnly}
           onClose={onClose}
           onArchive={onArchive}
@@ -871,6 +874,12 @@ describe('Archive or delete a project', () => {
 
     answers['projects:deleteDeep'] = () => Promise.resolve(null)
     await click(button('Delete project and 48 tasks'))
+    await settle()
+    // the delete paints nothing: Plan leaves with the delivery that no
+    // longer holds it, which the project cache answers gone
+    expect(P.project('plan')).toBeDefined()
+    snap.projects = snap.projects.filter((p) => p.id !== 'plan' && p.parent_id !== 'plan')
+    await act(async () => deliver(snap))
     await settle()
     expect(P.project('plan')).toBeUndefined()
   })
@@ -1162,7 +1171,6 @@ describe('the Archive or delete section of project settings', () => {
     snap.issues = snap.issues.filter((it) => it.project_id !== 'work')
     await act(async () => deliver(snap))
     await settle()
-    expect(P.project('plan')).toBeUndefined()
     // the same window, still waiting, with what it was told and counted
     expect(button('Deleting…').disabled).toBe(true)
     expect(find<HTMLTextAreaElement>('[data-fate-reason]').value).toBe('Trial cancelled')

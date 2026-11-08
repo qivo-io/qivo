@@ -29,7 +29,10 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
-  live: null as null | { holdWindow(from: string | null): void },
+  live: null as null | {
+    holdWindow(from: string | null): void
+    forceProjectNav(force: 'client' | null): void
+  },
 }))
 vi.mock('../lib/convex', async () => {
   const { liveOver } = await import('../store/guard/liveDouble.setup')
@@ -385,12 +388,19 @@ async function hintOf(element: Element | null | undefined) {
    window takes focus a frame after it opens, which would close a menu
    opened before; an archived task's note takes it instead. */
 async function taskActions() {
-  await act(async () => {
-    await vi.waitFor(() => {
-      if (!dialog()?.contains(document.activeElement))
-        throw new Error('the window has no focus yet')
-    })
-  })
+  // the frame the window takes focus in can come after the project cache's
+  // answer repaints the window, so it waits for it a turn at a time, each
+  // turn letting React and the frame run. A field a hint focused when that
+  // frame came keeps the window from taking focus, and gives it up as the
+  // hint ends, so once the frame has passed the menu's own button takes
+  // focus here, as a press of it would
+  for (let turn = 0; turn < 10 && !dialog()?.contains(document.activeElement); turn++)
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
+  if (!dialog()?.contains(document.activeElement))
+    await act(async () =>
+      document.querySelector<HTMLElement>('[aria-label="Task actions"]')?.focus(),
+    )
+  if (!dialog()?.contains(document.activeElement)) throw new Error('the window has no focus yet')
   await click(document.querySelector('[aria-label="Task actions"]'))
   return (text: string) =>
     [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
@@ -879,7 +889,29 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
       expect(control?.disabled, control?.getAttribute('aria-label') ?? '').toBe(true)
       expect(await hintOf(control)).toBe(READ_ONLY)
     }
-    expect(link?.disabled).toBe(false)
+    // Link task waits for the first batch of the sub-projects the person
+    // may add tasks to in the task's organization (projectNav.targets),
+    // and is offered once it holds a row
+    expect(relationButtons()[2]?.disabled).toBe(true)
+    expect(one('projectNav:targets').args).toEqual({ org_id: snap.orgs[0].id })
+    await answer('projectNav:targets', {
+      state: 'ok',
+      rows: [
+        {
+          id: 'work',
+          org_id: snap.orgs[0].id,
+          name: 'Work',
+          num: 2,
+          parent_id: 'plan',
+          parent_name: 'Plan',
+          parent_num: 1,
+        },
+      ],
+      next: null,
+      stopped: false,
+    })
+    await act(async () => vi.waitFor(() => expect(relationButtons()[2]?.disabled).toBe(false)))
+    expect(link).toBeDefined()
   })
 
   it('waits with the check sentence while its read fails, keeping comments and a typed title', async () => {
@@ -1687,7 +1719,9 @@ describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () 
     await openWindow(handle)
     await answer('taskWindow:task', okAnswer(far()))
     // the window asks for the owner's other work, as a Board card does,
-    // and shows no mark while it is on its way
+    // once the project cache says the task's project tracks delays, and
+    // shows no mark while it is on its way
+    await act(async () => vi.waitFor(() => one('planning:ownerLoads')))
     expect(one('planning:ownerLoads').args).toEqual({
       org_id: snap.orgs[0].id,
       owner_ids: ['mira'],
@@ -2269,12 +2303,35 @@ describe('the task window’s Move', { timeout: 30_000 }, () => {
   async function moveToBench() {
     const item = await taskActions()
     await click(item('Move to sub-project…'))
-    const select = document.querySelector<HTMLSelectElement>('select[aria-label="Move to"]')
-    if (!select) throw new Error('the Move window did not open')
-    await act(async () => {
-      select.value = 'bench'
-      select.dispatchEvent(new Event('change', { bubbles: true }))
+    // the window lists the sub-projects Mira may add tasks to in the
+    // task's organization (projectNav.targets), and names the chosen one
+    // with the project cache, whose answer Move waits for
+    const row = (id: string, name: string, num: number) => ({
+      id,
+      org_id: snap.orgs[0].id,
+      name,
+      num,
+      parent_id: 'plan',
+      parent_name: 'Plan',
+      parent_num: 1,
     })
+    await answer('projectNav:targets', {
+      state: 'ok',
+      rows: [row('bench', 'Bench', 5), row('work', 'Work', 2)],
+      next: null,
+      stopped: false,
+    })
+    const bench = await act(() =>
+      vi.waitFor(() => {
+        const input = document.querySelector<HTMLInputElement>(
+          '[data-target="bench"] input:not(:disabled)',
+        )
+        if (!input) throw new Error('the Move window did not list Bench')
+        return input
+      }),
+    )
+    await act(async () => bench.click())
+    await act(() => vi.waitFor(() => expect(buttonNamed('Move')?.disabled).toBe(false)))
     await click(buttonNamed('Move'))
   }
   const movedToasts = () =>
@@ -2352,6 +2409,13 @@ describe('the task window on a task whose project the workspace does not hold', 
     next.access.push({ project_id: 'lab-work', profile_id: 'mira', level: 'user' })
   }
   const inLab = () => far({ project_id: 'lab-work' })
+  /* The store on `withLab`, its project cache's later reads left to the
+     test, which answers them through the client by hand. */
+  const loadLab = async () => {
+    await load(false, withLab)
+    double.live?.forceProjectNav('client')
+  }
+  afterEach(() => double.live?.forceProjectNav(null))
   /* projectNav.byIds' answer of Lab work, which Mira edits, with Lab, which
      she sees only for navigation. */
   const labRows = () => {
@@ -2387,12 +2451,13 @@ describe('the task window on a task whose project the workspace does not hold', 
   }
 
   it("takes the answer's level while the project loads, and turns off once the cache answers it gone", async () => {
-    await load(false, withLab)
+    await loadLab()
     await openWindow(await noteTask(inLab()))
     await answer('taskWindow:task', okAnswer(inLab()))
     await answer('snapshot:threadComments', { comments: [], earlier: false })
-    // the window names its task's project, which the cache has not answered
-    expect(one('projectNav:byIds').args).toEqual({ ids: ['lab-work'] })
+    // the window names its task's project, which joins the cache's read
+    // beside the held tasks' project and has no answer yet
+    expect(one('projectNav:byIds').args.ids).toContain('lab-work')
     expect(P.projectState('lab-work')).toBe('loading')
     for (const label of ['Status', 'Priority', 'Assignee'])
       expect(field(label)?.disabled, label).toBe(false)
@@ -2412,35 +2477,20 @@ describe('the task window on a task whose project the workspace does not hold', 
     expect(await offersNewSubtask(held, 'Wire the mast')).toBe(true)
   })
 
-  it('offers no new subtask in a project only the project cache holds, which it could not create in', async () => {
-    await load(false, withLab)
+  it('offers a new subtask in a project the project cache answers writable, as it holds every project', async () => {
+    await loadLab()
     const held = holdRelations()
     await openWindow(await noteTask(inLab()))
     await answer('taskWindow:task', okAnswer(inLab()))
     await answer('snapshot:threadComments', { comments: [], earlier: false })
     await answer('projectNav:byIds', labRows())
     await act(() => vi.waitFor(() => expect(P.canWrite('lab-work')).toBe(true)))
-    expect(await offersNewSubtask(held, 'Wire the mast')).toBe(false)
-    expect(sentArgs('issues:create')).toEqual([])
+    expect(await offersNewSubtask(held, 'Wire the mast')).toBe(true)
   })
 
-  it("opens a crumb's project only the project cache holds through the server's check, never moving to it unheld", async () => {
+  it("opens a crumb's project at once by the open rule, with no check of the server's", async () => {
     window.dismissToast = vi.fn()
-    await load(false, withLab)
-    const resolved = {
-      state: 'ok',
-      project: {
-        id: 'lab-work',
-        org_id: snap.orgs[0].id,
-        name: 'Lab work',
-        num: 7,
-        parent: { id: 'lab', org_id: snap.orgs[0].id, name: 'Lab', num: 6 },
-        favorite: null,
-      },
-    }
-    network.query.mockImplementation(async (ref) =>
-      getFunctionName(ref) === 'projectNav:resolve' ? resolved : null,
-    )
+    await loadLab()
     const shown = vi.fn()
     await openWindow(await noteTask(inLab()), shown)
     await answer('taskWindow:task', okAnswer(inLab()))
@@ -2455,41 +2505,20 @@ describe('the task window on a task whose project the workspace does not hold', 
     )
     const press = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 })
     await act(async () => crumb.dispatchEvent(press))
-    // the window keeps the page, and asks the server whether it may open
+    // the window keeps the page and moves the scope to the crumb's project
+    // at once, whose check the scope's own read by id makes (App)
     expect(press.defaultPrevented).toBe(true)
+    expect(shown).toHaveBeenCalledTimes(1)
+    expect(shown.mock.calls[0]?.[0]).toBe('lab-work')
     expect(
       network.query.mock.calls.filter(([ref]) => getFunctionName(ref) === 'projectNav:resolve'),
-    ).toHaveLength(1)
-    // its lines share one toast, so the next one replaces this one
-    expect(window.showToast).toHaveBeenCalledWith('Opening Lab work…', 'info', {
-      key: 'task-crumb-open',
-    })
-    // the workspace, current, does not hold it, so the window says so and
-    // moves nowhere
-    await act(() =>
-      vi.waitFor(() =>
-        expect(window.showToast).toHaveBeenCalledWith(
-          'Lab work has not loaded yet. Try again in a moment.',
-          'info',
-          { key: 'task-crumb-open' },
-        ),
-      ),
-    )
-    expect(shown).not.toHaveBeenCalled()
-    // a second press says Opening again, and a move elsewhere takes its
-    // line away
-    const { navMoved } = await import('../components/projectNavRows')
-    const again = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 })
-    await act(async () => {
-      crumb.dispatchEvent(again)
-      navMoved()
-    })
-    expect(window.dismissToast).toHaveBeenCalledExactlyOnceWith('task-crumb-open')
-    expect(shown).not.toHaveBeenCalled()
+    ).toEqual([])
+    // the row's facts seed the project cache, so the scope names it at once
+    expect(P.project('lab-work')?.name).toBe('Lab work')
   })
 
   it("says it is read-only where the task's answer gives View, while the project loads", async () => {
-    await load(false, withLab)
+    await loadLab()
     await openWindow(await noteTask(inLab()))
     await answer('taskWindow:task', okAnswer(inLab(), { level: 'viewer' }))
     await answer('snapshot:threadComments', { comments: [], earlier: false })

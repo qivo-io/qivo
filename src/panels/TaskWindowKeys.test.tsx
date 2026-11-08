@@ -5,7 +5,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 
 /* The keys of the task window, on the real store and the real editor. The
    app has no shortcuts of its own there: L opens no label picker and
@@ -39,7 +39,9 @@ let root: Root
 /** Loads the store with task QN-27, whose description is `description`. */
 async function load(description = '') {
   vi.resetModules()
-  const snap: Snapshot = plannerFixture()
+  // the project under a top-level project, as every writer stores one
+  // that holds tasks, so the project cache answers it
+  const snap: Snapshot = underProgram(plannerFixture())
   snap.issues.push({
     id: 'task-a',
     org_id: snap.orgs[0].id,

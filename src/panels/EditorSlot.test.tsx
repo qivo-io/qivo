@@ -5,7 +5,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 
 /* The task window opened while the connection is down, before the editor's
    code has downloaded: the description shows as plain text in the editor's
@@ -58,7 +58,9 @@ const description = () =>
 describe('the task editor while its code waits for the connection', { timeout: 20_000 }, () => {
   it('shows the description as text in its place and loads the editor once connected', async () => {
     vi.resetModules()
-    const snap: Snapshot = plannerFixture()
+    // the project under a top-level project, as every writer stores one
+    // that holds tasks, so the project cache answers it
+    const snap: Snapshot = underProgram(plannerFixture())
     snap.issues.push({
       id: 'task-a',
       org_id: snap.orgs[0].id,

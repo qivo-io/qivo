@@ -1068,6 +1068,10 @@ describe('a new task before the server stored it', { timeout: 20_000 }, () => {
 
   it('shows the new task at once with its lists empty and whole, and keeps the controls that read the server waiting until its own read answered', async () => {
     const server = await loadNotAsked()
+    // the New task picker's row names Work with the project cache, whose
+    // answer a create waits for
+    P.nameProjects('the New task picker', ['work'])
+    await vi.waitFor(() => expect(P.projectState('work')).toBe('ok'))
     let made: string | null = null
     await act(async () => {
       made = P.addIssue({ project: 'work', title: 'Order the spare sensors', assignee: 'mira' })
