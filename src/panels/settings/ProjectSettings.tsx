@@ -159,7 +159,8 @@ export function ProjectPage({
      does not change. A project the workspace does not hold keeps its
      address there, and a held one that leaves meanwhile keeps its number
      until the window closes. */
-  const unheldIn = answer && !gone && !P.heldProject(answer.project.id) ? answer.project.org_id : null
+  const unheldIn =
+    answer && !gone && !P.heldProject(answer.project.id) ? answer.project.org_id : null
   const openedBy =
     typeof project !== 'string' && 'num' in project && project.org_id === unheldIn
       ? project.num
