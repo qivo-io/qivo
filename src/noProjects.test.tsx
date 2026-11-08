@@ -8,7 +8,11 @@ import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
-import { answerProjectNav, isProjectNavRead } from './store/projectNavStandIn.setup'
+import {
+  answerProjectNav,
+  isProjectNavRead,
+  queryProjectNav,
+} from './store/projectNavStandIn.setup'
 import { answerRoadmap } from './store/roadmapStandIn.setup'
 
 /* The pages of a person who can see no active project, on the real store
@@ -118,14 +122,25 @@ async function app(snap: Snapshot, path = '/app/testbed') {
   let publish = (_: Snapshot) => {}
   // what the server holds: the workspace last published
   let server = snap
+  // the navigation reads open now, which the server answers again after
+  // a change of access, as Convex reruns them
+  const navReads = new Set<() => void>()
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') {
       publish = (value) => {
         server = value
         next(structuredClone(value))
+        for (const answer of navReads) answer()
       }
       publish(snap)
+    } else if (isProjectNavRead(name)) {
+      const answer = () => answerProjectNav(server, name, args, next, fail)
+      navReads.add(answer)
+      answer()
+      return () => {
+        navReads.delete(answer)
+      }
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name === 'tasks:board') next(boardStandIn(server, args as BoardArgs))
     else if (name === 'tasks:roadmap' || name === 'tasks:roadmapDependencies')
@@ -134,10 +149,15 @@ async function app(snap: Snapshot, path = '/app/testbed') {
     else if (isMilestoneRead(name)) {
       milestoneReads.push(name)
       answerMilestones(server, name, args, next, fail)
-    } else if (isProjectNavRead(name)) answerProjectNav(server, name, args, next, fail)
+    }
     return () => {}
   })
-  network.query.mockResolvedValue(null)
+  // a project address by number resolves through projectNav.resolve
+  network.query.mockImplementation(async (ref, args) =>
+    getFunctionName(ref) === 'projectNav:resolve'
+      ? queryProjectNav(server, 'projectNav:resolve', args)
+      : null,
+  )
   network.mutation.mockResolvedValue(null)
   const store = await import('./store/planner')
   await store.initStore()
