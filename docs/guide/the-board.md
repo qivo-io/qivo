@@ -85,6 +85,8 @@ owner, as the task window's **Assignee** does
 ([The details column](./the-task-window.md#the-details-column)). This also
 works for parent tasks. While a task is In Review with a reviewer, its
 portrait picker changes the reviewer and offers **No reviewer** to clear it.
+While Qivo is still loading a task's project, its portrait can't be changed
+and says **Loading this project…** until Qivo knows your access there.
 
 Paused tasks show an amber mark. Delay banners identify slipping or delayed
 tasks ([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). A
