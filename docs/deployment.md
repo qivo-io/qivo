@@ -428,16 +428,7 @@ task after the step, also after a failure, and reports that delete as
 `cleanup/admin-management`; the control sub-project goes with its first
 project in the cleanup. Against a backend from before the release after
 v0.1.159, where admin status still gives access to project work, that
-step fails. After the startup step it opens `/board/all`, an address that
-once named all projects, which must give way to the startup rule's page
-with **All projects** unlit, makes `<tag> Old paths`, led by the Standard
-agent, takes Nora's automatic User grant there away, and opens its
-numbered **Settings** address, which must show the project's page and
-keep that address through a reload, and a number no project holds, which
-must open **Your preferences** (`ui/old-paths`). It deletes the project
-after the step, also after a failure, as `cleanup/old-paths`. Against a
-backend from before the release after v0.1.160, which reads a project's
-settings by id alone, that step fails. It then makes a sub-project of its
+step fails. It then makes a sub-project of its
 own under its first project, uploads one file of 2,048 bytes over REST to a
 task there, opens **Billing**, checks that current storage shows a figure
 rather than **Being counted**, finds the sub-project alone with **2.0 KB ·
@@ -478,7 +469,17 @@ file, which must go on an upload ticket: its `POST` must go to
 `/attachment-uploads/` on the API origin and answer 200, the window must list
 the file and its download must match the bytes, and the step deletes it again
 (`ui/attachment-upload`). That step and `uploads/confirm-retry` fail against a
-backend from before the release after v0.1.135. Then it makes 26 tasks of
+backend from before the release after v0.1.135. After startup selection
+(`ui/startup-selection`) it opens `/board/all`, an address that once named
+all projects, which must give way to the startup rule's page with **All
+projects** unlit, makes `<tag> Old paths`, led by the Standard agent, takes
+Nora's automatic User grant there away, and opens its numbered
+**Settings** address, which must show the project's page and keep that
+address through a reload, and a number no project holds, which must open
+**Your preferences** (`ui/old-paths`). It deletes the project after the
+step, also after a failure, as `cleanup/old-paths`. Against a backend from
+before the release after v0.1.160, which reads a project's settings by id
+alone, that step fails. Then it makes 26 tasks of
 its own and deletes them over REST, searches its run tag in **Settings →
 Projects → Deleted items** and waits until the page answers that nothing
 matches without projects, then picks its project and kind **Tasks**, opens
