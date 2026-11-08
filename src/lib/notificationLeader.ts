@@ -16,12 +16,15 @@
      happens at once when the leader's tab closes or crashes. Without Web
      Locks or a channel (a page outside a secure context) or when asking
      throws, the tab leads alone; the server's records keep two such tabs
-     from alerting one event.
+     from alerting one event. One election runs at a time, so a page back
+     from the cache, which hears pageshow and the document's resume, asks
+     once.
    - Leaving. A leader lets go of the lock on `pagehide` (also into the back
      and forward cache) and on the document's `freeze`, and asks again on
      `pageshow` from the cache and on the document's `resume`. A follower
      drops its queued request then too, so a frozen page never holds the
-     next turn.
+     next turn. A leave and a stop let go of a held lock whatever the
+     tab's role says.
    - The beat. Only while this page can notify (lib/notify.ts canNotify),
      at the server's pace (`every_ms`, clamped to NOTIFY_CLIENT's range):
      at once on gaining leadership, when the capability or the watched
@@ -309,6 +312,11 @@ export function startNotificationLeader(deps: LeaderDeps) {
   let queued: AbortController | null = null
   // whether this tab leads, so a callback from a request let go is ignored
   let leadership = 0
+  // whether an election waits for the lock's answer, so a second trigger
+  // asks nothing, and its number, so the callback of an election that a
+  // leave, a stop or a later election replaced changes nothing
+  let electing = false
+  let election = 0
 
   let instance: string | null = null
   let capable = false
@@ -599,10 +607,19 @@ export function startNotificationLeader(deps: LeaderDeps) {
     release = null
   }
 
-  /* Holds the lock until it is let go, leading meanwhile. */
-  function hold(): Promise<void> {
+  /* Ends the election in progress, whose callback then changes nothing
+     and lets go of a lock it is granted. */
+  function dropElection() {
+    election += 1
+    electing = false
+  }
+
+  /* Holds the lock for election `mine` until it is let go, leading
+     meanwhile. A lock granted to an election that was replaced, or while
+     this tab holds one, is let go at once. */
+  function hold(mine: number): Promise<void> {
     return new Promise<void>((resolve) => {
-      if (stopped || role === 'leader') {
+      if (stopped || mine !== election || release !== null) {
         resolve()
         return
       }
@@ -612,65 +629,79 @@ export function startNotificationLeader(deps: LeaderDeps) {
     })
   }
 
-  /* Follows: says hello and queues for the lock. */
-  function follow() {
+  /* Follows for election `mine`: says hello and queues for the lock,
+     dropping any turn it queued before. */
+  function follow(mine: number) {
     if (stopped || !locks) return
+    queued?.abort()
     role = 'follower'
     mirror()
     post({ kind: 'hello' })
     const abort = new AbortController()
     queued = abort
     void locks
-      .request(name, { signal: abort.signal }, () => (abort.signal.aborted ? undefined : hold()))
+      .request(name, { signal: abort.signal }, () =>
+        abort.signal.aborted ? undefined : hold(mine),
+      )
       .catch(() => {
         /* aborted at pagehide or freeze, or at stop */
       })
   }
 
-  /* Asks for the lock if it is free, else follows. */
+  /* Asks for the lock if it is free, else follows. One election runs at a
+     time, so a page back from the cache, which hears both pageshow and the
+     document's resume, asks once. */
   function elect() {
-    if (stopped) return
+    if (stopped || electing) return
     if (!locks || !channel) {
       gain('alone')
       return
     }
+    const mine = ++election
+    electing = true
     try {
       void locks
         .request(name, { ifAvailable: true }, (lock) => {
+          if (mine !== election) return undefined
+          electing = false
           if (stopped) return undefined
           if (lock === null) {
-            follow()
+            follow(mine)
             return undefined
           }
-          return hold()
+          return hold(mine)
         })
         .catch(() => {
+          if (mine !== election) return
+          electing = false
           if (!stopped && role === 'stopped') gain('alone')
         })
     } catch {
+      electing = false
       gain('alone')
     }
   }
 
   /* The page goes into the back and forward cache, closes or freezes: a
      leader that beat since it gained leadership and sees no other tab
-     waiting ends the session, and every tab lets go of its turn. */
+     waiting ends the session, and every tab lets go of the lock or its
+     turn, whatever its role says, and of an election still waiting. */
   function leave() {
-    if (stopped || role === 'stopped') return
-    if (leading()) {
-      if (beatenSinceGain && !othersWaiting && instance !== null && !refused) {
-        const id = instance
-        ends += 1
-        void trackNotificationCall(convex, () =>
-          convex.mutation(api.notifications.end, { instance: id }),
-        ).catch(() => undefined)
-      }
-      stopLeading()
-    } else {
-      queued?.abort()
-      queued = null
-      post({ kind: 'bye' })
+    if (stopped) return
+    dropElection()
+    if (role === 'stopped') return
+    const led = leading()
+    if (led && beatenSinceGain && !othersWaiting && instance !== null && !refused) {
+      const id = instance
+      ends += 1
+      void trackNotificationCall(convex, () =>
+        convex.mutation(api.notifications.end, { instance: id }),
+      ).catch(() => undefined)
     }
+    stopLeading()
+    queued?.abort()
+    queued = null
+    if (!led) post({ kind: 'bye' })
     role = 'stopped'
     mirror()
   }
@@ -769,12 +800,14 @@ export function startNotificationLeader(deps: LeaderDeps) {
   elect()
 
   return {
-    /** Stops for good: lets go of the lock or its turn, closes the channel
-        and the listeners, and sends no `end`. */
+    /** Stops for good: lets go of the lock or its turn, whatever the role
+        says, and of an election still waiting, closes the channel and the
+        listeners, and sends no `end`. */
     stop() {
       if (stopped) return
       stopped = true
-      if (leading()) stopLeading()
+      dropElection()
+      stopLeading()
       queued?.abort()
       queued = null
       for (const stop of stops.splice(0)) stop()

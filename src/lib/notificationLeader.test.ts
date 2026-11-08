@@ -181,7 +181,7 @@ function openTab(p: Profile, { can = true, locks }: { can?: boolean; locks?: Lea
         tab.settings.watching -= 1
       }
     },
-    name: leaderName('https://happy-otter-123.convex.cloud', 'better-auth'),
+    name: NAME,
     locks: locks ?? p.manager,
     openChannel: () => {
       const channel = p.hub.open()
@@ -208,6 +208,9 @@ function openTab(p: Profile, { can = true, locks }: { can?: boolean; locks?: Lea
   })
   return tab
 }
+
+/** The lock's and the channel's name the simulated tabs share. */
+const NAME = leaderName('https://happy-otter-123.convex.cloud', 'better-auth')
 
 /** Runs the microtasks and the timers due now, as a browser's next tasks. */
 async function flush() {
@@ -346,6 +349,47 @@ describe('takeover and end', () => {
     b.page.win.fire('pageshow', { persisted: true })
     await flush()
     expect(b.leader.role()).toBe('follower')
+  })
+
+  it('asks for the lock once when a page back from the cache hears resume and pageshow together', async () => {
+    const p = profile()
+    const lone = openTab(p)
+    await flush()
+    lone.page.doc.fire('freeze')
+    await flush()
+    // both before the lock request answers
+    lone.page.doc.fire('resume')
+    lone.page.win.fire('pageshow', { persisted: true })
+    await flush()
+    expect(lone.leader.role()).toBe('leader')
+    expect(await p.manager?.query()).toEqual({ held: [{ name: NAME }], pending: [] })
+    const beats = lone.beats().length
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    expect(lone.beats()).toHaveLength(beats + 1)
+    lone.leader.stop()
+    await flush()
+    expect(await p.manager?.query()).toEqual({ held: [], pending: [] })
+  })
+
+  it('keeps one turn for a follower back from the cache, and leaves no lock or turn at its pagehide', async () => {
+    const p = profile()
+    const [a, b] = [openTab(p), openTab(p)]
+    await flush()
+    a.page.doc.fire('freeze')
+    await flush()
+    expect(b.leader.role()).toBe('leader')
+    a.page.doc.fire('resume')
+    a.page.win.fire('pageshow', { persisted: true })
+    await flush()
+    expect(a.leader.role()).toBe('follower')
+    expect((await p.manager?.query())?.pending).toHaveLength(1)
+    b.page.win.fire('pagehide', { persisted: false })
+    await flush()
+    expect(a.leader.role()).toBe('leader')
+    a.page.win.fire('pagehide', { persisted: true })
+    await flush()
+    expect(a.leader.role()).toBe('stopped')
+    expect(await p.manager?.query()).toEqual({ held: [], pending: [] })
   })
 
   it('drops a frozen follower’s turn, so a live tab takes over', async () => {
