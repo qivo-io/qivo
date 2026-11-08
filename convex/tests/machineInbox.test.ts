@@ -1301,10 +1301,11 @@ describe('reads at the design size', () => {
       expect(r.ranges).toBeLessThan(4096)
       expect(r.documents).toBeLessThan(32_000)
     }
-    // 300 more projects of the organization, none of them the twin's, leave
-    // the twin's change reading what the first one read
+    // 90 more live top-level projects of the organization, none of them the
+    // twin's, bring its live top-level projects from 110 to the design
+    // size's 200 and leave the twin's change reading what the first one read
     await t.run(async (ctx) => {
-      for (let i = 0; i < 300; i++)
+      for (let i = 0; i < 90; i++)
         await ctx.db.insert('projects', {
           id: uuid(),
           org_id: f.org.id,
