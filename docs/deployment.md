@@ -322,7 +322,20 @@ and checks that `offset=1`, `limit=0`, an active list's cursor sent with
 `archived=true`, a users cursor and an unknown query parameter are refused
 with their sentences. The run reads every project list a page at a time.
 Against a backend from before the paged project lists that step fails, and
-so do the run's reads of the project lists. In the
+so do the run's reads of the project lists. Its `machine/project-details`
+step adds two milestones of its own to the run's project, checks that `GET
+/v1/projects/{ref}` and `get_project` answer its milestones, user grants and
+team grants whole on their first pages with every cursor `null`, each MCP
+cursor before what it continues, pages each list at limit 1 over `GET
+/v1/projects/{ref}/milestones`, `/access/users` and `/access/teams` and
+`list_project_related` to its end, carries a REST cursor into MCP, pages a
+sub-project's users over `/users` and `list_project_users`, and checks
+that `offset=1`, `limit=0`, a milestones cursor sent to the user grants
+route, a cursor of another project and an unknown query parameter are
+refused with their sentences. The run reads every list of a project's grants
+and milestones a page at a time. Against a backend from before the paged
+project details that step fails, as the new routes answer `404`, and so do
+the run's reads of those lists. In the
 browser it then opens the Board of the project it made, waits for the
 deployment's answer for it (`tasks.board`)
 and checks that the cards of its two fixture tasks show, which it makes in
@@ -2171,10 +2184,19 @@ projects}`, each top-level project by key followed by its sub-projects by
 key, and take `search`, `limit`, `cursor` and `offset`, and the REST and
 MCP project reads and the answers of project creates and updates read the
 named project and the caller's access to it instead of every project of
-the organization. This release is the backend floor for REST and MCP
-callers that page these lists. Returning the backend below it makes both
-project lists answer every project as one array in key order and refuse
-the new arguments as unknown, and drops the indexes
+the organization. REST `GET /v1/projects/{ref}`, the answers of project
+creates and updates, and MCP `get_project`, `create_project` and
+`update_project` answer at most 50 of a project's milestones, user grants
+and team grants, each with its cursor, and REST `GET
+/v1/projects/{ref}/users`, `/milestones`, `/access/users` and
+`/access/teams` and MCP `list_project_users` and the new
+`list_project_related` page them. This release is the backend floor for
+REST and MCP callers that page these lists. Returning the backend below it
+makes both project lists answer every project as one array in key order,
+the project details every milestone and grant without the cursors and the
+project users every row at once, refuses the new arguments as unknown,
+answers `404` for the three new routes, does not know
+`list_project_related`, and drops the indexes
 `projects.by_org_parent_state_key` and `project_reach.by_grantee_root_key`,
 which a deploy forward builds again with no change to data. It sets no
 floor for the app, which calls none of them, and has no backfill and no
