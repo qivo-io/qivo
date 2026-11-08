@@ -8,7 +8,11 @@ import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
-import { answerProjectNav, isProjectNavRead } from './store/projectNavStandIn.setup'
+import {
+  answerProjectNav,
+  isProjectNavRead,
+  queryProjectNav,
+} from './store/projectNavStandIn.setup'
 import { answerRoadmap } from './store/roadmapStandIn.setup'
 
 /* Where the main All projects entry goes, on the real store and App. The
@@ -106,7 +110,12 @@ async function app(snap: Snapshot, path: string) {
     else if (isProjectNavRead(name)) answerProjectNav(snap, name, args, next, fail)
     return () => {}
   })
-  network.query.mockResolvedValue(null)
+  // a project address by number resolves through projectNav.resolve
+  network.query.mockImplementation(async (ref, args) =>
+    getFunctionName(ref) === 'projectNav:resolve'
+      ? queryProjectNav(snap, 'projectNav:resolve', args)
+      : null,
+  )
   network.mutation.mockResolvedValue(null)
   const store = await import('./store/planner')
   await store.initStore()

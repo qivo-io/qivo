@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
 import { type BoardArgs, boardStandIn, type ForcedBoard } from './store/boardStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
-import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixture.setup'
+import { queryProjectNav } from './store/projectNavStandIn.setup'
 
 /* A boot on a task's address, on App and the real store: the live parts
    read the task the address names with their first parts (AuthGate passes
@@ -119,7 +120,9 @@ async function bootAt(
   vi.resetModules()
   reads = []
   history.replaceState(null, '', address)
-  const snap: Snapshot = plannerFixture()
+  // the fixture's project under a top-level project, as every writer
+  // stores one that holds tasks, so the project cache answers it
+  const snap: Snapshot = underProgram(plannerFixture())
   snap.orgs[0].next_issue_num = 64 * 200
   snap.issues.push({
     id: SOAK,
@@ -152,7 +155,12 @@ async function bootAt(
     else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
     return () => {}
   })
-  network.query.mockResolvedValue(null)
+  // a project address by number resolves through projectNav.resolve
+  network.query.mockImplementation(async (ref, args) =>
+    getFunctionName(ref) === 'projectNav:resolve'
+      ? queryProjectNav(snap, 'projectNav:resolve', args)
+      : null,
+  )
   network.mutation.mockResolvedValue(null)
   const store = await import('./store/planner')
   const { addressedTask } = await import('./lib/router')
