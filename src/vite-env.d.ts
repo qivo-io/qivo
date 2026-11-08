@@ -39,7 +39,10 @@ type QivoDesktopBridge = {
   }
   notifications: {
     supported: boolean
+    /** the permission when the page loaded, which the bridge copies once */
     readonly permission: QivoDesktopNotificationPermission
+    /** the permission now, from Show notifications and the platform */
+    currentPermission(): QivoDesktopNotificationPermission
     requestPermission(): Promise<QivoDesktopNotificationPermission>
     show(payload: { tag: string; title: string; body: string }): Promise<boolean>
     onClick(listener: (tag: string) => void): () => void

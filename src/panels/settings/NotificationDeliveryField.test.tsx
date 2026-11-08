@@ -244,7 +244,7 @@ describe('Notification delivery', () => {
   it('in the desktop app, names its switch and changes no local switch', async () => {
     const update = vi.fn()
     window.qivoDesktop = {
-      notifications: { supported: true, permission: 'denied' },
+      notifications: { supported: true, permission: 'denied', currentPermission: () => 'denied' },
       settings: { get: vi.fn(), update },
     } as unknown as QivoDesktopBridge
     await load()

@@ -96,8 +96,12 @@ describe('canNotify', () => {
 
   it('takes the desktop app’s bridge alone, whatever the web permission says', async () => {
     const { canNotify } = await import('./notify')
-    const bridge = (permission: QivoDesktopNotificationPermission) =>
-      ({ notifications: { supported: true, permission } }) as unknown as QivoDesktopBridge
+    // `permission` is the value at the page's load, and only the fresh read
+    // counts
+    const bridge = (now: QivoDesktopNotificationPermission) =>
+      ({
+        notifications: { supported: true, permission: 'granted', currentPermission: () => now },
+      }) as unknown as QivoDesktopBridge
     PageNotification.permission = 'denied'
     window.qivoDesktop = bridge('granted')
     expect(canNotify()).toBe(true)
@@ -140,7 +144,7 @@ describe('watchCapability', () => {
     expect(heard).toEqual([true, false, true])
     // the desktop app's Show notifications, after its save
     window.qivoDesktop = {
-      notifications: { supported: true, permission: 'denied' },
+      notifications: { supported: true, permission: 'granted', currentPermission: () => 'denied' },
     } as unknown as QivoDesktopBridge
     notify.noteCapabilityChange()
     expect(heard).toEqual([true, false, true, false])

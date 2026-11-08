@@ -61,13 +61,15 @@ export function pageAlertsWork(): boolean {
 
 /** Whether this page can show desktop alerts now, which the leader tab
     reports to the server as `can_notify`: in the desktop app, its bridge's
-    answer alone, from Show notifications and the platform; in a browser, a
+    answer alone, read afresh, from Show notifications and the platform; in a browser, a
     granted permission on a platform whose pages can show alerts
     (pageAlertsWork). Anything it cannot read answers false. */
 export function canNotify(): boolean {
   try {
     if (typeof window === 'undefined') return false
-    if (window.qivoDesktop) return window.qivoDesktop.notifications.permission === 'granted'
+    // the bridge's `permission` is the value at the page's load
+    if (window.qivoDesktop)
+      return window.qivoDesktop.notifications.currentPermission() === 'granted'
     return 'Notification' in window && Notification.permission === 'granted' && pageAlertsWork()
   } catch {
     return false
