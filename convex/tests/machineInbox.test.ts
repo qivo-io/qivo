@@ -1276,9 +1276,10 @@ describe('reads at the design size', () => {
     const f = await withReadingAdmin(t)
     let num = 5000
     // a batch of INBOX_BATCH messages, each about a task of its own in a
-    // sub-project of its own, the most projects one change asks about, in
-    // an organization of the reader's 54 top-level projects and withOrg's
-    // 2: 160 sub-projects under 54 top-level ones, each granted to `me`
+    // sub-project of its own, the most projects one change asks about. The
+    // organization holds the reader's 54 top-level projects and withOrg's
+    // 2, and the reader holds a grant on each of 160 sub-projects under its
+    // 54.
     const me = await reader(t, f, [], 'user')
     const subs = await t.run(async (ctx) => {
       const out: Doc<'projects'>[] = []
