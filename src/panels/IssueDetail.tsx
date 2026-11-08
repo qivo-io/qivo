@@ -4730,7 +4730,7 @@ function IssueDetail({
           }
           createLabel="Create new subtask:"
           onCreate={
-            noSubtask || !canRelate
+            noSubtask || !canRelate || !P.heldProject(it.project)
               ? undefined
               : (title) => {
                   P.addIssue({ project: it.project, title, parent: it.id })
@@ -4742,6 +4742,9 @@ function IssueDetail({
         <RelationPicker
           key={`link-${taskKey}`}
           kind="link"
+          // a new subtask goes into this task's project, which P.addIssue
+          // needs the workspace to hold, so a project only the project
+          // cache holds offers no create row
           task={it}
           anchor={linkAnchor}
           onDone={() => setLinkAnchor(null)}

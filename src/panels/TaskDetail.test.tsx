@@ -2348,6 +2348,39 @@ describe('the task window on a task whose project the workspace does not hold', 
     next.unheldProjects = ['lab', 'lab-work']
   }
   const inLab = () => far({ project_id: 'lab-work' })
+  /* projectNav.byIds' answer of Lab work, which Mira edits, with Lab, which
+     she sees only for navigation. */
+  const labRows = () => {
+    const row = (id: string, name: string, num: number, parent: string | null, level: string) => ({
+      id,
+      org_id: snap.orgs[0].id,
+      name,
+      num,
+      parent_id: parent,
+      level,
+      track_delay: true,
+      lead_id: null,
+      review_hours: 2,
+    })
+    return {
+      rows: [row('lab-work', 'Lab work', 7, 'lab', 'user'), row('lab', 'Lab', 6, null, 'viewer')],
+      unchecked: [],
+      message: null,
+    }
+  }
+  /* Whether the Subtasks picker offers to create a subtask titled `title`,
+     once its search for it answered. */
+  async function offersNewSubtask(held: ReturnType<typeof holdRelations>, title: string) {
+    await click(document.querySelector('[aria-label="Add subtask"]'))
+    await nextFrame()
+    await held.at(-1)?.answer(pickerBatch([]))
+    const search = document.querySelector<HTMLInputElement>('[data-relation-picker] input')
+    if (!search) throw new Error('no picker search')
+    await typeInto(search, title)
+    await act(() => new Promise((resolve) => setTimeout(resolve, 300)))
+    await held.at(-1)?.answer(pickerBatch([]))
+    return document.querySelector('[data-picker-create]') !== null
+  }
 
   it("takes the answer's level while the project loads, and turns off once the cache answers it gone", async () => {
     await load(false, withLab)
@@ -2365,6 +2398,26 @@ describe('the task window on a task whose project the workspace does not hold', 
     // the window shows it with the cache's repaint, a frame later
     await act(() => vi.waitFor(() => expect(field('Priority')?.disabled).toBe(true)))
     expect(await hintOf(field('Priority'))).toBe(GONE_NOTE)
+  })
+
+  it('offers a new subtask in a project the workspace holds', async () => {
+    await load()
+    const held = holdRelations()
+    await openWindow(await noteTask(far()))
+    await answer('taskWindow:task', okAnswer(far()))
+    expect(await offersNewSubtask(held, 'Wire the mast')).toBe(true)
+  })
+
+  it('offers no new subtask in a project only the project cache holds, which it could not create in', async () => {
+    await load(false, withLab)
+    const held = holdRelations()
+    await openWindow(await noteTask(inLab()))
+    await answer('taskWindow:task', okAnswer(inLab()))
+    await answer('snapshot:threadComments', { comments: [], earlier: false })
+    await answer('projectNav:byIds', labRows())
+    await act(() => vi.waitFor(() => expect(P.canWrite('lab-work')).toBe(true)))
+    expect(await offersNewSubtask(held, 'Wire the mast')).toBe(false)
+    expect(sentArgs('issues:create')).toEqual([])
   })
 
   it("says it is read-only where the task's answer gives View, while the project loads", async () => {
