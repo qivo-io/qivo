@@ -1340,9 +1340,8 @@ const wholeNumber = (n: number | undefined): n is number =>
  * which the Board's lane heads and the Overview's Lead read through the
  * store's project cache) and the time a task gets on entering Review in it
  * (`review_hours`: its own, else its parent's, else DEFAULT_REVIEW_HOURS,
- * lib/review.ts resolveReviewHours, for the views' Review paint of a
- * project the workspace does not hold, store/planner.ts
- * reviewHoursForProject). A reader of the project's Settings page reads the
+ * lib/review.ts resolveReviewHours, for the views' Review paint,
+ * store/planner.ts reviewHoursForProject). A reader of the project's Settings page reads the
  * same lead and Review time (model/projectSettings.ts settingsGate). */
 export type NavByIdRow = NavProject & {
   parent_id: string | null
@@ -1383,9 +1382,8 @@ export const BY_IDS_LIMIT = `ids must name at most ${BY_IDS_MAX} projects`
  * an organization without the caller's seat, one the seat does not see and
  * a top-level project seen only through an archived sub-project are left
  * out alike, so an answer tells nothing of a project the person cannot open.
- * The last of these lib/access.ts counts for navigation and the workspace's
- * projects part sends; byIds leaves it out as the directory, the sidebar
- * and resolve do.
+ * The last of these lib/access.ts counts for navigation; byIds leaves it
+ * out as the directory, the sidebar and resolve do.
  *
  * Every asked id is judged first, then the parent of each opened
  * sub-project is added whatever its own verdict in the call, so the answer

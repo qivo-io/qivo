@@ -568,7 +568,8 @@ describe('windows', () => {
     })
     await plantTasks(t, f, 4)
     const one = await workspaceOf(as(t, f.guest))
-    // counters that ask for 16 task windows and 4 project windows
+    // counters that ask for 16 task windows, and a project number the root
+    // no longer sends
     await t.run((ctx) =>
       patchCounters(ctx, f.org.id, { next_issue_num: 1600, next_project_num: 1000 }),
     )

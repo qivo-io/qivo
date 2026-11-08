@@ -48,14 +48,12 @@
  * resolve, the All projects directory (src/components/ProjectDirectory.tsx)
  * calls page, search and children and stars through setFavorite, and the
  * sidebar's project tree (src/components/SidebarProjects.tsx) calls page
- * and children. resolve is also the check startup runs on the project the
- * person opened last and on a project address the workspace does not hold
- * (src/App.tsx), and the open rule's check of a listed project the
- * workspace does not hold (src/components/projectNavRows.tsx). byIds is
- * the read of the store's project cache (src/store/projectCache.ts), which
- * keeps the projects the open views name that the workspace does not hold,
- * and of the staging check's ui/project-by-ids step, which reads every
- * project the app shows since the workspace sends none. targets is the
+ * and children. resolve is also App's check of a project address that
+ * names a project by organization and number (src/App.tsx,
+ * src/components/projectNavRows.tsx openResolved). byIds is the read of
+ * the store's project cache (src/store/projectCache.ts), the app's only
+ * source of the projects it shows and of the caller's levels on them, and
+ * of the staging check's ui/project-by-ids and ui/projects-part steps. targets is the
  * New task dialog's and the Move window's list (src/components/
  * TargetPicker.tsx) and the task window's Link task offer (store/planner.ts
  * P.watchEditsSomeProject); holds every "no project" note
