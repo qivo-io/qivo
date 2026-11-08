@@ -10,6 +10,10 @@
  * - resolve: whether one project, named by id or by its organization and
  *   number, is open to the caller for navigation, with its parent and its
  *   favorite state; a check a bound stopped answers apart from a loss.
+ * - byIds: up to 100 projects by id, each one the caller opens for
+ *   navigation with the caller's level on it, every sub-project's
+ *   top-level project as a row of its own, each judged with the caller's
+ *   seat in its organization; a check a bound stopped answers that id apart.
  * - search: one batch of the projects and sub-projects the caller sees for
  *   navigation whose own name holds every word of a search, across every
  *   active seat or in one organization, the matching favorites first and
@@ -38,16 +42,21 @@
  * and children. resolve is also the check startup runs on the project the
  * person opened last and on a project address the workspace does not hold
  * (src/App.tsx), and the open rule's check of a listed project the
- * workspace does not hold (src/components/projectNavRows.tsx). */
+ * workspace does not hold (src/components/projectNavRows.tsx). byIds is
+ * the read of the store's project cache (src/store/projectCache.ts), which
+ * keeps the projects the open views name that the workspace does not hold,
+ * and of the staging check's ui/project-by-ids step. */
 
 import { v } from 'convex/values'
 import { authedQuery, orgMutation } from './lib/functions'
 import { setFavoriteCore } from './model/projectFavorites'
 import {
+  type NavByIds,
   type NavChildren,
   type NavPage,
   type NavResolve,
   type NavSearch,
+  navByIdsOf,
   navChildrenOf,
   navPageOf,
   navResolveOf,
@@ -93,6 +102,20 @@ export const resolve = authedQuery({
     num: v.optional(v.number()),
   },
   handler: (ctx, a): Promise<NavResolve> => navResolveOf(ctx, ctx.myProfiles, a),
+})
+
+/** Up to 100 projects by id (model/projectNavReads.ts navByIdsOf), each
+ * judged with the caller's seat in its organization by ordinary access and
+ * the navigation rule of resolve, rows `{ id, org_id, name, num, parent_id,
+ * level, track_delay }` with the caller's level, and the top-level project
+ * of every sub-project answered as a row of its own whatever the order of
+ * the ids. Every project the caller cannot open is left out alike, and an id
+ * whose check a bound stopped is listed in `unchecked` with `message`,
+ * never left out as no access. More than 100 ids, repeats included, is a
+ * bad_request before any project is read. */
+export const byIds = authedQuery({
+  args: { ids: v.array(v.string()) },
+  handler: (ctx, { ids }): Promise<NavByIds> => navByIdsOf(ctx, ctx.myProfiles, ids),
 })
 
 /** One batch of the projects and sub-projects the caller sees for

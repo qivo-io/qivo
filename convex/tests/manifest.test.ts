@@ -713,6 +713,7 @@ profiles:setDisplayName mutation public {"type":"object","value":{"name":{"field
 profiles:setMessageRetention mutation public {"type":"object","value":{"days":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":false}}}
 profiles:setPlannableHours mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"hours":{"fieldType":{"type":"number"},"optional":false},"expected":{"fieldType":{"type":"object","value":{"plannable_hours":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":false}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 profiles:update mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"patch":{"fieldType":{"type":"object","value":{"org_role":{"fieldType":{"type":"union","value":[{"type":"literal","value":"admin"},{"type":"literal","value":"user"},{"type":"literal","value":"guest"},{"type":"literal","value":"viewer"}]},"optional":true},"active":{"fieldType":{"type":"boolean"},"optional":true},"name":{"fieldType":{"type":"string"},"optional":true},"email":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"teams":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":true},"can_create_projects":{"fieldType":{"type":"boolean"},"optional":true}}},"optional":false},"expected":{"fieldType":{"type":"object","value":{"org_role":{"fieldType":{"type":"string"},"optional":true},"active":{"fieldType":{"type":"boolean"},"optional":true},"name":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"email":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"can_create_projects":{"fieldType":{"type":"union","value":[{"type":"boolean"},{"type":"null"}]},"optional":true},"plannable_hours":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":true},"avatar_storage_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+projectNav:byIds query public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
 projectNav:children query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true}}}
 projectNav:page query public {"type":"object","value":{"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true}}}
 projectNav:resolve query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":true},"num":{"fieldType":{"type":"number"},"optional":true}}}
@@ -1266,12 +1267,14 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // Project navigation. The reads span organizations like main Search. They
   // read a person's projects across every active seat, and a project named
   // by id, or by its organization and number, judged with the caller's seat
-  // in its organization, by ordinary access. The name search reads every
-  // seat, or the one in the organization it is given, and an organization
-  // without the caller's seat answers an empty list. A star is the seat's
+  // in its organization, by ordinary access, and up to 100 projects by id,
+  // each judged with the caller's seat in its organization. The name search
+  // reads every seat, or the one in the organization it is given, and an
+  // organization without the caller's seat answers an empty list. A star is the seat's
   // own preference, refused like following a task while the organization
   // is read-only.
   projectNav: {
+    byIds: 'authedQuery',
     page: 'authedQuery',
     children: 'authedQuery',
     resolve: 'authedQuery',
@@ -1379,7 +1382,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 254
+const PUBLIC_COUNT = 255
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

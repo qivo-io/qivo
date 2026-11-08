@@ -112,10 +112,10 @@ import {
   receivesTeamAccess,
 } from '../lib/access'
 import { byId } from '../lib/db'
-import type { ArchiveState } from '../lib/enums'
+import type { AccessLevel, ArchiveState } from '../lib/enums'
 import { badRequest, type Refusal } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
-import { LIMITS, LIST_BATCH } from '../lib/limits'
+import { BY_IDS_MAX, LIMITS, LIST_BATCH } from '../lib/limits'
 import {
   type BatchAsk,
   compareNamed,
@@ -132,6 +132,7 @@ import {
   namedCeiling,
   openNamedCursor,
   type ReadGuard,
+  readGuard,
 } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
 import { allWordsMatcher } from '../lib/search'
@@ -1292,6 +1293,222 @@ export async function navResolveOf(
 /* Whether `n` is a whole number of at least 1. */
 const wholeNumber = (n: number | undefined): n is number =>
   n !== undefined && Number.isInteger(n) && n >= 1
+
+/* ------------------------------------------------------------ by id */
+
+/** A row of projectNav.byIds: a project the caller opens for navigation,
+ * with its top-level project's id (null for a top-level one), the caller's
+ * level on it and whether its tasks track delay. */
+export type NavByIdRow = NavProject & {
+  parent_id: string | null
+  level: AccessLevel
+  track_delay: boolean
+}
+
+/** What projectNav.byIds answers: the rows of the projects asked that the
+ * caller opens, with the top-level project of each such sub-project, each
+ * project once; the asked ids whose check a bound stopped (`unchecked`),
+ * never left out as no access; and the refusal's sentence for them,
+ * `message`, null when `unchecked` is empty. */
+export type NavByIds = { rows: NavByIdRow[]; unchecked: string[]; message: string | null }
+
+/** The refusal of a byIds call that names more projects than it answers. */
+export const BY_IDS_LIMIT = `ids must name at most ${BY_IDS_MAX} projects`
+
+/**
+ * projectNav.byIds for the login whose active seats are `myProfiles`: the
+ * projects of `ids` the person opens for navigation, each with the
+ * caller's level on it, and the top-level project of every sub-project it
+ * answers as a row of its own. The project cache (src/store/projectCache.ts)
+ * reads it for the projects the open views name.
+ *
+ * It refuses more than BY_IDS_MAX (100) ids on the raw length, repeats
+ * included, with badRequest before it reads any project, as people.byIds
+ * and labels.byIds do. It reads each distinct id once (byId) and judges each
+ * project with the person's seat in its own organization
+ * (`myProfiles.get(project.org_id)`), one seatSight a seat a call, so the
+ * checks of one call share one access instance and its bounds. An id is
+ * answered when the seat opens its project for navigation (opened): a live
+ * project of that organization in a meta's tree, a top-level one the seat
+ * sees for a reason of its own or through a live sub-project it sees, a
+ * sub-project the seat sees under a live parent. An unknown id, a project in
+ * Deleted items, an archived project, one under an archived parent, one of
+ * an organization without the caller's seat, one the seat does not see and
+ * a top-level project seen only through an archived sub-project are left
+ * out alike, so an answer tells nothing of a project the person cannot open.
+ * The last of these lib/access.ts counts for navigation and the workspace's
+ * projects part sends; byIds leaves it out as the directory, the sidebar
+ * and resolve do.
+ *
+ * Every asked id is judged first, then the parent of each opened
+ * sub-project is added whatever its own verdict in the call, so the answer
+ * does not depend on the order of the ids, and a row wins over `unchecked`
+ * for the same id. A row's level is lib/access.ts level where the seat
+ * reaches the project for a reason of its own (accessible), which needs no
+ * walk of navigation, and else `viewer`, the level lib/access.ts gives a
+ * top-level project seen only for navigation and what resolve already
+ * discloses. A level of null where accessible holds cannot arise by the
+ * rules; such a row is left out, which fails closed.
+ *
+ * A check a bound stopped (OWN_READS and PROJECT_NAV, roomSpent included,
+ * and Unproven for a top-level project seen only for navigation while the
+ * organization's reach rows are not complete) lists the asked id in
+ * `unchecked` with the refusal's sentence, and the call goes on with the
+ * next id. Where the check of the parent a sub-project brings stops, the
+ * sub-project is listed, so `unchecked` names only ids the caller asked
+ * for. The call settles against NAMED_READ between ids (namedCeiling), and
+ * an id it reaches with no room left is listed the same way, so no call
+ * reads past that share; a single check that still passes Convex's limits
+ * fails the call, which the cache shows as failed. Any other error throws.
+ *
+ * It reads no task, no favorite and no list, and needs no readiness stamp
+ * except for a top-level project seen only for navigation, which waits for
+ * the organization's reach rows. As a live query it reruns on a rename, an
+ * archive, a move or an access change of the projects it names, never on
+ * a task write.
+ *
+ * What one call of 100 ids reads at the design size, one figure a case,
+ * measured in convex/tests/projectNavByIds.test.ts ("reads at the design
+ * size") under Convex's transaction limits, in index ranges and documents
+ * as Convex counts them, every answer whole with nothing in `unchecked`:
+ * - 100 of 200 sub-projects the person reads through grants under 67
+ *   parents, answered with their 34 parents: 303 ranges and 397 documents;
+ * - the 67 parents of those 200 sub-projects, each seen only for
+ *   navigation, with 33 of the sub-projects: 415 ranges and 608 documents,
+ *   the most of any case;
+ * - 100 of 200 top-level projects with grants: 234 ranges and 234
+ *   documents;
+ * - the 100 sub-projects 5 of the person's teams share, 20 each, with
+ *   their parents: 211 ranges and 270 documents;
+ * - 100 projects each shared with 5 teams, the person in 3 teams reaching
+ *   each through one: 178 ranges and 365 documents;
+ * - 50 live projects one of the person's teams shares and 50 of its 150
+ *   archived shares, which it leaves out: 168 ranges and 335 documents;
+ * - 100 projects the person does not see, each with other people's child
+ *   reach rows: 266 ranges and 101 documents;
+ * - 100 of 167 live parents shown only through 500 archived sub-projects
+ *   with grants, all left out: 335 ranges and 134 documents; 100 of those
+ *   archived sub-projects: 101 ranges and 101 documents.
+ * Every case stays far inside NAMED_READ (2,000 ranges, 8,000 documents),
+ * so a chunk of 100 ids answers whole at the design size. Past it a call
+ * that reaches the share lists the rest apart; at PROJECT_NAV.teams teams a
+ * top-level project seen only for navigation can cost a range a grantee,
+ * and the settling between ids keeps such a call inside Convex's limits.
+ */
+export async function navByIdsOf(
+  ctx: QueryCtx,
+  myProfiles: ReadonlyMap<string, Doc<'profiles'>>,
+  ids: readonly string[],
+): Promise<NavByIds> {
+  if (ids.length > BY_IDS_MAX) throw badRequest(BY_IDS_LIMIT)
+  const asked = [...new Set(ids)]
+  if (asked.length === 0) return { rows: [], unchecked: [], message: null }
+  const guard = readGuard(ctx, await namedCeiling(ctx))
+  const found: Doc<'projects'>[] = []
+  for (const id of asked) {
+    const project = await byId(ctx, 'projects', id)
+    if (project !== null && myProfiles.has(project.org_id)) found.push(project)
+  }
+  const sights = new Map<string, SeatSight>()
+  const sightOf = async (seat: Doc<'profiles'>) => {
+    let sight = sights.get(seat.org_id)
+    if (sight === undefined) {
+      const ready = await readyRow(ctx, seat.org_id)
+      const read = found.filter((p) => p.org_id === seat.org_id)
+      sight = seatSight(ctx, seat, ready?.nav_at !== undefined, read)
+      sights.set(seat.org_id, sight)
+    }
+    return sight
+  }
+  const rows = new Map<string, NavByIdRow>()
+  const unchecked = new Map<string, string>()
+  // each opened sub-project with its parent, in the order asked
+  const brought: { sub: Doc<'projects'>; parent: Doc<'projects'>; sight: SeatSight }[] = []
+  const stop = (id: string, message: string) => {
+    if (!rows.has(id)) unchecked.set(id, message)
+  }
+  for (const project of found) {
+    const seat = myProfiles.get(project.org_id)
+    if (seat === undefined) continue
+    if (!(await guard.settle())) {
+      stop(project.id, accessUnchecked().data.message)
+      continue
+    }
+    try {
+      const sight = await sightOf(seat)
+      const open = await opened(sight, project)
+      if (open === null) continue
+      const row = await byIdRow(sight, project)
+      if (row === null) continue
+      rows.set(project.id, row)
+      if (open.parent !== null) brought.push({ sub: project, parent: open.parent, sight })
+    } catch (e) {
+      if (!isAccessUnchecked(e)) throw e
+      stop(project.id, e.data.message)
+    }
+  }
+  for (const { sub, parent, sight } of brought) {
+    if (rows.has(parent.id)) continue
+    const fail = (message: string) => {
+      rows.delete(sub.id)
+      stop(sub.id, message)
+    }
+    if (!(await guard.settle())) {
+      fail(accessUnchecked().data.message)
+      continue
+    }
+    try {
+      const row = await byIdRow(sight, parent)
+      if (row === null) {
+        // a parent a live sub-project the seat sees shows for navigation;
+        // without its row the sub-project is not answered either
+        rows.delete(sub.id)
+        continue
+      }
+      rows.set(parent.id, row)
+      unchecked.delete(parent.id)
+    } catch (e) {
+      if (!isAccessUnchecked(e)) throw e
+      fail(e.data.message)
+    }
+  }
+  const out: NavByIdRow[] = []
+  const given = new Set<string>()
+  const give = (id: string) => {
+    const row = rows.get(id)
+    if (row === undefined || given.has(id)) return
+    given.add(id)
+    out.push(row)
+  }
+  for (const project of found) {
+    give(project.id)
+    const parent = rows.get(project.id)?.parent_id
+    if (parent) give(parent)
+  }
+  const left = [...unchecked.keys()].filter((id) => !rows.has(id))
+  return {
+    rows: out,
+    unchecked: left,
+    message: left.length === 0 ? null : (unchecked.get(left[0]) ?? null),
+  }
+}
+
+/* The byIds row of `project`, which the seat opens: the caller's level
+ * where the seat reaches it for a reason of its own, else `viewer`, or null
+ * where that level is null (navByIdsOf). Rejects with accessUnchecked where
+ * a check stopped. */
+async function byIdRow(sight: SeatSight, project: Doc<'projects'>): Promise<NavByIdRow | null> {
+  const level: AccessLevel | null = (await sight.access.accessible(project.id))
+    ? await sight.access.level(project.id)
+    : 'viewer'
+  if (level === null) return null
+  return {
+    ...navProject(project),
+    parent_id: project.parent_id ?? null,
+    level,
+    track_delay: project.track_delay,
+  }
+}
 
 /* ------------------------------------------------------------ the search */
 
