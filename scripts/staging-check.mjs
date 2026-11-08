@@ -7088,10 +7088,12 @@ async function rosterPartsCheck() {
       )
       const address = people.find((p) => p.id === leo.id)?.email
       expect(address, `the mention read gives ${leo.name} no address`)
+      // the removal duty starts before the grant is sent, so a grant the
+      // server committed whose answer was lost goes too
+      granted = true
       const grant = await restOk(w, 'PUT', `/projects/${A.id}/access/users/${leo.id}`, {
         level: 'viewer',
       })
-      granted = true
       eq(grant.level, 'viewer', `${leo.name}'s level on ${A.key}`)
       await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${run.t0.key.toLowerCase()}`, {
         waitUntil: 'domcontentloaded',

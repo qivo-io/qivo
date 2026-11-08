@@ -324,6 +324,12 @@ describe('staging check REST contract', () => {
     expect(address).toBeGreaterThan(step.indexOf(`'[data-filter-x="assignee"]'`))
     expect(address).toBeLessThan(grant)
     expect(step).toContain(`.fill(address)`)
+    // the removal duty starts before the PUT, so the finally removes a
+    // grant the server committed whose answer was lost
+    const duty = step.indexOf('granted = true')
+    expect(duty).toBeGreaterThan(address)
+    expect(duty).toBeLessThan(grant)
+    expect(step.indexOf('granted = true', duty + 1)).toBe(-1)
     const removal = step.indexOf(
       `await restOk(w, 'DELETE', \`/projects/\${A.id}/access/users/\${leo.id}\`)\n      granted = false`,
     )
