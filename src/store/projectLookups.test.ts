@@ -22,10 +22,13 @@ import {
    then and never with a right before a current answer. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', async () => ({
-  convex: network,
-  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+const double = vi.hoisted(() => ({
+  live: null as null | { reconnect(only?: readonly string[]): void },
 }))
+vi.mock('../lib/convex', async () => {
+  double.live = (await import('./guard/liveDouble.setup')).liveOver(network)
+  return { convex: network, live: double.live }
+})
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -295,6 +298,23 @@ describe('the project lookups', () => {
     await vi.waitFor(() => expect(stopped.P.projectState(w.edits.id)).toBe('unchecked'))
     expect(stopped.P.canWrite(w.edits.id)).toBe(false)
     expect(stopped.P.writeNote(w.edits.id)).toBe(NAV_UNCHECKED)
+  })
+
+  it('gives no right from an answer of before a reconnect until byIds answers again, keeping the name', async () => {
+    const w = world()
+    const { P } = await start(w.snap)
+    P.nameProjects('test', [w.edits.id])
+    await vi.waitFor(() => expect(P.canWrite(w.edits.id)).toBe(true))
+    // the socket connects again, and no result has arrived again yet
+    double.live?.reconnect(['no:query'])
+    expect(P.projectState(w.edits.id)).toBe('loading')
+    expect(P.canWrite(w.edits.id)).toBe(false)
+    expect(P.writeNote(w.edits.id)).toBe('Loading this project…')
+    expect(P.project(w.edits.id)?.name).toBe('Edits')
+    // every result arrives again on the new connection
+    double.live?.reconnect()
+    expect(P.projectState(w.edits.id)).toBe('ok')
+    expect(P.canWrite(w.edits.id)).toBe(true)
   })
 
   it('stops naming a project on release and keeps no stale right after it', async () => {

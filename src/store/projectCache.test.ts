@@ -18,6 +18,8 @@ function setup(held: Set<string> = new Set()) {
   const visibility = new Set<(v: Visibility) => void>()
   let next = 0
   let changes = 0
+  // the socket's connection count, which reconnect() moves on
+  let connection = 1
   const cache = createProjectCache({
     live: {
       watch: (_ref, args) => {
@@ -44,7 +46,7 @@ function setup(held: Set<string> = new Set()) {
     },
   })
   const tell = (...tokens: string[]) => {
-    for (const fn of handlers) fn({ tokens: new Set(tokens), at: 0, connection: 1 })
+    for (const fn of handlers) fn({ tokens: new Set(tokens), at: 0, connection })
   }
   const reads = () => [...subs].map(([token, sub]) => ({ token, ids: sub.args.ids }))
   const sub = (token: string) => {
@@ -75,6 +77,13 @@ function setup(held: Set<string> = new Set()) {
     },
     show(visible: boolean) {
       for (const listener of visibility) listener({ visible, shownAt: 0 })
+    },
+    /** Drops the socket and connects again: the connection count moves on
+        and a transition brings again only the reads `tokens` name, as
+        between the transitions that bring every result again. */
+    reconnect(...tokens: string[]) {
+      connection++
+      tell(...tokens)
     },
   }
 }
@@ -182,6 +191,28 @@ describe('the project cache', () => {
     // the old read stopped, and the new answer speaks for every id
     expect(s.reads().map((r) => r.ids)).toEqual([ids(4)])
     expect(states(ids(4))).toEqual(['ok', 'ok', 'gone', 'ok'])
+  })
+
+  it("gives no level after a reconnect until each chunk's read answers again, a parent row another chunk brought included, keeping the names", () => {
+    const s = setup()
+    PROJECT_CACHE.chunk = 1
+    s.cache.name('task', ['sub', 'other'])
+    const [subRead, otherRead] = s.reads()
+    const subRows = [project('sub', { parent_id: 'meta' }), project('meta', { level: 'lead' })]
+    s.answer(subRead.token, subRows)
+    s.answer(otherRead.token)
+    expect(s.cache.look('meta')).toMatchObject({ state: 'ok', row: { level: 'lead' } })
+    const changes = s.changes()
+    // the socket connects again, and only the other read's answer arrived
+    s.reconnect(otherRead.token)
+    expect(s.changes()).toBeGreaterThan(changes)
+    expect(s.cache.look('other').state).toBe('ok')
+    expect(s.cache.look('sub')).toEqual({ state: 'loading', row: subRows[0], message: null })
+    expect(s.cache.look('meta')).toEqual({ state: 'loading', row: subRows[1], message: null })
+    // the sub-project's read answers on the new connection
+    s.answer(subRead.token, subRows)
+    expect(s.cache.look('sub')).toMatchObject({ state: 'ok', row: { level: 'user' } })
+    expect(s.cache.look('meta')).toMatchObject({ state: 'ok', row: { level: 'lead' } })
   })
 
   it("answers a parent a sub-project brought ok, also when the parent's own chunk left it out", () => {

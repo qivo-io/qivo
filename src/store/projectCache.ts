@@ -28,10 +28,14 @@
      current answer holds its row, since a parent row counts as an answer
      for that parent. A failed chunk marks its ids `failed`, and one whose
      read restarts holds no answer, so its ids read as `loading`, until the
-     new one arrives. A row kept from an earlier answer still names the
-     project in every state but `gone`, never with a right, so stale rights
-     are never kept. An answer that makes a project `gone` drops its row,
-     so nothing the cache keeps names it any more.
+     new one arrives. A reconnect leaves every answer to arrive again
+     before it counts (lib/liveQueries.ts), so from a transition of a newer
+     connection a chunk's answer gives no state but `loading` until its
+     read answers on that connection, a parent row it brought included. A
+     row kept from an earlier answer still names the project in every state
+     but `gone`, never with a right, so stale rights are never kept. An
+     answer that makes a project `gone` drops its row, so nothing the cache
+     keeps names it any more.
    - A project no owner names stays `loading` until one names it: the cache
      has no safety net for an unnamed miss, so every reader's host names
      what it shows.
@@ -102,8 +106,9 @@ type Sub = { token: string; stop: () => void; ids: readonly string[]; args: stri
 
 /** One live read: its ids in the order first named, its subscription while
     the page shows, the subscription of its new ids while that has not
-    answered (`next`), and its current answer, which says what it asked,
-    `failed`, or null while it has none. */
+    answered (`next`), its last answer, which says what it asked, `failed`,
+    or null while it has none, and whether that answer arrived on the
+    newest connection the cache heard (`fresh`), the only one that counts. */
 type Chunk = {
   ids: string[]
   sub: Sub | null
@@ -116,6 +121,7 @@ type Chunk = {
       }
     | 'failed'
     | null
+  fresh: boolean
 }
 
 const LOADING: CachedProject = Object.freeze({ state: 'loading', row: null, message: null })
@@ -140,6 +146,8 @@ export function createProjectCache(deps: ProjectCacheDeps) {
   let dirty = false
   let stopTransitions: (() => void) | null = null
   let watching = false
+  // the socket's connection count of the newest transition the cache heard
+  let connection: number | null = null
 
   const touch = () => {
     revision++
@@ -190,8 +198,9 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     try {
       answer = deps.live.read(sub.token) as NavByIds | undefined
     } catch {
-      if (chunk.result !== 'failed') {
+      if (chunk.result !== 'failed' || !chunk.fresh) {
         chunk.result = 'failed'
+        chunk.fresh = true
         touch()
       }
       return
@@ -217,8 +226,9 @@ export function createProjectCache(deps: ProjectCacheDeps) {
       [...rows].every(([id, row]) => before.rows.get(id) === row) &&
       before.unchecked.size === unchecked.size &&
       [...unchecked].every(([id, message]) => before.unchecked.get(id) === message)
-    if (same) return
+    if (same && chunk.fresh) return
     chunk.result = { asked, rows, unchecked }
+    chunk.fresh = true
     touch()
     // a project this answer makes gone, one it asked or a parent row it
     // stopped bringing, keeps no row, so no lookup names it from an
@@ -249,10 +259,19 @@ export function createProjectCache(deps: ProjectCacheDeps) {
   }
 
   /** Hears every transition once for every chunk, so the answers one
-      transition brings repaint once. */
+      transition brings repaint once. A transition of a newer connection
+      first makes every chunk's answer stale until its read answers again
+      (Chunk `fresh`). */
   function listen() {
     stopTransitions ??= deps.live.onTransition(
       (transition) => {
+        if (connection !== null && transition.connection !== connection)
+          for (const chunk of chunks) {
+            if (chunk.result === null || !chunk.fresh) continue
+            chunk.fresh = false
+            touch()
+          }
+        connection = transition.connection
         for (const chunk of chunks) {
           if (chunk.next && transition.tokens.has(chunk.next.token)) promote(chunk)
           if (chunk.sub && transition.tokens.has(chunk.sub.token)) take(chunk)
@@ -325,7 +344,7 @@ export function createProjectCache(deps: ProjectCacheDeps) {
       if (chunkOf.has(id)) continue
       let last = chunks.at(-1)
       if (!last || last.ids.length >= PROJECT_CACHE.chunk) {
-        last = { ids: [], sub: null, next: null, result: null }
+        last = { ids: [], sub: null, next: null, result: null, fresh: false }
         chunks.push(last)
       }
       last.ids.push(id)
@@ -381,16 +400,20 @@ export function createProjectCache(deps: ProjectCacheDeps) {
   const sameList = (a: readonly string[], b: readonly string[]) =>
     a.length === b.length && a.every((id, i) => id === b[i])
 
+  /** The answer of `chunk` that counts now: the one that arrived on the
+      newest connection, else none. */
+  const currentOf = (chunk: Chunk | undefined) => (chunk?.fresh ? chunk.result : null)
+
   /** The current answer's row of project `id`, from its own chunk or, for a
       parent another chunk's sub-project brought, from any chunk. */
   function currentRow(id: string): NavByIdRow | undefined {
-    const own = chunkOf.get(id)?.result
+    const own = currentOf(chunkOf.get(id))
     if (own && own !== 'failed') {
       const row = own.rows.get(id)
       if (row) return row
     }
     for (const chunk of chunks) {
-      const result = chunk.result
+      const result = currentOf(chunk)
       if (result && result !== 'failed') {
         const row = result.rows.get(id)
         if (row) return row
@@ -399,12 +422,14 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     return undefined
   }
 
-  /** What the cache knows of `id`, worked out (look keeps the answers). */
+  /** What the cache knows of `id`, worked out (look keeps the answers). A
+      chunk whose answer arrived before a reconnect answers for none of its
+      ids until it answers again, so they load, keeping their rows. */
   function lookUp(id: string): CachedProject {
     const row = currentRow(id)
     if (row) return { state: 'ok', row, message: null }
     const kept = entries.get(id) ?? null
-    const result = chunkOf.get(id)?.result
+    const result = currentOf(chunkOf.get(id))
     if (result === 'failed') return kept ? { state: 'failed', row: kept, message: null } : FAILED
     // an answer speaks only of the ids it asked, so an id that joined the
     // chunk since loads until the read of the new ids answers
@@ -485,6 +510,7 @@ export function createProjectCache(deps: ProjectCacheDeps) {
       looks.clear()
       stopTransitions?.()
       stopTransitions = null
+      connection = null
       revision++
       dirty = false
     },
