@@ -2233,9 +2233,8 @@ rollback floor (see Rollback and hotfixes). Later changes keep the rule,
 with one exception. By the owner's decision of 7 November 2026, while
 nobody uses the app, a change removes an old function, part or answer field
 in the same release that stops using it, as the release after v0.1.159
-removes the milestones of the workspace projects part and the release
-after v0.1.160 removes `deletedItems.list` and `matches`, and its
-deployment paragraph names only the floor a later rollback needs.
+removes the milestones of the workspace projects part, and its deployment
+paragraph names only the floor a later rollback needs.
 Test migrations with representative synthetic data and retain verified
 production backups before destructive changes.
 
