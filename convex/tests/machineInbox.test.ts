@@ -1007,7 +1007,8 @@ function logged(label: string, r: Measured): Measured {
   return r
 }
 
-/** Every page of `who`'s inbox at `limit`, measured and logged. */
+/** Every page of `who`'s inbox at `limit`, measured and logged; fails on
+ * a cursor that does not move or a walk that has not ended in 200 pages. */
 async function measuredPages(
   t: T,
   who: Doc<'profiles'>,
@@ -1019,14 +1020,30 @@ async function measuredPages(
   for (let i = 0; i < 200; i++) {
     const r: Measured = await measuredPage(t, who, { ...a, cursor })
     out.push(r)
-    if (r.answer.next_cursor === null) break
+    if (r.answer.next_cursor === null) {
+      out.forEach((p, n) => {
+        logged(`${label}, page ${n + 1} of ${out.length}`, p)
+      })
+      return out
+    }
+    expect(r.answer.next_cursor, label).not.toBe(cursor)
     cursor = r.answer.next_cursor
   }
-  out.forEach((r, i) => {
-    logged(`${label}, page ${i + 1} of ${out.length}`, r)
-  })
-  return out
+  throw new Error(`${label}: the pages did not end in 200`)
 }
+
+/** The items the old whole read answered `who` under `filters`. */
+const oracleOf = (t: T, who: Doc<'profiles'>, filters: Filters) =>
+  t.run((ctx) =>
+    machineInboxItems(ctx, who, {
+      unreadOnly: filters.unread_only === true,
+      includeSnoozed: filters.include_snoozed === true,
+    }),
+  )
+
+/** Every item of `ms`, as REST answers it. */
+const itemsOf = (ms: readonly Measured[]) =>
+  JSON.parse(JSON.stringify(ms.flatMap((r) => r.answer.items))) as OracleItem[]
 
 /** A title of about 80 characters, ordinary text. */
 const title = (i: number) =>
@@ -1070,12 +1087,18 @@ describe('reads at the design size', () => {
     })
     for (const task of groups.slice(0, 5))
       await restamp(t, me, task, { snoozed_until: '2099-01-01T00:00:00.000Z' })
+    // every group holds an unread comment, so unread_only keeps all of
+    // them, and the 5 snoozed come only with include_snoozed
+    const awake = groups.slice(5).map((task) => task.id)
     for (const limit of [50, 200])
-      for (const filters of FILTERS)
-        await measuredPages(t, me, `everyday at ${limit}, ${JSON.stringify(filters)}`, {
-          ...filters,
-          limit,
-        })
+      for (const filters of FILTERS) {
+        const label = `everyday at ${limit}, ${JSON.stringify(filters)}`
+        const items = itemsOf(await measuredPages(t, me, label, { ...filters, limit }))
+        expect(items, label).toEqual(await oracleOf(t, me, filters))
+        expect(items.map((i) => i.task.id).sort(), label).toEqual(
+          (filters.include_snoozed === true ? groups.map((task) => task.id) : awake).sort(),
+        )
+      }
   })
 
   it('2. one sub-project’s 300 open and 150 Done tasks, a group each, paged at 200 to the end and unread only', async () => {
@@ -1161,8 +1184,12 @@ describe('reads at the design size', () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const { me, subs } = await everyday(t, f, 5)
-    await plantGroups(t, me, 60, (i) => subs[i % 3].id, { title })
-    for (const limit of [50, 200]) await measuredPages(t, me, `in 5 teams at ${limit}`, { limit })
+    const groups = await plantGroups(t, me, 60, (i) => subs[i % 3].id, { title })
+    for (const limit of [50, 200]) {
+      const all = await measuredPages(t, me, `in 5 teams at ${limit}`, { limit })
+      expect(itemsOf(all).map((i) => i.task.id)).toEqual(newestFirst(groups))
+      expect(itemsOf(all)).toEqual(await oracleOf(t, me, {}))
+    }
   })
 
   it('7. an organization of 1,000 people whose everyday Inbox names 180 of them, at limit 200', async () => {
