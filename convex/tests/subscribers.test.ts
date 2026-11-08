@@ -431,6 +431,9 @@ describe('task subscriber popover', () => {
     expect(answer.subscribers).toHaveLength(LIMITS.followers.max)
     const names = answer.subscribers.map((r) => r.name)
     expect(names).toEqual([...names].sort())
+    // the earliest follows, so the one planted last, which sorts first, is left out
+    expect(names[0]).toBe('Follower 001')
+    expect(names).not.toContain('Follower 000')
     // the rows hold no email
     expect(Object.keys(answer.subscribers[0]).sort()).toEqual(
       ['active', 'color', 'id', 'initials', 'name'].sort(),

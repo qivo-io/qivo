@@ -651,11 +651,13 @@ async function subscriptionTarget(ctx: MeCtx, issueId: string) {
  * popover names them without loading anyone's profile. Existing follows
  * stay listed after a loss of access or a deactivation, so a manager can
  * remove them; a follow whose profile is gone or of another organization
- * is left out. It reads at most LIMITS.followers.max of the task's follows
- * and one profile each; a task followed past the cap before the cap
- * existed answers the first of them with `more` true, which the popover
- * says. The people a manager may add come from pickers.taskFollowers, a
- * batch at a time, never from this answer. */
+ * is left out. It reads at most LIMITS.followers.max of the task's follows,
+ * the earliest, and one profile each. A task past the cap, as a new
+ * assignee or reviewer takes it past (cap 'pass') or as it was followed
+ * before the cap existed, answers those earliest follows with `more` true,
+ * so a later follower is not listed until some earlier ones unfollow,
+ * which the popover says. The people a manager may add come from
+ * pickers.taskFollowers, a batch at a time, never from this answer. */
 export const subscribers = orgQuery({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => {

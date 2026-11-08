@@ -3,6 +3,7 @@ import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { LIMITS } from '../../convex/lib/limits'
 import { endClosing, playClosingAnimations } from '../lib/closingAnimation.setup'
 import { subscribersStandIn, taskFollowersStandIn } from '../store/followerStandIn.setup'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
@@ -286,6 +287,40 @@ describe('the task subscribers popover of a task the window shows from its own a
         { org_id: org, issue_id: 'far', profile_id: 'person-0996', subscribed: true },
       ])
     })
+  })
+})
+
+describe('the task subscribers popover past the followers cap', () => {
+  beforeAll(() => {
+    crowd = 1
+  })
+  afterAll(() => {
+    crowd = 0
+    followers = []
+  })
+
+  it('lists the earliest followers and says the later ones show as earlier ones unfollow', async () => {
+    // the cap lowered to 2, in the stand-in's limits and in the popover's,
+    // which the store's modules loaded afresh
+    const shown = (await import('../../convex/lib/limits')).LIMITS
+    const cap = LIMITS.followers.max
+    Object.assign(LIMITS.followers, { max: 2 })
+    Object.assign(shown.followers, { max: 2 })
+    try {
+      // Person 0000 followed last, past the cap
+      followers = ['leo', 'aisha', 'person-0000']
+      await press('[data-task-subscribe]')
+      const listed = [...document.querySelectorAll('[data-task-subscriber]')].map((row) =>
+        row.getAttribute('data-task-subscriber'),
+      )
+      expect(listed).toEqual(['aisha', 'leo'])
+      expect(document.querySelector('[data-task-subscribers-more]')?.textContent).toBe(
+        'Showing the 2 earliest followers. Later ones show here as earlier ones unfollow.',
+      )
+    } finally {
+      Object.assign(LIMITS.followers, { max: cap })
+      Object.assign(shown.followers, { max: cap })
+    }
   })
 })
 

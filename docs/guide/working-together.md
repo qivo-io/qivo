@@ -218,7 +218,9 @@ subscribed, so the people working on a task always hear about it. A comment
 or description can mention at most 100 people. Qivo refuses to save one that
 mentions more, keeps your draft and says **A text can mention at most 100
 people. Remove some mentions and save again.** A task can pass 100
-subscribers through its assignee and reviewer. On such a task, a comment or a
+subscribers through its assignee and reviewer. **Subscribers** then lists
+the 100 who subscribed first and says **Showing the 100 earliest
+followers. Later ones show here as earlier ones unfollow.** On such a task, a comment or a
 change reaches the first subscribers at once and the rest a few seconds
 later. The same holds when many of the people it mentions or notifies have
 snoozed a long thread about the task, because each message wakes theirs. Changes saved for many tasks at once, from the Roadmap, by

@@ -271,7 +271,8 @@ export function IssueSubscribers({
               ))}
               {roster.more && (
                 <p data-task-subscribers-more className="px-2 py-1 text-sm text-text-2">
-                  Showing the first {LIMITS.followers.max} followers.
+                  Showing the {LIMITS.followers.max} earliest followers. Later ones show here as
+                  earlier ones unfollow.
                 </p>
               )}
             </>
