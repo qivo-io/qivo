@@ -60,8 +60,14 @@ export type LoadRow = {
 
 /** What the index knows of an owner: their organization, '' for one the
     server's answer says is not there, undefined while it cannot tell, and
-    their plannable hours a week, undefined while unknown. */
-export type OwnerFacts = { org: string | undefined; capacity: number | undefined }
+    their plannable hours a week, undefined while unknown, with `waits`
+    true while the face that brings them is on its way, so a verdict that
+    reads them waits too rather than reading as unknown. */
+export type OwnerFacts = {
+  org: string | undefined
+  capacity: number | undefined
+  waits: boolean
+}
 
 /** The rows the tasks are built from, read outside any paint. */
 export type TaskSources = {
@@ -466,16 +472,18 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
     if (dates.partial) partial.add(it.uuid)
   }
 
-  /** The delay of each task in `uuids`, null for none and DELAY_UNKNOWN
-      where the verdict reads its owner's capacity and the store does not
-      know it (`byId` by handle). */
+  /** The delay of each task in `uuids`, null for none and also while the
+      verdict reads an owner's capacity whose face is on its way, and
+      DELAY_UNKNOWN where it reads one the store cannot learn (`byId` by
+      handle). */
   function judge(uuids: Iterable<string>, byId: Readonly<Record<string, IssueVM>>) {
     const project = delayProjector((owner) => loadByOwner.get(owner) || [], TODAY_WEEK)
     const out = new Map<string, DelayInfo | typeof DELAY_UNKNOWN | null>()
     for (const uuid of uuids) {
       const it = byUuid.get(uuid)
       if (!it) continue
-      const capacity = it.owner ? facts(it.owner).capacity : 0
+      const known = it.owner ? facts(it.owner) : null
+      const capacity = known ? known.capacity : 0
       const issue = {
         uuid: it.uuid,
         status: it.status,
@@ -491,13 +499,14 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
         remainingSet: it.remainingSet,
         capacity: capacity ?? DEFAULT_PLANNABLE_HOURS,
       }
-      // a verdict that reads an unknown week is unknown; one that needs no
-      // one's capacity is the same against any week
+      // a verdict that reads an unknown week waits for the face that brings
+      // it, and is unknown once none will; one that needs no one's capacity
+      // is the same against any week
       const unknown =
         capacity === undefined &&
         !issue.isGroup &&
         delayBeforeLoads(issue, { datesKnown: true, loading: false }) === DELAY_UNKNOWN
-      out.set(uuid, unknown ? DELAY_UNKNOWN : project(issue))
+      out.set(uuid, unknown ? (known?.waits ? null : DELAY_UNKNOWN) : project(issue))
     }
     return out
   }
@@ -864,7 +873,7 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
           const now = from.ownerFacts(id)
           if (sameData(was, now)) continue
           factsOf.set(id, now)
-          if (now.capacity !== was.capacity) owners.add(id)
+          if (now.capacity !== was.capacity || now.waits !== was.waits) owners.add(id)
           if (now.org !== was.org) for (const uuid of ownerTasks.get(id) ?? []) recheck.add(uuid)
         }
       }

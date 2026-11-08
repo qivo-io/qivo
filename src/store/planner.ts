@@ -5353,6 +5353,7 @@ const viewDelayCtx: ViewDelayCtx = {
     }
   },
   capacity: (id) => ownerFacts(id).capacity,
+  capacityWaits: (id) => ownerFacts(id).waits,
   projectLive: (id) => !!PLANNER.project(id),
   orgOf: (id) => ownerFacts(id).org,
 }
@@ -5365,14 +5366,17 @@ const viewDelayCtx: ViewDelayCtx = {
     alone their organization and, for an agent, an unbounded week, since a
     name is no week; for a person a current answer leaves out no
     organization ('') and the default week, as for any person the store did
-    not hold before; and with nothing yet, neither. The views name the
-    owners whose delays they show (reshapeViews), so their faces load. */
+    not hold before; and with nothing yet, neither. An unknown week `waits`
+    while the face that brings it is on its way, and no longer once its
+    read failed. The views name the owners whose delays they show
+    (reshapeViews), so their faces load. */
 function ownerFacts(id: string): OwnerFacts {
   const own = rows.profiles.get(id)
   if (own)
     return {
       org: own.org_id,
       capacity: plannableHoursOf({ plannableHours: own.plannable_hours ?? null, kind: own.kind }),
+      waits: false,
     }
   const known = profileCache.look(id)
   switch (known.state) {
@@ -5383,13 +5387,18 @@ function ownerFacts(id: string): OwnerFacts {
           plannableHours: known.face.plannable_hours,
           kind: known.face.kind,
         }),
+        waits: false,
       }
     case 'name':
-      return { org: known.org, capacity: known.name.kind === 'agent' ? Infinity : undefined }
+      return known.name.kind === 'agent'
+        ? { org: known.org, capacity: Infinity, waits: false }
+        : { org: known.org, capacity: undefined, waits: known.reading }
     case 'gone':
-      return { org: '', capacity: DEFAULT_PLANNABLE_HOURS }
+      return { org: '', capacity: DEFAULT_PLANNABLE_HOURS, waits: false }
+    case 'failed':
+      return { org: undefined, capacity: undefined, waits: false }
     default:
-      return { org: undefined, capacity: undefined }
+      return { org: undefined, capacity: undefined, waits: true }
   }
 }
 

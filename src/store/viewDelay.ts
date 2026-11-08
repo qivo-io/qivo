@@ -43,7 +43,9 @@
    signed-in person's own seats, an agent (unbounded) and a person whose
    face loaded with their stored hours, and unknown before that, as for a
    person known only by a picker's name. A verdict that reads an unknown
-   capacity is unknown (judgeDelay), never judged against the default. A
+   capacity has none while the owner's face is on its way, as while a load
+   is, and is unknown once it will not come (judgeDelay), never judged
+   against the default. A
    row's span is filed for its owner unless the profile cache places the
    owner in another organization or its current answer leaves them out
    (ownerInOrg), so an owner whose face is on its way keeps their load,
@@ -82,6 +84,9 @@ export type ViewDelayCtx = {
       or undefined while the store does not know them (store/planner.ts
       ownerFacts) */
   capacity: (id: string) => number | undefined
+  /** whether person `id`'s capacity is unknown only because their face is
+      on its way (store/planner.ts ownerFacts) */
+  capacityWaits: (id: string) => boolean
   /** whether project `id` is live */
   projectLive: (id: string) => boolean
   /** the organization of person `id`, '' for one the server's answer says
@@ -409,10 +414,11 @@ const ROW_FACTS: DelayFacts = { datesKnown: true, loading: false }
     cannot judge: exact where the verdict needs no one's other work, as for
     a group, whose dates decide it (`facts`), else against its owner's load
     and capacity. Late for a passed due date. Null while that load's first
-    answer is on its way, as before any answer nothing is known and a mark
-    would flash on every open; DELAY_UNKNOWN where the load is unavailable,
-    failed or past the cap, or where the owner's capacity is unknown
-    (ViewDelayCtx capacity), so it never reads as on track and is never
+    answer or the owner's face that brings their capacity is on its way, as
+    before any answer nothing is known and a mark would flash on every
+    open; DELAY_UNKNOWN where the load is unavailable, failed or past the
+    cap, or where the owner's capacity cannot be learned (ViewDelayCtx
+    capacity and capacityWaits), so it never reads as on track and is never
     judged against a default week. */
 export function judgeDelay(
   issue: DelayIssue,
@@ -442,6 +448,9 @@ export function judgeDelay(
   if (exact === null && issue.duePast && !issue.isDone) return { status: 'late', fin: null }
   if (exact !== DELAY_UNKNOWN) return exact
   if (load === null || load.state === 'waiting') return null
+  // the load is in, and the face that brings the capacity it is judged
+  // against is on its way
+  if (load?.state === 'ok' && issue.owner && ctx.capacityWaits(issue.owner)) return null
   return DELAY_UNKNOWN
 }
 

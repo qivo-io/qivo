@@ -28,7 +28,7 @@ describe('the task index', () => {
       projects: rows.projects,
       // an owner the rows hold, else one the index cannot place, whose
       // capacity is the 40 hours the cases plan with
-      ownerFacts: (id) => ({ org: rows.profiles.peek(id)?.org_id, capacity: 40 }),
+      ownerFacts: (id) => ({ org: rows.profiles.peek(id)?.org_id, capacity: 40, waits: false }),
       factsVersion: 0,
       hiddenSubtaskParents: rows.flags('hiddenSubtaskParents'),
       hiddenParentTasks: rows.flags('hiddenParentTasks'),

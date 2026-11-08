@@ -422,6 +422,7 @@ async function expectDelays(
     heldSpans: (owner) => probe.shownSpans(owner),
     viewRows: () => [],
     capacity,
+    capacityWaits: () => false,
     projectLive: (id) => !!P.project(id),
     orgOf: (id) => {
       const person = P.person(id)
