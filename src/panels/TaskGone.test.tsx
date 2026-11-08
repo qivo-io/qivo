@@ -4,7 +4,7 @@ import { act, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 
 /* The task window when someone else archives or deletes its task while it
    is open (IssueDetail TaskGone), and when Search opens a task the
@@ -145,7 +145,9 @@ async function open(
   held = false,
 ) {
   vi.resetModules()
-  snap = plannerFixture()
+  // the project under a top-level project, as every writer stores one
+  // that holds tasks, so the navigation reads name it
+  snap = underProgram(plannerFixture())
   snap.profiles[0].org_role = role
   if (level)
     snap.access.push({ project_id: snap.projects[0].id, profile_id: snap.profiles[0].id, level })
@@ -836,8 +838,9 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
         .querySelector('[data-task-gone] [data-task-gone-archived]')
         ?.textContent?.startsWith('Archived '),
     ]
+    // the place names the project under its top-level project
     expect(windows().map(placed)).toEqual([
-      [snap.projects[0].name, true],
+      [`Fixture program, ${snap.projects[0].name}`, true],
       [undefined, undefined],
     ])
     expect(windows()[1].querySelector('[data-task-gone-archived]')).not.toBeNull()
@@ -989,7 +992,9 @@ async function openFound({
   archivedAt?: string
 } = {}) {
   vi.resetModules()
-  snap = plannerFixture()
+  // the project under a top-level project, as every writer stores one
+  // that holds tasks, so the navigation reads name it
+  snap = underProgram(plannerFixture())
   snap.profiles[0].org_role = role
   if (level)
     snap.access.push({ project_id: snap.projects[0].id, profile_id: snap.profiles[0].id, level })
@@ -1084,7 +1089,7 @@ describe('the task window on a task Search found that the workspace does not hol
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Run the soak test')
     expect(dialog()?.textContent).toContain('Measure the drift.')
     expect(document.querySelector('[data-task-gone-place]')?.textContent).toBe(
-      'Task creation fixture',
+      'Fixture program, Task creation fixture',
     )
     expect(document.querySelector('[data-task-gone-archived]')?.textContent).toMatch(
       /^Archived on \d+ \w+/,

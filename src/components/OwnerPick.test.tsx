@@ -10,7 +10,7 @@ import {
   type OwnerPickerArgs,
   ownerPickersStandIn,
 } from '../store/ownerPickersStandIn.setup'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 
 /* The owner list on the real store, read from the server's owner pickers
    through the stand-in (store/ownerPickersStandIn.setup.ts): nothing read
@@ -104,7 +104,9 @@ async function load({
   holder?: string
 } = {}) {
   vi.resetModules()
-  snap = plannerFixture()
+  // the project under a top-level project, as every writer stores one
+  // that holds tasks, so the navigation reads name it
+  snap = underProgram(plannerFixture())
   addPeople(people, viewers)
   if (john)
     snap.profiles.push({

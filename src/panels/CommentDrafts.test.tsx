@@ -7,7 +7,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LIMITS } from '../../convex/lib/limits'
 import { TooltipProvider } from '../components/ui/tooltip'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 import type { Row } from '../store/rows'
 
 /* The comment composer and the thread's failed state in the task window, on
@@ -65,7 +65,9 @@ const range = (from: number, to: number) =>
 /** Loads the store with task QN-27, whose description is `description`. */
 async function load(description = '') {
   vi.resetModules()
-  const snap: Snapshot = plannerFixture()
+  // the project under a top-level project, as every writer stores one
+  // that holds tasks, so the navigation reads name it
+  const snap: Snapshot = underProgram(plannerFixture())
   me = snap.profiles[0].id
   snap.issues.push({
     id: 'task-a',
