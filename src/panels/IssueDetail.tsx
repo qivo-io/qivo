@@ -96,6 +96,7 @@ import {
   type CommentVM,
   type IssueVM,
   P,
+  READ_ONLY_PROJECT,
   type RelatedTaskVM,
   type SectionAttachmentVM,
   type SectionName,
@@ -155,7 +156,26 @@ function EditorSlot({ fallback, children }: { fallback: ReactNode; children: Rea
    for someone who could restore it. */
 const RESTORE_TO_CHANGE = 'Restore this task to change it'
 /* Why a control is off for someone who can only read the project. */
-const READ_ONLY = 'Read-only project access'
+const READ_ONLY = READ_ONLY_PROJECT
+
+/** Whether the store's level agrees that the caller writes in project
+    `id`, for a control a task's answer gives Edit: the store's level where
+    the projects part holds the project or the project cache answered it,
+    the answer's alone while the cache loads, failed or did not check it,
+    which only narrows nothing the server would refuse, and no where the
+    cache answered it gone. */
+const storeWrites = (id: string) => {
+  const state = P.projectState(id)
+  if (state === 'held' || state === 'ok') return P.canWrite(id)
+  return state !== 'gone' && state !== null
+}
+
+/** storeWrites for Lead. */
+const storeLeads = (id: string) => {
+  const state = P.projectState(id)
+  if (state === 'held' || state === 'ok') return P.levelOn(id) === 'lead'
+  return state !== 'gone' && state !== null
+}
 
 /* One task in Parent, Subtasks or Linked tasks, from its row model
    (RelatedTaskVM): the workspace's view of a task it holds, else the
@@ -1873,7 +1893,7 @@ function IssueDetail({
   const projectArchived =
     !!goneAnswer &&
     typeof goneAnswer === 'object' &&
-    !P.project(goneAnswer.project) &&
+    !P.heldProject(goneAnswer.project) &&
     P.archivedProjects.some((project) => project.id === goneAnswer.project)
   // the caller's level on a task shown from its answer, which decides the
   // controls offered there, together with the workspace's (canComment);
@@ -1885,7 +1905,7 @@ function IssueDetail({
     goneAnswer !== null &&
     typeof goneAnswer === 'object' &&
     (answerEditor || (answerLevel === null && !!detail?.textless)) &&
-    P.canWrite(goneAnswer.project)
+    storeWrites(goneAnswer.project)
   /** Says that text typed for the task went with it, as its editors do,
       unless the person chose Discard for it. */
   const sayDiscarded = (what: string) => {
@@ -1895,7 +1915,7 @@ function IssueDetail({
   // an active task shown from its answer, in any state of its read: their
   // title, description and hours editors stay mounted with their drafts,
   // and a save waits while the read failed or runs again (P.refuseStaleEdit)
-  const answerEditorOn = !!it && fromAnswer && !archived && answerEditor && P.canWrite(it.project)
+  const answerEditorOn = !!it && fromAnswer && !archived && answerEditor && storeWrites(it.project)
   // a title is typed for a task the workspace holds, or one shown from its
   // answer for its editor
   useUpdateBlocker(editTitle && !!it && titleDraft !== it.title)
@@ -2316,10 +2336,10 @@ function IssueDetail({
   // Comments on a task shown from its answer need edit access by both the
   // answer and the workspace, so a stale one only takes controls away. An
   // archived task takes none.
-  const canComment = held ? canLabel : !!it && !archived && answerEditor && P.canWrite(it.project)
+  const canComment = held ? canLabel : !!it && !archived && answerEditor && storeWrites(it.project)
   const canLead = held
     ? P.levelOn(held.project) === 'lead'
-    : !!it && !archived && answerLevel === 'lead' && P.levelOn(it.project) === 'lead'
+    : !!it && !archived && answerLevel === 'lead' && storeLeads(it.project)
   // the Inbox pane's owner, named from the workspace or by id
   // (store/planner.ts P.person), so one not loaded never reads as
   // unassigned; the window names its people below (usePeople)
@@ -2334,7 +2354,9 @@ function IssueDetail({
       ? WAITS_FOR_CHECK
       : fromAnswer && answerEditor && archived
         ? RESTORE_TO_CHANGE
-        : READ_ONLY
+        : fromAnswer && answerLevel !== null && !answerEditor
+          ? READ_ONLY
+          : ((it && P.writeNote(it.project)) ?? READ_ONLY)
   // The phone's Activity view keeps the two frequent edits within reach.
   // Details uses the same controls, with the same choices and access checks.
   // Pause / Resume is the last row of the status menu: a pause is a state of
@@ -2490,7 +2512,7 @@ function IssueDetail({
   const current = !!held || (!!it && P.editsFromAnswer(it.id))
   const canRelate = canEdit
   const rowEditor = (row: RelatedTaskVM) =>
-    (row.level === 'lead' || row.level === 'user') && P.canWrite(row.project)
+    (row.level === 'lead' || row.level === 'user') && storeWrites(row.project)
   // a link needs Edit on either task (convex/model/issues.ts linkAccess),
   // so someone who only views this task links it to a task they can edit
   const canLinkAny =
@@ -3594,19 +3616,22 @@ function IssueDetail({
                             held or from its answer, whose project the store
                             holds, which the Board needs; App reveals the card
                             the Board's answer names it by */}
-                          {embedded && onShowOnBoard && !archived && !!P.project(it.project) && (
-                            <MenuItem
-                              data-task-open-board
-                              onClick={() => {
-                                close()
-                                const num = Number(it.key.slice(P.ISSUE_PREFIX.length + 1))
-                                onShowOnBoard(it.project, P.openTask(it.uuid, it.org, num))
-                              }}
-                            >
-                              <Icon name="board" size={14} />
-                              Open task in board
-                            </MenuItem>
-                          )}
+                          {embedded &&
+                            onShowOnBoard &&
+                            !archived &&
+                            !!P.heldProject(it.project) && (
+                              <MenuItem
+                                data-task-open-board
+                                onClick={() => {
+                                  close()
+                                  const num = Number(it.key.slice(P.ISSUE_PREFIX.length + 1))
+                                  onShowOnBoard(it.project, P.openTask(it.uuid, it.org, num))
+                                }}
+                              >
+                                <Icon name="board" size={14} />
+                                Open task in board
+                              </MenuItem>
+                            )}
                           <MenuItem
                             onClick={() => {
                               copyId()

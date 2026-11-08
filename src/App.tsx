@@ -809,12 +809,12 @@ function App() {
   // a scope is either a project row or My view's sentinel, which resolves to
   // no row on purpose, so every check has to admit it explicitly, or a
   // #/board/mine deep link would boot into no scope
-  const liveScope = (s) => !!s && (P.isWideScope(s) || !!P.project(s))
+  const liveScope = (s) => !!s && (P.isWideScope(s) || !!P.heldProject(s))
   // the remembered project (UIPrefs.lastProject) where the workspace holds
   // it, which a task address prefers when it holds the task; nothing else
   // opens it before the server checked it
   const remembered = ui0.lastProject?.project_id
-  const heldRemembered = remembered && P.project(remembered) ? remembered : null
+  const heldRemembered = remembered && P.heldProject(remembered) ? remembered : null
   // prefs saved before the merge may still say "split"/"resources" — both
   // collapsed into the roadmap (which now always docks the resource strip)
   const uiView0 = ui0.view === 'split' || ui0.view === 'resources' ? 'roadmap' : ui0.view
@@ -1011,7 +1011,7 @@ function App() {
      and its top-level project's id, for the access guard's note and
      Settings' onProjectGone once it has left the workspace. */
   const scopePlace = useRef<{ id: string; top: string | null; name: string } | null>(null)
-  const scopeProject = scope ? P.project(scope) : undefined
+  const scopeProject = scope ? P.heldProject(scope) : undefined
   if (scopeProject)
     scopePlace.current = {
       id: scopeProject.id,
@@ -1354,7 +1354,7 @@ function App() {
       : null
   useEffect(() => {
     if (!viewShown || !scope || P.isWideScope(scope) || taskScope.current === scope) return
-    const p = P.project(scope)
+    const p = P.heldProject(scope)
     if (!p) return
     const was = P.loadUI().lastProject
     if (was?.project_id === p.id && was.org_id === p.org) return
@@ -1698,12 +1698,26 @@ function App() {
      under a parent they still see goes too. A lost one leaves no scope and
      the chooser with "<name> is no longer available to you.", never another
      project or My view: someone else's change must not choose for the
-     person. Its address gives way to the front door in place. */
+     person. Its address gives way to the front door in place. The scope
+     itself must be the workspace's (P.heldProject), as every view reads its
+     sub-projects there (P.scopeInfo). Its top-level project, which the
+     projects part holds wherever it holds the sub-project, is judged by
+     the project cache where the part does not hold it (named under
+     `scope`): it stays while the cache loads it, failed or did not check
+     it, and only the cache's `gone` loses it, so loading never reads as
+     lost. */
   useEffect(() => {
-    if (!scope || P.isWideScope(scope)) return
-    const p = P.project(scope)
-    const top = p?.parent ? P.project(p.parent) : p
-    if (p && top && P.canSee(top.id) && P.canSee(p.id)) return
+    if (!scope || P.isWideScope(scope)) {
+      P.nameProjects('scope', [])
+      return
+    }
+    const p = P.heldProject(scope)
+    const topId = p ? (p.parent ?? p.id) : null
+    const topHeld = !!topId && !!P.heldProject(topId)
+    P.nameProjects('scope', topId && !topHeld ? [topId] : [])
+    const topState = topId && !topHeld ? P.projectState(topId) : null
+    if (topState === 'loading' || topState === 'failed' || topState === 'unchecked') return
+    if (p && topId && (topHeld || topState === 'ok') && P.canSee(topId) && P.canSee(p.id)) return
     const was = scopePlace.current?.id === scope ? scopePlace.current : null
     setScope(undefined)
     showOpening((n) => ({
@@ -1839,7 +1853,7 @@ function App() {
        can open without one: the dialog offers only writable projects and
        asks for the project/sub-project there. */
     const target = init.project || (P.isWideScope(scope) ? null : scope)
-    const proj = target ? P.project(target) : null
+    const proj = target ? P.heldProject(target) : null
     // "tasks live in sub-projects": a project with none can't receive one.
     // The rule follows the TARGET, not just the scope. My view gives every
     // project a lane and a track, and their + buttons name them.
@@ -1941,7 +1955,7 @@ function App() {
       window.showToast?.('Move this task out of Backlog before planning it on the roadmap', 'error')
       return
     }
-    const meta = P.metaOf(it.project)
+    const meta = P.heldMeta(it.project)
     if (!meta) return
     const place = taskPlaceOf(it)
     /* A Roadmap that holds the task's sub-project, that sub-project's or
@@ -1996,7 +2010,7 @@ function App() {
   // the window and reveals the card at once (the crumb on a phone, whose
   // window covers the list).
   const showOnBoard = (projectId: string, issueKey?: string, keepOpen = true) => {
-    const p = P.project(projectId)
+    const p = P.heldProject(projectId)
     if (!p) return
     const revealed = issueKey || null
     const target = keepOpen ? revealed : null
@@ -2125,7 +2139,7 @@ function App() {
      first name, from Team sync's agenda. */
   const showPersonOn = (v: 'kanban' | 'roadmap', profileId: string, first: string) => {
     const place = parseSyncScope(sync?.scope)
-    const to = place.kind === 'project' && P.project(place.id) ? place.id : undefined
+    const to = place.kind === 'project' && P.heldProject(place.id) ? place.id : undefined
     move({ sync: null, scope: to, view: v, openIssue: null }, () => {
       setFilters((f) => ({
         search: '',
@@ -2149,7 +2163,7 @@ function App() {
   /* A sub-project's Board, from Team sync's note for one past its limits:
      leave the page for the Board of that sub-project. */
   const showBoardOf = (projectId: string) => {
-    if (!P.project(projectId)) return
+    if (!P.heldProject(projectId)) return
     move({ sync: null, scope: projectId, view: 'kanban', openIssue: null }, () => {
       setSync(null)
       setScope(projectId)
@@ -2309,7 +2323,7 @@ function App() {
     // commit, takes the task's address (lib/pageHistory pushPage).
     setModal(null)
     window.showToast?.(`Created ${P.keyOfOpen(open)}`)
-    const curProj = P.project(scope)
+    const curProj = P.heldProject(scope)
     /* A create from a project that does not hold the task moves to the
        task's sub-project. My view shows it only if it landed on me, by P.isMine's
        rule read from what was typed, since the workspace holds no task:
@@ -2367,7 +2381,7 @@ function App() {
         // whether the workspace holds the new project now, which it does
         // once the live transport has delivered what the create made
         // visible, or while a paint under a held parent stays
-        const held = !!id && !!P.project(id)
+        const held = !!id && !!P.heldProject(id)
         /* What follows once whether the creator sees the project is known:
            true, false or null for unknown. */
         const follow = (seen: boolean | null) => {
@@ -2546,7 +2560,7 @@ function App() {
         // purpose, so My view opens it on no choice rather than on an
         // arbitrary project or on all of an organization's projects
         // (P.project() is undefined for it)
-        const p = P.project(scope)
+        const p = P.heldProject(scope)
         const scopeMeta = p ? (p.type === 'meta' ? p.id : (p.parent ?? null)) : null
         /** Leaves Settings for the page that opened it. */
         const exitSettings = () => {
@@ -2616,7 +2630,7 @@ function App() {
                         ? opening.lost
                         : null
                     if (!at || (at.id !== id && at.top !== id)) return
-                    if (parent && P.project(parent) && P.canSee(parent)) setScope(parent)
+                    if (parent && P.heldProject(parent) && P.canSee(parent)) setScope(parent)
                     else {
                       setScope(undefined)
                       showOpening((n) => ({ kind: 'choose', n, note: null, lost: null }))
@@ -2806,14 +2820,14 @@ function App() {
                 // lacks gets nothing
                 const it = P.taskShown(id)
                 const acts =
-                  it && P.metaOf(it.project) && (P.isGroup(it) || it.status !== 'backlog')
+                  it && P.heldMeta(it.project) && (P.isGroup(it) || it.status !== 'backlog')
                 if (acts) leaveSettingsFor(() => planOnRoadmap(id))
                 else planOnRoadmap(id)
               }}
               unread={undefined}
               onPopOut={undefined}
               onShowOnBoard={(projectId, issueKey, keepOpen) =>
-                P.project(projectId)
+                P.heldProject(projectId)
                   ? leaveSettingsFor(() => showOnBoard(projectId, issueKey, keepOpen))
                   : undefined
               }

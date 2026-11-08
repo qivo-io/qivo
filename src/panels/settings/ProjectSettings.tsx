@@ -135,7 +135,7 @@ export function ProjectPage({
       // a sub-project falls back to its project while the workspace holds
       // it; a project back to the list it was opened from (never to some
       // other project the caller may not see)
-      if (parent && P.project(parent)) setPage(`project:${parent}`)
+      if (parent && P.heldProject(parent)) setPage(`project:${parent}`)
       else setPage('projects')
       return true
     }
@@ -159,7 +159,7 @@ export function ProjectPage({
      does not change. A project the workspace does not hold keeps its
      address there, and a held one that leaves meanwhile keeps its number
      until the window closes. */
-  const unheldIn = answer && !gone && !P.project(answer.project.id) ? answer.project.org_id : null
+  const unheldIn = answer && !gone && !P.heldProject(answer.project.id) ? answer.project.org_id : null
   const openedBy =
     typeof project !== 'string' && 'num' in project && project.org_id === unheldIn
       ? project.num

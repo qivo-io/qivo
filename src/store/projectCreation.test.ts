@@ -67,12 +67,12 @@ describe('project creation through the client store', () => {
 
   it('adopts the key the server chose in place of a taken preview', async () => {
     const id = P.addProject({ type: 'meta', key: 'TES', name: 'Test' })!
-    expect(P.project(id)?.key).toBe('TES')
+    expect(P.heldProject(id)?.key).toBe('TES')
     expect(requests[0]).toMatchObject({ name: 'projects:create', args: { id, key: 'TES' } })
 
     requests[0].resolve({ id, num: snap.orgs[0].next_project_num + 1, key: 'TES2' })
     await settled()
-    expect(P.project(id)?.key).toBe('TES2')
+    expect(P.heldProject(id)?.key).toBe('TES2')
     expect(showToast).not.toHaveBeenCalled()
   })
 
@@ -284,7 +284,7 @@ describe('project creation through the client store', () => {
     const id = P.addProject({ type: 'meta', key: 'NEW', name: 'New' })!
     requests[0].resolve({ id, num: snap.orgs[0].next_project_num + 1, key: 'NEW' })
     await settled()
-    expect(P.project(id)?.key).toBe('NEW')
+    expect(P.heldProject(id)?.key).toBe('NEW')
   })
 
   describe('canCreateProject', () => {

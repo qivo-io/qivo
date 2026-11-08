@@ -48,6 +48,16 @@ type MobileRoadmapProps = {
 
 /* A task row's height before it renders (a two-line title), and the least
    it takes, for the rows a first screen holds. */
+/* The verb of an agenda milestone row's label: Edit where the caller
+   writes in its top-level project, View for a known level without Edit,
+   and Open while the project cache loads it, failed or did not check it,
+   where the Milestones window decides from its own read. */
+function milestoneVerb(projectId: string): 'Edit' | 'View' | 'Open' {
+  if (P.canWrite(projectId)) return 'Edit'
+  const state = P.projectState(projectId)
+  return state === 'held' || state === 'ok' || state === 'gone' ? 'View' : 'Open'
+}
+
 const ROW_ESTIMATE_PX = 96
 const ROW_MIN_PX = 72
 const taskKey = (task: IssueVM) => task.id
@@ -207,7 +217,7 @@ export function MobileRoadmap({
           m.project,
         )
       }
-      aria-label={`${P.canWrite(m.project) ? 'Edit' : 'View'} milestone ${m.name}`}
+      aria-label={`${milestoneVerb(m.project)} milestone ${m.name}`}
     >
       <Icon name="diamond" size={16} color={P.MILESTONE_COLOR} />
       <span className="mobile-roadmap-row-body">

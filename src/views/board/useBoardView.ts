@@ -8,7 +8,10 @@
    - The store owns the Board's read (P.watchBoard): each variant registers
      its arguments from an effect, or none while its page or the tab is
      hidden (lib/viewVisibility.ts), so a kept page stops its read and reads
-     afresh when it shows again.
+     afresh when it shows again. The store names the projects the answer
+     names with its project cache (store/planner.ts BOARD_QUERY `projects`),
+     so a card's place and rights read a project the workspace's projects
+     part does not hold from the cache.
    - The answer decides which tasks a Board shows. Each shows as the
      workspace's view model where the workspace holds the task, else as the
      model the store shaped from the answer's row (store/viewRows.ts), so a
