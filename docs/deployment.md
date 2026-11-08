@@ -955,24 +955,16 @@ a later backend, and that includes a tab already open when the release
 deploys, until it reloads. This moves the floor: never return the app or the
 demo to a deployment of a commit before the release that replaced
 `snapshot.forMe` with the parts (the release after v0.1.52). Roll forward
-instead. From the release after v0.1.160 the backend has no
-`workspace.people` or `workspace.catalog`, which every earlier app
-subscribes, so that app cannot load against it, and the app from that
-release needs its backend's `teams.picker`, `pickers.taskFollowers` and the
-root part's own rows. Never return the backend to a commit before that
-release, and never return the app or the demo alone to a release before
-it; roll forward. From the release after v0.1.161 the backend has no
-`workspace.projects`, which every earlier app subscribes at boot, so that
-app cannot load against it: never return the app or the demo alone,
-Vercel Instant Rollback included, to a release before that one; roll
-forward.
-
-An app from before the release after v0.1.159 joins the milestones of every
-workspace projects part it reads, which later backends no longer send, so
+instead. The app from the release after v0.1.160 on needs its backend's
+`teams.picker`, `pickers.taskFollowers` and the root part's own rows, so
+never return the backend to a commit before that release. Every app before
+the release after v0.1.161 subscribes a workspace part that later backends
+no longer have, `workspace.projects` and `workspace.inbox`, and before the
+release after v0.1.160 also `workspace.people` and `workspace.catalog`, so
 it cannot load its workspace against them, and that includes a tab already
 open when the release deploys, until it reloads. Never return the app or
-the demo alone to a deployment of a commit before that release; return the
-backend with it, or roll forward.
+the demo alone, Vercel Instant Rollback included, to a deployment of a
+commit before the release after v0.1.161; roll forward.
 
 The app before v0.1.149 lists **Settings → Projects → Deleted items**
 through `deletedItems.list` and searches it through `deletedItems.matches`,
@@ -2289,8 +2281,14 @@ release removes `workspace.projects` and the root part's `live_projects`
 and `next_project_num`. Every earlier app subscribes the removed part at
 boot, so this release is the app floor that "Rollback and hotfixes" names.
 The backend floor for these reads is the one the paragraph on
-`projectNav.byIds` above sets. The release changes no table, field or
-index, and needs no backfill and no release step.
+`projectNav.byIds` above sets. The staging check's `ui/projects-part`
+step boots the run's project's Board and checks that no frame subscribes
+`workspace.projects` and that `projectNav.byIds` reads the project, that the
+Board's **New task** dialog lists the project's two sub-projects from
+`projectNav.targets` and that Team sync's scope menu offers the project from
+`projectNav.page` with the home organization, each found by the run's tag,
+and writes nothing. The release changes no table, field or index, and needs
+no backfill and no release step.
 
 ## Node.js version
 
