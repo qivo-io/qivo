@@ -94,7 +94,9 @@ const openInbox = async (page) => {
   await page.waitForSelector('[data-message]', { timeout: 30000 })
 }
 
-const browser = await chromium.launch()
+// the full Chromium in its new headless mode, whose pages honour a granted
+// notification permission; the headless shell denies every page's
+const browser = await chromium.launch({ channel: 'chromium' })
 const restore = [] // { org, task, read } for every row this drive touched
 let ctxA
 let ctxB
@@ -102,6 +104,8 @@ let ctxPhone
 let pageA
 try {
   ctxA = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' })
+  // A's page shows desktop alerts, so the wake below raises one
+  await ctxA.grantPermissions(['notifications'], { origin: BASE })
   const A = await ctxA.newPage()
   pageA = A
   await signInDemo(A, demo)
@@ -234,11 +238,20 @@ try {
   if (woke.snoozed || woke.read) fail('the wake did not return the row unread')
   // the wake moves it to the top of Newest first, as its list time is the wake's
   if ((await groups(A))[0].id !== third.id) fail('the woken row is not at the top of the list')
-  const notes = await A.evaluate(() => window.__qivoNotes ?? [])
-  if (!notes.some((n) => n.title.startsWith('Back from snooze, ')))
-    fail(`no wake notification: ${JSON.stringify(notes)}`)
+  // the alert follows the Inbox feed's answer and its claim; where the
+  // server handed delivery to A's session since its last claim, it comes
+  // as the generic summary instead (src/lib/notificationFeed.ts)
+  const announced = (notes) =>
+    notes.find((n) => n.title.startsWith('Back from snooze, ') || n.tag === 'qivo:catch-up')
+  let notes = []
+  for (let i = 0; i < 40 && !announced(notes); i++) {
+    await sleep(250)
+    notes = await A.evaluate(() => window.__qivoNotes ?? [])
+  }
+  const note = announced(notes)
+  if (!note) fail(`no wake notification: ${JSON.stringify(notes)}`)
   log(
-    `server wake returned "${third.title}" ${Math.round((Date.now() - t0) / 1000)}s after the stamp: unread, on top, announced`,
+    `server wake returned "${third.title}" ${Math.round((Date.now() - t0) / 1000)}s after the stamp: unread, on top, announced ${note.tag === 'qivo:catch-up' ? 'by the summary' : 'by its own alert'}`,
   )
   await A.screenshot({ path: `${SHOTS}/inbox-snooze-5-after-wake.png` })
 

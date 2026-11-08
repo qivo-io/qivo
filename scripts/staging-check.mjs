@@ -1589,6 +1589,10 @@ async function openBrowser() {
   // group, so a terminal's Ctrl-C reaches only this process, whose handler
   // lets the run clean up.
   browser = await chromium.launch({
+    // the full Chromium in its new headless mode, whose pages honour a
+    // granted notification permission, which the alert steps need; the
+    // headless shell reports every page's permission as denied
+    channel: 'chromium',
     headless: true,
     handleSIGINT: false,
     handleSIGTERM: false,
