@@ -951,10 +951,12 @@ this project; hand the lead to someone else first`.
 `PUT` answers `{"project_id", "user" | "team": {"id", "name"}, "level",
 "changed"}`; giving the level someone already has changes nothing.
 `expected.level` is the level you last read for that user or team in the
-project's `grants`, or `null` when the project listed no grant of their own,
-and `PUT` saves nothing when it changed since (see [Refusing a change when a
-field changed since you read
-it](#refusing-a-change-when-a-field-changed-since-you-read-it)).
+project's `grants` or in the pages of `/access/users` or `/access/teams`.
+It is `null` only when neither the single-project read's first page nor
+those pages, followed until `next_cursor` is `null`, listed a grant of
+their own, because the read holds only the first 50 grants. `PUT` saves
+nothing when it changed since (see [Refusing a change when a field changed
+since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it)).
 
 Removing access can hide open tasks from the people working on them. These
 are the tasks of the project and its sub-projects that are not Done, whose
@@ -3154,10 +3156,13 @@ Send each field as the read showed it:
   so a sub-project without a lead of its own compares its parent's lead.
 - **A label's color.** `color` is the color reads show, so a label stored
   before the `#rrggbb` rule compares as `#8A8F98`.
-- **A milestone's day.** `date` is the `date` the project read lists for the
-  milestone.
-- **A grant.** `level` is the level the project's `grants` list for that user
-  or team, or `null` when it lists no grant of their own.
+- **A milestone's day.** `date` is the `date` the project read, or a page
+  of `GET /v1/projects/{ref}/milestones`, lists for the milestone.
+- **A grant.** `level` is the level the project's `grants`, or the pages of
+  `GET /v1/projects/{ref}/access/users` or `/access/teams`, list for that
+  user or team. It is `null` only when none of them lists a grant of their
+  own, with those pages followed until `next_cursor` is `null`, because the
+  single-project read holds only the first 50 grants.
 
 Values compare in a normalized form, so formatting alone never refuses a
 change. Titles and names are trimmed. A task's or project's description
