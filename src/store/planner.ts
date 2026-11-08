@@ -8235,17 +8235,18 @@ const profileCache = createProfileCache({
    name, read by id and kept within PROJECT_CACHE.most
    (store/projectCache.ts), the store's only source of project facts and
    of the caller's levels, as the workspace holds no project. A change of
-   an entry or a state repaints once a frame as a picture does: a rebuild,
-   which shapes the cached facts, the number tags and P.contextVersion,
-   then a workspace emit. P.project, P.levelOn and the lookups built on
-   them answer from it. */
+   an entry or a state repaints once a frame (projectFrame), also while
+   every task loads, where a picture waits for the load: a rebuild, which
+   shapes the cached facts, the number tags and P.contextVersion, then a
+   workspace emit. P.project, P.levelOn and the lookups built on them
+   answer from it. */
 const projectCache = createProjectCache({
   live: {
     watch: (ref, args) => live.watch(ref, args),
     read: (token) => live.read(token),
     onTransition: (fn, options) => live.onTransition(fn, options),
   },
-  changed: () => showPortraits(),
+  changed: () => projectFrame.schedule(),
   watchVisibility,
 })
 /* The facts of the cache's rows, by id, shaped in rebuild, each the same
@@ -8279,6 +8280,14 @@ const portraitFrame = frameBatch(() => {
   rebuild()
   emit()
 })
+/* One repaint a frame for the project cache's news, also while every task
+   loads: the cache is the store's only source of projects, so a scope, a
+   view's groups and the task window's rights wait for it, where pictures
+   can wait for the load's next paint. */
+const projectFrame = frameBatch(() => {
+  rebuild()
+  emit()
+})
 
 /* Clears every file URL and byte the store holds: the mint queue, the
    minted attachment leases, the inline images and the pictures, with the
@@ -8303,6 +8312,7 @@ function clearAvatarSources() {
   avatarSources.clear()
   avatarSources.setPersistent(null)
   portraitFrame.cancel()
+  projectFrame.cancel()
   if (mintSweep) clearInterval(mintSweep)
   mintSweep = null
 }

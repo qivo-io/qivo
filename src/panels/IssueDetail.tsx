@@ -237,9 +237,14 @@ function MiniIssueRow({
           <span className="line-clamp-2 [font-size:var(--fs-base)] [line-height:1.4] [overflow-wrap:anywhere]">
             {task.title}
           </span>
-          <span className="[font-size:var(--fs-xs)] [color:var(--text-3)] [max-width:100%] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
-            <ProjectName project={proj} />
-          </span>
+          {/* the related task's project, named by the window, shows once
+              the project cache answers it; while it loads the row names no
+              project rather than a wrong one */}
+          {proj && (
+            <span className="[font-size:var(--fs-xs)] [color:var(--text-3)] [max-width:100%] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
+              <ProjectName project={proj} />
+            </span>
+          )}
         </span>
         <span className="flex shrink-0 items-center gap-3">
           {!task.isGroup && <StatusDot status={task.status} size={14} />}
