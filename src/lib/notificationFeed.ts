@@ -20,7 +20,10 @@
      replays no stored history. That answer's `more` is part of the
      baseline too. Its keys are never offered later, since the baseline
      recorded none of them and one may come back into the feed, as when
-     the person reads it and marks it unread again.
+     the person reads it and marks it unread again. They belong to the
+     session, not to one lead, so a stop and the resume that follows (a
+     capability that turns off and on, a freeze) keep them, and only the
+     next baseline or a new client, as after a sign-out, drops them.
    - A takeover starts from the floor, the keys and the baseline's keys the
      tab that led before posted, as if it went on from there. It offers
      what its first answer holds beyond those keys, and takes no baseline.
@@ -209,7 +212,9 @@ export function createNotificationFeed(deps: FeedDeps) {
   // the keys of the last answer handled
   let lastKeys = new Set<string>()
   // the keys of the fresh start's baseline, which it never offers, since
-  // the baseline recorded none of them and one may come back into the feed
+  // the baseline recorded none of them and one may come back into the feed;
+  // kept across stop() and a resume, replaced by a takeover's and by the
+  // next baseline
   let baselined = new Set<string>()
   // the newest answer not handled yet
   let waiting: Feed | null = null
@@ -420,14 +425,15 @@ export function createNotificationFeed(deps: FeedDeps) {
     void pump()
   }
 
-  /** Forgets the floor, the answer and its keys, and stops the watch. */
+  /** Forgets the floor, the answer and its keys, and stops the watch. It
+      keeps the baseline's keys, which a resume of the session still
+      needs. */
   function forget() {
     if (after !== null || watched !== null) deps.unwatch()
     after = null
     watched = null
     baseline = false
     lastKeys = new Set()
-    baselined = new Set()
     waiting = null
     resumePending = false
     freshBeat = null
@@ -503,8 +509,9 @@ export function createNotificationFeed(deps: FeedDeps) {
     /** What the client holds, for tests: the keys of the last answer and
         of the baseline, and whether an answer waits. */
     held: () => ({ keys: lastKeys.size, baselined: baselined.size, waiting: waiting !== null }),
-    /** Stops leading: forgets the floor, the answer and its keys, stops the
-        watch, and lets no run in progress show or move anything. */
+    /** Stops leading: forgets the floor, the answer and its keys, but not
+        the baseline's, stops the watch, and lets no run in progress show
+        or move anything. */
     stop() {
       if (!link) return
       link = null

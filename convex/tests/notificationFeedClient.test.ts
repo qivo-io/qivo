@@ -832,6 +832,48 @@ describe('resumes', () => {
     expect(tab.after).toBeNull()
   })
 
+  it('keeps the baseline’s keys through notifications turned off and on inside the minute, and alerts a late notice', async () => {
+    const t = newT()
+    const { f, s, task } = await fixture(t)
+    // an unread message stored before the tab opened, which the baseline holds
+    const stored = await news(t, f, task)
+    if (!stored) throw new Error('no message')
+    const tab = openTab(s)
+    await startTabs([tab])
+    expect(tab.notes).toEqual([])
+    expect(tab.client.held().baselined).toBe(1)
+    // off and on again inside the minute the feed reads back, which stops
+    // the feed and leads it again with the resume order
+    jump(0.1)
+    tab.can = false
+    tab.permissionChanged()
+    await settle([tab])
+    expect(tab.after).toBeNull()
+    jump(0.1)
+    tab.can = true
+    const from = tab.calls.length
+    tab.permissionChanged()
+    await settle([tab], true)
+    expect(names(tab, from).slice(0, 2)).toEqual([
+      'notifications:beat',
+      'notifications:claimSummary',
+    ])
+    // the stored message, which claimAlerts would grant, is never offered
+    const offered = () =>
+      tab.calls
+        .slice(from)
+        .filter((c) => c.name === 'notifications:claimAlerts')
+        .flatMap((c) => (c.args.events as { key: string }[]).map((e) => e.key))
+    expect(offered()).not.toContain(stored.id)
+    expect(tab.notes).toEqual([])
+    // a notice stored late, newer than the baseline, still alerts
+    const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'Late' })
+    const late = await post(t, f, { to: f.guest, task: other, minute: 0.05 })
+    await settle([tab], true)
+    expect(tab.notes.map((n) => n.tag)).toEqual([late?.id])
+    expect(offered()).not.toContain(stored.id)
+  })
+
   it('beats and summarizes again after a failed claim, before it claims anything', async () => {
     const t = newT()
     const { f, s, task } = await fixture(t)
