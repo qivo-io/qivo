@@ -11,12 +11,18 @@
  * tasks of a store that holds every task, which the tests' default boot
  * holds, and t3/limits-retire-task-windows ends or rewrites it with the
  * store's whole-list reads. The test imports it after the store it boots,
- * so it reads that store. */
+ * so it reads that store. The store's filter row takes no text (the views
+ * take the answer's text verdict), so the oracle matches the text itself
+ * with the server's words and the fixture's names
+ * (store/textMatch.setup.ts matchesText). */
 
 import { isRoadmapTaskVisible } from '../lib/roadmapVisibility'
 import { type AutoMove, autoMoves, type DepPair, dependencyPairs } from '../lib/schedule'
 import { issueLoadByPerson, type LoadIssue, pausedWeeksByPerson } from '../lib/workload'
 import { type IssueFilters, type IssueVM, P, type ScopeInfo } from './planner'
+import { matchesText, type TextNames, textNames } from './textMatch.setup'
+
+export { textNames }
 
 /** The Roadmap's rows of `info` in the weeks `w0` to `w1` with `filters`,
  * as the phone's agenda derives them (MobileRoadmap.tsx) and the desktop
@@ -27,12 +33,14 @@ export function roadmapRows(
   w0: number,
   w1: number,
   filters: IssueFilters,
+  names: TextNames,
   session?: string,
 ): IssueVM[] {
   return P.scopedIssues(info).filter(
     (it) =>
       isRoadmapTaskVisible(it, P.isDone(it), w0, w1) &&
-      (it.id === session || P.passesFilters(it, filters)),
+      (it.id === session ||
+        (P.passesFilters(it, filters) && matchesText(names, it, filters.search))),
   )
 }
 

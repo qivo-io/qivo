@@ -40,9 +40,9 @@ import { isRoadmapTaskVisible } from '../../convex/lib/roadmapVisibility'
 import { allWordsMatcher, taskSearchText } from '../../convex/lib/search'
 import { issueKey } from '../../convex/lib/taskRefs'
 import type { ViewRow } from '../../convex/lib/viewReads'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
 import { groupProgress, isIssueDone } from '../lib/issueGroups'
 import { ACCESS_UNCHECKED_MESSAGE, spanOf } from './boardStandIn.setup'
+import type { Whole } from './guard/liveDouble.setup'
 
 /** The arguments tasks.roadmap takes. */
 export type RoadmapArgs = {
@@ -85,12 +85,12 @@ export type RoadmapStandInOptions = {
 }
 
 type Snapshot = Pick<
-  Workspace,
+  Whole,
   'myProfileIds' | 'profiles' | 'projects' | 'issues' | 'labels' | 'issueLabels' | 'links'
 >
-type Task = Workspace['issues'][number]
-type Project = Workspace['projects'][number]
-type Link = Workspace['links'][number]
+type Task = Whole['issues'][number]
+type Project = Whole['projects'][number]
+type Link = Whole['links'][number]
 
 /* -1, 0 or 1 as `a` sorts before, with or after `b` in code unit order. */
 const order = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)

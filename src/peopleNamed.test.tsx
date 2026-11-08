@@ -5,7 +5,9 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ApiAccessPageAnswer } from './lib/apiAccess'
 import { TODAY_WEEK, weekToISO } from './lib/dates'
+import { matchesAllWords } from './lib/search'
 import { isPeopleSettingsRead, peopleSettingsServer } from './store/peopleSettingsStandIn.setup'
+import { type IssueVM, nameUnknown } from './store/planner'
 import type { Snapshot } from './store/plannerFixture.setup'
 import { isProjectSettingsRead, projectSettingsServer } from './store/projectSettingsStandIn.setup'
 import { isTeamSettingsRead, teamSettingsServer } from './store/teamSettingsStandIn.setup'
@@ -13,7 +15,8 @@ import { BOARD_TEST_TIMEOUT, loadBoard, spread, taskRow } from './views/boardFix
 
 /* The people every page shows, as the profile cache names and paints them
    (store/profileCache.ts, store/planner.ts P.person): a person the
-   workspace's people part does not hold shows as loading, then by name once
+   workspace does not hold, which is everyone but the signed-in person,
+   shows as loading, then by name once
    people.byIds answers, never as Unassigned, "Unknown user" or "Unavailable
    user" until the answer leaves them out; and the audit, one case a page:
    every portrait a page renders ([data-avatar]) is of a person an open view
@@ -82,8 +85,9 @@ afterEach(async () => {
 
 type Board = Awaited<ReturnType<typeof loadBoard>>
 
-/** Gina and Hal, people of the organization the workspace's people part
-    does not hold, who own work the views show. */
+/** Gina and Hal, people of the organization, whom the workspace does not
+    hold as it holds nobody but the signed-in person, who own work the
+    views show. */
 const GINA = 'gina'
 const HAL = 'hal'
 const unheld = (snap: Snapshot) => {
@@ -103,9 +107,8 @@ const unheld = (snap: Snapshot) => {
     })
 }
 
-/** Loads the Board's store with `prepare`, Gina and Hal left out of the
-    people part and their faces held back, and records what the views
-    name. */
+/** Loads the Board's store with `prepare` and Gina's and Hal's faces held
+    back, and records what the views name. */
 async function load(prepare: (snap: Snapshot) => void, options: Parameters<typeof loadBoard>[2]) {
   const board = await loadBoard(
     network,
@@ -115,7 +118,6 @@ async function load(prepare: (snap: Snapshot) => void, options: Parameters<typeo
     },
     options,
   )
-  board.server.people.unheld = new Set([GINA, HAL])
   board.server.people.hold = true
   await board.deliver()
   const names = watchNames(board)
@@ -225,6 +227,20 @@ const portraits = (id: string) =>
 
 const WORDS_BEFORE_ANSWER = ['Unknown user', 'Unavailable user', 'Unknown person']
 
+/** Whether the Board's text narrowing keeps task `it` for `text` while the
+    answer for the text is on its way (views/board/useBoardView.ts textOk):
+    by the fields a card shows, and always where its assignee's name has
+    not loaded, which the narrowing cannot tell from a match. The Board's
+    module is the one of the store the fixture booted, which names people
+    from that store. */
+async function narrowKeeps(board: Board, it: IssueVM, text: string) {
+  const { shownText } = await import('./views/board/useBoardView')
+  return (
+    matchesAllWords(shownText(it.key, it, board.P.isGroup(it), it.assignee), text) ||
+    nameUnknown(board.P.person(it.assignee, it.org))
+  )
+}
+
 describe('people the workspace does not hold, on each page', () => {
   it(
     'names the Board’s lanes and cards loading and then by name, never unknown before the answer, and names every portrait',
@@ -258,7 +274,7 @@ describe('people the workspace does not hold, on each page', () => {
         if (!it) throw new Error('the Board holds no g1')
         return it
       }
-      expect(board.P.matchesSearch(task(), 'zzz')).toBe(true)
+      expect(await narrowKeeps(board, task(), 'zzz')).toBe(true)
       // the answer names them
       board.server.people.hold = false
       await board.answer()
@@ -267,8 +283,8 @@ describe('people the workspace does not hold, on each page', () => {
       expect(document.body.textContent).toContain('Gina Ghost')
       expect(names.unnamed()).toEqual([])
       // once named, the filter decides by the name
-      expect(board.P.matchesSearch(task(), 'zzz')).toBe(false)
-      expect(board.P.matchesSearch(task(), 'ghost')).toBe(true)
+      expect(await narrowKeeps(board, task(), 'zzz')).toBe(false)
+      expect(await narrowKeeps(board, task(), 'ghost')).toBe(true)
       // only an answer that leaves Hal out makes him unknown
       board.server.people.force = 'gone'
       await board.answer()
@@ -365,8 +381,8 @@ describe('people the workspace does not hold, on each page', () => {
       await repaint()
       const task = board.P.viewTask('board:phone', 'r1')
       if (!task) throw new Error('the phone Board holds no r1')
-      expect(board.P.matchesSearch(task, 'ghost')).toBe(true)
-      expect(board.P.matchesSearch(task, 'zzz')).toBe(false)
+      expect(await narrowKeeps(board, task, 'ghost')).toBe(true)
+      expect(await narrowKeeps(board, task, 'zzz')).toBe(false)
     },
     BOARD_TEST_TIMEOUT,
   )

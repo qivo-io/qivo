@@ -1,9 +1,9 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { firstSittingDay, SYNC_OWNERS_MAX, SYNC_SITTING_MS } from '../../convex/lib/teamSync'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
+import type { Whole } from './guard/liveDouble.setup'
 
-type Snapshot = Workspace
+type Snapshot = Whole
 type Planner = typeof import('./planner')['P']
 type Role = Snapshot['profiles'][number]['org_role']
 
@@ -234,10 +234,10 @@ describe('the Team sync store', () => {
   const task = (title: string) => P.issues.find((issue) => issue.title === title)!
   const stamps = () => sent.filter((w) => w.name === 'teamSync:stamp')
 
-  it('shapes each profile stamp, and none when the columns are absent', () => {
-    const aisha = f.snap.profiles[1]
-    expect(P.user(f.aisha)?.sync).toEqual({ at: aisha.sync_at, since: aisha.sync_since })
-    expect(P.user(f.ben)?.sync).toBeNull()
+  it('holds no one else, nor anyone’s stamp, as the agenda answers the stamps', () => {
+    expect(P.user(f.aisha)).toBeUndefined()
+    expect(P.user(f.ben)).toBeUndefined()
+    expect(P.users.map((u) => u.id)).toEqual(P.myProfileIds)
   })
 
   it('carries the Done, created and review hand-off instants on each task', () => {
@@ -414,46 +414,41 @@ describe('the Team sync store', () => {
     expect(delivered - before).toBeLessThan(span)
   })
 
-  it('stamps a person optimistically and on the wire, keeping a sitting’s reading point', () => {
-    P.syncStamp(f.ben)
-    const first = P.user(f.ben)!.sync!
-    expect(Date.now() - Date.parse(first.at)).toBeLessThan(5000)
-    // a first stamp keeps the day the page was reading from, and says so
+  it('stamps the page owner from the agenda’s row, which the store does not hold, and paints nothing', () => {
+    // Ben has no stamp: a first stamp keeps the day the page was reading
+    // from, and says so
+    P.syncStamp({ id: f.ben, stamp: null }, f.org)
     const day = firstSittingDay(Date.now())
-    expect(first.since).toBe(day)
     expect(stamps()).toEqual([
       { name: 'teamSync:stamp', args: { org_id: f.org, profile_id: f.ben, first_since: day } },
     ])
-    P.syncStamp(f.ben)
-    expect(P.user(f.ben)!.sync!.since).toBe(day)
-    expect(stamps()[1].args.first_since).toBeUndefined()
+    // the agenda brings the new stamp; until then nothing is painted
+    expect(P.user(f.ben)).toBeUndefined()
     sent.length = 0
-    // Aisha's last stamp is older than a sitting: it becomes her reading point
-    const previous = P.user(f.aisha)!.sync!.at
-    P.syncStamp(f.aisha)
-    expect(P.user(f.aisha)!.sync!.since).toBe(previous)
-    // a second change in the same sitting keeps it
-    P.syncStamp(f.aisha)
-    expect(P.user(f.aisha)!.sync!.since).toBe(previous)
-    expect(Date.now() - Date.parse(previous)).toBeGreaterThan(SYNC_SITTING_MS)
-    expect(stamps()).toHaveLength(2)
-    expect(stamps().every((w) => w.args.first_since === undefined)).toBe(true)
+    // Aisha has one: the server works out her reading point from it
+    const aisha = f.snap.profiles[1]
+    const stamp = { at: aisha.sync_at as string, since: aisha.sync_since }
+    expect(Date.now() - Date.parse(stamp.at)).toBeGreaterThan(SYNC_SITTING_MS)
+    P.syncStamp({ id: f.aisha, stamp }, f.org)
+    expect(stamps()).toEqual([
+      { name: 'teamSync:stamp', args: { org_id: f.org, profile_id: f.aisha } },
+    ])
   })
 
-  it('rolls a refused stamp back to the server’s', async () => {
+  it('takes nothing back from a refused stamp, which painted nothing', async () => {
     refuse = true
-    P.syncStamp(f.ben)
-    expect(P.user(f.ben)!.sync).not.toBeNull()
-    await vi.waitFor(() => expect(P.user(f.ben)!.sync).toBeNull())
+    P.syncStamp({ id: f.ben, stamp: null }, f.org)
+    expect(stamps()).toHaveLength(1)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(P.user(f.ben)).toBeUndefined()
   })
 
-  it('sends nothing for an unknown person or from a viewer', async () => {
-    P.syncStamp(crypto.randomUUID())
+  it('sends nothing from a viewer or for an organization without a seat', async () => {
+    P.syncStamp({ id: f.ben, stamp: null }, crypto.randomUUID())
     expect(stamps()).toHaveLength(0)
     await boot('viewer')
-    P.syncStamp(f.ben)
+    P.syncStamp({ id: f.ben, stamp: null }, f.org)
     expect(stamps()).toHaveLength(0)
-    expect(P.user(f.ben)!.sync).toBeNull()
   })
 
   it('watches the latest comments of the people the page shows', () => {

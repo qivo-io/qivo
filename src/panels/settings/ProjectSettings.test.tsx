@@ -569,8 +569,10 @@ describe('the page before and after its answer', () => {
     const before = network.onUpdate.mock.calls.length
     await open()
     const opened = network.onUpdate.mock.calls.slice(before).map(([ref]) => getFunctionName(ref))
-    // the project's settings and lists, its sub-projects included
+    // the project's settings and lists, its sub-projects included, and the
+    // faces of the people they show, as the store holds nobody else
     expect([...new Set(opened)].sort()).toEqual([
+      'people:byIds',
       'projectSettings:get',
       'projectSettings:subProjects',
       'projectSettings:teams',
@@ -996,7 +998,8 @@ describe('changing access', () => {
       snap.access.push({ project_id: 'plan', profile_id: 'nora', level: 'user' })
     })
     const kept = find('[data-project-access-kept="nora"]')
-    expect(kept.textContent).toBe('NNora AdminUser · Added')
+    // the portrait shows the picker's name until Nora's face arrives
+    expect(kept.textContent).toBe('NANora AdminUser · Added')
     expect(kept.querySelector('select, button')).toBeNull()
     for (let i = 0; i < 3; i++) {
       await click(find('[data-project-access-more="user"]'))

@@ -387,7 +387,21 @@ adds the Standard agent on the team's page through **Add member**
 both pages that the team has **1 member**, renames it in place, removes the
 agent and deletes the team from the list (`ui/settings-teams`). Against a
 backend from before the release whose app reads the team pages from the
-server that step fails. It then searches **Settings → Users** for its
+server that step fails. Next it loads the run project's Board, whose sync
+socket must subscribe neither `workspace.people` nor `workspace.catalog`,
+with Nora's own seats alone in the store, finds Leo Martins in the Board's
+**Assignee** menu (`pickers.mentions`), whose pick reads the Board with
+him among its owners and whose **×** clears it, gives him Viewer on the
+run's Alpha sub-project, finds him by his address under **+ Add** in the
+follower popover of a task there (`pickers.taskFollowers`, which offers
+only people who see the task's project), closes it without adding him and
+takes the grant away again, and finds the run's team by its tag in
+Team sync's scope menu (`teams.picker`), whose pick names it on the
+trigger and reads the team's agenda (`ui/roster-parts`). Against a backend
+from before the release after v0.1.160 that step fails. When it fails after
+it sent Leo's grant, it removes the grant once more as a check of its own
+(`ui/roster-parts/revoke`), so a grant it could not remove is among the
+run's failures. It then searches **Settings → Users** for its
 Standard agent by its
 full name, which the deployment's page (`people.settingsPage`) lists alone
 with the fingerprint of its named key from a one-shot key read
@@ -883,7 +897,13 @@ a later backend, and that includes a tab already open when the release
 deploys, until it reloads. This moves the floor: never return the app or the
 demo to a deployment of a commit before the release that replaced
 `snapshot.forMe` with the parts (the release after v0.1.52). Roll forward
-instead.
+instead. From the release after v0.1.160 the backend has no
+`workspace.people` or `workspace.catalog`, which every earlier app
+subscribes, so that app cannot load against it, and the app from that
+release needs its backend's `teams.picker`, `pickers.taskFollowers` and the
+root part's own rows. Never return the backend to a commit before that
+release, and never return the app or the demo alone to a release before
+it; roll forward.
 
 An app from before the release after v0.1.159 joins the milestones of every
 workspace projects part it reads, which later backends no longer send, so
@@ -2119,6 +2139,23 @@ on reads, so never return the app alone below v0.1.149. It drops the
 earlier backend, and has no schema field change, no backfill and no release
 step.
 
+From the release after v0.1.160, the app reads the signed-in person's own
+profiles, team memberships and teams from `workspace.root`, Team sync's
+teams from `teams.picker`, the follower list's people from
+`issues.subscribers` and `pickers.taskFollowers`, and every other person,
+team and label from the reads that name them, instead of the workspace's
+people and catalog parts, which the release removes (`workspace.people`
+and `workspace.catalog`). The release first ships `teams.picker`,
+`pickers.taskFollowers` and the root's own rows, so it is the backend's
+floor for its app, and its backend serves no app before it: that app
+subscribes the removed parts and fails to load, also in a tab that was
+open when the release deploys, until it reloads. From it on, never return
+the backend to a commit before it, and never return the app or the demo
+alone to a release before it; roll forward instead. Every earlier
+statement here that returning the app alone to an earlier release is safe
+holds only against a backend from before this release. There is no schema
+change, no backfill and no release step.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
@@ -2233,7 +2270,8 @@ rollback floor (see Rollback and hotfixes). Later changes keep the rule,
 with one exception. By the owner's decision of 7 November 2026, while
 nobody uses the app, a change removes an old function, part or answer field
 in the same release that stops using it, as the release after v0.1.159
-removes the milestones of the workspace projects part, and its deployment
+removes the milestones of the workspace projects part and the release after
+v0.1.160 the workspace's people and catalog parts, and its deployment
 paragraph names only the floor a later rollback needs.
 Test migrations with representative synthetic data and retain verified
 production backups before destructive changes.

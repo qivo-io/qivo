@@ -26,11 +26,12 @@
    the real query. It imports nothing the benchmark's worker cannot load. */
 
 import { ConvexError, compareValues } from 'convex/values'
+import { shownAvatarColor } from '../../convex/lib/avatarColors'
 import { LIMITS, MENTION_BATCH, overText } from '../../convex/lib/limits'
 import { nameKey } from '../../convex/lib/nameKey'
 import { allWordsMatcher, searchWords } from '../../convex/lib/search'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
 import type { MentionBatch, MentionRow } from '../../convex/model/pickers'
+import type { Whole } from './guard/liveDouble.setup'
 
 /** What pickers.mentions is asked. */
 export type MentionArgs = { org_id: string; search?: string; after?: string; through?: string }
@@ -41,17 +42,13 @@ export type MentionArgs = { org_id: string; search?: string; after?: string; thr
     that fails (`fail`) and a smaller batch (`batch`). */
 export type ForcedMentions = { notReady?: boolean; stop?: number; fail?: boolean; batch?: number }
 
-type Profile = Workspace['profiles'][number]
+type Profile = Whole['profiles'][number]
 /* A place in the list, just after the profile with this name key and id. */
 type Position = { key: string; id: string }
 
 const LIST = 'pickers.mentions'
 const NOT_A_CURSOR =
   'after and through must be cursors from an earlier answer of these suggestions, with the same search; start again from the first batch'
-
-/* The gray a legacy color is sent as (convex/model/people.ts
-   shownAvatarColor), which the stand-in cannot import. */
-const FALLBACK_COLOR = '#8A8F98'
 
 /* -1, 0 or 1 as position `a` sorts before, with or after `b`. */
 function compare(a: Position, b: Position): number {
@@ -67,7 +64,8 @@ const rowOf = (profile: Profile): MentionRow => ({
   id: profile.id,
   name: profile.name,
   initials: profile.initials,
-  color: /^#[0-9a-f]{6}$/i.test(profile.color) ? profile.color : FALLBACK_COLOR,
+  // gray for an older color, as the server sends it
+  color: shownAvatarColor(profile.color),
   email: profile.email ?? null,
 })
 
@@ -79,7 +77,7 @@ const rowOf = (profile: Profile): MentionRow => ({
  * for the organization and search.
  */
 export function mentionStandIn(
-  workspace: Pick<Workspace, 'myProfileIds' | 'profiles'>,
+  workspace: Pick<Whole, 'myProfileIds' | 'profiles'>,
   args: MentionArgs,
   options: { force?: ForcedMentions } = {},
 ): MentionBatch {

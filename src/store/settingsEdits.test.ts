@@ -1,6 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { peopleSettingsStandIn } from './peopleSettingsStandIn.setup'
 import { labelShownOf, shownOf } from './personShown.setup'
 import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup'
 
@@ -8,7 +9,12 @@ import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup
    it wrote nothing. updateLabel returns false for a refusal or an unchanged
    name, and else the write's promise, which resolves whether the server
    accepted it; updateUser returns false when a client rule refuses the
-   patch, and true once a change is painted and sent. */
+   patch, and true once a change is painted and sent. The store holds
+   nobody but the signed-in person and no label, so a page sends what it
+   showed of anyone else (store/personShown.setup.ts), only the signed-in
+   person's own profile paints, and a notice names a writer a view named
+   through the profile cache, whose people:byIds read answers from the
+   server's data (store/peopleSettingsStandIn.setup.ts). */
 
 type Planner = typeof import('./planner')['P']
 
@@ -93,8 +99,10 @@ describe('settings edits through the client store', () => {
     })
     requests = []
     network.query.mockResolvedValue(null)
-    network.onUpdate.mockImplementation((_ref, _args, next) => {
-      next(structuredClone(snap))
+    network.onUpdate.mockImplementation((ref, args, next) => {
+      if (getFunctionName(ref) === 'people:byIds')
+        next(peopleSettingsStandIn(snap, 'people:byIds', args))
+      else next(structuredClone(snap))
       return () => {}
     })
     network.mutation.mockImplementation((ref, args) => {
@@ -112,12 +120,21 @@ describe('settings edits through the client store', () => {
     vi.unstubAllGlobals()
   })
 
+  /* Starts the store again over the server's data as it is now, for a case
+     that needs the signed-in person's own profile otherwise. */
+  const restart = async () => {
+    vi.resetModules()
+    const store = await import('./planner')
+    P = store.P
+    await store.initStore()
+  }
+
   describe('updateLabel', () => {
     // Changed with the roster cache stage: the store reads no catalogue for
     // a duplicate, and the server refuses a name another label holds
     it('sends a name another label in the organization has, leaving the refusal to the server', () => {
       expect(
-        P.updateLabel('l-feat', { name: ' bug ' }, {}, labelShownOf(P, 'l-feat')),
+        P.updateLabel('l-feat', { name: ' bug ' }, {}, labelShownOf(snap, 'l-feat')),
       ).toBeInstanceOf(Promise)
       expect(showToast).not.toHaveBeenCalled()
       expect(requests).toMatchObject([
@@ -127,9 +144,8 @@ describe('settings edits through the client store', () => {
 
     it('writes a trimmed new name', () => {
       expect(
-        P.updateLabel('l-feat', { name: '  Firmware ' }, {}, labelShownOf(P, 'l-feat')),
+        P.updateLabel('l-feat', { name: '  Firmware ' }, {}, labelShownOf(snap, 'l-feat')),
       ).toBeInstanceOf(Promise)
-      expect(P.labelById['l-feat'].name).toBe('Firmware')
       expect(requests).toMatchObject([
         { name: 'labels:update', args: { id: 'l-feat', patch: { name: 'Firmware' } } },
       ])
@@ -137,110 +153,116 @@ describe('settings edits through the client store', () => {
 
     it('allows a case change of its own name', () => {
       expect(
-        P.updateLabel('l-feat', { name: 'feature' }, {}, labelShownOf(P, 'l-feat')),
+        P.updateLabel('l-feat', { name: 'feature' }, {}, labelShownOf(snap, 'l-feat')),
       ).toBeInstanceOf(Promise)
-      expect(P.labelById['l-feat'].name).toBe('feature')
     })
 
     it("ignores another organization's labels", () => {
       expect(
-        P.updateLabel('l-feat', { name: 'Hardware' }, {}, labelShownOf(P, 'l-feat')),
+        P.updateLabel('l-feat', { name: 'Hardware' }, {}, labelShownOf(snap, 'l-feat')),
       ).toBeInstanceOf(Promise)
       expect(showToast).not.toHaveBeenCalled()
     })
 
     it('reports a name that shortens to the stored one as nothing written', () => {
       const long = 'A'.repeat(40)
-      expect(P.updateLabel('l-feat', { name: long }, {}, labelShownOf(P, 'l-feat'))).toBeInstanceOf(
-        Promise,
-      )
+      expect(
+        P.updateLabel('l-feat', { name: long }, {}, labelShownOf(snap, 'l-feat')),
+      ).toBeInstanceOf(Promise)
       requests = []
       expect(
-        P.updateLabel('l-feat', { name: `${long} and more` }, {}, labelShownOf(P, 'l-feat')),
+        P.updateLabel('l-feat', { name: `${long} and more` }, {}, labelShownOf(snap, 'l-feat')),
       ).toBe(false)
       expect(requests).toEqual([])
-      expect(P.labelById['l-feat'].name).toBe(long)
     })
 
     it('restores the stored name when the server refuses', async () => {
       expect(
-        P.updateLabel('l-feat', { name: 'Firmware' }, {}, labelShownOf(P, 'l-feat')),
+        P.updateLabel('l-feat', { name: 'Firmware' }, {}, labelShownOf(snap, 'l-feat')),
       ).toBeInstanceOf(Promise)
       requests[0].reject(
         new ConvexError({ code: 'rule', message: 'a label with that name already exists' }),
       )
-      await vi.waitFor(() => expect(P.labelById['l-feat'].name).toBe('Feature'))
+      // the store holds no label, so nothing is painted or taken back: the
+      // page's field goes back to its draft (updateLabel resolves false)
+      await vi.waitFor(() => expect(showToast).toHaveBeenCalled())
       expect(showToast).toHaveBeenCalledExactlyOnceWith(
-        'A label with that name already exists. Change reverted.',
+        'A label with that name already exists.',
         'error',
       )
     })
   })
 
   describe('updateUser', () => {
-    it("refuses an invited seat's email that another seat has", () => {
-      expect(P.updateUser('u-ben', { email: 'ANA@example.test' }, {}, shownOf(P, 'u-ben'))).toBe(
-        false,
+    it("sends an invited seat's address another seat has, leaving the refusal to the server", () => {
+      expect(P.updateUser('u-ben', { email: 'ANA@example.test' }, {}, shownOf(snap, 'u-ben'))).toBe(
+        true,
       )
-      expect(showToast).toHaveBeenCalledExactlyOnceWith(
-        'ana@example.test already has a seat in this organization',
-        'error',
-      )
-      expect(requests).toEqual([])
-      expect(P.user('u-ben')?.email).toBe('ben@example.test')
+      expect(showToast).not.toHaveBeenCalled()
+      expect(requests).toMatchObject([
+        { name: 'profiles:update', args: { id: 'u-ben', patch: { email: 'ana@example.test' } } },
+      ])
     })
 
-    it('writes a free address, lowercased', () => {
+    it('writes a free address, lowercased, and paints nobody the store does not hold', () => {
       expect(
-        P.updateUser('u-ben', { email: 'Ben.New@Example.test' }, {}, shownOf(P, 'u-ben')),
+        P.updateUser('u-ben', { email: 'Ben.New@Example.test' }, {}, shownOf(snap, 'u-ben')),
       ).toBe(true)
-      expect(P.user('u-ben')?.email).toBe('ben.new@example.test')
       expect(requests).toMatchObject([
         {
           name: 'profiles:update',
           args: { id: 'u-ben', patch: { email: 'ben.new@example.test' } },
         },
       ])
+      expect(P.user('u-ben')).toBeUndefined()
     })
 
     it('turns the project-creation right on and off', () => {
-      expect(P.user('u-ana')?.canCreateProjects).toBe(false)
-      expect(P.updateUser('u-ana', { canCreateProjects: true }, {}, shownOf(P, 'u-ana'))).toBe(true)
-      expect(P.user('u-ana')?.canCreateProjects).toBe(true)
-      expect(P.updateUser('u-ana', { canCreateProjects: false }, {}, shownOf(P, 'u-ana'))).toBe(
-        true,
-      )
-      expect(P.user('u-ana')?.canCreateProjects).toBe(false)
+      const shown = shownOf(snap, 'u-ana')
+      expect(shown.canCreateProjects).toBe(false)
+      expect(P.updateUser('u-ana', { canCreateProjects: true }, {}, shown)).toBe(true)
+      // the page then shows its answer's row, which holds the right
+      expect(
+        P.updateUser(
+          'u-ana',
+          { canCreateProjects: false },
+          {},
+          { ...shown, canCreateProjects: true },
+        ),
+      ).toBe(true)
       expect(requests.map((r) => [r.name, r.args.patch])).toEqual([
         ['profiles:update', { can_create_projects: true }],
         ['profiles:update', { can_create_projects: false }],
       ])
     })
 
-    it('clears the right on a role change but keeps it on deactivation or an unchanged role', () => {
-      P.updateUser('u-ana', { canCreateProjects: true }, {}, shownOf(P, 'u-ana'))
-      P.updateUser('u-ana', { active: false }, {}, shownOf(P, 'u-ana'))
-      expect(P.user('u-ana')?.canCreateProjects).toBe(true)
+    it('clears the painted right on a role change but keeps it on deactivation or an unchanged role', async () => {
+      // the signed-in person's own profile, the one the store holds
+      Object.assign(snap.profiles[0], { org_role: 'user', can_create_projects: true })
+      await restart()
+      const me = snap.profiles[0].id
+      P.updateUser(me, { active: false }, {}, shownOf(P, me))
+      expect(P.user(me)?.canCreateProjects).toBe(true)
       // the role select sends the role it shows, changed or not, and only
       // the fields that differ from the screen go out, each as expected
-      P.updateUser('u-ana', { orgRole: 'user', active: true }, {}, shownOf(P, 'u-ana'))
-      expect(P.user('u-ana')?.canCreateProjects).toBe(true)
-      P.updateUser('u-ana', { orgRole: 'viewer', active: true }, {}, shownOf(P, 'u-ana'))
-      expect(P.user('u-ana')?.canCreateProjects).toBe(false)
+      P.updateUser(me, { orgRole: 'user', active: true }, {}, shownOf(P, me))
+      expect(P.user(me)?.canCreateProjects).toBe(true)
+      P.updateUser(me, { orgRole: 'viewer', active: true }, {}, shownOf(P, me))
+      expect(P.user(me)?.canCreateProjects).toBe(false)
       expect(requests.at(-1)?.args.patch).toEqual({ org_role: 'viewer' })
       expect(requests.at(-1)?.args.expected).toEqual({ org_role: 'user' })
     })
 
-    it('compares each field with what the page showed, not with the store', () => {
-      // the page still shows Ana as a viewer while the store holds her as a
-      // user: choosing user on the page is a change, sent over the viewer
+    it('compares each field with what the page showed, not with the server', () => {
+      // the page still shows Ana as a viewer while the server holds her as
+      // a user: choosing user on the page is a change, sent over the viewer
       // the page showed, and the server's check decides it
       P.updateUser(
         'u-ana',
         { orgRole: 'user', active: true },
         {},
         {
-          ...shownOf(P, 'u-ana'),
+          ...shownOf(snap, 'u-ana'),
           orgRole: 'viewer',
         },
       )
@@ -250,9 +272,14 @@ describe('settings edits through the client store', () => {
     })
 
     it('sends deactivation alone to its own door and reactivation through update', () => {
-      P.updateUser('u-ana', { active: false }, {}, shownOf(P, 'u-ana'))
-      expect(P.user('u-ana')?.active).toBe(false)
-      P.updateUser('u-ana', { orgRole: 'user', active: true }, {}, shownOf(P, 'u-ana'))
+      P.updateUser('u-ana', { active: false }, {}, shownOf(snap, 'u-ana'))
+      // the page then shows its answer's row, switched off
+      P.updateUser(
+        'u-ana',
+        { orgRole: 'user', active: true },
+        {},
+        { ...shownOf(snap, 'u-ana'), active: false },
+      )
       // the role is unchanged, so only the reactivation goes out, over the
       // deactivation still on screen
       expect(requests.map((r) => [r.name, r.args])).toEqual([
@@ -269,13 +296,17 @@ describe('settings edits through the client store', () => {
       ])
     })
 
-    it('sets the right with the standard user role only when the same patch turns it on', () => {
-      // a stale right on a viewer never comes back with the role
-      P.updateUser('u-cat', { orgRole: 'user', active: true }, {}, shownOf(P, 'u-cat'))
-      expect(P.user('u-cat')?.canCreateProjects).toBe(false)
-      P.updateUser('u-cat', { orgRole: 'viewer', active: true }, {}, shownOf(P, 'u-cat'))
-      P.updateUser('u-cat', { orgRole: 'user', canCreateProjects: true }, {}, shownOf(P, 'u-cat'))
-      expect(P.user('u-cat')).toMatchObject({ orgRole: 'user', canCreateProjects: true })
+    it('paints the right with the standard user role only when the same patch turns it on', async () => {
+      // a stale right on a viewer never comes back with the role, on the
+      // signed-in person's own profile, the one the store holds
+      Object.assign(snap.profiles[0], { org_role: 'viewer', can_create_projects: true })
+      await restart()
+      const me = snap.profiles[0].id
+      P.updateUser(me, { orgRole: 'user', active: true }, {}, shownOf(P, me))
+      expect(P.user(me)?.canCreateProjects).toBe(false)
+      P.updateUser(me, { orgRole: 'viewer', active: true }, {}, shownOf(P, me))
+      P.updateUser(me, { orgRole: 'user', canCreateProjects: true }, {}, shownOf(P, me))
+      expect(P.user(me)).toMatchObject({ orgRole: 'user', canCreateProjects: true })
       expect(requests.at(-1)?.args.patch).toEqual({ org_role: 'user', can_create_projects: true })
     })
   })
@@ -312,6 +343,15 @@ describe('settings edits through the client store', () => {
     const settle = async () => {
       for (let i = 0; i < 10; i++) await Promise.resolve()
     }
+    // the views that show Ana and Ben name them, so a notice can
+    beforeEach(async () => {
+      const org = snap.orgs[0].id
+      P.namePeople('settings', [
+        { org, id: 'u-ana' },
+        { org, id: 'u-ben' },
+      ])
+      await vi.waitFor(() => expect(P.person('u-ben')?.state).toBe('ok'))
+    })
 
     it('sends it as expected from setOrg, and the value on screen without it', () => {
       P.setOrg({ name: 'Testbed Robotics' })
@@ -337,18 +377,13 @@ describe('settings edits through the client store', () => {
     })
 
     it('sends it from updateTeam and updateProject', () => {
-      P.updateTeam(
-        't-crew',
-        { name: 'Bench crew' },
-        {},
-        { orgId: P.homeOrg, name: P.teamById('t-crew')?.name ?? '' },
-      )
+      P.updateTeam('t-crew', { name: 'Bench crew' }, {}, { orgId: P.homeOrg, name: 'Crew' })
       expect(latest().args.expected).toEqual({ name: 'Crew' })
       P.updateTeam(
         't-crew',
         { name: 'Field crew' },
         { seen: { name: 'Crew' } },
-        { orgId: P.homeOrg, name: P.teamById('t-crew')?.name ?? '' },
+        { orgId: P.homeOrg, name: 'Crew' },
       )
       expect(latest().args.expected).toEqual({ name: 'Crew' })
       const project = snap.projects[0].id
@@ -359,7 +394,7 @@ describe('settings edits through the client store', () => {
     })
 
     it('sends it from updateLabel, the value on screen without it, and keeps the draft a rename refused', async () => {
-      P.updateLabel('l-feat', { name: 'Firmware' }, {}, labelShownOf(P, 'l-feat'))
+      P.updateLabel('l-feat', { name: 'Firmware' }, {}, labelShownOf(snap, 'l-feat'))
       expect(latest().args.expected).toEqual({ name: 'Feature' })
       const kept: unknown[] = []
       const save = {
@@ -370,33 +405,31 @@ describe('settings edits through the client store', () => {
         },
         keepUnsaved: () => kept.push('keepUnsaved'),
       }
-      // the field began before the first save's paint, which the screen shows
-      expect(P.labelById['l-feat'].name).toBe('Firmware')
+      // the field began before the first save, whose name the page shows
       expect(
-        P.updateLabel('l-feat', { name: 'Field test' }, save, labelShownOf(P, 'l-feat')),
+        P.updateLabel('l-feat', { name: 'Field test' }, save, labelShownOf(snap, 'l-feat')),
       ).toBeInstanceOf(Promise)
       expect(latest().args.expected).toEqual({ name: 'Feature' })
       latest().reject(changed('label', 'l-feat', 'name'))
       // a recolor sends the color on screen
-      P.updateLabel('l-feat', { color: '#DC2626' }, {}, labelShownOf(P, 'l-feat'))
+      P.updateLabel('l-feat', { color: '#DC2626' }, {}, labelShownOf(snap, 'l-feat'))
       expect(latest().args.expected).toEqual({ color: '#2563EB' })
       latest().reject(new ConvexError({ code: 'rule', message: 'the server said no' }))
       await settle()
       expect(kept).toEqual([[undefined, { name: 'Ana' }]])
-      expect(showToast.mock.calls.map(([message]) => message)).toContain(
-        'The server said no. Change reverted.',
-      )
+      // the store holds no label, so the refused recolor took nothing back
+      expect(showToast.mock.calls.map(([message]) => message)).toContain('The server said no.')
     })
 
     it('sends it from both writes of updateUser', () => {
-      P.updateUser('u-ana', { name: 'Ana Berg' }, {}, shownOf(P, 'u-ana'))
+      P.updateUser('u-ana', { name: 'Ana Berg' }, {}, shownOf(snap, 'u-ana'))
       expect(latest()).toMatchObject({
         name: 'profiles:update',
         args: { expected: { name: 'Ana' } },
       })
-      P.updateUser('u-ana', { name: 'Ana B.' }, { seen: { name: 'Ana' } }, shownOf(P, 'u-ana'))
+      P.updateUser('u-ana', { name: 'Ana B.' }, { seen: { name: 'Ana' } }, shownOf(snap, 'u-ana'))
       expect(latest().args.expected).toEqual({ name: 'Ana' })
-      P.updateUser('u-ana', { plannableHours: 30 }, {}, shownOf(P, 'u-ana'))
+      P.updateUser('u-ana', { plannableHours: 30 }, {}, shownOf(snap, 'u-ana'))
       expect(latest()).toMatchObject({
         name: 'profiles:setPlannableHours',
         args: { expected: { plannable_hours: null } },
@@ -405,7 +438,7 @@ describe('settings edits through the client store', () => {
         'u-ana',
         { plannableHours: 28 },
         { seen: { plannable_hours: 32 } },
-        shownOf(P, 'u-ana'),
+        shownOf(snap, 'u-ana'),
       )
       expect(latest().args.expected).toEqual({ plannable_hours: 32 })
     })
@@ -437,17 +470,19 @@ describe('settings edits through the client store', () => {
         't-crew',
         { name: 'Bench crew' },
         { keepDraft },
-        { orgId: P.homeOrg, name: P.teamById('t-crew')?.name ?? '' },
+        { orgId: P.homeOrg, name: 'Crew' },
       )
       latest().reject(changed('team', 't-crew', 'name', 'u-ben'))
       P.updateProject(project, { name: 'Sensor' }, { keepDraft })
       latest().reject(changed('project', project, 'name', P.CURRENT_USER))
-      P.updateUser('u-ana', { plannableHours: 30 }, { keepDraft }, shownOf(P, 'u-ana'))
+      P.updateUser('u-ana', { plannableHours: 30 }, { keepDraft }, shownOf(snap, 'u-ana'))
       latest().reject(changed('profile', 'u-ana', 'plannable_hours'))
       await settle()
+      // a team the store does not hold, as a person, shows the store no
+      // value of its own
       expect(kept).toEqual([
         ['Testbed Labs', { name: 'Ana' }],
-        ['Crew', { name: 'Ben' }],
+        [undefined, { name: 'Ben' }],
         ['Task creation fixture', 'you'],
         [undefined, { name: 'Ana' }],
       ])
@@ -463,7 +498,7 @@ describe('settings edits through the client store', () => {
       expect(P.org.name).toBe('Testbed Robotics')
       // a server fault reaches the app as an Error, not a ConvexError
       latest().reject(new Error('[Request ID: 1] Server Error'))
-      P.updateUser('u-ana', { plannableHours: 30 }, save, shownOf(P, 'u-ana'))
+      P.updateUser('u-ana', { plannableHours: 30 }, save, shownOf(snap, 'u-ana'))
       latest().reject(new ConvexError({ code: 'rule', message: 'the server said no' }))
       await settle()
       expect(calls).toEqual(['keepUnsaved', 'keepUnsaved'])

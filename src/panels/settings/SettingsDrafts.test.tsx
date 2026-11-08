@@ -8,6 +8,7 @@ import type { FieldChange } from '../../../convex/lib/functions'
 import { TooltipProvider } from '../../components/ui/tooltip'
 import { WHOLE } from '../../store/guard/liveDouble.setup'
 import { isPeopleSettingsRead, peopleSettingsServer } from '../../store/peopleSettingsStandIn.setup'
+import { shownOf } from '../../store/personShown.setup'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 import { isTeamSettingsRead, teamSettingsServer } from '../../store/teamSettingsStandIn.setup'
 
@@ -561,14 +562,14 @@ describe('default plannable hours', () => {
   it('takes a person’s refused hours and their mark away on a Discard', async () => {
     const { PlannableHoursInput } = await import('./UserControls')
     const scope = leaveGuard.createUnsentScope()
-    await open(() => {
-      const leo = store.P.user(LEO)
-      return leo ? (
-        <leaveGuard.UnsentScopeContext.Provider value={scope}>
-          <PlannableHoursInput user={{ id: leo.id, ...store.personShownOf(leo) }} canEdit />
-        </leaveGuard.UnsentScopeContext.Provider>
-      ) : null
-    })
+    // Leo as a page's answer shows him, as the store holds nobody but the
+    // signed-in person
+    const leo = { id: LEO, ...shownOf(snap, LEO) }
+    await open(() => (
+      <leaveGuard.UnsentScopeContext.Provider value={scope}>
+        <PlannableHoursInput user={leo} canEdit />
+      </leaveGuard.UnsentScopeContext.Provider>
+    ))
     const field = find(`[data-plannable-for="${LEO}"]`)
     await type(field, '0')
     await blur(field)

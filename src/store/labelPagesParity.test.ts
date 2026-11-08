@@ -13,15 +13,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
-import {
-  as,
-  NOW,
-  newT,
-  plantSeat,
-  type T,
-  uuid,
-  workspaceOf,
-} from '../../convex/tests/helpers.setup'
+import { as, NOW, newT, plantSeat, type T, uuid, wholeOf } from '../../convex/tests/helpers.setup'
 import { plantNorthstar } from '../../convex/tests/northstar.setup'
 import {
   type LabelPageAnswer,
@@ -56,7 +48,7 @@ async function northstar(): Promise<Fixture> {
   }
   const nora = person('Nora Berg')
   const leo = person('Leo Martins')
-  const ws = await workspaceOf(as(t, nora))
+  const ws = await wholeOf(t, nora)
   if (!ws) throw new Error('no workspace')
   const live = new Set(ws.projects.filter((p) => !p.archived_at).map((p) => p.id))
   const tasks = ws.issues.filter((i) => i.org_id === org.id && live.has(i.project_id))
@@ -100,7 +92,7 @@ async function both(
   args: Omit<LabelPageArgs, 'org_id'> = {},
   at: { server?: Partial<LabelPageArgs>; stand?: Partial<LabelPageArgs> } = {},
 ) {
-  const ws = await workspaceOf(as(f.t, f.nora))
+  const ws = await wholeOf(f.t, f.nora)
   if (!ws) throw new Error('no workspace')
   const server = await as(f.t, f.nora).query(api.labels.settingsPage, {
     org_id: f.org.id,
@@ -166,14 +158,14 @@ describe("the label pages' stand-in", () => {
 
   it('refuses a seat that is not an admin, and a cursor of another search, as the server does', async () => {
     const f = await northstar()
-    const ws = await workspaceOf(as(f.t, f.leo))
+    const ws = await wholeOf(f.t, f.leo)
     if (!ws) throw new Error('no workspace')
     await expect(
       as(f.t, f.leo).query(api.labels.settingsPage, { org_id: f.org.id }),
     ).rejects.toMatchObject({ data: { code: 'forbidden' } })
     expect(refusal(() => labelSettingsStandIn(ws, { org_id: f.org.id }))).toBe('forbidden')
     const first = await both(f)
-    const nora = await workspaceOf(as(f.t, f.nora))
+    const nora = await wholeOf(f.t, f.nora)
     if (!nora) throw new Error('no workspace')
     await expect(
       as(f.t, f.nora).query(api.labels.settingsPage, {
@@ -205,7 +197,7 @@ describe("the label picker's and byIds' stand-ins", () => {
       accepted_at: NOW,
     })
     for (const who of [f.nora, guest]) {
-      const ws = await workspaceOf(as(f.t, who))
+      const ws = await wholeOf(f.t, who)
       if (!ws) throw new Error('no workspace')
       const read = async (args: Omit<LabelPageArgs, 'org_id'>, stand = args) => ({
         server: await as(f.t, who).query(api.labels.picker, { org_id: f.org.id, ...args }),
@@ -240,7 +232,7 @@ describe("the label picker's and byIds' stand-ins", () => {
 
   it('answers labels by id as labels.byIds does, each once in the order asked', async () => {
     const f = await northstar()
-    const ws = await workspaceOf(as(f.t, f.nora))
+    const ws = await wholeOf(f.t, f.nora)
     if (!ws) throw new Error('no workspace')
     const [a, b, c] = ws.labels.filter((l) => l.org_id === f.org.id)
     const ids = [c.id, 'unknown-id', a.id, c.id, b.id]

@@ -6,10 +6,30 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Separator } from '@/components/ui/separator'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { LIMITS } from '../../convex/lib/limits'
-import { matchesAllWords } from '../lib/search'
-import { type IssueVM, P, type IssueSubscribers as SubscriberRoster } from '../store/planner'
+import { listEnd, usePagedList, useSettledSearch } from '../lib/pagedList'
+import { PICKER_CAPS } from '../lib/pickerCaps'
+import { useViewVisibility } from '../lib/viewVisibility'
+import {
+  type FollowerChoice,
+  type FollowerChoices,
+  type IssueVM,
+  P,
+  type IssueSubscribers as SubscriberRoster,
+} from '../store/planner'
+import { ChoiceEnd } from './pickerParts'
+import { type ChoiceWords, heldLine } from './pickerWords'
 import { Avatar, Icon, MenuItem } from './qivo'
-import { personLabel, sortName, usePeople } from './usePeople'
+import { RowAvatar } from './RowAvatar'
+import { usePeople } from './usePeople'
+
+/** The words of the follower popover's Add list. */
+const FOLLOWER_WORDS: ChoiceWords = {
+  held: (held) => heldLine(held, true),
+  failed: "Couldn't load people.",
+  stopped: 'Showing the people found so far.',
+  empty: 'No other users to add.',
+  none: 'No users found.',
+}
 
 /** The eye remains personal; opening its roster never changes a subscription.
     The roster, Me and a lead's add and remove take the task's organization
@@ -19,7 +39,15 @@ import { personLabel, sortName, usePeople } from './usePeople'
     task, as while the window's read of such a task failed or runs again.
     With `rosterWaits`, its hint, the eye follows and unfollows the task at
     once and its roster does not open, as for the person's own new task
-    before the server stored it, which has no roster to read yet. */
+    before the server stored it, which has no roster to read yet.
+
+    The roster names its followers from its own answer's rows
+    (issues.subscribers), in name order, and paints each portrait from the
+    row's initials and color with the picture the store holds; it names
+    the followers while open, so their pictures load. A lead's **+ Add**
+    reads the people who may follow the task a batch at a time from the
+    server (pickers.taskFollowers), with a search over names and email, and
+    names none of them, so opening it loads no one's face. */
 export function IssueSubscribers({
   issue,
   disabled,
@@ -66,27 +94,13 @@ export function IssueSubscribers({
   }
   // A task takes no new follower by hand past LIMITS.followers.max; leaving it and
   // removing others still work. A new assignee or reviewer still follows.
-  const full = !!roster && roster.subscribers.length >= LIMITS.followers.max
+  const full = !!roster && (roster.more || roster.subscribers.length >= LIMITS.followers.max)
   const fullTip = `This task has ${LIMITS.followers.max} followers, the most a task can have`
-  // a follower as P.person names them: "Loading…" while their details are
-  // on their way, and "Unavailable user" only once the server says so
-  const nameOf = (id: string) => personLabel(P.person(id, issue.org), 'Unavailable user')
-  // named people by name, then the ones not named yet in place by id
-  const byName = (a: string, b: string) => {
-    const an = sortName(P.person(a, issue.org), 'Unavailable user')
-    const bn = sortName(P.person(b, issue.org), 'Unavailable user')
-    if (an === undefined || bn === undefined)
-      return an !== undefined ? -1 : bn !== undefined ? 1 : a.localeCompare(b)
-    return an.localeCompare(bn) || a.localeCompare(b)
-  }
-  const others = (roster?.subscribers ?? []).filter((id) => id !== me).sort(byName)
-  // the followers, named while the popover is open; the Add list's
-  // candidates are the roster parts stage's (later-work.md)
-  usePeople(open ? others.map((id) => ({ org: issue.org, id })) : [])
-  const candidates = (roster?.candidates ?? [])
-    .filter((id) => id !== me)
-    .filter((id) => matchesAllWords(`${nameOf(id)} ${P.user(id)?.email || ''}`, search))
-    .sort(byName)
+  // the followers as the answer names them, in its name order
+  const others = (roster?.subscribers ?? []).filter((row) => row.id !== me)
+  const following = new Set((roster?.subscribers ?? []).map((row) => row.id))
+  // the followers, named while the popover is open, so their pictures load
+  usePeople(open ? others.map((row) => ({ org: issue.org, id: row.id })) : [])
   const changeSubscriber = (id: string, subscribed: boolean) => {
     setPending((ids) => [...ids, id])
     P.setIssueSubscriber(
@@ -223,33 +237,45 @@ export function IssueSubscribers({
               Loading subscribers…
             </p>
           ) : others.length ? (
-            others.map((id) => (
-              <div
-                key={id}
-                data-task-subscriber={id}
-                className="flex min-h-10 items-center gap-2 px-2 py-1"
-              >
-                <Avatar id={id} size={28} />
-                <HoverTooltip content={nameOf(id)}>
-                  <span className="min-w-0 flex-1 truncate text-base">{nameOf(id)}</span>
-                </HoverTooltip>
-                {roster.canManage && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-control-sm w-control-sm shrink-0"
-                    data-task-subscriber-remove={id}
-                    aria-label={`Remove ${nameOf(id)} from subscribers`}
-                    title={`Remove ${nameOf(id)} from subscribers`}
-                    disabled={pending.includes(id)}
-                    onClick={() => changeSubscriber(id, false)}
-                  >
-                    <Icon name="close" size={16} />
-                  </Button>
-                )}
-              </div>
-            ))
+            <>
+              {others.map((row) => (
+                <div
+                  key={row.id}
+                  data-task-subscriber={row.id}
+                  {...(row.active ? {} : { 'data-task-subscriber-off': '' })}
+                  className="flex min-h-10 items-center gap-2 px-2 py-1"
+                >
+                  <RowAvatar row={row} org={issue.org} size={28} named />
+                  <HoverTooltip content={row.name}>
+                    <span className="min-w-0 flex-1 truncate text-base">
+                      {row.name}
+                      {!row.active && <span className="text-sm text-text-2"> (off)</span>}
+                    </span>
+                  </HoverTooltip>
+                  {roster.canManage && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-control-sm w-control-sm shrink-0"
+                      data-task-subscriber-remove={row.id}
+                      aria-label={`Remove ${row.name} from subscribers`}
+                      title={`Remove ${row.name} from subscribers`}
+                      disabled={pending.includes(row.id)}
+                      onClick={() => changeSubscriber(row.id, false)}
+                    >
+                      <Icon name="close" size={16} />
+                    </Button>
+                  )}
+                </div>
+              ))}
+              {roster.more && (
+                <p data-task-subscribers-more className="px-2 py-1 text-sm text-text-2">
+                  Showing the {LIMITS.followers.max} earliest followers. Later ones show here as
+                  earlier ones unfollow.
+                </p>
+              )}
+            </>
           ) : (
             <p className="px-2 py-2 text-sm text-text-2">No other subscribers.</p>
           )}
@@ -279,30 +305,14 @@ export function IssueSubscribers({
                     <Icon name="close" size={16} />
                   </Button>
                 </div>
-                <div className="max-h-40 overflow-y-auto overscroll-contain">
-                  {candidates.map((id) => (
-                    <MenuItem
-                      key={id}
-                      data-task-subscriber-add={id}
-                      aria-label={`Subscribe ${nameOf(id)}`}
-                      disabled={pending.includes(id)}
-                      onClick={() => changeSubscriber(id, true)}
-                    >
-                      <Avatar id={id} size={28} />
-                      <HoverTooltip content={nameOf(id)}>
-                        <span tabIndex={-1} className="min-w-0 flex-1 truncate">
-                          {nameOf(id)}
-                        </span>
-                      </HoverTooltip>
-                      <Icon name="plus" size={14} />
-                    </MenuItem>
-                  ))}
-                  {!candidates.length && (
-                    <p className="px-2 py-2 text-sm text-text-2">
-                      {search.trim() ? 'No users found.' : 'No other users to add.'}
-                    </p>
-                  )}
-                </div>
+                <FollowerAddList
+                  issue={issue}
+                  me={me}
+                  search={search}
+                  following={following}
+                  pending={pending}
+                  onAdd={(id) => changeSubscriber(id, true)}
+                />
               </>
             ) : (
               <MenuItem
@@ -319,5 +329,76 @@ export function IssueSubscribers({
         )}
       </PopoverContent>
     </Popover>
+  )
+}
+
+/* The people the follower popover's Add list offers, a batch at a time from
+   the server (pickers.taskFollowers, P.followerChoices) while the list is
+   open and the page shows, with the server's search over names and email,
+   Load more and the list's end lines, at most PICKER_CAPS.owners kept. A
+   person who follows the task since the batch was read leaves the list
+   from the roster's live answer (`following`). Each portrait comes from the
+   row's initials and color, and the list names no one, so opening it loads
+   no face or picture. */
+function FollowerAddList({
+  issue,
+  me,
+  search: text,
+  following,
+  pending,
+  onAdd,
+}: {
+  issue: IssueVM
+  me: string | undefined
+  search: string
+  following: ReadonlySet<string>
+  pending: readonly string[]
+  onAdd: (id: string) => void
+}) {
+  const search = useSettledSearch(text, LIMITS.search)
+  const { visible } = useViewVisibility()
+  const list = usePagedList<FollowerChoices, FollowerChoice>({
+    key: visible ? `${issue.org}\n${issue.uuid}\n${search.settled}` : null,
+    source: {
+      kind: 'once',
+      read: (at) =>
+        P.followerChoices({
+          task: { uuid: issue.uuid, org: issue.org },
+          search: search.settled,
+          cursor: at.after,
+        }),
+    },
+    batch: (answer) => (answer.state === 'ready' ? answer : null),
+    id: (row) => row.id,
+    most: PICKER_CAPS.owners,
+  })
+  const answered = !search.tooLong && search.settled === search.typed && list.phase !== 'first'
+  const end = answered ? listEnd(list, search.settled !== '') : 'loading'
+  const rows = list.rows.filter((row) => row.id !== me && !following.has(row.id))
+  return (
+    <div
+      data-task-subscriber-candidates
+      data-picker-state={answered ? list.phase : 'loading'}
+      className="max-h-40 overflow-y-auto overscroll-contain"
+    >
+      {rows.map((row) => (
+        <MenuItem
+          key={row.id}
+          data-task-subscriber-add={row.id}
+          aria-label={`Subscribe ${row.name}`}
+          disabled={pending.includes(row.id) || !answered}
+          onClick={() => onAdd(row.id)}
+        >
+          <RowAvatar row={row} org={issue.org} size={28} />
+          <HoverTooltip content={row.name}>
+            <span tabIndex={-1} className="min-w-0 flex-1 truncate">
+              {row.name}
+            </span>
+          </HoverTooltip>
+          <Icon name="plus" size={14} />
+        </MenuItem>
+      ))}
+      <ChoiceEnd end={end} tooLong={search.tooLong} list={list} words={FOLLOWER_WORDS} />
+    </div>
   )
 }

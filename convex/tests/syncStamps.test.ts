@@ -1,14 +1,24 @@
 /* Team sync stamps live in sync_stamps, off the profile documents
- * (model/syncStamps.ts): a stamp never writes the profile, the people part
- * ships them on its profile rows, and removing a person or an organization
- * leaves no stamp row. */
+ * (model/syncStamps.ts): a stamp never writes the profile, the agenda
+ * answers each walker's stamp and no workspace row carries one, and
+ * removing a person or an organization leaves no stamp row. */
 
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { deleteOrgDeep, removeProfile } from '../model/cascade'
 import { deleteOrgStep } from '../model/orgDeletion'
-import { as, NOW, newT, type OrgFixture, type T, withOrg, workspaceOf } from './helpers.setup'
+import {
+  as,
+  NOW,
+  newT,
+  type OrgFixture,
+  plantIssue,
+  type T,
+  withOrg,
+  workspaceOf,
+} from './helpers.setup'
+import { agendaFor, okOf } from './teamSyncAgenda.setup'
 
 const stampRows = (t: T) => t.run(async (ctx) => await ctx.db.query('sync_stamps').collect())
 
@@ -18,8 +28,12 @@ const profileRow = (t: T, profile: Doc<'profiles'>) =>
 const stamp = (t: T, f: OrgFixture, profile_id: string) =>
   as(t, f.admin).mutation(api.teamSync.stamp, { org_id: f.org.id, profile_id })
 
-const shipped = async (t: T, f: OrgFixture, id: string) =>
-  (await workspaceOf(as(t, f.viewer)))?.profiles.find((p) => p.id === id)
+/* Walker `id`'s stamp as the agenda of the fixture's project answers the
+ * viewer, who reads the meeting. */
+const walked = async (t: T, f: OrgFixture, id: string) =>
+  okOf(await agendaFor(t, f.viewer, { kind: 'project', project_id: f.meta.id })).people.find(
+    (p) => p.id === id,
+  )?.stamp
 
 describe('teamSync.stamp', () => {
   it('writes a stamp row and leaves the profile document as it was', async () => {
@@ -35,19 +49,29 @@ describe('teamSync.stamp', () => {
   })
 })
 
-describe('workspace.people', () => {
-  it('ships the stamp row on the profile row, its since only when it holds one', async () => {
+describe('teamSync.agenda', () => {
+  it('answers the stamp row on the walker, its since only when it holds one, and no workspace row carries it', async () => {
     const t = newT()
     const f = await withOrg(t)
+    for (const who of [f.user, f.admin])
+      await plantIssue(t, {
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        status: 'progress',
+        assignee_id: who.id,
+      })
     await stamp(t, f, f.user.id)
     const [row] = await stampRows(t)
-    expect(await shipped(t, f, f.user.id)).toMatchObject({ sync_at: row.at })
-    expect(await shipped(t, f, f.user.id)).not.toHaveProperty('sync_since')
+    expect(await walked(t, f, f.user.id)).toEqual({ at: row.at })
     await t.run(async (ctx) => {
       await ctx.db.patch(row._id, { since: NOW })
     })
-    expect(await shipped(t, f, f.user.id)).toMatchObject({ sync_at: row.at, sync_since: NOW })
-    expect(await shipped(t, f, f.admin.id)).not.toHaveProperty('sync_at')
+    expect(await walked(t, f, f.user.id)).toEqual({ at: row.at, since: NOW })
+    expect(await walked(t, f, f.admin.id)).toBeNull()
+    // the user's own workspace holds their profile without the stamp
+    const own = (await workspaceOf(as(t, f.user)))?.profiles
+    expect(own?.map((p) => p.id)).toEqual([f.user.id])
+    expect(own?.[0]).not.toHaveProperty('sync_at')
   })
 })
 

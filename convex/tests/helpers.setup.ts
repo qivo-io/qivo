@@ -37,7 +37,9 @@ import { type ActivityEntry, insertActivity } from '../model/activity'
 import { insertTask, type TaskWithText, withText } from '../model/descriptions'
 import { ERASE_TIMERS, noteRestore } from '../model/fileHolds'
 import { activeTaskCount } from '../model/labelCounts'
+import { shownLabelColor } from '../model/labels'
 import { countersOf, countersRow, type OrgCounters } from '../model/orgs'
+import { shownAvatarColor } from '../model/people'
 import { memberCount } from '../model/teamCounts'
 import schema from '../schema'
 import { teamJson } from './teamMembers.setup'
@@ -1270,20 +1272,109 @@ export async function workspaceOf(caller: Caller): Promise<Workspace | null> {
   return snap && { ...snap, delivered_at: '' }
 }
 
+/* A stored row as the app would receive it, without Convex's system fields
+ * and the name key, which only serve index reads. */
+function appRow<R extends { _id: unknown; _creationTime: number; name_key?: string }>(row: R) {
+  const { _id, _creationTime, name_key: _key, ...rest } = row
+  return rest
+}
+
+/**
+ * The server's data a store test publishes for `profile`'s login
+ * (src/store/guard/liveDouble.setup.ts Whole): the workspace the app holds
+ * (workspaceOf), which holds only the login's own profiles, memberships and
+ * teams, with every profile of each of its organizations and that
+ * profile's Team sync stamp, every team, membership and label beside it, as
+ * the stand-ins of the reads by id, the pickers and the agenda answer them.
+ * Null without a seat.
+ */
+export async function wholeOf(t: T, profile: Doc<'profiles'>) {
+  const snap = await workspaceOf(as(t, profile))
+  if (snap === null) return null
+  const orgIds = snap.orgs.map((org) => org.id)
+  const projectIds = snap.projects.map((project) => project.id)
+  const rows = await t.run(async (ctx) => {
+    const profiles = []
+    const teams = []
+    const teamMembers = []
+    const labels = []
+    // every grant on the projects the workspace shows, as the projects part
+    // sends them; the app keeps only the caller's own (workspaceJoin.ts
+    // joinParts)
+    const access = []
+    for (const project_id of projectIds)
+      for (const grant of await ctx.db
+        .query('project_access')
+        .withIndex('by_project', (q) => q.eq('project_id', project_id))
+        .collect())
+        access.push(appRow(grant))
+    for (const org_id of orgIds) {
+      const stamps = new Map(
+        (
+          await ctx.db
+            .query('sync_stamps')
+            .withIndex('by_org_profile', (q) => q.eq('org_id', org_id))
+            .collect()
+        ).map((row) => [row.profile_id, row]),
+      )
+      for (const p of await ctx.db
+        .query('profiles')
+        .withIndex('by_org', (q) => q.eq('org_id', org_id))
+        .collect()) {
+        const stamp = stamps.get(p.id)
+        profiles.push({
+          ...appRow(p),
+          color: shownAvatarColor(p.color),
+          ...(stamp === undefined
+            ? {}
+            : stamp.since === undefined
+              ? { sync_at: stamp.at }
+              : { sync_at: stamp.at, sync_since: stamp.since }),
+        })
+      }
+      for (const team of await ctx.db
+        .query('teams')
+        .withIndex('by_org', (q) => q.eq('org_id', org_id))
+        .collect()) {
+        teams.push(appRow(team))
+        for (const m of await ctx.db
+          .query('team_members')
+          .withIndex('by_team', (q) => q.eq('team_id', team.id))
+          .collect())
+          teamMembers.push(appRow(m))
+      }
+      for (const label of await ctx.db
+        .query('labels')
+        .withIndex('by_org', (q) => q.eq('org_id', org_id))
+        .collect()) {
+        const { _id, _creationTime, ...row } = label
+        labels.push({ ...row, color: shownLabelColor(label.color) })
+      }
+    }
+    return { profiles, teams, teamMembers, labels, access }
+  })
+  return { ...snap, ...rows }
+}
+
 /** The load rows the app works with for workspace `snap`: a row for each
  * task it shows that passes the server's fence, taken from the task rows
  * the way the store derives them (src/store/taskIndex.ts), then the rows
- * the server sends for the tasks the reader is not shown. */
-export function appLoadRows(snap: Workspace): OrgLoadRow[] {
+ * the server sends for the tasks the reader is not shown. The workspace
+ * holds no other person, so an owner counts as one of the task's
+ * organization unless `gone` names them, as the app files a row for any
+ * owner people.byIds has not said is gone (src/store/viewDelay.ts
+ * ownerInOrg): the fixtures these serve hold their owners, and the
+ * server's own fence checks them (lib/workspaceParts.ts). A test with an
+ * owner who is no profile of the organization passes them in `gone`. */
+export function appLoadRows(snap: Workspace, gone: ReadonlySet<string> = new Set()): OrgLoadRow[] {
   const parents = new Set(snap.issues.flatMap((task) => task.parent_id ?? []))
   const projects = new Map(snap.projects.map((project) => [project.id, project]))
-  const orgOf = new Map(snap.profiles.map((person) => [person.id, person.org_id]))
   const shown = snap.issues.flatMap((task) => {
     const project = projects.get(task.project_id)
     const row = loadRowFor(task, {
       isGroup: parents.has(task.id) || task.has_hidden_subtasks,
       projectLive: project !== undefined && project.archived_at === undefined,
-      ownerInOrg: (id) => orgOf.get(id) === task.org_id,
+      ownerInOrg: (id) => !gone.has(id),
       visible: true,
       staff: false,
       meId: '',
@@ -1305,14 +1396,13 @@ export type AppPausedRow = {
 /** The paused tasks the app marks for workspace `snap`, beside
  * appLoadRows. They are the tasks it shows that are paused and not groups
  * (the store's isPaused), not Done, scheduled, not archived and in a live
- * project, owned (lib/review.ts taskOwnerId) by a profile of its
- * organization, as src/views/Resources.tsx passes them to
- * pausedWeeksByPerson. The workspace holds only tasks of projects the
- * reader can see. */
+ * project, owned (lib/review.ts taskOwnerId), as src/views/Resources.tsx
+ * passes them to pausedWeeksByPerson, the owner counted as one of the
+ * task's organization as appLoadRows counts them. The workspace holds only
+ * tasks of projects the reader can see. */
 export function appPausedRows(snap: Workspace): AppPausedRow[] {
   const parents = new Set(snap.issues.flatMap((task) => task.parent_id ?? []))
   const projects = new Map(snap.projects.map((project) => [project.id, project]))
-  const orgOf = new Map(snap.profiles.map((person) => [person.id, person.org_id]))
   return snap.issues.flatMap((task) => {
     const project = projects.get(task.project_id)
     const owner = taskOwnerId(task)
@@ -1326,8 +1416,7 @@ export function appPausedRows(snap: Workspace): AppPausedRow[] {
       project.archived_at !== undefined ||
       task.start_week === undefined ||
       task.end_week === undefined ||
-      owner === undefined ||
-      orgOf.get(owner) !== task.org_id
+      owner === undefined
     )
       return []
     return [

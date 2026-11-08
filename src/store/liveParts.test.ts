@@ -1,9 +1,12 @@
 import { type FunctionReference, getFunctionName, makeFunctionReference } from 'convex/server'
-import type { Value } from 'convex/values'
+import { ConvexError, type Value } from 'convex/values'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { idWindows } from '../../convex/lib/idWindows'
 import type { LiveQueries, LiveTransition } from '../lib/liveQueries'
-import { createLiveParts, type PartsReport, ROOT_ARGS, STALL } from './liveParts'
+import { createLiveParts, type PartsReport, STALL } from './liveParts'
+
+/* The root part's arguments, none (convex/workspace.ts root). */
+const ROOT_ARGS = {}
 
 /* The registry over a scripted transport: the test plays the server, sets
    what each part answers and sends transitions naming the parts that
@@ -16,13 +19,22 @@ const ROOT = {
   auth_user_id: 'a',
   myProfileIds: ['me'],
   orgs: [{ id: ORG, name: 'Org', next_issue_num: 300, next_project_num: 1 }],
+  // the caller's own rows, which the root carries (convex/lib/workspaceParts.ts readRoot)
+  profiles: [],
+  teamMembers: [],
+  teams: [],
+  create: 'now',
 }
+// the one project window of a small organization
+const PROJECTS = { org_id: ORG, from: '', to: null }
+// a projects window's answer with one project, as a change elsewhere sends it
+const changedProjects = (id: string) =>
+  ok({ projects: [{ id, org_id: ORG }], access: [], teamAccess: [] })
 const LEFT = { from: '', to: '80000000' }
 const RIGHT = { from: '80000000', to: null }
 const ok = (rows: Record<string, unknown[]>) => ({ state: 'ok', ...rows })
 const task = (id: string) => ({ id, org_id: ORG, title: id })
 const EMPTY = {
-  'workspace:catalog': ok({ teams: [], labels: [] }),
   'workspace:inbox': {
     state: 'ok',
     unread: [],
@@ -32,7 +44,6 @@ const EMPTY = {
     readTruncated: false,
     truncated: false,
   },
-  'workspace:people': ok({ profiles: [], teamMembers: [] }),
   'workspace:projects': ok({ projects: [], access: [], teamAccess: [] }),
 }
 const tasksPart = (ids: string[], extra = {}) => ({
@@ -115,7 +126,7 @@ function scripted() {
 function serve(s: ReturnType<typeof scripted>) {
   s.set('workspace:root', ROOT_ARGS, { value: ROOT })
   for (const [name, value] of Object.entries(EMPTY)) {
-    const args = name === 'workspace:catalog' || name === 'workspace:inbox' ? { org_id: ORG } : null
+    const args = name === 'workspace:inbox' ? { org_id: ORG } : null
     if (args) s.set(name, args, { value })
     else s.set(name, { org_id: ORG, from: '', to: null }, { value })
   }
@@ -318,10 +329,9 @@ describe('the live parts registry', () => {
     expect(s.log).toEqual([`stop ${inbox}`, `watch ${inbox}`])
     s.send([inbox])
     expect(last()?.state).toBe('complete')
-    const people = { org_id: ORG, from: '', to: null }
-    const peopleKey = s.keyOf('workspace:people', people)
-    s.set('workspace:people', people, { value: { state: 'refused', message: 'Too much.' } })
-    s.send([peopleKey])
+    const projectsKey = s.keyOf('workspace:projects', PROJECTS)
+    s.set('workspace:projects', PROJECTS, { value: { state: 'refused', message: 'Too much.' } })
+    s.send([projectsKey])
     const failed = last()
     expect(failed?.state === 'failed' && (failed.error as { data: unknown }).data).toEqual({
       code: 'rule',
@@ -329,9 +339,9 @@ describe('the live parts registry', () => {
     })
     s.log.length = 0
     expect(parts.retry()).toBe(true)
-    expect(s.log).toEqual([`stop ${peopleKey}`, `watch ${peopleKey}`])
-    s.set('workspace:people', people, { value: EMPTY['workspace:people'] })
-    s.send([peopleKey])
+    expect(s.log).toEqual([`stop ${projectsKey}`, `watch ${projectsKey}`])
+    s.set('workspace:projects', PROJECTS, { value: EMPTY['workspace:projects'] })
+    s.send([projectsKey])
     expect(last()?.state).toBe('complete')
     // nothing failed, nothing to run again
     expect(parts.retry()).toBe(false)
@@ -414,7 +424,7 @@ describe('the live parts registry', () => {
     })
     expect(last()).toMatchObject({ state: 'complete', changed: true })
     // a workspace transition alone tells of no side
-    s.send([s.keyOf('workspace:catalog', { org_id: ORG })])
+    s.send([s.keyOf('workspace:projects', PROJECTS)])
     expect(reports.at(-1)?.sides).toBeUndefined()
   })
 
@@ -544,7 +554,7 @@ describe('the live parts registry', () => {
     online = true
     // a part answering starts the wait over
     await vi.advanceTimersByTimeAsync(600)
-    s.send([s.keyOf('workspace:catalog', { org_id: ORG })])
+    s.send([s.keyOf('workspace:projects', PROJECTS)])
     await vi.advanceTimersByTimeAsync(600)
     expect(reports.at(-1)?.workspace.state).toBe('held')
     await vi.advanceTimersByTimeAsync(400)
@@ -645,13 +655,9 @@ describe('tasks on demand', () => {
     expect(taskWatches(s)).toEqual([])
     expect(last()).toMatchObject({ state: 'complete', tasks: 'not_asked' })
     expect(ids()).toEqual([])
-    // the projects, people and Inbox stay live
-    s.set(
-      'workspace:catalog',
-      { org_id: ORG },
-      { value: ok({ teams: [{ id: 'team-1' }], labels: [] }) },
-    )
-    s.send([s.keyOf('workspace:catalog', { org_id: ORG })])
+    // the projects and the Inbox stay live
+    s.set('workspace:projects', PROJECTS, { value: changedProjects('project-1') })
+    s.send([s.keyOf('workspace:projects', PROJECTS)])
     expect(last()).toMatchObject({ state: 'complete', tasks: 'not_asked', changed: true })
     expect(reports.map((r) => r.workspace.state)).not.toContain('partial')
   })
@@ -683,8 +689,8 @@ describe('tasks on demand', () => {
     expect(last()).toMatchObject({ state: 'partial', loaded: 16 / 64, changed: false })
     expect(ids()).toEqual([])
     // another part changes: a partial that repaints
-    s.set('workspace:catalog', { org_id: ORG }, { value: ok({ teams: [{ id: 'x' }], labels: [] }) })
-    s.send([s.keyOf('workspace:catalog', { org_id: ORG })])
+    s.set('workspace:projects', PROJECTS, { value: changedProjects('x') })
+    s.send([s.keyOf('workspace:projects', PROJECTS)])
     expect(last()).toMatchObject({ state: 'partial', changed: true })
     // another part waits: held
     s.reconnect()
@@ -745,7 +751,7 @@ describe('tasks on demand', () => {
     expect(last()).toMatchObject({ state: 'partial', loaded: 0 })
   })
 
-  it('gives an organization added after the ask its task windows before its people and projects', () => {
+  it('gives an organization added after the ask its task windows before its projects', () => {
     const { s, parts } = big()
     parts.askTasks()
     s.send()
@@ -760,9 +766,6 @@ describe('tasks on demand', () => {
       .filter((l) => l.startsWith('watch ') && l.includes('org-2'))
       .map((l) => l.split('{')[0])
     expect(order).toContain('watch workspace:tasks')
-    expect(order.lastIndexOf('watch workspace:tasks')).toBeLessThan(
-      order.indexOf('watch workspace:people'),
-    )
     expect(order.lastIndexOf('watch workspace:tasks')).toBeLessThan(
       order.indexOf('watch workspace:projects'),
     )
@@ -783,8 +786,8 @@ describe('tasks on demand', () => {
       'did not arrive in time',
     )
     // the rest stays live, and still says the load stopped
-    s.set('workspace:catalog', { org_id: ORG }, { value: ok({ teams: [{ id: 'y' }], labels: [] }) })
-    s.send([s.keyOf('workspace:catalog', { org_id: ORG })])
+    s.set('workspace:projects', PROJECTS, { value: changedProjects('y') })
+    s.send([s.keyOf('workspace:projects', PROJECTS)])
     const live = last()
     expect(live).toMatchObject({ state: 'partial', changed: true })
     expect(live?.state === 'partial' && live.tasksFailed).toBeTruthy()
@@ -798,12 +801,12 @@ describe('tasks on demand', () => {
     s.send()
     expect(last()).toMatchObject({ state: 'complete', tasks: 'all' })
 
-    // a silent catalog during a load fails the workspace as before
+    // a silent inbox during a load fails the workspace as before
     const t = big()
     for (const w of WINDOWS) t.s.set('workspace:tasks', { org_id: ORG, ...w }, {})
     t.parts.askTasks()
     t.s.reconnect()
-    t.s.set('workspace:catalog', { org_id: ORG }, {})
+    t.s.set('workspace:inbox', { org_id: ORG }, {})
     t.s.send([t.s.keyOf('workspace:root', ROOT_ARGS)])
     await vi.advanceTimersByTimeAsync(1000)
     expect(t.last()?.state).toBe('failed')
@@ -893,10 +896,10 @@ describe('tasks on demand', () => {
   it('subscribes every task window from the start for a registry made with the ask', () => {
     const { s, reports, last } = big({ ask: true })
     expect(watchedWindows(s)).toHaveLength(64)
-    // the task windows before the people and project windows
+    // the task windows before the project windows
     const order = s.log.filter((l) => l.startsWith('watch ')).map((l) => l.split('{')[0])
     expect(order.lastIndexOf('watch workspace:tasks')).toBeLessThan(
-      order.indexOf('watch workspace:people'),
+      order.indexOf('watch workspace:projects'),
     )
     expect(last()).toMatchObject({ state: 'complete', tasks: 'all' })
     expect(reports.map((r) => r.workspace.state)).not.toContain('partial')
@@ -972,7 +975,7 @@ describe('tasks on demand', () => {
     // ahead of the organization's parts, and no task window
     const order = s.log.filter((l) => l.startsWith('watch ')).map((l) => l.split('{')[0])
     expect(order.indexOf('watch taskWindow:task')).toBeLessThan(
-      order.indexOf('watch workspace:catalog'),
+      order.indexOf('watch workspace:inbox'),
     )
     expect(parts.sideArgs('reference')).toEqual(args)
     expect(taskWatches(s)).toEqual([])
@@ -1043,15 +1046,78 @@ const orgRow = (id: string, windows: number) => ({
     window i. */
 function serveOrg(s: ReturnType<typeof scripted>, id: string, windows: number) {
   for (const [name, value] of Object.entries(EMPTY)) {
-    const args =
-      name === 'workspace:catalog' || name === 'workspace:inbox'
-        ? { org_id: id }
-        : { org_id: id, from: '', to: null }
+    const args = name === 'workspace:inbox' ? { org_id: id } : { org_id: id, from: '', to: null }
     s.set(name, args, { value })
   }
   for (const [i, w] of idWindows(windows).entries())
     s.set('workspace:tasks', { org_id: id, ...w }, { value: tasksPart([`${id}-${i}`]) })
 }
+
+describe('the parts an organization subscribes', () => {
+  it('watches no people or catalog part, and joins the caller’s own rows from the root', async () => {
+    const s = scripted()
+    serve(s)
+    s.set('workspace:root', ROOT_ARGS, {
+      value: {
+        ...ROOT,
+        profiles: [{ id: 'me', org_id: ORG, name: 'Me' }],
+        teamMembers: [
+          { team_id: 'mine', profile_id: 'me', is_leader: false },
+          // a membership of a team the root does not name joins nothing
+          { team_id: 'elsewhere', profile_id: 'me', is_leader: false },
+        ],
+        teams: [{ id: 'mine', org_id: ORG, name: 'Mine' }],
+      },
+    })
+    const reports: PartsReport[] = []
+    createLiveParts(
+      s.live,
+      (r) => reports.push(r),
+      () => true,
+    )
+    s.send()
+    await tick()
+    s.send()
+    const watched = s.log.filter((l) => l.startsWith('watch ')).map((l) => l.split('{')[0])
+    expect(watched).not.toContain('watch workspace:people')
+    expect(watched).not.toContain('watch workspace:catalog')
+    expect(new Set(watched)).toEqual(
+      new Set([
+        'watch workspace:root',
+        'watch inbox:summary',
+        'watch workspace:inbox',
+        'watch workspace:projects',
+      ]),
+    )
+    const w = reports.at(-1)?.workspace
+    if (w?.state !== 'complete' || !w.value) throw new Error(`not complete: ${w?.state}`)
+    expect(w.value.profiles.map((p) => p.id)).toEqual(['me'])
+    expect(w.value.teams.map((t) => t.id)).toEqual(['mine'])
+    expect(w.value.teamMembers.map((m) => m.team_id)).toEqual(['mine'])
+    expect(w.value).not.toHaveProperty('labels')
+  })
+
+  it('fails the workspace with the sentence of a refused root', async () => {
+    const s = scripted()
+    serve(s)
+    const reports: PartsReport[] = []
+    createLiveParts(
+      s.live,
+      (r) => reports.push(r),
+      () => true,
+    )
+    s.set('workspace:root', ROOT_ARGS, {
+      error: new ConvexError({ code: 'rule', message: 'Qivo could not finish checking.' }),
+    })
+    s.send()
+    const w = reports.at(-1)?.workspace
+    expect(w?.state).toBe('failed')
+    expect(w?.state === 'failed' && (w.error as { data: unknown }).data).toEqual({
+      code: 'rule',
+      message: 'Qivo could not finish checking.',
+    })
+  })
+})
 
 describe("the Inbox's unread summary side", () => {
   const summaryKey = (s: ReturnType<typeof scripted>) => s.keyOf('inbox:summary', {})
@@ -1093,9 +1159,9 @@ describe("the Inbox's unread summary side", () => {
 
   it('reports its news with the transition that brought it, and its failure holds nothing', async () => {
     const { s, reports, last } = await started()
-    const catalog = s.keyOf('workspace:catalog', { org_id: ORG })
+    const catalog = s.keyOf('workspace:projects', PROJECTS)
     s.set('inbox:summary', {}, { value: { unread_count: 3 } })
-    s.set('workspace:catalog', { org_id: ORG }, { value: ok({ teams: [{ id: 'x' }], labels: [] }) })
+    s.set('workspace:projects', PROJECTS, { value: changedProjects('x') })
     const count = reports.length
     s.send([summaryKey(s), catalog])
     expect(reports).toHaveLength(count + 1)

@@ -26,6 +26,7 @@
  * viewer, and the admin, over plants the brief names. Cases that must fail
  * if a rule drifts compare a drifted rule with the server's answer. */
 
+import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
@@ -53,12 +54,13 @@ import {
   plantSeat,
   type T,
   uuid,
+  wholeOf,
   withReadingAdmin,
-  workspaceOf,
 } from '../../convex/tests/helpers.setup'
 import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { countOrg } from '../../convex/tests/overviewCounts.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
+import type { Whole as Snapshot } from './guard/liveDouble.setup'
 import { OVERVIEW_BATCH, OVERVIEW_SPLIT, OVERVIEW_WEEKS } from './overviewLists'
 import {
   type ForcedOverview,
@@ -66,7 +68,8 @@ import {
   type OverviewArgs,
   overviewStandIn,
 } from './overviewStandIn.setup'
-import type { Snapshot } from './workspaceBase'
+import { peopleSettingsStandIn } from './peopleSettingsStandIn.setup'
+import { nameEveryone } from './personShown.setup'
 
 vi.hoisted(() => {
   // the client's zone, set before any module reads the clock
@@ -100,12 +103,17 @@ async function start(snap: Snapshot) {
   vi.stubGlobal('window', { showToast: vi.fn() })
   network.query.mockResolvedValue(null)
   network.mutation.mockResolvedValue(null)
-  network.onUpdate.mockImplementation((_ref, _args, next) => {
-    next(structuredClone(snap))
+  // the faces the views name come from the server's data, as the store
+  // holds nobody but the caller
+  network.onUpdate.mockImplementation((ref, args, next) => {
+    if (getFunctionName(ref) === 'people:byIds')
+      next(peopleSettingsStandIn(snap, 'people:byIds', args))
+    else next(structuredClone(snap))
     return () => {}
   })
   const store = await import('./planner')
   await store.initStore()
+  await nameEveryone(store.P, snap)
   // the oracle and the page's clock read this store
   const figures = await import('./overviewOracle.setup')
   const args = await import('../views/overview/overviewArgs')
@@ -118,7 +126,7 @@ type Issue = Store['issues'][number]
 /** The store booted for `profile` from their workspace, with the clock at
  * `now` before the store's modules load. */
 async function storeOf(t: T, profile: Doc<'profiles'>, now: number): Promise<Store> {
-  const snap = await workspaceOf(as(t, profile))
+  const snap = await wholeOf(t, profile)
   if (snap === null) throw new Error(`no workspace for ${profile.name}`)
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(now)
@@ -900,7 +908,7 @@ describe('fixed ends', () => {
     const standIn =
       (force: ForcedOverview = {}): Read =>
       async (at) => {
-        const snap = await workspaceOf(caller)
+        const snap = await wholeOf(t, f.user)
         if (snap === null) throw new Error('no workspace')
         return overviewStandIn(snap, 'paused', { scope, ...at }, { force }) as ListAnswer
       }

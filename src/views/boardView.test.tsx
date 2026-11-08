@@ -205,7 +205,7 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(board.card('a')).toBeNull()
   })
 
-  it('narrows at once when another person moves a task out of the selection, to Done under Focus or out of a search', async () => {
+  it('narrows at once when another person moves a task out of the selection or to Done under Focus, and out of a search once the answer says so', async () => {
     const board = await loadBoard(network, (snap) => {
       plan(snap)
       for (const [n, id] of ['a', 'b', 'c'].entries())
@@ -231,6 +231,12 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     task('b').status = 'done'
     task('c').title = 'Order the case'
     await board.deliver()
+    // the text verdict is the answer's: the store cannot read every name a
+    // text matches, so a held card stays until the answer for the text
+    // leaves it out
+    expect(['a', 'b', 'c'].map((id) => board.card(id) !== null)).toEqual([false, false, true])
+    board.server.hold = false
+    await board.answer()
     expect(['a', 'b', 'c'].map((id) => board.card(id) !== null)).toEqual([false, false, false])
     expect(state()).toBe('ok')
   })

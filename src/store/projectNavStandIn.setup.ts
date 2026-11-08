@@ -53,7 +53,6 @@ import { ConvexError, compareValues } from 'convex/values'
 import { LIMITS, LIST_BATCH, overText } from '../../convex/lib/limits'
 import { nameKey } from '../../convex/lib/nameKey'
 import { allWordsMatcher } from '../../convex/lib/search'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
 import type {
   NavBatch,
   NavChildRow,
@@ -65,10 +64,11 @@ import type {
   NavSearch,
   NavSearchRow,
 } from '../../convex/model/projectNavReads'
+import type { Whole } from './guard/liveDouble.setup'
 
 /** The workspace sections the reads' rule reads. */
 export type NavWorkspace = Pick<
-  Workspace,
+  Whole,
   | 'auth_user_id'
   | 'myProfileIds'
   | 'profiles'
@@ -111,8 +111,8 @@ export const NAV_RESOLVE_FORM =
 const NOT_A_CURSOR =
   'after and through must be cursors from an earlier answer of this list; start again from the first batch'
 
-type Project = Workspace['projects'][number]
-type Profile = Workspace['profiles'][number]
+type Project = Whole['projects'][number]
+type Profile = Whole['profiles'][number]
 type Level = 'lead' | 'user' | 'viewer'
 
 /* A place in a list: the key, then the tie (the project id and, for page

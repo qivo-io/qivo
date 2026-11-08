@@ -769,16 +769,14 @@ function EventRow({ e }: { e: ActivityVM }) {
 }
 
 /* The small pen after an edited comment's timestamp. Hover or keyboard focus
-   pops the edit attribution: when + by whom (and that they were acting as
-   project lead) when the editor wasn't the author. */
-function EditedGlyph({ c, it }: { c: CommentVM; it: IssueVM }) {
+   pops the edit attribution: when, and by whom when the editor wasn't the
+   author. It names no role: the store holds no one else's level, and
+   comments an organization admin edited before admins lost project access
+   keep an editor who was no lead. */
+function EditedGlyph({ c }: { c: CommentVM }) {
   const foreign = !!c.editedBy && c.editedBy !== c.author
   const editor = personLabel(P.person(c.editedBy), 'someone')
-  const lead = foreign && P.levelOn(it.project, c.editedBy) === 'lead'
-  const tip =
-    'Edited ' +
-    new Date(c.editedTs).toLocaleString() +
-    (foreign ? ` by ${editor}${lead ? ' (project lead)' : ''}` : '')
+  const tip = `Edited ${new Date(c.editedTs).toLocaleString()}${foreign ? ` by ${editor}` : ''}`
   return (
     <Button
       type="button"
@@ -1403,7 +1401,7 @@ function CommentRow({
               {P.fmtAgo(c.ts)}
             </span>
           </HoverTooltip>
-          {c.editedTs != null && <EditedGlyph c={c} it={it} />}
+          {c.editedTs != null && <EditedGlyph c={c} />}
           {canEdit && !editing && (
             <div
               style={{ opacity: hover ? 1 : 0 }}
@@ -4800,19 +4798,26 @@ function IssueDetail({
             if (P.refusePausedEdit()) return
             // the key is org-scoped and immutable (0050): the modal stays
             // anchored to the same issue, nothing to re-open or re-anchor
-            const key = P.moveIssue(it.id, pid)
+            const t = P.project(pid)
+            const shownKey = it.key
+            // the server checks that everyone on the task and its subtasks
+            // keeps access; a refusal is toasted with its sentence and the
+            // move taken back, so the task is said to have moved only once
+            // the server took it
+            const key = P.moveIssue(it.id, pid, (saved) => {
+              if (!saved) return
+              // the handle is a uuid for another organization's tasks —
+              // toasts and every other human-facing string name the
+              // readable key
+              window.showToast?.(
+                `Moved ${(key && P.taskShown(key)?.key) || shownKey} to ${t ? t.name : 'the sub-project'}`,
+              )
+            })
             setMoveOpen(false)
             if (!key) {
               // the target vanished between render and click (concurrent delete)
               window.showToast?.("Couldn't move: the sub-project no longer exists", 'error')
-              return
             }
-            const t = P.project(pid)
-            // the handle is a uuid for another organization's tasks — toasts
-            // and every other human-facing string name the readable key
-            window.showToast?.(
-              `Moved ${P.taskShown(key)?.key || it.key} to ${t ? t.name : 'the sub-project'}`,
-            )
           }}
         />
       )}

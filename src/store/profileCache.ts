@@ -1,6 +1,6 @@
-/* The people the open views show that the workspace's people part does
-   not hold, read by id from the server (convex/people.ts byIds) and kept in
-   one bounded cache, so every place that shows another person can name and
+/* The people the open views show other than the signed-in person's own
+   seats, which the workspace's root part sends, read by id from the server
+   (convex/people.ts byIds) and kept in one bounded cache, so every place that shows another person can name and
    paint them (store/planner.ts P.person).
 
    - A view names the people its loaded rows show (`name`), by organization
@@ -82,7 +82,8 @@ export type CachedPerson =
 /** What the cache needs from the store and the transport. */
 export type ProfileCacheDeps = {
   live: Pick<LiveQueries, 'watch' | 'read' | 'onTransition'>
-  /** Whether the workspace's people part holds person `id` of `org`. */
+  /** Whether the workspace holds person `id` of `org`, as it holds the
+      signed-in person's own seats. */
   held: (org: string, id: string) => boolean
   /** Called once after a transition, a registration or a take that changed
       an entry or a state, so the store repaints. */

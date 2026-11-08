@@ -1,8 +1,8 @@
 /* The task window's label picker and the labels its Labels section shows.
 
    The picker reads the labels it offers from the server a batch at a time
-   (labels.picker, through P.labelChoices), never from the workspace's
-   catalogue, on the rules the window's other pickers follow
+   (labels.picker, through P.labelChoices), as the store holds no label, on
+   the rules the window's other pickers follow
    (panels/RelationPicker.tsx, the coordinator's decisions of 4 and 6
    November 2026):
 
@@ -186,8 +186,9 @@ export function LabelPickerPopup({
     const name = typed
     const made = P.addLabel({ name })
     if (!made) return
-    // its chip names it at once, whether or not the catalogue holds it
-    keepNamed(it.org, { id: made.id, name: name.trim(), color: made.color })
+    // its chip names it at once, as the store holds no label to name it,
+    // also while the create is on its way
+    keepNamed(it.org, { id: made.id, name: name.trim(), color: made.color }, made.saved)
     if (!onTask.has(made.id)) P.toggleIssueLabel(it.id, made.id, made.saved)
     setText('')
     void made.saved.then((saved) => {

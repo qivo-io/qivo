@@ -1,10 +1,13 @@
 /* The workspace's live parts (convex/workspace.ts) as the store adopts
    them: once per Convex transition, all together (lib/liveQueries.ts).
 
-   The registry subscribes to the root part, and for each organization it
-   names to the catalog, the inbox, and windows of its people and projects
+   The registry subscribes to the root part, which carries the caller's
+   seats, organizations and own profiles, team memberships and teams, and
+   for each organization it names to the inbox and windows of its projects
    (convex/lib/idWindows.ts), as many as its counts of projects say it
-   fills (startWindows), chosen once when it adds the organization. After
+   fills (startWindows), chosen once when it adds the organization. No part
+   sends another person, a team the caller is not in or a label; the views
+   read those by id or a batch at a time. After
    each transition it tells the store (report) whether every part it needs
    holds a current answer. Only then is the workspace complete, joined from
    them (convex/lib/workspaceJoin.ts); otherwise the store keeps what it
@@ -21,8 +24,8 @@
    waits for its answer, so no window queues behind running project
    windows. From the ask until every task window answered, a transition
    with every other part current reports `partial` with no task at all and
-   the share of task windows that answered, so the projects, people and
-   Inbox stay live during the load while the store never holds part of the
+   the share of task windows that answered, so the projects and the Inbox
+   stay live during the load while the store never holds part of the
    tasks. The first transition in which every task window answered reports
    `complete` with `tasks: 'all'`, and the registry is never partial again.
    A partial transition holds no write for certain, since the window a
@@ -30,8 +33,8 @@
 
    One socket runs one update at a time, and every part subscribed before
    an update starts arrives with it. An organization added once tasks were
-   asked subscribes its task windows before its people and project
-   windows: a deployment runs a limited number of queries at once (16 on a
+   asked subscribes its task windows before its project windows: a
+   deployment runs a limited number of queries at once (16 on a
    local backend) and refuses one that waits too long for a turn, closing
    the socket with 1013 TooManyConcurrentRequests, and the project windows
    of a workspace with thousands of projects run long enough that a part
@@ -109,11 +112,9 @@ import {
   tasksIn,
 } from '../../convex/lib/idWindows'
 import {
-  type CatalogPart,
   type InboxPart,
   joinParts,
   type OrgParts,
-  type PeoplePart,
   type ProjectsPart,
   partRows,
   type RootAnswer,
@@ -227,13 +228,12 @@ export type PartsReport = {
   sides?: Partial<Record<SideName, SideNews>>
 }
 
-type Kind = 'tasks' | 'people' | 'projects'
-const KINDS: readonly Kind[] = ['tasks', 'people', 'projects']
+type Kind = 'tasks' | 'projects'
+const KINDS: readonly Kind[] = ['tasks', 'projects']
 /* The kinds whose windows every workspace needs, asked or not. */
-const PART_KINDS: readonly Kind[] = ['people', 'projects']
+const PART_KINDS: readonly Kind[] = ['projects']
 const WINDOWED = {
   tasks: api.workspace.tasks,
-  people: api.workspace.people,
   projects: api.workspace.projects,
 } as const
 
@@ -261,7 +261,6 @@ type Node = IdWindow & { slot: Slot; pieces: Node[] | null }
 /* What the registry holds for one organization. */
 type Org = {
   id: string
-  catalog: Slot
   inbox: Slot
   /** the windows of each kind */
   kinds: Record<Kind, Node[]>
@@ -275,11 +274,6 @@ type Answer = { state: string; split?: boolean; pieces?: number; message?: strin
 
 const isAnswer = (value: unknown): value is Answer =>
   typeof value === 'object' && value !== null && 'state' in value
-
-/** The root part's arguments: this app shows a login that an organization
-    deactivated its own screen, so it asks to hear of one
-    (convex/workspace.ts root). */
-export const ROOT_ARGS = { seatless: 'all' } as const
 
 /** The task a boot's address names under an organization's slug
     (lib/router.ts addressedTask), with its ref as taskWindow.task reads it,
@@ -402,19 +396,17 @@ export function createLiveParts(
     for (const { row, tasks } of added) {
       orgs.set(row.id, {
         id: row.id,
-        catalog: watch(api.workspace.catalog, { org_id: row.id }),
         inbox: watch(api.workspace.inbox, { org_id: row.id }),
-        kinds: { tasks: windows(row.id, 'tasks', tasks), people: [], projects: [] },
+        kinds: { tasks: windows(row.id, 'tasks', tasks), projects: [] },
         tasksStarted: tasksNow,
       })
       moved = true
     }
-    // People and projects subscribe after the task windows, so the backend,
-    // which runs the parts in the order they came, runs the slow project
-    // windows last, with nothing waiting behind them
+    // Projects subscribe after the task windows, so the backend, which runs
+    // the parts in the order they came, runs the slow project windows last,
+    // with nothing waiting behind them
     for (const { row, projects } of added) {
       const org = orgs.get(row.id) as Org
-      org.kinds.people = windows(row.id, 'people', idWindows(1))
       org.kinds.projects = windows(row.id, 'projects', projects)
     }
     // a window that asked to be cut gets its pieces
@@ -439,7 +431,6 @@ export function createLiveParts(
     }
   }
   function* orgSlots(org: Org): Generator<Slot> {
-    yield org.catalog
     yield org.inbox
     for (const kind of KINDS) for (const n of nodesOf(org.kinds[kind])) yield n.slot
   }
@@ -496,13 +487,12 @@ export function createLiveParts(
   }
 
   /** The slots complete() needs an answer from other than task windows:
-      the root, each organization's catalog and inbox, and each people or
-      project window that shows its rows neither itself nor through its
-      pieces (rowsOf), or, when it has pieces, the pieces that cannot. */
+      the root, each organization's inbox, and each project window that
+      shows its rows neither itself nor through its pieces (rowsOf), or,
+      when it has pieces, the pieces that cannot. */
   function* neededParts(): Generator<Slot> {
     if (root) yield root
     for (const org of orgs.values()) {
-      yield org.catalog
       yield org.inbox
       for (const kind of PART_KINDS) for (const n of org.kinds[kind]) yield* neededIn(n)
     }
@@ -578,13 +568,11 @@ export function createLiveParts(
       }
       for (const n of org.kinds.tasks)
         if (rowsOf(n) !== null) loaded += (idShare(n) * weight(row)) / allTasks
-      const catalog = rowsOfSlot<CatalogPart>(org.catalog)
       const inbox = rowsOfSlot<InboxPart>(org.inbox)
       const tasks = withTasks ? windowsOf<TasksPart>('tasks') : []
-      const people = windowsOf<PeoplePart>('people')
       const projects = windowsOf<ProjectsPart>('projects')
-      if (!catalog || !inbox || !tasks || !people || !projects) return null
-      parts.push({ catalog, inbox, tasks, people, projects })
+      if (!inbox || !tasks || !projects) return null
+      parts.push({ inbox, tasks, projects })
     }
     return { value: joinParts(answer, parts, new Date(lastAt).toISOString()), loaded }
   }
@@ -792,7 +780,7 @@ export function createLiveParts(
     settle({ news, progress })
   })
 
-  root = watch(api.workspace.root, ROOT_ARGS)
+  root = watch(api.workspace.root, {})
   // the unread summary from the start, right after the root part, so its
   // first answer comes with the first parts
   watchSide('summary', api.inbox.summary, {})

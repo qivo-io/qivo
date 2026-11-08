@@ -22,8 +22,8 @@
 
 import { loadRowFor, type OrgLoadRow } from '../../convex/lib/loadRows'
 import { taskOwnerId } from '../../convex/lib/review'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
 import type { OwnerLoadSpan, OwnerLoadsJson, OwnerPausedSpan } from '../../convex/planning'
+import type { Whole } from './guard/liveDouble.setup'
 
 /** The arguments planning.ownerLoads takes. */
 export type OwnerLoadsArgs = { org_id: string; owner_ids: string[] }
@@ -62,7 +62,7 @@ const spanOf = (
 /** What planning.ownerLoads answers `args` for the person `workspace` is
     the workspace of. */
 export function ownerLoadsStandIn(
-  workspace: Workspace,
+  workspace: Whole,
   args: OwnerLoadsArgs,
   { unavailable = [] }: { unavailable?: readonly string[] } = {},
 ): OwnerLoadsJson {

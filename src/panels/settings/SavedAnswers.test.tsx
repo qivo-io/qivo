@@ -5,7 +5,11 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../../components/ui/tooltip'
-import { answerLabelPages, labelPickerStandIn } from '../../store/labelPagesStandIn.setup'
+import {
+  answerLabelPages,
+  labelPickerStandIn,
+  labelsByIdsStandIn,
+} from '../../store/labelPagesStandIn.setup'
 import { answerMilestones, isMilestoneRead } from '../../store/milestoneStandIn.setup'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 import {
@@ -49,7 +53,12 @@ function mondayIn(weeks: number) {
   return `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`
 }
 
-type Pending = { name: string; resolve: (value: unknown) => void; reject: (e: unknown) => void }
+type Pending = {
+  name: string
+  args: Record<string, unknown>
+  resolve: (value: unknown) => void
+  reject: (e: unknown) => void
+}
 
 let pages: {
   teams: typeof import('./TeamSettings')
@@ -146,14 +155,15 @@ async function load(betaName = 'Beta', { crewName = 'Crew', labelName = '' } = {
     if (isProjectSettingsRead(name)) return settings.watch(name, args, next, fail)
     if (isTeamSettingsRead(name)) return teams.watch(name, args, next, fail)
     if (name === 'labels:settingsPage') answerLabelPages(snap, args, next, fail)
+    else if (name === 'labels:byIds') next(labelsByIdsStandIn(snap, args))
     else if (isMilestoneRead(name)) answerMilestones(snap, name, args, next, fail)
     else next(structuredClone(snap))
     return () => {}
   })
-  network.mutation.mockImplementation((ref) => {
+  network.mutation.mockImplementation((ref, args) => {
     const name = getFunctionName(ref)
     if (name === 'identity:claimMySeats') return Promise.resolve(null)
-    return new Promise((resolve, reject) => requests.push({ name, resolve, reject }))
+    return new Promise((resolve, reject) => requests.push({ name, args, resolve, reject }))
   })
   const store = await import('../../store/planner')
   await store.initStore()
@@ -274,13 +284,13 @@ describe('create forms', () => {
     expect(field?.value).toBe('Field crew')
     expect(button('Add team')?.disabled).toBe(true)
     expect(toasts()).toEqual([])
-    // a create on its way shows nowhere, though the store painted it
+    // a create on its way shows nowhere, and the store paints no team
     const list = () => document.querySelector('[data-org-teams]')?.textContent ?? ''
     expect(list()).not.toContain('Field crew')
+    expect(pages.store.P.teams.some((t) => t.name === 'Field crew')).toBe(false)
     // the server's batch holds the created team before the create's
     // answer, as Convex delivers a write's results first
-    const created = pages.store.P.teams.find((t) => t.name === 'Field crew')
-    if (!created) throw new Error('the store painted no created team')
+    const created = { id: String(requests[0]?.args.id) }
     server = structuredClone(fixture)
     server.teams.push({
       id: created.id,
@@ -307,7 +317,8 @@ describe('create forms', () => {
     await answer('teams:create', 'refuse')
     expect(field?.value).toBe('Field crew')
     expect(button('Add team')?.disabled).toBe(false)
-    expect(toasts()).toEqual(['The server said no. Change reverted.'])
+    // nothing was painted, so nothing is taken back
+    expect(toasts()).toEqual(['The server said no.'])
     // a refused team never shows
     expect(document.querySelector('[data-org-teams]')?.textContent).not.toContain('Field crew')
     expect(document.querySelector('[data-team-kept]')).toBeNull()
@@ -327,7 +338,8 @@ describe('create forms', () => {
     await act(async () => button('Add label')?.click())
     await act(async () => requests.at(-1)?.resolve(null))
     expect(field?.value).toBe('')
-    expect(toasts()).toEqual(['The server said no. Change reverted.', 'Label “Firmware” created'])
+    // the store holds no label, so the refused create took nothing back
+    expect(toasts()).toEqual(['The server said no.', 'Label “Firmware” created'])
   })
 
   it('keeps a new milestone name until the server creates the milestone', async () => {

@@ -1,7 +1,7 @@
 /* The team domain's public surface: create / settings /
- * delete + the three membership verbs, and the four reads of Settings ›
- * Teams and a team's page. Thin wrappers over model/teams (the rules REST
- * and MCP share), model/orgs and model/cascade.
+ * delete + the three membership verbs, the four reads of Settings › Teams
+ * and a team's page, and Team sync's scope menu's list. Thin wrappers over
+ * model/teams (the rules REST and MCP share), model/orgs and model/cascade.
  *
  * The reads (model/teams.ts) answer the app a batch at a time in name
  * order, with a search over the whole list on the server, and read no
@@ -19,6 +19,9 @@
  *   addable       the Add member picker, read once a batch while it is
  *                 open: the people who may join, `refused` as the add
  *                 refuses
+ *   picker        Team sync's scope menu, read once a batch while it is
+ *                 open: every team's id and name, for every seat of the
+ *                 organization, guests and Viewers included
  *
  * Ported predicates (final SQL state):
  *   teams_insert            is_org_admin (0081:218)
@@ -69,7 +72,9 @@ import {
   settingsTeamsOf,
   type TeamChoicesAnswer,
   type TeamMembersAnswer,
+  type TeamPickerAnswer,
   type TeamSettingsAnswer,
+  teamPickerOf,
   teamSettingsOf,
   updateTeamCore,
   vTeamExpected,
@@ -143,6 +148,27 @@ export const members = orgQuery({
 export const addable = orgQuery({
   args: { team_id: v.string(), ...vListArgs },
   handler: (ctx, a): Promise<TeamChoicesAnswer> => addableOf(ctx, ctx.me, a),
+})
+
+/* ----------------------------------------------------------------- picker
+ * Team sync's scope menu, read once a batch while it is open. */
+
+/** One batch of the organization's teams in name order, each its id and
+ * name, with a search over every team (model/teams.ts teamPickerOf), for
+ * Team sync's scope menu (src/views/teamSync/SyncScopeMenu.tsx). Any active
+ * seat of the organization may read it, guests and Viewers included, as
+ * every seat received every team's name through the workspace's catalog
+ * part before it was removed. It reads teams.by_org_name alone, no
+ * membership, count, share or profile. Answers `not_ready` until the name
+ * keys are written, or `ready` with the rows, `next` and `stopped`
+ * (lib/namedPages.ts ListBatch). In the timing of 8 November 2026 among 50
+ * teams, a batch or a search read at most 6 ranges, 52 documents and
+ * 0.012 MiB with the sign-in, in at most 51 ms of JavaScript quiet and
+ * 65 ms beside eight busy loops (model/teams.ts teamPickerOf has the
+ * cases). */
+export const picker = orgQuery({
+  args: vListArgs,
+  handler: (ctx, a): Promise<TeamPickerAnswer> => teamPickerOf(ctx, ctx.me, a),
 })
 
 /* ----------------------------------------------------------------- create

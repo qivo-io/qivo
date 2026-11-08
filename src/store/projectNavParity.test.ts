@@ -56,13 +56,14 @@ import {
   plantSeat,
   type T,
   uuid,
+  wholeOf,
   withOrg,
-  workspaceOf,
 } from '../../convex/tests/helpers.setup'
 import { keyOrg } from '../../convex/tests/nameKeys.setup'
 import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { expectedPage, expectedSearch, navSees } from '../../convex/tests/projectNav.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
+import type { Whole as Snapshot } from './guard/liveDouble.setup'
 import {
   NAV_BLANK_SEARCH,
   NAV_EMPTY_ORG,
@@ -74,7 +75,6 @@ import {
   projectNavStandIn,
   setFavoriteStandIn,
 } from './projectNavStandIn.setup'
-import type { Snapshot } from './workspaceBase'
 
 vi.hoisted(() => {
   // cursors are sealed with a key derived from it (lib/archiveCursorSeal.ts)
@@ -116,7 +116,7 @@ async function start(snap: Snapshot) {
 
 /** The store booted for `profile` from their workspace. */
 async function storeOf(t: T, profile: Doc<'profiles'>) {
-  const snap = await workspaceOf(as(t, profile))
+  const snap = await wholeOf(t, profile)
   if (snap === null) throw new Error(`no workspace for ${profile.name}`)
   return await start(snap)
 }
@@ -185,7 +185,7 @@ async function compareStandIn(
   terms: readonly string[],
   favorites: readonly string[] = [],
 ) {
-  const snap = await workspaceOf(as(t, profile))
+  const snap = await wholeOf(t, profile)
   if (snap === null) throw new Error(`no workspace for ${profile.name}`)
   const seats = new Map([[profile.org_id, profile]])
   const login = profile.auth_user_id ?? 'auth_nobody'
@@ -312,7 +312,7 @@ const favoriteIds = (t: T, profile: Doc<'profiles'>) =>
  * the favorites the profile had.
  */
 async function compareStars(t: T, profile: Doc<'profiles'>, label: string) {
-  const snap = await workspaceOf(as(t, profile))
+  const snap = await wholeOf(t, profile)
   if (snap === null) throw new Error(`no workspace for ${profile.name}`)
   const had = await favoriteIds(t, profile)
   const favorites = new Set(had)

@@ -363,9 +363,12 @@ describe('the owner list reads', () => {
   it('leaves a holder named and checked, with no note, when the check fails', async () => {
     force.add('check-error')
     vi.spyOn(console, 'error').mockImplementation(() => {})
+    // without the check's row the holder is named by id, as the store holds
+    // nobody but the signed-in person
+    byIds = true
     await load()
     await openList()
-    expect(holderRow()?.textContent).toContain('Zoe Young')
+    await vi.waitFor(() => expect(holderRow()?.textContent).toContain('Zoe Young'))
     expect(holderRow()?.getAttribute('aria-disabled')).not.toBe('true')
     expect(holderRow()?.querySelector('[data-owner-ineligible]')).toBeNull()
   })

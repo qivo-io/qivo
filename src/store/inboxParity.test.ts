@@ -37,8 +37,8 @@ import {
   plantIssue,
   plantProject,
   type T,
+  wholeOf,
   withOrg,
-  workspaceOf,
 } from '../../convex/tests/helpers.setup'
 import { at, grant, post } from '../../convex/tests/inboxItems.setup'
 import { plantNorthstar } from '../../convex/tests/northstar.setup'
@@ -59,7 +59,7 @@ vi.hoisted(() => {
 
 /** The workspace `who` holds, or a failure. */
 async function workspace(t: T, who: Doc<'profiles'>): Promise<Workspace> {
-  const ws = await workspaceOf(as(t, who))
+  const ws = await wholeOf(t, who)
   if (!ws) throw new Error(`no workspace for ${who.name}`)
   return ws
 }

@@ -32,6 +32,7 @@ import {
   settingsTeamsOf,
   TEAM_LIST_REFUSAL,
   TEAM_RUNS_RULE,
+  teamPickerOf,
   teamSettingsOf,
 } from '../model/teams'
 import {
@@ -187,6 +188,11 @@ const read = {
     team_id: string,
     a: { search?: string; after?: string } = {},
   ) => as(t, me).query(api.teams.addable, { org_id: me.org_id, team_id, ...a }),
+  picker: (
+    t: T,
+    me: Doc<'profiles'>,
+    a: { search?: string; after?: string; through?: string } = {},
+  ) => as(t, me).query(api.teams.picker, { org_id: me.org_id, ...a }),
 }
 
 /* `answer` as a ready batch, failing the test for any other state. */
@@ -418,6 +424,111 @@ describe('teams.settingsPage', () => {
     expect(batch.stopped).toBe(true)
     expect(batch.next).not.toBeNull()
     expect(batch.rows).toEqual([])
+  })
+})
+
+/* --------------------------------------------------------- 1b. picker */
+
+describe('teams.picker', () => {
+  it("lists 25 and then 25 of the teams figure's 50 teams in name key order, ids breaking ties, as {id, name}", async () => {
+    const fx = await setup()
+    // the teams figure: Hardware and 49 more, two of them named alike
+    const planted = await plantTeams(fx.t, fx.org.id, [
+      ...Array.from({ length: 47 }, (_, i) => `Team ${String(i).padStart(2, '0')} Ops`),
+      'Twin crew',
+      'Twin crew',
+    ])
+    await plantTeams(fx.t, fx.otherOrg.id, ['Elsewhere crew'])
+    const want = byKey([fx.team, ...planted])
+    const batches = await walk((after) => read.picker(fx.t, fx.guest, { after }))
+    expect(batches.map((b) => b.rows.length)).toEqual([LIST_BATCH, 50 - LIST_BATCH])
+    const rows = batches.flatMap((b) => b.rows)
+    expect(rows.map((r) => r.id)).toEqual(want.map((r) => r.id))
+    expect(rows[0]).toEqual({ id: want[0].id, name: want[0].name })
+    const twins = rows.filter((r) => r.name === 'Twin crew').map((r) => r.id)
+    expect(twins).toEqual([...twins].sort())
+    expect(JSON.stringify(rows)).not.toContain('Elsewhere')
+  })
+
+  it('finds a team by any word in any case, without its accent, over every team before the batch is cut', async () => {
+    const fx = await setup()
+    await plantTeams(fx.t, fx.org.id, [
+      ...Array.from({ length: 48 }, (_, i) => `Team ${String(i).padStart(2, '0')} Ops`),
+      'Équipe Zénith',
+    ])
+    expect(ready(await read.picker(fx.t, fx.user, { search: 'zenith EQUIPE' })).rows).toEqual([
+      expect.objectContaining({ name: 'Équipe Zénith' }),
+    ])
+    expect(ready(await read.picker(fx.t, fx.user, { search: 'nothing' }))).toMatchObject({
+      rows: [],
+      next: null,
+      stopped: false,
+    })
+  })
+
+  it('answers every seat of the organization, guests and Viewers too, and refuses a caller without one', async () => {
+    const fx = await setup()
+    const agentRead = await fx.t.run((ctx) => teamPickerOf(ctx, fx.agent, {}))
+    for (const who of [fx.admin, fx.user, fx.viewer, fx.guest])
+      expect(ready(await read.picker(fx.t, who)).rows.map((r) => r.id)).toEqual([fx.team.id])
+    expect(ready(agentRead).rows.map((r) => r.id)).toEqual([fx.team.id])
+    await expectRefusal(
+      as(fx.t, fx.otherAdmin).query(api.teams.picker, { org_id: fx.org.id }),
+      'forbidden',
+    )
+  })
+
+  it("refuses a foreign cursor and a cursor of another search or list with the list's sentence", async () => {
+    const fx = await setup()
+    const names = Array.from({ length: 30 }, (_, i) => `Team ${i}`)
+    await plantTeams(fx.t, fx.org.id, names)
+    await plantTeams(fx.t, fx.otherOrg.id, names)
+    const next = ready(await read.picker(fx.t, fx.admin)).next ?? ''
+    const foreign = ready(await read.picker(fx.t, fx.otherAdmin)).next ?? ''
+    const settings = ready(await read.teams(fx.t, fx.admin)).next ?? ''
+    expect([next, foreign, settings]).not.toContain('')
+    const refusal = new RegExp(`^${NOT_TEAM_CURSOR.replace(/[.;]/g, '\\$&')}$`)
+    await expectRefusal(read.picker(fx.t, fx.admin, { after: foreign }), 'bad_request', refusal)
+    await expectRefusal(
+      read.picker(fx.t, fx.admin, { after: next, search: 'team' }),
+      'bad_request',
+      refusal,
+    )
+    await expectRefusal(read.picker(fx.t, fx.user, { after: next }), 'bad_request', refusal)
+    await expectRefusal(read.picker(fx.t, fx.admin, { after: settings }), 'bad_request', refusal)
+    // the list's own cursor continues it
+    expect(ready(await read.picker(fx.t, fx.admin, { after: next })).rows).toHaveLength(6)
+  })
+
+  it('answers not_ready before the name keys, and a stopped batch where a lowered ceiling ends', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    expect(await read.picker(t, f.guest)).toEqual({ state: 'not_ready' })
+    await keyOrg(t, f.org.id)
+    await plantTeams(
+      t,
+      f.org.id,
+      Array.from({ length: 20 }, (_, i) => `Team ${i}`),
+    )
+    Object.assign(NAMED_READ, { ranges: 3, documents: 6, bytes: 4 * 1024 * 1024 })
+    const batch = ready(await read.picker(t, f.guest, { search: 'nothing' }))
+    expect(batch.stopped).toBe(true)
+    expect(batch.next).not.toBeNull()
+    expect(batch.rows).toEqual([])
+  })
+
+  it('reads no membership, count or profile, only the teams of its index', async () => {
+    const fx = await setup()
+    // the teams figure, 50 teams of 3 to 10 members among 300 people
+    await plantTeamsFigure(fx)
+    const { out, read: reads } = await measured(fx.t, (ctx) =>
+      teamPickerOf(ctx, fx.guest, { search: 'nothing matches' }),
+    )
+    expect(ready(out).rows).toEqual([])
+    // the 50 teams and the readiness row; a membership or a count a team
+    // would add 50 or more
+    expect(reads.documents).toBeLessThanOrEqual(52)
+    expect(reads.ranges).toBeLessThanOrEqual(4)
   })
 })
 
@@ -781,6 +892,30 @@ describe('at the design size', () => {
     ])
     const leadNone = await leader({ search: 'nothing matches' })
     logged('settingsPage, leader of 3, a search that matches none', leadNone.read, 0)
+  })
+
+  it('reads the scope menu among 50 teams, as an admin and as a guest', async () => {
+    const fx = await setup(newT({ transactionLimits: true }))
+    await plantTeamsFigure(fx)
+    for (const [who, me] of [
+      ['admin', fx.admin],
+      ['guest', fx.guest],
+    ] as const) {
+      const picker = (a: { search?: string; after?: string } = {}) =>
+        measured(fx.t, (ctx) => teamPickerOf(ctx, me, a))
+      const first = await picker()
+      logged(`picker, ${who}, first batch of 50 teams`, first.read, ready(first.out).rows.length)
+      expect(ready(first.out).rows).toHaveLength(LIST_BATCH)
+      const second = await picker({ after: ready(first.out).next ?? '' })
+      logged(`picker, ${who}, second batch`, second.read, ready(second.out).rows.length)
+      expect(ready(second.out)).toMatchObject({ next: null })
+      const one = await picker({ search: 'team 07' })
+      logged(`picker, ${who}, a search that finds one team`, one.read, ready(one.out).rows.length)
+      expect(ready(one.out).rows).toHaveLength(1)
+      const none = await picker({ search: 'nothing matches' })
+      logged(`picker, ${who}, a search that matches none`, none.read, 0)
+      expect(ready(none.out)).toMatchObject({ rows: [], next: null, stopped: false })
+    }
   })
 
   it("reads a team of 1,000 members among 1,000 people, and its page's get", async () => {

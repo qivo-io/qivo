@@ -54,8 +54,8 @@ import {
   plantSeat,
   type T,
   uuid,
+  wholeOf,
   withOrg,
-  workspaceOf,
 } from '../../convex/tests/helpers.setup'
 import { keyOrg } from '../../convex/tests/nameKeys.setup'
 import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
@@ -67,8 +67,8 @@ import {
   expectedProjects,
   expectedSubProjects,
 } from '../../convex/tests/projectSettingsLists.setup'
+import type { Whole as Snapshot } from './guard/liveDouble.setup'
 import { projectListsStandIn } from './projectSettingsListsStandIn.setup'
-import type { Snapshot } from './workspaceBase'
 
 vi.hoisted(() => {
   // cursors are sealed with a key derived from it (lib/archiveCursorSeal.ts)
@@ -110,7 +110,7 @@ async function start(snap: Snapshot) {
 
 /** The store booted for `profile` from their workspace. */
 async function storeOf(t: T, profile: Doc<'profiles'>) {
-  const snap = await workspaceOf(as(t, profile))
+  const snap = await wholeOf(t, profile)
   if (snap === null) throw new Error(`no workspace for ${profile.name}`)
   return await start(snap)
 }
@@ -253,7 +253,7 @@ async function compare(t: T, profile: Doc<'profiles'>, label: string, terms: rea
  * holds only the projects they take part in, while their Settings lists
  * hold every project they manage. */
 async function worldOf(t: T, profile: Doc<'profiles'>): Promise<Snapshot> {
-  const ws = await workspaceOf(as(t, profile))
+  const ws = await wholeOf(t, profile)
   if (ws === null) throw new Error(`no workspace for ${profile.name}`)
   if (profile.org_role !== 'admin') return ws
   const held = new Set(ws.projects.map((p) => p.id))
@@ -405,7 +405,7 @@ describe('the stand-in at the design size', () => {
     const seen = await plantMetas(t, f.org.id, names('Seen project ', 3))
     await plantGrants(t, lead, seen)
     await ready(t, f)
-    const ws = await workspaceOf(as(t, lead))
+    const ws = await wholeOf(t, lead)
     if (ws === null) throw new Error('no workspace')
     const parents = await rowsOf((after) =>
       t.run((ctx) => settingsProjectsOf(ctx, lead, { sub_project_parents: true, after })),

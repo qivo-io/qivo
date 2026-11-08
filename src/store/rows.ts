@@ -28,20 +28,17 @@ type InternalFields<T extends TableNames> =
       : never)
 
 // The workspace parts add each organization's task and project counters
-// and, once counted, its live counts, which live in org_counters, each
-// person's Team sync stamp, which lives in sync_stamps, and whether a task
-// has subtasks, which the workspace reads before every task is held
-// (convex/lib/workspaceParts.ts).
+// and, once counted, its live counts, which live in org_counters, and
+// whether a task has subtasks, which the workspace reads before every task
+// is held (convex/lib/workspaceParts.ts).
 type AddedFields<T extends TableNames> = T extends 'organizations'
   ? Pick<
       Doc<'org_counters'>,
       'next_issue_num' | 'next_project_num' | 'active_tasks' | 'live_projects'
     >
-  : T extends 'profiles'
-    ? { sync_at?: string; sync_since?: string }
-    : T extends 'issues'
-      ? { has_subtasks?: boolean }
-      : unknown
+  : T extends 'issues'
+    ? { has_subtasks?: boolean }
+    : unknown
 
 export type Row<T extends TableNames> = Omit<Doc<T>, InternalFields<T>> & AddedFields<T>
 

@@ -52,6 +52,7 @@ import {
   uuid,
   withReadingAdmin,
 } from './helpers.setup'
+import { keyOrg } from './nameKeys.setup'
 import { countOrg } from './overviewCounts.setup'
 import { deleteTask, itemFor } from './trash.setup'
 import { plantTicket } from './uploadTickets.setup'
@@ -1498,8 +1499,9 @@ describe('the follower limit', () => {
 
   it('lists followers and candidates for a lead in an organization of 1,000 people', async () => {
     // a sight check for each person, about two index ranges each, would
-    // pass this lowered limit; the roster reads every level at once
-    // (lib/access.ts projectLevelsForProfiles), a few ranges in all
+    // pass this lowered limit; the Add list reads every level at once
+    // (lib/access.ts canSeeProjectFor), a few ranges in all, and the
+    // roster one profile a follower
     const fx = await setup(newT({ transactionLimits: { databaseQueries: 500 } }))
     const issue = await task(fx)
     const crowd = await plantFollowers(fx, issue, LIMITS.followers.max)
@@ -1545,13 +1547,30 @@ describe('the follower limit', () => {
       issue_id: issue.id,
     })
     expect(roster.canManage).toBe(true)
+    expect(roster.more).toBe(false)
     expect(roster.subscribers).toHaveLength(LIMITS.followers.max)
-    expect(roster.subscribers).toEqual(expect.arrayContaining(crowd.map((p) => p.id)))
-    // people who see TBED, the team's 300 included, and none of the 595
-    // who do not
-    expect(roster.candidates).toEqual(expect.arrayContaining([fx.user.id, fx.agent.id, ...team]))
-    expect(roster.candidates.length).toBeLessThan(team.length + 10)
-  })
+    expect(roster.subscribers.map((r) => r.id)).toEqual(
+      expect.arrayContaining(crowd.map((p) => p.id)),
+    )
+    // the Add list, a batch at a time: people who see TBED, the team's 300
+    // included, and none of the 595 who do not
+    await keyOrg(fx.t, fx.org.id)
+    const candidates: string[] = []
+    let after: string | undefined
+    for (let n = 0; n < 30; n++) {
+      const batch = await as(fx.t, fx.admin).query(api.pickers.taskFollowers, {
+        org_id: fx.org.id,
+        issue_id: issue.id,
+        ...(after === undefined ? {} : { after }),
+      })
+      if (batch.state !== 'ready') throw new Error(batch.state)
+      candidates.push(...batch.rows.map((r) => r.id))
+      if (batch.next === null) break
+      after = batch.next
+    }
+    expect(candidates).toEqual(expect.arrayContaining([fx.user.id, fx.agent.id, ...team]))
+    expect(candidates.length).toBeLessThan(team.length + 10)
+  }, 60_000)
 
   it('lets a new assignee and a new reviewer pass the limit', async () => {
     const fx = await setup()

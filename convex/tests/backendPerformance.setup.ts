@@ -67,16 +67,16 @@ async function readParts(identity: Identity, orgId: string) {
     }
     const org = root.orgs.find((o) => o.id === orgId)
     const start = org === undefined ? { tasks: 1, projects: 1 } : startWindows(org)
-    return idWindows(kind === 'people' ? 1 : kind === 'projects' ? start.projects : start.tasks)
+    return idWindows(kind === 'projects' ? start.projects : start.tasks)
   }
+  // the root carries the caller's own profiles, memberships and teams, so
+  // there is no people or catalog part to measure
   const parts = [
     await measured('root', workspace.root, {}),
-    await measured('catalog', workspace.catalog, { org_id: orgId }),
     await measured('inbox', workspace.inbox, { org_id: orgId }),
   ]
   const windowed = {
     tasks: workspace.tasks,
-    people: workspace.people,
     projects: workspace.projects,
   }
   for (const [kind, fn] of Object.entries(windowed)) {

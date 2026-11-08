@@ -54,7 +54,6 @@ import { BY_IDS_MAX, LIMITS, LIST_BATCH, overText } from '../../convex/lib/limit
 import { nameKey } from '../../convex/lib/nameKey'
 import { canCreateProjects } from '../../convex/lib/projectCreators'
 import { allWordsMatcher } from '../../convex/lib/search'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
 import type {
   CreatorRow,
   GuestProject,
@@ -65,11 +64,12 @@ import type {
   SettingsPersonRow,
 } from '../../convex/model/peopleSettings'
 import type { AgentKeysRow } from '../../convex/tokens'
+import type { Whole } from './guard/liveDouble.setup'
 import { readsServer } from './projectSettingsStandIn.setup'
 
 /** The workspace rows the stand-in reads. */
 export type PeopleSettingsWorkspace = Pick<
-  Workspace,
+  Whole,
   'myProfileIds' | 'profiles' | 'projects' | 'access' | 'orgs'
 >
 
@@ -127,7 +127,7 @@ export type ForcedPeopleSettings = {
   byIds?: 'error' | 'gone'
 }
 
-type Profile = Workspace['profiles'][number]
+type Profile = Whole['profiles'][number]
 
 /* The sentences the server answers with, which the worker cannot import
    from its model code (convex/model/peopleSettings.ts). */

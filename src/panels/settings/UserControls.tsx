@@ -6,7 +6,9 @@
    and its `expected` from it, whether or not the store holds the person.
    `waiting` keeps the writes off with "Loading this person…" (WAITING)
    only where the page's own read is not current, as on the phone's user
-   page. */
+   page. `onAccepted` hears the values the server accepted, by the row's
+   field names, for a list whose kept rows no paint or read brings them to
+   (UsersSettings.tsx). */
 import React, { useEffect as useEffectS, useState as useStateS } from 'react'
 import { flushSync } from 'react-dom'
 import { Button } from '@/components/ui/button'
@@ -14,8 +16,9 @@ import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import { asciiEmail } from '../../../convex/lib/email'
+import { asciiEmail, cleanEmail } from '../../../convex/lib/email'
 import { LIMITS } from '../../../convex/lib/limits'
+import { projectRightAfterUpdate } from '../../../convex/lib/projectCreators'
 import { LimitedInput } from '../../components/LimitedField'
 import { fmtTime } from '../../lib/dates'
 import { DEMO_MODE } from '../../lib/demoMode'
@@ -32,7 +35,7 @@ import {
 import { projectRightBox } from '../../lib/projectCreators'
 import { EMAIL, PERSON_NAME, useSavedDraft, wholeNumber } from '../../lib/savedDraft'
 import { DEFAULT_PLANNABLE_HOURS } from '../../lib/workload'
-import type { FieldSave, PersonShown, UserPatch } from '../../store/planner'
+import type { FieldSave, PersonShown, SettingsPersonRow, UserPatch } from '../../store/planner'
 import { P } from '../../store/planner'
 import { DraftConflictLine } from './controls'
 
@@ -43,6 +46,27 @@ export const WAITING = 'Loading this person…'
 /** A person as a Settings row showed them, with their id: what every
     control shows and each write sends (store/planner.ts PersonShown). */
 export type ShownPerson = PersonShown & { id: string }
+
+/** Hears the values the server accepted for a person's row, by the row's
+    field names, as sent. */
+export type OnAccepted = (fields: Partial<SettingsPersonRow>) => void
+
+/** `save`, which also tells `onAccepted` of `fields` once the server
+    accepted it, after the save's own `accepted`. */
+const learning = (
+  save: FieldSave,
+  fields: Partial<SettingsPersonRow>,
+  onAccepted: OnAccepted | undefined,
+): FieldSave =>
+  onAccepted
+    ? {
+        ...save,
+        accepted: () => {
+          save.accepted?.()
+          onAccepted(fields)
+        },
+      }
+    : save
 
 /** Tells `onUnsaved` whether a field holds its row, as that changes, and
     false when the field goes, so a list can keep the row on screen while a
@@ -91,11 +115,13 @@ export function UserName({
   isSelf,
   waiting = false,
   onUnsaved,
+  onAccepted,
 }: {
   user: ShownPerson
   isSelf: boolean
   waiting?: boolean
   onUnsaved?: (id: string, unsaved: boolean) => void
+  onAccepted?: OnAccepted
 }) {
   const canEdit = P.isAdmin() && !waiting
   const draft = useSavedDraft(`${user.id}:name`, user.name, PERSON_NAME, 'name', !canEdit)
@@ -121,7 +147,9 @@ export function UserName({
     }
     // a conflict waits for Use saved or Keep mine; a paused rename keeps it
     if (draft.conflict || P.refusePausedEdit()) return
-    send(draft.save(next).as('name'), (save) => P.updateUser(user.id, { name: next }, save, user))
+    send(draft.save(next).as('name'), (save) =>
+      P.updateUser(user.id, { name: next }, learning(save, { name: next }, onAccepted), user),
+    )
     window.showToast?.(`${(user.isAgent ? 'Agent renamed to “' : 'Renamed to “') + next}”`)
   }
   const chips = (
@@ -381,10 +409,12 @@ export function UserEmail({
   user,
   waiting = false,
   onUnsaved,
+  onAccepted,
 }: {
   user: ShownPerson
   waiting?: boolean
   onUnsaved?: (id: string, unsaved: boolean) => void
+  onAccepted?: OnAccepted
 }) {
   const canEdit = !DEMO_MODE && P.isAdmin() && user.pending && !waiting
   const draft = useSavedDraft(`${user.id}:email`, user.email, EMAIL, 'email', !canEdit)
@@ -397,7 +427,15 @@ export function UserEmail({
     // a conflict waits for Use saved or Keep mine; a paused change keeps it
     if (draft.conflict || P.refusePausedEdit()) return
     const save = draft.save(next).as('email')
-    if (!send(save, (sent) => P.updateUser(user.id, { email: next }, sent, user))) draft.discard()
+    // the address as the store sends it (P.updateUser), lower case and
+    // with an ASCII domain
+    const stored = { email: cleanEmail(next) }
+    if (
+      !send(save, (sent) =>
+        P.updateUser(user.id, { email: next }, learning(sent, stored, onAccepted), user),
+      )
+    )
+      draft.discard()
   }
   if (!canEdit) {
     const line = (
@@ -475,12 +513,14 @@ export function PlannableHoursInput({
   width = 48,
   waiting = false,
   onUnsaved,
+  onAccepted,
 }: {
   user: ShownPerson
   canEdit: boolean
   width?: number
   waiting?: boolean
   onUnsaved?: (id: string, unsaved: boolean) => void
+  onAccepted?: OnAccepted
 }) {
   const draft = useSavedDraft(
     `${user.id}:plannable_hours`,
@@ -517,7 +557,12 @@ export function PlannableHoursInput({
     // a conflict waits for Use saved or Keep mine; a pause keeps the hours
     if (draft.conflict || P.refusePausedEdit()) return
     send(draft.save(h).as('plannable_hours'), (save) =>
-      P.updateUser(user.id, { plannableHours: h }, save, user),
+      P.updateUser(
+        user.id,
+        { plannableHours: h },
+        learning(save, { plannable_hours: h }, onAccepted),
+        user,
+      ),
     )
     window.showToast?.(`${user.name} plans ${h} h per week`)
   }
@@ -576,17 +621,27 @@ export function PlannableHoursInput({
    (projectRightBox). The phone's user page shows a single row without the
    header, so there the checkbox carries a visible label and the empty cell
    is left out. `waiting` turns the checkbox off with WAITING while the
-   page's read is not current. */
+   page's read is not current. A click while an earlier one's write waits
+   sends the change from what the box showed, so a reversal goes out too,
+   checked against the earlier write's value. */
 export function ProjectRightCell({
   user,
   labelled,
   waiting = false,
+  onAccepted,
 }: {
   user: ShownPerson
   labelled: boolean
   waiting?: boolean
+  onAccepted?: OnAccepted
 }) {
   const box = projectRightBox(user, P.org.projectCreators)
+  // the box shows the newest change at once while its write is on its
+  // way, as the store paints only the signed-in person's own profile, and
+  // the page's read again once that write answered; the page's read holds
+  // an accepted change before the write answers
+  const [sent, setSent] = useStateS<{ on: boolean; write: number } | null>(null)
+  const writes = React.useRef(0)
   if (labelled && box === null) return null
   const inputId = `can-create-projects-${user.id}`
   const locked = box === 'locked' || waiting
@@ -608,13 +663,22 @@ export function ProjectRightCell({
             type="checkbox"
             data-can-create-projects={user.id}
             aria-label={`${user.name} can create projects`}
-            checked={box === 'locked' || !!user.canCreateProjects}
+            checked={box === 'locked' || (sent?.on ?? !!user.canCreateProjects)}
             disabled={locked}
             title={waiting ? WAITING : undefined}
             onChange={(e) => {
               const on = e.target.checked
               if (waiting || P.refusePausedEdit()) return
-              P.updateUser(user.id, { canCreateProjects: on }, {}, user)
+              // the person as the box showed them, with an earlier write's
+              // value while it waits
+              const shown = { ...user, canCreateProjects: sent?.on ?? user.canCreateProjects }
+              const write = ++writes.current
+              setSent({ on, write })
+              // a write that sends nothing settles at once, after this;
+              // an older write's answer leaves the newer one's value
+              const settle = () => setSent((was) => (was?.write === write ? null : was))
+              const save = learning({ onSettled: settle }, { can_create_projects: on }, onAccepted)
+              if (!P.updateUser(user.id, { canCreateProjects: on }, save, shown)) settle()
               window.showToast?.(
                 on
                   ? `${user.name} can create projects`
@@ -653,17 +717,24 @@ export function ProjectRightHeader() {
 
 // Role and active status share one selector; deactivation removes access.
 // `waiting` shows the role, unchangeable, while the page's read is not
-// current.
+// current. A choice sends only what differs from the row shown, and
+// `onAccepted` hears just that once the server accepted it: the role with
+// the project right a role change clears (convex/lib/projectCreators.ts
+// projectRightAfterUpdate), the reactivation, or both. So a deactivation
+// and a role change sent before either answers leave the row inactive
+// with the new role, as the server does.
 export function UserRoleSelect({
   user,
   isSelf,
   lastAdmin,
   waiting = false,
+  onAccepted,
 }: {
   user: ShownPerson
   isSelf: boolean
   lastAdmin: boolean
   waiting?: boolean
+  onAccepted?: OnAccepted
 }) {
   const value = !user.active
     ? 'inactive'
@@ -697,8 +768,31 @@ export function UserRoleSelect({
         // The viewer guard refuses someone who leads a project or a team;
         // the toast names what to hand over first. Reactivation contributes
         // to the billable user count at the next monthly renewal.
-        if (v === 'inactive') P.updateUser(user.id, { active: false }, {}, user)
-        else P.updateUser(user.id, { orgRole: v, active: true }, {}, user)
+        if (v === 'inactive')
+          P.updateUser(
+            user.id,
+            { active: false },
+            learning({}, { active: false }, onAccepted),
+            user,
+          )
+        else {
+          const patch: UserPatch = {}
+          const fields: Partial<SettingsPersonRow> = {}
+          if (v !== user.orgRole) {
+            patch.orgRole = v
+            fields.org_role = v
+            fields.can_create_projects =
+              projectRightAfterUpdate(
+                { org_role: user.orgRole, can_create_projects: user.canCreateProjects },
+                { org_role: v },
+              ) === true
+          }
+          if (!user.active) {
+            patch.active = true
+            fields.active = true
+          }
+          P.updateUser(user.id, patch, learning({}, fields, onAccepted), user)
+        }
       }}
       style={{ opacity: lastAdmin || waiting ? 0.55 : 1 }}
       className="h-control-sm w-[132px] shrink-0 bg-surface-1 text-sm font-sans"

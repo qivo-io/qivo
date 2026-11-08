@@ -46,6 +46,7 @@ import {
   plantSeat,
   type T,
   uuid,
+  wholeOf,
   workspaceOf,
 } from '../../convex/tests/helpers.setup'
 import { NORTHSTAR_ANCHOR, plantNorthstar } from '../../convex/tests/northstar.setup'
@@ -215,7 +216,7 @@ describe('the milestone stand-in against the reads', () => {
     const { org, profiles } = await plantNorthstar(t)
     const admin = profiles.find((p) => p.org_role === 'admin')
     if (!admin) throw new Error('Northstar has no admin')
-    const adminSnap = await workspaceOf(as(t, admin))
+    const adminSnap = await wholeOf(t, admin)
     if (adminSnap === null) throw new Error('no workspace for the admin')
     const tops = adminSnap.projects.filter((p) => p.parent_id === undefined)
     const parent = tops.find((p) => adminSnap.projects.some((s) => s.parent_id === p.id))
@@ -281,7 +282,7 @@ describe('the milestone stand-in against the reads', () => {
     let writable = 0
     for (const person of [...profiles.filter((p) => p.kind === 'person'), viewer, guest]) {
       const caller = as(t, person)
-      const workspace = await workspaceOf(caller)
+      const workspace = await wholeOf(t, person)
       if (workspace === null) throw new Error(`${person.name} holds no seat`)
       // the server's whole, the person's workspace with every stored
       // milestone beside it, which no part sends

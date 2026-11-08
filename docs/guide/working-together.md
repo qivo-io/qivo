@@ -200,7 +200,8 @@ task for changes. An archived task's window has no eye button.
 
 Organization admins and the named project lead can remove other subscribers
 with **×** or use **+ Add** to subscribe an active person or Standard user
-agent who can access the task. Viewer agents receive no new messages and
+agent who can access the task. **+ Add** lists them 25 at a time, with a
+search over names and email addresses and **Load more**. Viewer agents receive no new messages and
 cannot be added. People who later lose access remain listed and can be
 removed. Managing subscribers does not give access to anyone's inbox.
 
@@ -217,7 +218,9 @@ subscribed, so the people working on a task always hear about it. A comment
 or description can mention at most 100 people. Qivo refuses to save one that
 mentions more, keeps your draft and says **A text can mention at most 100
 people. Remove some mentions and save again.** A task can pass 100
-subscribers through its assignee and reviewer. On such a task, a comment or a
+subscribers through its assignee and reviewer. **Subscribers** then lists
+the 100 who subscribed first and says **Showing the 100 earliest
+followers. Later ones show here as earlier ones unfollow.** On such a task, a comment or a
 change reaches the first subscribers at once and the rest a few seconds
 later. The same holds when many of the people it mentions or notifies have
 snoozed a long thread about the task, because each message wakes theirs. Changes saved for many tasks at once, from the Roadmap, by

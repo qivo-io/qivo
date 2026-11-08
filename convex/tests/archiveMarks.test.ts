@@ -569,7 +569,7 @@ describe('a follow of an archived task', () => {
       org_id: f.org.id,
       issue_id: task.id,
     })
-    expect(roster.subscribers).toContain(f.admin.id)
+    expect(roster.subscribers.map((r) => r.id)).toContain(f.admin.id)
     // a later instant than the Archived notice, so the item keeps the comment
     vi.setSystemTime(Date.now() + 1000)
     await as(t, f.user).mutation(api.comments.create, {

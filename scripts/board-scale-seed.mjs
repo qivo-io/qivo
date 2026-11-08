@@ -1853,9 +1853,12 @@ async function seedThread(count, { client, target, people, actor, org, log }) {
     }
     if (posted % 100 === 0 && posted) log(`${posted} --thread comments posted`)
   }
+  // the workspace holds no label (convex/lib/workspaceJoin.ts), so the
+  // label is looked up by id, as the task window names a task's labels
   if (
     plan.toggles[0]?.label_id === THREAD_LABEL &&
-    !joined('labels').some((label) => label.id === THREAD_LABEL)
+    (await client.query(ref('labels:byIds'), { org_id: org, ids: [THREAD_LABEL] })).rows.length ===
+      0
   )
     await client.mutation(ref('labels:create'), {
       org_id: org,
@@ -1978,7 +1981,10 @@ async function seedLabels(count, { client, org, seeded, target, log }) {
     if (!live.has(issue_id)) continue
     on.set(issue_id, [...(on.get(issue_id) ?? []), label_id])
   }
-  const plan = planLabels({ org, count, present: joined('labels'), tasks, on })
+  // the workspace holds no label, so the organization's labels come from
+  // the table, as its profiles do (tableRows)
+  const present = (await tableRows(client, 'labels')).filter((label) => label.org_id === org)
+  const plan = planLabels({ org, count, present, tasks, on })
   for (const [name, calls] of [
     ['labels:create', plan.create],
     ['labels:toggle', plan.toggle],

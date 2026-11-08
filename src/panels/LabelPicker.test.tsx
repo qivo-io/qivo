@@ -417,9 +417,12 @@ describe('the label picker', () => {
   it('says No matching labels only at the real end with no task label shown', async () => {
     const old = label('Old name')
     await load({ labels: [...many(3), old], on: [old.id] })
-    // the server renamed it, so its batches never hold "old"
-    server.labels = server.labels.filter((l) => l.id !== old.id)
     const input = await open()
+    // the window read the task's label by id; then the server renamed it,
+    // so its batches never hold "old"
+    server.labels = server.labels.map((l) =>
+      l.id === old.id ? { ...l, name: 'Renamed', name_lower: 'renamed' } : l,
+    )
     await search(input, 'nothing')
     expect(text()).toContain('No matching labels.')
     expect(pop()?.hasAttribute('data-picker-end')).toBe(true)
@@ -515,12 +518,30 @@ describe("the label picker's Create new label", () => {
     await enter(input)
     await rest()
     expect(input.value).toBe('')
-    expect(P.labels.map((l) => l.name)).toEqual(['Bench'])
+    // the store holds no label: the new one is the id the create sent
+    const created = sent.find((s) => s.name === 'labels:create')?.args.id
+    expect(created).toBeTruthy()
     await enter(input)
     expect(sent.filter((s) => s.name === 'labels:toggle')).toHaveLength(1)
-    expect(task().labels).toEqual([P.labels[0].id])
+    expect(task().labels).toEqual([created])
     // the new label shows checked at the top
     expect(rows()[0]).toMatchObject({ name: 'Bench', on: true, current: true })
+  })
+
+  it('names a label it made while its create waits, though the read by id answers before it commits', async () => {
+    await load()
+    // the create waits; the window's read of the new label answers first,
+    // from a server that does not hold it yet
+    let commit: (value: unknown) => void = () => {}
+    answers['labels:create'] = () => new Promise((resolve) => (commit = resolve))
+    const input = await open()
+    await type(input, 'Bench')
+    await enter(input)
+    await rest()
+    const made = String(sent.find((s) => s.name === 'labels:create')?.args.id)
+    expect(task().labels).toEqual([made])
+    expect(rows()[0]).toMatchObject({ id: made, name: 'Bench', on: true, current: true })
+    await act(async () => commit(null))
   })
 
   it('still picks the one label a typed search matches', async () => {
@@ -550,10 +571,10 @@ describe("the label picker's Create new label", () => {
     const input = await open()
     await search(input, 'Bench')
     await enter(input)
+    // the store holds no label, so the create painted none to take back
     expect(vi.mocked(window.showToast).mock.calls).toEqual([
-      ['A label named Bench exists. Change reverted.', 'error'],
+      ['A label named Bench exists.', 'error'],
     ])
-    expect(P.labels).toEqual([])
     expect(task().labels).toEqual([])
     // the refused name comes back for another try
     expect(input.value).toBe('Bench')
@@ -689,8 +710,8 @@ describe('the label picker of a task the window shows from its own answer', () =
       'labels:create',
       'labels:toggle',
     ])
-    const made = P.labels.find((l) => l.name === 'Bench')
-    expect(P.taskDetail('far')?.view?.labels).toEqual([made?.id])
+    const made = sent.find((s) => s.name === 'labels:create')?.args.id
+    expect(P.taskDetail('far')?.view?.labels).toEqual([made])
   })
 
   it('puts on and takes off a label the store does not hold', async () => {

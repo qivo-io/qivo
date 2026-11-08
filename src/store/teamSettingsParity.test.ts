@@ -17,15 +17,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { internal } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
 import { nameKey } from '../../convex/lib/nameKey'
-import {
-  as,
-  NOW,
-  newT,
-  plantLogin,
-  type T,
-  uuid,
-  workspaceOf,
-} from '../../convex/tests/helpers.setup'
+import { as, NOW, newT, plantLogin, type T, uuid, wholeOf } from '../../convex/tests/helpers.setup'
 import { keyOrg } from '../../convex/tests/nameKeys.setup'
 import { plantNorthstar } from '../../convex/tests/northstar.setup'
 import {
@@ -201,7 +193,7 @@ async function northstar(o: { teams?: number; people?: number } = {}) {
   })
   await keyOrg(t, org.id)
   await recount(t, org.id)
-  const ws = await workspaceOf(as(t, nora))
+  const ws = await wholeOf(t, nora)
   if (!ws) throw new Error('no workspace')
   return { t, org, nora, profiles, ...planted, ws }
 }
@@ -229,6 +221,11 @@ describe('the team settings stand-in', () => {
     await same(t, nora, ws, 'teams:members', { ...base, team_id: 'no-such-team' })
     await same(t, nora, ws, 'teams:addable', team, true)
     await same(t, nora, ws, 'teams:addable', { ...team, search: 'emile' })
+    // Team sync's scope menu, 25 and then 25, and searched
+    const picker = await same(t, nora, ws, 'teams:picker', base, true)
+    expect(rowsOf(picker.server)).toHaveLength(50)
+    for (const search of ['crew', 'EMILE', 'operations 4', 'nothing here'])
+      await same(t, nora, ws, 'teams:picker', { ...base, search }, true)
   })
 
   it('answers a leader of 3 of 50 teams their list, and refuses as the server does', async () => {
@@ -246,7 +243,7 @@ describe('the team settings stand-in', () => {
     })
     await recount(t, org.id)
     const lead = await plantLogin(t, zoe)
-    const ws = await workspaceOf(as(t, lead))
+    const ws = await wholeOf(t, lead)
     if (!ws) throw new Error('no workspace')
     const base = { org_id: org.id }
     const list = await same(t, lead, ws, 'teams:settingsPage', base, true)
@@ -258,7 +255,7 @@ describe('the team settings stand-in', () => {
     await same(t, lead, ws, 'teams:addable', { ...base, team_id: teams[11].id })
     // a Viewer is refused the list and the add, and reads the team's page
     const viewer = await plantLogin(t, people[2])
-    const theirs = await workspaceOf(as(t, viewer))
+    const theirs = await wholeOf(t, viewer)
     if (!theirs) throw new Error('no workspace')
     const refused = await same(t, viewer, theirs, 'teams:settingsPage', base)
     expect(refused.server[0].state).toBe('refused')
@@ -271,6 +268,9 @@ describe('the team settings stand-in', () => {
     await same(t, viewer, theirs, 'teams:addable', { ...base, team_id: teams[0].id })
     await same(t, viewer, theirs, 'teams:get', { ...base, id: teams[0].id })
     await same(t, viewer, theirs, 'teams:members', { ...base, team_id: teams[0].id }, true)
+    // the scope menu answers a Viewer every team too
+    const picked = await same(t, viewer, theirs, 'teams:picker', base, true)
+    expect(rowsOf(picked.server)).toHaveLength(50)
   })
 
   it('answers the members of a team of 1,000 among 1,000 people, batch by batch, pinned and searched, as the server does', async () => {
@@ -289,7 +289,7 @@ describe('the team settings stand-in', () => {
           })
     })
     await recount(t, org.id)
-    const ws = await workspaceOf(as(t, nora))
+    const ws = await wholeOf(t, nora)
     if (!ws) throw new Error('no workspace')
     const team = { org_id: org.id, team_id: big.id }
     const walk = await both(t, nora, ws, 'teams:members', team, true)

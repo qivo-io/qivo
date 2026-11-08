@@ -551,7 +551,7 @@ describe('windows', () => {
       expect(cutPieces({ from: '80000000', to: null }, last)).toBe(2)
   })
 
-  it('send the same workspace in many windows as in one, relation rows across windows included, people cut as they overflow', async () => {
+  it('send the same workspace in many windows as in one, relation rows across windows included', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     // tasks in four windows of four, by their window keys
@@ -618,7 +618,6 @@ describe('windows', () => {
     await t.run((ctx) =>
       patchCounters(ctx, f.org.id, { next_issue_num: 1600, next_project_num: 1000 }),
     )
-    PAGE.people.most = 2
     const many = await workspaceOf(as(t, f.guest))
     const by =
       <R>(key: (row: R) => string) =>
@@ -1003,7 +1002,10 @@ describe('what a part reveals', () => {
     expect(await as(t, f.admin).query(api.workspace.inbox, { org_id: 'no-such-org' })).toEqual({
       state: 'gone',
     })
-    await expectRefusal(t.query(api.workspace.people, { org_id: f.org.id, ...whole }), 'forbidden')
+    await expectRefusal(
+      t.query(api.workspace.projects, { org_id: f.org.id, ...whole }),
+      'forbidden',
+    )
   })
 })
 
@@ -1041,6 +1043,207 @@ describe('answers Convex need not re-send', () => {
     expect(after.map((answer, i) => answer !== before[i])).toEqual(
       windows.map((w) => inIdWindow(tasks[3].window_key!, w)),
     )
+  })
+})
+
+/* `n` more people of organization `orgId`, inserted in writes of 100. */
+async function plantRoster(t: T, orgId: string, n: number) {
+  for (let from = 0; from < n; from += 100)
+    await t.run(async (ctx) => {
+      for (let i = from; i < Math.min(n, from + 100); i++)
+        await ctx.db.insert('profiles', {
+          id: uuid(),
+          org_id: orgId,
+          name: `Person ${i}`,
+          initials: 'PE',
+          color: '#7a7ad0',
+          email: `person${i}@testbed.test`,
+          org_role: 'user',
+          active: true,
+          kind: 'person',
+          plannable_hours: 40,
+          created_at: NOW,
+        })
+    })
+}
+
+/* `n` teams of organization `orgId`, with `member` in each. */
+async function plantTeamsOf(t: T, orgId: string, member: Doc<'profiles'>, n: number) {
+  return await t.run(async (ctx) => {
+    const teams: string[] = []
+    for (let i = 0; i < n; i++) {
+      const id = uuid()
+      await ctx.db.insert('teams', {
+        id,
+        org_id: orgId,
+        name: `Crew ${i}`,
+        track_delay_default: false,
+        created_at: NOW,
+      })
+      await ctx.db.insert('team_members', { team_id: id, profile_id: member.id, is_leader: false })
+      teams.push(id)
+    }
+    return teams
+  })
+}
+
+/* The root part's answer for `who`'s login and the documents it read. */
+const rootRead = (t: T, who: Doc<'profiles'>) =>
+  as(t, who).query(async (ctx) => {
+    const { readRoot } = await import('../lib/workspaceParts')
+    const { loginMemberships } = await import('../lib/functions')
+    const authUserId = who.auth_user_id ?? ''
+    const { myProfiles } = await loginMemberships(ctx, authUserId)
+    const before = (await ctx.meta.getTransactionMetrics()).documentsRead.used
+    const answer = await readRoot(Object.assign(ctx, { authUserId, myProfiles }))
+    const documents = (await ctx.meta.getTransactionMetrics()).documentsRead.used - before
+    return { answer, documents }
+  })
+
+/* The root part's answer for a caller with a seat. */
+function seated(answer: unknown) {
+  if (answer === null || typeof answer !== 'object' || 'deleting' in answer)
+    throw new Error('the root answered no seat')
+  return answer as {
+    myProfileIds: string[]
+    profiles: Record<string, unknown>[]
+    teamMembers: { team_id: string; profile_id: string }[]
+    teams: { id: string; org_id: string; name: string }[]
+  }
+}
+
+describe('the root part', () => {
+  it("answers the caller's own profiles, memberships and teams in seat order, and nothing else of the organization", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the user in 3 teams at home (the fixture's and two more) and a guest
+    // seat elsewhere
+    const more = await plantTeamsOf(t, f.org.id, f.user, 2)
+    const guestSeat = await plantSeat(t, {
+      org_id: f.otherOrg.id,
+      auth_user_id: f.user.auth_user_id,
+      email: f.user.email,
+      name: 'user',
+      org_role: 'guest',
+      accepted_at: NOW,
+    })
+    // a team the user is not in
+    await plantTeamsOf(t, f.org.id, f.admin, 1)
+    const root = seated((await rootRead(t, f.user)).answer)
+    expect(root.myProfileIds).toEqual([f.user.id, guestSeat.id])
+    expect(root.profiles.map((p) => p.id)).toEqual([f.user.id, guestSeat.id])
+    for (const p of root.profiles) {
+      expect(p).not.toHaveProperty('name_key')
+      expect(p).not.toHaveProperty('sync_at')
+      expect(p).not.toHaveProperty('_id')
+    }
+    expect(root.profiles[0]).toMatchObject({ name: 'user', email: 'user@testbed.test' })
+    expect(root.teamMembers.map((m) => [m.team_id, m.profile_id])).toEqual(
+      [f.team.id, ...more].map((id) => [id, f.user.id]),
+    )
+    expect(root.teams.map((team) => team.id)).toEqual([f.team.id, ...more])
+    for (const team of root.teams) expect(team).not.toHaveProperty('name_key')
+    const text = JSON.stringify(root)
+    for (const other of [f.admin, f.viewer, f.guest, f.agent, f.otherAdmin])
+      expect(text).not.toContain(other.id)
+  })
+
+  it('reads as many documents in an organization of 1,000 people as in one of ten', async () => {
+    const t = newT()
+    const small = await withOrg(t)
+    const before = await rootRead(t, small.user)
+    const big = await withOrg(t)
+    // the people figure: 1,000 people (the fixture's 5 and 995 more)
+    await plantRoster(t, big.org.id, 995)
+    const after = await rootRead(t, big.user)
+    expect(seated(after.answer).profiles.map((p) => p.id)).toEqual([big.user.id])
+    expect(seated(after.answer).teamMembers).toHaveLength(1)
+    expect(after.documents).toBe(before.documents)
+  })
+
+  it('answers a caller in 5 teams their 5 memberships and 5 teams', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the teams-one-person-belongs-to figure: the fixture's team and 4 more
+    const more = await plantTeamsOf(t, f.org.id, f.user, 4)
+    const root = seated((await rootRead(t, f.user)).answer)
+    expect(root.teamMembers).toHaveLength(5)
+    expect(root.teams.map((team) => team.id)).toEqual([f.team.id, ...more])
+  })
+
+  it('refuses with the access check sentence past OWN_READS.teams memberships rather than send part of them', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    OWN_READS.teams = 2
+    // the user in 2 teams is answered, the admin in 3 is refused
+    await plantTeamsOf(t, f.org.id, f.user, 1)
+    await plantTeamsOf(t, f.org.id, f.admin, 2)
+    expect(seated(await as(t, f.user).query(api.workspace.root, {})).teams).toHaveLength(2)
+    await expectRefusal(
+      as(t, f.admin).query(api.workspace.root, {}),
+      'rule',
+      new RegExp(`^${accessUnchecked().data.message.replace(/[.]/g, '\\.')}$`),
+    )
+  })
+
+  it('names no team for a membership whose team is gone or of another organization', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [elsewhere] = await plantTeamsOf(t, f.otherOrg.id, f.otherAdmin, 1)
+    await t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: 'gone-team',
+        profile_id: f.user.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('team_members', {
+        team_id: elsewhere,
+        profile_id: f.user.id,
+        is_leader: false,
+      })
+    })
+    const root = seated((await rootRead(t, f.user)).answer)
+    expect(root.teams.map((team) => team.id)).toEqual([f.team.id])
+    // the workspace keeps the membership of its own team only
+    const snap = await workspaceOf(as(t, f.user))
+    expect(
+      snap?.teamMembers.filter((m) => m.profile_id === f.user.id).map((m) => m.team_id),
+    ).toEqual([f.team.id])
+  })
+
+  it("changes when one of the caller's teams is renamed, and not for another team, a new person or a new label", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [other] = await plantTeamsOf(t, f.org.id, f.admin, 1)
+    const read = async () => JSON.stringify(await as(t, f.user).query(api.workspace.root, {}))
+    const first = await read()
+    await t.run(async (ctx) => {
+      const team = await ctx.db
+        .query('teams')
+        .withIndex('by_uuid', (q) => q.eq('id', other))
+        .unique()
+      await ctx.db.patch(team!._id, { name: 'Renamed elsewhere' })
+      await ctx.db.insert('labels', {
+        id: uuid(),
+        org_id: f.org.id,
+        name: 'Fresh',
+        name_lower: 'fresh',
+        color: '#50b070',
+        created_at: NOW,
+      })
+    })
+    await plantSeat(t, { org_id: f.org.id, name: 'Newcomer' })
+    expect(await read()).toBe(first)
+    await t.run(async (ctx) => {
+      const team = await ctx.db
+        .query('teams')
+        .withIndex('by_uuid', (q) => q.eq('id', f.team.id))
+        .unique()
+      await ctx.db.patch(team!._id, { name: 'Hardware crew' })
+    })
+    const renamed = await read()
+    expect(renamed).not.toBe(first)
+    expect(renamed).toContain('Hardware crew')
   })
 })
 
@@ -1340,7 +1543,7 @@ describe('many projects', () => {
   })
 })
 
-describe('the projects and people parts', () => {
+describe('the projects part', () => {
   it('a projects window answers overflow past its rows or its reads, its cuts send every project, and the narrowest one refuses', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
@@ -1591,80 +1794,6 @@ describe('the projects and people parts', () => {
     // the checks and 800 for the 400 projects
     expect(after.ranges).toBe(checks + 2 * 400)
   }, 60_000)
-
-  it('a people window too full to cut refuses with a sentence', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const crowded = [0, 1, 2].map((i) => `fff00000-0000-4000-8000-00000000000${i}`)
-    const { _id, _creationTime, ...viewer } = f.viewer
-    await t.run(async (ctx) => {
-      for (const id of crowded)
-        await ctx.db.insert('profiles', {
-          ...viewer,
-          id,
-          email: `${id}@testbed.test`,
-          auth_user_id: undefined,
-        })
-    })
-    PAGE.people.most = 2
-    expect(
-      await as(t, f.admin).query(api.workspace.people, {
-        org_id: f.org.id,
-        ...narrowestOf('fff00000').holds,
-      }),
-    ).toMatchObject({ state: 'refused', message: expect.stringMatching(/^One part/) })
-  })
-})
-
-describe('the people part', () => {
-  it('names how many pieces to cut an overflowing window into, from how far its read reached', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const w = { from: 'a0000000', to: 'a0400000' }
-    const { _id, _creationTime, ...viewer } = f.viewer
-    await t.run(async (ctx) => {
-      for (const at of ['a0000000', 'a0080000', 'a0100000', 'a0180000'])
-        await ctx.db.insert('profiles', {
-          ...viewer,
-          id: `${at}-0000-4000-8000-000000000000`,
-          email: `${at}@testbed.test`,
-          auth_user_id: undefined,
-        })
-    })
-    const inWindow = await t.run(async (ctx) =>
-      (await ctx.db.query('profiles').collect())
-        .filter((p) => p.org_id === f.org.id)
-        .map((p) => p.id)
-        .filter((id) => inIdWindow(id, w))
-        .sort(),
-    )
-    PAGE.people.most = 2
-    const answer = await as(t, f.admin).query(api.workspace.people, { org_id: f.org.id, ...w })
-    expect(answer).toEqual({ state: 'overflow', pieces: cutPieces(w, inWindow[1]) })
-    // the read reached an eighth of the window, sixteen pieces, which the
-    // grid allows only four of
-    expect(piecesAfter(w, answer)).toHaveLength(4)
-  })
-
-  it("sends each person's memberships with them, and the app keeps those of teams it holds", async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    await t.run(async (ctx) => {
-      // a membership of a team that no longer exists
-      await ctx.db.insert('team_members', {
-        team_id: 'gone-team',
-        profile_id: f.viewer.id,
-        is_leader: false,
-      })
-    })
-    const snap = await workspaceOf(as(t, f.admin))
-    const mine = snap?.teamMembers.filter((m) => m.profile_id === f.user.id)
-    expect(mine?.length).toBeGreaterThan(0)
-    expect(snap?.teamMembers.some((m) => m.team_id === 'gone-team')).toBe(false)
-    const answer = await as(t, f.admin).query(api.workspace.people, { org_id: f.org.id, ...whole })
-    if (answer.state !== 'ok') throw new Error(answer.state)
-    expect(answer.teamMembers.some((m) => m.team_id === 'gone-team')).toBe(true)
-  })
 })
 
 /* A member of the fixture's team with a login, the team sharing FW. */

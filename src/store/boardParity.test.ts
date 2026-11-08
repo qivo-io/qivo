@@ -3,7 +3,10 @@
  * caller's real workspace, as projectTags.test.ts does, and compares what
  * tasks.board answers for the same caller with the rules the Board still
  * runs on screen over the answer (src/views/board/useBoardView.ts passes:
- * P.passesFilters) and the Roadmap still runs over the workspace's tasks
+ * P.passesFilters, with the text matched by the server's words and the
+ * fixture's names, store/textMatch.setup.ts matchesText, as the store
+ * holds nobody but the caller and no label) and the Roadmap still runs
+ * over the workspace's tasks
  * (P.isGroup, groupSpan, groupBoardCell): the phone set (scopedIssues with
  * passesFilters), the desktop cards (its leaves), each card's shown parent chain
  * (groupBoardCell), the group facts (isGroup, isDone, the calculated span
@@ -24,6 +27,7 @@
  * owner's tasks compete for a week's hours, so a span counted twice or
  * missing changes a verdict. */
 
+import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
@@ -44,8 +48,8 @@ import {
   plantSeat,
   type T,
   uuid,
+  wholeOf,
   withReadingAdmin,
-  workspaceOf,
 } from '../../convex/tests/helpers.setup'
 import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
@@ -54,10 +58,13 @@ import { DELAY_UNKNOWN } from '../lib/delay'
 import { groupSpan } from '../lib/issueGroups'
 import { DEFAULT_PLANNABLE_HOURS, plannableHoursOf } from '../lib/workload'
 import { boardStandIn } from './boardStandIn.setup'
+import type { Whole as Snapshot } from './guard/liveDouble.setup'
 import type { OwnerLoad } from './ownerLoadCache'
 import { ownerLoadsStandIn } from './ownerLoadsStandIn.setup'
+import { peopleSettingsStandIn } from './peopleSettingsStandIn.setup'
+import { nameEveryone } from './personShown.setup'
+import { matchesText, textNames } from './textMatch.setup'
 import type { ViewDelayCtx } from './viewDelay'
-import type { Snapshot } from './workspaceBase'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -89,12 +96,17 @@ async function start(snap: Snapshot) {
   vi.stubGlobal('window', { showToast: vi.fn() })
   network.query.mockResolvedValue(null)
   network.mutation.mockResolvedValue(null)
-  network.onUpdate.mockImplementation((_ref, _args, next) => {
-    next(structuredClone(snap))
+  // the faces the views name come from the server's data, as the store
+  // holds nobody but the caller
+  network.onUpdate.mockImplementation((ref, args, next) => {
+    if (getFunctionName(ref) === 'people:byIds')
+      next(peopleSettingsStandIn(snap, 'people:byIds', args))
+    else next(structuredClone(snap))
     return () => {}
   })
   const store = await import('./planner')
   await store.initStore()
+  await nameEveryone(store.P, snap)
   // the week indexes of the store's own timeline (src/lib/dates.ts)
   const { isoToWeek } = await import('../lib/dates')
   // the view rows, delays and owner loads of the store's own module
@@ -118,7 +130,7 @@ type Issue = Store['issues'][number]
 /** The store booted for `profile` from their workspace, with the clock at
  * `now`, so isStale's cutoff is STALE_DAYS before it. */
 async function storeOf(t: T, profile: Doc<'profiles'>, now?: number): Promise<Store> {
-  const snap = await workspaceOf(as(t, profile))
+  const snap = await wholeOf(t, profile)
   if (snap === null) throw new Error(`no workspace for ${profile.name}`)
   if (now !== undefined) {
     vi.useFakeTimers({ toFake: ['Date'] })
@@ -164,7 +176,10 @@ function expectParity(
   const shows = (it: Issue) =>
     !(filters.focus && P.isGroup(it) && (it.status === 'backlog' || it.status === 'done'))
   const scoped = P.scopedIssues(info)
-  const passing = scoped.filter((it) => P.passesFilters(it, desk) && shows(it))
+  const names = textNames(P.snapshot)
+  const passing = scoped.filter(
+    (it) => P.passesFilters(it, desk) && matchesText(names, it, search) && shows(it),
+  )
   const byUuid = new Map(Object.values(P.issueById).map((it) => [it.uuid, it]))
   const rowIds = new Set(answer.rows.map((row) => row.id))
   const parentIds = new Set(answer.parents.map((row) => row.id))
@@ -367,9 +382,11 @@ async function expectDelays(
   if (answer.state !== 'ok' || !P.__probe) return
   const probe = P.__probe
   const { delayIssueOfTask, judgeDelay, needsLoad, ownerLoadOf, viewDelay } = P.__views
+  // each owner's face, which the test named (nameEveryone), else the
+  // signed-in person's own profile
   const capacity = (id: string) => {
-    const person = P.user(id)
-    return (person && plannableHoursOf(person)) || DEFAULT_PLANNABLE_HOURS
+    const person = P.person(id)
+    return (person?.state === 'ok' && plannableHoursOf(person)) || DEFAULT_PLANNABLE_HOURS
   }
   const cards = answer.rows.filter((row) => !row.has_subtasks)
   const answerRows = [...answer.rows, ...answer.parents]
@@ -405,8 +422,12 @@ async function expectDelays(
     heldSpans: (owner) => probe.shownSpans(owner),
     viewRows: () => [],
     capacity,
+    capacityWaits: () => false,
     projectLive: (id) => !!P.project(id),
-    orgOf: (id) => P.user(id)?.org,
+    orgOf: (id) => {
+      const person = P.person(id)
+      return person?.state === 'ok' ? person.org : undefined
+    },
   }
   // the answer's rows as tasks only the view holds: theirs are the spans of
   // their tasks, and the workspace's only those of the others

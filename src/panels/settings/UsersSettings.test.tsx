@@ -17,7 +17,6 @@ import {
   peopleSettingsServer,
   type StandInKey,
 } from '../../store/peopleSettingsStandIn.setup'
-import { shownOf } from '../../store/personShown.setup'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 
 /* Organization > Users on the real store, its people read from the server
@@ -345,7 +344,7 @@ function Screen({ initial, reset = vi.fn() }: { initial: string; reset?: (page: 
 /* --------------------------------------------------------------- the list */
 
 describe('the list', () => {
-  it('reads one page at a time with Previous and Next, people before guests, rows painted from the store', async () => {
+  it('reads one page at a time with Previous and Next, people before guests, rows shown from the answer', async () => {
     await load((s) => {
       s.profiles.push(...people(30), person('gail', 'Gail Guest', { org_role: 'guest' }))
     })
@@ -356,10 +355,17 @@ describe('the list', () => {
     expect(pageRows().slice(0, 3)).toEqual(['anna', 'atlas', 'p00'])
     expect(has('[data-org-guests]')).toBe(false)
     expect(find('[data-org-users]').dataset.usersState).toBe('ok')
-    // a rename in this session shows at once, before the server holds it
-    store.P.updateUser('p00', { name: 'Paula Renamed' }, {}, shownOf(store.P, 'p00'))
+    // a rename in this session shows at once, before the server holds it:
+    // the field keeps what it sent, as the store holds nobody else
+    const renamed = find<HTMLInputElement>('input[data-user-name="p00"]')
+    await act(async () => renamed.focus())
+    await type(renamed, 'Paula Renamed')
+    await act(async () => renamed.blur())
     await settle()
+    expect(pending.map((p) => p.name)).toContain('profiles:update')
     expect(find<HTMLInputElement>('input[data-user-name="p00"]').value).toBe('Paula Renamed')
+    await act(async () => pending.find((p) => p.name === 'profiles:update')?.resolve(null))
+    await settle()
 
     const next = find<HTMLButtonElement>('[data-users-next]')
     next.focus()
@@ -572,6 +578,49 @@ describe('the list', () => {
     })
   })
 
+  it('sends a project right turned back before the first answer, so the server and the box end unticked', async () => {
+    await load((s) => {
+      s.orgs[0].project_creators = 'selected'
+      s.profiles.push(person('abby', 'Abby Unheld'))
+    })
+    await show()
+    const abby = () => snap.profiles.find((p) => p.id === 'abby')
+    const box = () => find<HTMLInputElement>('[data-can-create-projects="abby"]')
+    const updates = () => pending.filter((p) => p.name === 'profiles:update')
+    expect(box().checked).toBe(false)
+    await click(box())
+    expect(box().checked).toBe(true)
+    // turned back before the server answered the first click
+    await click(box())
+    expect(box().checked).toBe(false)
+    expect(updates().map((p) => p.args)).toMatchObject([
+      {
+        id: 'abby',
+        patch: { can_create_projects: true },
+        expected: { can_create_projects: false },
+      },
+      {
+        id: 'abby',
+        patch: { can_create_projects: false },
+        expected: { can_create_projects: true },
+      },
+    ])
+    // the server takes both in order; the box shows the newest choice
+    // while the second waits, and then the page's read
+    const [first, second] = updates()
+    Object.assign(abby() ?? {}, { can_create_projects: true })
+    await act(async () => server.rerun())
+    await act(async () => first.resolve(null))
+    await settle()
+    expect(box().checked).toBe(false)
+    Object.assign(abby() ?? {}, { can_create_projects: undefined })
+    await act(async () => server.rerun())
+    await act(async () => second.resolve(null))
+    await settle()
+    expect(abby()?.can_create_projects).toBeUndefined()
+    expect(box().checked).toBe(false)
+  })
+
   it('reads nothing while the tab is hidden, and reads again on return', async () => {
     await load()
     await show()
@@ -623,6 +672,11 @@ describe('kept rows', () => {
     snap.profiles.push(person(id, 'Zed New'))
     await act(async () => server.rerun())
     expect(keptRows()).toEqual([[id, 'added']])
+    // the next add waits for this one's answer
+    expect(find<HTMLButtonElement>('[data-add-user]').disabled).toBe(true)
+    await act(async () => create?.resolve(null))
+    await settle()
+    expect(keptRows()).toEqual([[id, 'added']])
     await click(find('[data-users-next]'))
     expect(pageRows()).toContain(id)
     expect(keptRows()).toEqual([])
@@ -640,6 +694,119 @@ describe('kept rows', () => {
     )
     await settle()
     expect(keptRows()).toEqual([])
+  })
+
+  it("shows a kept added person's accepted role and deactivation, so the change back goes out", async () => {
+    await load((s) => s.profiles.push(...people(30)))
+    await show()
+    await type(find<HTMLInputElement>('input[aria-label="New person name"]'), 'Zed New')
+    await type(find<HTMLInputElement>('[data-add-email]'), 'zed@example.test')
+    await click(find('[data-add-user]'))
+    const create = pending.find((p) => p.name === 'profiles:create')
+    const id = String(create?.args.id)
+    // the server holds them past the first page
+    snap.profiles.push(person(id, 'Zed New', { auth_user_id: undefined }))
+    await act(async () => server.rerun())
+    await act(async () => create?.resolve(null))
+    await settle()
+    expect(keptRows()).toEqual([[id, 'added']])
+    const zed = () => snap.profiles.find((p) => p.id === id)
+    const role = () => find<HTMLSelectElement>(`[data-user-role="${id}"]`)
+    const choose = async (value: string) => {
+      await act(async () => {
+        role().value = value
+        role().dispatchEvent(new Event('change', { bubbles: true }))
+      })
+      await settle()
+    }
+    /* The server stores the write, then answers it. */
+    const accept = async (change: Partial<Profile>) => {
+      const write = pending.at(-1)
+      Object.assign(zed() ?? {}, change)
+      await act(async () => server.rerun())
+      await act(async () => write?.resolve(null))
+      await settle()
+    }
+    await choose('viewer')
+    expect(pending.at(-1)).toMatchObject({
+      name: 'profiles:update',
+      args: { id, patch: { org_role: 'viewer' }, expected: { org_role: 'user' } },
+    })
+    await accept({ org_role: 'viewer' })
+    // the kept row shows what the server accepted, which no page holds
+    expect(keptRows()).toEqual([[id, 'added']])
+    expect(role().value).toBe('viewer')
+    expect(has(`[data-user-row="${id}"] [data-viewer-chip]`)).toBe(true)
+    // the change back goes out, from the role the row shows
+    await choose('user')
+    expect(pending.at(-1)).toMatchObject({
+      name: 'profiles:update',
+      args: { id, patch: { org_role: 'user' }, expected: { org_role: 'viewer' } },
+    })
+    await accept({ org_role: 'user' })
+    expect(role().value).toBe('user')
+    // a deactivation the server accepted shows, and the reactivation goes out
+    await choose('inactive')
+    expect(pending.at(-1)).toMatchObject({ name: 'profiles:deactivate', args: { id } })
+    await accept({ active: false })
+    expect(role().value).toBe('inactive')
+    await choose('user')
+    expect(pending.at(-1)).toMatchObject({
+      name: 'profiles:update',
+      args: { id, patch: { active: true }, expected: { active: false } },
+    })
+  })
+
+  it('keeps a kept row inactive when a role change follows its deactivation before either answers', async () => {
+    await load((s) => s.profiles.push(...people(30)))
+    await show()
+    await type(find<HTMLInputElement>('input[aria-label="New person name"]'), 'Zed New')
+    await type(find<HTMLInputElement>('[data-add-email]'), 'zed@example.test')
+    await click(find('[data-add-user]'))
+    const create = pending.find((p) => p.name === 'profiles:create')
+    const id = String(create?.args.id)
+    // the server holds them past the first page
+    snap.profiles.push(person(id, 'Zed New', { auth_user_id: undefined }))
+    await act(async () => server.rerun())
+    await act(async () => create?.resolve(null))
+    await settle()
+    expect(keptRows()).toEqual([[id, 'added']])
+    const role = () => find<HTMLSelectElement>(`[data-user-role="${id}"]`)
+    const choose = async (value: string) => {
+      await act(async () => {
+        role().value = value
+        role().dispatchEvent(new Event('change', { bubbles: true }))
+      })
+      await settle()
+    }
+    await choose('inactive')
+    const deactivation = pending.at(-1)
+    expect(deactivation).toMatchObject({ name: 'profiles:deactivate', args: { id } })
+    // the row still shows them active, so the role goes out alone
+    await choose('viewer')
+    const update = pending.at(-1)
+    expect(update).toMatchObject({ name: 'profiles:update', args: { id } })
+    expect(update?.args.patch).toEqual({ org_role: 'viewer' })
+    // the server stores both, then answers them
+    Object.assign(snap.profiles.find((p) => p.id === id) ?? {}, {
+      active: false,
+      org_role: 'viewer',
+    })
+    await act(async () => server.rerun())
+    await act(async () => deactivation?.resolve(null))
+    await act(async () => update?.resolve(null))
+    await settle()
+    // the kept row shows what the server holds, an inactive Viewer
+    expect(keptRows()).toEqual([[id, 'added']])
+    expect(role().value).toBe('inactive')
+    expect(has(`[data-user-row="${id}"] [data-viewer-chip]`)).toBe(true)
+    // so the next role change sends the reactivation with it
+    await choose('user')
+    expect(pending.at(-1)).toMatchObject({ name: 'profiles:update', args: { id } })
+    expect(pending.at(-1)?.args).toMatchObject({
+      patch: { org_role: 'user', active: true },
+      expected: { org_role: 'viewer', active: false },
+    })
   })
 
   it('keeps a drafted name, address and hours through a search and a page move, and lets them go once settled', async () => {
@@ -661,7 +828,8 @@ describe('kept rows', () => {
     await type(email, 'anna.new@example.test')
     const anna = snap.profiles.find((p) => p.id === 'anna')
     if (anna) anna.email = 'anna.other@example.test'
-    await act(async () => publish(structuredClone(snap)))
+    // the page's read reruns with it, as the store holds nobody else
+    await act(async () => server.rerun())
     await search('planner')
     expect(pageRows()).toEqual([me.id])
     expect(keptRows().sort()).toEqual(
@@ -722,8 +890,7 @@ describe('kept rows', () => {
       pending.find((p) => p.name === 'profiles:update' && p.args.id === id)
     expect(sent('p00')?.args).toMatchObject({ patch: { name: 'Paula New' } })
     expect(sent('anna')?.args).toMatchObject({ patch: { email: 'anna.new@example.test' } })
-    // the store painted both, which read as saved, but the rows wait for
-    // the server's answers
+    // both read as saved, but the rows wait for the server's answers
     expect(pageRows()).toEqual([me.id])
     expect(keptRows().sort()).toEqual(
       [
@@ -752,14 +919,21 @@ describe('kept rows', () => {
       ),
     )
     await settle()
-    // the same field holds the typed name, with the name the server keeps
+    // the same field holds the typed name; the page cannot tell the name
+    // the server keeps until a page holds Person 00 again, as the store
+    // holds nobody but the signed-in person
     expect(keptRows()).toEqual([['p00', 'kept']])
+    expect(find<HTMLInputElement>('input[data-user-name="p00"]')).toBe(name)
+    expect(name.value).toBe('Paula New')
+    expect(document.querySelector('[data-user-row="p00"] [data-draft-conflict]')).toBeNull()
+    // the search goes, and the page's answer brings the name the server keeps
+    await search('')
     expect(find<HTMLInputElement>('input[data-user-name="p00"]')).toBe(name)
     expect(name.value).toBe('Paula New')
     expect(find('[data-user-row="p00"] [data-draft-conflict]').textContent).toContain(
       'Changed elsewhere to “Paula Other”.',
     )
-    // Use saved lets the draft go, and the row with it once focus leaves
+    // Use saved lets the draft go
     await click(find('[data-user-row="p00"] [data-draft-use-saved]'))
     expect(name.value).toBe('Paula Other')
     await act(async () => find<HTMLInputElement>('[data-users-search]').focus())
@@ -1519,6 +1693,47 @@ describe('Add person', () => {
     await type(nameInput(), `${'a'.repeat(40)}  ${'b'.repeat(40)}`)
     expect(nameInput().getAttribute('aria-invalid')).toBe('true')
     expect(addButton().disabled).toBe(true)
+  })
+
+  it('keeps a next person typed while the create waits, and clears what still holds the added one', async () => {
+    await load()
+    await show()
+    const email = () => find<HTMLInputElement>('[data-add-email]')
+    const role = () => find<HTMLSelectElement>('[data-add-role]')
+    await type(nameInput(), 'Alice Added')
+    await type(email(), 'alice@example.test')
+    await act(async () => {
+      role().value = 'viewer'
+      role().dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await click(addButton())
+    const creates = () => pending.filter((p) => p.name === 'profiles:create')
+    expect(creates().map((p) => p.args.name)).toEqual(['Alice Added'])
+    // the next person, typed while Alice's create waits, with the same role
+    await type(nameInput(), 'Bob Next')
+    await type(email(), 'bob@example.test')
+    await act(async () => creates()[0].resolve(null))
+    await settle()
+    expect(nameInput().value).toBe('Bob Next')
+    expect(email().value).toBe('bob@example.test')
+    expect(role().value).toBe('viewer')
+    // with nothing typed since, the form clears and the role goes back
+    await click(addButton())
+    expect(creates().map((p) => p.args.name)).toEqual(['Alice Added', 'Bob Next'])
+    await act(async () => creates()[1].resolve(null))
+    await settle()
+    expect(nameInput().value).toBe('')
+    expect(email().value).toBe('')
+    expect(role().value).toBe('user')
+    // a name typed on clears the address the added person still held
+    await type(nameInput(), 'Cleo Third')
+    await type(email(), 'cleo@example.test')
+    await click(addButton())
+    await type(nameInput(), 'Dan Fourth')
+    await act(async () => creates()[2].resolve(null))
+    await settle()
+    expect(nameInput().value).toBe('Dan Fourth')
+    expect(email().value).toBe('')
   })
 
   it('says why an address longer than the server stores cannot be added', async () => {

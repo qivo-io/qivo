@@ -54,6 +54,7 @@ import { useViewVisibility } from '../../lib/viewVisibility'
 import {
   type IssueFilters,
   type IssueVM,
+  nameUnknown,
   P,
   ROADMAP_SLOT,
   type ScopeInfo,
@@ -272,22 +273,23 @@ export function useRoadmapView(
   }, [shownAnswer, views])
   const family = useMemo(() => familyOver(byId), [byId])
 
-  const passes = (it: IssueVM) => {
-    const shaped = P.handleOf(it.uuid) === null
-    return (
-      info.subIdSet.has(it.project) &&
-      (!info.only || info.only(it)) &&
-      isRoadmapTaskVisible(it, P.isDone(it), w0, w1) &&
-      (planned?.id === it.uuid ||
-        P.passesFilters(it, shaped ? { ...filters, search: '' } : filters))
-    )
-  }
+  // the text filter is the answer's for every task, held or not: the server
+  // matched the whole text, label and assignee names included, which the
+  // store cannot read, so the store's filters take no text
+  const passes = (it: IssueVM) =>
+    info.subIdSet.has(it.project) &&
+    (!info.only || info.only(it)) &&
+    isRoadmapTaskVisible(it, P.isDone(it), w0, w1) &&
+    (planned?.id === it.uuid || P.passesFilters(it, { ...filters, search: '' }))
   // the Roadmap's own text check of a kept answer while typing narrows it,
-  // over the fields a row sends
+  // over the fields a row sends; a task whose assignee's name has not
+  // loaded may match by it, so it stays until the answer for the text
+  // decides
   const textOk = (it: IssueVM) =>
     !narrowing ||
     planned?.id === it.uuid ||
-    matchesAllWords(shownText(it.key, it, P.isGroup(it), it.assignee), filters.search)
+    matchesAllWords(shownText(it.key, it, P.isGroup(it), it.assignee), filters.search) ||
+    nameUnknown(P.person(it.assignee, it.org))
 
   let joined: { tasks: IssueVM[]; missing: number } | null = null
   if (shownAnswer) {

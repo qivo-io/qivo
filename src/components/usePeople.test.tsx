@@ -7,7 +7,8 @@ import type { PersonFaceRow } from '../../convex/model/peopleSettings'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
 /* The people a view shows as it names them (usePeople, through the store's
-   profile cache and P.person): the store's profile at once, else
+   profile cache and P.person): the signed-in person's own profile, the one
+   the store holds, at once, else
    people.byIds, loading until it answers, gone only on an answer that
    leaves the id out, failed on a failed read, a picker's name at once; and
    the names follow the component's life: named while mounted and shown,
@@ -61,7 +62,10 @@ beforeEach(async () => {
   vi.resetModules()
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   snap = plannerFixture()
-  snap.profiles.push({ ...snap.profiles[0], id: 'held', name: 'Hal Held', auth_user_id: 'a-held' })
+  // the signed-in person, whom the store holds as it holds nobody else
+  Object.assign(snap.profiles[0], { id: 'held', name: 'Hal Held' })
+  snap.myProfileIds = ['held']
+  snap.projects[0].lead_id = 'held'
   subs = []
   network.query.mockResolvedValue(null)
   network.mutation.mockResolvedValue(null)
@@ -122,7 +126,7 @@ const open = () => subs.filter((s) => !s.closed)
 const named = () => store.P.fileStats().people.named
 
 describe('usePeople', () => {
-  it('names a person the store holds at once, reading nothing', async () => {
+  it('names the signed-in person, whom the store holds, at once, reading nothing', async () => {
     await show(['held'])
     expect(text()).toEqual(['held:Hal Held'])
     expect(subs).toEqual([])

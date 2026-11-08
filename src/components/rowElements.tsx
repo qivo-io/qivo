@@ -59,8 +59,8 @@ export function hoverTooltip(
    An uploaded picture painted over the initials-on-color chip. The chip is
    not a placeholder that gets replaced: it is always rendered, so a person
    without a picture, or one whose picture fails to load, shows initials.
-   The person comes from P.person, the workspace's people part or the
-   profile cache, so a person not loaded yet is a plain square, never the
+   The person comes from P.person, the signed-in person's own profile or
+   the profile cache, so a person not loaded yet is a plain square, never the
    dashed Unassigned face, which only no person and the server's answer
    that leaves the person out draw. */
 /* 20 is the Team sync row's portrait (beside a chevron in a 32px control). */

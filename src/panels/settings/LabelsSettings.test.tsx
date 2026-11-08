@@ -8,14 +8,17 @@ import { TooltipProvider } from '../../components/ui/tooltip'
 import {
   answerLabelPages,
   type ForcedLabelPage,
+  type LabelsByIdsArgs,
   labelPickerStandIn,
+  labelsByIdsStandIn,
 } from '../../store/labelPagesStandIn.setup'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 
-/* Settings › Labels on the real store, its batches answered by the label
-   pages' stand-in (store/labelPagesStandIn.setup.ts) over a workspace the
-   test holds as the server's, which it can change and answer again as
-   Convex reruns the open reads. I am the admin of Testbed Labs. */
+/* Settings › Labels on the real store, its batches and the kept rows'
+   labels.byIds read answered by the label pages' stand-in
+   (store/labelPagesStandIn.setup.ts) over a workspace the test holds as
+   the server's, which it can change and answer again as Convex reruns the
+   open reads. The store holds no label. I am the admin of Testbed Labs. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../../lib/convex', async () => ({
@@ -42,6 +45,23 @@ type Read = {
   args: unknown
   next: (value: unknown) => void
   fail?: (error: unknown) => void
+  /** a kept rows' labels.byIds read, else a page batch */
+  byIds?: boolean
+}
+
+/* Answers label read `read` from the server's workspace. */
+function answerRead(read: Read) {
+  if (!read.byIds) {
+    answerLabelPages(server.snap, read.args, read.next, read.fail, { force: server.force })
+    return
+  }
+  try {
+    read.next(
+      labelsByIdsStandIn(server.snap, read.args as LabelsByIdsArgs, { force: server.force }),
+    )
+  } catch (error) {
+    read.fail?.(error)
+  }
 }
 
 let page: typeof import('./LabelsSettings')
@@ -124,10 +144,10 @@ async function load(shape?: (snap: Snapshot) => void) {
   })
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
-    if (name === 'labels:settingsPage') {
-      const read: Read = { args, next, fail }
+    if (name === 'labels:settingsPage' || name === 'labels:byIds') {
+      const read: Read = { args, next, fail, byIds: name === 'labels:byIds' }
       server.reads.add(read)
-      if (!server.hold) answerLabelPages(server.snap, args, next, fail, { force: server.force })
+      if (!server.hold) answerRead(read)
       return () => server.reads.delete(read)
     }
     if (name === 'workspace:whole')
@@ -153,8 +173,7 @@ async function load(shape?: (snap: Snapshot) => void) {
     Convex reruns a query whose reads changed. */
 const rerun = () =>
   act(async () => {
-    for (const read of server.reads)
-      answerLabelPages(server.snap, read.args, read.next, read.fail, { force: server.force })
+    for (const read of server.reads) answerRead(read)
     for (let i = 0; i < 5; i++) await Promise.resolve()
   })
 
@@ -568,12 +587,13 @@ describe('Settings › Labels', () => {
     await click(button('Add label'))
     expect(requests.map((r) => r.name)).toEqual(['labels:create'])
     const id = requests[0]?.args.id as string
+    // the server holds it once it accepts the create, behind Load more
+    labelRow(server.snap, id, 'Zeta release')
     await answer('labels:create', 'accept')
     expect(toasts()).toContain('Label “Zeta release” created')
     expect(rows()[0]).toEqual({ id, name: 'Zeta release', count: 'Added' })
     expect(find(`[data-label-row="${id}"] [data-label-kept]`).textContent).toBe('Added')
-    // the server holds it, behind Load more
-    await elsewhere((snap) => labelRow(snap, id, 'Zeta release'))
+    await rerun()
     expect(rows()[0]?.count).toBe('Added')
     await click(find('[data-labels-more]'))
     expect(rows().at(-1)).toEqual({ id, name: 'Zeta release', count: '0 active tasks' })
@@ -596,9 +616,10 @@ describe('Settings › Labels', () => {
     await settle()
     await click(button('Add label'))
     const id = requests[0]?.args.id as string
+    // the server holds it once it accepts the create, and no loaded batch
+    // does
+    labelRow(server.snap, id, 'Zeta release')
     await answer('labels:create', 'accept')
-    // the catalogue holds it, and no loaded batch does
-    await elsewhere((snap) => labelRow(snap, id, 'Zeta release'))
     expect(rows()[0]).toEqual({ id, name: 'Zeta release', count: 'Added' })
     // another admin deletes it
     await elsewhere((snap) => {
@@ -933,6 +954,26 @@ describe('a label name on the draft model', () => {
       { id: 'l03', name: long, count: 'Not in this list' },
       { id: 'l29', name: 'Label 29', count: '0 active tasks' },
     ])
+  })
+
+  it('drops a kept row with an unsaved name, and its unsaved mark, once someone else deletes the label', async () => {
+    await load(many(30))
+    await render()
+    // a name over the cap stays typed and unsent, and a search hides it
+    await rename('l03', 'f'.repeat(41))
+    await type(find<HTMLInputElement>('[data-labels-search]'), 'label 29')
+    await rest()
+    await settle()
+    expect(rows().map((row) => row.id)).toEqual(['l03', 'l29'])
+    const { hasUnsaved } = await import('../../lib/leaveGuard')
+    expect(hasUnsaved()).toBe(true)
+    // another admin deletes it, and the kept row's by-id read leaves it out
+    await elsewhere((snap) => {
+      snap.labels = snap.labels.filter((label) => label.id !== 'l03')
+    })
+    expect(rows()).toEqual([{ id: 'l29', name: 'Label 29', count: '0 active tasks' }])
+    expect(hasUnsaved()).toBe(false)
+    expect(labelReads().some((args) => 'ids' in args)).toBe(false)
   })
 })
 

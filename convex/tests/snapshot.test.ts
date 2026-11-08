@@ -125,28 +125,29 @@ describe('workspace scoping', () => {
     const projectIds = snap.projects.map((p) => p.id)
     expect(projectIds.sort()).toEqual([f.meta.id, f.sub.id, f.sub2.id].sort())
     expect(snap.access.every((a) => a.project_id === f.meta.id)).toBe(true)
-    // with the admin's own grant
-    expect(snap.access.map((a) => a.profile_id).sort()).toEqual(
-      [f.guest.id, f.viewer.id, f.admin.id].sort(),
-    )
+    // the projects part sends every grant on TBED, the viewer's and the
+    // admin's too, and the workspace keeps the guest's own alone
+    // (lib/workspaceJoin.ts joinParts)
+    expect(snap.access.map((a) => a.profile_id)).toEqual([f.guest.id])
     expect(snap.issues.map((i) => i.id)).toContain(issueVis.id)
     expect(snap.issues.map((i) => i.id)).not.toContain(issueHid.id)
     expect(snap.auth_user_id).toBe(f.guest.auth_user_id)
     expect(snap.myProfileIds).toEqual([f.guest.id])
   })
 
-  it('guest: full member roster and the host label vocabulary ride along', async () => {
+  it('guest: only their own profile rides along, and no other person and no label', async () => {
     const label = await plantLabel('Bug')
     const snap = await snapFor(f.guest)
-    expect(snap.profiles.map((p) => p.id).sort()).toEqual(
-      [f.admin.id, f.user.id, f.viewer.id, f.guest.id, f.agent.id].sort(),
-    )
-    expect(snap.labels.map((l) => l.id)).toContain(label.id)
-    // auth_user_id stays on the rows — the client's `pending` derivation needs it
-    expect(snap.profiles.find((p) => p.id === f.user.id)?.auth_user_id).toBe(f.user.auth_user_id)
+    expect(snap.profiles.map((p) => p.id)).toEqual([f.guest.id])
+    expect(snap).not.toHaveProperty('labels')
+    expect(JSON.stringify(snap)).not.toContain(label.id)
+    for (const other of [f.admin, f.user, f.viewer, f.agent])
+      expect(JSON.stringify(snap.profiles)).not.toContain(other.id)
+    // auth_user_id stays on the row, which the client's `pending` reads
+    expect(snap.profiles[0]?.auth_user_id).toBe(f.guest.auth_user_id)
   })
 
-  it('a stored label color that is not #rrggbb goes out as gray; valid colors pass unchanged', async () => {
+  it('a stored label color that is not #rrggbb goes out as gray from labels.byIds; valid colors pass unchanged', async () => {
     const valid = await plantLabel('Bug')
     const unsafe = await t.run(async (ctx) => {
       const ids: string[] = []
@@ -164,7 +165,11 @@ describe('workspace scoping', () => {
       }
       return ids
     })
-    const colorById = new Map((await snapFor(f.guest)).labels.map((l) => [l.id, l.color]))
+    const { rows } = await as(t, f.guest).query(api.labels.byIds, {
+      org_id: f.org.id,
+      ids: [valid.id, ...unsafe],
+    })
+    const colorById = new Map(rows.map((l) => [l.id, l.color]))
     expect(colorById.get(valid.id)).toBe('#F0555D')
     expect(unsafe.map((id) => colorById.get(id))).toEqual(['#8A8F98', '#8A8F98', '#8A8F98'])
     // the read does not rewrite the row; an admin recolor replaces it
@@ -173,16 +178,14 @@ describe('workspace scoping', () => {
   })
 
   it('a stored avatar color that is not #rrggbb goes out as gray; valid colors pass unchanged', async () => {
-    const unsafe: Doc<'profiles'>[] = []
+    expect((await snapFor(f.guest)).profiles[0]?.color).toBe(f.guest.color)
     for (const color of ['url(https://example.test/p.png)', 'red', '#fff']) {
-      unsafe.push(await plantSeat(t, { org_id: f.org.id, color }))
+      await t.run(async (ctx) => ctx.db.patch(f.guest._id, { color }))
+      expect((await snapFor(f.guest)).profiles[0]?.color).toBe('#8A8F98')
     }
-    const colorById = new Map((await snapFor(f.guest)).profiles.map((p) => [p.id, p.color]))
-    expect(colorById.get(f.user.id)).toBe(f.user.color)
-    expect(unsafe.map((p) => colorById.get(p.id))).toEqual(['#8A8F98', '#8A8F98', '#8A8F98'])
     // the read does not rewrite the row
-    const stored = await t.run(async (ctx) => ctx.db.get(unsafe[0]._id))
-    expect(stored?.color).toBe('url(https://example.test/p.png)')
+    const stored = await t.run(async (ctx) => ctx.db.get(f.guest._id))
+    expect(stored?.color).toBe('#fff')
   })
 
   it('viewer reaches the family via the grant only — dropping the grant drops everything', async () => {
@@ -287,7 +290,7 @@ describe('billing redaction', () => {
 })
 
 describe('projectAccess', () => {
-  it("carries EVERYONE'S grants on visible projects and nothing on hidden ones", async () => {
+  it("the projects part carries EVERYONE'S grants on visible projects and nothing on hidden ones, and the workspace keeps the caller's own", async () => {
     await t.run(async (ctx) => {
       await ctx.db.insert('project_access', {
         project_id: f.hidden.id,
@@ -295,14 +298,18 @@ describe('projectAccess', () => {
         level: 'user',
       })
     })
-    const guest = await snapFor(f.guest)
-    // the viewer's grant arrives in the guest's snapshot — not "own grants"
+    const part = await projectsPartFor(f.guest)
+    if (part.state !== 'ok') throw new Error(part.state)
+    // the viewer's grant arrives in the guest's part, not only their own
     expect(
-      guest.access.some((a) => a.profile_id === f.viewer.id && a.project_id === f.meta.id),
+      part.access.some((a) => a.profile_id === f.viewer.id && a.project_id === f.meta.id),
     ).toBe(true)
-    expect(guest.access.some((a) => a.project_id === f.hidden.id)).toBe(false)
+    expect(part.access.some((a) => a.project_id === f.hidden.id)).toBe(false)
+    // the join keeps the guest's own grant alone (lib/workspaceJoin.ts)
+    expect((await snapFor(f.guest)).access.map((a) => a.profile_id)).toEqual([f.guest.id])
 
-    const admin = await snapFor(f.admin)
+    const admin = await projectsPartFor(f.admin)
+    if (admin.state !== 'ok') throw new Error(admin.state)
     expect(
       admin.access.some((a) => a.project_id === f.hidden.id && a.profile_id === f.agent.id),
     ).toBe(true)
@@ -509,7 +516,8 @@ describe('org_load', () => {
       remaining_hours: 2,
       archived_at: NOW,
     })
-    await plantIssue(t, { ...inSub, ...scheduled, assignee_id: uuid(), remaining_hours: 9 }) // dangling assignee
+    const dangling = uuid()
+    await plantIssue(t, { ...inSub, ...scheduled, assignee_id: dangling, remaining_hours: 9 }) // dangling assignee
     await t.run(async (ctx) => {
       const sub2 = await ctx.db
         .query('projects')
@@ -544,7 +552,8 @@ describe('org_load', () => {
     expect(appLoadRows(snap).some((r) => r.owner_id === inactive.id && r.remaining === 8)).toBe(
       true,
     )
-    expect(appLoadRows(snap).some((r) => r.remaining === 9)).toBe(false)
+    // the app files no row for an owner people.byIds says is not there
+    expect(appLoadRows(snap, new Set([dangling])).some((r) => r.remaining === 9)).toBe(false)
   })
 
   it('the owner carries the load: the reviewer while In Review with one set, else the assignee', async () => {
@@ -1478,8 +1487,10 @@ describe('navigation-only parents', () => {
       'type',
     ])
     expect(snap.issues.some((i) => i.id === sibling.id)).toBe(false)
-    expect(new Set(snap.access.map((a) => a.project_id))).toEqual(new Set([f.meta.id, f.sub.id]))
-    expect(snap.access.some((a) => a.profile_id === siblingOnly.id)).toBe(false)
+    const sent = await projectsPartFor(subOnly)
+    if (sent.state !== 'ok') throw new Error(sent.state)
+    expect(new Set(sent.access.map((a) => a.project_id))).toEqual(new Set([f.meta.id, f.sub.id]))
+    expect(sent.access.some((a) => a.profile_id === siblingOnly.id)).toBe(false)
     expect(snap.teamAccess.some((g) => g.project_id === f.sub2.id)).toBe(false)
     expect(snap.teamAccess).toContainEqual({
       project_id: f.meta.id,

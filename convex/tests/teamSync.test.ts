@@ -32,7 +32,6 @@ import {
   tick,
   uuid,
   withReadingAdmin,
-  workspaceOf,
 } from './helpers.setup'
 import { orgProjectView } from './orgProjectView.setup'
 
@@ -307,19 +306,6 @@ describe('teamSync.stamp', () => {
     expect(await stampOf(t, f.admin.id)).not.toHaveProperty('sync_since')
     await firstStamp(f.agent, back(20))
     expect(await stampOf(t, f.agent.id)).not.toHaveProperty('sync_since')
-  })
-
-  it("the stamp rides every member's snapshot profile row", async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    await stamp(t, f, f.admin, f.user.id)
-    await setStamp(t, f.user, (await stampOf(t, f.user.id)).sync_at!, NOW)
-    const row = await stampOf(t, f.user.id)
-    const snap = await workspaceOf(as(t, f.viewer))
-    const shipped = snap?.profiles.find((p) => p.id === f.user.id)
-    expect(shipped?.sync_at).toBe(row.sync_at)
-    expect(shipped?.sync_since).toBe(NOW)
-    expect(snap?.profiles.find((p) => p.id === f.admin.id)).not.toHaveProperty('sync_at')
   })
 })
 

@@ -751,7 +751,8 @@ describe("a person's page and the agents'", () => {
           : answer
       await board.answer()
       await settle()
-      expect(board.P.user(board.snapshot.profiles[0].id)?.sync ?? null).toBeNull()
+      // the store holds no stamp of anyone; the agenda answers them
+      expect(board.P.user(board.snapshot.profiles[0].id)).not.toHaveProperty('sync')
       expect(done()).toHaveLength(0)
     },
     BOARD_TEST_TIMEOUT,

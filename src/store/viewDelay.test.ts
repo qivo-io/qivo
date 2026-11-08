@@ -78,6 +78,7 @@ function ctx(
     heldSpans: (owner) => held[owner] ?? [],
     viewRows: () => views,
     capacity: () => 40,
+    capacityWaits: () => false,
     projectLive: () => true,
     orgOf: () => 'org',
   }
@@ -119,6 +120,21 @@ describe("a view task's delay", () => {
     expect(viewDelay(t, ctx([t], {}))).toBeNull()
     for (const state of ['unavailable', 'failed', 'capped'] as const)
       expect(viewDelay(t, ctx([t], { ana: { state } }))).toBe(DELAY_UNKNOWN)
+  })
+
+  it('waits without a mark while the owner’s face brings their week after the load, and says unknown once it cannot', () => {
+    const t = row('t', 'ana')
+    const load = { ana: ok([]) }
+    // the load answered first; the face that brings Ana's week is on its way
+    const waiting = { ...ctx([t], load), capacity: () => undefined, capacityWaits: () => true }
+    expect(viewDelay(t, waiting)).toBeNull()
+    // the face's read failed, or brought a name alone
+    const failed = { ...waiting, capacityWaits: () => false }
+    expect(viewDelay(t, failed)).toBe(DELAY_UNKNOWN)
+    // the face arrived
+    expect(viewDelay(t, { ...waiting, capacity: () => 40, capacityWaits: () => false })).toBe('ok')
+    // a load it cannot read is unknown, whatever the face does
+    expect(viewDelay(t, { ...waiting, load: () => ({ state: 'failed' }) })).toBe(DELAY_UNKNOWN)
   })
 
   it('judges against the load: on track when it fits, late when other work fills the weeks', () => {

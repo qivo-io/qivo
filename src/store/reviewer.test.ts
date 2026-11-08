@@ -1,8 +1,8 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Workspace } from '../../convex/lib/workspaceJoin'
+import type { Whole } from './guard/liveDouble.setup'
 
-type Snapshot = Workspace
+type Snapshot = Whole
 type Planner = typeof import('./planner')['P']
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))

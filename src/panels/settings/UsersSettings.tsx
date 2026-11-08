@@ -20,7 +20,10 @@
    Checking keys… while its read waits. A row whose name, address or hours
    are being typed or wait for the server's answer to their save, an agent
    whose key panel is open and a person added on this visit stay on screen
-   through a search or a page move.
+   through a search or a page move. Such a kept row shows the row it last
+   showed with, a page's answer or what the add sent, with the values the
+   server accepted for it since laid over, as no paint or read brings them,
+   so its next write sends what it shows.
    Leaving the page drops every answer; the page remembers only its search
    and page starts (usersKept). */
 import React, { useEffect as useEffectS, useRef as useRefS, useState as useStateS } from 'react'
@@ -46,6 +49,7 @@ import { useUpdateBlocker } from '../../lib/updateSafety'
 import { useConfirmArm } from '../../lib/useConfirmArm'
 import { useViewVisibility } from '../../lib/viewVisibility'
 import type {
+  AddedPerson,
   AgentKeysRow,
   NewUserInput,
   PeoplePageAnswer,
@@ -80,7 +84,8 @@ type PageReady = Extract<PeoplePageAnswer, { state: 'ready' }>
 
 /** The store's profile of `id` in the home organization, or undefined,
     which a row paints over the answer so this session's writes show at
-    once, and which keeps an "Added" row on screen. */
+    once. The store holds only the signed-in person's own seats, so for
+    anyone else a row shows the page's answer. */
 const held = (id: string): UserVM | undefined => {
   const user = P.user(id)
   return user && user.org === P.homeOrg ? user : undefined
@@ -380,6 +385,9 @@ type RowContext = {
       and once the server accepted it, then runs `done`; a refused one
       shows the row again. */
   onRemove: (id: string, removal: Promise<boolean>, done: () => void) => void
+  /** Keeps `fields`, the values the server accepted for person `id`, for
+      the row a kept row shows (UserControls.tsx OnAccepted). */
+  learn: (id: string, fields: Partial<SettingsPersonRow>) => void
 }
 
 /* One person or agent of the list, by id. While the store holds the
@@ -414,6 +422,7 @@ function UserRow({
   const blocked = isSelf || lastAdmin || waiting
   const arm = ctx.confirm.armed === `u:${id}`
   const open = ctx.openKeys === id
+  const learn = (fields: Partial<SettingsPersonRow>) => ctx.learn(id, fields)
   return (
     <>
       <div
@@ -425,7 +434,13 @@ function UserRow({
       >
         <RowFace id={id} />
         <div className="[flex:1] [min-width:0]">
-          <UserName user={u} isSelf={isSelf} waiting={waiting} onUnsaved={ctx.onUnsaved('name')} />
+          <UserName
+            user={u}
+            isSelf={isSelf}
+            waiting={waiting}
+            onUnsaved={ctx.onUnsaved('name')}
+            onAccepted={learn}
+          />
           {/* an agent has no address to show or edit; what stands in its
               place is the thing it actually signs in with */}
           {u.isAgent ? (
@@ -436,7 +451,12 @@ function UserRow({
               <KeyLineText line={ctx.keyLine(id)} />
             </div>
           ) : (
-            <UserEmail user={u} waiting={waiting} onUnsaved={ctx.onUnsaved('email')} />
+            <UserEmail
+              user={u}
+              waiting={waiting}
+              onUnsaved={ctx.onUnsaved('email')}
+              onAccepted={learn}
+            />
           )}
           {note && (
             <div data-kept-note className="pl-1.5 text-xs text-text-2 italic">
@@ -450,6 +470,7 @@ function UserRow({
           canEdit={!waiting}
           waiting={waiting}
           onUnsaved={ctx.onUnsaved('hours')}
+          onAccepted={learn}
         />
         {u.isAgent && !DEMO_MODE && (
           <Button
@@ -465,8 +486,16 @@ function UserRow({
             <Icon name="zap" size={16} />
           </Button>
         )}
-        {ctx.rightColumn && <ProjectRightCell user={u} labelled={labelled} waiting={waiting} />}
-        <UserRoleSelect user={u} isSelf={isSelf} lastAdmin={lastAdmin} waiting={waiting} />
+        {ctx.rightColumn && (
+          <ProjectRightCell user={u} labelled={labelled} waiting={waiting} onAccepted={learn} />
+        )}
+        <UserRoleSelect
+          user={u}
+          isSelf={isSelf}
+          lastAdmin={lastAdmin}
+          waiting={waiting}
+          onAccepted={learn}
+        />
         <Button
           type="button"
           variant="ghost"
@@ -588,6 +617,7 @@ function GuestRow({
         canEdit={!waiting}
         waiting={waiting}
         onUnsaved={ctx.onUnsaved('hours')}
+        onAccepted={(fields) => ctx.learn(id, fields)}
       />
       {/* revoking the seat removes every grant with it; the two clicks
           match every other destructive control */}
@@ -781,8 +811,15 @@ export function OrgUsersPage({
     : (pageAnswer?.admins ?? null)
 
   /* ---- the rows kept on screen ---- */
-  // the people this visit added, which leave once a page has held them
-  const [added, setAdded] = useStateS<readonly string[]>([])
+  // the people this visit added, each as the page sent them (P.addUser's
+  // row) with whether the server created them yet. One shows from that
+  // row while the create is on its way and after the server accepted it,
+  // until a page holds them, the page is left, or, once created, the
+  // server says they are gone (P.person); a refused create leaves at once
+  const [added, setAdded] = useStateS<ReadonlyMap<string, { row: AddedPerson; saved: boolean }>>(
+    () => new Map(),
+  )
+  const [adding, setAdding] = useStateS(false)
   // the fields that hold their row, with unsaved text or a save the server
   // has not answered (UserControls.tsx useHeldRow), by person
   const [drafts, setDrafts] = useStateS<ReadonlyMap<string, ReadonlySet<string>>>(() => new Map())
@@ -798,9 +835,34 @@ export function OrgUsersPage({
   const pageRows = page.rows
   for (const row of pageRows) known.current.set(row.id, row)
   const onPage = new Set(pageRows.map((r) => r.id))
+  for (const [id, entry] of added) if (!onPage.has(id)) known.current.set(id, entry.row)
+  // the values the server accepted for people a kept row shows, by id,
+  // which no paint or read brings to its row; a page that holds the
+  // person shows its own answer, which holds them, instead
+  const [learned, setLearned] = useStateS<ReadonlyMap<string, Partial<SettingsPersonRow>>>(
+    () => new Map(),
+  )
+  /** The row kept person `id` shows, the one they last showed with and
+      what the server accepted for them since. */
+  const keptRow = (id: string): SettingsPersonRow | null => {
+    const row = known.current.get(id)
+    if (!row) return null
+    const over = learned.get(id)
+    return over ? { ...row, ...over } : row
+  }
   useEffectS(() => {
-    const seen = added.filter((id) => onPage.has(id) || !held(id))
-    if (seen.length > 0) setAdded((was) => was.filter((id) => !seen.includes(id)))
+    const seen = [...added]
+      .filter(
+        ([id, entry]) =>
+          onPage.has(id) || (entry.saved && P.person(id, P.homeOrg)?.state === 'gone'),
+      )
+      .map(([id]) => id)
+    if (seen.length > 0)
+      setAdded((was) => {
+        const next = new Map(was)
+        for (const id of seen) next.delete(id)
+        return next
+      })
   })
   const onUnsaved = React.useCallback(
     (field: string) => (id: string, unsaved: boolean) =>
@@ -824,7 +886,7 @@ export function OrgUsersPage({
     keptIds.push({ id, note })
   }
   if (!personPage) {
-    for (const id of added) if (held(id)) keep(id, 'Added')
+    for (const id of added.keys()) keep(id, 'Added')
     for (const id of drafts.keys()) keep(id, 'Not on this page')
     if (focused !== null && known.current.has(focused)) keep(focused, 'Not on this page')
     if (openKeys !== null) keep(openKeys, 'Not on this page')
@@ -832,6 +894,16 @@ export function OrgUsersPage({
   // forget the answers of rows neither the page nor a kept row shows
   for (const id of known.current.keys())
     if (!onPage.has(id) && !keptIds.some((k) => k.id === id)) known.current.delete(id)
+  // and what was accepted for a person a page holds or no row shows
+  useEffectS(() => {
+    const done = [...learned.keys()].filter((id) => onPage.has(id) || !known.current.has(id))
+    if (done.length > 0)
+      setLearned((was) => {
+        const next = new Map(was)
+        for (const id of done) next.delete(id)
+        return next
+      })
+  })
   // the people the page shows, named while it shows: the kept rows, then
   // the page's rows, or the phone page's one person
   usePeople(
@@ -943,6 +1015,7 @@ export function OrgUsersPage({
         })
       })
     },
+    learn: (id, fields) => setLearned((was) => new Map(was).set(id, { ...was.get(id), ...fields })),
   }
 
   /* ---- the add form ---- */
@@ -971,9 +1044,13 @@ export function OrgUsersPage({
   const emailNoteId = React.useId()
   // counted as the server stores it, with whitespace runs collapsed
   const nameTooLong = overLimit(LIMITS.personName, cleanName(addName))
+  // the add form as it reads now, for a create that answers after the
+  // person typed on
+  const formNow = useRefS({ name: addName, email: addEmail, role: addRole })
+  formNow.current = { name: addName, email: addEmail, role: addRole }
   const addUser = async () => {
-    if (!addName.trim() || nameTooLong || emailBad || emailMissing) return
-    // Preserve the entered fields when addUser refuses a duplicate seat.
+    if (!addName.trim() || nameTooLong || emailBad || emailMissing || adding) return
+    const submitted = { name: addName, email: addEmail, role: addRole }
     const made = P.addUser(
       agentMode
         ? { name: cleanName(addName), kind: 'agent', orgRole: addRole }
@@ -981,22 +1058,40 @@ export function OrgUsersPage({
     )
     if (!made) return
     const name = cleanName(addName)
-    setAddName('')
-    setAddEmail('')
-    setAddRole('user')
-    // shown at the top until a page holds them
-    setAdded((was) => [...was, made])
+    // shown at the top from what the page sent until a page holds them
+    setAdded((was) => new Map(was).set(made.id, { row: made.row, saved: false }))
+    setAdding(true)
+    const saved = await made.saved
+    setAdding(false)
+    // a refusal, such as an address that already has a seat, which the
+    // server checks over the whole organization, is toasted with its
+    // sentence; the entered fields stay so it can be sent again
+    setAdded((was) => {
+      if (!was.has(made.id)) return was
+      const next = new Map(was)
+      if (saved) next.set(made.id, { row: made.row, saved: true })
+      else next.delete(made.id)
+      return next
+    })
+    if (!saved) return
+    // the fields that still hold the person just added clear; a next
+    // person typed while the create waited stays, with the role on screen
+    const now = formNow.current
+    const typedOn = now.name !== submitted.name || now.email !== submitted.email
+    if (now.name === submitted.name) setAddName('')
+    if (now.email === submitted.email) setAddEmail('')
+    if (!typedOn && now.role === submitted.role) setAddRole('user')
     if (!agentMode) {
       window.showToast?.(`${name} added to the organization`)
       return
     }
     // An agent with no key cannot sign in, so creating one is a single act:
     // the agent AND the key it authenticates with, revealed once, here.
-    setMinting((was) => new Set(was).add(made))
-    const res = await P.createAgentKey(made, 'Default key')
+    setMinting((was) => new Set(was).add(made.id))
+    const res = await P.createAgentKey(made.id, 'Default key')
     setMinting((was) => {
       const next = new Set(was)
-      next.delete(made)
+      next.delete(made.id)
       return next
     })
     onKeysChanged()
@@ -1005,7 +1100,7 @@ export function OrgUsersPage({
         `${name} added, but its key could not be created. Mint one below.`,
         'error',
       )
-      setOpenKeys(made)
+      setOpenKeys(made.id)
       return
     }
     setFreshAgent({ name, secret: res.secret })
@@ -1122,7 +1217,7 @@ export function OrgUsersPage({
   const pageGuests = pageRows.filter((r) => r.org_role === 'guest')
   const items: React.ReactNode[] = []
   if (rightColumn && !narrow) items.push(<ProjectRightHeader key="project-right-header" />)
-  for (const k of keptIds) items.push(rowFor(k.id, known.current.get(k.id) ?? null, k.note, false))
+  for (const k of keptIds) items.push(rowFor(k.id, keptRow(k.id), k.note, false))
   for (const row of pagePeople) items.push(rowFor(row.id, row, null, true))
   if (pageGuests.length > 0) {
     items.push(
@@ -1299,7 +1394,8 @@ export function OrgUsersPage({
                 <Button
                   type="button"
                   data-add-user
-                  disabled={!addName.trim() || nameTooLong || emailBad || emailMissing}
+                  disabled={!addName.trim() || nameTooLong || emailBad || emailMissing || adding}
+                  aria-busy={adding || undefined}
                   title={
                     emailBad
                       ? emailWhy

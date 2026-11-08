@@ -5,6 +5,11 @@
    changes one task costs one cheap comparison per row, and everything built
    from the rows can tell exactly what changed (Changes).
 
+   The profiles, teams and team memberships are the signed-in person's own,
+   which the root part sends (convex/lib/workspaceJoin.ts joinParts); no
+   section holds another person or a label, which the views read by id or a
+   batch at a time.
+
    A delivery is staged when it arrives and applied at the start of the next
    workspace paint (store/rowMap.ts), so the rows on screen stay exactly what
    was last painted until then. Rows are frozen in every build, so code that
@@ -25,7 +30,6 @@ const KEYED = {
   projects: (r: Snapshot['projects'][number]) => r.id,
   issues: (r: Snapshot['issues'][number]) => r.id,
   links: (r: Snapshot['links'][number]) => r.id,
-  labels: (r: Snapshot['labels'][number]) => r.id,
   attachments: (r: Snapshot['attachments'][number]) => r.id,
   messages: (r: Snapshot['messages'][number]) => r.id,
 }
@@ -55,7 +59,6 @@ const SAME_KEY: Record<keyof typeof KEYED | keyof typeof LISTED, (a: never, b: n
     projects: byId,
     issues: byId,
     links: byId,
-    labels: byId,
     attachments: byId,
     messages: byId,
     teamMembers: (a: RowOf<'teamMembers'>, b: RowOf<'teamMembers'>) =>

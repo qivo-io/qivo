@@ -141,8 +141,9 @@ export type PersonSettingsAnswer =
  * (`avatar`, null for none), which is the picture's version the app mints,
  * keys and keeps it by, the demo's sample portrait (`sample_avatar`, null
  * for none), and the plannable hours as stored (null for an agent and for a
- * seat that stores none, which plans the organization's default), the same
- * fields the workspace's people part sends every seat (people.byIds). */
+ * seat that stores none, which plans the organization's default), the
+ * fields the workspace's people part sent every seat before it was removed
+ * (people.byIds). */
 export type PersonFaceRow = PersonRow & {
   color: string
   initials: string

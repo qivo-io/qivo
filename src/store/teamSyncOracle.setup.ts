@@ -24,7 +24,8 @@ import {
   syncRows,
   syncWalk,
 } from '../lib/teamSync'
-import { type IssueVM, P, type ProjectVM, type TeamVM, type UserVM } from './planner'
+import type { Whole } from './guard/liveDouble.setup'
+import { type IssueVM, P, type ProjectVM, type TeamVM } from './planner'
 
 export type SyncProject = Pick<
   ProjectVM,
@@ -126,24 +127,49 @@ export function blockersOf(
 
 /** The page's scope world (TeamSync.tsx): the home organization, the
  * store's projects and teams and what the person can see. */
-export const worldOf = (): ScopeWorld => ({
+export const worldOf = (whole: Pick<Whole, 'teams'>): ScopeWorld => ({
   homeOrg: P.homeOrg,
   projects: P.projects,
-  teams: P.teams,
+  // every team of the server's data, as the agenda resolves a scope by
+  // them; the store holds the person's own teams alone
+  teams: whole.teams.map((t) => ({ id: t.id, org: t.org_id })),
   canSee: (id) => P.canSee(id),
 })
+
+/** A person of the server's data as the oracle walks them: their name,
+    kind, teams and Team sync stamp, which the store holds for the person's
+    own seats alone. */
+export type OracleUser = SyncUser & { teams: string[]; sync: { at: string; since?: string } | null }
+
+/** The people of the server's data `whole` in the home organization, as
+    the oracle walks them. */
+export function peopleOf(whole: Pick<Whole, 'profiles' | 'teamMembers'>): OracleUser[] {
+  return whole.profiles
+    .filter((p) => p.org_id === P.homeOrg)
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      isAgent: p.kind === 'agent',
+      teams: whole.teamMembers.filter((m) => m.profile_id === p.id).map((m) => m.team_id),
+      sync: p.sync_at === undefined ? null : { at: p.sync_at, since: p.sync_since },
+    }))
+}
 
 /** One meeting of `scope` as the page derived it at `now` (ms): its
  * sub-projects and top-level projects, its rows, the walk's people, the
  * opening's Needs an owner, each walker's Done since from their exact
  * reading point, each row's blockers and banner verdict, each walker's
  * week hours (P.weekLoadOf) and the sub-projects the person may edit. */
-export function meetingOf(scope: SyncScope, now: number) {
-  const world = worldOf()
+export function meetingOf(
+  scope: SyncScope,
+  now: number,
+  whole: Pick<Whole, 'teams' | 'profiles' | 'teamMembers'>,
+) {
+  const world = worldOf(whole)
   const subIds = scopeProjectIds(scope, world)
   const rows = syncRows(P.issues, subIds)
-  const { humans, agents } = syncRoster(rows, P.users, scope)
-  const walkers: UserVM[] = [...humans, ...agents]
+  const { humans, agents } = syncRoster(rows, peopleOf(whole), scope)
+  const walkers: OracleUser[] = [...humans, ...agents]
   const weekStart = P.org.weekStart ?? 1
   const doneOf = new Map(
     walkers.map((u) => [
@@ -158,10 +184,10 @@ export function meetingOf(scope: SyncScope, now: number) {
     walkers,
     asks: needsOwner(P.issues, subIds, syncDay(now)),
     doneOf,
-    sinceOf: (u: UserVM) => syncSince(u.sync ?? null, now, weekStart),
+    sinceOf: (u: OracleUser) => syncSince(u.sync ?? null, now, weekStart),
     blockers: (it: IssueVM) => blockersOf(it, P.issueById),
     verdict: (it: IssueVM) => bannerVerdict(P.delayOf(it), P.tracksDelay(it)),
-    week: (u: UserVM) => P.weekLoadOf(u.id, P.TODAY_WEEK),
+    week: (u: OracleUser) => P.weekLoadOf(u.id, P.TODAY_WEEK),
     editable: [...subIds].filter((id) => P.canWrite(id)),
   }
 }

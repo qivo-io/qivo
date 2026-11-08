@@ -27,7 +27,7 @@ import {
   readableLiveSubProjects,
   type T,
   uuid,
-  workspaceOf,
+  wholeOf,
 } from '../../convex/tests/helpers.setup'
 import { keyOrg } from '../../convex/tests/nameKeys.setup'
 import { plantNorthstar } from '../../convex/tests/northstar.setup'
@@ -201,7 +201,7 @@ async function northstar(o: { people?: number } = {}) {
     return { people, guest }
   })
   await keyOrg(t, org.id)
-  const ws = await workspaceOf(as(t, nora))
+  const ws = await wholeOf(t, nora)
   if (!ws) throw new Error('no workspace')
   return { t, org, nora, profiles, ...planted, ws }
 }
@@ -295,7 +295,7 @@ describe("the Users page's stand-in", () => {
     // alone
     expect(await readableLiveSubProjects(t, guest)).toBe(200)
     await keyOrg(t, org.id)
-    const own = await workspaceOf(as(t, nora))
+    const own = await wholeOf(t, nora)
     if (!own) throw new Error('no workspace')
     const ws = await wholeOrg(t, own, org.id)
     const walk = await same(t, nora, ws, 'people:settingsPage', { org_id: org.id }, true)
@@ -346,7 +346,7 @@ describe("the Users page's stand-in", () => {
       return out
     })
     await keyOrg(t, org.id)
-    const ws = await workspaceOf(as(t, nora))
+    const ws = await wholeOf(t, nora)
     if (!ws) throw new Error('no workspace')
     const keys: StandInKey[] = await t.run(async (ctx) =>
       (await ctx.db.query('agent_keys').collect()).map((k) => ({
@@ -450,7 +450,7 @@ describe("the Users page's stand-in", () => {
       ],
     }
     await t.run((ctx) => ctx.db.patch(claimed._id, { auth_user_id: 'auth_cleo' }))
-    const ws = await workspaceOf(as(t, nora))
+    const ws = await wholeOf(t, nora)
     if (!ws) throw new Error('no workspace')
     const named = [invited.id, claimed.id, foreign.id, 'no-such-seat']
     const walk = await same(
@@ -469,7 +469,7 @@ describe("the Users page's stand-in", () => {
     await same(t, nora, ws, 'invites:deliveries', { org_id: org.id, profile_ids: [] }, false, extra)
     // a standard user sees only the sends their own change caused
     const zoe = await plantLogin(t, people[0])
-    const theirs = await workspaceOf(as(t, zoe))
+    const theirs = await wholeOf(t, zoe)
     if (!theirs) throw new Error('no workspace')
     await same(
       t,
@@ -492,7 +492,7 @@ describe("the Users page's stand-in", () => {
           .unique()
         if (row) await ctx.db.patch(row._id, { project_creators: setting })
       })
-      const ws = await workspaceOf(as(t, nora))
+      const ws = await wholeOf(t, nora)
       if (!ws) throw new Error('no workspace')
       const walk = await same(t, nora, ws, 'orgs:projectCreators', { org_id: org.id })
       expect(walk.server[0]).toMatchObject({ state: 'ok', setting })
@@ -511,7 +511,7 @@ describe("the Users page's stand-in", () => {
       }
     }
     const zoe = await plantLogin(t, people[0])
-    const theirs = await workspaceOf(as(t, zoe))
+    const theirs = await wholeOf(t, zoe)
     if (!theirs) throw new Error('no workspace')
     const base = { org_id: org.id }
     for (const [name, args] of [

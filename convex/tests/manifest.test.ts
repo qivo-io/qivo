@@ -693,6 +693,7 @@ people:settingsPage query public {"type":"object","value":{"search":{"fieldType"
 pickers:canOwn query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"field":{"fieldType":{"type":"union","value":[{"type":"literal","value":"assignee"},{"type":"literal","value":"reviewer"},{"type":"literal","value":"recipient"}]},"optional":false},"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 pickers:mentions query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 pickers:syncRecipients query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+pickers:taskFollowers query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 pickers:taskOwners query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"field":{"fieldType":{"type":"union","value":[{"type":"literal","value":"assignee"},{"type":"literal","value":"reviewer"}]},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 planning:assigneeLoad query public {"type":"object","value":{"assignee_id":{"fieldType":{"type":"string"},"optional":false}}}
 planning:ownerLoads query public {"type":"object","value":{"owner_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -763,6 +764,7 @@ teams:create mutation public {"type":"object","value":{"id":{"fieldType":{"type"
 teams:deleteDeep mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"on_held_tasks":{"fieldType":{"type":"union","value":[{"type":"literal","value":"leave"},{"type":"literal","value":"keep_as_viewer"},{"type":"object","value":{"reassign_to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}]},"optional":true},"expected":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"track_delay_default":{"fieldType":{"type":"boolean"},"optional":true}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teams:get query public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teams:members query public {"type":"object","value":{"team_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+teams:picker query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teams:removeMember mutation public {"type":"object","value":{"team_id":{"fieldType":{"type":"string"},"optional":false},"profile_id":{"fieldType":{"type":"string"},"optional":false},"on_held_tasks":{"fieldType":{"type":"union","value":[{"type":"literal","value":"leave"},{"type":"literal","value":"keep_as_viewer"},{"type":"object","value":{"reassign_to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}]},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teams:setLeader mutation public {"type":"object","value":{"team_id":{"fieldType":{"type":"string"},"optional":false},"profile_id":{"fieldType":{"type":"string"},"optional":false},"is_leader":{"fieldType":{"type":"boolean"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teams:settingsPage query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -821,11 +823,9 @@ webhooks:remove mutation internal {"type":"object","value":{"owner":{"fieldType"
 webhooks:removeOrganization mutation internal {"type":"object","value":{"owner":{"fieldType":{"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"credential_table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"agent_keys"},{"type":"literal","value":"mcp_tokens"},{"type":"literal","value":"oauth_connections"}]},"optional":false},"credential_id":{"fieldType":{"type":"string"},"optional":false},"credential_row_id":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false}}}
 webhooks:save mutation internal {"type":"object","value":{"owner":{"fieldType":{"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"credential_table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"agent_keys"},{"type":"literal","value":"mcp_tokens"},{"type":"literal","value":"oauth_connections"}]},"optional":false},"credential_id":{"fieldType":{"type":"string"},"optional":false},"credential_row_id":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"union","value":[{"type":"literal","value":"task.created"},{"type":"literal","value":"task.updated"},{"type":"literal","value":"task.deleted"},{"type":"literal","value":"task.restored"},{"type":"literal","value":"comment.created"}]},"optional":false},"filters":{"fieldType":{"type":"object","value":{"task_id":{"fieldType":{"type":"string"},"optional":true},"project_id":{"fieldType":{"type":"string"},"optional":true}}},"optional":false},"url":{"fieldType":{"type":"string"},"optional":false},"encrypted_secret":{"fieldType":{"type":"string"},"optional":false},"secret_hash":{"fieldType":{"type":"string"},"optional":true},"legacy_secret_hash":{"fieldType":{"type":"string"},"optional":true},"expires_at":{"fieldType":{"type":"number"},"optional":true}}}
 webhooks:sweep mutation internal {"type":"object","value":{}}
-workspace:catalog query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 workspace:inbox query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-workspace:people query public {"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 workspace:projects query public {"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-workspace:root query public {"type":"object","value":{"seatless":{"fieldType":{"type":"literal","value":"all"},"optional":true}}}
+workspace:root query public {"type":"object","value":{}}
 workspace:tasks query public {"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 `
   .trim()
@@ -1229,11 +1229,14 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // whom Team sync's Mention window may notify about it, and a check of a
   // few people by id. Each runs the write's own gate and rule, and is read
   // once a batch, never subscribed. The editor's mention suggestions take
-  // the organization alone, for any seat there, as the people part does.
+  // the organization alone, for any seat there, as the people part did
+  // before it was removed; the follower popover's Add list takes the task
+  // and runs the follow write's gate and rule.
   pickers: {
     canOwn: 'orgQuery',
     mentions: 'orgQuery',
     syncRecipients: 'orgQuery',
+    taskFollowers: 'orgQuery',
     taskOwners: 'orgQuery',
   },
   // Removing a person's or team's access stays open to org admins during a
@@ -1340,6 +1343,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     get: 'orgQuery',
     members: 'orgQuery',
     addable: 'orgQuery',
+    picker: 'orgQuery',
   },
   // Revoking and deleting an agent key stay open to org admins during a
   // billing pause; creating one does not. agentKeys reads the keys of up to
@@ -1357,13 +1361,12 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     revokeMcpToken: 'authedMutation',
     deleteMcpToken: 'authedMutation',
   },
-  // The workspace in live parts. The root reads every seat of the login;
-  // each other part takes one organization and answers gone,
-  // without throwing, where the caller holds no seat.
+  // The workspace in live parts. The root reads every seat of the login,
+  // with the caller's own profiles, memberships and teams; each other part
+  // takes one organization and answers gone, without throwing, where the
+  // caller holds no seat.
   workspace: {
     root: 'authedQuery',
-    catalog: 'seatQuery',
-    people: 'seatQuery',
     projects: 'seatQuery',
     tasks: 'seatQuery',
     inbox: 'seatQuery',

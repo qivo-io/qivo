@@ -126,8 +126,7 @@ activity. Under **Comments** it adds that changes show only under **All** when
 your unread inbox updates include a change or a mention in the description.
 
 You can edit or delete your own comments. Project leads can moderate other
-people's comments. The edit indicator shows when and by whom a comment changed,
-including a **(project lead)** label when someone other than the author edited it.
+people's comments. The edit indicator shows when and by whom a comment changed.
 
 Use the pop-out beside **Description** or **Activity** to read that section
 in a separate window. It keeps the task's breadcrumb, title and ID, and the
@@ -346,8 +345,8 @@ above refuse, also for subtasks that are archived or that you cannot see.
 The current parent shows first so you can remove it, and so does each
 current subtask you can edit, also one stored in another project.
 Everyone assigned to or reviewing the task or its subtasks must be able to
-see the new parent and every task above it; otherwise Qivo refuses the parent and names the person
-and the subtask to reassign. The assignee and
+see the new parent and every task above it. Qivo checks this when you save
+and, when someone could not, refuses the parent and says what to change. The assignee and
 reviewer pickers on a subtask offer only people who can see every task above
 it. Removing a parent needs edit access to the subtask only. Adding or
 removing a link needs edit access to one of the two tasks and access to the
@@ -386,11 +385,11 @@ before moving. The same holds for each active subtask that moves with the
 task. Moving a group clears an ineligible reviewer instead of refusing the
 move for that reviewer. Everyone assigned to or reviewing a subtask that
 stays where it is needs at least View access at the
-destination, so they can still see the task. The dialog names each person
-who would lose access and keeps **Move** disabled until you give them access
-or reassign their subtask. A subtask in a project you cannot see is checked when you
-move, and Qivo refuses the move without naming the person. Switched-off
-people are not checked on the subtasks that stay.
+destination, so they can still see the task. Qivo checks everyone on the
+task and its subtasks when you choose **Move**, also on subtasks in projects
+you cannot see, and when someone would lose access it refuses the move and
+says what to change: give them access there, or change who works on that
+subtask. Switched-off people are not checked on the subtasks that stay.
 
 ## Archiving
 

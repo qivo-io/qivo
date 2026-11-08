@@ -12,14 +12,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Doc } from '../../convex/_generated/dataModel'
 import { managesIn } from '../../convex/lib/access'
 import {
-  as,
   newT,
   plantProject,
   plantSeat,
   type T,
   uuid,
+  wholeOf,
   withOrg,
-  workspaceOf,
 } from '../../convex/tests/helpers.setup'
 import type { Snapshot } from './plannerFixture.setup'
 
@@ -59,7 +58,7 @@ async function start(snap: Snapshot) {
 /** `profile`'s workspace with every project of their organization added, and
     no milestone beside it, as the store tests' whole carries them. */
 async function worldOf(t: T, profile: Doc<'profiles'>): Promise<Snapshot> {
-  const ws = await workspaceOf(as(t, profile))
+  const ws = await wholeOf(t, profile)
   if (ws === null) throw new Error(`no workspace for ${profile.name}`)
   const held = new Set(ws.projects.map((p) => p.id))
   const rest = await t.run((ctx) =>
@@ -120,22 +119,32 @@ describe('the store’s management rule', () => {
         .collect(),
     )
     const byId = new Map(projects.map((p) => [p.id, p]))
-    const P = await start(await worldOf(t, f.user))
     let manages = 0
     let refused = 0
-    for (const seat of [f.admin, f.user, f.guest, f.viewer, owen, inactive])
+    // each seat asks of itself, as the store holds no one else's rows; the
+    // switched-off admin has no login and no workspace, and the server
+    // gives them nothing (managesIn needs an active seat)
+    for (const seat of [f.admin, f.user, f.guest, f.viewer, owen]) {
+      const P = await start(await worldOf(t, seat))
       for (const p of projects) {
         const root = p.parent_id === undefined ? p : byId.get(p.parent_id)
         const server = root !== undefined && managesIn(seat, p, root)
-        expect(P.canManageOwnProjectAccess(p.id, seat.id), `${seat.name} on ${p.key}`).toBe(server)
+        expect(P.canManageOwnProjectAccess(p.id), `${seat.name} on ${p.key}`).toBe(server)
         if (server) manages++
         else refused++
       }
-    // the admin manages every project in a meta tree, Owen only his own,
-    // and nobody manages LOOSE or UNDER
-    expect(P.canManageOwnProjectAccess(loose.id, f.admin.id)).toBe(false)
-    expect(P.canManageOwnProjectAccess(f.hidden.id, f.admin.id)).toBe(true)
-    expect(P.levelOn(f.hidden.id, f.admin.id)).toBeNull()
+      if (seat === f.admin) {
+        // the admin manages every project in a meta tree, and nobody
+        // manages LOOSE or UNDER
+        expect(P.canManageOwnProjectAccess(loose.id)).toBe(false)
+        expect(P.canManageOwnProjectAccess(f.hidden.id)).toBe(true)
+        expect(P.levelOn(f.hidden.id)).toBeNull()
+      }
+    }
+    for (const p of projects) {
+      const root = p.parent_id === undefined ? p : byId.get(p.parent_id)
+      expect(root !== undefined && managesIn(inactive, p, root), `${inactive.name}`).toBe(false)
+    }
     expect(manages).toBeGreaterThan(5)
     expect(refused).toBeGreaterThan(5)
   })

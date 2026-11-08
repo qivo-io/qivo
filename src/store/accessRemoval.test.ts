@@ -79,8 +79,11 @@ const item = (
 
 /* The store's removal on the server's answers. Leo and Dan hold direct User
  * grants on the Work project; Ann reaches it through the Crew team's grant.
- * The signed-in Planner is an organization admin. The network answers the
- * preview with `preview` and records every query and write. */
+ * The signed-in Planner is an organization admin and the store holds
+ * nobody else and no team of theirs, so each change carries the
+ * organization and the names the page showed, as the Settings pages press
+ * them (grantRemoval, teamRemoval). The network answers the preview with
+ * `preview` and records every query and write. */
 describe('removing access through the server preview', () => {
   let P: Planner
   let requests: { name: string; args: Record<string, unknown> }[]
@@ -199,11 +202,22 @@ describe('removing access through the server preview', () => {
   })
 
   const vm = (uuid: string) => P.issues.find((it) => it.uuid === uuid)!
-  const user = (userId: string) => ({ kind: 'userGrant', projectId: work, userId }) as const
+  const shownName = (id: string) => `${id[0].toUpperCase()}${id.slice(1)} Person`
+  const user = (userId: string) =>
+    ({ kind: 'userGrant', projectId: work, userId, label: shownName(userId) }) as const
   const crewGrant = (projectId = work) =>
-    ({ kind: 'teamGrant', projectId, teamId: 'crew' }) as const
-  const leaving = (userId: string) => ({ kind: 'teamMember', teamId: 'crew', userId }) as const
-  const deleteCrew = { kind: 'deleteTeam', teamId: 'crew' } as const
+    ({ kind: 'teamGrant', projectId, teamId: 'crew', label: 'Crew' }) as const
+  const leaving = (userId: string) =>
+    ({
+      kind: 'teamMember',
+      teamId: 'crew',
+      userId,
+      orgId: org,
+      label: shownName(userId),
+      team: 'Crew',
+    }) as const
+  const deleteCrew = () =>
+    ({ kind: 'deleteTeam', teamId: 'crew', orgId: org, label: 'Crew' }) as const
   const shown = () => true
   const toasts = () => (window.showToast as ReturnType<typeof vi.fn>).mock.calls
   const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
@@ -245,7 +259,7 @@ describe('removing access through the server preview', () => {
       await load()
       await P.startRemoval(user('leo'), shown)
       await P.startRemoval(leaving('ann'), shown)
-      await P.previewRemoval(deleteCrew, 'dan')
+      await P.previewRemoval(deleteCrew(), 'dan')
       await P.reassignChoices(crewGrant(), '', null)
       await P.reassignChoices(crewGrant(), 'da', 'cursor')
       const removalReads = queries.filter((q) => q.name.startsWith('accessRemovals:'))
@@ -309,7 +323,7 @@ describe('removing access through the server preview', () => {
       expect(toasts().map(([text]) => text)).toEqual(
         Array(4).fill("Couldn't check which tasks this removal affects. Nothing was removed."),
       )
-      expect(P.levelOn(work, 'leo')).toBe('user')
+      // the store holds no one else's level; the requests say what changed
       // the check of a chosen person needs its answer too
       preview = async () => leoAnswer()
       expect(await P.previewRemoval(user('leo'), 'dan')).toBeNull()
@@ -321,7 +335,7 @@ describe('removing access through the server preview', () => {
         [user('leo'), 'Leo Person no longer has this access. Nothing was changed.'],
         [crewGrant(), 'The Crew team no longer has this access. Nothing was changed.'],
         [leaving('ann'), 'Ann Person has already left the Crew team. Nothing was changed.'],
-        [deleteCrew, 'The Crew team was already deleted. Nothing was changed.'],
+        [deleteCrew(), 'The Crew team was already deleted. Nothing was changed.'],
       ] as const) {
         preview = async () => ({ state: 'unavailable' })
         expect(await P.startRemoval(change, shown)).toBeNull()
@@ -337,16 +351,21 @@ describe('removing access through the server preview', () => {
       await load()
       const { teamRemoval, grantRemoval } = await import('./planner')
       for (const [change, said] of [
-        // a person and a team the store holds by other names: the change's
-        // label wins
+        // the names the page showed, the change's label and a member's team
         [{ ...user('leo'), label: 'Leo As Shown' }, 'Leo As Shown no longer has this access.'],
         [
-          teamRemoval('crew', 'ann', org, 'Ann As Shown'),
-          'Ann As Shown has already left the Crew team.',
+          teamRemoval('crew', 'ann', org, 'Ann As Shown', 'Crew As Shown'),
+          'Ann As Shown has already left the Crew As Shown team.',
         ],
         [
           teamRemoval('crew', null, org, 'Crew As Shown'),
           'The Crew As Shown team was already deleted.',
+        ],
+        // a member's team the page did not name, which the store does not
+        // hold either
+        [
+          teamRemoval('crew', 'ann', org, 'Ann As Shown'),
+          'Ann As Shown has already left the team.',
         ],
         // a person and a team the store does not hold, named only by the page
         [
@@ -389,7 +408,7 @@ describe('removing access through the server preview', () => {
       await load()
       for (const state of ['refused', 'too_large'] as const) {
         preview = async () => ({ state, message: 'only organization admins can delete teams' })
-        expect(await P.startRemoval(deleteCrew, shown)).toBeNull()
+        expect(await P.startRemoval(deleteCrew(), shown)).toBeNull()
         expect(window.showToast).toHaveBeenLastCalledWith(
           'Only organization admins can delete teams.',
           'error',
@@ -406,7 +425,7 @@ describe('removing access through the server preview', () => {
       expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
         ['projects:removeAccess', 'leave'],
       ])
-      expect(P.levelOn(work, 'leo')).toBeNull()
+      // the store holds no one else's level; the requests say what changed
     })
 
     it('opens the window with Keep as Viewer alone for a caller who may keep the people but not reassign', async () => {
@@ -470,8 +489,8 @@ describe('removing access through the server preview', () => {
       ;(window.showToast as ReturnType<typeof vi.fn>).mockClear()
       expect(await P.startRemoval(leaving('ann'), shown)).toBeNull()
       await vi.waitFor(() => expect(requests).toHaveLength(1))
-      // refused, rolled back, and no notice
-      await vi.waitFor(() => expect(P.user('ann')?.teams).toEqual(['crew']))
+      // refused with its toast, and no notice
+      await vi.waitFor(() => expect(toasts().map(([, tone]) => tone)).toContain('error'))
       expect(toasts().map(([, tone]) => tone)).not.toContain('info')
     })
 
@@ -491,7 +510,7 @@ describe('removing access through the server preview', () => {
           'info',
         ),
       )
-      expect(P.levelOn(work, 'leo')).toBeNull()
+      // the store holds no one else's level; the requests say what changed
       expect(vm('t1').assignee).toBe('leo')
       expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
         ['projects:removeAccess', 'leave'],
@@ -516,7 +535,7 @@ describe('removing access through the server preview', () => {
     it('keeps a person as a Viewer with their tasks, in one server write', async () => {
       await load()
       expect(await P.removeAccess(user('leo'), { keep: true }, leoAnswer())).toBe(true)
-      expect(P.levelOn(work, 'leo')).toBe('viewer')
+      // the store holds no one else's level; the requests say what changed
       expect(vm('t1').assignee).toBe('leo')
       expect(requests).toEqual([
         {
@@ -532,7 +551,7 @@ describe('removing access through the server preview', () => {
       // painted at once; a refusal re-adopts the server's rows
       expect(vm('t1').assignee).toBe('dan')
       expect(vm('t2').reviewer).toBe('dan')
-      expect(P.levelOn(work, 'leo')).toBeNull()
+      // the store holds no one else's level; the requests say what changed
       expect(await removed).toBe(true)
       expect(vm('t3').assignee).toBe('leo') // Done stays
       expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
@@ -575,7 +594,7 @@ describe('removing access through the server preview', () => {
     it('sends leave and paints the removal alone without a preview, or with one that lists nothing', async () => {
       await load()
       expect(await P.removeAccess(user('leo'), { keep: true })).toBe(true)
-      expect(P.levelOn(work, 'leo')).toBeNull()
+      // the store holds no one else's level; the requests say what changed
       expect(vm('t1').assignee).toBe('leo')
       expect(await P.removeAccess(user('dan'), { to: 'ann' }, answer())).toBe(true)
       expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
@@ -588,7 +607,7 @@ describe('removing access through the server preview', () => {
       await load()
       refused.add(work)
       expect(await P.removeAccess(user('leo'), { to: 'dan' }, leoAnswer())).toBe(false)
-      expect(P.levelOn(work, 'leo')).toBe('user')
+      // the store holds no one else's level; the requests say what changed
       expect(vm('t1').assignee).toBe('leo')
       expect(requests.map((r) => r.name)).toEqual(['projects:removeAccess'])
       expect(window.showToast).toHaveBeenCalledWith(
@@ -626,14 +645,14 @@ describe('removing access through the server preview', () => {
         'Leo Person keeps access, because not every task could be reassigned.',
         'error',
       )
-      expect(P.levelOn(work, 'leo')).toBe('user')
+      // the store holds no one else's level; the requests say what changed
       expect(vm('t1').assignee).toBe('leo')
     })
 
     it("paints a team's grant kept as Viewers on its project, and takes it away on a refusal", async () => {
       await load()
       expect(await P.removeAccess(crewGrant(), { keep: true }, annAnswer())).toBe(true)
-      expect(P.levelOn(work, 'ann')).toBe('viewer')
+      // the store holds no one else's level; the requests say what changed
       expect(P.project(work)?.teamAccess?.crew).toBeUndefined()
       expect(requests).toEqual([
         {
@@ -659,7 +678,6 @@ describe('removing access through the server preview', () => {
           }),
       )
       const removed = P.removeAccess(leaving('ann'), { keep: true }, annAnswer())
-      expect(P.user('ann')?.teams).toEqual([])
       expect(P.project(work)?.access?.ann).toBeUndefined()
       expect(vm('t4').assignee).toBe('ann')
       deliver((snap) => {
@@ -668,7 +686,7 @@ describe('removing access through the server preview', () => {
       })
       answered(null)
       expect(await removed).toBe(true)
-      expect(P.levelOn(work, 'ann')).toBe('viewer')
+      // the store holds no one else's level; the requests say what changed
       expect(requests).toEqual([
         {
           name: 'teams:removeMember',
@@ -689,7 +707,6 @@ describe('removing access through the server preview', () => {
         ['teams:removeMember', { reassign_to: 'dan' }],
       ])
       expect(vm('t4').assignee).toBe('dan')
-      expect(P.user('ann')?.teams).toEqual([])
     })
 
     it('keeps the member in the team and every task when the server refuses', async () => {
@@ -697,7 +714,7 @@ describe('removing access through the server preview', () => {
       refused.add('ann')
       expect(await P.removeAccess(leaving('ann'), { keep: true }, annAnswer())).toBe(false)
       expect(requests.map((r) => r.name)).toEqual(['teams:removeMember'])
-      expect(P.user('ann')?.teams).toEqual(['crew'])
+      expect(vm('t4').assignee).toBe('ann')
       expect(window.showToast).toHaveBeenCalledWith(
         'Ann Person stays in the Crew team, because not every Viewer grant could be saved.',
         'error',
@@ -719,12 +736,21 @@ describe('removing access through the server preview', () => {
         'This organization is read-only. Change reverted.',
         'error',
       )
-      expect(P.user('ann')?.teams).toEqual(['crew'])
     })
 
     it('reassigns the tasks and deletes the team in one server write, and keeps it when refused', async () => {
-      await load((snap) => snap.teams.push({ ...snap.teams[0], id: 'other', name: 'Other' }))
-      const deleted = P.removeAccess(deleteCrew, { to: 'dan' }, annAnswer())
+      // the signed-in person is in Crew, so the store holds it and paints
+      // its delete
+      const inCrew = (snap: Snapshot) => {
+        snap.teams.push({ ...snap.teams[0], id: 'other', name: 'Other' })
+        snap.teamMembers.push({
+          team_id: 'crew',
+          profile_id: snap.myProfileIds[0],
+          is_leader: false,
+        })
+      }
+      await load(inCrew)
+      const deleted = P.removeAccess(deleteCrew(), { to: 'dan' }, annAnswer())
       // painted at once
       expect(vm('t4').assignee).toBe('dan')
       expect(P.teams.map((t) => t.id)).not.toContain('crew')
@@ -733,9 +759,9 @@ describe('removing access through the server preview', () => {
         ['teams:deleteDeep', { reassign_to: 'dan' }],
       ])
       expect(window.showToast).toHaveBeenLastCalledWith('Team “Crew” deleted', 'success')
-      await load((snap) => snap.teams.push({ ...snap.teams[0], id: 'other', name: 'Other' }))
+      await load(inCrew)
       refused.add('crew')
-      expect(await P.removeAccess(deleteCrew, { keep: true }, annAnswer())).toBe(false)
+      expect(await P.removeAccess(deleteCrew(), { keep: true }, annAnswer())).toBe(false)
       expect(P.teams.map((t) => t.id)).toContain('crew')
       expect(window.showToast).toHaveBeenLastCalledWith(
         'The Crew team stays, because not every Viewer grant could be saved.',
@@ -743,13 +769,21 @@ describe('removing access through the server preview', () => {
       )
     })
 
-    it('saves nothing when the team to delete is the last one', async () => {
+    it('leaves the last team to the server, which refuses its delete with its sentence', async () => {
+      // the store holds no team of anyone else, so it cannot tell the last
+      // one; the server refuses it (convex/model/orgs.ts assertNotLastTeam)
       await load()
-      expect(await P.removeAccess(deleteCrew, { to: 'dan' }, annAnswer())).toBe(false)
-      expect(requests).toEqual([])
+      refused.add('crew')
+      refusal = new ConvexError({
+        code: 'rule',
+        message:
+          'an organization needs at least one team; create another team before deleting this one',
+      })
+      expect(await P.removeAccess(deleteCrew(), { to: 'dan' }, annAnswer())).toBe(false)
+      expect(requests.map((r) => r.name)).toEqual(['teams:deleteDeep'])
       expect(vm('t4').assignee).toBe('ann')
-      expect(window.showToast).toHaveBeenCalledWith(
-        "The Crew team can't be deleted, because an organization needs at least one team. Create another team first.",
+      expect(window.showToast).toHaveBeenLastCalledWith(
+        'An organization needs at least one team; create another team before deleting this one. Change reverted.',
         'error',
       )
     })
@@ -873,7 +907,7 @@ describe('removing access through the server preview', () => {
     it('names the projects one kept Viewer of a deleted team sees, without "each"', async () => {
       await load()
       expect(
-        text(deleteCrew, {
+        text(deleteCrew(), {
           people: [ann],
           tasks: 2,
           projects: [workRef(), specs],
@@ -887,7 +921,7 @@ describe('removing access through the server preview', () => {
     it('names a kept Viewer who edits another listed project of a deleted team, and several places', async () => {
       await load()
       expect(
-        text(deleteCrew, {
+        text(deleteCrew(), {
           people: [ann, dan],
           tasks: 2,
           projects: [workRef(), specs],
@@ -930,11 +964,13 @@ describe('removing access through the server preview', () => {
 
   it("changes one person's or team's level with that grant alone", async () => {
     await load()
-    expect(P.levelOn(work, 'leo')).toBe('user')
-    expect(await P.setProjectAccess(work, 'leo', 'viewer')).toBe(true)
+    // the store holds no one else's level; the requests say what changed
+    // the page sends the level it showed, as the store holds no one else's
+    const shown = (level: 'user' | 'viewer') => ({ orgId: org, leadId: null, level })
+    expect(await P.setProjectAccess(work, 'leo', 'viewer', shown('user'))).toBe(true)
     expect(await P.setProjectTeamAccess(work, 'crew', 'viewer')).toBe(true)
     // the level a person already has sends nothing
-    expect(await P.setProjectAccess(work, 'leo', 'viewer')).toBe(true)
+    expect(await P.setProjectAccess(work, 'leo', 'viewer', shown('viewer'))).toBe(true)
     expect(requests.map((r) => [r.name, r.args])).toEqual([
       [
         'projects:setAccess',
@@ -945,22 +981,26 @@ describe('removing access through the server preview', () => {
         { org_id: org, id: work, team_id: 'crew', level: 'viewer', expected: { level: 'user' } },
       ],
     ])
-    expect(P.levelOn(work, 'leo')).toBe('viewer')
+    // the store holds no one else's level; the requests say what changed
     expect(P.project(work)?.teamAccess).toEqual({ crew: 'viewer' })
   })
 
-  it('invites a seat whose stored address predates the address rule with the level it holds', async () => {
-    await load((snap) => {
-      const leo = snap.profiles.find((p) => p.id === 'leo')
-      if (leo) leo.email = 'jørn@example.no'
-    })
+  it('invites with the level the page’s lookup found as expected, and none without a lookup', async () => {
+    await load()
     network.mutation.mockImplementation((ref, args) => {
       requests.push({ name: getFunctionName(ref), args })
       return Promise.resolve({ id: 'leo', emailed: false })
     })
-    expect(await P.inviteToProject(work, ' Jørn@Example.no ', 'viewer')).toEqual({ emailed: null })
+    // the server's lookup finds a seat by its stored address, also one that
+    // predates the address rule (projectSettings.inviteTarget)
+    expect(
+      await P.inviteToProject(work, ' Jørn@Example.no ', 'viewer', { orgId: org, level: 'user' }),
+    ).toEqual({ emailed: null })
+    // the store holds nobody else to look the address up in
+    expect(await P.inviteToProject(work, 'leo@example.test', 'viewer')).toEqual({ emailed: null })
     expect(requests.map((r) => [r.name, r.args.expected])).toEqual([
       ['projects:inviteGuest', { level: 'user' }],
+      ['projects:inviteGuest', undefined],
     ])
   })
 })

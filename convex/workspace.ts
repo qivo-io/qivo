@@ -4,17 +4,26 @@
  * re-sends only the parts it changed. Readers and budgets are in
  * lib/workspaceParts.ts.
  *
- * - root: the caller's seats and organizations, and whether the login may
- *   create an organization. With no seat it can open, null, or why not
- *   (an organization deletion, a deactivation the caller asks to hear of)
- *   and when it may create one (lib/workspaceParts.ts readRoot). It reads the caller's profiles, each
- *   organization and its counters, so it reruns on seat changes,
+ * - root: the caller's seats and organizations, the caller's own profiles,
+ *   their team memberships and the teams those name, and whether the login
+ *   may create an organization. With no seat it can open, null, or why not
+ *   (an organization deletion or a deactivation) and when it may create
+ *   one (lib/workspaceParts.ts readRoot). It reads the caller's profiles,
+ *   each one's memberships (at most OWN_READS.teams of them, past which it
+ *   refuses with lib/access.ts accessUnchecked's sentence), the teams they
+ *   name, each organization and its counters, so it reruns on seat and
+ *   membership changes, a change to one of the caller's teams,
  *   organization settings and every task or project created, archived,
- *   restored or deleted (the numbers and live counts in org_counters).
- * - catalog (per organization): teams and labels. One range each.
- * - people (per window of the organization's profile ids,
- *   lib/idWindows.ts): profiles with their Team sync stamps and team
- *   memberships. Two ranges, and one per person for their memberships.
+ *   restored or deleted (the numbers and live counts in org_counters). It
+ *   sends no other person's profile, membership or Team sync stamp, and no
+ *   team the caller is not in. In the timing of 8 November 2026 at
+ *   02fa0e0a on a local backend on Boat (8 vCPU), one call at a time, one
+ *   seat with its 3 team memberships read 9 ranges, 10 documents and
+ *   0.003 MiB with the sign-in at 50 people and at 1,000, where the removed
+ *   people part read 1,005 ranges, 4,461 documents and 1.118 MiB at 1,000
+ *   people. Every root case took 7 to 29 ms of JavaScript quiet and 11 to
+ *   66 ms beside eight busy loops (lib/workspaceParts.ts readRoot has the
+ *   cases).
  * - projects (per window of its projects' window keys, which the server
  *   picks at random, lib/db.ts newWindowKey): the projects the caller can
  *   see, with grants and team grants. Two ranges per project, beside the
@@ -66,14 +75,7 @@
 import { v } from 'convex/values'
 import { authedQuery, badRequest, seatQuery } from './lib/functions'
 import { type IdWindow, isIdWindow } from './lib/idWindows'
-import {
-  readCatalog,
-  readInbox,
-  readPeople,
-  readProjects,
-  readRoot,
-  readTasks,
-} from './lib/workspaceParts'
+import { readInbox, readProjects, readRoot, readTasks } from './lib/workspaceParts'
 
 const GONE = { state: 'gone' as const }
 
@@ -89,24 +91,9 @@ function gridWindow(w: IdWindow): IdWindow {
   return w
 }
 
-/* `seatless: 'all'` asks for the answer to a login that an organization
- * deactivated too. Without it that login gets null, as before the answer
- * existed, because app versions from then read every seatless answer as an
- * organization deletion. */
 export const root = authedQuery({
-  args: { seatless: v.optional(v.literal('all')) },
-  handler: async (ctx, args) => await readRoot(ctx, args.seatless === 'all'),
-})
-
-export const catalog = seatQuery({
   args: {},
-  handler: async (ctx) => (ctx.me === null ? GONE : await readCatalog(ctx, ctx.me)),
-})
-
-export const people = seatQuery({
-  args: windowArgs,
-  handler: async (ctx, w) =>
-    ctx.me === null ? GONE : await readPeople(ctx, ctx.me, gridWindow(w)),
+  handler: async (ctx) => await readRoot(ctx),
 })
 
 export const projects = seatQuery({

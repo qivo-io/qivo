@@ -34,7 +34,7 @@ import {
   type LoadSpan,
   plannableHoursOf,
 } from '../../src/lib/workload'
-import { internal } from '../_generated/api'
+import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { accessOf, isOrgStaff, OWN_READS } from '../lib/access'
 import { TASK_READ_RESERVE } from '../lib/core'
@@ -183,8 +183,10 @@ async function cases(fx: Fx) {
 /* What the app shows `person` as delay, by task id. That is the snapshot it
  * serves them, shaped and projected the way the store's rebuild does
  * (src/store/viewModels.ts shapeIssue, src/store/planner.ts rebuild), with
- * the app's grid anchored at NOW. A project that does not track delay
- * paints nothing (planner.ts tracksDelay). */
+ * the app's grid anchored at NOW, and each owner's capacity from their
+ * profile as people.byIds answers it, which the app judges with once the
+ * owner's face loaded (src/store/planner.ts ownerFacts). A project that
+ * does not track delay paints nothing (planner.ts tracksDelay). */
 async function appDelays(fx: Fx, person: Doc<'profiles'>): Promise<Map<string, DelayJson | null>> {
   setWeekConfig(fx.org.week_start, fx.org.week_one_rule, new Date(NOW))
   const snap = await workspaceOf(as(fx.t, person))
@@ -203,8 +205,15 @@ async function appDelays(fx: Fx, person: Doc<'profiles'>): Promise<Map<string, D
         r.end_week != null ? Math.max(start ?? isoToWeek(r.end_week), isoToWeek(r.end_week)) : null,
     }
   }
+  const owners = [
+    ...new Set(rows.flatMap((r) => [r.assignee_id, r.reviewer_id]).filter((id) => id != null)),
+  ]
+  const faces = await as(fx.t, person).query(api.people.byIds, {
+    org_id: fx.org.id,
+    ids: owners as string[],
+  })
   const capacity = new Map(
-    snap.profiles.map((p) => [
+    faces.rows.map((p) => [
       p.id,
       plannableHoursOf({ plannableHours: p.plannable_hours ?? null, kind: p.kind }),
     ]),

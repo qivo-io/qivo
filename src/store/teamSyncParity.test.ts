@@ -24,6 +24,7 @@
  * access shape for a user, a guest and a viewer, and the admin. Cases that
  * must fail if a rule drifts compare a drifted rule with the answer. */
 
+import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
@@ -42,21 +43,23 @@ import {
   plantSeat,
   type T,
   uuid,
+  wholeOf,
   withReadingAdmin,
-  workspaceOf,
 } from '../../convex/tests/helpers.setup'
 import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { countOrg } from '../../convex/tests/overviewCounts.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
 import { plantBlocks, plantStamp, plantTeam } from '../../convex/tests/teamSyncAgenda.setup'
 import type { SyncScope } from '../lib/teamSync'
+import type { Whole as Snapshot } from './guard/liveDouble.setup'
+import { peopleSettingsStandIn } from './peopleSettingsStandIn.setup'
+import { nameEveryone } from './personShown.setup'
 import {
   type ForcedSync,
   SYNC_CONTEXT,
   type SyncArgs,
   teamSyncStandIn,
 } from './teamSyncStandIn.setup'
-import type { Snapshot } from './workspaceBase'
 
 vi.hoisted(() => {
   // the client's zone, set before any module reads the clock
@@ -90,12 +93,17 @@ async function start(snap: Snapshot) {
   vi.stubGlobal('window', { showToast: vi.fn() })
   network.query.mockResolvedValue(null)
   network.mutation.mockResolvedValue(null)
-  network.onUpdate.mockImplementation((_ref, _args, next) => {
-    next(structuredClone(snap))
+  // the faces the views name come from the server's data, as the store
+  // holds nobody but the caller
+  network.onUpdate.mockImplementation((ref, args, next) => {
+    if (getFunctionName(ref) === 'people:byIds')
+      next(peopleSettingsStandIn(snap, 'people:byIds', args))
+    else next(structuredClone(snap))
     return () => {}
   })
   const store = await import('./planner')
   await store.initStore()
+  await nameEveryone(store.P, snap)
   return Object.assign(store.P, {
     oracle: await import('./teamSyncOracle.setup'),
     rules: await import('../lib/teamSync'),
@@ -110,7 +118,7 @@ type Issue = Store['issues'][number]
 /** The store booted for `profile` from their workspace, with the clock at
  * `now` before the store's modules load. */
 async function storeOf(t: T, profile: Doc<'profiles'>, now: number): Promise<Store> {
-  const snap = await workspaceOf(as(t, profile))
+  const snap = await wholeOf(t, profile)
   if (snap === null) throw new Error(`no workspace for ${profile.name}`)
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(now)
@@ -182,9 +190,10 @@ function needsLoad(P: Store, r: Extract<AgendaAnswer, { state: 'ok' }>['rows'][n
   if (r.end_week === undefined && r.due_date === undefined) return false
   if (!((r.remaining_hours ?? 0) > 0)) return false
   const owner = taskOwnerId(r, false)
-  const u = owner === undefined ? undefined : P.user(owner)
-  if (u === undefined || u === null) return false
-  const capacity = plannableHoursOf({ plannableHours: u.plannableHours, isAgent: u.isAgent })
+  // the owner's face, which the test named (nameEveryone)
+  const u = owner === undefined ? null : P.person(owner)
+  if (u?.state !== 'ok') return false
+  const capacity = plannableHoursOf(u)
   return Number.isFinite(capacity) && capacity > 0
 }
 
@@ -203,7 +212,7 @@ async function expectMeeting(
   if (answer.state !== 'ok') throw new Error(`${label}: ${JSON.stringify(answer)}`)
   // the stand-in answers the same, field for field
   expect(standInOf(P, profile, server), `${label}: the stand-in`).toEqual(answer)
-  const m = P.oracle.meetingOf(page, now)
+  const m = P.oracle.meetingOf(page, now, P.snap)
   expect(answer.sub_projects, `${label}: sub-projects`).toEqual(sorted(m.subIds))
   expect(answer.top_projects, `${label}: top-level projects`).toEqual(sorted(m.metaIds))
   const rowIds = new Set(answer.rows.map((r) => r.id))
@@ -243,14 +252,16 @@ async function expectMeeting(
   }
   // each walker's week
   for (const p of answer.people) {
-    const u = P.user(p.id)
-    if (u === undefined || u === null) throw new Error(`${label}: no ${p.id}`)
+    const u = m.walkers.find((w) => w.id === p.id)
+    if (u === undefined) throw new Error(`${label}: no ${p.id}`)
     expect(p.week, `${label}: week of ${u.name}`).toEqual(
       staff
         ? { state: 'ok', hours: roundTenths(m.week(u)) }
         : { state: 'unavailable', reason: 'loads' },
     )
-    expect(p.stamp ?? null, `${label}: stamp of ${u.name}`).toEqual(u.sync ?? null)
+    expect(p.stamp ?? null, `${label}: stamp of ${u.name}`).toEqual(
+      u.sync === null ? null : JSON.parse(JSON.stringify(u.sync)),
+    )
   }
   expect(answer.editable, `${label}: editable`).toEqual(sorted(m.editable))
   // the shown ancestors of the agenda's tasks that are none of them
@@ -477,7 +488,7 @@ describe('the rules that must hold', () => {
     const answer = await agendaOf(t, P, subject, { kind: 'project', project_id: f.meta.id })
     if (answer.state !== 'ok') throw new Error(answer.state)
     const rows = sorted(answer.rows.map((r) => r.id))
-    const m = P.oracle.meetingOf({ kind: 'project', id: f.meta.id }, now)
+    const m = P.oracle.meetingOf({ kind: 'project', id: f.meta.id }, now, P.snap)
     const inScope = (it: Issue) => m.subIds.has(it.project)
     const open = ['todo', 'progress', 'review']
     // a Backlog task as a row
@@ -490,7 +501,7 @@ describe('the rules that must hold', () => {
     expect(sorted(withGroups.map((it) => it.uuid))).not.toEqual(rows)
     // a review counted without its hand-off
     const done = answer.done.map((r) => P.issues.find((it) => it.uuid === r.id) as Issue)
-    const user = P.user(f.user.id)
+    const user = m.walkers.find((w) => w.id === f.user.id)
     if (!user) throw new Error('user')
     const drifted = done.filter(
       (it) =>
@@ -504,7 +515,9 @@ describe('the rules that must hold', () => {
     // stand-in answer unavailable, where a stand-in that fell back would
     // answer All projects' meeting, an ok one here
     const unknown = uuid()
-    expect(P.oracle.resolveSyncScope({ kind: 'team', id: unknown }, P.oracle.worldOf())).toEqual({
+    expect(
+      P.oracle.resolveSyncScope({ kind: 'team', id: unknown }, P.oracle.worldOf(P.snap)),
+    ).toEqual({
       kind: 'all',
     })
     const refused = await agendaOf(t, P, subject, { kind: 'team', team_id: unknown })

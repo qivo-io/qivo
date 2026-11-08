@@ -218,7 +218,6 @@ describe('snapshot trouble', () => {
     expect(read()).toBe(true)
     expect(sentNames()).toEqual(['messages:markRead'])
     expect(P.issueById[task.id].status).toBe('todo')
-    expect(P.labels).toHaveLength(0)
     expect(P.org.name).toBe('Testbed Labs')
     expect(P.teams).toHaveLength(teams)
     expect(P.project(project)?.name).toBe('Task creation fixture')
@@ -365,12 +364,14 @@ describe('snapshot trouble', () => {
     void P.deleteMcpToken('token-b')
     void P.revokeApiCredential('oauth_connections', 'connection-a')
     void P.revokeOAuthConnection('connection-b')
-    expect(P.updateUser('seat-a', { active: false }, {}, shownOf(P, 'seat-a'))).toBe(true)
+    expect(P.updateUser('seat-a', { active: false }, {}, shownOf(snapshot, 'seat-a'))).toBe(true)
     // the removal goes out, which sentNames shows; it resolves once the
     // server answers
     void P.removeUser('seat-b', { orgId: P.homeOrg })
     // a role change or a new credential is an ordinary edit and pauses
-    expect(P.updateUser('seat-a', { orgRole: 'viewer' }, {}, shownOf(P, 'seat-a'))).toBe(false)
+    expect(P.updateUser('seat-a', { orgRole: 'viewer' }, {}, shownOf(snapshot, 'seat-a'))).toBe(
+      false,
+    )
     await expect(P.createMcpToken('Laptop', { access: 'read' })).resolves.toBeNull()
     await settle()
     expect(sentNames()).toEqual([
@@ -564,7 +565,7 @@ describe('snapshot trouble', () => {
     P.saveUI({ view: 'kanban' })
     // the writes that take access away or change a seat answer that they
     // were not sent, so their callers announce nothing
-    expect(P.updateUser('seat-a', { active: false }, {}, shownOf(P, 'seat-a'))).toBe(false)
+    expect(P.updateUser('seat-a', { active: false }, {}, shownOf(snapshot, 'seat-a'))).toBe(false)
     await expect(P.removeUser('seat-b', { orgId: P.homeOrg })).resolves.toBe(false)
     expect(P.setMessageRetention(30)).toBe(false)
     void P.revokeMcpToken('token-a')
@@ -578,7 +579,8 @@ describe('snapshot trouble', () => {
     expect(sentNames()).toEqual(['appearance:save', 'oauthConnections:revoke'])
     expect(P.issueById[task.id].status).toBe('todo')
     expect(P.messages.find((message) => message.id === 'message-a')?.read).toBeFalsy()
-    expect(P.users.map((user) => user.id)).toEqual(expect.arrayContaining(['seat-a', 'seat-b']))
+    // the store holds the login's own seat alone, kept from the last view
+    expect(P.users.map((user) => user.id)).toEqual(snapshot.myProfileIds)
     expect(showToast).toHaveBeenCalledWith(store.NO_ACCESS_TEXT, 'error')
     expect(showToast).not.toHaveBeenCalledWith(store.PAUSED_TEXT, 'error')
     // a retry cannot bring a seat back

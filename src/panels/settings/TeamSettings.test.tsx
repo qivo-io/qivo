@@ -509,6 +509,28 @@ describe('Settings › Teams', () => {
     expect(teamRows().map((r) => r.name)).toEqual(['Bench'])
   })
 
+  it('drops a created team past the loaded rows once its own read says someone deleted it', async () => {
+    await load()
+    server.force = { batch: 1 }
+    await teamsPage()
+    await type(find<HTMLInputElement>('input[placeholder="New team name"]'), 'Zed crew')
+    await click(button('Add team'))
+    const created = requests.find((r) => r.name === 'teams:create')?.args.id as string
+    team(server.snap, created, 'Zed crew')
+    await rerun()
+    await answer('teams:create', 'accept')
+    await rerun()
+    // Zed crew sorts past the one loaded batch, so the list cannot tell
+    expect(teamRows()[0]).toEqual({ id: created, name: 'Zed crew', count: 'Added' })
+    expect(open('teams:get').map((r) => r.args.id)).toEqual([created])
+    // someone deletes it elsewhere, and the kept row's read answers so
+    server.snap.teams = server.snap.teams.filter((t) => t.id !== created)
+    await rerun()
+    expect(document.querySelector('[data-team-kept]')).toBeNull()
+    expect(teamRows().map((r) => r.name)).toEqual(['Bench'])
+    expect(open('teams:get')).toEqual([])
+  })
+
   it('keeps a team created while the tab is hidden as Added until a batch after the return holds it', async () => {
     await load()
     // a batch holds two teams, so the list of Bench and Crew has ended
@@ -605,8 +627,9 @@ describe("a team's page", () => {
         .sort(),
     ).toEqual(['teams:get', 'teams:members'])
     expect(queries.map((q) => q.name)).toEqual([])
-    // the page read nothing else, no task among it
-    expect([...new Set(opened)].sort()).toEqual(['teams:get', 'teams:members'])
+    // the page read nothing else, no task among it, but its members'
+    // faces, as the store holds nobody but the signed-in person
+    expect([...new Set(opened)].sort()).toEqual(['people:byIds', 'teams:get', 'teams:members'])
   })
 
   it('says it could not load the team with Try again, and that a gone team is no longer available', async () => {
@@ -711,29 +734,33 @@ describe("a team's page", () => {
     expect(document.querySelector('[data-team-waiting]')).toBeNull()
   })
 
-  it("shows the store's hours and role while it holds the person, else the answer's", async () => {
-    await load(undefined, (held) => {
-      const leo = held.profiles.find((p) => p.id === 'leo')
-      if (leo) leo.plannable_hours = 32
-      // the store holds Vic as a user, as after this session promoted them
-      const vic = held.profiles.find((p) => p.id === 'vic')
-      if (vic) vic.org_role = 'user'
-      held.profiles = held.profiles.filter((p) => p.id !== 'bot')
-    })
+  it("shows the store's hours for the signed-in person, and everyone else's from the answer", async () => {
+    let me = ''
+    await load(
+      (snap) => {
+        me = snap.profiles[0].id
+        snap.teamMembers.push({ team_id: 'crew', profile_id: me, is_leader: false })
+      },
+      (held) => {
+        // the store's own profile, as after this session saved 32 hours
+        held.profiles[0].plannable_hours = 32
+      },
+    )
     await teamPage()
-    expect(find<HTMLInputElement>('[data-plannable-for="leo"]').value).toBe('32')
+    expect(find<HTMLInputElement>(`[data-plannable-for="${me}"]`).value).toBe('32')
+    // the store holds nobody else: Leo and Vic show as the answer has them
+    expect(find<HTMLInputElement>('[data-plannable-for="leo"]').value).toBe('40')
     expect(
       document.querySelector('[data-settings-team-member="vic"] [data-viewer-chip]'),
-    ).toBeNull()
-    // the agent the store does not hold shows from the answer, and nothing
-    // waits for the store
+    ).not.toBeNull()
+    // the agent shows from the answer, and nothing waits for the store
     const bot = find('[data-settings-team-member="bot"]')
     expect(bot.hasAttribute('data-team-member-waiting')).toBe(false)
     expect(bot.textContent).toContain('Relay')
     expect(bot.querySelector('[data-plannable-unbounded]')).not.toBeNull()
   })
 
-  it("locks Leader for a Viewer and an agent, and paints the store's change at once", async () => {
+  it('locks Leader for a Viewer and an agent, and shows a change at once while it is on its way', async () => {
     await load()
     await teamPage()
     const leader = (id: string) =>
@@ -746,6 +773,50 @@ describe("a team's page", () => {
     await click(leader('leo'))
     expect(requests.map((r) => r.name)).toEqual(['teams:setLeader'])
     expect(leader('leo').checked).toBe(true)
+    // a refusal shows the answer's again, as the store holds no one else's
+    // membership to take back
+    await answer('teams:setLeader', 'refuse')
+    expect(leader('leo').checked).toBe(false)
+    // an accepted change shows from the answer, which holds it first
+    await click(leader('leo'))
+    const crewLeo = server.snap.teamMembers.find(
+      (m) => m.team_id === 'crew' && m.profile_id === 'leo',
+    )
+    if (crewLeo) crewLeo.is_leader = true
+    await rerun()
+    await answer('teams:setLeader', 'accept')
+    expect(leader('leo').checked).toBe(true)
+  })
+
+  it('sends a Leader box turned back before the first answer, so the server and the box end unticked', async () => {
+    await load()
+    await teamPage()
+    const leader = () =>
+      find<HTMLInputElement>('[data-settings-team-member="leo"] [data-team-leader-toggle] input')
+    const crewLeo = () =>
+      server.snap.teamMembers.find((m) => m.team_id === 'crew' && m.profile_id === 'leo')
+    await click(leader())
+    await click(leader())
+    expect(leader().checked).toBe(false)
+    expect(requests.map((r) => [r.name, r.args.is_leader])).toEqual([
+      ['teams:setLeader', true],
+      ['teams:setLeader', false],
+    ])
+    // the server takes both in order; the box shows the newest choice while
+    // the second waits, and then the members read
+    const leads = (on: boolean) => {
+      const member = crewLeo()
+      if (member) member.is_leader = on
+    }
+    leads(true)
+    await rerun()
+    await answer('teams:setLeader', 'accept')
+    expect(leader().checked).toBe(false)
+    leads(false)
+    await rerun()
+    await answer('teams:setLeader', 'accept')
+    expect(crewLeo()?.is_leader).toBe(false)
+    expect(leader().checked).toBe(false)
   })
 
   it('searches the members on the server and loads more, and says no member matches only at a real end', async () => {
@@ -808,7 +879,8 @@ describe("a team's page", () => {
     await act(async () => field.blur())
     await settle()
     expect(requests.map((r) => r.name)).toEqual(['profiles:setPlannableHours'])
-    // the store painted the hours, but the row waits for the server's answer
+    // the row waits for the server's answer, which no delivery brings, as
+    // the store holds nobody but the signed-in person
     expect(memberIds()).toEqual(['leo', 'bot'])
     await answer('profiles:setPlannableHours', 'accept')
     expect(memberIds()).toEqual(['bot'])
@@ -848,16 +920,27 @@ describe("a team's page", () => {
       ),
     )
     await settle()
-    // the same field holds the typed hours, with the value the server keeps
+    // the same field holds the typed hours; the page cannot tell the value
+    // the server keeps until a read holds Leo again, as the store holds
+    // nobody but the signed-in person
     expect(memberIds()).toEqual(['leo', 'bot'])
+    expect(find<HTMLInputElement>('[data-plannable-for="leo"]')).toBe(field)
+    expect(field.value).toBe('30')
+    expect(
+      document.querySelector('[data-settings-team-member="leo"] [data-draft-conflict]'),
+    ).toBeNull()
+    // the search goes, and the list's answer brings the value the server keeps
+    await type(find<HTMLInputElement>('[data-team-members-search]'), '')
+    await rest()
     expect(find<HTMLInputElement>('[data-plannable-for="leo"]')).toBe(field)
     expect(field.value).toBe('30')
     expect(find('[data-settings-team-member="leo"] [data-draft-conflict]').textContent).toContain(
       'Changed elsewhere to “36”.',
     )
-    // Use saved lets the draft go, and the row with it
+    // Use saved lets the draft go
     await click(find('[data-settings-team-member="leo"] [data-draft-use-saved]'))
-    expect(memberIds()).toEqual(['bot'])
+    expect(field.value).toBe('36')
+    expect(document.querySelector('[data-team-member-kept]')).toBeNull()
   })
 
   it('keeps a member added here as Added until a batch holds them, and offers only who may join', async () => {
@@ -986,7 +1069,7 @@ describe("a team's page", () => {
     }
     await add()
     // the picker asks the server, which has not added Oli yet, so it offers
-    // her again, and the store, which holds her membership, sends nothing
+    // her again, and the page, which shows her as Added, sends nothing
     await add()
     expect(requests.map((r) => [r.name, r.args.profile_id])).toEqual([['teams:addMember', 'off']])
     expect(memberIds()).toEqual(['off', 'leo', 'bot', 'vic'])
@@ -999,6 +1082,40 @@ describe("a team's page", () => {
     await answer('teams:addMember', 'accept')
     expect(document.querySelector('[data-team-member-kept]')).toBeNull()
     expect(memberIds()).toEqual(['leo', 'off', 'bot', 'vic'])
+  })
+
+  it('sends an add again once the first went through, as after someone removed the member elsewhere', async () => {
+    await load()
+    await teamPage()
+    // the lists show one person a batch, so Oli sorts past the members the
+    // page loaded, and the picker finds her by a search
+    const add = async () => {
+      await click(find('[data-team-member-picker]'))
+      await type(find<HTMLInputElement>('[data-team-member-picker-search]'), 'oli')
+      await rest()
+      await click(document.querySelector('[data-team-member-choice="off"]'))
+      await click(find('[data-team-member-add]'))
+    }
+    server.force = { batch: 1 }
+    await rerun()
+    expect(memberIds()).toEqual(['leo'])
+    await add()
+    server.snap.teamMembers.push({ team_id: 'crew', profile_id: 'off', is_leader: false })
+    await rerun()
+    await answer('teams:addMember', 'accept')
+    expect(find('[data-settings-team-member="off"] [data-team-member-kept]').textContent).toBe(
+      'Added',
+    )
+    // another admin removes Oli, and the picker offers her again
+    server.snap.teamMembers = server.snap.teamMembers.filter((m) => m.profile_id !== 'off')
+    await rerun()
+    await add()
+    expect(requests.map((r) => [r.name, r.args.profile_id])).toEqual([['teams:addMember', 'off']])
+    // a refusal keeps the row of the add the server took before
+    await answer('teams:addMember', 'refuse')
+    expect(find('[data-settings-team-member="off"] [data-team-member-kept]').textContent).toBe(
+      'Added',
+    )
   })
 
   it('keeps an added member while the page is hidden, since the answers it holds are from before the add', async () => {
@@ -1196,6 +1313,8 @@ describe('the store', () => {
       name: 'Field crew',
     })
     expect(sent[1].id).toMatch(/^[0-9a-f-]{36}$/)
-    expect(P.teamById('11111111-1111-4111-8111-111111111111')?.name).toBe('Field crew')
+    // the store paints no team: it holds only the signed-in person's own,
+    // and the page keeps a made team's row itself
+    expect(P.teamById('11111111-1111-4111-8111-111111111111')).toBeUndefined()
   })
 })

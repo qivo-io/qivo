@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { plannerFixture } from './plannerFixture.setup'
+import { asStored, plannerFixture } from './plannerFixture.setup'
 import { createWorkspaceRows } from './rowMap'
 import { createWorkspaceBase } from './workspaceBase'
 
@@ -35,7 +35,7 @@ function rowsOf() {
     has_hidden_parent: false,
   }))
   const base = createWorkspaceBase()
-  base.stage(snap)
+  base.stage(asStored(snap))
   const rows = createWorkspaceRows(base)
   rows.beginRepaint()
   return { base, rows, me: me.id }

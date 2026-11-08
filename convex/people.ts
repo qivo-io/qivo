@@ -15,8 +15,11 @@
  *   (src/panels/settings/usePersonSettings.ts).
  * - byIds reads the person rows, with their faces, pictures and plannable
  *   hours, of up to 100 profiles of the organization by id, for any active
- *   seat, guests and viewers included, as the workspace's people part sends
- *   every seat the whole roster today. The app's profile cache reads it
+ *   seat, guests and viewers included: the fields the workspace's people
+ *   part sent every seat until it was removed, a disclosure kept as it was
+ *   (an agent decision of 7 November 2026, for the owner). Since the root
+ *   part sends only the caller's own profiles, every other person the app
+ *   shows comes from here. The app's profile cache reads it
  *   live, in chunks, for the people its open pages, pickers and views name
  *   that the workspace does not hold (src/store/profileCache.ts).
  *

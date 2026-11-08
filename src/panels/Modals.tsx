@@ -1161,10 +1161,10 @@ function MoveIssueModal({
   const targetValid = groups.some((g) => g.subs.some((sp) => sp.id === target))
   const moving = targetValid && target !== it.project
   // whoever works on the task or its subtasks must keep access after the
-  // move; the dialog names them (subtasks outside this view are left to the
-  // server, whose refusal names no one)
-  const blockers = moving && family ? P.moveBlockers(it, target, family) : []
-  const canMove = !!target && moving && !!family && !blockers.length
+  // move: the server checks every one at full scope and refuses the move
+  // with a sentence that says what to change, which is toasted and the
+  // move taken back (the store holds no one else to name here)
+  const canMove = !!target && moving && !!family
   // a subtask stays in its parent's project, so a move to another project
   // leaves the parent and carries the subtasks along; the dialog says so
   const moved = moving && family ? P.moveFamily(it, target, family) : null
@@ -1222,9 +1222,9 @@ function MoveIssueModal({
           ))}
         </NativeSelect>
       </MField>
-      {notes.length + blockers.length > 0 && (
+      {notes.length > 0 && (
         <div
-          data-move-blockers
+          data-move-notes
           className="[font-size:var(--fs-base)] [color:var(--text-2)] [line-height:1.5] [margin-top:12px] flex flex-col gap-2"
         >
           {notes.map((note) => (
@@ -1232,16 +1232,6 @@ function MoveIssueModal({
               {note}
             </p>
           ))}
-          {blockers.slice(0, 3).map((b) => (
-            <p key={`${b.task.id}:${b.role}`}>{P.blockerText(b)}</p>
-          ))}
-          {blockers.length > 3 && (
-            <p>
-              {blockers.length === 4
-                ? '1 more assignment is affected.'
-                : `${blockers.length - 3} more assignments are affected.`}
-            </p>
-          )}
         </div>
       )}
     </ModalShell>
@@ -1344,10 +1334,11 @@ function AccessRemovalModal({
   // "the task" and "this task" read better than "the 1 task"
   const theTasks = count === 1 ? 'the task' : `the ${tasks}`
   // the team and the person as the page that pressed showed them (the
-  // change's label), the store's team only as a fallback
+  // change's label, and a member's team), the store's team only as a
+  // fallback
   const team =
     'teamId' in change
-      ? ((change.kind !== 'teamMember' ? change.label : undefined) ??
+      ? ((change.kind !== 'teamMember' ? change.label : change.team) ??
         P.teamById(change.teamId)?.name)
       : undefined
   const teamName = `the ${teamNoun(team)}`

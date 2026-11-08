@@ -7,6 +7,7 @@ import type { OwnerLoadsJson } from '../../convex/planning'
 import { isoToWeek, TODAY_WEEK, weekToISO } from '../lib/dates'
 import { DELAY_UNKNOWN } from '../lib/delay'
 import { GUEST_CALLS } from './ownerLoadCache'
+import { peopleSettingsStandIn } from './peopleSettingsStandIn.setup'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 /* The task rows a view's answer brings (store/viewRows.ts) on the real
@@ -143,6 +144,9 @@ beforeEach(async () => {
     } else if (name === 'planning:ownerLoads')
       loads.set((args.owner_ids as string[]).join(), receive as (v: OwnerLoadsJson) => void)
     else if (name === 'snapshot:threadComments') receive({ comments: [], earlier: false })
+    // the owners' faces, with their hours, which the views name, from the
+    // server's people, as the store holds nobody but the signed-in person
+    else if (name === 'people:byIds') receive(peopleSettingsStandIn(snapshot, name, args))
     else if (name === 'taskWindow:task') taskReads.set(String(args.ref), receive)
     else if (name.startsWith('overview:')) {
       overviews.set(name, receive)
@@ -423,20 +427,6 @@ describe('a write on a task only a view brings', () => {
     deliver(structuredClone(snapshot))
     await turn()
     expect(probe().layerCount()).toBe(0)
-  })
-
-  it('walks the parents an answer brings for the roster check', async () => {
-    answer = ok(
-      [row('kid', 8, { parent_id: 'par' })],
-      [row('par', 7, { has_subtasks: true, project_id: 'elsewhere' })],
-    )
-    await open()
-    const kid = store.P.viewTask(SLOT, 'kid')
-    if (!kid) throw new Error('no kid')
-    // someone who cannot see the parent's project is held off the task
-    const unseen = store.P.unseenAbove(kid, 'someone', (project) => project !== 'elsewhere')
-    expect(unseen?.uuid).toBe('par')
-    expect(store.P.unseenAbove(kid, 'someone', () => true)).toBeNull()
   })
 })
 

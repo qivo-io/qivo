@@ -160,13 +160,14 @@ describe('a label on more tasks than one delete removes', () => {
     const events = await activityFor(t, f.org.id)
     expect(events.map((e) => [e.verb, e.label])).toEqual([['deleted label', 'Bug']])
 
-    // The app joins the snapshot's labels as below. planner.ts drops an
-    // assignment whose label is not in the list.
+    // The app names a task's labels through labels.byIds, which leaves the
+    // deleted label out, so its chip hides (src/panels/taskLabels.ts).
     const snap = (await workspaceOf(as(t, f.admin)))!
-    const shown = new Set(snap.labels.map((l) => l.id))
-    expect(shown.has(bug.id)).toBe(false)
-    const joined = snap.issueLabels.filter((row) => shown.has(row.label_id))
-    expect(new Set(joined.map((row) => row.label_id))).toEqual(new Set([keep.id]))
+    const { rows } = await as(t, f.admin).query(api.labels.byIds, {
+      org_id: f.org.id,
+      ids: [...new Set(snap.issueLabels.map((row) => row.label_id))],
+    })
+    expect(rows.map((l) => l.id)).toEqual([keep.id])
     // The machine task read and label search, on an archived task too.
     for (const ref of [tasks[0], tasks[2]]) {
       const detail = await t.query(internal.machine.rest.getIssue, {

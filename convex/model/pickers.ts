@@ -49,8 +49,11 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import {
   canBeAssignedFor,
+  canManageOwnProjectAccess,
+  canSeeProject,
   canSeeProjectFor,
   inMetaTree,
+  keepsInbox,
   levelRank,
   type ProjectLevelReads,
   projectLevel,
@@ -516,9 +519,10 @@ export async function canOwnOf(
 /** A person as the editor's @ mention popup shows and matches them: the
  * name, the initials and the color of their portrait (a legacy color sent
  * as gray, model/people.ts shownAvatarColor) and the email, null for an
- * agent. The workspace's people part sends these fields of every profile
- * to every seat of the organization today (lib/workspaceParts.ts
- * readPeople), so the row discloses nothing more. */
+ * agent. Any active seat of the organization reads these fields of every
+ * profile here, guests and Viewers included, as the workspace's people
+ * part sent them to every seat until it was removed; that disclosure is
+ * kept as it was (an agent decision of 7 November 2026, for the owner). */
 export type MentionRow = {
   id: string
   name: string
@@ -576,8 +580,8 @@ const MENTIONS_CURSOR =
  *
  * No task, project, grant or team is read, so the read cannot widen
  * access to work, and any active seat of the organization may read it,
- * guests and viewers too, since the people part sends every seat these
- * fields today. With `through` a batch holds every match up to it and
+ * guests and viewers too, the disclosure the workspace's people part made
+ * to every seat before it was removed, kept as it was. With `through` a batch holds every match up to it and
  * stops past four batches (lib/namedPages.ts listBatch); the app reads
  * without it, once a batch, and never subscribes. A kept row reads
  * nothing more, so a batch costs one document a person walked. Measured
@@ -608,6 +612,136 @@ export async function mentionsOf(
         ? mentionRow(profile)
         : null,
     limit: MENTION_BATCH,
+    ceiling: await namedCeiling(ctx),
+  })
+  return { state: 'ready', ...batch }
+}
+
+/* ---------------------------------------------------------- the followers */
+
+/** A person as the follower popover shows them (src/components/
+ * IssueSubscribers.tsx): the name, the initials and the color of their
+ * portrait (a legacy color sent as gray), and whether their seat is on, so
+ * a switched-off follower shows and can be removed. It holds no email,
+ * team, level, task or project. */
+export type FollowerRow = {
+  id: string
+  name: string
+  initials: string
+  color: string
+  active: boolean
+}
+
+/** `profile` as a follower row. */
+export const followerRow = (profile: Doc<'profiles'>): FollowerRow => ({
+  id: profile.id,
+  name: profile.name,
+  initials: profile.initials,
+  color: shownAvatarColor(profile.color),
+  active: profile.active,
+})
+
+/** What the follower popover's Add list is asked for: the task and a
+ * list's search and cursors. */
+export type TaskFollowersArgs = ListArgs & { issue_id: string }
+
+/** What the follower popover's Add list answers: `unavailable` for a task
+ * the caller cannot see, `refused` with the write's sentence for a caller
+ * who may not manage other followers, `not_ready` until the names are
+ * keyed, `over_budget` past PICKERS.rule, or one batch of rows. */
+export type FollowerBatch =
+  | { state: 'unavailable' }
+  | { state: 'refused'; message: string }
+  | { state: 'not_ready' }
+  | { state: 'over_budget' }
+  | ({ state: 'ready' } & ListBatch<FollowerRow>)
+
+/** The sentence issues.setSubscriber refuses another person's follow
+ * with, for a caller who may not manage the task's followers. */
+export const MANAGE_FOLLOWERS_RULE =
+  'only project leads and organization admins can manage other subscribers'
+
+/** The list name the follower cursors are sealed with. */
+const TASK_FOLLOWERS = 'pickers.taskFollowers'
+
+/* The refusal of a cursor that is not one of the list's for the same task
+ * and search. */
+const FOLLOWERS_CURSOR =
+  'after and through must be cursors from an earlier answer of this list, for the same task and search; start again from the first batch'
+
+/**
+ * pickers.taskFollowers for `me`: one batch of LIST_BATCH people the
+ * follower popover's Add list offers for task `a.issue_id`, in name order,
+ * by issues.setSubscriber's own rule for a new follower: an active person
+ * or a Standard user agent with an inbox (lib/access.ts keepsInbox) who
+ * sees the task's project, navigation included (canSeeProject, through
+ * canSeeProjectFor for every person at once), and who does not follow the
+ * task yet. The caller is left out, as the popover's Me row is their own.
+ * In order:
+ *
+ * 1. The arguments, as the other lists refuse them (orderedListAsk).
+ * 2. The task by id in the caller's organization and its project, which
+ *    the caller must see, else `unavailable`, alike for a missing, foreign
+ *    or hidden task, as issues.subscribers refuses them; then
+ *    `refused` with MANAGE_FOLLOWERS_RULE unless the caller may manage the
+ *    task's followers (canManageOwnProjectAccess), the write's check.
+ * 3. `not_ready` until the organization's names are keyed.
+ * 4. The rule within PICKERS.rule, else `over_budget`.
+ * 5. The walk over every profile of the organization in name order
+ *    (profileIndex), keeping each person the rule lets in whose name or
+ *    email holds every word of the search in any order, ignoring case and
+ *    accents, and whose follow of the task one lookup finds missing. Past
+ *    NAMED_READ it stops and says so.
+ *
+ * The app reads it once a batch while the Add list is open and never
+ * subscribes. The write checks again.
+ *
+ * Timed on 8 November 2026 at 02fa0e0a on a local backend on Boat (8
+ * vCPU), one call at a time, among 1,000 people. A lead's or an admin's
+ * first batch of 25 read 44 to 49 ranges, 946 to 956 documents and
+ * 0.19 MiB with the sign-in, in 13 to 52 ms of JavaScript quiet and 20 to
+ * 80 ms beside eight busy loops. A search that walked all 1,000 people read 18
+ * to 19 ranges, 1,912 documents and 0.644 MiB in 23 to 72 ms quiet and 42
+ * to 93 ms busy, with totals of 88 to 236 ms. A Viewer is refused after 16
+ * ranges and 12 documents.
+ */
+export async function followerChoicesOf(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  a: TaskFollowersArgs,
+): Promise<FollowerBatch> {
+  const ask = await orderedListAsk(TASK_FOLLOWERS, [me.org_id, a.issue_id], a, {
+    tieOf: idTieOf,
+    refusal: FOLLOWERS_CURSOR,
+  })
+  const task = await byId(ctx, 'issues', a.issue_id)
+  if (task === null || task.org_id !== me.org_id) return UNAVAILABLE
+  const project = await byId(ctx, 'projects', task.project_id)
+  if (project === null || !(await canSeeProject(ctx, me, project))) return UNAVAILABLE
+  if (!(await canManageOwnProjectAccess(ctx, me, project))) return refused(MANAGE_FOLLOWERS_RULE)
+  if (!(await nameKeysReady(ctx, me.org_id))) return NOT_READY
+  const sees = await withinRule(ctx, (guard) =>
+    canSeeProjectFor(ctx, project, { guard, reads: projectLevelReads() }),
+  )
+  if (sees === null) return OVER_BUDGET
+  const matches = allWordsMatcher(nameKey(ask.search))
+  const batch = await listBatch(ctx, ask, {
+    stream: indexAfter(profileIndex(ctx, me.org_id), ask.after),
+    keep: async (profile: Doc<'profiles'>, guard): Promise<FollowerRow | null> => {
+      if (profile.id === me.id || !profile.active || !keepsInbox(profile) || !sees(profile))
+        return null
+      if (!matches(`${nameKey(profile.name)}\n${nameKey(profile.email ?? '')}`)) return null
+      const follows = await guard.lookup(() =>
+        ctx.db
+          .query('issue_subscriptions')
+          .withIndex('by_issue_profile', (q) =>
+            q.eq('issue_id', task.id).eq('profile_id', profile.id),
+          )
+          .first(),
+      )
+      return follows === null ? followerRow(profile) : null
+    },
+    limit: LIST_BATCH,
     ceiling: await namedCeiling(ctx),
   })
   return { state: 'ready', ...batch }

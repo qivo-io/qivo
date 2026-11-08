@@ -77,9 +77,9 @@ function SettingsScreen({
   const admin = P.isAdmin()
   const desktopSettings = window.qivoDesktop?.isElectron ? window.qivoDesktop.settings : undefined
   // Only home-organization team leaders and admins can open team settings.
-  // The Teams item and the org-teams check read the store's own
-  // memberships (P.isTeamLeader) until t3/limits-roster-parts gives them a
-  // server answer; a team's page decides from the server's (teamRead).
+  // The Teams item and the org-teams check read the signed-in person's own
+  // memberships (P.isTeamLeader), which the workspace's root part sends; a
+  // team's page decides from the server's answer (teamRead).
   const myTeams = P.teams.filter((t) => t.org === P.homeOrg && P.isTeamLeader(t.id))
   /* A project page's read of its settings, for the check below, the
      phone's Back and the page itself, which takes it as a prop rather than

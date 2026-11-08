@@ -6,6 +6,7 @@ import { parentLink, workingSetOf } from '../../convex/lib/workingSet'
 import { canonicalLoad, committedByWeek, type LoadSpan } from '../../convex/lib/workload'
 import { orgLoadRows } from '../../convex/tests/orgLoad.setup'
 import { isoToWeek, TODAY_WEEK, tsToWeek, weekToISO } from '../lib/dates'
+import { peopleSettingsStandIn } from './peopleSettingsStandIn.setup'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 /* The store derives the load of the tasks it shows from their rows with the
@@ -34,13 +35,16 @@ describe('the load the store derives from the tasks it shows', () => {
 
   const P = () => store.P
 
-  /** Boots the store on `snap`, every write left waiting. */
+  /** Boots the store on `snap`, every write left waiting, its people's
+      faces read by id from `snap`, as the store holds nobody but the
+      signed-in person. */
   async function boot(snap: Snapshot) {
-    network.onUpdate.mockImplementation((ref, _args, next) => {
+    network.onUpdate.mockImplementation((ref, args, next) => {
       if (getFunctionName(ref) === 'workspace:whole') {
         deliver = (s) => next(structuredClone(s))
         deliver(snap)
-      }
+      } else if (getFunctionName(ref) === 'people:byIds')
+        next(peopleSettingsStandIn(snap, 'people:byIds', args))
       return vi.fn()
     })
     store = await import('./planner')
@@ -214,6 +218,14 @@ describe('the load the store derives from the tasks it shows', () => {
     })
     snap.orgLoad = rows.filter((row) => row.issue_id === null)
     await boot(snap)
+    // the views on screen name the owners, so the store learns that the
+    // outsider is no person of this organization, whose load it then
+    // leaves out as the server does; until then it files their work
+    P().namePeople(
+      'owners',
+      owners.filter((id) => id !== me.id).map((id) => ({ org, id })),
+    )
+    await vi.waitFor(() => expect(P().person('outsider', org)?.state).toBe('gone'))
     expect(P().issues.length).toBe(workingSet.tasks.length)
     // the server's rows by owner, added up in the order both sides use
     const expected = new Map<string, LoadSpan[]>()
