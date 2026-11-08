@@ -54,11 +54,12 @@
      last report, beats at once with `active: true` while the mode is
      Most recently active session. A follower tells the leader that input
      happened, at most every forward_ms, never what it was. `active` is
-     true only for input within report_ms, never older, and never in All
+     true only for input within report_ms, never older, never in All
      enabled sessions, where nothing reads it until a switch back, whose
-     beat carries it. The first beat after gaining leadership or after the
-     capability turned on counts as no report, since the server ignores
-     `active` on a session's first beat.
+     beat carries it, and never before the watch answered the mode. The
+     first beat after gaining leadership or after the capability turned on
+     carries none, since the server ignores `active` on a session's first
+     beat, and the next input reports at once.
    - The feed. A leader that can notify starts the feed after its first
      beat: fresh, with a baseline, on the page's first leadership with
      nothing heard; as a takeover from the floor, the keys and the
@@ -351,7 +352,7 @@ export function startNotificationLeader(deps: LeaderDeps) {
   let inputWaits = false
   // the server time of the last beat that answered
   let lastBeatAt: number | null = null
-  // whether the next beat counts as no report (the first after gaining
+  // whether the next beat carries no report (the first after gaining
   // leadership or after the capability turned on)
   let noReport = true
   let beatenSinceGain = false
@@ -451,12 +452,12 @@ export function startNotificationLeader(deps: LeaderDeps) {
     const can = deps.canNotify()
     const at = Date.now()
     const active =
+      !noReport &&
       can &&
-      mode !== 'all' &&
+      mode === 'recent' &&
       inputAt !== null &&
       at - inputAt < NOTIFY_CLIENT.report_ms &&
       (reportedAt === null || at - reportedAt >= NOTIFY_CLIENT.report_ms)
-    const counts = active && !noReport
     clearBeat()
     inFlight = true
     sentAt = at
@@ -495,7 +496,7 @@ export function startNotificationLeader(deps: LeaderDeps) {
     beatenSinceGain = true
     noReport = false
     lastBeatAt = answer.now
-    if (counts) reportedAt = at
+    if (active) reportedAt = at
     every = clamp(answer.every_ms)
     if (can && capable) schedule(every)
     refreshOthers()
@@ -798,7 +799,7 @@ export function startNotificationLeader(deps: LeaderDeps) {
   /* A report of use in this tab or a follower. */
   function took() {
     inputAt = Date.now()
-    if (!leading() || !capable || refused || mode === 'all') return
+    if (!leading() || !capable || refused || mode !== 'recent') return
     if (reportedAt !== null && inputAt - reportedAt < NOTIFY_CLIENT.report_ms) return
     if (inFlight) {
       inputWaits = true

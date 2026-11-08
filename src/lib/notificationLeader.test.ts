@@ -537,14 +537,19 @@ describe('the pace', () => {
 describe('reports of use', () => {
   it('reports input at once a minute after the last report, and not inside it', async () => {
     const tab = openTab(profile())
-    // input before it leads rides on the first beat, which counts as no
-    // report, since the server ignores `active` on a session's first beat
+    // input before it leads: the first beat carries no report, since the
+    // server ignores `active` on a session's first beat
     input(tab)
     await flush()
-    expect(tab.beats().map((b) => b.args.active)).toEqual([true])
+    expect(tab.beats().map((b) => b.args.active)).toEqual([false])
+    // nor does input beat before the watch answered the mode
     input(tab)
     await flush()
-    expect(tab.beats().map((b) => b.args.active)).toEqual([true, true])
+    expect(tab.beats()).toHaveLength(1)
+    tab.settings.take?.('recent')
+    input(tab)
+    await flush()
+    expect(tab.beats().map((b) => b.args.active)).toEqual([false, true])
     // inside report_ms of the report, input waits
     input(tab, 'keydown')
     await vi.advanceTimersByTimeAsync(30_000)
@@ -554,7 +559,7 @@ describe('reports of use', () => {
     // the periodic beat a minute after the report carries the input of the
     // last minute
     await vi.advanceTimersByTimeAsync(30_000)
-    expect(tab.beats().map((b) => b.args.active)).toEqual([true, true, true])
+    expect(tab.beats().map((b) => b.args.active)).toEqual([false, true, true])
     // a quiet minute's beat reports nothing and restarts no report window,
     // so the next input reports at once
     await vi.advanceTimersByTimeAsync(MINUTE)
@@ -562,12 +567,13 @@ describe('reports of use', () => {
     await vi.advanceTimersByTimeAsync(1_000)
     input(tab, 'touchstart')
     await flush()
-    expect(tab.beats().map((b) => b.args.active)).toEqual([true, true, true, false, true])
+    expect(tab.beats().map((b) => b.args.active)).toEqual([false, true, true, false, true])
   })
 
   it('counts nothing hidden, untrusted or from a pointer that did not move', async () => {
     const tab = openTab(profile())
     await flush()
+    tab.settings.take?.('recent')
     await vi.advanceTimersByTimeAsync(NOTIFY_CLIENT.report_ms)
     const before = tab.beats().length
     input(tab, 'pointermove', { movementX: 0, movementY: 0 })
@@ -586,6 +592,7 @@ describe('reports of use', () => {
     const p = profile()
     const [lead, follow] = [openTab(p), openTab(p)]
     await flush()
+    lead.settings.take?.('recent')
     await vi.advanceTimersByTimeAsync(NOTIFY_CLIENT.report_ms)
     input(follow, 'keydown', { key: 'a', code: 'KeyA' })
     input(follow, 'keydown', { key: 'b' })
