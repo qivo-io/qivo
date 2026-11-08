@@ -1789,13 +1789,6 @@ const targetTieOf = ({ tie }: NamedAt): TargetTie | null => {
   return [parentId, childKey, childId, orgId]
 }
 
-/**
- * projectNav.targets for the login whose active seats are `myProfiles`:
- * one batch of the live sub-projects under a live parent the person may
- * add tasks to, Edit (User) or Lead by lib/access.ts level, across every
- * seat or only the seat in `org_id` (an org_id without the caller's seat
- * answers an empty last batch, as the search does), for the New task
- * dialog, the Move window and the task window's Link task offer.
 /* A target position's parts. */
 const targetParts = ({ key, tie: [parentId, childKey, childId, orgId] }: NamedAt<TargetTie>) => ({
   parentKey: key,
@@ -1805,6 +1798,13 @@ const targetParts = ({ key, tie: [parentId, childKey, childId, orgId] }: NamedAt
   orgId,
 })
 
+/**
+ * projectNav.targets for the login whose active seats are `myProfiles`:
+ * one batch of the live sub-projects under a live parent the person may
+ * add tasks to, Edit (User) or Lead by lib/access.ts level, across every
+ * seat or only the seat in `org_id` (an org_id without the caller's seat
+ * answers an empty last batch, as the search does), for the New task
+ * dialog, the Move window and the task window's Link task offer.
  *
  * The order is the parent's name key, the parent's id, the sub-project's
  * name key and its id, the positions of page and children joined: the

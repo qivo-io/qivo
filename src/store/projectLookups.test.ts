@@ -109,10 +109,10 @@ async function start(
   const open = new Set<() => void>()
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
-    if (name === 'workspace:whole') next(structuredClone(snap))
     const count = (views.reads?.get(name) ?? 0) + 1
     views.reads?.set(name, count)
     const answers = !views.once || count === 1
+    if (name === 'workspace:whole') next(structuredClone(snap))
     else if (name === 'tasks:board' && views.board) {
       if (answers) next(structuredClone(views.board))
     } else if (name === 'tasks:roadmap' && views.roadmap) {
@@ -286,31 +286,6 @@ describe('the project lookups', () => {
     expect(read()).toEqual([])
   })
 
-  it('stays loading while byIds has not answered, never gone, with no right', async () => {
-    const w = world()
-    const { P, byIds } = await start(w.snap, { byIdsLoading: true })
-    P.nameProjects('test', [w.edits.id])
-    expect(byIds).toHaveLength(1)
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(P.projectState(w.edits.id)).toBe('loading')
-    expect(P.canWrite(w.edits.id)).toBe(false)
-    expect(P.canSee(w.edits.id)).toBe(false)
-    expect(P.writeNote(w.edits.id)).toBe('Loading this project…')
-  })
-
-  it("says why where the read failed or the server's check stopped", async () => {
-    const w = world()
-    const failed = await start(w.snap, { fail: true })
-    failed.P.nameProjects('test', [w.edits.id])
-    await vi.waitFor(() => expect(failed.P.projectState(w.edits.id)).toBe('failed'))
-    expect(failed.P.canWrite(w.edits.id)).toBe(false)
-    expect(failed.P.writeNote(w.edits.id)).toBe("Couldn't load this project.")
-    const stopped = await start(w.snap, { unchecked: NAV_UNCHECKED })
-    stopped.P.nameProjects('test', [w.edits.id])
-    await vi.waitFor(() => expect(stopped.P.projectState(w.edits.id)).toBe('unchecked'))
-    expect(stopped.P.canWrite(w.edits.id)).toBe(false)
-    expect(stopped.P.writeNote(w.edits.id)).toBe(NAV_UNCHECKED)
-  })
   it("lets a kept page's projects go while it hides, and names them again from its kept answer as it shows", async () => {
     const w = world()
     const board: BoardAnswer = {
@@ -351,6 +326,31 @@ describe('the project lookups', () => {
     expect(P.boardRead('board:desktop').current).toBe(false)
   })
 
+  it('stays loading while byIds has not answered, never gone, with no right', async () => {
+    const w = world()
+    const { P, byIds } = await start(w.snap, { byIdsLoading: true })
+    P.nameProjects('test', [w.edits.id])
+    expect(byIds).toHaveLength(1)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(P.projectState(w.edits.id)).toBe('loading')
+    expect(P.canWrite(w.edits.id)).toBe(false)
+    expect(P.canSee(w.edits.id)).toBe(false)
+    expect(P.writeNote(w.edits.id)).toBe('Loading this project…')
+  })
+
+  it("says why where the read failed or the server's check stopped", async () => {
+    const w = world()
+    const failed = await start(w.snap, { fail: true })
+    failed.P.nameProjects('test', [w.edits.id])
+    await vi.waitFor(() => expect(failed.P.projectState(w.edits.id)).toBe('failed'))
+    expect(failed.P.canWrite(w.edits.id)).toBe(false)
+    expect(failed.P.writeNote(w.edits.id)).toBe("Couldn't load this project.")
+    const stopped = await start(w.snap, { unchecked: NAV_UNCHECKED })
+    stopped.P.nameProjects('test', [w.edits.id])
+    await vi.waitFor(() => expect(stopped.P.projectState(w.edits.id)).toBe('unchecked'))
+    expect(stopped.P.canWrite(w.edits.id)).toBe(false)
+    expect(stopped.P.writeNote(w.edits.id)).toBe(NAV_UNCHECKED)
+  })
 
   it('gives no right from an answer of before a reconnect until byIds answers again, keeping the name', async () => {
     const w = world()

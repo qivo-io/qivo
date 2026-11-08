@@ -186,7 +186,6 @@ describe('projectNav.targets', () => {
     expect(new Set(walked.rows.map((r) => r.id)).size).toBe(subs.length)
   })
 
-  it("matches the sub-project's or the parent's name, and seals cursors with the organization, the search and the login", async () => {
   it('lists every sub-project once in order across batches where a name holds a control character', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -204,6 +203,7 @@ describe('projectNav.targets', () => {
     expect(walked.rows.map((r) => r.id)).toEqual([...subs.map((p) => p.id), other.id])
   })
 
+  it("matches the sub-project's or the parent's name, and seals cursors with the organization, the search and the login", async () => {
     const t = newT()
     const f = await withOrg(t)
     const pia = await person(t, f.org.id, 'Pia')
