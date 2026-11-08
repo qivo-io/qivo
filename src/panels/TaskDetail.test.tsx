@@ -912,6 +912,26 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     })
     await act(async () => vi.waitFor(() => expect(relationButtons()[2]?.disabled).toBe(false)))
     expect(link).toBeDefined()
+    // the read stops while the page is hidden, and the offer waits for it
+    // again once the page shows
+    const targetsOpen = () =>
+      subs.filter((x) => x.name === 'projectNav:targets' && !x.closed).length
+    const setHidden = async (hidden: boolean) => {
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        get: () => (hidden ? 'hidden' : 'visible'),
+      })
+      await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+    }
+    try {
+      await setHidden(true)
+      expect(targetsOpen()).toBe(0)
+      await setHidden(false)
+      expect(targetsOpen()).toBe(1)
+      expect(relationButtons()[2]?.disabled).toBe(true)
+    } finally {
+      Reflect.deleteProperty(document, 'visibilityState')
+    }
   })
 
   it('waits with the check sentence while its read fails, keeping comments and a typed title', async () => {

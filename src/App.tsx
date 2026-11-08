@@ -29,7 +29,7 @@ import { MobileHeader, MobileNavigation, MobileTaskList } from './components/Mob
 import { navRow } from './components/navRow'
 import { type ChooserShows, ProjectChooser } from './components/ProjectChooser'
 import { ProjectDirectory } from './components/ProjectDirectory'
-import { navMoved, onNavMove, openResolved } from './components/projectNavRows'
+import { navMoved, onNavMove, openedName, openResolved } from './components/projectNavRows'
 import { Icon, MenuItem, Popover, Seg } from './components/qivo'
 import { type FocusRow, SidebarProjects } from './components/SidebarProjects'
 import { TasksLoadingBar } from './components/TasksLoading'
@@ -665,7 +665,8 @@ type StartupCheck = {
 /** How the scope's project was opened, for what App says while the
     project cache checks it (scopeShows) and when it answers the project
     gone: the remembered project (UIPrefs.lastProject), an address, or a
-    row, a jump or a move that names it (`name` where the opener knew it). */
+    row, a jump or a move that names it. The name a row showed comes from
+    the open rule (components/projectNavRows.tsx openedName). */
 type ScopeOpened = { id: string; of: 'remembered' | 'address' | 'row' }
 
 /** What the main pane shows in place of the views while no project is
@@ -700,10 +701,16 @@ const rememberedScope = (): string | undefined => P.loadUI().lastProject?.projec
     for its project cache answer (App's scopeShows): "Opening <name>…"
     while it loads, the failure's sentence with Retry. */
 function scopeOpeningShows(info: ScopeInfo, opened: ScopeOpened | null): ChooserShows {
-  const name = info.name
   const of = opened?.id === info.id ? opened.of : 'row'
-  if (info.state === 'unchecked')
-    return { kind: 'retry', line: P.writeNote(info.id) ?? "Couldn't open the project." }
+  // the cache's name, else the one the row that opened it showed, as a
+  // Search result, which seeds nothing
+  const name = info.name || (of === 'row' ? (openedName(info.id) ?? '') : '')
+  // the refusal's sentence of whichever project the cache lists unchecked,
+  // the scope's own or its top-level project's
+  if (info.state === 'unchecked') {
+    const apart = P.projectState(info.id) === 'unchecked' ? info.id : (info.topId ?? info.id)
+    return { kind: 'retry', line: P.writeNote(apart) ?? "Couldn't open the project." }
+  }
   if (info.state === 'failed')
     return {
       kind: 'retry',

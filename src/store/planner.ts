@@ -3990,8 +3990,8 @@ function repaint(parts: {
       viewReadsChanged = false
     }
   }
-  // the projects the views' answers named, now that the rows show what the
-  // projects part holds
+  // the projects the views' answers named, with the repaint of the
+  // answers that named them
   nameWaiting()
   // what the window's delay reads besides its task shows with the
   // comments, an owner load or a group's facts from a view's row
@@ -4132,9 +4132,9 @@ const WINDOW_PROJECTS = 'window'
 
 /** Names the projects owner `owner`'s answer names with the project cache,
     or releases them with an empty list. A release goes at once; a naming
-    waits for the next repaint (nameWaiting), which paints what the
-    projects part delivered in the same transition, so a project the part
-    is about to hold is never read by id. */
+    waits for the next repaint (nameWaiting), so one transition's answers
+    name their projects together and the cache reads them in as few
+    chunks as it can. */
 function nameAnswerProjects(owner: string, ids: readonly string[]) {
   if (ids.length === 0) {
     waitingNames.delete(owner)
@@ -4159,8 +4159,8 @@ function nameWaiting() {
 
 /** The projects the task window's answers name: its task's, its parent's,
     its subtasks' and its linked tasks', each once, so the crumb, the
-    related rows and the window's rights read a project the workspace's
-    projects part does not hold from the project cache. */
+    related rows and the window's rights read their projects from the
+    project cache. */
 function windowProjects(): string[] {
   const ids: string[] = []
   const task = sectionAnswers.task
@@ -4595,8 +4595,8 @@ function takeViewResult(slot: ViewSlot, read: ViewRead, key: string, token: stri
       read.behind = false
       dropHeldViewParts()
     }
-    // the projects an answer names, named once the repaint shows whether
-    // the projects part holds them; a failure keeps the last answer's
+    // the projects an answer names, named with the next repaint; a failure
+    // keeps the last answer's
     const named = read.query.projects
     if (named && next.value !== undefined) nameSlotProjects(slot, named(next.value) ?? [])
     // a milestone read's answer is its anchor; a failure keeps the last
@@ -4865,8 +4865,8 @@ function overviewStep(step: () => void) {
    is a view read
    (watchView), with its owner, attempt, key, connection and the answer it
    keeps while it stops, and its answer's milestones are the read's anchor
-   in milestoneRows. They are the store's only milestones, since the
-   workspace's projects part sends none, so every milestone the app shows,
+   in milestoneRows. They are the store's only milestones, since no
+   workspace part sends one, so every milestone the app shows,
    edits or names comes from them. Every
    live layer's `milestones` part paints every copy of a milestone it
    changes there, and a delivery of each read that holds a copy holds the
@@ -12086,8 +12086,8 @@ export const PLANNER = {
       picks, as names the views show at once until a face arrives. */
   takePeople: (org: string, people: readonly PersonRow[]) => profileCache.take(org, people),
   teamById: (id: string | null | undefined): TeamVM | undefined => findTeam(PLANNER.teams, id),
-  /** The facts of the top-level project of project `pid`, from the part
-      else the project cache (P.project), or null where neither knows it. */
+  /** The facts of the top-level project of project `pid`, from the project
+      cache (P.project), or null where it knows none yet. */
   metaOf: (pid: string | null | undefined): ProjectFacts | null => {
     const p = PLANNER.project(pid)
     if (!p) return null
@@ -14765,10 +14765,9 @@ export const PLANNER = {
       answers `unavailable` with reason access_unchecked and its sentence,
       apart from a project the person cannot open. Null for a failed read.
       One read, never subscribed to and never part of the snapshot. Its
-      callers are startup's check of a project address by number (App.tsx
-      through components/projectNavRows.tsx openResolved), App's check
-      that the creator sees a new sub-project, Search's Search in and
-      Settings › Archived tasks. */
+      callers are App's check of a project address by organization and
+      number, also Team sync's `sync/p/<n>` (components/projectNavRows.tsx
+      openResolved), Search's Search in and Settings › Archived tasks. */
   resolveProject: async (ask: ProjectAsk): Promise<ProjectResolved | null> => {
     try {
       return await convex.query(
@@ -15166,17 +15165,22 @@ export const PLANNER = {
     return answer
   },
   /** Keeps one projectNav.targets read of organization `org`'s first batch
-      while the task window shows a task the person only views, for
-      P.editsSomeProject, and answers its release. */
+      while the task window shows a task the person only views and the page
+      shows, for P.editsSomeProject, and answers its release. While the
+      page is hidden the read stops and the answer reads unknown. */
   watchEditsSomeProject: (org: string): (() => void) => {
-    const { token, stop } = live.watch(api.projectNav.targets, { org_id: org })
+    // the read follows the hidden-tab gate (lib/viewVisibility.ts), as the
+    // project cache and the targets pickers do: it stops while the page is
+    // hidden, keeping the answer it had, which counts as unknown until the
+    // read runs again on show
+    let read: { token: string; stop: () => void } | null = null
     editsSome.set(org, 'asked')
     const off = live.onTransition(
       (transition) => {
-        if (!transition.tokens.has(token)) return
+        if (!read || !transition.tokens.has(read.token)) return
         let value: unknown
         try {
-          value = live.read(token)
+          value = live.read(read.token)
         } catch {
           value = undefined
         }
@@ -15196,9 +15200,25 @@ export const PLANNER = {
       },
       { view: true },
     )
+    const stopGate = watchVisibility(({ visible }) => {
+      if (visible && !read) {
+        read = live.watch(api.projectNav.targets, { org_id: org })
+        return
+      }
+      if (!visible && read) {
+        read.stop()
+        read = null
+        if (editsSome.get(org) !== 'asked') {
+          editsSome.set(org, 'asked')
+          emit()
+        }
+      }
+    })
     return () => {
+      stopGate()
       off()
-      stop()
+      read?.stop()
+      read = null
       editsSome.delete(org)
       emit()
     }
@@ -19292,8 +19312,8 @@ if (STRICT_LAYERS) {
 
 export const P = PLANNER
 
-/* The scope description P.scopeInfo answers with (null aside) — the shape
-   App threads to every view. Derived after the store so the type can name
+/* The scope description P.scopeInfo answers with, the shape App threads
+   to every view. Derived after the store so the type can name
    the method's own return. */
 /** The scope the Overview, the Board and the Roadmap share (P.scopeInfo):
     My view, or one project with its facts and its top-level project's from

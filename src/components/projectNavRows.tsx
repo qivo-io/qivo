@@ -281,9 +281,29 @@ export function useNavOpen(go: (id: string) => void, say: (line: string | null) 
   const cancel = useCallback(() => {}, [])
   const open = (row: NavOpenRow) => {
     seedNavRow(row)
+    noteOpenedName(row.id, row.name)
     sayNow(null)
     navMoved()
     goNow(row.id)
   }
   return { open, cancel }
 }
+
+/* The name each row open showed for its project, by id, newest last and
+   at most OPENED_NAMES of them, for App's "Opening <name>…" where the row
+   gave no number to seed the project cache with, as a Search result. */
+const openedNames = new Map<string, string>()
+const OPENED_NAMES = 100
+
+/** Notes `name` as the name a row showed for project `id`. */
+function noteOpenedName(id: string, name: string) {
+  openedNames.delete(id)
+  openedNames.set(id, name)
+  if (openedNames.size > OPENED_NAMES) {
+    const oldest = openedNames.keys().next().value
+    if (oldest !== undefined) openedNames.delete(oldest)
+  }
+}
+
+/** The name the last row open of project `id` showed, or undefined. */
+export const openedName = (id: string): string | undefined => openedNames.get(id)
