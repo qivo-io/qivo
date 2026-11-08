@@ -1,12 +1,10 @@
 /* The oracle of the machine Inbox suite (machineInbox.test.ts): the read REST
  * GET /v1/inbox and MCP list_inbox made before they paged through the
  * Inbox walk, folded from the caller's messages read whole
- * (messages.by_recipient) instead of through lib/inbox.ts loadInbox's
- * bounded walks, so it is complete for any inbox a test plants and does not
- * depend on the workspace inbox part. A task is shown by the old rule: of
- * the caller's organization, not archived, in a project the caller can see
- * (lib/access.ts canSeeProject) that is not archived (lib/workingSet.ts
- * inWorkingSet). Actors are named from the organization's profiles. Two
+ * (messages.by_recipient), so it is complete for any inbox a test plants.
+ * A task is shown by the old rule: of the caller's organization, not
+ * archived, in a project the caller can see (lib/access.ts canSeeProject)
+ * that is not archived (lib/workingSet.ts inWorkingSet). Actors are named from the organization's profiles. Two
  * dots in the basename keep the Convex CLI from deploying this module, as
  * helpers.setup.ts. */
 

@@ -205,12 +205,6 @@ export const MENTION_BATCH = 8
  * limit people meet. */
 export const BY_IDS_MAX = 100
 
-/** The most messages one seat's bounded inbox walk examines in each of its
- * unread and read halves (lib/inbox.ts loadInbox), which only the workspace
- * inbox part reads, and which stays for it until it goes. REST and MCP page
- * the Inbox through model/inboxPage.ts instead. */
-export const INBOX_LIMIT = 500
-
 /** How old an event may be and still become a live desktop alert, ten
  * minutes. No claim grants an event older than this
  * (model/notificationSessions.ts NOTIFY.live_window_ms reads it), and the

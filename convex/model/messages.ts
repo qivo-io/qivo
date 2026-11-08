@@ -325,10 +325,7 @@ const itemStart = (ctx: MutationCtx, a: { recipient_id: string; issue_id: string
  * woke the item from any snooze.
  *
  * The item counts what the cap deleted in `dropped` (schema.ts), kept on
- * `holder`, its newest unread row by insertion. The bounded read of
- * lib/inbox.ts loadInbox, which only tests call, walks unread rows newest
- * first and stops at INBOX_LIMIT, so whenever it lists an item it holds
- * that row, while its oldest rows are the first it leaves out.
+ * `holder`, its newest unread row by insertion.
  * A trim adds the rows it deleted to the counts its rows carried, the
  * deleted ones included, and to the count of the last holder, read on its
  * own when the item is longer than `unread`, and moves the total to the

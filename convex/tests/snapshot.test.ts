@@ -21,7 +21,6 @@ import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { HISTORY_PAGE_MAX, WINDOW_HISTORY_PAGE } from '../lib/activityVisibility'
 import { byId } from '../lib/db'
-import { loadInbox } from '../lib/inbox'
 import { insertActivity } from '../model/activity'
 import { startPurge } from '../model/deletedItems'
 import {
@@ -616,11 +615,9 @@ describe('org_load', () => {
   })
 })
 
-/* The bounded walk of a recipient's messages (lib/inbox.ts loadInbox),
- * which no surface reads any more. The workspace sends no message, the
- * app's Inbox reads inbox.page and its alerts inbox.feed, and REST and MCP
- * page the stored items through model/inboxPage.ts inboxWalk
- * (machineInbox.test.ts). */
+/* No workspace part sends a message. The app's Inbox reads inbox.page and
+ * its alerts inbox.feed, and REST and MCP page the stored items through
+ * model/inboxPage.ts inboxWalk (machineInbox.test.ts). */
 describe('messages', () => {
   const msg = (
     recipient_id: string,
@@ -644,38 +641,6 @@ describe('messages', () => {
     const snap = await snapFor(f.user)
     expect(Object.keys(snap)).not.toContain('messages')
     expect(Object.keys(snap)).not.toContain('readMessageCount')
-  })
-
-  it('reads past a stopped walk for a row the bulk actions reach, passing at most `peek` snoozed rows', async () => {
-    const until = '2027-01-01T00:00:00.000Z'
-    const ids = await t.run(async (ctx) => {
-      const inserted = []
-      // oldest first, one row that is not snoozed and then three snoozed ones
-      for (const snoozed of [false, true, true, true]) {
-        const row = msg(f.user.id, NOW)
-        inserted.push(
-          await ctx.db.insert('messages', snoozed ? { ...row, snoozed_until: until } : row),
-        )
-      }
-      return inserted
-    })
-    // keeps one row, the newest, then reads on past the snoozed ones
-    const load = (peek?: number) => t.run((ctx) => loadInbox(ctx, f.user.id, () => true, 1, peek))
-
-    // two snoozed rows, then the oldest one, which Mark all as read reaches
-    expect(await load(3)).toMatchObject({ unreadTruncated: true, truncated: true })
-    await t.run((ctx) => ctx.db.patch(ids[0], { snoozed_until: until }))
-    // every row past the stop is snoozed, which neither action touches
-    expect(await load(3)).toMatchObject({
-      unreadTruncated: false,
-      readTruncated: false,
-      truncated: true,
-    })
-    // after two snoozed rows another follows, so it stops reading and counts
-    // one as possible
-    expect(await load(2)).toMatchObject({ unreadTruncated: true, truncated: true })
-    // without a peek the flag is the walk's truncation
-    expect(await load()).toMatchObject({ unreadTruncated: true, truncated: true })
   })
 })
 
