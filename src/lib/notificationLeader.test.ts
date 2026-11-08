@@ -427,6 +427,49 @@ describe('takeover and end', () => {
     rogue.close()
   })
 
+  it('starts with the resume order after its own freeze, unless it hears a newer handover', async () => {
+    const p = profile()
+    const [a, b] = [openTab(p), openTab(p)]
+    await flush()
+    // b heard a's floor, then froze, and a closed meanwhile
+    b.page.doc.fire('freeze')
+    await flush()
+    a.page.win.fire('pagehide', { persisted: false })
+    await flush()
+    b.page.doc.fire('resume')
+    await flush()
+    expect(b.leader.role()).toBe('leader')
+    expect(b.feed.leads).toEqual([{ kind: 'resume' }])
+    // a follower back from a freeze hears the leader again and takes over
+    // from that
+    const c = openTab(p)
+    await flush()
+    c.page.doc.fire('freeze')
+    await flush()
+    c.page.doc.fire('resume')
+    await flush()
+    b.page.win.fire('pagehide', { persisted: false })
+    await flush()
+    expect(c.feed.leads).toEqual([{ kind: 'takeover', after: expect.any(Number), keys: ['m1'] }])
+  })
+
+  it('runs the resume order when the capability turns on again after a takeover', async () => {
+    const p = profile()
+    const [a, b] = [openTab(p), openTab(p)]
+    await flush()
+    a.page.win.fire('pagehide', { persisted: false })
+    await flush()
+    expect(b.feed.leads.map((s) => s.kind)).toEqual(['takeover'])
+    // off and on again while a's last beat is still under the threshold
+    b.state.can = false
+    b.capabilityChanged()
+    await flush()
+    b.state.can = true
+    b.capabilityChanged()
+    await flush()
+    expect(b.feed.leads.map((s) => s.kind)).toEqual(['takeover', 'resume'])
+  })
+
   it('leads again after a freeze with the resume order', async () => {
     const lone = openTab(profile())
     await flush()

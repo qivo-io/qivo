@@ -60,7 +60,9 @@
      posted (`state`, sent each time they move and after each beat) when
      that tab's last beat is under RESUME_GAP_MS old; else with the resume
      order, as after a freeze, the back and forward cache, a capability
-     that turned on and a stale handover. A gap between its ticks past
+     that turned on and a stale handover. A handover is taken once, and
+     one heard before this page left (pagehide or freeze) is dropped, so a
+     later start runs the resume order unless the page hears a newer one. A gap between its ticks past
      RESUME_GAP_MS and the desktop app's wake go to the feed's resume(),
      and every other tick to the feed's tick(), which keeps its floor
      about eleven minutes back at most between beats hours apart.
@@ -340,10 +342,12 @@ export function startNotificationLeader(deps: LeaderDeps) {
   // a beat that came due while the socket was down
   let socketWait = false
   let feedStarted = false
-  // whether this page has not started a feed yet and led with the
-  // capability on from its first leadership, so its first start is fresh
+  // whether this page has not started a feed yet, has heard no handover
+  // and led with the capability on from its first leadership, so its
+  // first start is fresh
   let freshLeft = true
-  // the newest handover heard, and the feed's own state while it leads
+  // the newest handover heard since this page last left or started a
+  // feed, and the feed's own state while it leads
   let heard: Handover | null = null
   let ownState: FeedState | null = null
   let othersWaiting = false
@@ -511,6 +515,9 @@ export function startNotificationLeader(deps: LeaderDeps) {
     feedStarted = true
     const start = startOf(first)
     freshLeft = false
+    // taken once: a later start, such as after the capability turned on
+    // again, runs the resume order unless a newer handover comes
+    heard = null
     feed.lead(start, link, first)
   }
 
@@ -702,6 +709,9 @@ export function startNotificationLeader(deps: LeaderDeps) {
     queued?.abort()
     queued = null
     if (!led) post({ kind: 'bye' })
+    // what it heard before it left may be stale when it returns, so it
+    // takes over only from a handover it hears after
+    heard = null
     role = 'stopped'
     mirror()
   }
@@ -760,8 +770,11 @@ export function startNotificationLeader(deps: LeaderDeps) {
         check()
         return
       case 'state':
-        if (!leading() && (heard === null || message.beat_at >= heard.beat_at))
+        if (!leading() && (heard === null || message.beat_at >= heard.beat_at)) {
           heard = { after: message.after, keys: message.keys, beat_at: message.beat_at }
+          // a page that heard a tab lead is no first start
+          freshLeft = false
+        }
     }
   }
 
