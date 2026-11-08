@@ -884,8 +884,10 @@ export type ProjectUsersPageJson = { next_cursor: string | null; users: ProjectU
  * page at 200 reading: 1,000 people in 3 teams each, 5 of the teams
  * sharing a sub-project or its parent, 18 ranges and 1,716 documents;
  * 1,000 grants on a sub-project and 1,000 on its parent, 10 ranges and
- * 2,506 documents, the most, inside PICKERS.rule's 8,000; and 100 people
- * in 5 teams each, 18 ranges and about 365 documents.
+ * 2,506 documents, the most, inside PICKERS.rule's 8,000; 100 people in 5
+ * teams each, 18 ranges and about 365 documents; and a sub-project shared
+ * with 5 teams under a top-level project shared with 5 others, 100 people
+ * in 3 teams each, 28 ranges, the most, and 225 documents.
  */
 export async function projectUserPage(
   ctx: QueryCtx,

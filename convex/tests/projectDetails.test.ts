@@ -1046,6 +1046,22 @@ const grantsOn = (t: T, projects: readonly Doc<'projects'>[]) =>
     return out
   })
 
+/* The team shares on each of `projects`, counted whole. */
+const sharesOn = (t: T, projects: readonly Doc<'projects'>[]) =>
+  t.run(async (ctx) => {
+    const out: number[] = []
+    for (const p of projects)
+      out.push(
+        (
+          await ctx.db
+            .query('project_team_access')
+            .withIndex('by_project', (q) => q.eq('project_id', p.id))
+            .collect()
+        ).length,
+      )
+    return out
+  })
+
 describe('reads at the design size', () => {
   it('reads the details at the sum, 1,000 grants, 5 shares and 260 weekly milestones, and the lists over them', async () => {
     const t = newT({ transactionLimits: true })
@@ -1253,5 +1269,34 @@ describe('reads at the design size', () => {
     const users = await measuredUsers(t, f.user, f.sub, 200)
     expect(users.rows).toBe(100)
     show(`case 5, 5 teams a person, ${users.reads.length} pages, the first`, users.reads[0])
+  })
+
+  it('works out the rule for a sub-project shared with 5 teams under a project shared with 5 others, 100 people in 3 teams each', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // an organization of 100 people, as in the case above
+    const people = await crowd(t, f.org.id, 95)
+    const everyone = [f.admin, f.user, f.viewer, f.guest, f.agent, ...people]
+    // teams 0 to 4 share FW and 5 to 9 share TBED, each project at its 5.
+    // Each person is in one of the ten and in teams 10 and 11, which share
+    // neither, so each share is the only way in for the crowd's people of
+    // its team, and a rule that skips any of the ten lists fewer people.
+    const teams = await plantTeams(t, f.org.id, 12)
+    await t.run(async (ctx) => {
+      for (const [n, p] of everyone.entries()) {
+        // the admin and the user hold withOrg's Hardware already
+        const held = p === f.admin || p === f.user ? [teams[10]] : [teams[10], teams[11]]
+        for (const team of [teams[n % 10], ...held])
+          await ctx.db.insert('team_members', { team_id: team, profile_id: p.id, is_leader: false })
+      }
+    })
+    for (let i = 0; i < 5; i++) await plantShares(t, teams[i], [f.sub])
+    for (let i = 5; i < 10; i++) await plantShares(t, teams[i], [f.meta])
+    await keyOrg(t, f.org.id)
+    expect(await figures(t, f)).toEqual({ people: 100, teams: 13, mostTeams: 3, fewestTeams: 3 })
+    expect(await sharesOn(t, [f.meta, f.sub])).toEqual([5, 5])
+    const users = await measuredUsers(t, f.user, f.sub, 200)
+    expect(users.rows).toBe(100)
+    show(`case 5, 5 shares on each, ${users.reads.length} pages, the first`, users.reads[0])
   })
 })
