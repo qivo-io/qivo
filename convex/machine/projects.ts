@@ -555,7 +555,12 @@ export async function grantRows(
  * the level rejects with accessUnchecked, which refuses the whole call and
  * rolls back a write, since a flag cannot be guessed; one inside the
  * completion answers it `unavailable`. A project the call `created` holds
- * no tasks, so its completion reads none. */
+ * no tasks, so its completion reads none. What it reads does not grow with
+ * the organization: a lead's read of a top-level project with two
+ * sub-projects, and a PATCH that archives and then restores it, read the
+ * same ranges and documents in an organization at the catalogue's sum as
+ * in an everyday one (convex/tests/machineProjects.test.ts, "reads at the
+ * design size"). */
 export async function projectRead(
   ctx: QueryCtx,
   me: Caller,

@@ -1448,6 +1448,46 @@ describe('reads at the design size', () => {
     expect(sum).toEqual(everyday)
   })
 
+  it('reads the same for the single read and an update that archives and restores, whatever the organization holds', async () => {
+    const reads = async (big: boolean) => {
+      const { t, f } = await catalogueOrg(big)
+      await countOrg(t, f.org.id)
+      // TBED's lead reads it and archives and restores it, with FW and PCB
+      const single = await measured(t, async (ctx) => {
+        const me = (await byId(ctx, 'profiles', f.user.id)) as Doc<'profiles'>
+        const project = await managedProject(ctx, me, 'TBED')
+        if (project === null) throw new Error('fixture')
+        return await projectRead(ctx, me, project, 'read')
+      })
+      expect(single.out.completion).toMatchObject({ status: 'ok' })
+      const updates: [number, number][] = []
+      for (const archived of [true, false]) {
+        const { out, read } = await measured(t, (ctx) =>
+          (
+            restUpdateProject as unknown as {
+              _handler: (c: QueryCtx, a: unknown) => Promise<{ archived: boolean }>
+            }
+          )._handler(ctx, {
+            callerId: f.user.id,
+            access: 'write',
+            ref: 'TBED',
+            body: JSON.stringify({ archived }),
+            keyName: null,
+          }),
+        )
+        expect(out.archived).toBe(archived)
+        updates.push([read.ranges, read.documents])
+      }
+      return { single: [single.read.ranges, single.read.documents], updates }
+    }
+    const everyday = await reads(false)
+    const sum = await reads(true)
+    console.log(
+      `case 7, the single read and the update: everyday ${JSON.stringify(everyday)}, at the sum ${JSON.stringify(sum)}`,
+    )
+    expect(sum).toEqual(everyday)
+  })
+
   it('reads one project’s access for the single read and an update that archives and restores it', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
