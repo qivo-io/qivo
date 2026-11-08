@@ -83,7 +83,8 @@
      change reaches a session that beats every six hours, also hidden.
    - End. The leader keeps whether another tab waits for its lock
      (locks.query), refreshed when it gains leadership, on each `hello` and
-     `bye` and after each beat. On `pagehide` and `freeze`, a leader that
+     `bye` (a follower says it as it leaves and as it withdraws a queued
+     turn) and after each beat. On `pagehide` and `freeze`, a leader that
      beat since it gained leadership and sees no other tab waiting sends
      `end` with its instance, best effort over the open socket, which the
      server takes as the session no longer live. A stop (the store's reset
@@ -658,11 +659,16 @@ export function startNotificationLeader(deps: LeaderDeps) {
 
   /* Waits outside the election while this page cannot notify, so a tab of
      the profile that can notify leads, and reads the capability at each
-     tick, joining again once it can. */
+     tick, joining again once it can. A turn it queued is withdrawn with a
+     `bye`, so the leader reads its waiting tabs again and still ends the
+     session at its close when no other tab waits. */
   function standBy() {
     dropElection()
-    queued?.abort()
-    queued = null
+    if (queued) {
+      queued.abort()
+      queued = null
+      post({ kind: 'bye' })
+    }
     freshLeft = false
     role = 'follower'
     poll ??= setInterval(contend, NOTIFY_CLIENT.tick_ms)

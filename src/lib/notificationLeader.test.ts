@@ -819,6 +819,30 @@ describe('the capability', () => {
     await flush()
     expect(b.leader.role()).toBe('leader')
   })
+
+  it('says bye as a queued follower loses its capability, so the leader closing before its next beat still ends', async () => {
+    const p = profile()
+    const [a, b] = [openTab(p), openTab(p)]
+    await flush()
+    expect((await p.manager?.query())?.pending).toHaveLength(1)
+    // b waits in the queue, and its page loses its capability
+    b.state.can = false
+    b.capabilityChanged()
+    await flush()
+    expect(b.leader.role()).toBe('follower')
+    expect((await p.manager?.query())?.pending).toEqual([])
+    expect(p.posted.filter((m) => m.from === b.number).map((m) => m.message.kind)).toEqual([
+      'hello',
+      'capability',
+      'bye',
+    ])
+    // the leader closes before its next beat, with nobody else waiting
+    a.page.win.fire('pagehide', { persisted: false })
+    await flush()
+    expect(a.beats()).toHaveLength(1)
+    expect(a.ends()).toHaveLength(1)
+    expect(b.sent).toEqual([])
+  })
 })
 
 /* ---------------------------------------------------------------- failures */
