@@ -2299,7 +2299,7 @@ try {
   await signInDemo(pageB, demo, 'leo')
   await pageB.goto(await lumaPath(pageA), { waitUntil: 'domcontentloaded' })
   await pageB.waitForSelector('[data-card]', { timeout: 30000 })
-  log('B: Leo signed in — the Luma Sensor board renders')
+  log('B: Leo signed in, and the Luma Sensor board renders')
 
   // ---- 3. create through the real UI in A — the column supplies status,
   // while the short dialog asks only where the task goes and its title.

@@ -273,7 +273,7 @@ describe('parsePath — scopes and pages', () => {
     expect(buildPath({ view: 'kanban' })).toBe('/app/home')
   })
 
-  it('reads a task window open over My view — the org pins only the task', () => {
+  it('reads a task window open over My view, the org pinning only the task', () => {
     expect(parsePath('/app/home/board/mine/tasks/qn-9')).toEqual({
       view: 'kanban',
       scope: 'mine',
@@ -1062,7 +1062,7 @@ describe('pathMatchesState — replace in place vs. a new history entry', () => 
     ).toBe(false)
   })
 
-  it('moving between My view and a project earns one too — they are different panes', () => {
+  it('moving between My view and a project earns one too, as they are different panes', () => {
     // the rule compares the sentinel by identity: entering or leaving My
     // view with the window open changes the pane behind the task
     expect(

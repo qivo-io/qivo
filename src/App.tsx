@@ -1763,7 +1763,7 @@ function App() {
     const target = init.project || (P.isWideScope(scope) ? null : scope)
     const proj = target ? P.project(target) : null
     // "tasks live in sub-projects": a project with none can't receive one.
-    // The rule follows the TARGET, not just the scope — My view gives every
+    // The rule follows the TARGET, not just the scope. My view gives every
     // project a lane and a track, and their + buttons name them.
     if (proj && proj.type === 'meta' && proj.children.length === 0) {
       window.showToast?.('Create a sub-project first. Tasks live in sub-projects.', 'info')
@@ -1793,8 +1793,8 @@ function App() {
   /* A milestone lands on exactly ONE project's roadmap (0078), so My view
      has none to offer: the three surfaces that create one (the Overview
      section's +, the Roadmap toolbar, the palette) all hide there. This is the
-     single closure behind them — the two copies it replaces had already
-     drifted apart once — and it never lets My view reach the dialog. */
+     single closure behind them, in place of two copies that had already
+     drifted apart once, and it never lets My view reach the dialog. */
   const openNewMilestone = (init) =>
     setModal({
       kind: 'milestone',

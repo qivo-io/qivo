@@ -1106,8 +1106,8 @@ function KanbanBoard({
   })
   const defaultProject = subIds[0] || null
   // null in My view: a create needs a project, and a status column across
-  // every project names none — ColHeaderRow drops the + rather than opening
-  // a dialog with nothing chosen
+  // every project names none, so ColHeaderRow drops the + rather than
+  // opening a dialog with nothing chosen
   const addTo =
     wide || !P.canWrite(info.id)
       ? null
