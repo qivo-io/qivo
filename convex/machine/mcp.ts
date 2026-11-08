@@ -70,9 +70,9 @@ import {
   issueKey,
   listArchivedIssuesCore,
   listCommentsCore,
-  listProjectUsersCore,
   loadCatalogue,
   meCore,
+  projectUserPage,
   seesProject,
   taskListRequest,
   taskOut,
@@ -166,6 +166,7 @@ import {
   runEntry,
 } from './registry'
 import {
+  cursorPaging,
   hasLoneSurrogate,
   internalError,
   LONE_SURROGATE,
@@ -449,14 +450,27 @@ export const TOOLS: McpTool[] = [
     def: {
       name: 'list_project_users',
       title: 'List project users',
-      description:
-        'Users who can see a destination project, for safe reporter_id, assignee_id and reviewer_id mapping. `project` accepts a project number, a key like ENC, or a uuid and must be visible to your account. Every row is a real Qivo profile; `assignable` is true only when that user is active and has effective Edit or Lead permission on the project. Any returned id may be a reporter_id, including an inactive user or viewer, while only rows with `assignable: true` may be an assignee_id or reviewer_id.',
+      description: `Users who can see a destination project, for safe reporter_id, assignee_id and reviewer_id mapping, one page in name order, ignoring case and accents. \`project\` accepts a project number, a key like ENC, or a uuid and must be visible to your account. Every row is a real Qivo profile; \`assignable\` is true only when that user is active and has effective Edit or Lead permission on the project. Any returned id may be a reporter_id, including an inactive user or viewer, while only rows with \`assignable: true\` may be an assignee_id or reviewer_id. The answer is \`{next_cursor, users}\`; pass \`next_cursor\` back as \`cursor\`, with the same \`project\`, until it is null, because a page may hold fewer than \`limit\` users (${DEFAULT_PAGE_SIZE} by default, at most ${LIMITS.listProjectUsers.max}), even none. A user missing from the pages you have read is not ineligible until \`next_cursor\` is null. \`offset\` is refused unless 0.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
         properties: {
           project: {
             type: 'string',
+          },
+          limit: {
+            type: 'integer',
+            minimum: LIMITS.listProjectUsers.min,
+            maximum: LIMITS.listProjectUsers.max,
+          },
+          offset: {
+            type: 'integer',
+            minimum: 0,
+            maximum: 0,
+          },
+          cursor: {
+            type: 'string',
+            minLength: 1,
           },
         },
         required: ['project'],
@@ -466,7 +480,7 @@ export const TOOLS: McpTool[] = [
       r.runQuery(internal.machine.mcp.listProjectUsers, {
         callerId,
         access,
-        ...(args as { project: string }),
+        ...(args as { project: string; limit?: number; offset?: number; cursor?: string }),
       }),
   },
   {
@@ -1875,17 +1889,27 @@ export const listUsers = internalQuery({
   },
 })
 
-/* list_project_users: a project the caller can read (lib/core.ts
- * findProject and seesProject), its people with `assignable`. */
+/* list_project_users: one page of the people of a project the caller can
+ * read (lib/core.ts findProject and seesProject, checked after the
+ * paging), each with `assignable` (lib/core.ts projectUserPage, shared with
+ * REST's GET /v1/projects/{ref}/users), the cursor first. */
 export const listProjectUsers = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess, project: v.string() },
-  handler: async (ctx, { callerId, access, project }) => {
-    const me = await asMachineCaller(ctx, callerId, access)
-    const target = await findProject(ctx, me, project)
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    project: v.string(),
+    limit: v.optional(v.number()),
+    offset: v.optional(v.number()),
+    cursor: v.optional(v.string()),
+  },
+  handler: async (ctx, a): Promise<string> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const paging = cursorPaging(LIMITS.listProjectUsers, 'project users', a)
+    const target = await findProject(ctx, me, a.project)
     if (target === null || !(await seesProject(ctx, me, target))) {
-      throw notFound(`project "${project}" not found (or not visible to you)`)
+      throw notFound(`project "${a.project}" not found (or not visible to you)`)
     }
-    return pretty(await listProjectUsersCore(ctx, me, target))
+    return pretty(await projectUserPage(ctx, me, target, paging))
   },
 })
 

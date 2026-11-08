@@ -116,15 +116,17 @@ export const PICKERS: { rule: ReadCeiling } = {
  * `over_budget`. */
 class RuleFull extends Error {}
 
-/* `step` with a guard for its access reads that throws RuleFull once
+/** `step` with a guard for its access reads that throws RuleFull once
  * PICKERS.rule past what the request has read is used, and the ReadGuard
  * behind it, which canOwn's lookups count against. Answers null for
- * RuleFull. The guard looks before each block of access reads and before
- * each lookup, not after the last one, so the share can end one block over
+ * RuleFull. The REST and MCP project user list (lib/core.ts
+ * projectUserPage) works out its rule within it too. The guard looks
+ * before each block of access reads and before each lookup, not after the
+ * last one, so the share can end one block over
  * (at most one block of profiles' reads, far inside Convex's limits beside
  * the budgets above). An answer whose last block finished is whole, so it
  * stays `ready` rather than turning into `over_budget` after the fact. */
-async function withinRule<T>(
+export async function withinRule<T>(
   ctx: QueryCtx,
   step: (guard: () => Promise<void>, share: ReadGuard) => Promise<T>,
 ): Promise<T | null> {

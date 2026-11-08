@@ -1144,9 +1144,9 @@ export async function canSeeProject(
 /* Access for a reason other than read-only navigation, the per-profile
  * counterpart of accessOf's accessible. On a parent it means its lead, or
  * an individual or team grant on the parent itself, for an organization
- * admin as for anyone. On a sub-project it equals canSeeProject. The
- * project user list answers it for every profile at once through
- * projectLevelsForProfiles. */
+ * admin as for anyone. On a sub-project it equals canSeeProject. The REST
+ * and MCP project user list (lib/core.ts projectUserPage) answers it for
+ * every profile at once through projectLevelsForProfiles. */
 export async function canAccessProject(
   ctx: QueryCtx,
   profile: Doc<'profiles'>,
@@ -1719,8 +1719,8 @@ export async function projectLevelsForProfiles(
  * profile of another organization answers false. The task owner pickers
  * ask it for a new assignee or reviewer (model/pickers.ts ownerRule), the
  * rule the task writes ask one person at a time (model/issues.ts
- * assertAssigneeRule), and REST and MCP project users compute `assignable`
- * the same way (lib/core.ts listProjectUsersCore). Levels come only from
+ * assertAssigneeRule), and REST and MCP project users take `assignable`
+ * from it (lib/core.ts projectUserPage). Levels come only from
  * levelsFrom, so an organization admin passes only with a level of their
  * own, like anyone else. */
 export async function canBeAssignedFor(

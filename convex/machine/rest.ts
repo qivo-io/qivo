@@ -71,10 +71,11 @@ import {
   issueKey,
   listArchivedIssuesCore,
   listCommentsCore,
-  listProjectUsersCore,
   loadCatalogue,
   type MeJson,
   meCore,
+  type ProjectUsersPageJson,
+  projectUserPage,
   type RestCommentJson,
   type RestIssueJson,
   seesProject,
@@ -172,6 +173,7 @@ import { RECORD_ROUTES } from './records'
 import { conflictRetrying, type MachineEntry, type Principal, runEntry } from './registry'
 import {
   REST_CALLER as CALLER,
+  cursorPaging,
   internalError,
   namedPaging,
   needJson,
@@ -192,7 +194,6 @@ import { TEAM_ROUTES } from './teams'
 
 type RestProjectDetailJson = Awaited<ReturnType<typeof projectRead>>
 type RestUserJson = ReturnType<typeof userJson>
-type RestProjectUserJson = Awaited<ReturnType<typeof listProjectUsersCore>>[number]
 type RestTaskJson = RestIssueJson & TaskDetailJson & TaskAttachmentsJson
 /** A page of active or archived tasks; `next_cursor` is null on the last
  * one. */
@@ -506,19 +507,33 @@ export const getProject = internalQuery({
   },
 })
 
-/* GET /v1/projects/{ref}/users — the project-scoped identity resolver for
- * imports and user pickers. A caller may only enumerate a project it can
- * itself read (lib/core.ts findProject and seesProject). Reporter
- * eligibility is membership in this result; assignee eligibility
- * additionally requires `assignable`. */
+/* GET /v1/projects/{ref}/users?limit=&cursor=&offset= — the project-scoped
+ * identity resolver for imports and user pickers, one page of the
+ * project's people in name order, shared with MCP's list_project_users
+ * (lib/core.ts projectUserPage). A caller may only enumerate a project it
+ * can itself read (lib/core.ts findProject and seesProject), checked after
+ * the paging. Reporter eligibility is membership in this list; assignee
+ * eligibility additionally requires `assignable`. An empty cursor is taken
+ * as absent. */
 export const listProjectUsers = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
-  handler: async (ctx, a): Promise<RestProjectUserJson[]> => {
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    ref: v.string(),
+    limit: v.optional(v.string()),
+    cursor: v.optional(v.string()),
+    offset: v.optional(v.string()),
+  },
+  handler: async (ctx, a): Promise<ProjectUsersPageJson> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const paging = cursorPaging(LIMITS.listProjectUsers, 'project users', {
+      ...a,
+      cursor: a.cursor || undefined,
+    })
     const project = await findProject(ctx, me, a.ref)
     if (project === null || !(await seesProject(ctx, me, project)))
       throw notFound('project not found')
-    return await listProjectUsersCore(ctx, me, project)
+    return await projectUserPage(ctx, me, project, paging)
   },
 })
 
@@ -1325,8 +1340,16 @@ export const ROUTES: RestRoute[] = [
     path: 'projects/:ref/users',
     access: 'read',
     status: 200,
-    run: (r, { callerId, access, param }) =>
-      r.runQuery(internal.machine.rest.listProjectUsers, { callerId, access, ref: param('ref') }),
+    query: ['limit', 'cursor', 'offset'],
+    run: (r, { callerId, access, param, query }) =>
+      r.runQuery(internal.machine.rest.listProjectUsers, {
+        callerId,
+        access,
+        ref: param('ref'),
+        limit: query('limit'),
+        cursor: query('cursor'),
+        offset: query('offset'),
+      }),
   }),
   route({
     method: 'GET',

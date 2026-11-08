@@ -56,19 +56,21 @@ import {
 } from '../model/issues'
 import { labelJson, setTaskLabel } from '../model/labels'
 import { linkKindFrom, type TaskLinkKind } from '../model/links'
-import { idTieOf, nameKeysReady, profileIndex } from '../model/nameKeys'
+import { type IdTie, idTieOf, nameKeysReady, profileIndex } from '../model/nameKeys'
 import { attachmentLimitMb } from '../model/orgs'
 import { familyCounts, OVERVIEW_SHARDS } from '../model/overviewCounts'
+import { withinRule } from '../model/pickers'
 import {
   type Access,
   accessOf,
+  canBeAssignedFor,
   canChangeAccess,
-  canHoldWork,
   canSeeProject,
   isAccessUnchecked,
   levelRank,
   liveCredentialRow,
   machineAccess,
+  projectLevelReads,
   projectLevelsForOrg,
   projectLevelsForProfiles,
   readOnlyRefusal,
@@ -128,7 +130,15 @@ import {
   taskForecaster,
 } from './machineDelay'
 import { type ReadTally, type ReadTotals, readTally, totalsOf } from './machineSubtree'
-import { compareNamed, NAMED_RESERVE, type NamedAt, readGuard } from './namedPages'
+import {
+  compareNamed,
+  indexAfter,
+  listBatch,
+  NAMED_RESERVE,
+  type NamedAt,
+  namedCeiling,
+  readGuard,
+} from './namedPages'
 import { nameKey } from './nameKey'
 import { canCreateProjects } from './projectCreators'
 import { taskOwnerId } from './review'
@@ -751,10 +761,9 @@ export async function taskListRequest(
 /* The organization's whole roster, people and agents alike, ordered by
  * name. Not gated on a project grant, because the roster belongs to the org
  * the credential authenticates. REST GET /v1/users and MCP list_users page it
- * with userPage instead; only listProjectUsersCore and the REST and MCP
- * inbox's actor names (machine/discussion.ts) read it whole, until
- * t3/limits-machine-project-details and t3/limits-machine-inbox replace
- * those reads. */
+ * with userPage instead, and a project's users with projectUserPage; only
+ * the REST and MCP inbox's actor names (machine/discussion.ts) read it
+ * whole, until t3/limits-machine-inbox replaces that read. */
 export async function listUsersCore(ctx: QueryCtx, me: Caller): Promise<Doc<'profiles'>[]> {
   const rows = await ctx.db
     .query('profiles')
@@ -830,32 +839,102 @@ export async function userPage(
   return { next_cursor: page.next_cursor, users: page.rows }
 }
 
-/* A project's people for the machine surfaces' project roster (REST
- * GET /v1/projects/{ref}/users, MCP list_project_users), ordered by name.
- * The caller must already have resolved a project it can read. A parent's
- * people are those with standing on the parent itself; someone who sees it
- * only through a sub-project is listed under that sub-project. A reporter
- * may be anyone listed; an assignee or reviewer needs `assignable`. Listed
- * and `assignable` are canAccessProject and profileCanBeAssigned, answered
- * for the whole roster from the project's grants (projectLevelsForProfiles),
- * so the read costs the same few index ranges however large the
- * organization is. */
-export async function listProjectUsersCore(
+/* The list name a project's users cursor seals (lib/listCursor.ts). REST
+ * and MCP answer the same rows, so they share it. */
+const PROJECT_USERS_LIST = 'machine.project_users'
+
+/** The refusal of a project's user list whose access rows are more than
+ * the rule's share of one request reads (model/pickers.ts PICKERS.rule). */
+export const PROJECT_USERS_TOO_LARGE =
+  "this project's access is too large to check in one request, so Qivo cannot list its users. Contact support@qivo.io so we can help."
+
+/** A row of a project's users: the user row and whether they may be given
+ * work there. */
+export type ProjectUserJson = ReturnType<typeof userJson> & { assignable: boolean }
+
+/** One page of a project's users, as REST GET /v1/projects/{ref}/users and
+ * MCP list_project_users answer it, the cursor first. */
+export type ProjectUsersPageJson = { next_cursor: string | null; users: ProjectUserJson[] }
+
+/**
+ * One page of `project`'s people for REST GET /v1/projects/{ref}/users and
+ * MCP list_project_users, after `p.cursor`, the next_cursor of an earlier
+ * page, at most `p.limit` of them. The caller has resolved a project it can
+ * read.
+ *
+ * Who is listed: the people with standing on the project itself, as
+ * lib/access.ts canAccessProject admits them, so a parent lists no one who
+ * reaches it only through a sub-project, who is listed under that
+ * sub-project; people of the caller's organization alone. A reporter may be
+ * anyone listed. `assignable` is lib/access.ts canBeAssignedFor, the
+ * write's rule for a new assignee or reviewer on this project, an active
+ * admin, user or guest with User or Lead there; a subtask's holder must also
+ * see every task above it, which `assignable` does not show. Both are
+ * decided before the page is cut, from the project's own access rows: its
+ * and its top-level project's grants and shares and each sharing team's
+ * members (projectLevelsForProfiles), read once within the owner pickers'
+ * share (model/pickers.ts PICKERS.rule), past which the call is refused
+ * with PROJECT_USERS_TOO_LARGE rather than answered short.
+ *
+ * The page then walks the organization's people in name order
+ * (profiles.by_org_name, by the name key, then the id, as userPage does)
+ * within NAMED_READ, keeping the ones the rule lists, so a page can hold
+ * fewer than `p.limit` people, or none, while next_cursor is set, and a
+ * person missing from the pages read so far is not ineligible until
+ * next_cursor is null. For a project few people reach one page reads the
+ * roster in name order until it ends or the budget stops it. The cursor is
+ * sealed with the organization, `me` and the project, so it opens only for
+ * that list on either surface. Pages are not a snapshot. Refused with
+ * NAMES_NOT_READY until the organization's names are keyed, and with
+ * CURSOR_REFUSAL for any other cursor, both before the rule's reads.
+ *
+ * Measured at the design size in convex/tests/projectDetails.test.ts
+ * ("reads at the design size"), a page with the rule's reads: a project 995
+ * of 1,000 people reach through one team's share, at most 10 ranges and
+ * 1,204 documents at limit 200 and 1,054 at 50; one 3 of 1,000 reach by
+ * grants, one page that walks the roster to its end in 8 ranges and 1,006
+ * documents; one with 1,000 user grants, at most 18 ranges and 1,218
+ * documents at 200; and a sub-project shared with 5 teams under a top-level
+ * project shared with 5 others, its people in 5 teams each (5,000
+ * memberships) with 1,000 grants on each project, 28 ranges and 7,226
+ * documents for its first page, inside PICKERS.rule's 8,000.
+ */
+export async function projectUserPage(
   ctx: QueryCtx,
   me: Caller,
   project: Doc<'projects'>,
-): Promise<(ReturnType<typeof userJson> & { assignable: boolean })[]> {
-  const levelOf = await projectLevelsForProfiles(ctx, project)
-  return (await listUsersCore(ctx, me)).flatMap((profile) => {
-    const level = levelOf(profile)
-    if (level === null) return []
-    return [
-      {
-        ...userJson(profile),
-        assignable: canHoldWork(profile) && levelRank(level) >= LEVEL_RANK.user,
-      },
-    ]
+  p: { limit: number; cursor: string | null },
+): Promise<ProjectUsersPageJson> {
+  if (!(await nameKeysReady(ctx, me.org_id))) throw rule(NAMES_NOT_READY)
+  const scope = [me.org_id, me.id, project.id]
+  let after: NamedAt<IdTie> | null = null
+  if (p.cursor !== null) {
+    const at = await openListCursor(p.cursor, PROJECT_USERS_LIST, scope, 1)
+    const tie = idTieOf(at)
+    if (tie === null) throw badRequest(CURSOR_REFUSAL)
+    after = { key: at.key, tie }
+  }
+  const people = await withinRule(ctx, async (guard) => {
+    const reads = projectLevelReads()
+    const levelOf = await projectLevelsForProfiles(ctx, project, { guard, reads })
+    const assignable = await canBeAssignedFor(ctx, project, { guard, reads })
+    return { levelOf, assignable }
   })
+  if (people === null) throw rule(PROJECT_USERS_TOO_LARGE)
+  const batch = await listBatch(
+    ctx,
+    { list: PROJECT_USERS_LIST, scope, after, through: null },
+    {
+      stream: indexAfter(profileIndex(ctx, me.org_id), after),
+      keep: async (profile: Doc<'profiles'>) =>
+        people.levelOf(profile) === null
+          ? null
+          : { ...userJson(profile), assignable: people.assignable(profile) },
+      limit: p.limit,
+      ceiling: await namedCeiling(ctx),
+    },
+  )
+  return { next_cursor: batch.next, users: batch.rows }
 }
 
 /* The most comments one REST or MCP read answers, and how many it answers
@@ -2701,13 +2780,32 @@ export const UNAVAILABLE_COMPLETION: CompletionJson = {
   percent: null,
 }
 
+/** The bound of the three first pages of a project's details, its
+ * milestones, user grants and team grants, read together after the
+ * completion (machine/projects.ts projectDetail), as transaction totals
+ * from the first page's start. A list that finds no room left answers no
+ * rows and a cursor at its start, never as complete. Tests lower it.
+ * Measured in convex/tests/projectDetails.test.ts ("reads at the design
+ * size"), the details at the sum, a sub-project with 1,000 user grants and
+ * 5 team shares under a top-level project with 260 weekly milestones, read
+ * 71 index ranges and 170 documents in all, the first pages and the rest
+ * of the read, and a PATCH renaming it 82 and 178. */
+export const PROJECT_DETAILS: ReadCeiling = { ranges: 512, documents: 2000, bytes: 4 * MIB }
+
+/* The single reads of a project's details besides its first pages: its
+ * top-level project, its lead's profile and what its review hours inherit. */
+const DETAIL_LOOKUPS = 4
+
 /** What a completion keeps back from the request's limits for the reads of
- * a project's detail after it (machine/projects.ts projectDetail): the
- * profile of each user given access to the project, one range each, at
- * most the organization's people, the team shares and their teams, and
- * the milestones, with the documents a read may take past its last look.
- * Tests lower these. */
-export const COMPLETION_RESERVE: ReadCeiling = { ranges: 1200, documents: 2400, bytes: 4 * MIB }
+ * a project's details after it (machine/projects.ts projectDetail): the
+ * three first pages within PROJECT_DETAILS, what lib/namedPages.ts
+ * namedCeiling keeps back beside them (NAMED_RESERVE) and the details'
+ * single reads. Tests lower these. */
+export const COMPLETION_RESERVE: ReadCeiling = {
+  ranges: PROJECT_DETAILS.ranges + NAMED_RESERVE.ranges + DETAIL_LOOKUPS,
+  documents: PROJECT_DETAILS.documents + NAMED_RESERVE.documents + DETAIL_LOOKUPS,
+  bytes: PROJECT_DETAILS.bytes + NAMED_RESERVE.bytes,
+}
 
 /* One count row as the completion keeps room for it, as the Overview's
  * figures do (lib/viewReads.ts COUNT_ROW), since its fields are ids and
