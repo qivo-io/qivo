@@ -1639,6 +1639,10 @@ const attachments = descriptionImages.concat(
 const issueSubs = tasks.flatMap((row, n) => {
   return picked(n, followShare, 3) ? [{ issue_id: row.id, profile_id: me.id, created_at: now }] : []
 })
+/* The number the server gives the next project created here, as its
+   org_counters next_project_num does, which no part sends: one past every
+   program and the hidden one. */
+let nextProjectNum = hiddenNum + hiddenCount + 1
 const snapshot = {
   auth_user_id: 'perf-account',
   myProfileIds: [me.id],
@@ -1649,11 +1653,9 @@ const snapshot = {
       slug: 'testbed',
       created_at: now,
       next_issue_num: count + hiddenTasks.length + 1,
-      next_project_num: hiddenNum + hiddenCount + 1,
-      // every task is active, and every program and its projects are live
-      // but those archivedprojects archives
+      // every task is active; the root sends no project number or count,
+      // which the server keeps in org_counters (nextProjectNum below)
       active_tasks: count + hiddenTasks.length,
-      live_projects: liveProgramCount * (subprojectCount + 1) + 1 + hiddenCount,
       date_format: 'iso',
       week_start: 1,
       week_one_rule: 'first4day',
@@ -1707,9 +1709,7 @@ if (deletedStates.has('two-orgs')) {
       name: 'Partner Co',
       slug: 'partner',
       next_issue_num: 1,
-      next_project_num: 3,
       active_tasks: 0,
-      live_projects: 2,
     },
   ]
   snapshot.myProfileIds = [...snapshot.myProfileIds, seat]
@@ -3020,8 +3020,7 @@ async function mutate(name, args) {
         ? p.type === 'meta' && p.parent_id === undefined
         : p.type === 'project' && p.parent_id === parent,
     )
-    const [orgRow] = snapshot.orgs
-    const num = orgRow.next_project_num
+    const num = nextProjectNum++
     const row = {
       id: args.id,
       org_id: args.org_id,
@@ -3038,7 +3037,6 @@ async function mutate(name, args) {
       track_delay: args.track_delay ?? true,
       created_at: new Date().toISOString(),
     }
-    snapshot.orgs = [{ ...orgRow, next_project_num: num + 1 }, ...snapshot.orgs.slice(1)]
     if (unseen) hidden.children.push(row)
     else {
       snapshot.projects = [...snapshot.projects, row]

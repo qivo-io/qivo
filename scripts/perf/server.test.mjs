@@ -2092,7 +2092,11 @@ describe('the benchmark server', () => {
       lead_id: before.profiles[0].id,
       sort_order: Math.max(...siblings.map((p) => p.sort_order)) + 1,
     })
-    expect(after.orgs[0].next_project_num).toBe(before.orgs[0].next_project_num + 1)
+    // numbered past every project the server holds, as org_counters numbers
+    // it, with no project number in the root
+    expect(row.num).toBeGreaterThan(Math.max(...before.projects.map((p) => p.num)))
+    expect(after.orgs[0]).not.toHaveProperty('next_project_num')
+    expect(after.orgs[0]).not.toHaveProperty('live_projects')
     // under the hidden program, which the workspace leaves out, it stays out
     // and Settings' lists and its page still answer it
     const lists = async (tag) => {
