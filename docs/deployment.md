@@ -391,9 +391,11 @@ server that step fails. Next it loads the run project's Board, whose sync
 socket must subscribe neither `workspace.people` nor `workspace.catalog`,
 with Nora's own seats alone in the store, finds Leo Martins in the Board's
 **Assignee** menu (`pickers.mentions`), whose pick reads the Board with
-him among its owners and whose **×** clears it, finds him by his address
-under **+ Add** in a task's follower popover (`pickers.taskFollowers`)
-and closes it without adding him, and finds the run's team by its tag in
+him among its owners and whose **×** clears it, gives him Viewer on the
+run's Alpha sub-project, finds him by his address under **+ Add** in the
+follower popover of a task there (`pickers.taskFollowers`, which offers
+only people who see the task's project), closes it without adding him and
+takes the grant away again, and finds the run's team by its tag in
 Team sync's scope menu (`teams.picker`), whose pick names it on the
 trigger and reads the team's agenda (`ui/roster-parts`). Against a backend
 from before the release after v0.1.160 that step fails. It then searches **Settings → Users** for its

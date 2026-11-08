@@ -102,9 +102,10 @@
  * the agent and deletes the team from the list (ui/settings-teams). It
  * loads M's Board without the workspace's removed people and catalog
  * parts and with Nora's own seats alone in the store, finds Leo Martins in
- * the Board's Assignee menu and by his address in a task's follower
- * popover, and the run's team by its tag in Team sync's scope menu, each
- * on the server's reads (ui/roster-parts). It
+ * the Board's Assignee menu and, with Viewer on the task's sub-project for
+ * the step, by his address in a task's follower popover, and the run's
+ * team by its tag in Team sync's scope menu, each on the server's reads
+ * (ui/roster-parts). It
  * searches Settings › Users for its Standard agent by name, which the deployment answers alone
  * with its key's fingerprint from a one-shot key read, opens its keys, and
  * checks that Organization › General's creators line names and counts what
@@ -7010,14 +7011,17 @@ export const ROSTER_READS = {
  *  agenda answers for its scope. M's Board's Assignee menu finds
  *  OWNER_PICKERS_PERSON through pickers.mentions, a pick sends the
  *  Board's read with his id in its owners, and the filter's × clears it.
- *  run.t0's follower popover finds him by his address under + Add
- *  through pickers.taskFollowers and closes without adding anyone. A
- *  failure clears the filter and Team sync's scope in a `finally`. It
- *  writes no record. It runs after ui/settings-teams and before the run
- *  archives M, and needs a backend from this release on. */
+ *  The follower Add list offers only people who see the task's project,
+ *  so the step gives him Viewer on Alpha, run.t0's sub-project, which the
+ *  run otherwise shares with its agents alone, and run.t0's follower
+ *  popover finds him by his address under + Add through
+ *  pickers.taskFollowers and closes without adding anyone. A failure
+ *  clears the filter and Team sync's scope, and the grant goes, in a
+ *  `finally`. It writes no record. It runs after ui/settings-teams and
+ *  before the run archives M, and needs a backend from this release on. */
 async function rosterPartsCheck() {
   const w = run.creds.writeToken
-  const { M } = run.projects
+  const { M, A } = run.projects
   await check(ROSTER_PARTS_STEP, async () => {
     expect(run.team, 'the run made no team')
     expect(Number.isInteger(M.num), 'the run project has no number')
@@ -7032,6 +7036,7 @@ async function rosterPartsCheck() {
     const board = `${cfg.appOrigin}/app/${ORG_SLUG}/board/p/${M.num}`
     let filtered = false
     let scoped = false
+    let granted = false
     try {
       // a fresh load subscribes neither removed part, and the store holds
       // Nora's own seats alone
@@ -7069,10 +7074,17 @@ async function rosterPartsCheck() {
       filtered = false
       await app.locator('[data-filter-x="assignee"]').first().waitFor({ state: 'detached' })
 
-      // run.t0's follower popover finds Leo by his address under + Add
-      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/task/${run.t0.key}`, {
+      // run.t0's follower popover finds Leo by his address under + Add,
+      // once he sees Alpha
+      const grant = await restOk(w, 'PUT', `/projects/${A.id}/access/users/${leo.id}`, {
+        level: 'viewer',
+      })
+      granted = true
+      eq(grant.level, 'viewer', `${leo.name}'s level on ${A.key}`)
+      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${run.t0.key.toLowerCase()}`, {
         waitUntil: 'domcontentloaded',
       })
+      await app.locator('[role="dialog"] [data-task-title]').waitFor({ timeout: 60_000 })
       await app.locator('[data-task-subscribe]').first().click()
       await app.locator('[data-task-subscriber-add-open]').first().click()
       await app.locator('[data-task-subscriber-search]').first().fill(leo.email)
@@ -7130,6 +7142,8 @@ async function rosterPartsCheck() {
             waitUntil: 'domcontentloaded',
           })
           .catch(() => {})
+      if (granted)
+        await rest(w, 'DELETE', `/projects/${A.id}/access/users/${leo.id}`).catch(() => {})
       app.off('websocket', record)
     }
   })

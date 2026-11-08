@@ -290,6 +290,33 @@ describe('staging check REST contract', () => {
     ])
       expect(followers, mark).toContain(mark)
     expect(ROSTER_PARTS_STEP).toBe('ui/roster-parts')
+    const check = read('./staging-check.mjs')
+    const step = check.slice(
+      check.indexOf('async function rosterPartsCheck()'),
+      check.indexOf('/** Whether frame `text` the page sent is a one-shot read'),
+    )
+    // run.t0's window opens at the address the router parses, its key in
+    // lower case, and the step waits for it before the eye
+    expect(read('../src/lib/router.ts')).toContain("if (seg[1] === 'tasks')")
+    const opens = step.indexOf(
+      `\`\${cfg.appOrigin}/app/\${ORG_SLUG}/tasks/\${run.t0.key.toLowerCase()}\``,
+    )
+    expect(opens).toBeGreaterThan(-1)
+    const title = step.indexOf(`'[role="dialog"] [data-task-title]'`)
+    expect(title).toBeGreaterThan(opens)
+    expect(title).toBeLessThan(step.indexOf(`'[data-task-subscribe]'`))
+    // no step opens a task at /task/, which the router does not parse
+    expect(check).not.toContain(`/app/\${ORG_SLUG}/task/`)
+    // the Add list offers only people who see the task's project, so Leo
+    // gets Viewer on Alpha before the search, and the grant goes in the
+    // step's finally
+    const grant = step.indexOf(`\`/projects/\${A.id}/access/users/\${leo.id}\`, {`)
+    expect(grant).toBeGreaterThan(-1)
+    expect(grant).toBeLessThan(step.indexOf(`'[data-task-subscriber-search]'`))
+    expect(step.slice(grant, grant + 120)).toContain("level: 'viewer'")
+    expect(
+      step.indexOf(`rest(w, 'DELETE', \`/projects/\${A.id}/access/users/\${leo.id}\`)`),
+    ).toBeGreaterThan(step.indexOf('} finally {'))
   })
   it("opens its own milestone in the Milestones window by the window's own marks, in a free week, and a past one in Past", () => {
     // the window and its section part, which the Overview and the phone
