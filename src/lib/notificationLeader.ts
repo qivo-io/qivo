@@ -53,7 +53,9 @@
      that tab's last beat is under RESUME_GAP_MS old; else with the resume
      order, as after a freeze, the back and forward cache, a capability
      that turned on and a stale handover. A gap between its ticks past
-     RESUME_GAP_MS and the desktop app's wake go to the feed's resume().
+     RESUME_GAP_MS and the desktop app's wake go to the feed's resume(),
+     and every other tick to the feed's tick(), which keeps its floor
+     about eleven minutes back at most between beats hours apart.
    - The mode. The leader watches notifications.settings through
      `watchSettings`, the live transport outside the visibility gate, so a
      change reaches a session that beats every six hours, also hidden.
@@ -550,7 +552,7 @@ export function startNotificationLeader(deps: LeaderDeps) {
     }
     if (!feedStarted) return
     if (gap > RESUME_GAP_MS) feed.resume()
-    // what a failed call left waits for this tick
+    // the floor's raise and what a failed call left wait for this tick
     else feed.tick()
   }
 

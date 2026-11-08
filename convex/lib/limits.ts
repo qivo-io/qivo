@@ -216,8 +216,13 @@ export const INBOX_LIMIT = 500
  * (model/notificationSessions.ts NOTIFY.live_window_ms reads it), and the
  * app's feed client (src/lib/notificationFeed.ts) starts its floor this far
  * before its first beat's server time and keeps it no further back than
- * this before the latest beat, so inbox.feed reads only events a claim may
- * still grant. A bound on the app's own calls, not a limit people meet. */
+ * this before the latest beat's, and than this and a minute more
+ * (FLOOR_SLACK_MS) before the server time it estimates at the leader's
+ * tick, which also holds under All enabled sessions, where a leader beats
+ * every six hours. So inbox.feed reads the events a claim may still
+ * grant, and at most the two minutes before them that the slack and the
+ * read-back minute add. A bound on the app's own calls, not a limit people
+ * meet. */
 export const ALERT_WINDOW_MS = 600_000
 
 /** The task groups one Inbox page holds (model/inboxPage.ts INBOX_PAGE.rows),

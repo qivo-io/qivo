@@ -27,7 +27,12 @@
      `through`, never a clock, and shows each granted one. The floor then
      moves to `through`, and on each beat answer it is raised to no
      further back than ALERT_WINDOW_MS before the beat's `now`, so it stays
-     the later of ten minutes ago and the last `through`.
+     the later of ten minutes ago and the last `through`. The leader's
+     tick raises it the same way from the server's time it estimates (the
+     last beat's `now` plus the local time since) once it lags FLOOR_SLACK_MS
+     more, so the bound also holds under All enabled sessions, whose leader
+     beats every six hours, and a quiet tab watches the feed again at most
+     once a minute. That raise is a floor, never a claim's `through`.
    - A resume (a rise in the socket's connection count, resume(), which the
      leader calls for a gap between its ticks past RESUME_GAP_MS, the
      desktop app's wake and a start after a freeze, and a lead() that is
@@ -74,6 +79,12 @@ export const RESUME_GAP_MS = 90_000
     desktop app's wake, the reconnect and the timer gap that follow one
     sleep run the resume order once. */
 export const RESUME_QUIET_MS = 5_000
+
+/** How far past ALERT_WINDOW_MS the floor may lag the estimated server
+    time before the leader's tick raises it: a minute, a leader's beat in
+    Most recently active session, so a quiet tab of either mode watches
+    the feed again at most once a minute. */
+export const FLOOR_SLACK_MS = 60_000
 
 /** The generic summary's tag, so a newer one replaces an older one. */
 export const SUMMARY_TAG = 'qivo:catch-up'
@@ -206,8 +217,17 @@ export function createNotificationFeed(deps: FeedDeps) {
   let running = false
   // the run in progress, which idle() waits for
   let current: Promise<void> | null = null
+  // the server time of the last beat answer heard and the local time it
+  // came, from which the tick estimates the server's time
+  let heard: { now: number; local: number } | null = null
 
-  const track = <R>(send: () => Promise<R>) => trackNotificationCall(convex, send)
+  /* Sends `send` for a run of leadership `mine`, refused with CallOffline
+     once that run ended, so a run that outlives stop() records no key and
+     moves no checkpoint. */
+  const sendAs = <R>(mine: number, send: () => Promise<R>) => {
+    if (!link || mine !== epoch) return Promise.reject(new CallOffline('not leading'))
+    return trackNotificationCall(convex, send)
+  }
 
   /* Tells the leader where the floor and the keys stand. */
   function moved() {
@@ -222,18 +242,27 @@ export function createNotificationFeed(deps: FeedDeps) {
   }
 
   /* Raises the floor to no further back than ALERT_WINDOW_MS before the
-     beat's `now`. */
-  function raise(beat: Beat) {
-    if (after !== null && after < beat.now - ALERT_WINDOW_MS) {
-      after = beat.now - ALERT_WINDOW_MS
+     server time `now`. */
+  function lift(now: number) {
+    if (after !== null && after < now - ALERT_WINDOW_MS) {
+      after = now - ALERT_WINDOW_MS
       watchFeed()
     }
   }
 
-  /* The leader's beat, for a run of leadership `mine`. */
+  /* Takes beat answer `beat`: its time is the tick's estimate from now on,
+     and the floor rises to ten minutes before it. */
+  function raise(beat: Beat) {
+    heard = { now: beat.now, local: Date.now() }
+    lift(beat.now)
+  }
+
+  /* The leader's beat, for a run of leadership `mine`, which a stop
+     during the beat ends. */
   async function beat(mine: number): Promise<Beat> {
     if (!link || mine !== epoch) throw new CallOffline('not leading')
     const answer = await link.beat()
+    if (mine !== epoch) throw new CallOffline('not leading')
     raise(answer)
     return answer
   }
@@ -243,7 +272,7 @@ export function createNotificationFeed(deps: FeedDeps) {
   async function summarize(mine: number): Promise<void> {
     const beaten = freshBeat ?? (await beat(mine))
     freshBeat = null
-    const answer = await track(() => convex.mutation(api.notifications.claimSummary, {}))
+    const answer = await sendAs(mine, () => convex.mutation(api.notifications.claimSummary, {}))
     if (mine !== epoch) return
     if (answer.state === 'summary')
       deps.notify(SUMMARY_TAG, SUMMARY_TITLE, SUMMARY_BODY, deps.openInbox)
@@ -271,7 +300,7 @@ export function createNotificationFeed(deps: FeedDeps) {
       shows on `not_target`. */
   async function claimEvents(mine: number, events: FeedEvent[], through: number) {
     const claim = () =>
-      track(() =>
+      sendAs(mine, () =>
         convex.mutation(api.notifications.claimAlerts, {
           events: events.map(({ key, at }) => ({ key, at })),
           through,
@@ -377,6 +406,7 @@ export function createNotificationFeed(deps: FeedDeps) {
     waiting = null
     resumePending = false
     freshBeat = null
+    heard = null
   }
 
   return {
@@ -390,6 +420,7 @@ export function createNotificationFeed(deps: FeedDeps) {
       forget()
       epoch += 1
       link = l
+      heard = { now: first.now, local: Date.now() }
       if (start.kind === 'resume') {
         // the summary takes this beat and watches from its `now`
         freshBeat = first
@@ -426,9 +457,14 @@ export function createNotificationFeed(deps: FeedDeps) {
       void pump()
     },
     resume,
-    /** Runs what a failed call left, a resume and the answer it was
-        handling, at the leader's tick. */
+    /** At the leader's tick: raises the floor from the estimated server
+        time once it lags FLOOR_SLACK_MS past ALERT_WINDOW_MS, and runs
+        what a failed call left, a resume and the answer it was handling. */
     tick() {
+      if (link && heard !== null) {
+        const now = heard.now + Math.max(0, Date.now() - heard.local)
+        if (after !== null && after < now - ALERT_WINDOW_MS - FLOOR_SLACK_MS) lift(now)
+      }
       if (resumePending || waiting !== null) void pump()
     },
     /** The floor the feed is watched with, for a new registry to watch it

@@ -430,7 +430,9 @@ const newestUnreadMessage = (ctx: QueryCtx, item: Doc<'inbox_items'>) =>
  * The floor is the safeguard for restored tasks and tasks newly in view: a
  * stored unread message about such a task is answered only when it is
  * newer than the floor less the minute, and the client keeps its floor no
- * further back than ALERT_WINDOW_MS before its latest beat. So such a
+ * further back than ALERT_WINDOW_MS before its latest beat, and a minute
+ * more before the server time it estimates at each of its leader's ticks,
+ * in either delivery mode. So such a
  * message under ten minutes old that no session alerted is offered and
  * raises one alert, an older one raises none, and the claims' records
  * refuse what a session alerted. A notice stored more than the minute late,

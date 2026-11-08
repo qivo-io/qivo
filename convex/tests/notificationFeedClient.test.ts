@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createNotificationFeed,
   type FeedConvex,
+  FLOOR_SLACK_MS,
   type NotificationFeed,
   RESUME_GAP_MS,
   SUMMARY_TAG,
@@ -32,6 +33,7 @@ import { createChannelHub, createLockManager } from '../../src/lib/notificationT
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { newWindowKey } from '../lib/db'
+import { ALERT_WINDOW_MS } from '../lib/limits'
 import { insertTask } from '../model/descriptions'
 import { postMessage } from '../model/messages'
 import { CATCH_UP } from '../model/notificationCatchup'
@@ -116,6 +118,12 @@ type Tab = {
   permissionChanged: () => void
   /** a mutation name the next call of fails once, for a failure case */
   failNext: string | null
+  /** a mutation name the next call of waits for release() to be sent on */
+  holdNext: string | null
+  /** the held call, until it answers */
+  held: Promise<unknown> | null
+  /** sends the held call, if one waits */
+  release: () => void
   s: Session
   /** the locks its leader shares with other tabs, none to lead alone */
   locks: LeaderLocks | null
@@ -143,6 +151,9 @@ function openTab(s: Session, can = true, locks: LeaderLocks | null = null): Tab 
     can,
     permissionChanged: () => {},
     failNext: null,
+    holdNext: null,
+    held: null,
+    release: () => {},
     s,
     locks,
   } as unknown as Tab
@@ -151,18 +162,28 @@ function openTab(s: Session, can = true, locks: LeaderLocks | null = null): Tab 
       const name = getFunctionName(ref)
       const call: Call = { name, args }
       tab.calls.push(call)
+      const hold = tab.holdNext === name
+      if (hold) tab.holdNext = null
       const run = (async () => {
         if (tab.failNext === name) {
           tab.failNext = null
           call.failed = true
           throw new Error('the network failed')
         }
+        if (hold)
+          await new Promise<void>((resolve) => {
+            tab.release = () => {
+              tab.release = () => {}
+              resolve()
+            }
+          })
         // convex-test's mutation, typed loosely as the client's is
         const mutate = s.as.mutation as (ref: unknown, args: unknown) => Promise<unknown>
         call.answer = await mutate(ref, args)
         return call.answer
       })()
       tab.pending.add(run)
+      if (hold) tab.held = run
       void run.then(
         () => tab.pending.delete(run),
         () => tab.pending.delete(run),
@@ -272,6 +293,18 @@ async function startTabs(tabs: readonly Tab[]) {
 /** The names of a tab's calls from `from` on. */
 const names = (tab: Tab, from = 0) => tab.calls.slice(from).map((c) => c.name)
 
+/** Waits until tab `tab` sent a call of `name` from its call `from` on,
+    which may still wait to answer, letting every call it does not hold
+    answer meanwhile. */
+async function sent(tab: Tab, name: string, from = 0) {
+  for (let round = 0; round < 50; round++) {
+    if (names(tab, from).includes(name)) return
+    await Promise.allSettled([...tab.pending].filter((p) => p !== tab.held))
+    await vi.advanceTimersByTimeAsync(0)
+  }
+  throw new Error(`the tab sent no ${name}`)
+}
+
 /** The answers of a tab's calls of `name`. */
 const answers = (tab: Tab, name: string) =>
   tab.calls.filter((c) => c.name === name).map((c) => c.answer)
@@ -362,6 +395,51 @@ describe('a fresh start', () => {
     expect(
       tab.calls.filter((c) => c.name === 'notifications:claimAlerts').map((c) => c.args.events),
     ).toEqual([[], []])
+  })
+
+  it('sends nothing more once stopped while a summary or a beat it waits on is in flight', async () => {
+    const t = newT()
+    const { f, s, task } = await fixture(t)
+    const other = openTab(await signIn(t, f.guest.auth_user_id as string))
+    await startTabs([other])
+    jump(1)
+    await news(t, f, task)
+    await settle([other], true)
+    // the baseline answers summarize_first, and the summary waits
+    jump(1)
+    const tab = openTab(s)
+    tab.holdNext = 'notifications:claimSummary'
+    startLeader(tab)
+    await vi.advanceTimersByTimeAsync(0)
+    await quiet(tab)
+    // the first answer, whose baseline claim answers summarize_first
+    const first = await tab.s.as.query(api.inbox.feed, { after: tab.after as number })
+    tab.client.receive({ value: first }, tab.connection)
+    await sent(tab, 'notifications:claimSummary')
+    expect(names(tab)).toEqual([
+      'notifications:beat',
+      'notifications:claimAlerts',
+      'notifications:beat',
+      'notifications:claimSummary',
+    ])
+    tab.leader?.stop()
+    tab.release()
+    await quiet(tab)
+    expect(names(tab)).toHaveLength(4)
+    // a resume's beat that answers after the stop asks no summary
+    const again = openTab(await signIn(t, f.guest.auth_user_id as string))
+    await startTabs([again])
+    jump(2)
+    const from = again.calls.length
+    again.holdNext = 'notifications:beat'
+    again.client.resume()
+    await sent(again, 'notifications:beat', from)
+    expect(names(again, from)).toEqual(['notifications:beat'])
+    again.leader?.stop()
+    again.release()
+    await quiet(again)
+    expect(names(again, from)).toEqual(['notifications:beat'])
+    expect(again.notes).toEqual([])
   })
 })
 
@@ -819,29 +897,47 @@ describe('the summary', () => {
 /* --------------------------------------------------- the floor and history */
 
 describe('the floor', () => {
-  it('keeps the floor within ten minutes through a quiet hour, so items back in view raise nothing', async () => {
-    const t = newT()
-    const { f, s } = await fixture(t)
-    const lost = await plantProject(t, { org_id: f.org.id })
-    const revoke = await grant(t, f.guest, lost.id)
-    // 60 unread items about a project the guest then loses
-    for (let i = 0; i < 60; i++) {
-      const task = await plantIssue(t, { org_id: f.org.id, project_id: lost.id })
-      await post(t, f, { to: f.guest, task, minute: 0.01 * i })
-    }
-    await revoke()
-    jump(1)
-    const tab = openTab(s)
-    await startTabs([tab])
-    // an hour with no event, the beats going on
-    await wait([tab], 60 * MINUTE)
-    const restore = await grant(t, f.guest, lost.id)
-    await settle([tab], true)
-    expect(tab.notes).toEqual([])
-    expect(names(tab)).not.toContain('notifications:claimSummary')
-    expect(tab.after).toBeGreaterThan(Date.now() - 11 * MINUTE)
-    await restore()
-  })
+  it.each([
+    ['Most recently active session', 'recent'],
+    ['All enabled sessions', 'all'],
+  ] as const)(
+    'keeps the floor within ten minutes through a quiet hour under %s, so items back in view raise nothing',
+    async (_, delivery) => {
+      const t = newT()
+      const { f, s } = await fixture(t)
+      if (delivery === 'all') await s.as.mutation(api.notifications.setDelivery, { delivery })
+      const lost = await plantProject(t, { org_id: f.org.id })
+      const revoke = await grant(t, f.guest, lost.id)
+      // 60 unread items about a project the guest then loses
+      for (let i = 0; i < 60; i++) {
+        const task = await plantIssue(t, { org_id: f.org.id, project_id: lost.id })
+        await post(t, f, { to: f.guest, task, minute: 0.01 * i })
+      }
+      await revoke()
+      jump(1)
+      const tab = openTab(s)
+      await startTabs([tab])
+      // an hour with no event, the beats going on once a minute, or in All
+      // enabled sessions only the leader's ticks after its first beat
+      await wait([tab], 60 * MINUTE)
+      const beats = names(tab).filter((n) => n === 'notifications:beat')
+      if (delivery === 'all') {
+        expect(answers(tab, 'notifications:beat')[0]).toMatchObject({
+          every_ms: NOTIFY.idle_beat_ms,
+        })
+        expect(beats).toHaveLength(1)
+      } else expect(beats.length).toBeGreaterThan(50)
+      const restore = await grant(t, f.guest, lost.id)
+      await settle([tab], true)
+      expect(tab.notes).toEqual([])
+      expect(names(tab)).not.toContain('notifications:claimSummary')
+      // a beat raises it each minute, a tick once it lags a minute more
+      const lag =
+        delivery === 'all' ? ALERT_WINDOW_MS + FLOOR_SLACK_MS + NOTIFY_CLIENT.tick_ms : 11 * MINUTE
+      expect(tab.after).toBeGreaterThan(Date.now() - lag)
+      await restore()
+    },
+  )
 
   it('alerts a message under ten minutes old that comes back into view, and not one older', async () => {
     const t = newT()
