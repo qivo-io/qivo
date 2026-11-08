@@ -87,6 +87,8 @@ type Tab = {
     fail: (() => unknown) | null
     /** whether the calls never answer */
     hang: boolean
+    /** whether the next call waits for release() to answer */
+    holdNext: boolean
   }
   feed: FeedDouble
   settings: { take: ((d: Delivery | null) => void) | null; watching: number }
@@ -98,6 +100,8 @@ type Tab = {
   capabilityChanged: () => void
   /** the desktop app's wake */
   wake: () => void
+  /** answers the call holdNext held */
+  release: () => void
 }
 
 const tabs: Tab[] = []
@@ -141,7 +145,7 @@ function openTab(p: Profile, { can = true, locks }: { can?: boolean; locks?: Lea
     number,
     page: createPageDouble(),
     sent,
-    state: { can, online: true, every: MINUTE, fail: null, hang: false },
+    state: { can, online: true, every: MINUTE, fail: null, hang: false, holdNext: false },
     feed,
     settings: { take: null, watching: 0 },
     mirror: null,
@@ -154,16 +158,26 @@ function openTab(p: Profile, { can = true, locks }: { can?: boolean; locks?: Lea
     wake: () => {
       for (const listener of powers) listener()
     },
+    release: () => {},
   }
+  /* what call `name` answers, at the time it answers */
+  const answerOf = (name: string) =>
+    name === 'notifications:beat'
+      ? { every_ms: tab.state.every, live_ms: 180_000, now: Date.now() }
+      : null
   const convex = {
     mutation: (ref: FunctionReference<'mutation'>, args: Record<string, unknown>) => {
       const name = getFunctionName(ref)
       sent.push({ name, args })
       if (tab.state.fail) return Promise.reject(tab.state.fail())
       if (tab.state.hang) return new Promise(() => {})
-      if (name === 'notifications:beat')
-        return Promise.resolve({ every_ms: tab.state.every, live_ms: 180_000, now: Date.now() })
-      return Promise.resolve(null)
+      if (tab.state.holdNext) {
+        tab.state.holdNext = false
+        return new Promise((resolve) => {
+          tab.release = () => resolve(answerOf(name))
+        })
+      }
+      return Promise.resolve(answerOf(name))
     },
     connectionState: () => ({ isWebSocketConnected: tab.state.online }),
   }
@@ -335,6 +349,31 @@ describe('takeover and end', () => {
     await flush()
     expect(leaving.ends()).toEqual([])
     expect(leaving.page.listening('pagehide')).toBe(0)
+  })
+
+  it('sends no beat or end after a stop, from its timer or from a beat in flight', async () => {
+    const tab = openTab(profile())
+    await flush()
+    tab.leader.stop()
+    await vi.advanceTimersByTimeAsync(10 * MINUTE)
+    input(tab)
+    await flush()
+    expect(tab.beats()).toHaveLength(1)
+    // a periodic beat in flight at the stop answers after it
+    const held = openTab(profile())
+    await flush()
+    held.state.holdNext = true
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    expect(held.beats()).toHaveLength(2)
+    held.leader.stop()
+    held.release()
+    await flush()
+    await vi.advanceTimersByTimeAsync(10 * MINUTE)
+    expect(held.beats()).toHaveLength(2)
+    expect(held.ends()).toEqual([])
+    // the late answer reached neither the feed nor the mirror
+    expect(held.feed.beatens).toBe(1)
+    expect(held.mirror).toMatchObject({ role: 'stopped', beats: 1 })
   })
 
   it('lets go at freeze and into the back and forward cache, and follows when it returns', async () => {
