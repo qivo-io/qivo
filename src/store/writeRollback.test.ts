@@ -373,6 +373,91 @@ describe('rollback during snapshot trouble', () => {
     expect(showToast).toHaveBeenCalledWith("Couldn't save.", 'error')
   })
 
+  /* The generic cases below write a follow of the sensor task, a write that
+     still goes out during trouble and paints the workspace, beside the one
+     refuseFollow refuses. */
+  const sensor = () => task('Calibrate the sensor')
+  const follow = (on: boolean) => P().setIssueSubscribed(sensor().id, on)
+
+  it('paints accepted writes again in the order the server took them', async () => {
+    live().fail(new Error(QUERY_FAILURE))
+    follow(true)
+    await accept()
+    // the unfollow came second, so it must win
+    follow(false)
+    await accept()
+    await refuseFollow()
+    expect(sensor().subscribed).toBe(false)
+  })
+
+  it('forgets kept writes once a good delivery holds the newer truth', async () => {
+    live().fail(new Error(QUERY_FAILURE))
+    follow(true)
+    await accept()
+    await refuseFollow()
+    expect(sensor().subscribed).toBe(true)
+    // the server took the follow, then another device unfollowed
+    deliverTruth(() => {})
+    expect(sensor().subscribed).toBe(false)
+    await refuseFollow()
+    expect(sensor().subscribed).toBe(false)
+  })
+
+  it('keeps a pending write on screen when another write is refused first', async () => {
+    live().fail(new Error(QUERY_FAILURE))
+    follow(true)
+    // the refusal answers first and takes away only its own paint
+    await refuseFollow()
+    expect(sensor().subscribed).toBe(true)
+    await accept()
+    expect(sensor().subscribed).toBe(true)
+  })
+
+  it('paints a write kept after a held delivery once the last write settles', async () => {
+    follow(true)
+    // another client's change arrives, then the query fails
+    deliverTruth(() => {})
+    live().fail(new Error(QUERY_FAILURE))
+    await accept()
+    expect(sensor().subscribed).toBe(true)
+  })
+
+  it('keeps no paint of a write the newest delivery already holds once the trouble ended', async () => {
+    live().fail(new Error(QUERY_FAILURE))
+    deliverTruth(() => {})
+    expect(P().snapshotTrouble()).toBeNull()
+    follow(true)
+    expect(sensor().subscribed).toBe(true)
+    // the delivery that holds the follow, which another device undid
+    deliverTruth(() => {})
+    await accept()
+    expect(sensor().subscribed).toBe(false)
+    await refuseFollow()
+    expect(sensor().subscribed).toBe(false)
+  })
+
+  it('keeps the paint of a write accepted after Try again replaced the subscription', async () => {
+    live().fail(new Error(QUERY_FAILURE))
+    follow(true)
+    // a held delivery from before the follow, then Try again
+    deliverTruth(() => {})
+    P().retrySnapshot()
+    await accept()
+    expect(sensor().subscribed).toBe(true)
+  })
+
+  it('reverts only the refused write outside trouble', async () => {
+    follow(true)
+    // Convex delivers a write's own snapshot before its promise resolves
+    deliverTruth((snap) => {
+      snap.issueSubs.push({ issue_id: 'task-a', profile_id: me(), created_at: UNTIL })
+    })
+    await accept()
+    await refuseFollow()
+    expect(sensor().subscribed).toBe(true)
+    expect(P().snapshotTrouble()).toBeNull()
+  })
+
   it('takes back only the refused edit of three waiting online, at every step', async () => {
     P().updateIssue(task('Calibrate the sensor').id, { title: 'Calibrate sensor A' })
     P().updateIssue(task('Replace the gasket').id, { title: 'Replace gasket B' })
