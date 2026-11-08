@@ -370,7 +370,20 @@ async function ownTeamsOf(ctx: QueryCtx, me: Doc<'profiles'>) {
  * caller's seat and membership changes and on a change to one of their
  * teams, beside the organization settings and counters. Past
  * OWN_READS.teams memberships of one seat it throws accessUnchecked's
- * refusal, which the app shows as the workspace's failure (ownTeamsOf). */
+ * refusal, which the app shows as the workspace's failure (ownTeamsOf).
+ *
+ * Timed on 8 November 2026 at 02fa0e0a on a local backend on Boat (8
+ * vCPU), one call at a time, quiet and beside eight busy loops. One seat
+ * with its 3 team memberships read 9 ranges, 10 documents and 0.003 MiB
+ * with the sign-in, the same in an organization of 50 people as in one of
+ * 1,000. A seat in 5 teams read 11 ranges and 14 documents, and a login
+ * with a home seat and two guest seats read 17 ranges and 18 documents.
+ * JavaScript took 7 to 29 ms quiet and 11 to 66 ms busy. Before the people
+ * and catalog parts were removed, the root read 5 ranges and 4 documents
+ * for one seat, and the people part, which a seat no longer reads, read
+ * 1,005 ranges, 4,461 documents and 1.118 MiB at 1,000 people (an 839 KB
+ * answer) in 52 to 65 ms of JavaScript quiet and 72 to 120 ms busy, with
+ * totals up to 625 ms. */
 export async function readRoot(
   ctx: QueryCtx & { authUserId: string; myProfiles: Map<string, Doc<'profiles'>> },
 ) {

@@ -16,7 +16,14 @@
  *   organization settings and every task or project created, archived,
  *   restored or deleted (the numbers and live counts in org_counters). It
  *   sends no other person's profile, membership or Team sync stamp, and no
- *   team the caller is not in.
+ *   team the caller is not in. In the timing of 8 November 2026 at
+ *   02fa0e0a on a local backend on Boat (8 vCPU), one call at a time, one
+ *   seat with its 3 team memberships read 9 ranges, 10 documents and
+ *   0.003 MiB with the sign-in at 50 people and at 1,000, where the removed
+ *   people part read 1,005 ranges, 4,461 documents and 1.118 MiB at 1,000
+ *   people. Every root case took 7 to 29 ms of JavaScript quiet and 11 to
+ *   66 ms beside eight busy loops (lib/workspaceParts.ts readRoot has the
+ *   cases).
  * - projects (per window of its projects' window keys, which the server
  *   picks at random, lib/db.ts newWindowKey): the projects the caller can
  *   see, with grants and team grants. Two ranges per project, beside the

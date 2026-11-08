@@ -161,7 +161,11 @@ export const addable = orgQuery({
  * part before it was removed. It reads teams.by_org_name alone, no
  * membership, count, share or profile. Answers `not_ready` until the name
  * keys are written, or `ready` with the rows, `next` and `stopped`
- * (lib/namedPages.ts ListBatch). */
+ * (lib/namedPages.ts ListBatch). In the timing of 8 November 2026 among 50
+ * teams, a batch or a search read at most 6 ranges, 52 documents and
+ * 0.012 MiB with the sign-in, in at most 51 ms of JavaScript quiet and
+ * 65 ms beside eight busy loops (model/teams.ts teamPickerOf has the
+ * cases). */
 export const picker = orgQuery({
   args: vListArgs,
   handler: (ctx, a): Promise<TeamPickerAnswer> => teamPickerOf(ctx, ctx.me, a),

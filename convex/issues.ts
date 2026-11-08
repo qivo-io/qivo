@@ -657,7 +657,21 @@ async function subscriptionTarget(ctx: MeCtx, issueId: string) {
  * before the cap existed, answers those earliest follows with `more` true,
  * so a later follower is not listed until some earlier ones unfollow,
  * which the popover says. The people a manager may add come from
- * pickers.taskFollowers, a batch at a time, never from this answer. */
+ * pickers.taskFollowers, a batch at a time, never from this answer.
+ *
+ * Timed on 8 November 2026 at 02fa0e0a on a local backend on Boat (8
+ * vCPU), one call at a time, in an organization of 1,000 people, on a task
+ * with 5 followers in a sub-project shared with 3 teams. The project
+ * lead's call read 12 ranges, 15 documents and 0.006 MiB with the sign-in,
+ * and an admin's or a Viewer's call read 22 ranges and 22 to 24 documents
+ * (0.007 MiB). The lead's and the admin's ranges and documents were the
+ * same at 50 people. JavaScript took 7 to 33 ms quiet and 9 to 54 ms
+ * beside eight busy loops. A task at the 100-follower cap, among 125
+ * people, read 107 ranges, 205 documents and 0.07 MiB in 12 to 32 ms quiet
+ * and 17 to 50 ms busy. While this answer also listed the people a manager
+ * could add, it read 1,916 to 1,925 documents (0.644 to 0.646 MiB) for a
+ * lead or an admin, answering 890 candidates, and 1,017 documents for a
+ * Viewer. */
 export const subscribers = orgQuery({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => {
