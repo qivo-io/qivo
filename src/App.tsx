@@ -2507,8 +2507,20 @@ function App() {
           })
           window.showToast?.(saved.message)
           // stay put when the creator cannot see it, or moved elsewhere
-          // while it saved; otherwise follow the new project
+          // while it saved; otherwise follow the new project, its facts
+          // seeded from the create and its answer, as a navigation row
+          // seeds them, so its views and the sidebar's scope rule place it
+          // at once while the project cache checks it
           if (!saved.open || placeRef.current !== placeAtCreate) return
+          P.seedProjects([
+            {
+              id: created.id,
+              org_id: created.org,
+              name: p.name,
+              num: created.num,
+              parent_id: p.type === 'meta' ? null : (p.parent ?? null),
+            },
+          ])
           setScope(id)
           setProjectsOpen(false)
           setSync(null)

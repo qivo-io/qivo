@@ -11677,8 +11677,8 @@ export type ProjectShown = { orgId: string }
 
 /** What a project create's answer says (P.addProject `onSaved`): the new
     project's id, its number in its organization and the key the server
-    kept or chose. */
-export type ProjectCreated = { id: string; num: number; key: string }
+    kept or chose, with the organization the create went to. */
+export type ProjectCreated = { id: string; org: string; num: number; key: string }
 
 /** A team as a page that read it from the server showed it (teams.get), for
     a write the workspace may not hold the team for: its organization and
@@ -17162,7 +17162,8 @@ export const PLANNER = {
       and the views show it once their reads hold it. `onSaved` runs once
       the server has stored it, with the create's answer (its id, number
       and key: the server keeps `p.key` while it is free, else the first
-      free candidate of the name, model/projects.ts allocateKey). `onRefused`
+      free candidate of the name, model/projects.ts allocateKey) and the
+      organization the create went to. `onRefused`
       runs after the refusal toast. `shown` is the organization the dialog
       that read the parent from the server showed it in (ProjectShown), or
       for a top-level project the home organization's; without it a
@@ -17211,7 +17212,7 @@ export const PLANNER = {
       {},
       {
         keep: (answer) => {
-          created = { id: uuid, num: answer.num, key: answer.key }
+          created = { id: uuid, org: orgId, num: answer.num, key: answer.key }
           return {}
         },
         onError: (error) => {
