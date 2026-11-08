@@ -59,10 +59,14 @@ import {
   IMAGE_DOWNLOADS,
   IMAGE_SPACER,
   INBOX_BADGE_STEP,
+  INBOX_FEED_MARKS,
+  INBOX_FEED_QUERY,
+  INBOX_FEED_STEP,
   INBOX_LIST_MARKS,
   INBOX_LIST_STEP,
   INBOX_PAGE_QUERY,
   INBOX_PAGES_MAX,
+  INBOX_PART_QUERY,
   INBOX_REFUSALS,
   imageDownloads,
   inboxPagesMax,
@@ -86,6 +90,7 @@ import {
   NEW_TASK_READS,
   NOT_LOADED_YET,
   newerWalk,
+  notificationCall,
   OLD_PATHS_CLEANUP,
   OLD_PATHS_MARKS,
   OLD_PATHS_STEP,
@@ -1252,7 +1257,7 @@ describe('staging check REST contract', () => {
       JSON.stringify({ type: 'Mutation', requestId: 3, udfPath, args: [args] })
     const read = { org_id: 'o', issue_id: 't', through: 12.5 }
     expect(sentMutation(mutation('messages:readItem', read), 'messages:readItem')).toEqual(read)
-    expect(sentMutation(mutation('messages:markRead', read), 'messages:readItem')).toBeNull()
+    expect(sentMutation(mutation('messages:unreadItem', read), 'messages:readItem')).toBeNull()
     expect(sentMutation('not json', 'messages:readItem')).toBeNull()
     const add = (udfPath, args) => ({ type: 'Add', queryId: 1, udfPath, args: [args] })
     const frame = JSON.stringify({
@@ -1261,6 +1266,43 @@ describe('staging check REST contract', () => {
     })
     expect(addedArgs(frame, INBOX_PAGE_QUERY)).toEqual([{ search: 'QN-1' }])
     expect(addedArgs(frame, TASK_WINDOWS_QUERY)).toEqual([])
+  })
+  it("names the Inbox feed's step, its reads and marks, and reads the notification calls", () => {
+    expect(INBOX_FEED_STEP).toBe('ui/inbox-feed')
+    expect(INBOX_FEED_QUERY).toBe('inbox:feed')
+    expect(INBOX_PART_QUERY).toBe('workspace:inbox')
+    // the store watches the feed by that name, and the client tags its
+    // summary and mirrors its alerts by these
+    const store = readFileSync(new URL('../src/store/planner.ts', import.meta.url), 'utf8')
+    expect(store).toContain("watchSide('feed', api.inbox.feed, { after })")
+    const client = readFileSync(new URL('../src/lib/notificationFeed.ts', import.meta.url), 'utf8')
+    expect(client).toContain(`SUMMARY_TAG = '${INBOX_FEED_MARKS.summaryTag}'`)
+    const notify = readFileSync(new URL('../src/lib/notify.ts', import.meta.url), 'utf8')
+    expect(notify).toContain(`window.${INBOX_FEED_MARKS.notes}.push`)
+    // it runs after the list's step and before the archive, while t0 is active
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const order = ['await inboxListCheck()', 'await inboxFeedCheck()', 'await archiveChecks()']
+    const at = order.map((call) => script.indexOf(call))
+    expect(at.every((n) => n > 0)).toBe(true)
+    expect([...at].sort((a, b) => a - b)).toEqual(at)
+    // the route is set before the page loads, and the step gives the
+    // permission back
+    const step = script.slice(
+      script.indexOf('async function inboxFeedCheck()'),
+      script.indexOf("/** What the Overview of the run's own sub-project shows"),
+    )
+    expect(step.indexOf('page.routeWebSocket(')).toBeGreaterThan(0)
+    expect(step.indexOf('page.routeWebSocket(')).toBeLessThan(step.indexOf('page.goto('))
+    expect(step).toContain('context.clearPermissions()')
+    // a notification call's name and arguments, and nothing for any other frame
+    const frame = (udfPath, args) =>
+      JSON.stringify({ type: 'Mutation', requestId: 4, udfPath, args: [args] })
+    expect(notificationCall(frame('notifications:claimAlerts', { events: [] }))).toEqual({
+      name: 'notifications:claimAlerts',
+      args: { events: [] },
+    })
+    expect(notificationCall(frame('messages:readItem', {}))).toBeNull()
+    expect(notificationCall('not json')).toBeNull()
   })
   it('tells a frame that subscribes the task windows from every other frame', () => {
     expect(ON_DEMAND_STEP).toBe('ui/tasks-on-demand')

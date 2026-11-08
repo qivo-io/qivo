@@ -265,7 +265,13 @@
  * It reads the run's project, Alpha and Zulu, an id of no project and a
  * project the run archived by id through the store's read of
  * projectNav.byIds, and checks the level, the parent row and the ids left
- * out (ui/project-by-ids).
+ * out (ui/project-by-ids). Granted notifications, a
+ * fresh page takes its baseline, and one alert must follow the Standard
+ * agent's next mention from the deployment's feed (inbox.feed) and a
+ * granted notifications.claimAlerts, tagged with the message's id, with no
+ * workspace.inbox subscribed; with its sync socket closed for one more
+ * mention, one generic summary must follow, asked with
+ * notifications.claimSummary before any claim (ui/inbox-feed).
  * Every task, comment,
  * grant and file lives in projects the run creates and names with its run
  * tag. It revokes every credential in the app, checks that the next call is
@@ -6844,6 +6850,197 @@ async function inboxListCheck() {
   })
 }
 
+/** The step that checks a desktop alert from the deployment's Inbox feed
+ *  and the catch-up summary after a dropped socket (inboxFeedCheck). */
+export const INBOX_FEED_STEP = 'ui/inbox-feed'
+
+/** The read the desktop alerts come from (convex/inbox.ts feed) and the
+ *  workspace part no app subscribes any more. */
+export const INBOX_FEED_QUERY = 'inbox:feed'
+export const INBOX_PART_QUERY = 'workspace:inbox'
+
+/** The marks the step reads the alerts by: the page's mirror of every
+ *  would-be notification (src/lib/notify.ts) and the generic summary's tag
+ *  (src/lib/notificationFeed.ts SUMMARY_TAG). */
+export const INBOX_FEED_MARKS = { notes: '__qivoNotes', summaryTag: 'qivo:catch-up' }
+
+/** The names of the notification mutations frame `text` the page sent on
+ *  its sync socket runs, with their arguments, or null for any other. */
+export function notificationCall(text) {
+  let message
+  try {
+    message = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (message?.type !== 'Mutation' || !String(message.udfPath).startsWith('notifications:'))
+    return null
+  const [args] = Array.isArray(message.args) ? message.args : []
+  return { name: message.udfPath, args: args ?? {} }
+}
+
+/** A desktop alert from the deployment's feed. Nora's context is granted
+ *  notifications for the app's origin, and the app page leaves the app
+ *  meanwhile, so no other tab of her session claims the alerts. A new page,
+ *  whose Convex sync socket the step can close (page.routeWebSocket, set
+ *  before it loads, since it reaches only new sockets), loads Alpha's
+ *  Board; once it sent its fresh start's beat, its baseline claim with no
+ *  event and any claimSummary that led to, and then nothing for three
+ *  seconds, its notes are cleared. The Standard agent mentions Nora in a
+ *  comment on t0 over REST: one note must carry the message's id, the
+ *  newest of t0's item in Nora's Inbox over REST with her read token, as
+ *  its tag and `${agent} mentioned you, ${t0 title}` as its title, and the
+ *  page must have subscribed inbox:feed, sent notifications:beat and
+ *  notifications:claimAlerts, and never subscribed workspace:inbox. Then
+ *  the step closes the socket once and refuses the page's reconnects until
+ *  the agent mentioned Nora again, and once the socket is back one note
+ *  must carry the summary's tag, none the second mention's id, and
+ *  notifications:claimSummary must go before the next claimAlerts. Last it
+ *  removes t0's item with the Inbox row's Remove notification, so Nora's
+ *  Inbox is as the step found it, takes the permission back and closes the
+ *  page. It needs a backend from the release after v0.1.161 on. */
+async function inboxFeedCheck() {
+  const s = run.creds.stdKey
+  const { t0, nora } = run
+  const { M } = run.projects
+  const marks = INBOX_FEED_MARKS
+  await check(INBOX_FEED_STEP, async () => {
+    const origin = cfg.appOrigin
+    await context.grantPermissions(['notifications'], { origin })
+    await app.goto('about:blank')
+    const page = await context.newPage()
+    const sent = []
+    // the page's newest sync socket, and whether a new one is refused
+    let socket = null
+    let refusing = false
+    try {
+      await page.routeWebSocket(
+        (url) => url.pathname.endsWith('/sync'),
+        (ws) => {
+          if (refusing) {
+            ws.close()
+            return
+          }
+          const server = ws.connectToServer()
+          ws.onMessage((message) => {
+            sent.push(String(message))
+            server.send(message)
+          })
+          socket = ws
+        },
+      )
+      const calls = () => sent.map(notificationCall).filter(Boolean)
+      const notes = () => evaluate(page, (name) => window[name] ?? [], marks.notes)
+      await page.goto(`${origin}/app/${ORG_SLUG}/board/p/${M.num}`, {
+        waitUntil: 'domcontentloaded',
+      })
+      expect(
+        await until(
+          async () =>
+            calls().some(
+              (c) => c.name === 'notifications:claimAlerts' && c.args.events?.length === 0,
+            ),
+          60_000,
+        ),
+        `the page took no baseline: ${JSON.stringify(calls().map((c) => c.name))}`,
+      )
+      // the fresh start's chain, which a summarize_first answer lengthens
+      let quiet = calls().length
+      expect(
+        await until(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 3_000))
+          const now = calls().length
+          const settled = now === quiet
+          quiet = now
+          return settled
+        }, 60_000),
+        'the fresh start did not settle',
+      )
+      await evaluate(
+        page,
+        (name) => {
+          window[name] = []
+        },
+        marks.notes,
+      )
+      await restOk(s, 'POST', `/tasks/${t0.key}/comments`, {
+        body: `${run.tag} inbox feed for @[${nora.name}](user:${nora.id})`,
+      })
+      /** The id of t0's newest message to Nora, from her Inbox over REST. */
+      const newest = async () => {
+        const inbox = await restOk(run.creds.readToken, 'GET', '/inbox?limit=100')
+        const item = inbox.items.find((it) => it.task.id === t0.id)
+        return item?.messages.at(-1)?.id ?? null
+      }
+      const title = `${run.agents.std.name} mentioned you, ${t0.title}`
+      let first = null
+      expect(
+        await until(async () => {
+          first = (await notes()).find((note) => note.title === title) ?? null
+          return first !== null
+        }, 60_000),
+        `no alert for the mention: ${JSON.stringify(await notes())}`,
+      )
+      eq(first.tag, await newest(), "the alert's tag")
+      eq((await notes()).length, 1, 'the alerts for one mention')
+      expect(
+        sent.some((frame) => addsQuery(frame, INBOX_FEED_QUERY)),
+        'the page did not subscribe inbox:feed',
+      )
+      expect(
+        !sent.some((frame) => addsQuery(frame, INBOX_PART_QUERY)),
+        'the page subscribed workspace:inbox',
+      )
+      const names = calls().map((c) => c.name)
+      expect(names.includes('notifications:beat'), 'the page sent no beat')
+      expect(names.includes('notifications:claimAlerts'), 'the page sent no claim')
+      // a dropped socket, a mention meanwhile, and the summary after it
+      const from = calls().length
+      refusing = true
+      socket?.close()
+      await restOk(s, 'POST', `/tasks/${t0.key}/comments`, {
+        body: `${run.tag} inbox feed again for @[${nora.name}](user:${nora.id})`,
+      })
+      const second = await newest()
+      refusing = false
+      let summary = null
+      expect(
+        await until(async () => {
+          summary = (await notes()).find((note) => note.tag === marks.summaryTag) ?? null
+          return summary !== null
+        }, 90_000),
+        `no summary after the dropped socket: ${JSON.stringify(await notes())}`,
+      )
+      expect(second !== first.tag, 'the second mention stored no new message')
+      expect(
+        !(await notes()).some((note) => note.tag === second),
+        'the second mention raised its own alert',
+      )
+      const after = calls()
+        .slice(from)
+        .map((c) => c.name)
+      const asked = after.indexOf('notifications:claimSummary')
+      const claimed = after.indexOf('notifications:claimAlerts')
+      expect(asked >= 0, 'the page asked no claimSummary after the socket came back')
+      expect(claimed < 0 || asked < claimed, 'the page claimed before it asked claimSummary')
+      // Nora's Inbox as the step found it
+      await page.goto(`${origin}/app/~/inbox`, { waitUntil: 'domcontentloaded' })
+      const row = page.locator(`[data-message="${t0.id}"]`)
+      await row.waitFor({ timeout: 60_000 })
+      await row.click({ button: 'right' })
+      await page.locator('[data-msg-menu] button', { hasText: 'Remove notification' }).click()
+      expect(
+        await until(async () => (await row.count()) === 0, 30_000),
+        "t0's row stayed in the Inbox",
+      )
+      return `one alert for the mention from ${INBOX_FEED_QUERY}, tagged with its message, and one summary after the dropped socket, asked before any claim`
+    } finally {
+      await context.clearPermissions()
+      await page.close()
+    }
+  })
+}
+
 /** What the Overview of the run's own sub-project shows once the
  *  deployment answered (overviewCheck): its two tasks, one To do and due
  *  OVERVIEW_OVERDUE_DAYS ago, one paused with no due date, neither assigned,
@@ -11444,6 +11641,9 @@ async function main() {
   await inboxListCheck()
   // the run's projects read by id, while M is active
   await projectByIdsCheck()
+  // a desktop alert from the deployment's feed and the summary after a
+  // dropped socket, while t0 is active
+  await inboxFeedCheck()
   // archived tasks and projects, then delete the projects in the app
   await archiveChecks()
   await check('cleanup/app/delete-project', async () => {

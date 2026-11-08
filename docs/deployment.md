@@ -557,6 +557,17 @@ divider above the comment from its inbox item (`inbox.item`) and read the
 item (`messages.readItem`), so the summary drops back, and removes the
 task's item from Nora's Inbox with the row's own **Remove notification**
 (`ui/inbox-badge`). Against a backend from before v0.1.97 that step fails.
+In a page granted notifications for the app's origin it then checks a
+desktop alert (`ui/inbox-feed`): once the page took its fresh start's
+baseline, the Standard agent mentions Nora on the fixture task over REST,
+and one alert must carry that message's id as its tag and the agent's
+mention as its title, from `inbox.feed` and a granted
+`notifications.claimAlerts`, with no `workspace.inbox` watched; with the
+page's sync socket closed once, a second mention must reach no alert of its
+own and one generic summary must follow after `notifications.claimSummary`,
+which goes before the next claim. It removes the task's item again at the
+end. Against a backend from before the release after v0.1.161 that step
+fails.
 After that it checks
 the
 search on **Settings → Projects → Archived tasks** and main Search, where an
