@@ -577,8 +577,10 @@ async function shownParent(
  *   label rows and `level` the caller's level on its project, by which the
  *   app offers Restore. `project_archived` says whether its project or that
  *   project's parent is archived, from the documents the access check read,
- *   so the window says to restore the project first. An answer from before this release
- *   holds only `task`. It asks with the caller's seat in this organization
+ *   meant for the window's note to restore the project first, which reads
+ *   the workspace's archived projects until t3/limits-projects-part moves
+ *   it here; no app reads it yet. An answer from before this release holds
+ *   only `task`. It asks with the caller's seat in this organization
  *   only, never another seat of the login (lib/functions.ts loadMember), so
  *   another organization's archived task answers unavailable.
  * - `{ state: 'unavailable' }` for everything else, alike, also where a

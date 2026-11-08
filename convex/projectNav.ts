@@ -5,15 +5,15 @@
  *   navigation across every active seat of their login, the favorites of
  *   every seat first and then the rest of every seat, each group in name
  *   order, 25 a batch with sealed `after` and `through` cursors; with
- *   `org_id` only that seat's, for Team sync's scope menu, and with
+ *   `org_id` only that seat's, meant for Team sync's scope menu, and with
  *   `team_id` beside it that team's own shares the caller sees, projects
- *   and sub-projects together, for Team sync's notes.
+ *   and sub-projects together, meant for Team sync's notes.
  * - targets: one batch of the live sub-projects the caller may add tasks to
  *   (Edit or Lead), across every seat or in one organization, grouped under
- *   their top-level projects, with a search, for the New task dialog, the
- *   Move window and the task window's Link task offer.
+ *   their top-level projects, with a search, meant for the New task dialog,
+ *   the Move window and the task window's Link task offer.
  * - holds: whether the caller sees any top-level project and any
- *   sub-project, for every "no project" and "no sub-project" note.
+ *   sub-project, meant for every "no project" and "no sub-project" note.
  * - children: one batch of a top-level project's live sub-projects the
  *   caller sees, 25 a batch, the same way.
  * - resolve: whether one project, named by id or by its organization and
@@ -54,7 +54,10 @@
  * workspace does not hold (src/components/projectNavRows.tsx). byIds is
  * the read of the store's project cache (src/store/projectCache.ts), which
  * keeps the projects the open views name that the workspace does not hold,
- * and of the staging check's ui/project-by-ids step. */
+ * and of the staging check's ui/project-by-ids step. No app code reads
+ * targets, holds or page's org_id and team_id yet. Those readers still
+ * read the workspace's projects part, and t3/limits-projects-part moves
+ * them onto these reads. */
 
 import { v } from 'convex/values'
 import { authedQuery, orgMutation } from './lib/functions'

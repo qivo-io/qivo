@@ -1,5 +1,5 @@
-/* projectNav.page with `org_id`, one seat's list for Team sync's scope
- * menu, and with `team_id`, a team's own shares for its notes
+/* projectNav.page with `org_id`, one seat's list meant for Team sync's
+ * scope menu, and with `team_id`, a team's own shares meant for its notes
  * (model/projectNavReads.ts navPageOf, navTeamOf): what each lists, the
  * empty answers alike for what the caller cannot ask about, the cursors
  * that never cross, and the reads at the design size, which the suite

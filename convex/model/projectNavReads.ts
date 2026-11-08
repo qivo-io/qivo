@@ -1336,11 +1336,14 @@ const wholeNumber = (n: number | undefined): n is number =>
 
 /** A row of projectNav.byIds: a project the caller opens for navigation,
  * with its top-level project's id (null for a top-level one), the caller's
- * level on it, whether its tasks track delay, its own lead (`lead_id`, for
- * the Board's lane heads and the Overview's Lead) and the time a task gets
- * on entering Review in it (`review_hours`: its own, else its parent's,
- * else DEFAULT_REVIEW_HOURS, lib/review.ts resolveReviewHours, for the
- * views' Review paint). A reader of the project's Settings page reads the
+ * level on it, whether its tasks track delay, its own lead (`lead_id`,
+ * meant for the Board's lane heads and the Overview's Lead, which read the
+ * workspace's projects part until t3/limits-projects-part, so no app reads
+ * it yet) and the time a task gets on entering Review in it
+ * (`review_hours`: its own, else its parent's, else DEFAULT_REVIEW_HOURS,
+ * lib/review.ts resolveReviewHours, for the views' Review paint of a
+ * project the workspace does not hold, store/planner.ts
+ * reviewHoursForProject). A reader of the project's Settings page reads the
  * same lead and Review time (model/projectSettings.ts settingsGate). */
 export type NavByIdRow = NavProject & {
   parent_id: string | null
@@ -1566,8 +1569,10 @@ async function byIdRow(sight: SeatSight, project: Doc<'projects'>): Promise<NavB
  * projectNav.page with `team_id` (navPageOf): one batch of the projects and
  * sub-projects team `team_id` of organization `org_id` holds a share on
  * that the person sees for navigation with their seat there, in name key
- * order with the project id breaking ties, for Team sync's notes, which
- * offer a team meeting's smaller scopes.
+ * order with the project id breaking ties, meant for Team sync's notes,
+ * which offer a team meeting's smaller scopes and read the workspace's
+ * projects part until t3/limits-projects-part moves them here; no app
+ * reads it yet.
  *
  * Its candidates are the team's own shares: its live root reach rows that
  * record a source on the top-level project (on_root) and its live child
@@ -1652,8 +1657,10 @@ export type NavHolds =
 /**
  * projectNav.holds for the login whose active seats are `myProfiles`, or
  * only the seat in `org_id`: whether the person sees any live top-level
- * project and any live sub-project for navigation, for the "no project" and
- * "no sub-project" notes, which say so only on this confirmed answer.
+ * project and any live sub-project for navigation, meant for the "no
+ * project" and "no sub-project" notes, which are to say so only on this
+ * confirmed answer once t3/limits-projects-part moves them off the
+ * workspace's projects part; no app reads it yet.
  *
  * Its candidates are the navigation reads' own: the live root reach rows
  * of each seat and its teams (rootIndex), each judged by rootShows, never a
@@ -1803,8 +1810,10 @@ const targetParts = ({ key, tie: [parentId, childKey, childId, orgId] }: NamedAt
  * one batch of the live sub-projects under a live parent the person may
  * add tasks to, Edit (User) or Lead by lib/access.ts level, across every
  * seat or only the seat in `org_id` (an org_id without the caller's seat
- * answers an empty last batch, as the search does), for the New task
- * dialog, the Move window and the task window's Link task offer.
+ * answers an empty last batch, as the search does), meant for the New
+ * task dialog, the Move window and the task window's Link task offer,
+ * which read the workspace's projects part until t3/limits-projects-part
+ * moves them here; no app reads it yet.
  *
  * The order is the parent's name key, the parent's id, the sub-project's
  * name key and its id, the positions of page and children joined: the
