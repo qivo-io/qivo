@@ -297,7 +297,9 @@ describe('staging check REST contract', () => {
     )
     // run.t0's window opens at the address the router parses, its key in
     // lower case, and the step waits for it before the eye
-    expect(read('../src/lib/router.ts')).toContain("if (seg[1] === 'tasks')")
+    expect(read('../src/lib/router.ts')).toContain(
+      "if (seg[i] === 'tasks') {\n    r.issue = issue(seg[i + 1])",
+    )
     const opens = step.indexOf(
       `\`\${cfg.appOrigin}/app/\${ORG_SLUG}/tasks/\${run.t0.key.toLowerCase()}\``,
     )
