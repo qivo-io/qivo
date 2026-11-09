@@ -956,8 +956,12 @@ deploys, until it reloads. This moves the floor: never return the app or the
 demo to a deployment of a commit before the release that replaced
 `snapshot.forMe` with the parts (the release after v0.1.52). Roll forward
 instead. The app from the release after v0.1.160 on needs its backend's
-`teams.picker`, `pickers.taskFollowers` and the root part's own rows, so
-never return the backend to a commit before that release. Every app before
+`teams.picker`, `pickers.taskFollowers` and the root part's own rows, and
+the app from the release after v0.1.161 on reads its projects through
+`projectNav.byIds`, `projectNav.targets` and `projectNav.holds` and its
+desktop notifications through `inbox.feed`, all of which that release first
+ships, so never return the backend to a commit before the release after
+v0.1.161. Every app before
 the release after v0.1.161 subscribes a workspace part that later backends
 no longer have, `workspace.projects` and `workspace.inbox`, and before the
 release after v0.1.160 also `workspace.people` and `workspace.catalog`, so
