@@ -142,6 +142,7 @@ beforeEach(async () => {
   serve()
   vi.stubGlobal('isSecureContext', true)
   m = await import('./orgExport')
+  m.RECORD_RETRY.ms = 0
   guard = await import('./leaveGuard')
   updates = await import('./updateSafety')
 })
@@ -434,9 +435,43 @@ describe('the file way', () => {
       record: 'refused',
       message: 'This export can no longer be recorded. Prepare a new export.',
     })
-    // a Try again would get the same refusal, so it sends nothing
+    // the record and its one retry; a Try again would get the same
+    // refusal, so it sends nothing
     await m.retryExportRecord()
+    expect(records()).toHaveLength(2)
+  })
+
+  it('records once more after a moment when the first record is refused by rule', async () => {
+    m.RECORD_RETRY.ms = 20
+    const at: number[] = []
+    let refused = false
+    network.mutation.mockImplementation(async (ref) => {
+      const name = getFunctionName(ref)
+      if (name === 'orgExport:claimDownload') return { url: LINK, expires_at: '' }
+      at.push(Date.now())
+      if (refused) return null
+      refused = true
+      // the route's record of the served archive has not committed yet
+      throw new ConvexError({
+        code: 'rule',
+        message: 'This export can no longer be recorded. Prepare a new export.',
+      })
+    })
+    await save(zipResponse(streamOf(bytes(5)), 5), 5)
+    expect(records()).toHaveLength(2)
+    expect(at[1] - at[0]).toBeGreaterThanOrEqual(15)
+    expect(m.deliveryNow()).toMatchObject({ state: 'saved', record: 'recorded' })
+  })
+
+  it('tries no second record for a refusal other than a rule', async () => {
+    network.mutation.mockImplementation(async (ref) => {
+      const name = getFunctionName(ref)
+      if (name === 'orgExport:claimDownload') return { url: LINK, expires_at: '' }
+      throw new ConvexError({ code: 'forbidden', message: 'admin only' })
+    })
+    await save(zipResponse(streamOf(bytes(5)), 5), 5)
     expect(records()).toHaveLength(1)
+    expect(m.deliveryNow()).toMatchObject({ record: 'refused', message: 'admin only' })
   })
 
   it('leaves a saved, unrecorded export to Try again, which records and never downloads again', async () => {

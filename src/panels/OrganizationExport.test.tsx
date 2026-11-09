@@ -106,6 +106,8 @@ afterEach(async () => {
 })
 
 async function mount() {
+  // a record refused by rule is tried once more at once
+  ;(await import('../lib/orgExport')).RECORD_RETRY.ms = 0
   const { OrganizationExport } = await import('./OrganizationExport')
   await act(async () =>
     root.render(
@@ -121,6 +123,11 @@ const settle = () =>
     for (let i = 0; i < 6; i++) await Promise.resolve()
     await new Promise((r) => setTimeout(r, 0))
   })
+/** Settles until `selector` shows, a few rounds at most. */
+async function shown(selector: string) {
+  for (let i = 0; i < 10 && !container.querySelector(selector); i++) await settle()
+  return container.querySelector(selector)
+}
 const section = () => container.querySelector('[data-org-export]')
 const text = () => section()?.textContent ?? ''
 const stateShown = () => section()?.getAttribute('data-export-state')
@@ -555,7 +562,7 @@ describe('starting, joining, downloading and cancelling', () => {
     await act(async () => release())
     await settle()
     // the stand-in refuses to record an archive the route never served
-    expect(container.querySelector('[data-export-recorded="refused"]')?.textContent).toContain(
+    expect((await shown('[data-export-recorded="refused"]'))?.textContent).toContain(
       "The export was saved, but Qivo couldn't record it.",
     )
   })
@@ -615,7 +622,7 @@ describe('starting, joining, downloading and cancelling', () => {
     await mount()
     await act(async () => server.finish())
     await settle()
-    const refused = container.querySelector('[data-export-recorded="refused"]')
+    const refused = await shown('[data-export-recorded="refused"]')
     expect(refused?.textContent).toBe(
       "The export was saved, but Qivo couldn't record it. This export can no longer be recorded. Prepare a new export.",
     )

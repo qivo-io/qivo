@@ -261,6 +261,15 @@ const refusalOf = (error: unknown): string | null => {
   return typeof message === 'string' ? message : null
 }
 
+/** Whether `error` is a rule refusal of the server (convex/lib/functions.ts
+ * rule). */
+const ruleRefusal = (error: unknown): boolean =>
+  error instanceof ConvexError && (error.data as { code?: unknown } | null)?.code === 'rule'
+
+/** How long the page waits before it records a confirmed save once more
+ * after a rule refusal, for tests to lower. */
+export const RECORD_RETRY = { ms: 2_000 }
+
 /** A response's Retry-After seconds, or null. */
 const retryAfterOf = (response: Response): number | null => {
   const seconds = Number(response.headers.get('Retry-After'))
@@ -496,11 +505,23 @@ async function intoFile(
 /* Records the confirmed save of export `exportId` (saved as `file`). A
    refusal of the server, such as an archive past its record window, keeps
    its sentence and offers no Try again, which the same refusal would
-   answer; a failure to reach the server leaves the record to Try again. */
+   answer; a failure to reach the server leaves the record to Try again.
+   A rule refusal gets one more try after RECORD_RETRY.ms first: the route
+   records that it served the archive (served_at, which the record needs)
+   once the backend read its last byte, and for a small archive the page's
+   confirmed save can reach the server before that record commits. */
 async function record(orgId: string, exportId: string, file: string | null): Promise<void> {
   set({ orgId, exportId, state: 'saved', file, record: 'pending' })
+  const send = () =>
+    convex.mutation(api.orgRemovals.recordExport, { org_id: orgId, export_id: exportId })
   try {
-    await convex.mutation(api.orgRemovals.recordExport, { org_id: orgId, export_id: exportId })
+    try {
+      await send()
+    } catch (error) {
+      if (!ruleRefusal(error)) throw error
+      await new Promise((resolve) => setTimeout(resolve, RECORD_RETRY.ms))
+      await send()
+    }
     unrecorded = null
     set({ orgId, exportId, state: 'saved', file, record: 'recorded' })
   } catch (error) {
