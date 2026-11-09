@@ -8,10 +8,11 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
-import type { Doc } from '../_generated/dataModel'
+import type { Doc, TableNames } from '../_generated/dataModel'
 import { accessUnchecked, OWN_READS } from '../lib/access'
 import { newWindowKey } from '../lib/db'
 import { navByIdsOf } from '../model/projectNavReads'
+import schema from '../schema'
 import {
   as,
   expectRefusal,
@@ -187,6 +188,31 @@ describe('window keys', () => {
     expect(keyed.follows.length).toBeGreaterThan(0)
     for (const key of keyed.follows) expect(key).toBe(keyed.a)
     expect(keyed.attachments).toEqual([keyed.a])
+  })
+
+  it('reads no window key: the indexes only the tasks part read are gone, and the archive marks keep theirs', () => {
+    const indexes = (table: TableNames) =>
+      schema.tables[table][' indexes']().map((index) => index.indexDescriptor)
+    expect(indexes('issues')).not.toContain('by_org_archived_window')
+    for (const table of ['issue_links', 'issue_labels', 'issue_attachments'] as const)
+      expect(indexes(table), table).not.toContain('by_org_task_archived_key')
+    expect(indexes('issue_subscriptions')).not.toContain('by_profile_task_archived_key')
+    // no index of a relation table reads task_key, and none of the tasks
+    // reads window_key
+    const fieldsOf = (table: TableNames) =>
+      schema.tables[table][' indexes']().flatMap((index) => index.fields)
+    for (const table of [
+      'issue_links',
+      'issue_labels',
+      'issue_attachments',
+      'issue_subscriptions',
+    ] as const)
+      expect(fieldsOf(table), table).not.toContain('task_key')
+    expect(fieldsOf('issues')).not.toContain('window_key')
+    // the archive steps' and the label search's indexes over the marks stay
+    expect(indexes('issue_labels')).toContain('by_label')
+    expect(indexes('issue_links')).toContain('by_org_task_archived_source')
+    expect(indexes('issue_subscriptions')).toContain('by_profile_task_archived')
   })
 })
 
