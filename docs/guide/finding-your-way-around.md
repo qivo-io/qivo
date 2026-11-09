@@ -216,7 +216,10 @@ shows, the Overview asks for its figures and lists again, showing the
 ones it had meanwhile, and Team sync asks for its meeting again, showing
 the one it had meanwhile. All three do the same when you return to a
 browser tab or desktop window you had hidden or minimized, where they stop
-updating meanwhile. The Overview,
+updating meanwhile. An open task window also stops updating its discussion,
+history and details while the tab or window is hidden, and catches up when
+you return, keeping what you were writing. Settings pages that update by
+themselves, Billing's details among them, do the same. The Overview,
 the Board and the Roadmap belong to the
 sidebar choice, such as a project or My view. Choosing another one loads
 them again for it. Settings loads each time you open it.
