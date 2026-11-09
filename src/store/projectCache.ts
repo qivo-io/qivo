@@ -600,10 +600,12 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     /** Seeds the facts of `list`, projects a navigation row showed, where
         the cache keeps no row for them, a later seed replacing an earlier
         one. A seed reads as `loading` until an answer brings the
-        project's row or leaves it out. */
+        project's row or leaves it out. A project the current answer left
+        out (`gone`) takes no seed, so no lookup names it from a row that
+        showed it before. */
     seed(list: readonly ProjectSeed[]) {
       for (const s of list) {
-        if (entries.has(s.id)) continue
+        if (entries.has(s.id) || lookUp(s.id).state === 'gone') continue
         const was = seeds.get(s.id)
         if (
           was &&

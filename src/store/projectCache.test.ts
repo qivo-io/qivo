@@ -450,6 +450,21 @@ describe('the project cache', () => {
     expect(s.cache.seeds()).toEqual([])
   })
 
+  it('takes no seed for a project the current answer left out, until an answer brings it again', () => {
+    const s = setup()
+    s.cache.name('scope', ['p1'])
+    s.answer(s.reads()[0].token, [])
+    expect(s.cache.look('p1').state).toBe('gone')
+    // a navigation row that showed it before seeds it again
+    s.cache.seed([{ id: 'p1', org_id: 'org', name: 'Plan', num: 1, parent_id: null }])
+    // must fail for a seed that names a gone project
+    expect(s.cache.seedOf('p1')).toBeUndefined()
+    expect(s.cache.seeds()).toEqual([])
+    // once an answer brings it again, it is the row's
+    s.answer(s.reads()[0].token)
+    expect(s.cache.look('p1').state).toBe('ok')
+  })
+
   it('gives a seed way to the row an answer brings, and never replaces a row with a seed', () => {
     const s = setup()
     s.cache.seed([{ id: 'p1', org_id: 'org', name: 'Seeded', num: 3, parent_id: null }])

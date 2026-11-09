@@ -8719,7 +8719,10 @@ function orgOfProject(pid: string | null | undefined): string {
    the last rebuild (a view a navigation row just opened, a rename, a
    project gone) rather than the facts that rebuild shaped. */
 function factsOfProject(pid: string): ProjectFacts | undefined {
-  const row = projectCache.look(pid).row
+  const known = projectCache.look(pid)
+  // a project the current answer left out has no facts, whatever showed it
+  if (known.state === 'gone') return undefined
+  const row = known.row
   if (row) {
     let shaped = factsOfRow.get(row)
     if (!shaped) {

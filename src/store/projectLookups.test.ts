@@ -271,6 +271,26 @@ describe('the project lookups', () => {
     expect(P.writeNote(w.hidden.id)).toBe("You can't open this project.")
   })
 
+  it('names no gone project from a navigation row that seeds it again', async () => {
+    const w = world()
+    const { P } = await start(w.snap)
+    P.nameProjects('test', [w.hidden.id])
+    await vi.waitFor(() => expect(P.projectState(w.hidden.id)).toBe('gone'))
+    P.seedProjects([
+      {
+        id: w.hidden.id,
+        org_id: w.org,
+        name: 'Hidden program',
+        num: w.hidden.num,
+        parent_id: null,
+      },
+    ])
+    // must fail for a lookup that answers a seed of a gone project
+    expect(P.project(w.hidden.id)).toBeUndefined()
+    expect(P.projectPlace(w.hidden.id)).toBeNull()
+    expect(P.projectLabelOf(w.hidden.id)).toBe('')
+  })
+
   it('names nothing of a project it answered once the answer leaves it out, as after access goes', async () => {
     const w = world()
     const { P, rerun } = await start(w.snap)
