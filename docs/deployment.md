@@ -2287,7 +2287,19 @@ function and reads no new query, so it sets no new floor. Its staging check
 step `ui/hidden-task-window` mentions Nora on t0 while the page is hidden
 and removes that notification again. The desktop shell now reports a window
 started hidden at login as hidden until it is first shown, which reaches
-people only with a new desktop build. The release needs no backfill and no
+people only with a new desktop build. The same release prepares
+**Settings → Organization → General → Export data** with the server job
+(`orgExport.request`, `status` and `cancel`) and saves its archive through
+`orgExport.claimDownload` and the `/exports/` route, which now exposes
+`Retry-After` to the app's origins, instead of building a ZIP in the tab, and
+removes `orgExport.page`. Only a save the desktop app or the browser
+confirms calls `orgRemovals.recordExport`, which now takes the export's id
+and records only a served archive of that organization that is ready or
+ended less than 30 minutes before. The app needs a backend from v0.1.153
+(`b4dc7775`) on for its export, which first shipped `claimDownload` and the
+route, and the floors above already hold it. Against a backend from v0.1.153
+to before this release the archive downloads but its record is refused, so
+the deletion reminder still goes out. The release needs no backfill and no
 release step.
 
 ## Node.js version
@@ -2930,15 +2942,18 @@ are missing or late, so such a message is removed at most 28 days after its
 retention period ends. Deleting the one `message_sweep_seeds` row makes the
 next night's run start with the full pass.
 
-Organization exports can run as a server job (`convex/orgExport.ts`), which
-nothing in the app starts yet; the browser export still reads
-`orgExport.page`. A job keeps its state in `org_exports`, one row per admin
+Organization exports run as a server job (`convex/orgExport.ts`), which
+**Settings → Organization → General → Export data** starts; the browser
+export and its read, `orgExport.page`, are gone. A job keeps its state in `org_exports`, one row per admin
 who asked for it in `org_export_requests`, and its archive as compressed
 parts in storage, one `org_export_parts` row per part. The archive is
 format 4: the live tables under `data/`, then the organization's retained
 Deleted items under `deleted/`, each item marked complete or partial. Any
 active admin downloads a ready archive from the `/exports/` route through a
-two-minute link that `orgExport.claimDownload` answers. The route checks the
+two-minute link that `orgExport.claimDownload` answers, which the export
+page uses at once: the desktop app downloads it into the Downloads folder, a
+browser with the File System Access API streams it into a file the person
+chose, and other browsers download it themselves. The route checks the
 admin on every request, takes a lease on the job row, and records an
 archive it served whole in the job's `served_at`. On a local backend the
 runtime read the archive into the response as fast as storage gave it,
@@ -2946,9 +2961,12 @@ whatever the client took, so the lease and the checks before each part and
 of each part's size cover the backend's read, not the client's transfer,
 and `served_at` means the backend read the whole archive, not that the
 client received it. A served archive does not count as an export for the
-deletion reminder, which still goes out. Only the browser export's
-`recordExport` writes `organizations.last_export_at`, and a later app stage
-records a server export's download once the browser confirms it finished.
+deletion reminder by itself. Only `orgRemovals.recordExport` writes
+`organizations.last_export_at`, which the app calls once the desktop app or
+the browser confirmed a saved file of exactly the archive's bytes, and which
+records only a served archive of that organization that is ready or ended
+less than 30 minutes before. Other browsers' downloads record nothing, so
+the reminder still goes out after them.
 A ready archive whose file is gone fails as incomplete. A ready archive stays
 four hours, then its expiry, scheduled when it became ready, erases the
 parts; a newer archive of the same organization ends it as soon as the

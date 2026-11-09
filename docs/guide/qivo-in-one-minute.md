@@ -173,6 +173,11 @@ and **Show notifications** start enabled. **Minimize to tray** starts disabled:
   under **Notification delivery**. It does not remove Inbox messages or in-app
   update notices.
 
+The desktop test builds save an
+[organization export](./organization-and-team-settings.md#export-data) into
+the Downloads folder without asking where, and tell Qivo when it is saved. The
+download runs in the app and cannot be stopped from the page.
+
 These settings apply to this computer. The desktop window has no application
 menu row. Linux requires a desktop environment with tray support to show the
 tray icon. The Linux app does not check spelling.

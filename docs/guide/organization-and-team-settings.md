@@ -77,45 +77,70 @@ sub-projects.** With **Selected users**, it adds **Choose who in Users.** The
 
 ## Export data
 
-Organization admins can download a ZIP from
-**Settings → Organization → General → Export data**. It contains:
+Organization admins can export the organization's data from
+**Settings → Organization → General → Export data**. Qivo prepares the export
+on its server, so you can leave the page, or close it, while it runs. The
+organization has one export at a time: **Export data** while another admin's
+export is being prepared shows it with **Join export**, and joining it gives
+you its download too. Any admin can **Cancel export** for everyone who joined
+it. Exports keep working while an organization is read-only before its
+deletion.
+
+The ZIP archive contains every project of the organization, also the ones you
+have not joined:
 
 - Projects and tasks, including archived work, comments and activity.
 - People and roles, including inactive people, agents and unclaimed seats.
 - Teams, access grants, labels, task relationships, milestones, organization
   settings, legacy billing metadata and agent-key metadata.
-- Uploaded attachments, description images and member pictures.
 - The organization's change history, including changes to the organization
   itself and to its projects, milestones, teams, people, labels and agent keys.
+- The [Deleted items](./how-work-is-organized.md#deleted-items) Qivo still
+  keeps, in a `deleted/` folder of their own, each marked complete or partial.
+  Exporting an item does not restore it.
 
-The manifest lists record counts and file locations. Format version 2 stores
-tasks in `data/tasks.json`, with `task_links.json`, `task_labels.json` and
-`task_attachments.json` in the same folder. Related records use `task_id`.
+It leaves out the contents of files: attachment files, images in descriptions
+and comments, and profile pictures. Their names and references stay, but the
+export cannot bring those files back. It also leaves out personal inboxes,
+subscriptions, preferences, project favorites, private backgrounds, login
+data, OAuth connections and credentials. Agent-key metadata contains neither
+the key nor its hash. Billing plans, subscriptions, usage and delivery records
+are also excluded. Review current usage in **Billing** and invoices through
+**Manage billing**.
+
+The archive is format version 4. It holds `README.txt`, `manifest.json` with
+record counts and file locations, each table in numbered files such as
+`data/tasks/0001.json` and `data/task_links/0001.json`, and the Deleted items
+under `deleted/<table>/` and `deleted/items/`. Related records use `task_id`.
 A move to another sub-project clears a task's `status_at` and sets its
 `done_at` and `review_at`, where it has them, to the move time, for the task
 and each subtask that moves with it, while `remaining_set_at` stays. Later
 changes stamp them again. The move changes no activity, so the task's history
 still shows when it was completed.
 
-The export excludes [Deleted items](./how-work-is-organized.md#deleted-items),
-personal inboxes, subscriptions, preferences, project favorites, private
-backgrounds, login data, OAuth connections and credentials.
-Agent-key metadata contains neither the key nor its hash. Billing plans,
-subscriptions, usage and delivery records are also excluded. Review current
-usage in **Billing** and invoices through **Manage billing**.
+Qivo reads the organization while the export runs, so changes made meanwhile
+may appear at different times in the files. The export is not a snapshot of
+one point in time. Qivo has no import or restore for exports.
 
-Keep the General page open until the download finishes. **Cancel export** or
-leaving the page stops preparation. A missing file or failed request stops
-the export and shows an error.
+A ready export stays available for 4 hours, or until a newer export of the
+organization is ready, and then asks you to prepare a new one. An export may
+hold at most 95 MiB as one download, 2 MiB on the public demo
+([Limits](./limits.md#files-and-images)); a larger one stops with a message
+and its files are deleted.
 
-Your browser assembles the ZIP. It must fit in available memory, remain under
-**4 GiB** and contain at most **65,534 entries**, including JSON files. Changes
-made during preparation may appear in only part of the archive. Qivo has no
-import or restore workflow for these exports.
+Each admin who asked for an export gets one automatic download when it is
+ready on their open page, and any admin can use **Download** or **Save
+export…** while it is available. How the file is saved depends on where you
+run Qivo:
 
-When the browser finishes a ZIP, the panel shows that date as the last export.
-Qivo cannot see whether the file was saved. Exports keep working while an
-organization is read-only before its deletion.
+- **Chrome and Edge on a computer** ask where to save when you start or join
+  the export, or when you choose **Save export…**, and save the file there.
+  The file stays empty until the export is saved.
+- **Other browsers** download the file as their downloads do.
+
+Only a save the app saw finish counts as a saved export. Chrome and Edge on a
+computer tell Qivo when the file is saved; other browsers cannot, so their
+downloads do not count. The page shows the date of the last confirmed save.
 
 ## Deleting an organization
 
@@ -139,8 +164,9 @@ Once the service has ended, the organization stays read-only for 30 days.
 Members can still read their work, and admins can export it. Admins can also
 still take access away, as while billing pauses editing
 ([Billing and free access](./administration-guard-rails-and-the-demo.md#billing-and-free-access)).
-Qivo emails the admins unless one of them finished an export in the 7 days
-before the service ended. On the deletion date, Qivo deletes everything the
+Qivo emails the admins unless Qivo confirmed that one of them saved an
+export in the 7 days before the service ended
+([Export data](#export-data)). On the deletion date, Qivo deletes everything the
 organization owns, including uploaded files. Nobody can open the files from
 then on, and Qivo erases their contents within 7 days
 ([Deleted items](./how-work-is-organized.md#deleted-items)). Each person's
