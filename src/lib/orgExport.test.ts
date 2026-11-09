@@ -301,6 +301,7 @@ describe('the file way', () => {
     file.file.createWritable = async () => {
       throw new DOMException('the folder is gone', 'NotFoundError')
     }
+    picker(async () => file.file)
     m.holdExportFile(EXPORT, file.file)
     vi.stubGlobal(
       'fetch',
