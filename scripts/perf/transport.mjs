@@ -174,6 +174,10 @@ export const AUTH_STORAGE_PREFIX = 'better-auth'
 export const signOut = async () => {}
 export const clearLocalSession = () => {}
 export const handleOAuthReturn = async () => false
+/* The page's sign-in never drops (armConvexAuth), so nothing hears Convex
+   confirm it again (src/lib/authSession.ts onSignedIn): a listener is
+   never called, and the answer stops nothing. */
+export const onSignedIn = () => () => {}
 
 /** Asks the server to run benchmark scenario `name`, resolving once its
     results reached the page. */
