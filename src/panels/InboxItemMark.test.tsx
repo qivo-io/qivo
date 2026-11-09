@@ -880,6 +880,51 @@ describe('the Inbox pane and its pop-out', { timeout: 20_000 }, () => {
       { org_id: snap.orgs[0].id, issue_id: 'task-a', through: Date.parse(at(8)) },
     ])
   })
+
+  it('opens a pop-out after a return with no mark, though the pane behind it shows that return under New', async () => {
+    await load([], [message('task-a', 5, { kind: 'comment' })])
+    await openInbox()
+    const row = document.querySelector<HTMLElement>('[data-message="task-a"] .inbox-message-open')
+    if (!row) throw new Error('missing the row')
+    await act(async () => row.click())
+    await settle()
+    // the server read the item, and confirmed the read
+    snap.messages = snap.messages.map((m) => ({ ...m, read_at: at(6) }))
+    await act(async () => publish())
+    await act(async () => writes[0].answer())
+    await settle()
+    await comments(range(1, 7))
+    // the page hides with the task in the pane, and a comment's message
+    // arrives meanwhile
+    await act(async () => {
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        get: () => 'hidden',
+      })
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await settle()
+    beyond = [message('task-a', 8)]
+    await act(async () => publish())
+    await settle()
+    await act(async () => {
+      Reflect.deleteProperty(document, 'visibilityState')
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await settle()
+    await comments(range(1, 9))
+    await settle()
+    expect(thread(pane()).slice(-3)).toEqual(['Check 7', 'New', 'Check 8'])
+    // the pop-out opens after that return, so it starts nowhere
+    const button = pane().querySelector<HTMLElement>('[data-task-popout]')
+    if (!button) throw new Error('missing the pop-out button')
+    await act(async () => button.click())
+    await settle()
+    const dialog = popOut()
+    if (!dialog) throw new Error('the pop-out did not open')
+    expect(thread(dialog)).toContain('Check 8')
+    expect(thread(dialog)).not.toContain('New')
+  })
 })
 
 describe('a return to a hidden page', { timeout: 20_000 }, () => {

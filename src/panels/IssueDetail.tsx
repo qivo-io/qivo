@@ -2067,11 +2067,14 @@ function IssueDetail({
   const unreadTs = frozen.current.unread?.ts ?? null
   const unreadPending = frozen.current.unread === null
   // a return froze the start again, which the pop-out over this window
-  // takes
+  // takes. It is told once a return, never again for a new callback, such
+  // as the Inbox's when its pop-out opens later in the visit.
   const returned = frozen.current.returned
+  const onReturnRef = useRefID(onReturnUnread)
+  onReturnRef.current = onReturnUnread
   useEffectID(() => {
-    if (returned !== null) onReturnUnread?.(returned)
-  }, [returned, onReturnUnread])
+    if (returned !== null) onReturnRef.current?.(returned)
+  }, [returned])
   // …and once the start is frozen, read the whole item on the server, so
   // what the badge counts goes also for messages the store never loaded. The store sends each `through` of the item once a visit, from
   // the organization, the task and the `through` of its own answer, never
