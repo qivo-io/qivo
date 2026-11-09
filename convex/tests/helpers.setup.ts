@@ -1390,20 +1390,22 @@ export async function wholeOf(t: T, profile: Doc<'profiles'>) {
   return { ...snap, ...rows, ...tasks }
 }
 
-/** The load rows the app works with for workspace `snap`: a row for each
- * task it shows that passes the server's fence, taken from the task rows
- * the way the store derives them (src/store/taskIndex.ts), then the rows
- * the server sends for the tasks the reader is not shown. The workspace
- * holds no other person, so an owner counts as one of the task's
+/** The tasks of a published test whole (wholeOf) and the projects beside
+ * them, which appLoadRows and appPausedRows read. */
+type WholeTasks = Pick<TaskSections, 'issues' | 'orgLoad'> & Pick<OracleProjects, 'projects'>
+
+/** The load rows of a reader's working set in `whole` (wholeOf), as an
+ * independent reference for planning.ownerLoads: a row for each task the
+ * reader is shown that passes the server's fence, taken from the task rows
+ * as the app derived them while it held tasks, then the tests' oracle's
+ * anonymized rows for the tasks the reader is not shown
+ * (tasksOracle.setup.ts). An owner counts as one of the task's
  * organization unless `gone` names them, as the app files a row for any
  * owner people.byIds has not said is gone (src/store/viewDelay.ts
  * ownerInOrg): the fixtures these serve hold their owners, and the
- * server's own fence checks them (lib/workspaceParts.ts). A test with an
- * owner who is no profile of the organization passes them in `gone`. */
-export function appLoadRows(
-  snap: Workspace & OracleProjects,
-  gone: ReadonlySet<string> = new Set(),
-): OrgLoadRow[] {
+ * server's own fence checks them (lib/loadRows.ts). A test with an owner
+ * who is no profile of the organization passes them in `gone`. */
+export function appLoadRows(snap: WholeTasks, gone: ReadonlySet<string> = new Set()): OrgLoadRow[] {
   const parents = new Set(snap.issues.flatMap((task) => task.parent_id ?? []))
   const projects = new Map(snap.projects.map((project) => [project.id, project]))
   const shown = snap.issues.flatMap((task) => {
@@ -1430,14 +1432,14 @@ export type AppPausedRow = {
   end_week: string
 }
 
-/** The paused tasks the app marks for workspace `snap`, beside
- * appLoadRows. They are the tasks it shows that are paused and not groups
- * (the store's isPaused), not Done, scheduled, not archived and in a live
- * project, owned (lib/review.ts taskOwnerId), as src/views/Resources.tsx
- * passes them to pausedWeeksByPerson, the owner counted as one of the
- * task's organization as appLoadRows counts them. The workspace holds only
- * tasks of projects the reader can see. */
-export function appPausedRows(snap: Workspace & OracleProjects): AppPausedRow[] {
+/** The paused tasks of a reader's working set in `whole` (wholeOf),
+ * beside appLoadRows. They are the tasks the reader is shown that are
+ * paused and not groups, not Done, scheduled, not archived and in a live
+ * project, owned (lib/review.ts taskOwnerId), as Team utilization marks
+ * them (src/views/Resources.tsx pausedWeeksByPerson), the owner counted as
+ * one of the task's organization as appLoadRows counts them. The whole
+ * holds only tasks of projects the reader can see. */
+export function appPausedRows(snap: WholeTasks): AppPausedRow[] {
   const parents = new Set(snap.issues.flatMap((task) => task.parent_id ?? []))
   const projects = new Map(snap.projects.map((project) => [project.id, project]))
   return snap.issues.flatMap((task) => {

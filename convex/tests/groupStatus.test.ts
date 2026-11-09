@@ -12,6 +12,7 @@ import {
   restTasks,
   TODAY,
   uuid,
+  wholeOf,
   withReadingAdmin,
   workspaceOf,
 } from './helpers.setup'
@@ -244,7 +245,7 @@ describe('parent task status', () => {
     const load = await as(t, f.admin).query(api.planning.assigneeLoad, { assignee_id: f.user.id })
     expect(load).toHaveLength(2)
     expect(load.map((r) => r.remaining)).toEqual([3, 3])
-    const snapshot = await workspaceOf(as(t, f.admin))
+    const snapshot = await wholeOf(t, f.admin)
     expect(snapshot && appLoadRows(snapshot).map((r) => r.remaining)).toEqual([3, 3])
   })
 

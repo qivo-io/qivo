@@ -58,8 +58,8 @@ import {
   type T,
   TODAY,
   uuid,
+  wholeOf,
   withReadingAdmin,
-  workspaceOf,
 } from './helpers.setup'
 import { plantNorthstar } from './northstar.setup'
 import { groupTest, liveTasksOf, orgLoadRows } from './orgLoad.setup'
@@ -256,11 +256,11 @@ const orgOwner = (fx: Pick<Fx, 't'>, reader: Doc<'profiles'>, ownerId: string) =
     return { spans, paused }
   })
 
-/** The app's rows of `ownerId` for workspace `snap` (helpers.setup.ts
- * appLoadRows), as spans in the wire's order, each with its task's project
- * from the workspace, and the paused tasks the app marks for them
- * (appPausedRows), in the wire's order. */
-function appOwnerOf(snap: NonNullable<Awaited<ReturnType<typeof workspaceOf>>>, ownerId: string) {
+/** The rows of `ownerId` derived from a reader's published whole
+ * (helpers.setup.ts wholeOf and appLoadRows), as spans in the wire's
+ * order, each with its task's project from the whole, and the paused
+ * tasks marked for them (appPausedRows), in the wire's order. */
+function appOwnerOf(snap: NonNullable<Awaited<ReturnType<typeof wholeOf>>>, ownerId: string) {
   const projectOf = new Map(snap.issues.map((task) => [task.id, task.project_id]))
   const spans = appLoadRows(snap)
     .filter((row) => row.owner_id === ownerId)
@@ -273,10 +273,10 @@ function appOwnerOf(snap: NonNullable<Awaited<ReturnType<typeof workspaceOf>>>, 
   return { spans, paused }
 }
 
-/** The app's spans and paused tasks of `ownerId` for `reader`, from their
- * workspace (appOwnerOf). */
+/** The spans and paused tasks of `ownerId` for `reader`, derived from
+ * their published whole (appOwnerOf). */
 async function appOwner(t: T, reader: Doc<'profiles'>, ownerId: string) {
-  const snap = await workspaceOf(as(t, reader))
+  const snap = await wholeOf(t, reader)
   if (snap === null) throw new Error(`${reader.name} has no workspace`)
   return appOwnerOf(snap, ownerId)
 }
@@ -444,7 +444,7 @@ describe('an owner’s spans are the organization’s rows of that owner', () =>
         reader,
         profiles.map((p) => p.id),
       )
-      const snap = await workspaceOf(as(t, reader))
+      const snap = await wholeOf(t, reader)
       if (snap === null) throw new Error(`${key} has no workspace`)
       let spans = 0
       let paused = 0

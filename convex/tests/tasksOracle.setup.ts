@@ -1,5 +1,5 @@
-/* The tasks of a caller's working set as the tests' reference data, now
- * that no read sends every task (the tasks part, workspace.tasks, is gone).
+/* The tasks of a caller's working set as the tests' reference data, which
+ * the tests keep once the tasks part (workspace.tasks) goes.
  *
  * tasksOracle answers, for one seat, what the tasks part answered for every
  * one of its windows together: the active tasks of the seat's organization
