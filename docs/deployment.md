@@ -2276,8 +2276,17 @@ subscribes `workspace.tasks`, so the app floor stays the one "Rollback and
 hotfixes" names. The staging check's `ui/own-reads` step, which replaces
 `ui/tasks-on-demand`, opens the run's project's Board, a fixture task's
 address and the project's Roadmap in fresh loads and checks that each shows
-its tasks from its own read. The release needs no backfill and no release
-step.
+its tasks from its own read. The same release stops a hidden or minimized
+tab's or window's reads of an open task (its thread, history, task, links,
+attachments and inbox item), the subscriber list, Billing's details and
+Organization › General's export and deletion state, and reads them again
+when it shows, so news that arrived meanwhile stays unread until then.
+Settings › Appearance's own watch of `appearance.get` is removed, not paused,
+since the page shows the value the app already reads. This changes no server
+function and reads no new query, so it sets no new floor. Its staging check
+step `ui/hidden-task-window` mentions Nora on t0 while the page is hidden
+and removes that notification again. The release needs no backfill and no
+release step.
 
 ## Node.js version
 
