@@ -1059,11 +1059,19 @@ function App() {
   const doneFocusRow = (n: number) => setFocusRow((was) => (was?.n === n ? null : was))
   useLayoutEffect(() => {
     const target = focusAfterMove.current
-    focusAfterMove.current = null
     if (!target) return
     const active = document.activeElement
     const nowhere = !active || active === document.body || !active.isConnected
-    if (nowhere || active.closest(OUT_OF_USE)) restoreFocus(target())
+    if (!nowhere && !active.closest(OUT_OF_USE)) {
+      focusAfterMove.current = null
+      return
+    }
+    // a target that waits for the project cache (projectTarget) is asked
+    // again in a later commit, as App renders again once the cache answers
+    const element = target()
+    if (element === null && projectTargetWaits.current) return
+    focusAfterMove.current = null
+    restoreFocus(element)
   })
   const [settingsPage, setSettingsPage] = useState(r0?.settings || null) // null | "account" | "org-*" | "team:<id>" | "project:<id>" | "project:<org>/<num>"
   // the tree's focus request while the desktop's rail shows the scope it
@@ -2176,20 +2184,35 @@ function App() {
      saved, while the views and the Projects page go behind it. A row out of
      use, such as the sidebar's while Settings hides it, never counts. The
      sidebar shows a new project once the server's list holds it, which its
-     focus request (focusRow) waits for. */
-  const projectTarget = (id: string) =>
-    [
+     focus request (focusRow) waits for. The phone header shows New task
+     once the project cache answers for the project (P.canWrite), so for a
+     new sub-project the creator may add tasks to (`tasks`), while the
+     cache is still loading it, projectTarget answers null and sets
+     projectTargetWaits, and the focus after a move asks again in a later
+     commit. */
+  const projectTargetWaits = useRef(false)
+  const projectTarget = (id: string, tasks = false) => {
+    projectTargetWaits.current = false
+    const row = [
       ...document.querySelectorAll<HTMLElement>(
         `[data-project-row="${id}"] button, [data-subproject-row="${id}"] button`,
       ),
-    ].find((control) => !control.closest(OUT_OF_USE)) ??
-    document.querySelector<HTMLElement>('[data-mobile-new-task]') ??
-    document.querySelector<HTMLElement>('[data-mobile-project-actions]')
+    ].find((control) => !control.closest(OUT_OF_USE))
+    if (row) return row
+    const newTask = document.querySelector<HTMLElement>('[data-mobile-new-task]')
+    if (newTask) return newTask
+    const actions = document.querySelector<HTMLElement>('[data-mobile-project-actions]')
+    if (actions && tasks && P.projectState(id) === 'loading') {
+      projectTargetWaits.current = true
+      return null
+    }
+    return actions
+  }
   /* Where focus goes as New sub-project closes after a create, for an
      opener that names nothing else. The empty states and Add sub-project
      buttons that open the dialog leave once the sub-project shows. */
   const afterNewSubProject = () =>
-    createdProject.current ? projectTarget(createdProject.current) : null
+    createdProject.current ? projectTarget(createdProject.current, true) : null
 
   // Jump from the issue window to the roadmap to plan an issue in context.
   // Switches to the issue's project/roadmap and closes the window so the
@@ -2676,7 +2699,7 @@ function App() {
           setScope(id)
           setProjectsOpen(false)
           setSync(null)
-          focusAfterMove.current = () => projectTarget(id)
+          focusAfterMove.current = () => projectTarget(id, p.type !== 'meta' && writes)
           // the tree's row may come a commit later than the move
           askFocusRow(id, id)
         }
