@@ -2261,6 +2261,24 @@ Board's **New task** dialog lists the project's two sub-projects from
 and writes nothing. The release changes no table, field or index, and needs
 no backfill and no release step.
 
+From the release after v0.1.161, the app subscribes no task window and holds
+no task. Every view and the task window show what their own reads answer,
+and every delay a card, a Roadmap bar or the task window shows comes from
+`planning.ownerLoads`. The release removes `workspace.tasks` with its reader
+and its hidden load rows, the root part's `active_tasks`, and the five
+indexes only that part read: `issues.by_org_archived_window`,
+`by_org_task_archived_key` on `issue_links`, `issue_labels` and
+`issue_attachments`, and `issue_subscriptions.by_profile_task_archived_key`.
+It keeps the `window_key` and `task_key` fields and their writers, so it
+changes no stored row, and a backend rollback builds the indexes again at
+its deploy. No page or action of the app from the release after v0.1.161
+subscribes `workspace.tasks`, so the app floor stays the one "Rollback and
+hotfixes" names. The staging check's `ui/own-reads` step, which replaces
+`ui/tasks-on-demand`, opens the run's project's Board, a fixture task's
+address and the project's Roadmap in fresh loads and checks that each shows
+its tasks from its own read. The release needs no backfill and no release
+step.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
