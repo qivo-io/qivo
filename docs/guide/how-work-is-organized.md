@@ -110,7 +110,11 @@ you can add its other details.
 The **Sub-project** picker lists the sub-projects you can add tasks to,
 under their project's name, 25 at a time with **Load more** and a search
 of either name. The dialog starts in the sub-project you opened it from,
-or in a project on its first sub-project you can add tasks to. Creating outside the current scope opens the task's
+or in a project on its first sub-project you can add tasks to. **Create**
+turns on once Qivo has checked the sub-project you choose. Under the picker
+the dialog says it is opening that sub-project while it checks it, and if
+the check fails or cannot finish it says so with **Retry**, keeping the
+title you typed. Creating outside the current scope opens the task's
 sub-project. A confirmation shows the new task ID, and the task window has a
 shareable URL.
 

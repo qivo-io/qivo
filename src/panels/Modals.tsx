@@ -324,6 +324,63 @@ function HoldUnsent({ what }: { what: string }) {
   return null
 }
 
+/**
+ * What a dialog says under its destination picker about the sub-project
+ * `id` it picked, `name` the row's, while the project cache has not
+ * answered it as one the person may write in, which the dialog's button
+ * waits for: "Opening <name>…" while the cache reads it, a failed read and
+ * the access_unchecked refusal's sentence with Retry (`retry`, the
+ * dialog's useProjects), which reads it again, the loss where the answer
+ * left it out, and `readOnly` for a level without Edit. Nothing for no
+ * pick or a writable one. The dialog keeps its draft meanwhile.
+ */
+function TargetNote({
+  id,
+  name,
+  retry,
+  readOnly,
+}: {
+  id: string | null
+  name: string
+  retry: () => void
+  readOnly: (name: string) => string
+}) {
+  if (!id) return null
+  const state = P.projectState(id)
+  if (state === 'ok' && P.canWrite(id)) return null
+  const text =
+    state === 'loading'
+      ? `Opening ${name}…`
+      : state === 'failed'
+        ? `Couldn't open ${name}.`
+        : state === 'unchecked'
+          ? P.writeNote(id)
+          : state === 'gone'
+            ? `${name} is no longer available to you.`
+            : readOnly(name)
+  const again = state === 'failed' || state === 'unchecked'
+  return (
+    <div
+      data-target-note={state}
+      role="status"
+      className="mt-2 flex flex-wrap items-center gap-2 text-sm text-text-2"
+    >
+      <span>{text}</span>
+      {again && (
+        <Button
+          type="button"
+          variant="ghost"
+          className="h-control-sm text-sm"
+          data-target-retry=""
+          onClick={retry}
+        >
+          Retry
+        </Button>
+      )}
+    </div>
+  )
+}
+
 /* ---------- New issue ---------- */
 function NewIssueModal({
   init = {},
@@ -357,6 +414,8 @@ function NewIssueModal({
   const [projId, setProjId] = useStateM<string | null>(
     contextWritable && init.project ? init.project : null,
   )
+  // the name of the row the person chose, for the note under the picker
+  const [chosenName, setChosenName] = useStateM<string | null>(null)
   // whether the person chose, after which no default moves the choice
   const chose = useRefM(contextWritable)
   // a context sub-project the cache answers writable once the dialog shows
@@ -374,11 +433,13 @@ function NewIssueModal({
     if (!first) return
     chose.current = true
     setProjId(first.id)
+    setChosenName(first.name)
   }
   // the chosen sub-project and the context, named while the dialog shows,
   // so the project cache reads them; Create waits for the chosen one's
-  // answer, which the create reads (P.addIssue)
-  useProjects([projId, init.project])
+  // answer, which the create reads (P.addIssue), and the note under the
+  // picker says where that stands, with Retry
+  const retryTarget = useProjects([projId, init.project])
   const targetReady = !!projId && P.projectState(projId) === 'ok' && P.canWrite(projId)
   const canSave = targetReady && title.trim().length > 0 && !overLimit(LIMITS.title, title)
 
@@ -423,8 +484,15 @@ function NewIssueModal({
             onChoose={(row) => {
               chose.current = true
               setProjId(row.id)
+              setChosenName(row.name)
             }}
             onRows={openOnFirst}
+          />
+          <TargetNote
+            id={projId}
+            name={P.project(projId)?.name ?? chosenName ?? 'this sub-project'}
+            retry={retryTarget}
+            readOnly={(name) => `You can't add tasks to ${name}.`}
           />
         </div>
       </MField>
@@ -1116,7 +1184,9 @@ function MoveIssueModal({
   // the project cache, and the window names it while it shows, so the
   // move reads its parent (crossing, P.moveFamily) from the cache.
   const [target, setTarget] = useStateM('')
-  useProjects([target || null])
+  // the chosen row's name, for the note under the list
+  const [targetName, setTargetName] = useStateM('')
+  const retryTarget = useProjects([target || null])
   // A move to another top-level project carries the subtasks, archived ones
   // included. Archived tasks are not in this view, so the server answers
   // whether any would move to the chosen sub-project.
@@ -1187,8 +1257,17 @@ function MoveIssueModal({
           org={it.org}
           value={target || null}
           current={it.project}
-          onChoose={(row) => setTarget(row.id)}
+          onChoose={(row) => {
+            setTarget(row.id)
+            setTargetName(row.name)
+          }}
           words={MOVE_TARGET_WORDS}
+        />
+        <TargetNote
+          id={target || null}
+          name={P.project(target)?.name ?? (targetName || 'this sub-project')}
+          retry={retryTarget}
+          readOnly={(name) => `You can no longer move this task into ${name}.`}
         />
       </MField>
       {notes.length > 0 && (

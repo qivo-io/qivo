@@ -364,6 +364,9 @@ sub-project you can edit. The window lists those sub-projects under their
 projects, 25 at a time with a search and **Load more**, the task's own
 marked **Current**, and says "No other sub-project you can move it to." when
 there is none. **Move** turns on once Qivo has checked the one you choose.
+Under the list the window says it is opening that sub-project while it
+checks it, and if the check fails or cannot finish it says so with
+**Retry**.
 The task keeps its ID, comments, attachments, labels,
 activity, links and subtasks. Its review hand-off and the time it became Done
 start again at the move, for the task and each subtask that moves with it.

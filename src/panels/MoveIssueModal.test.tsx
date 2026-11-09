@@ -14,10 +14,15 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
    another top-level project carries any. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', async () => ({
-  convex: network,
-  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
+// the live double of the store that loaded last, whose project cache reads
+// a case can leave to the client's onUpdate
+const double = vi.hoisted(() => ({
+  live: null as null | { forceProjectNav(force: 'client' | null): void },
 }))
+vi.mock('../lib/convex', async () => {
+  double.live = (await import('../store/guard/liveDouble.setup')).liveOver(network)
+  return { convex: network, live: double.live }
+})
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -45,6 +50,11 @@ let windowFail: ((error: unknown) => void) | null
 /* The server's answer to moveCarriesSubtasks, and the arguments it was asked with. */
 let carries: boolean
 let asked: Record<string, unknown>[]
+/* Whether the project cache's byIds reads go to onUpdate below, which
+   answers them from the world as it stands, and the ids whose next such
+   read fails, once each. */
+let byIdsHere = false
+let failByIds = new Set<string>()
 
 /** Loads the store on the world above, which `prepare` may change, given
     WEB's id. */
@@ -103,6 +113,13 @@ async function load(prepare: (snap: Snapshot, web: string) => void = () => {}) {
     // the window's targets, the sub-projects the person may add tasks to in
     // the task's organization, as the server lists them
     if (name === 'projectNav:targets') next(projectNavStandIn(snap, name, args))
+    if (name === 'projectNav:byIds') {
+      const asked = (args as { ids: string[] }).ids
+      if (asked.some((id) => failByIds.has(id))) {
+        for (const id of asked) failByIds.delete(id)
+        fail?.(new Error('the byIds read failed'))
+      } else next(projectNavStandIn(snap, name, args))
+    }
     if (getFunctionName(ref) === 'taskWindow:task') {
       windowRead = next
       windowFail = fail
@@ -120,11 +137,14 @@ async function load(prepare: (snap: Snapshot, web: string) => void = () => {}) {
   })
   const store = await import('../store/planner')
   P = store.P
+  if (byIdsHere) double.live?.forceProjectNav('client')
   await store.initStore()
   dialogs = await import('./Modals')
 }
 
 beforeEach(() => {
+  byIdsHere = false
+  failByIds = new Set()
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal(
     'matchMedia',
@@ -354,5 +374,38 @@ describe('Move window', () => {
     // must fail for labels that take their tags from the project cache
     expect(label(ids.be)).toBe('Design #4')
     expect(label('design-6')).toBe('Design #6')
+  })
+
+  it("says a failed read of the chosen sub-project with Retry, and turns Move on once Retry's read answers", async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    carries = false
+    byIdsHere = true
+    await load()
+    const lone = P.issues.find((it) => it.uuid === 'lone')
+    if (!lone) throw new Error('no task')
+    await openFor(lone.id)
+    const row = () =>
+      document.querySelector<HTMLInputElement>(`[data-target="${ids.be}"] input:not(:disabled)`)
+    await vi.waitFor(() => expect(row()).not.toBeNull())
+    // the project cache's first read of BE fails
+    failByIds.add(ids.be)
+    await act(async () => row()?.click())
+    const note = () => document.querySelector<HTMLElement>('[data-target-note]')
+    // the window draws again as the task window does on each change
+    await vi.waitFor(() => expect(P.projectState(ids.be)).toBe('failed'))
+    await openFor(lone.id)
+    expect(note()?.dataset.targetNote).toBe('failed')
+    expect(note()?.textContent).toContain("Couldn't open BE.")
+    const move = () =>
+      [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+        (b) => b.textContent === 'Move',
+      )
+    expect(move()?.disabled).toBe(true)
+    // must fail for a note whose Retry reads nothing again
+    await act(async () => note()?.querySelector<HTMLElement>('[data-target-retry]')?.click())
+    await vi.waitFor(() => expect(P.projectState(ids.be)).toBe('ok'))
+    await openFor(lone.id)
+    expect(move()?.disabled).toBe(false)
+    expect(note()).toBeNull()
   })
 })

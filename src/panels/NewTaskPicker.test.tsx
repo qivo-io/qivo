@@ -28,10 +28,15 @@ import {
    values: one top-level project with three sub-projects. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', async () => ({
-  convex: network,
-  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
+// the live double of the store that loaded last, whose project cache reads
+// a case can leave to the client's onUpdate
+const double = vi.hoisted(() => ({
+  live: null as null | { forceProjectNav(force: 'client' | null): void },
 }))
+vi.mock('../lib/convex', async () => {
+  double.live = (await import('../store/guard/liveDouble.setup')).liveOver(network)
+  return { convex: network, live: double.live }
+})
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -44,9 +49,15 @@ let container: HTMLDivElement
 let root: Root
 // how the server answers projectNav.targets
 let targets: ForcedProjectNav
+// whether the project cache's byIds reads go to onUpdate below, and the
+// ids whose next such read fails, once each
+let byIdsHere: boolean
+let failByIds: Set<string>
 
 beforeEach(() => {
   targets = {}
+  byIdsHere = false
+  failByIds = new Set()
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
   Range.prototype.getBoundingClientRect = () => new DOMRect()
   Element.prototype.getAnimations = () => []
@@ -138,7 +149,13 @@ async function app(snap: Snapshot, path = '/app/testbed/board/p/1') {
     else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name === 'tasks:board') next(boardStandIn(snap, args as BoardArgs))
     else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
-    else if (isProjectNavRead(name))
+    else if (name === 'projectNav:byIds' && failByIds.size > 0) {
+      const ids = (args as { ids: string[] }).ids
+      if (ids.some((id) => failByIds.has(id))) {
+        for (const id of ids) failByIds.delete(id)
+        fail?.(new Error('the byIds read failed'))
+      } else answerProjectNav(snap, name, args, next, fail)
+    } else if (isProjectNavRead(name))
       answerProjectNav(snap, name, args, next, fail, {
         force: name === 'projectNav:targets' ? targets : {},
       })
@@ -154,6 +171,7 @@ async function app(snap: Snapshot, path = '/app/testbed/board/p/1') {
   const { TASKS } = await import('../store/liveParts')
   TASKS.atBoot = false
   const store = await import('../store/planner')
+  if (byIdsHere) double.live?.forceProjectNav('client')
   await store.initStore()
   const { syncStatus } = await import('../lib/syncStatus')
   syncStatus.setSocket({ connected: true, everConnected: true })
@@ -248,6 +266,31 @@ describe("the New task dialog's Sub-project picker", { timeout: 30_000 }, () => 
     expect(group?.tagName).toBe('FIELDSET')
     const heading = document.getElementById(group?.getAttribute('aria-labelledby') ?? '')
     expect(heading?.textContent).toBe('Plan')
+  })
+
+  it("says a failed read of the chosen sub-project with Retry, keeping the draft, and turns Create on once Retry's read answers", async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    byIdsHere = true
+    await app(world(), '/app/~/board/mine')
+    await openDialog()
+    const row = await waitFor(
+      () => document.querySelector<HTMLInputElement>('[data-target="beta"] input'),
+      "Beta's row",
+    )
+    // the project cache's first read of Beta fails
+    failByIds.add('beta')
+    await act(async () => row.click())
+    const note = () => document.querySelector<HTMLElement>('[data-target-note]')
+    await waitFor(() => note()?.dataset.targetNote === 'failed' || null, 'the failed note')
+    expect(note()?.textContent).toContain("Couldn't open Beta.")
+    expect(buttonNamed('Create')?.disabled).toBe(true)
+    // must fail for a note whose Retry reads nothing again
+    await act(async () => note()?.querySelector<HTMLElement>('[data-target-retry]')?.click())
+    await waitFor(() => buttonNamed('Create')?.disabled === false || null, 'Create turned on')
+    expect(note()).toBeNull()
+    expect(document.querySelector<HTMLInputElement>('input[aria-label="Title"]')?.value).toBe(
+      'Write the notes',
+    )
   })
 
   it('says at a confirmed empty end that no sub-project takes tasks, and keeps Create off', async () => {
