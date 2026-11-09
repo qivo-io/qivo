@@ -298,6 +298,25 @@ describe('the read of a reference', () => {
     expect(one('taskWindow:task')).toBe(side)
   })
 
+  it("keeps a guest organization's reference through a home organization change", async () => {
+    const { P } = store
+    const moves: Record<string, string>[] = []
+    P.watchHandles((moved) => moves.push(Object.fromEntries(moved)))
+    const guest = taskRef({ org: GUEST, num: 5, uuid: OTHER })
+    P.watchTaskRef(guest)
+    snap.profiles = snap.profiles.map((p) =>
+      p.id === me
+        ? { ...p, org_role: 'guest' }
+        : p.id === 'me-guest'
+          ? { ...p, org_role: 'user' }
+          : p,
+    )
+    publishWhole(snap)
+    await turn()
+    expect(P.homeOrg).toBe(GUEST)
+    expect(moves.some((m) => guest in m)).toBe(false)
+  })
+
   it('walks the seats for a uuid without an organization, the named one first, then home, one at a time', async () => {
     const { P } = store
     P.watchTaskRef(taskRef({ org: null, uuid: FAR }))

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setup'
+import { oracleLevels } from './store/oracleScope.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, underProgram } from './store/plannerFixture.setup'
 import {
@@ -26,13 +27,9 @@ import { taskRow } from './views/boardFixture.setup'
    holds it, only while the person stays on the Roadmap. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-const double = vi.hoisted(() => ({
-  live: null as null | { holdWindow(from: string | null): void },
-}))
 vi.mock('./lib/convex', async () => {
   const { liveOver } = await import('./store/guard/liveDouble.setup')
-  double.live = liveOver(network, { taskWindow: 'client' })
-  return { convex: network, live: double.live }
+  return { convex: network, live: liveOver(network, { taskWindow: 'client' }) }
 })
 vi.mock('./lib/auth', () => ({
   armConvexAuth: async () => true,
@@ -131,12 +128,10 @@ async function waitFor<T>(find: () => T | null | undefined | false, what: string
 
 type Snapshot = ReturnType<typeof plannerFixture>
 
-/** Boots App on the fixture workspace, with what `prepare` adds, and the
-    task window from `held` on still to load. Answers the organization's
-    slug. */
-/* Whether boot's server answers the task window's read of a task
-   (windowTask), which the suite of Plan on roadmap turns on. */
-let answersTasks = false
+/* The task whose window read boot's server holds back while it is set, by
+   its number as the read names it (qn-5), and the read it holds back. */
+let heldTask: string | null = null
+let releaseTask = () => {}
 /* The Roadmap's reads boot's server holds back until `answerRoadmaps`
    answers them from the snapshot (store/roadmapStandIn.setup.ts), while
    `holdRoadmaps` is on. */
@@ -175,7 +170,9 @@ function windowTask(snap: Snapshot, ref: string) {
   }
 }
 
-async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string | null = null) {
+/** Boots App on the fixture workspace, with what `prepare` adds. Answers
+    the organization's slug. */
+async function boot(prepare: (snap: Snapshot) => void = () => {}) {
   vi.resetModules()
   const snap = plannerFixture()
   for (let n = 1; n <= 3; n++) snap.issues.push(taskRow(snap, `t${n}`, 'todo', n))
@@ -190,8 +187,6 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
   milestoneWatches.length = 0
   holdMilestones = false
   heldMilestones.length = 0
-  // the store, once it loaded, for what the person sees and may edit
-  let P: typeof import('./store/planner')['P'] | null = null
   // sends the workspace as the server holds it now
   let publishWhole = () => {}
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
@@ -200,14 +195,17 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
       publishWhole = () => next(structuredClone(snap))
       publishWhole()
     } else if (name === 'tasks:board') next(boardStandIn(snap, args as BoardArgs))
-    else if (name === 'teamSync:agenda')
+    else if (name === 'teamSync:agenda') {
+      // the agenda judges sight by the server's rule, as the server does,
+      // not by what the store's project cache has read so far
+      const levels = oracleLevels(snap)
       next(
         teamSyncStandIn(snap, args as SyncArgs, {
-          sees: (id) => P?.canSee(id) ?? true,
-          writes: (id) => P?.canWrite(id) ?? false,
+          sees: (id) => levels.has(id),
+          writes: (id) => levels.get(id) === 'lead' || levels.get(id) === 'user',
         }),
       )
-    else if (name === 'tasks:roadmap' || name === 'tasks:roadmapDependencies') {
+    } else if (name === 'tasks:roadmap' || name === 'tasks:roadmapDependencies') {
       const answer = () => next(structuredClone(answerRoadmap(snap, name, args)))
       if (!holdRoadmaps) answer()
       else {
@@ -231,11 +229,17 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
       }
     } else if (name === 'teamSync:lastComments')
       next({ rows: [{ issue_id: 't1', at: '2026-09-10T08:00:00.000Z' }], complete: true })
-    else if (name === 'taskWindow:task' && answersTasks) {
-      // the window's own read of a task the workspace does not hold, by its
-      // number or uuid; another stays on its way
-      const answer = windowTask(snap, String((args as { ref: string }).ref))
-      if (answer) next(answer)
+    else if (name === 'taskWindow:task') {
+      // the window's own read of a task, by its number or uuid; one the
+      // server does not hold here stays on its way, and so does `heldTask`
+      // until releaseTask
+      const ref = String((args as { ref: string }).ref)
+      const answer = () => {
+        const found = windowTask(snap, ref)
+        if (found) next(found)
+      }
+      if (heldTask !== null && ref.toLowerCase() === heldTask) releaseTask = answer
+      else answer()
     } else if (name === 'snapshot:threadComments') {
       next({ comments: [], earlier: false })
       const thread = { stopped: false }
@@ -274,8 +278,6 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
     return null
   })
   const store = await import('./store/planner')
-  P = store.P
-  double.live?.holdWindow(held)
   await store.initStore()
   const { syncStatus } = await import('./lib/syncStatus')
   syncStatus.setSocket({ connected: true, everConnected: true })
@@ -356,6 +358,110 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     const again = await shownPage('overview')
     expect(again).not.toBe(overview)
     expect(hiddenPages()).toEqual(['kanban'])
+  })
+
+  it('keeps Team sync through its sitting, where it was, and opens it anew after Done', async () => {
+    // the fixture's project as a sub-project (p/1) of a top-level one, as
+    // the agenda answers only those
+    const org = await boot((snap) => void underProgram(snap))
+    const { P } = await import('./store/planner')
+    const me = P.CURRENT_USER
+    await go(`/app/${org}/sync/p/1/people/${me}`)
+    const sync = await shownPage('sync')
+    const page = await waitFor(
+      () => sync.querySelector<HTMLElement>('[data-sync-page]'),
+      'the Team sync page',
+    )
+    // the tasks wait under Later, which opens for this sitting
+    const later = await waitFor(
+      () => sync.querySelector<HTMLElement>(`[data-sync-later="${me}"]`),
+      'Later',
+    )
+    await act(async () => later.click())
+    const tick = await waitFor(
+      () => sync.querySelector<HTMLElement>('[data-sync-tick="QN-1"]'),
+      "a task's review tick",
+    )
+    await act(async () => tick.click())
+    expect(tick.dataset.syncReviewed).toBe('1')
+    page.scrollTop = 120
+    await waitFor(() => P.lastComments.size > 0, 'the comment marks')
+
+    // a jump to the Board keeps the page, which reads no comment while it
+    // hides and keeps its marks for its return
+    const marks = P.lastComments.size
+    await go(`/app/${org}/board/mine`)
+    await shownPage('kanban')
+    expect(sync.dataset.hiddenView).toBe('sync')
+    expect(P.lastComments.size).toBe(marks)
+    // and its agenda's read stops, keeping its meeting
+    expect(P.syncRead()).toMatchObject({ current: false, value: { state: 'ok' } })
+    // the sidebar's Team sync goes back to the same page, where it was
+    const nav = await waitFor(
+      () => document.querySelector<HTMLElement>('[data-sync-nav]'),
+      "the sidebar's Team sync",
+    )
+    await act(async () => nav.click())
+    expect(await shownPage('sync')).toBe(sync)
+    expect(location.pathname).toContain(`/people/${me}`)
+    expect(page.scrollTop).toBe(120)
+    expect(tick.dataset.syncReviewed).toBe('1')
+
+    // Done on the last step ends the sitting
+    for (;;) {
+      const next = await waitFor(
+        () => sync.querySelector<HTMLElement>('[data-sync-next]'),
+        'Next or Done',
+      )
+      const done = next.textContent?.includes('Done')
+      await act(async () => next.click())
+      if (done) break
+    }
+    await waitFor(() => !sync.isConnected, 'the ended sitting gone')
+    // the ended sitting let its meeting and its marks go
+    expect(P.lastComments.size).toBe(0)
+    expect(P.syncRead().key).toBeNull()
+    await act(async () => nav.click())
+    const again = await shownPage('sync')
+    expect(again).not.toBe(sync)
+    expect(location.pathname).not.toContain('/people/')
+    await go(`/app/${org}/sync/p/1/people/${me}`)
+    await waitFor(() => again.querySelector(`[data-sync-later="${me}"]`), 'Later again')
+    expect(again.querySelector('[data-sync-tick]')).toBeNull()
+    await act(async () => again.querySelector<HTMLElement>(`[data-sync-later="${me}"]`)?.click())
+    const fresh = await waitFor(
+      () => again.querySelector<HTMLElement>('[data-sync-tick="QN-1"]'),
+      "the new sitting's review tick",
+    )
+    expect(fresh.dataset.syncReviewed).toBe('0')
+  })
+
+  it("keeps the opening's milestone reads while Team sync is kept, and forgets them once it is not", async () => {
+    const org = await boot((snap) => void underProgram(snap))
+    const { P } = await import('./store/planner')
+    const { SYNC_MILESTONE_SLOTS } = await import('./lib/teamSync')
+    await go(`/app/${org}/sync/p/1`)
+    const sync = await shownPage('sync')
+    await waitFor(
+      () => sync.querySelector('[data-sync-next-milestone="none"]'),
+      "the opening's next milestone",
+    )
+    const live = () => milestoneWatches.filter((w) => !w.stopped).map((w) => w.name)
+    expect(live().sort()).toEqual(['milestones:between', 'milestones:section'])
+    // hidden behind the Board, the reads stop and keep their answers
+    await go(`/app/${org}/board/mine`)
+    await shownPage('kanban')
+    await waitFor(() => live().length === 0, 'the stopped milestone reads')
+    expect(P.milestoneRead(SYNC_MILESTONE_SLOTS.next)).toMatchObject({
+      state: 'ok',
+      current: false,
+    })
+    // 30 minutes without input: Team sync is no longer kept, and its reads go
+    await act(async () => vi.advanceTimersByTime(30 * MINUTE))
+    await waitFor(() => !sync.isConnected, 'the released Team sync page')
+    for (const slot of Object.values(SYNC_MILESTONE_SLOTS))
+      expect(P.milestoneRead(slot)).toEqual({ state: 'loading' })
+    expect(live()).toEqual([])
   })
 
   it("keeps the Overview's milestone reads on their fixed slots while it is kept, and forgets them once it is not", async () => {
@@ -508,14 +614,168 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     expect(live()).toEqual([])
   })
 
-  it('opens an address that once named all projects on the project chooser at once, asking for no task', async () => {
-    // 12,800 task numbers make 64 task windows; the last starts at fc000000
+  it("opens an all-project sync row's Board and Roadmap jumps on the task's sub-project", async () => {
+    // the fixture's project as a sub-project (p/1) of a top-level one
+    const org = await boot((snap) => void underProgram(snap))
+    const { P } = await import('./store/planner')
+    const me = P.CURRENT_USER
+    const later = async () => {
+      await go(`/app/${org}/sync/all/people/${me}`)
+      const sync = await shownPage('sync')
+      const open = await waitFor(
+        () => sync.querySelector<HTMLElement>(`[data-sync-later="${me}"]`),
+        'Later',
+      )
+      // Later stays open while the sitting is kept
+      if (!sync.querySelector('[data-sync-board="QN-1"]')) await act(async () => open.click())
+      return sync
+    }
+    let sync = await later()
+    const roadmap = await waitFor(
+      () => sync.querySelector<HTMLElement>('[data-sync-roadmap="QN-1"]'),
+      'the Roadmap jump',
+    )
+    await act(async () => roadmap.click())
+    const page = await shownPage('roadmap')
+    // the jump opens the task's sub-project
+    expect(location.pathname).toBe(`/app/${org}/roadmap/p/1`)
+    await waitFor(
+      () =>
+        page.querySelector('[data-roadmap-root]')?.getAttribute('data-roadmap-state') === 'ok' &&
+        page.querySelector('[data-roadmap-task-open="QN-1"]'),
+      "the task's row",
+    )
+    sync = await later()
+    const board = await waitFor(
+      () => sync.querySelector<HTMLElement>('[data-sync-board="QN-1"]'),
+      'the Board jump',
+    )
+    await act(async () => board.click())
+    await shownPage('kanban')
+    // the project form of a task's address
+    expect(location.pathname).toBe(`/app/${org}/board/tasks/qn-1`)
+    await waitFor(
+      () =>
+        document
+          .querySelector('[data-workspace-view="kanban"] [data-board-root]')
+          ?.getAttribute('data-board-state') === 'ok',
+      "the sub-project's Board",
+    )
+    expect(
+      document.querySelector('[data-workspace-view="kanban"] [data-card="QN-1"]'),
+    ).not.toBeNull()
+  })
+
+  it('keeps the remembered project under task addresses, at boot, on Back or Forward and for a task still to load', async () => {
+    let key = ''
+    let other = { org_id: '', project_id: 'other' }
+    // QN-5's window read stays on its way until releaseTask
+    heldTask = 'qn-5'
     const org = await boot((snap) => {
       underProgram(snap)
-      snap.orgs[0].next_issue_num = 64 * 200
+      snap.issues.push(
+        taskRow(snap, '01000000-early', 'todo', 4),
+        taskRow(snap, 'fd000000-late', 'todo', 5),
+      )
+      // another project the person was in last, saved before the page loaded
+      snap.projects.push({ ...snap.projects[1], id: 'other', key: 'OTH', num: 98, name: 'Other' })
+      other = { org_id: snap.orgs[0].id, project_id: 'other' }
+      key = `planner.ui.v1:${snap.myProfileIds[0]}`
+      localStorage.setItem(key, JSON.stringify({ lastProject: other, view: 'kanban' }))
+      history.replaceState(null, '', '/app/testbed/inbox/tasks/qn-4')
+    })
+    try {
+      const { P } = await import('./store/planner')
+      // the scope beneath the Inbox is not remembered
+      await shownPage('inbox')
+      expect(P.loadUI().lastProject).toEqual(other)
+      // nor My view
+      await go(`/app/${org}/board/mine`)
+      await shownPage('kanban')
+      await go(`/app/${org}/inbox/tasks/qn-4`)
+      await shownPage('inbox')
+      expect(P.loadUI().lastProject).toEqual(other)
+      // a task still to load, which the app opens once its read answered
+      await go(`/app/${org}/inbox/tasks/qn-5`)
+      expect(P.loadUI().lastProject).toEqual(other)
+      await act(async () => {
+        releaseTask()
+        await new Promise((resolve) => realTimeout(resolve, 0))
+      })
+      await waitFor(
+        () => P.taskDetail('fd000000-late', other.org_id)?.state === 'ok',
+        'the task that arrived',
+      )
+      expect(location.pathname).toMatch(/\/inbox\/tasks\/qn-5$/)
+      expect(P.loadUI().lastProject).toEqual(other)
+      // nor the sub-project of the Board Back opens for a task's address
+      await go(`/app/${org}/board/tasks/qn-4`)
+      await shownPage('kanban')
+      expect(P.loadUI().lastProject).toEqual(other)
+    } finally {
+      heldTask = null
+      releaseTask = () => {}
+      localStorage.removeItem(key)
+    }
+  })
+
+  it('shows the Inbox again with an empty pane, holding nothing of the item picked before', async () => {
+    const org = await boot((snap) => {
+      const message = (id: string, issue: string, title: string) => ({
+        id,
+        org_id: snap.orgs[0].id,
+        recipient_id: snap.profiles[0].id,
+        issue_id: issue,
+        issue_title: title,
+        kind: 'comment' as const,
+        detail: 'New comment',
+        created_at: '2026-09-14T08:30:00.000Z',
+      })
+      snap.messages.push(message('m1', 't1', 'Write the release notes'))
+      // an item whose task the server holds and the workspace's parts do
+      // not send (the live double's `unheld`), which the Inbox's page lists
+      // and its pane opens from the server
+      snap.messages.push(message('m2', 'gone', 'Plan the offsite'))
+      Object.assign(snap, {
+        unheld: { issues: [{ ...taskRow(snap, 'gone', 'todo', 99), title: 'Plan the offsite' }] },
+      })
+    })
+    await go(`/app/${org}/inbox`)
+    const inbox = await shownPage('inbox')
+    const pick = async (id: string) => {
+      const row = await waitFor(
+        () => inbox.querySelector<HTMLElement>(`[data-message="${id}"] button`),
+        `the item ${id}`,
+      )
+      await act(async () => row.click())
+    }
+    // the pane opens its task from the server, which has not answered
+    // here, by the row's number too, which its loading note names
+    await pick('gone')
+    expect(inbox.textContent).toContain('Loading QN-99…')
+    await go(`/app/${org}/board/mine`)
+    await shownPage('kanban')
+    await go(`/app/${org}/inbox`)
+    expect(await shownPage('inbox')).toBe(inbox)
+    expect(inbox.textContent).not.toContain('Loading QN-99')
+
+    // the item read as it opened is not new when its task opens again
+    await pick('t1')
+    await waitFor(() => inbox.querySelector('[data-unread-divider]'), "the item's new part")
+    await go(`/app/${org}/board/tasks/qn-1`)
+    await shownPage('kanban')
+    await go(`/app/${org}/inbox/tasks/qn-1`)
+    await shownPage('inbox')
+    await waitFor(() => inbox.textContent?.includes('Write the release notes'), 'the task pane')
+    expect(inbox.querySelector('[data-unread-divider]')).toBeNull()
+  })
+
+  it('opens an address that once named all projects on the project chooser at once, asking for no task', async () => {
+    const org = await boot((snap) => {
+      underProgram(snap)
       // at the front door, with no scope chosen
       history.replaceState(null, '', '/app/testbed')
-    }, 'fc000000')
+    })
     const { __layerProbe } = await import('./store/planner')
     await waitFor(() => document.querySelector('[data-project-chooser]'), 'the chooser')
     // what the boot asked for
@@ -541,6 +801,43 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     await go(`/app/${org}/inbox`)
     expect(await shownPage('inbox')).toBe(inbox)
   })
+
+  it('hides the Inbox without its task pane, and keeps the task window that opens over the Board', async () => {
+    const org = await boot()
+    await go(`/app/${org}/inbox/tasks/qn-1`)
+    const inbox = await shownPage('inbox')
+    await waitFor(() => inbox.textContent?.includes('Write the release notes'), 'the task pane')
+    await waitFor(() => threads.length > 0, "the task's comments")
+    // the task opens over the Board, as the pane's Show on board does
+    await go(`/app/${org}/board/tasks/qn-1`)
+    await shownPage('kanban')
+    expect(inbox.dataset.hiddenView).toBe('inbox')
+    expect(inbox.textContent).not.toContain('Write the release notes')
+    await waitFor(
+      () =>
+        document.querySelector('[role="dialog"]')?.textContent?.includes('Write the release notes'),
+      'the task window',
+    )
+    expect(threads.at(-1)?.stopped).toBe(false)
+  })
+
+  it("opens the next Inbox task in the pane after the person left the Inbox from the task's pop-out", async () => {
+    const org = await boot()
+    await go(`/app/${org}/inbox/tasks/qn-1`)
+    const inbox = await shownPage('inbox')
+    const popOut = await waitFor(
+      () => inbox.querySelector<HTMLElement>('[data-task-popout]'),
+      'the pop-out button',
+    )
+    await act(async () => popOut.click())
+    await waitFor(() => document.querySelector('[role="dialog"]'), 'the popped-out window')
+    await go(`/app/${org}/board/tasks/qn-1`)
+    await shownPage('kanban')
+    await go(`/app/${org}/inbox/tasks/qn-2`)
+    expect(await shownPage('inbox')).toBe(inbox)
+    await waitFor(() => inbox.querySelector('[data-task-popout]'), 'the next task in the pane')
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
 })
 
 describe('Plan on roadmap while the Roadmap reads its answer', { timeout: 30_000 }, () => {
@@ -552,14 +849,10 @@ describe('Plan on roadmap while the Roadmap reads its answer', { timeout: 30_000
      back until `answerRoadmaps`. */
   const LAUNCH = '01000000-0000-4000-8000-000000000005'
   beforeEach(async () => {
-    answersTasks = true
     holdRoadmaps = true
     answerRoadmaps = () => {}
-    const { TASKS } = await import('./store/liveParts')
-    TASKS.atBoot = false
   })
   afterEach(async () => {
-    answersTasks = false
     holdRoadmaps = false
     answerRoadmaps = () => {}
     // no write went out on a path that needs every task, and no paint threw

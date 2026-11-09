@@ -1200,6 +1200,66 @@ describe('a task address the workspace does not hold', { timeout: 60_000 }, () =
     expect(sentProjects()).toEqual([])
   })
 
+  // KNOWN DEFECT: App keeps a remembered project for a task address only
+  // where the project cache already names the task's project's parent
+  // (lib/router.ts scopeForIssue), and on the app's path the task's answer
+  // arrives before the cache has read Firmware, so App opens Firmware
+  // instead of the remembered Luma Sensor (App.tsx, the pendingTask
+  // effect). It held only through the held arm, whose tasks named their
+  // projects with the cache at boot.
+  it.fails('keeps the remembered project for a task address of a task in it, else opens the task’s sub-project, checking nothing', async () => {
+    // QN-7 in Firmware, under Luma Sensor, which its window's answer names
+    for (const [id, org, name] of [
+      [LUMA, ORG, 'Luma Sensor'],
+      [PORTAL, PARTNER, 'Firmware'],
+    ] as const) {
+      await app(world(), '/app/testbed/board/tasks/qn-7', remembering(id, org))
+      await until(() => windowReads.length > 0, "the window's read")
+      await act(async () => {
+        for (const read of windowReads) read(taskAnswer())
+      })
+      await until(
+        () => shown() === 'kanban' && q('[data-scope-crumb] h1')?.textContent === name,
+        `the Board of ${name}`,
+      )
+      expect(asks).toEqual([])
+      // a task's address chose the scope, so nothing is remembered
+      expect(sentProjects()).toEqual([])
+      if (id === LUMA) await leave()
+    }
+    // the person's own press on the scope the task chose remembers it
+    await until(() => q(`aside [data-subproject-row="${FW}"] > button`), "Firmware's row")
+    await click(q(`aside [data-subproject-row="${FW}"] > button`))
+    await until(() => lastSent() === FW, 'Firmware remembered')
+  })
+
+  it('is written by Plan on roadmap from an Inbox task address, whose scope reading the task left alone', async () => {
+    await app(world(), '/app/testbed/inbox/tasks/qn-7', remembering(PORTAL, PARTNER))
+    await until(() => windowReads.length > 0, "the window's read")
+    await act(async () => {
+      for (const read of windowReads) read(taskAnswer())
+    })
+    // the Inbox's pane shows the discussion alone on a desktop, so the
+    // person plans from the window it pops out
+    await until(() => q('[data-task-popout]'), "the pane's pop-out")
+    await click(q('[data-task-popout]'))
+    await act(async () => {
+      for (const read of windowReads) read(taskAnswer())
+    })
+    await until(() => q('[data-plan-on-roadmap]'), 'Plan on roadmap')
+    // the task's address chose Firmware beneath the Inbox, which is not
+    // remembered
+    expect(shown()).toBe('inbox')
+    expect(sentProjects()).toEqual([])
+    await click(q('[data-plan-on-roadmap]'))
+    await until(() => shown() === 'roadmap', "Firmware's Roadmap")
+    expect(q('[data-scope-crumb] h1')?.textContent).toBe('Firmware')
+    // the jump is the person's choice of that Roadmap, so it is remembered
+    await until(() => lastSent() === FW, 'Firmware remembered')
+    expect(sentProjects()).toEqual([FW])
+    expect(saves.at(-1)?.lastProject).toEqual({ org_id: ORG, project_id: FW })
+  })
+
   it('takes the startup rule once the task names no project', async () => {
     await app(world(), '/app/testbed/board/tasks/qn-7', remembering(PORTAL, PARTNER))
     await until(() => windowReads.length > 0, "the window's read")
