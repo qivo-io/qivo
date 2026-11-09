@@ -465,6 +465,42 @@ export const LIMITS = {
       'you already have 20 uploads in progress, the most one person can have at once. Try again once one has finished. An upload that is never finished stops counting an hour after it started.',
     on: ALL,
   },
+  // The organization export's archive (model/orgExports.ts
+  // MAX_ARCHIVE_BYTES and DEMO_ARCHIVE_BYTES take their numbers from these
+  // two). A job that would pass its cap fails with the sentence of
+  // STOP_MESSAGES.too_large, which names no number, so these refusals serve
+  // the guide's table and the archive's own docs.
+  exportSize: {
+    label: 'Organization export size',
+    group: 'files',
+    max: 95,
+    unit: 'MiB as one download',
+    refusal:
+      'an organization export must be at most 95 MiB as one download. Qivo stops a larger export and deletes its files.',
+    on: ['app'],
+  },
+  demoExportSize: {
+    label: 'Organization export size on the public demo',
+    group: 'files',
+    max: 2,
+    unit: 'MiB as one download',
+    refusal:
+      'an organization export on the public demo must be at most 2 MiB as one download. Qivo stops a larger export and deletes its files.',
+    on: ['app'],
+  },
+  // How long a ready archive stays downloadable (model/orgExports.ts
+  // ARCHIVE_TTL_MS takes its number from it). No server path answers this
+  // refusal: a claim past it answers orgExport.ts NO_LONGER_AVAILABLE,
+  // which names no number, so it serves the guide alone.
+  exportHours: {
+    label: 'Organization export availability',
+    group: 'files',
+    max: 4,
+    unit: 'hours after it is ready',
+    refusal:
+      'an organization export stays available for 4 hours after it is ready, or until a newer export of the organization is ready. Prepare a new export after that.',
+    on: ['app'],
+  },
   subtasks: {
     label: 'Active subtasks per task',
     group: 'tasks',

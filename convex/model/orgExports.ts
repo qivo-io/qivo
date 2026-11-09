@@ -8,6 +8,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { deletionBegun } from '../lib/billingAccess'
 import { byId } from '../lib/db'
 import { demoForOrg, isDemoDeployment } from '../lib/demo'
+import { LIMITS, MIB } from '../lib/limits'
 import { eraseFile } from './fileHolds'
 
 /** The most bytes one archive may hold: its stored parts and their ZIP
@@ -17,8 +18,9 @@ import { eraseFile } from './fileHolds'
  * so the download, which the /exports/ route (http.ts) streams as one ZIP
  * file, keeps 5 MiB of room under it. A job that would pass it fails with `too_large`
  * and erases its parts. Parts and their rows depend on no single file, so
- * several archive files can come later without a format change. */
-export const MAX_ARCHIVE_BYTES = 95 * 1024 * 1024
+ * several archive files can come later without a format change. The
+ * number is lib/limits.ts LIMITS.exportSize, which the guide prints. */
+export const MAX_ARCHIVE_BYTES = LIMITS.exportSize.max * MIB
 
 /** About how many bytes of JSON one data part collects before the step
  * compresses and stores it. A part can pass it by one readBatch answer
@@ -37,8 +39,9 @@ export const PART_RAW_BYTES = 4 * 1024 * 1024
  * 65,731 for the Northstar seed on a local backend), so this leaves a
  * visitor about 30 times that for their own work. With one collecting job
  * and one ready archive per organization, a demo holds at most twice this
- * in export parts, which count against no upload budget. */
-export const DEMO_ARCHIVE_BYTES = 2 * 1024 * 1024
+ * in export parts, which count against no upload budget. The number is
+ * lib/limits.ts LIMITS.demoExportSize. */
+export const DEMO_ARCHIVE_BYTES = LIMITS.demoExportSize.max * MIB
 
 /** The job's limits, a mutable object so tests can lower them
  * (convex/tests restore them from a copy after each case):
@@ -134,8 +137,8 @@ export const archiveCap = (): number =>
 /** How long a ready archive stays downloadable: four hours after it is
  * ready, unless a newer archive of its organization ends it sooner
  * (orgExport.ts commitFinish). Downloads and later requests never extend
- * it. */
-export const ARCHIVE_TTL_MS = 4 * 60 * 60 * 1000
+ * it. The hours are lib/limits.ts LIMITS.exportHours. */
+export const ARCHIVE_TTL_MS = LIMITS.exportHours.max * 60 * 60 * 1000
 
 /** How long an ended job and its request rows stay as export history. */
 export const HISTORY_MS = 30 * 24 * 60 * 60 * 1000
