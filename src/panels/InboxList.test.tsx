@@ -194,12 +194,8 @@ function serverWrite(name: string, args: Record<string, unknown>) {
 }
 
 /** Loads the store with the whole `plant` builds, and renders the Inbox
-    as App holds it, in a kept view with `kept`. `tasks` false boots a
-    session that never asked for every task, so the workspace holds none. */
-async function openInbox(
-  plant: () => void,
-  { tasks = true, kept = false }: { tasks?: boolean; kept?: boolean } = {},
-) {
+    as App holds it, in a kept view with `kept`. */
+async function openInbox(plant: () => void, { kept = false }: { kept?: boolean } = {}) {
   vi.resetModules()
   double.live?.forceInbox(null)
   snap = plannerFixture()
@@ -240,8 +236,6 @@ async function openInbox(
       )
     return Promise.resolve(serverWrite(name, args))
   })
-  const { TASKS } = await import('../store/liveParts')
-  TASKS.atBoot = tasks
   store = await import('../store/planner')
   watchPages()
   await store.initStore()
@@ -432,14 +426,11 @@ function everyday() {
 
 describe('the Inbox list', { timeout: 30_000 }, () => {
   it('shows the everyday Inbox a page of 50 from the server, with Next and Previous, asking for no task', async () => {
-    await openInbox(
-      () => {
-        everyday()
-        // a second unread update on the newest group
-        snap.messages.push({ ...snap.messages[0], id: 'message-extra', created_at: minute(-1) })
-      },
-      { tasks: false },
-    )
+    await openInbox(() => {
+      everyday()
+      // a second unread update on the newest group
+      snap.messages.push({ ...snap.messages[0], id: 'message-extra', created_at: minute(-1) })
+    })
     await until(() => expect(rows()).toHaveLength(50))
     expect(titles().slice(0, 3)).toEqual(['Task 0', 'Task 1', 'Task 2'])
     // every row says where it is, a sub-project after its project, from the
@@ -464,30 +455,25 @@ describe('the Inbox list', { timeout: 30_000 }, () => {
     // one page read at a time, read open, and no task asked for
     expect(openPages()).toHaveLength(1)
     expect(pageWatches.every((w) => !('through' in w.args))).toBe(true)
-    expect(store.__layerProbe?.asks()).toEqual([])
-    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
   })
 
   it("pages one sub-project's 450 groups to the end and back, holding one page", async () => {
-    await openInbox(
-      () => {
-        project('firmware', 'Firmware', { parent_id: 'atlas' })
-        for (let n = 0; n < 450; n++)
-          group(n, 'firmware', {
-            beyond: true,
-            status: n % 3 === 2 ? 'done' : 'progress',
-            message:
-              n === 7
-                ? { snoozed_until: '2026-09-20T08:00:00.000Z' }
-                : n % 9 === 4
-                  ? { kind: 'mention', detail: 'mentioned you in a comment' }
-                  : n % 2
-                    ? { read_at: minute(-1) }
-                    : {},
-          })
-      },
-      { tasks: false },
-    )
+    await openInbox(() => {
+      project('firmware', 'Firmware', { parent_id: 'atlas' })
+      for (let n = 0; n < 450; n++)
+        group(n, 'firmware', {
+          beyond: true,
+          status: n % 3 === 2 ? 'done' : 'progress',
+          message:
+            n === 7
+              ? { snoozed_until: '2026-09-20T08:00:00.000Z' }
+              : n % 9 === 4
+                ? { kind: 'mention', detail: 'mentioned you in a comment' }
+                : n % 2
+                  ? { read_at: minute(-1) }
+                  : {},
+        })
+    })
     await until(() => expect(rows()).toHaveLength(50))
     const seen = new Set(rows().map((row) => row.dataset.messageKey))
     for (let page = 2; page <= 9; page++) {
@@ -538,22 +524,19 @@ describe('the Inbox list', { timeout: 30_000 }, () => {
   })
 
   it("searches one project's 1,000 groups on the server, says how far each stopped page looked, and finds a row the workspace does not hold", async () => {
-    await openInbox(
-      () => {
-        for (const [id, name] of [
-          ['firmware', 'Firmware'],
-          ['board', 'Board rev'],
-          ['docs', 'Docs'],
-        ])
-          project(id, name, { parent_id: 'atlas' })
-        for (let n = 0; n < 1000; n++)
-          group(n, ['firmware', 'board', 'docs'][n % 3], {
-            title: n === 999 ? 'Zephyr calibration' : `Task ${n}`,
-            status: n % 5 === 4 ? 'done' : 'progress',
-          })
-      },
-      { tasks: false },
-    )
+    await openInbox(() => {
+      for (const [id, name] of [
+        ['firmware', 'Firmware'],
+        ['board', 'Board rev'],
+        ['docs', 'Docs'],
+      ])
+        project(id, name, { parent_id: 'atlas' })
+      for (let n = 0; n < 1000; n++)
+        group(n, ['firmware', 'board', 'docs'][n % 3], {
+          title: n === 999 ? 'Zephyr calibration' : `Task ${n}`,
+          status: n % 5 === 4 ? 'done' : 'progress',
+        })
+    })
     const live = double.live
     if (!live) throw new Error('no live double')
     live.inboxStandIn.examine = 100
@@ -585,7 +568,6 @@ describe('the Inbox list', { timeout: 30_000 }, () => {
         [...row.querySelectorAll('[data-msg-crumb]')].some((c) => c.textContent === 'Docs'),
       ),
     ).toBe(true)
-    expect(store.__layerProbe?.asks()).toEqual([])
     // past 200 characters it asks nothing new and says the limit
     const asked = pageWatches.length
     await search('x'.repeat(201))
@@ -733,7 +715,7 @@ describe("the Inbox's row actions", { timeout: 30_000 }, () => {
   const row = (uuid: string) => container.querySelector<HTMLElement>(`[data-message="${uuid}"]`)
 
   it('reads, unreads, removes and snoozes the row’s item by its organization, task and cutoff, at once', async () => {
-    await openInbox(five, { tasks: false })
+    await openInbox(five)
     await until(() => expect(rows()).toHaveLength(5))
     holding = true
     const org = snap.orgs[0].id
@@ -806,7 +788,7 @@ describe("the Inbox's row actions", { timeout: 30_000 }, () => {
   })
 
   it('keeps the cutoff the menu opened with when news arrives on the row, which stays unread', async () => {
-    await openInbox(five, { tasks: false })
+    await openInbox(five)
     await until(() => expect(rows()).toHaveLength(5))
     await rowMenu(key('task-a-0001'))
     // news on the row while its menu is open moves it to the top
@@ -830,15 +812,12 @@ describe("the Inbox's row actions", { timeout: 30_000 }, () => {
   })
 
   it('shows one task id of two organizations as two rows, each acting on and opening its own', async () => {
-    await openInbox(
-      () => {
-        guestSeat()
-        project('firmware', 'Firmware', { parent_id: 'atlas' })
-        group(0, 'firmware', { uuid: 'shared-task' })
-        group(1, 'guest-work', { uuid: 'shared-task', org: GUEST })
-      },
-      { tasks: false },
-    )
+    await openInbox(() => {
+      guestSeat()
+      project('firmware', 'Firmware', { parent_id: 'atlas' })
+      group(0, 'firmware', { uuid: 'shared-task' })
+      group(1, 'guest-work', { uuid: 'shared-task', org: GUEST })
+    })
     await until(() => expect(rows()).toHaveLength(2))
     expect(rows().map((r) => r.dataset.message)).toEqual(['shared-task', 'shared-task'])
     const orgs = rows().map((r) => r.dataset.messageOrg)
@@ -861,33 +840,8 @@ describe("the Inbox's row actions", { timeout: 30_000 }, () => {
     }
   })
 
-  it('opens a held task of another organization of the same id by its own reference, not the handle', async () => {
-    await openInbox(() => {
-      guestSeat()
-      project('firmware', 'Firmware', { parent_id: 'atlas' })
-      group(0, 'firmware', { uuid: 'shared-task' })
-      // the guest seat's task of the same id, which the parts do not send
-      const before = snap.issues.length
-      group(1, 'guest-work', { uuid: 'shared-task', org: GUEST })
-      const [guestTask] = snap.issues.splice(before, 1)
-      Object.assign(snap, { unheld: { issues: [guestTask] } })
-    })
-    await until(() => expect(rows()).toHaveLength(2))
-    const guestOpen = container.querySelector<HTMLElement>(
-      `[data-message-key="${key('shared-task', GUEST)}"] .inbox-message-open`,
-    )
-    await press(guestOpen)
-    const { refParts } = await import('../lib/taskReference')
-    expect(refParts(opened.at(-1))).toEqual({ org: GUEST, num: 2, uuid: 'shared-task' })
-    const homeOpen = container.querySelector<HTMLElement>(
-      `[data-message-key="${key('shared-task')}"] .inbox-message-open`,
-    )
-    await press(homeOpen)
-    expect(opened.at(-1)).toBe(store.P.handleOf('shared-task'))
-  })
-
   it('marks the rows shown by Mark all as read at once, and brings back a refused seat’s rows', async () => {
-    await openInbox(everyday, { tasks: false })
+    await openInbox(everyday)
     await until(() => expect(rows()).toHaveLength(50))
     holding = true
     await press(button('[data-inbox-mark-all-read]'))
@@ -915,20 +869,17 @@ describe("the Inbox's row actions", { timeout: 30_000 }, () => {
   })
 
   it('offers Open task in board for a task the workspace does not hold, by its reference, on every row with a project', async () => {
-    await openInbox(
-      () => {
-        project('firmware', 'Firmware', { parent_id: 'atlas' })
-        group(0, 'firmware')
-        group(1, 'elsewhere')
-        // a project the store does not hold, which the Board needs
-        Object.assign(snap, {
-          unheld: {
-            projects: [{ ...snap.projects[0], id: 'elsewhere', name: 'Elsewhere', num: 77 }],
-          },
-        })
-      },
-      { tasks: false },
-    )
+    await openInbox(() => {
+      project('firmware', 'Firmware', { parent_id: 'atlas' })
+      group(0, 'firmware')
+      group(1, 'elsewhere')
+      // a project the store does not hold, which the Board needs
+      Object.assign(snap, {
+        unheld: {
+          projects: [{ ...snap.projects[0], id: 'elsewhere', name: 'Elsewhere', num: 77 }],
+        },
+      })
+    })
     await until(() => expect(rows()).toHaveLength(2))
     await rowMenu(key('task-a-0000'))
     await press(document.querySelector('[data-msg-menu-board]'))
@@ -1050,13 +1001,10 @@ describe('the Inbox list around its page', { timeout: 30_000 }, () => {
   })
 
   it('keeps at most PAGE_LIMITS.starts starts, so Previous stops at the oldest one held', async () => {
-    await openInbox(
-      () => {
-        project('firmware', 'Firmware', { parent_id: 'atlas' })
-        for (let n = 0; n < 300; n++) group(n, 'firmware')
-      },
-      { tasks: false },
-    )
+    await openInbox(() => {
+      project('firmware', 'Firmware', { parent_id: 'atlas' })
+      for (let n = 0; n < 300; n++) group(n, 'firmware')
+    })
     // the module the Inbox loaded
     const { PAGE_LIMITS } = await import('../lib/pagedList')
     PAGE_LIMITS.starts = 3
@@ -1081,7 +1029,7 @@ describe('the Inbox list around its page', { timeout: 30_000 }, () => {
         removeEventListener: vi.fn(),
       })),
     )
-    await openInbox(everyday, { tasks: false })
+    await openInbox(everyday)
     await until(() => expect(rows()).toHaveLength(50))
     expect(container.querySelector('[data-inbox-search]')).toBeNull()
     const list = container.querySelector('.inbox-list-scroll')

@@ -32,7 +32,6 @@ import { ProjectDirectory } from './components/ProjectDirectory'
 import { navMoved, onNavMove, openedName, openResolved } from './components/projectNavRows'
 import { Icon, MenuItem, Popover, Seg } from './components/qivo'
 import { type FocusRow, SidebarProjects } from './components/SidebarProjects'
-import { TasksLoadingBar } from './components/TasksLoading'
 import { ViewBoundary } from './components/ViewBoundary'
 import { ViewFilters } from './components/viewFilters'
 import {
@@ -117,7 +116,6 @@ import {
   type ProjectCreated,
   type ProjectShown,
   type ScopeInfo,
-  TASKS_FAILED_TEXT,
 } from './store/planner'
 import { usePlannerVersion } from './store/usePlannerVersion'
 import { BOARD_SLOTS } from './views/board/useBoardView'
@@ -817,30 +815,6 @@ function checkedOn(opening: Opening, page: string): string | null {
   return opening.check.address?.page === page ? JSON.stringify(opening.check.ask) : null
 }
 
-/** Says politely, through the page's announcer (lib/announce), which modal
-    layers leave audible, when every task starts loading for a page or
-    action that needs them, when every task has loaded, and when the load
-    stopped. The caller renders on every store change (usePlannerVersion). */
-function useTasksLoadingNews() {
-  const load = P.taskLoad()
-  const state = load.state
-  const reason = load.state === 'failed' ? load.reason : ''
-  // whether the start was said, so the end is said only after it
-  const said = useRef(false)
-  useEffect(() => {
-    if (state === 'arriving') {
-      said.current = true
-      announce('Loading every task. What asked for them continues once they are in.')
-    } else if (state === 'failed') {
-      said.current = true
-      announce(`${TASKS_FAILED_TEXT} ${reason}`)
-    } else if (said.current) {
-      said.current = false
-      announce('Every task has loaded.')
-    }
-  }, [state, reason])
-}
-
 /* ---------- root ---------- */
 /** A task address's scope to settle once the project cache names the
     task's project (App's scopeToSettle). `preferred` is the scope it
@@ -1402,7 +1376,6 @@ function App() {
   const pagesRev = useSyncExternalStore(subscribeProjectPages, projectPagesRev)
   // The Roadmap and Team sync read their tasks from the server, so no page
   // waits for every task
-  useTasksLoadingNews()
 
   // date rendering follows the organization's format setting; set during
   // render so everything below formats consistently on this pass
@@ -2580,7 +2553,7 @@ function App() {
     if (P.refusePausedEdit()) return false
     // what opening the new task passes on, which addIssue returns: a
     // reference to its organization, preview number and uuid, as the
-    // workspace holds no task (a handle where it holds every task). The
+    // workspace holds no task. The
     // preview can be invalidated by ANY concurrent create in the org
     // (0050's shared counter): the open window follows its task to the
     // server's number (P.watchHandles above), so it doesn't blank or show
@@ -3204,7 +3177,6 @@ function App() {
               onExport={() => actions.openSettings('org-general')}
             />
           )}
-          {!settingsPage && <TasksLoadingBar />}
           {/* Every main page the person opened stays loaded, hidden, while
              another one shows (lib/keptPages.ts, ViewKeeper): coming back
              shows it as it was, without mounting it again. A new scope

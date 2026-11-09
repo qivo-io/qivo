@@ -230,7 +230,6 @@ describe("a project's Upcoming", { timeout: BOARD_TEST_TIMEOUT }, () => {
     )
     expect(slots).toContain('ok')
     // no task is asked for
-    expect(store.__layerProbe?.asks()).toEqual([])
   })
 
   it('moves on at a lowered cap with Show from the start, and takes Next milestone from a one-row read', async () => {

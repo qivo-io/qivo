@@ -2,11 +2,12 @@ import type { Workspace } from '../../convex/lib/workspaceJoin'
 import type { Whole } from './guard/liveDouble.setup'
 
 /** The whole a store test publishes, the server's data: the workspace's
-    sections with every person, team, membership and label of each
-    organization, and the server's milestones and stored messages beside
-    them, which no part sends and the stand-ins answer from
+    sections with the caller's tasks and every person, team, membership and
+    label of each organization, and the server's milestones and stored
+    messages beside them, which no part sends and the stand-ins answer from
     (store/guard/liveDouble.setup.ts Whole). The store holds only the
-    caller's own profiles, memberships and teams of it, and no message. */
+    caller's own profiles, memberships and teams of it, no task and no
+    message. */
 export type Snapshot = Whole & Required<Pick<Whole, 'milestones' | 'messages'>>
 const NOW = '2026-09-14T08:00:00.000Z'
 
@@ -97,17 +98,26 @@ export function underProgram(snapshot: Snapshot): Snapshot {
 }
 
 /** The sections of `whole` in the form the workspace's rows keep them
-    (store/workspaceBase.ts Snapshot), for the tests of the rows and the
-    task index that stage a workspace straight: no label, no Team sync
-    stamp, no message and a create state, as the root part answers it. It
-    keeps every profile, which those tests read as rows; the store itself
-    holds the caller's own alone (convex/lib/workspaceJoin.ts rootOf). */
+    (store/workspaceBase.ts Snapshot), for the tests of the rows that stage
+    a workspace straight: no task, label, project, Team sync stamp or
+    message, and a create state, as the root part answers it. It keeps every
+    profile, which those tests read as rows; the store itself holds the
+    caller's own alone (convex/lib/workspaceJoin.ts rootOf). */
 export function asStored(whole: Whole): Workspace {
   const {
     labels: _labels,
     messages: _messages,
     unheld: _unheld,
     milestones: _milestones,
+    projects: _projects,
+    access: _access,
+    teamAccess: _teamAccess,
+    issues: _issues,
+    links: _links,
+    issueLabels: _issueLabels,
+    attachments: _attachments,
+    issueSubs: _issueSubs,
+    orgLoad: _orgLoad,
     create,
     profiles,
     ...rest

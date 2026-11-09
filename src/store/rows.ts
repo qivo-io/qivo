@@ -27,13 +27,12 @@ type InternalFields<T extends TableNames> =
       ? 'task_key'
       : never)
 
-// The workspace parts add each organization's task number and, once
-// counted, its count of active tasks, which live in org_counters, and
-// whether a task has subtasks, which the workspace reads before every task
-// is held (convex/lib/workspaceParts.ts). They send no project count or
-// number, as the app reads its projects by id.
+// The root part adds each organization's next task number, which lives in
+// org_counters (convex/lib/workspaceParts.ts readRoot), and the reads that
+// answer tasks say whether a task has subtasks. No read sends an
+// organization's count of tasks or projects.
 type AddedFields<T extends TableNames> = T extends 'organizations'
-  ? Pick<Doc<'org_counters'>, 'next_issue_num' | 'active_tasks'>
+  ? Pick<Doc<'org_counters'>, 'next_issue_num'>
   : T extends 'issues'
     ? { has_subtasks?: boolean }
     : unknown

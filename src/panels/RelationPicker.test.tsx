@@ -81,7 +81,6 @@ const relation = (n: number, title = `Task ${n}`): RelatedTaskVM & { type?: stri
   owner: undefined,
   isGroup: false,
   done: false,
-  held: false,
   level: 'lead',
   remaining: undefined,
 })

@@ -440,10 +440,9 @@ const ownDrag = (props: BoardCardProps) =>
   props.group.issues.some((it) => it.id === props.dragId) ? props.dragId : null
 
 /* A board renders every card again on each store change. A card whose tasks
-   are the same objects (P.issues keeps a task's object while it, its delay
-   and its family stay the same, and so does a model the Board's answer
-   brings, store/viewRows.ts, while its row and its delay from the owner-load
-   cache do), in the same places, with the same context, drag and stale
+   are the same objects (a model the Board's answer brings keeps its object
+   while its row and its delay from the owner-load cache stay the same,
+   store/viewRows.ts), in the same places, with the same context, drag and stale
    tasks, renders the same, so it skips. Kanban keeps the callbacks'
    identity. */
 const BoardCard = memo(BoardCardView, (before, after) => {

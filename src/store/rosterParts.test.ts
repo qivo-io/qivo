@@ -1,9 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { TODAY_WEEK, weekToISO } from '../lib/dates'
-import { DELAY_UNKNOWN } from '../lib/delay'
 import { peopleSettingsStandIn } from './peopleSettingsStandIn.setup'
-import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 /* The workspace without its people and catalog parts, on the real store:
    the root part sends the signed-in person's own profiles, memberships and
@@ -13,8 +11,8 @@ import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.se
    raises one figure to its design size and keeps the others at everyday
    values. Everyone else is named through the profile cache's people.byIds
    reads, which answer from the server's data
-   (store/peopleSettingsStandIn.setup.ts), and a delay waits for its
-   owner's face, whose hours it is judged by. A desktop notification names
+   (store/peopleSettingsStandIn.setup.ts); a card's delay waits for its
+   owner's face (views/boardDelayFaces.test.tsx). A desktop notification names
    its actor from the Inbox feed's own answer (store/desktopAlerts.test.ts). */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -94,17 +92,6 @@ function organization(
     10 teams. */
 const crowd = () => organization({ people: 1000, teams: 10 })
 
-/** The fixture with the one owner a delay case judges, Person 0001, at
-    everyday values, with `extra` changes. */
-function withOwner(extra: (snap: Snapshot) => void): Snapshot {
-  const snap = plannerFixture()
-  const me = snap.profiles[0]
-  me.org_role = 'user'
-  snap.profiles.push(personOf(me, 1))
-  extra(snap)
-  return snap
-}
-
 describe('the store without the people and catalog parts', () => {
   let store: typeof import('./planner')
   let byIds: {
@@ -114,14 +101,14 @@ describe('the store without the people and catalog parts', () => {
   }[]
   const P = () => store.P
 
-  async function boot(snap: Snapshot, { faces = true } = {}) {
+  async function boot(snap: Snapshot) {
     byIds = []
     network.onUpdate.mockImplementation((ref, args, next, fail) => {
       const name = getFunctionName(ref)
       if (name === 'people:byIds') {
         const read = { args, next, fail }
         byIds.push(read)
-        if (faces) next(peopleSettingsStandIn(snap, name, args))
+        next(peopleSettingsStandIn(snap, name, args))
       } else {
         next(structuredClone(snap))
       }
@@ -196,89 +183,5 @@ describe('the store without the people and catalog parts', () => {
     expect(byIds.map((read) => read.args.ids)).toEqual([['person-0500']])
     // the store still holds nobody else
     expect(P().users).toHaveLength(1)
-  })
-
-  describe('a delay, judged by the owner’s hours', () => {
-    /* A task of Person 0001's, 30 hours to do in one week, planned over
-       this week alone in a tracked project: late against the person's
-       10-hour week, on track against the default 40. */
-    const planned = (owner: string) => (snap: Snapshot) => {
-      snap.projects[0].track_delay = true
-      snap.issues.push({
-        id: 'task-1',
-        org_id: snap.orgs[0].id,
-        project_id: snap.projects[0].id,
-        num: 1,
-        title: 'Calibrate the sensor',
-        description: '',
-        status: 'todo',
-        priority: 'medium',
-        assignee_id: owner,
-        start_week: weekToISO(TODAY_WEEK),
-        end_week: weekToISO(TODAY_WEEK),
-        due_date: weekToISO(TODAY_WEEK + 1),
-        remaining_hours: 30,
-        remaining_set_at: AT,
-        paused: false,
-        created_at: AT,
-        updated_at: AT,
-        has_hidden_subtasks: false,
-        has_hidden_parent: false,
-      })
-    }
-
-    it('says nothing until the owner’s face brings their hours, never judging the default week', async () => {
-      const snap = withOwner(planned('person-0001'))
-      await boot(snap, { faces: false })
-      await P().askTasks('script')
-      await vi.waitFor(() => expect(P().tasksHeld()).toBe(true))
-      const key = P().handleOf('task-1') ?? ''
-      // the face is on its way, so no verdict, none against 40 hours and
-      // no Delay unknown before the face could tell
-      expect(P().delayOf(key)).toBeNull()
-      expect(P().delayUnknown(key)).toBe(false)
-      P().namePeople('the board', [{ org: snap.orgs[0].id, id: 'person-0001' }])
-      await vi.waitFor(() => expect(byIds.length).toBeGreaterThan(0))
-      const read = byIds.at(-1)
-      read?.next(peopleSettingsStandIn(snap, 'people:byIds', read.args))
-      // the face's 10 hours judge it late, once the cache turns
-      await vi.waitFor(() => expect(P().delayOf(key)?.status).toBe('late'))
-    })
-
-    it('says Delay unknown for a held task whose owner’s face could not be read, never on track', async () => {
-      // the task's project under a top-level project, so the project cache
-      // answers it
-      const snap = underProgram(withOwner(planned('person-0001')))
-      await boot(snap, { faces: false })
-      await P().askTasks('script')
-      await vi.waitFor(() => expect(P().tasksHeld()).toBe(true))
-      const key = P().handleOf('task-1') ?? ''
-      // the store names the held task's project, which tracks delays, and
-      // the Board the card's owner
-      const project = snap.issues.find((t) => t.id === 'task-1')?.project_id ?? ''
-      await vi.waitFor(() => expect(P().projectState(project)).toBe('ok'))
-      P().namePeople('the board', [{ org: snap.orgs[0].id, id: 'person-0001' }])
-      await vi.waitFor(() => expect(byIds.length).toBeGreaterThan(0))
-      byIds.at(-1)?.fail(new Error('people.byIds is down'))
-      await vi.waitFor(() =>
-        expect(P().person('person-0001', snap.orgs[0].id)?.state).toBe('failed'),
-      )
-      // no verdict against a default week, and the card says it cannot tell
-      await vi.waitFor(() => expect(P().delayUnknown(key)).toBe(true))
-      expect(P().delayOf(key)).toBeNull()
-    })
-
-    it('judges an owner a current answer leaves out against the default week', async () => {
-      const snap = withOwner(planned('person-gone'))
-      await boot(snap)
-      await P().askTasks('script')
-      await vi.waitFor(() => expect(P().tasksHeld()).toBe(true))
-      const key = P().handleOf('task-1') ?? ''
-      P().namePeople('the board', [{ org: snap.orgs[0].id, id: 'person-gone' }])
-      await vi.waitFor(() => expect(P().person('person-gone', snap.orgs[0].id)?.state).toBe('gone'))
-      // 30 of 40 hours fit the week
-      await vi.waitFor(() => expect(P().delayOf(key)?.status).toBe('ok'))
-      expect(P().delayOf(key)).not.toBe(DELAY_UNKNOWN)
-    })
   })
 })

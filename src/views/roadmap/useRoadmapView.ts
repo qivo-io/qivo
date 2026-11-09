@@ -3,8 +3,8 @@
    tasks, in which state, from the server's answer for the selection, the
    filter row and the window (convex/tasks.ts roadmap), and the arrows and
    Auto-move's inputs from its dependency answer (roadmapDependencies). The
-   Roadmap never reads the workspace's task lists. The Board's view
-   (views/board/useBoardView.ts) is the pattern.
+   workspace holds no task, so every row comes from the answer. The
+   Board's view (views/board/useBoardView.ts) is the pattern.
 
    - The store owns both reads (P.watchRoadmap, P.watchRoadmapDependencies).
      The Roadmap registers its arguments from an effect, or none while its
@@ -14,7 +14,6 @@
      ROADMAP_QUERY `projects`), so a bar's rights and a row's place read
      their project from the cache, the store's only source of projects.
    - The answer decides which tasks a Roadmap shows. Each shows as the
-     workspace's view model where the workspace holds the task, else as the
      model the store shaped from the answer's row (store/viewRows.ts), with
      the person's pending writes painted, so a bar follows every edit at
      once and a drag never snaps back. The answer's parents and the shown
@@ -23,7 +22,7 @@
    - On top of the answer, the app checks each task again against the
      selection, the window on screen and the filter row, so an edit or a
      pan hides a bar at once. That only narrows. A task shaped from a row has
-     no text or labels, so the text filter is the answer's alone for it. The
+     no text or labels, so the text filter is the answer's alone. The
      planning session's task skips the filter row alone, as the server keeps
      it (`planned`). A task the person's own pending writes changed shows as
      the rows on screen say, both ways (P.ownPaintedTasks).
@@ -296,8 +295,7 @@ export function useRoadmapView(
     const out: Record<string, IssueVM> = {}
     if (!shownAnswer) return out
     for (const row of [...shownAnswer.rows, ...shownAnswer.parents, ...shownAnswer.subtasks]) {
-      const handle = P.handleOf(row.id)
-      const it = handle === null ? P.viewTask(ROADMAP_SLOT, row.id) : P.issueById[handle]
+      const it = P.viewTask(ROADMAP_SLOT, row.id)
       if (it) out[it.id] = it
     }
     return out
@@ -306,7 +304,7 @@ export function useRoadmapView(
   }, [shownAnswer, views])
   const family = useMemo(() => familyOver(byId), [byId])
 
-  // the text filter is the answer's for every task, held or not: the server
+  // the text filter is the answer's for every task: the server
   // matched the whole text, label and assignee names included, which the
   // store cannot read, so the store's filters take no text
   const passes = (it: IssueVM) =>
@@ -332,8 +330,7 @@ export function useRoadmapView(
     let missing = 0
     for (const row of shownAnswer.rows) {
       if (own.has(row.id)) continue
-      const handle = P.handleOf(row.id)
-      const it = handle === null ? P.viewTask(ROADMAP_SLOT, row.id) : P.issueById[handle]
+      const it = P.viewTask(ROADMAP_SLOT, row.id)
       if (!it) {
         missing++
         continue
@@ -460,11 +457,10 @@ function useDeps(read: ReturnType<typeof P.roadmapDependenciesRead>, asks: boole
   }
 }
 
-/** The handle task `uuid` shows by on the Roadmap: the workspace's, else
-    the one its row in an answer opens by, else the uuid itself, which no
-    bar names. */
+/** The handle task `uuid` shows by on the Roadmap: the one its row in an
+    answer opens by, else the uuid itself, which no bar names. */
 function handleOfUuid(uuid: string): string {
-  return P.handleOf(uuid) ?? P.viewTask(ROADMAP_SLOT, uuid)?.id ?? uuid
+  return P.viewTask(ROADMAP_SLOT, uuid)?.id ?? uuid
 }
 
 /** Why the planning session or a plan request for a task cannot go on

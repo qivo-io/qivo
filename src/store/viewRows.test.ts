@@ -250,11 +250,11 @@ describe('a handle two models share', () => {
     views.beginPaint()
     views.insert(SLOT, row('mine', 4, { title: 'New bench check' }))
     const ctx = { handleNow: (_uuid: string, _org: string, num: number) => `QN-${num}` }
-    views.reshape(() => false, { ...ctx, wins: (uuid) => uuid === 'mine' })
+    views.reshape({ ...ctx, wins: (uuid) => uuid === 'mine' })
     expect(views.byHandle('QN-4')?.uuid).toBe('mine')
     expect(views.model(SLOT, 'theirs')?.key).toBe('QN-4')
     // without one on its way, the first row the view holds names it
-    views.reshape(() => false, ctx)
+    views.reshape(ctx)
     expect(views.byHandle('QN-4')?.uuid).toBe('theirs')
     expect(views.numbered(org)).toEqual(new Map([[4, 'theirs']]))
   })
@@ -270,21 +270,21 @@ describe('a model shaped from a row', () => {
     let handle = 'QN-9'
     let grid = 1
     const ctx = () => ({ handleNow: () => handle, grid })
-    views.reshape(() => false, ctx())
+    views.reshape(ctx())
     const first = views.model('v', 'far')
     expect(first?.id).toBe('QN-9')
-    expect(views.reshape(() => false, ctx())).toBe(false)
+    expect(views.reshape(ctx())).toBe(false)
     expect(views.model('v', 'far')).toBe(first)
     // the home organization moved, so the task opens by its uuid now
     handle = 'far'
-    expect(views.reshape(() => false, ctx())).toBe(true)
+    expect(views.reshape(ctx())).toBe(true)
     const moved = views.model('v', 'far')
     expect(moved?.id).toBe('far')
     expect(views.byHandle('far')).toBe(moved)
     expect(views.byHandle('QN-9')).toBeUndefined()
     // a re-anchored week grid gives week indexes on the new grid
     grid = 2
-    expect(views.reshape(() => false, ctx())).toBe(true)
+    expect(views.reshape(ctx())).toBe(true)
     expect(views.model('v', 'far')).not.toBe(moved)
   })
 })
@@ -385,7 +385,7 @@ describe('a write on a task only a view brings', () => {
     await open()
     const P = store.P
     // a write of the person's own waits, so the views' paint waits with it
-    void P.updateIssue(P.handleOf('task-a') ?? '', { title: 'Renamed' })
+    void P.updateIssue(P.viewTask(SLOT, 'far')?.id ?? '', { title: 'Renamed' })
     await turn()
     let views = 0
     const stop = P.updates.views.subscribe(() => views++)
@@ -411,12 +411,8 @@ describe('a write on a task only a view brings', () => {
     store.P.releaseView(SLOT)
     writes[0]?.resolve(null)
     await turn()
-    // its view part went with the rows; its workspace part, which paints
-    // the task once the workspace holds it, goes with the next workspace
-    // delivery, as every accepted write's does
-    expect(probe().layerCount()).toBe(1)
-    deliver(structuredClone(snapshot))
-    await turn()
+    // its view part went with the rows, and it paints nothing else, as the
+    // workspace holds no task
     expect(probe().layerCount()).toBe(0)
   })
 })

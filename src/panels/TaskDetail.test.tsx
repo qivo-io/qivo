@@ -23,14 +23,11 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
    description saved once it has uploaded, and an archived task's
    read-only window. Mira leads Work, where the family task
    "Calibrate the sensor" (QN-27) lives, and only views Manuals. The far
-   tasks (QN-40 on) are on the server but not in the workspace: in a task
-   window still to arrive while every task loads (`loading`), else not in
-   it at all. */
+   tasks (QN-40 on) are on the server's data with `far`, else not at all. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
   live: null as null | {
-    holdWindow(from: string | null): void
     forceProjectNav(force: 'client' | null): void
   },
 }))
@@ -167,9 +164,9 @@ const comment = (id: string, issue: string, author: string, body: string) => ({
 })
 
 /* Mira, Leo, Work under Plan (Mira leads it, with delay tracking) and
-   Manuals under Docs (Mira views it), the family task, and with `loading`
-   the far tasks in a task window still to arrive. */
-function fixture(loading: boolean) {
+   Manuals under Docs (Mira views it), the family task, and with `withFar`
+   the far tasks. */
+function fixture(withFar: boolean) {
   const next = plannerFixture()
   snap = next
   const me = next.profiles[0]
@@ -211,10 +208,9 @@ function fixture(loading: boolean) {
     color: '#335577',
     created_at: AT,
   })
-  // 12,800 task numbers make 64 task windows
-  next.orgs[0].next_issue_num = loading ? 64 * 200 : 60
+  next.orgs[0].next_issue_num = 60
   next.issues.push(task(FAM, 27, { title: 'Calibrate the sensor', status: 'progress' }))
-  if (loading)
+  if (withFar)
     next.issues.push(
       far(),
       task(FAR_RO, 41, { title: 'Read the far manual', project_id: 'manuals' }),
@@ -222,12 +218,12 @@ function fixture(loading: boolean) {
   return next
 }
 
-/* Loads the store, its fixture changed by `edit`; with `loading`, the last
-   task window stays back until arrive(). */
-async function load(loading = false, edit?: (next: Snapshot) => void) {
+/* Loads the store, its fixture changed by `edit`; with `withFar`, the far
+   tasks are on the server too. */
+async function load(withFar = false, edit?: (next: Snapshot) => void) {
   vi.resetModules()
   network.mutation.mockClear()
-  snap = fixture(loading)
+  snap = fixture(withFar)
   edit?.(snap)
   subs = []
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
@@ -250,8 +246,8 @@ async function load(loading = false, edit?: (next: Snapshot) => void) {
   await store.initStore()
 }
 
-/* The last task window arrives, and with it every task. */
-const arrive = () =>
+/* The server's data arrives again, unchanged. */
+const deliverAgain = () =>
   act(async () => {
     publish(snap)
   })
@@ -502,7 +498,6 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     expect(reads()).toHaveLength(2)
     await answer('taskWindow:task', okAnswer(far()))
     expect(document.querySelector('[data-task-gone]')).toBeNull()
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Tune the antenna')
     expect(dialog()?.textContent).toContain('three')
     // archived meanwhile: the note above the task, read-only
@@ -516,7 +511,6 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     expect(note()?.textContent).toBe(
       'QN-40 is no longer here. It was deleted, or you can no longer open it.',
     )
-    expect(dialog()?.dataset.taskSource).toBeUndefined()
     expect(dialog()?.textContent).not.toContain('three')
   })
 
@@ -537,7 +531,6 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     expect(note()?.textContent).toBe("QN-40 is no longer on the board. Couldn't check the archive.")
     await click(buttonNamed('Retry'))
     await answer('taskWindow:task', okAnswer(far()))
-    expect(dialog()?.dataset.taskSource).toBe('answer')
   })
 
   it('keeps a task and the comment typed for it through a failed read and its Retry, until the server says it is gone', async () => {
@@ -555,7 +548,6 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     expect(stale()?.textContent).toContain(
       "Couldn't check QN-40 for changes, so it shows as it was last loaded.",
     )
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(document.querySelector('[data-task-gone]')).toBeNull()
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Tune the antenna')
     expect((await editorOf('Leave a comment')).getText()).toBe('Gain looks low')
@@ -581,7 +573,6 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     expect(note()?.textContent).toBe(
       'QN-40 is no longer here. It was deleted, or you can no longer open it.',
     )
-    expect(dialog()?.dataset.taskSource).toBeUndefined()
     expect(document.querySelector('[role="textbox"][aria-label="Leave a comment"]')).toBeNull()
     expect(stale()).toBeNull()
   })
@@ -598,7 +589,6 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
       comments: [comment('c-1', FAR, 'mira', 'Measured at one metre')],
       earlier: false,
     })
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     for (const label of ['Status', 'Priority', 'Assignee', 'Reviewer'])
       expect(field(label)?.disabled, label).toBe(false)
     const update = () => sentArgs('issues:update').at(-1)
@@ -1192,7 +1182,6 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     await click(buttonNamed('Activity'))
     expect(open('taskWindow:links')).toEqual([])
     expect(one('taskWindow:task')).toBe(read)
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Tune the antenna')
   })
 })
@@ -1393,7 +1382,6 @@ describe('the task window when the home organization changes', { timeout: 30_000
       // and the window goes on showing the task
       expect(shownHandle).toBe(ref)
       expect(document.querySelector('[data-task-title]')?.textContent).toBe('Tune the antenna')
-      expect(dialog()?.dataset.taskSource).toBe('answer')
       expect(dialog()?.hasAttribute('data-task-archived')).toBe(state === 'archived')
       expect(one('taskWindow:task').args).toEqual({ org_id: snap.orgs[0].id, ref: FAR })
       // and the address and Copy link name it in Testbed
@@ -1403,7 +1391,7 @@ describe('the task window when the home organization changes', { timeout: 30_000
 })
 
 describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () => {
-  it("judges from the owner's load from the server while tasks load, and the workspace's verdict once they have", async () => {
+  it("judges from the owner's load from the server, and keeps the verdict through a delivery", async () => {
     await load(true)
     const handle = await noteTask(far())
     await openWindow(handle)
@@ -1431,13 +1419,13 @@ describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () 
       owners: [{ owner_id: 'mira', state: 'ok', spans: [] }],
     })
     expect(delayChip()?.dataset.delayChip).toBe('late')
-    await arrive()
+    await deliverAgain()
     // 400 hours do not fit in two weeks of Mira's time
     expect(delayChip()?.dataset.delayChip).toBe('late')
     expect(delayChip()?.textContent).toBe('Delayed')
   })
 
-  it('judges a group shown from its answer with hidden subtasks by its visible span, while tasks load too', async () => {
+  it('judges a group shown from its answer with hidden subtasks by its visible span', async () => {
     await load(true)
     await openWindow(await noteTask(far()))
     const kid = short(task(FAR_KID, 42, { parent_id: FAR, start_week: day(0), end_week: day(7) }))
@@ -1448,7 +1436,6 @@ describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () 
         subtasks: { rows: [kid], complete: true },
       }),
     )
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     // hidden subtasks prove neither on track nor behind, loaded or not
     expect(delayChip()).toBeNull()
     // a visible span that ends past the due date proves it late
@@ -1493,7 +1480,6 @@ describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () 
         subtasks: { rows: [kid], complete: true },
       }),
     )
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     // the span ends before the due date, on track as the card is
     const verdict = () => P.delayOf(P.viewTask('board:desktop', FAR) ?? '')?.status
     expect(verdict()).toBe('ok')
@@ -1611,7 +1597,6 @@ describe('the archived task window', { timeout: 30_000 }, () => {
     )
     expect(restores.map(([, args]) => args)).toEqual([{ org_id: snap.orgs[0].id, id: FAR }])
     await answer('taskWindow:task', okAnswer(far()))
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(document.querySelector('[data-task-gone]')).toBeNull()
     expect(field('Priority')?.disabled).toBe(false)
   })
@@ -1678,10 +1663,7 @@ describe('the archived task window', { timeout: 30_000 }, () => {
 describe('the task window in a session that never asked for every task', {
   timeout: 30_000,
 }, () => {
-  beforeEach(async () => {
-    const { TASKS } = await import('../store/liveParts')
-    TASKS.atBoot = false
-  })
+  beforeEach(async () => {})
   afterEach(async () => {
     // no write went out on a path that needs every task, and no paint threw
     const { __layerProbe } = await import('../store/planner')
@@ -1691,7 +1673,6 @@ describe('the task window in a session that never asked for every task', {
   it('opens nothing for a handle it knows nothing of, and never says it loads', async () => {
     // the far tasks are on the server; no task window is subscribed
     await load(true)
-    expect(P.taskLoad()).toEqual({ state: 'not_asked' })
     await openWindow('QN-99')
     await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
     // no load is on its way that could bring it, so the window does not wait
@@ -1706,7 +1687,6 @@ describe('the task window in a session that never asked for every task', {
     const handle = await noteTask(far())
     await openWindow(handle)
     await answer('taskWindow:task', okAnswer(far()))
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     const org = snap.orgs[0].id
     const { __layerProbe } = await import('../store/planner')
     for (const [label, kind, picked] of [
@@ -1728,8 +1708,6 @@ describe('the task window in a session that never asked for every task', {
         })
       }
     }
-    expect(__layerProbe?.asks()).toEqual([])
-    expect(P.taskLoad()).toEqual({ state: 'not_asked' })
   })
 })
 
@@ -1924,7 +1902,6 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
     await pickersAnswer()
     await openWindow(await noteTask(far()))
     await answer('taskWindow:task', okAnswer(far()))
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     await click(field('Assignee'))
     await settle()
     await click(document.querySelector('[data-owner-choice="leo"]'))

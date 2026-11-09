@@ -1,16 +1,14 @@
 /* What Team sync shows (views/TeamSync.tsx): the meeting the server's agenda
    answers for the place on screen (convex/teamSync.ts agenda), as
-   views/board/useBoardView.ts gives the Board its tasks. The page never
-   reads the workspace's task lists, so it opens without every task and
-   asks for none.
+   views/board/useBoardView.ts gives the Board its tasks. The workspace
+   holds no task, so the page shows only what its answer names.
 
    - The store owns the read (P.watchSync). The page registers its
      arguments from an effect, or none while it or the tab is hidden
      (lib/viewVisibility.ts), so a kept page stops its read and reads afresh
      when it shows again.
    - The answer decides which tasks the page can show: its rows, its asks
-     and its Done tasks, each once, as the workspace's model where the
-     workspace holds the task, else as the model the store shaped from the
+     and its Done tasks, each once, as the model the store shaped from the
      answer's row (P.syncTask). Either is painted with the person's pending
      writes, so the page's rules (lib/teamSync.ts) move a task between its
      sections at once, while nothing the answer does not name appears. A

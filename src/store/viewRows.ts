@@ -19,11 +19,8 @@
      of its tasks up to date (take), so the two never disagree and the
      live view's deliveries decide whether a write is held
      (store/planner.ts viewPartHeld).
-   - The rows never enter the workspace's rows, the task index, P.issues or
-     P.issueById. A task the workspace holds shows as the workspace's view
-     model; the store asks this module only for the others (`unheld`), which
-     until something asks for every task (store/planner.ts P.askTasks) are
-     all of a view's tasks.
+   - The rows never enter the workspace's rows, which hold no task. Every
+     task a view shows is a model shaped here from its answer's row.
    - The person's own new task goes into the rows of the views whose join
      shows the person's own changed tasks, the Board's and the Roadmap's
      (insert), from what its create sends, until the create answers, or
@@ -41,7 +38,29 @@
      rows the answer does not send: no description, labels, links, files or
      follow, and only the subtasks the answer names. A group's Done and
      partial span come from its facts (factsOf), which P.isDone and the
-     delay rules read before they walk subtasks. */
+     delay rules read before they walk subtasks.
+
+   What the Board holds, all of it (store/boardHolds.test.ts pins it):
+   - One answer per slot (views/board/useBoardView.ts BOARD_SLOTS), of at
+     most BOARD.ceiling cards and BOARD.context groups and shown parents
+     together (convex/lib/board.ts), 1,000 and 2,000. A variant that mounts
+     releases the other's slot, so the desktop Board and the phone's list
+     never hold rows at once.
+   - While typing only narrows the text filter, the answer it narrows,
+     until the answer for the new text arrives (P.watchBoard `narrows`);
+     any other change of the arguments drops it at once.
+   - The slots of the kept pages (lib/keptPages.ts), each page's own, at
+     most the six main pages of one scope, which a new scope ends.
+   - The owner-load cache's answers (store/ownerLoadCache.ts) for the
+     owners the cards need, released with the view that registered them.
+     Each open task is at most one span of one owner, so an organization's
+     spans are at most its open tasks plus the paused lists, whatever the
+     number of owners. An owner past OWNER_LOADS.open open rows answers
+     unavailable, and a call stops at OWNER_LOADS.spans spans
+     (convex/lib/ownerLoads.ts, convex/planning.ts ownerLoads).
+   The workspace holds no task. No cap applies here at run time: these
+   holders are bounded by the server's ceilings and the views' lifetimes,
+   and the total is measured at the design size, not limited. */
 
 import { reviewerOwns, taskOwnerId } from '../../convex/lib/review'
 import { ISSUE_PREFIX } from '../../convex/lib/taskRefs'
@@ -105,7 +124,7 @@ export function createViewRows(
   // a row once; a model shaped from a copy holds it, so a later paint, such
   // as the next write's at its send, copies the row again (reshape)
   let copies = new Set<ViewRow>()
-  // the models of the tasks the workspace does not hold, by view and uuid
+  // the models of the views' tasks, by view and uuid
   const shaped = new Map<ViewSlot, Map<string, Shaped>>()
   const facts = new WeakMap<IssueVM, ViewFacts>()
   let byHandle = new Map<string, IssueVM>()
@@ -300,6 +319,10 @@ export function createViewRows(
     peek,
     /** View `slot`'s rows on screen, by uuid, or null when it holds none. */
     rowsOf: (slot: ViewSlot): ReadonlyMap<string, ViewRow> | null => painted.get(slot) ?? null,
+    /** How many rows each slot's answer holds, by slot, for tests and the
+        report (the Board's holders, above). */
+    held: (): Map<ViewSlot, number> =>
+      new Map([...anchors].map(([slot, rows]) => [slot, rows.size])),
     /** The tasks whose rows on screen differ from their anchor, the ones a
         live layer changed (P.ownPaintedTasks). */
     paintedTasks(): Set<string> {
@@ -315,10 +338,9 @@ export function createViewRows(
       }
       return out
     },
-    /** Shapes the models of every task the views hold that `held` says the
-        workspace does not, reusing each object while its data holds.
-        Answers whether any model changed. */
-    reshape(held: (uuid: string) => boolean, ctx: ViewShapeCtx): boolean {
+    /** Shapes the models of every task the views hold, reusing each object
+        while its data holds. Answers whether any model changed. */
+    reshape(ctx: ViewShapeCtx): boolean {
       let changed = released
       released = false
       const handles = new Map<string, IssueVM>()
@@ -334,7 +356,6 @@ export function createViewRows(
           else kidsOf.set(row.parent_id, [row])
         }
         for (const [uuid, row] of rows) {
-          if (held(uuid)) continue
           const was = before.get(uuid)
           const now = shape(row, rows, kidsOf.get(uuid) ?? [], ctx, was)
           if (now.it !== was?.it) changed = true
@@ -356,16 +377,15 @@ export function createViewRows(
       copies = new Set()
       return changed
     },
-    /** The model of task `uuid` in view `slot`, when the workspace does not
-        hold it. */
+    /** The model of task `uuid` in view `slot`. */
     model: (slot: ViewSlot, uuid: string): IssueVM | undefined => shaped.get(slot)?.get(uuid)?.it,
-    /** The model a handle names, in any view, a live one first, when the
-        workspace does not hold its task, and the person's new task on its
-        way first where two share it (ViewShapeCtx wins). */
+    /** The model a handle names, in any view, a live one first, and the
+        person's new task on its way first where two share it
+        (ViewShapeCtx wins). */
     byHandle: (handle: string): IssueVM | undefined => byHandle.get(handle),
     /** Every model the views hold, by handle. */
     handles: (): ReadonlyMap<string, IssueVM> => byHandle,
-    /** A model's group facts, or undefined for a workspace view model. */
+    /** A model's group facts, or undefined for a model no view shaped. */
     factsOf: (it: IssueVM): ViewFacts | undefined => facts.get(it),
     /** Every view's rows on screen, by view, for the store's strict layer
         check. */

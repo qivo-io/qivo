@@ -277,7 +277,6 @@ describe('a task the workspace does not hold, in the store', () => {
         state: 'ready',
         complete: true,
         delivered: true,
-        source: 'answer',
         rows: [],
       }
       P.showSections(pane, true)
@@ -352,7 +351,6 @@ describe('a task the workspace does not hold, in the store', () => {
         handle: 'QN-41',
         org,
         num: 41,
-        held: false,
         isGroup: true,
       })
     })

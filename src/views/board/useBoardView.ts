@@ -1,9 +1,8 @@
 /* What the Board shows, for the desktop Board (views/Kanban.tsx) and the
    phone's task list (components/MobileWorkspace.tsx MobileTaskList): which
    tasks, in which state, from the server's answer for the selection
-   (convex/tasks.ts board) and the rows it brings. The Board never reads the
-   workspace's task lists: the workspace holds no task until something that
-   needs every task asks for them (store/planner.ts P.askTasks).
+   (convex/tasks.ts board) and the rows it brings. The workspace holds no
+   task, so every card comes from the answer.
 
    - The store owns the Board's read (P.watchBoard): each variant registers
      its arguments from an effect, or none while its page or the tab is
@@ -20,22 +19,20 @@
      organization name and number. Before an answer there are none, and the
      loading frame shows its columns with no groups. A group whose project
      the cache has not answered shows under a loading heading.
-   - The answer decides which tasks a Board shows. Each shows as the
-     workspace's view model where the workspace holds the task, else as the
-     model the store shaped from the answer's row (store/viewRows.ts), so a
-     card shows whether or not the workspace holds its task. Either is
-     painted with the person's pending writes, so a card follows every edit
-     at once and a drag never snaps back.
+   - The answer decides which tasks a Board shows. Each shows as the model
+     the store shaped from the answer's row (store/viewRows.ts), painted
+     with the person's pending writes, so a card follows every edit at once
+     and a drag never snaps back.
    - On top of the answer, the app checks each task again against the
      filter row on screen and the answer's own selection (a project
      selection's `projects`, My view's `only`), so an edit, a move out of
-     the selection or a new filter hides a card at once. That only narrows. A task shaped from a row has
-     no text or labels, and a group's newest activity is the server's, so
-     for those the text filter and a group's Stale are the answer's alone.
+     the selection or a new filter hides a card at once. That only narrows.
+     A task shaped from a row has no text or labels, and a group's newest
+     activity is the server's, so the text filter and a group's Stale are
+     the answer's alone.
      A task the person's own pending writes changed, or a parent they moved
      a task to or from (P.ownPaintedTasks), shows as the rows on screen
-     say, both ways, as the task window's sections do, so a new task shows
-     at once, a parent whose last subtask left shows as a task, and a
+     say, both ways, so a new task shows at once, a parent whose last subtask left shows as a task, and a
      refused write takes it away again. The person's new task goes into the
      Board's rows from what its create sent (store/viewRows.ts insert),
      and while the server has not taken it, the Board checks it against
@@ -55,12 +52,9 @@
      card the server keeps, never show one it drops.
    - The answer brings a row for each task it names, so a whole answer
      names no task the Board cannot show. A row source that brings fewer
-     (`missing`) keeps the Board loading, and STALL.ms later, while no load
-     of every task is on its way, says that some tasks have not reached it;
-     it never looks empty or complete meanwhile. While every task loads, a
-     new subtask the workspace holds whose parent only the answer brings
-     counts as missing on the desktop too: its card shows, but without its
-     parent's heading until the parent loads.
+     (`missing`) keeps the Board loading, and STALL.ms later says that some
+     tasks have not reached it; it never looks empty or complete
+     meanwhile.
    - With a text filter, the person's own pending write on a task only the
      answer brings can take away the word the server found it by: its
      title, status, priority or assignee's name, from the Board or the
@@ -154,18 +148,16 @@ export type BoardView = {
 /** Whether a task shows in the Board of `info` with `filters` on screen,
     within `selection`, the answer's own project selection (null in My
     view, which narrows by `info.only`). The text filter is the answer's
-    for every task, held or not: the server matched the whole text, label
-    and assignee names included, which the store cannot read. A group only
-    the answer brings has no newest activity of its subtasks, so the answer
-    decides Stale for it. */
+    for every task: the server matched the whole text, label and assignee
+    names included, which the store cannot read. A group has no newest
+    activity of its subtasks here, so the answer decides Stale for it. */
 function passes(
   info: ScopeInfo,
   selection: ReadonlySet<string> | null,
   filters: IssueFilters,
   it: IssueVM,
 ) {
-  const shaped = P.handleOf(it.uuid) === null
-  const local = { ...filters, search: '', stale: filters.stale && !(shaped && it.isGroup) }
+  const local = { ...filters, search: '', stale: filters.stale && !it.isGroup }
   return (
     (selection === null || selection.has(it.project)) &&
     (!info.only || info.only(it)) &&
@@ -397,10 +389,7 @@ export function useBoardView(
     // write changed decides as the person's own changed tasks do
     const unsent = filters.search ? P.ownUnsentEdits() : null
     const own = unsent?.size ? new Set([...P.ownPaintedTasks(), ...unsent]) : P.ownPaintedTasks()
-    const modelOf = (uuid: string) => {
-      const handle = P.handleOf(uuid)
-      return handle === null ? P.viewTask(slot, uuid) : P.issueById[handle]
-    }
+    const modelOf = (uuid: string) => P.viewTask(slot, uuid)
     // the Board's own text check of a narrowed answer, over the fields a
     // row sends
     // A task whose assignee's name has not loaded may match by it, so the
@@ -412,10 +401,6 @@ export function useBoardView(
     const shown = new Set<string>()
     const tasks: IssueVM[] = []
     let missing = 0
-    // while every task loads, a new subtask the workspace holds names no
-    // parent it does not hold (store/viewModels.ts), so the desktop Board
-    // would file it without the heading of a parent only the answer brings
-    const loading = variant === 'desktop' && P.tasksArriving()
     for (const row of shownAnswer.rows) {
       if (own.has(row.id)) continue
       const it = modelOf(row.id)
@@ -423,14 +408,6 @@ export function useBoardView(
         missing++
         continue
       }
-      if (
-        loading &&
-        row.parent_id &&
-        P.handleOf(row.id) !== null &&
-        P.handleOf(row.parent_id) === null &&
-        P.viewTask(slot, row.parent_id)
-      )
-        missing++
       if (passes(info, selection, filters, it) && textOk(it)) {
         shown.add(it.uuid)
         tasks.push(it)
@@ -450,8 +427,6 @@ export function useBoardView(
       // shows it, the writes sent behind its create included
       const created = filters.search ? P.createText(uuid) : null
       if (created !== null && !matchesAllWords(created, filters.search)) continue
-      // the person's new subtask whose parent is still to come, as above
-      if (loading && P.parentLoading(it)) missing++
       // a task the local check searched by nothing (passes), which the
       // answer matched before the person's writes changed it
       if (answered && created === null) {
@@ -465,10 +440,7 @@ export function useBoardView(
     }
     joined = { tasks, missing, unsure }
   }
-  const stalled = useStall(
-    joined !== null && joined.missing > 0 && !P.tasksArriving(),
-    wantKey ?? '',
-  )
+  const stalled = useStall(joined !== null && joined.missing > 0, wantKey ?? '')
 
   // the groups of the answer on screen: a project selection's sub-projects,
   // My view's held lanes and the cards' sub-projects folded through the

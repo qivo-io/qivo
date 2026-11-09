@@ -776,22 +776,15 @@ describe('New sub-project', { timeout: 30_000 }, () => {
   )
 })
 
-describe("New sub-project's starter task under tasks on demand", { timeout: 30_000 }, () => {
-  beforeEach(async () => {
-    const { TASKS } = await import('./store/liveParts')
-    TASKS.atBoot = false
-  })
-
-  // the starter task paints the new sub-project's views and asks for no
-  // task, as every create does (store/planner.ts P.addIssue)
-  it.each<[string, boolean, string[]]>([
-    ['with', true, []],
-    ['without', false, []],
-  ])('asks for no task for a create %s a starter task', async (_, starter, asks) => {
+describe("New sub-project's starter task", { timeout: 30_000 }, () => {
+  // the starter task paints the new sub-project's views, as every create
+  // does (store/planner.ts P.addIssue)
+  it.each<[string, boolean]>([
+    ['with', true],
+    ['without', false],
+  ])('creates a sub-project %s a starter task', async (_, starter) => {
     await boot()
     const { __layerProbe } = await import('./store/planner')
-    // the boot asks for no task, as the app's does on a project
-    expect(__layerProbe?.asks()).toEqual([])
     await press(await find('Add sub-project'))
     const box = await waitFor(
       () => document.querySelector<HTMLInputElement>('#subproject-starter'),
@@ -802,7 +795,6 @@ describe("New sub-project's starter task under tasks on demand", { timeout: 30_0
     await finish(true)
     await save()
     expect(sent.some((w) => w.name === 'issues:create')).toBe(starter)
-    expect(__layerProbe?.asks()).toEqual(asks)
     expect(__layerProbe?.faults()).toEqual([])
   })
 })

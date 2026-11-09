@@ -7,32 +7,21 @@ import { createWorkspaceBase } from './workspaceBase'
 
 const AT = '2026-09-14T08:00:00.000Z'
 
-/** A snapshot with tasks `ids`, and for each a load row of a task in a
-    project its reader cannot see, the only load rows the base keeps. */
+/** A snapshot with teams `ids`, and the fixture's person a member of each,
+    the leader of none. */
 function snapshotOf(ids: string[]): Snapshot {
   const snap = plannerFixture()
-  snap.issues = ids.map((id, n) => ({
+  snap.teams = ids.map((id) => ({
     id,
     org_id: snap.orgs[0].id,
-    project_id: snap.projects[0].id,
-    num: n + 1,
-    title: `Task ${id}`,
-    description: '',
-    status: 'todo',
-    priority: 'medium',
+    name: `Team ${id}`,
+    track_delay_default: false,
     created_at: AT,
-    updated_at: AT,
-    paused: false,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
   }))
-  snap.orgLoad = ids.map((_, n) => ({
-    issue_id: null,
-    owner_id: snap.profiles[0].id,
-    start_week: '2026-09-14',
-    end_week: '2026-09-21',
-    remaining: n + 1,
-    remaining_set_at: AT,
+  snap.teamMembers = ids.map((team_id) => ({
+    team_id,
+    profile_id: snap.profiles[0].id,
+    is_leader: false,
   }))
   return snap
 }
@@ -43,38 +32,38 @@ describe('the workspace base', () => {
     const snap = snapshotOf(['a', 'b', 'c'])
     base.stage(asStored(structuredClone(snap)))
     base.apply()
-    const before = base.map('issues')
+    const before = base.map('teams')
     const [a, b] = [before.get('a'), before.get('b')]
-    snap.issues[1].title = 'Renamed'
+    snap.teams[1].name = 'Renamed'
     base.stage(asStored(structuredClone(snap)))
     const changes = base.apply()
-    expect([...(changes?.issues?.keys() ?? [])]).toEqual(['b'])
-    expect(changes?.orgLoad).toBeUndefined()
-    expect(base.map('issues').get('a')).toBe(a)
-    expect(base.map('issues').get('b')).not.toBe(b)
-    expect(base.map('issues').get('b')?.title).toBe('Renamed')
-    expect(Object.isFrozen(base.map('issues').get('b'))).toBe(true)
+    expect([...(changes?.teams?.keys() ?? [])]).toEqual(['b'])
+    expect(changes?.teamMembers).toBeUndefined()
+    expect(base.map('teams').get('a')).toBe(a)
+    expect(base.map('teams').get('b')).not.toBe(b)
+    expect(base.map('teams').get('b')?.name).toBe('Renamed')
+    expect(Object.isFrozen(base.map('teams').get('b'))).toBe(true)
   })
 
-  it('names a removed and an added task, and a list that only moved', () => {
+  it('names a removed and an added team, and a list that only moved', () => {
     const base = createWorkspaceBase()
     const snap = snapshotOf(['a', 'b', 'c'])
     base.stage(asStored(structuredClone(snap)))
     base.apply()
-    // b goes, d comes, and the load rows arrive in another order
+    // b goes, d comes, and the memberships arrive in another order
     const next = structuredClone(snap)
-    const d = { ...next.issues[1], id: 'd', num: 4, title: 'Task d' }
-    next.issues = [next.issues[0], next.issues[2], d]
-    next.orgLoad = [next.orgLoad[1], next.orgLoad[2], next.orgLoad[0]]
+    const d = { ...next.teams[1], id: 'd', name: 'Team d' }
+    next.teams = [next.teams[0], next.teams[2], d]
+    next.teamMembers = [next.teamMembers[1], next.teamMembers[2], next.teamMembers[0]]
     base.stage(asStored(structuredClone(next)))
     const changes = base.apply()
-    expect(new Set(changes?.issues?.keys())).toEqual(new Set(['b', 'd']))
-    expect(changes?.issues?.get('b')).toMatchObject({ id: 'b' })
-    expect(changes?.issues?.get('d')).toBeUndefined()
-    expect([...base.map('issues').keys()]).toEqual(['a', 'c', 'd'])
+    expect(new Set(changes?.teams?.keys())).toEqual(new Set(['b', 'd']))
+    expect(changes?.teams?.get('b')).toMatchObject({ id: 'b' })
+    expect(changes?.teams?.get('d')).toBeUndefined()
+    expect([...base.map('teams').keys()]).toEqual(['a', 'c', 'd'])
     // a list in a new order is a change
-    expect(changes?.orgLoad).toBeDefined()
-    expect(base.list('orgLoad').map((row) => row.remaining)).toEqual([2, 3, 1])
+    expect(changes?.teamMembers).toBeDefined()
+    expect(base.list('teamMembers').map((row) => row.team_id)).toEqual(['b', 'c', 'a'])
   })
 
   it('reports nothing for a delivery that changes nothing, and nothing twice', () => {
@@ -92,83 +81,41 @@ describe('the workspace base', () => {
     const snap = snapshotOf(['a', 'b'])
     base.stage(asStored(structuredClone(snap)))
     base.apply()
-    const a = base.map('issues').get('a')
+    const a = base.map('teams').get('a')
     // a renamed and back, c added and gone again, b renamed for good
     const renamed = structuredClone(snap)
-    renamed.issues[0].title = 'Renamed'
-    renamed.issues[1].title = 'Renamed too'
-    renamed.issues.push({ ...renamed.issues[1], id: 'c', num: 3 })
+    renamed.teams[0].name = 'Renamed'
+    renamed.teams[1].name = 'Renamed too'
+    renamed.teams.push({ ...renamed.teams[1], id: 'c' })
     base.stage(asStored(structuredClone(renamed)))
     const back = structuredClone(renamed)
-    back.issues[0].title = snap.issues[0].title
-    back.issues.pop()
+    back.teams[0].name = snap.teams[0].name
+    back.teams.pop()
     base.stage(asStored(structuredClone(back)))
     const changes = base.apply()
-    expect([...(changes?.issues?.keys() ?? [])]).toEqual(['b'])
-    expect(base.map('issues').get('a')?.title).toBe(snap.issues[0].title)
-    expect(base.map('issues').has('c')).toBe(false)
-    expect(a?.title).toBe(snap.issues[0].title)
+    expect([...(changes?.teams?.keys() ?? [])]).toEqual(['b'])
+    expect(base.map('teams').get('a')?.name).toBe(snap.teams[0].name)
+    expect(base.map('teams').has('c')).toBe(false)
+    expect(a?.name).toBe(snap.teams[0].name)
   })
 
-  it("keys an owner's hidden load rows by their place and keeps a new order across deliveries", () => {
+  it('keeps a list by place and a new order across deliveries', () => {
     const base = createWorkspaceBase()
-    const snap = snapshotOf(['a', 'b'])
-    const hidden = (remaining: number) => ({ ...snap.orgLoad[0], remaining })
-    snap.orgLoad = [hidden(1), hidden(2), hidden(4)]
+    const snap = snapshotOf(['a', 'b', 'c'])
     base.stage(asStored(structuredClone(snap)))
     base.apply()
-    expect(base.list('orgLoad').map((row) => row.remaining)).toEqual([1, 2, 4])
-    // the first hidden row goes: the second takes its place
+    // the first membership goes: the second takes its place
     const fewer = structuredClone(snap)
-    fewer.orgLoad.splice(0, 1)
+    fewer.teamMembers.splice(0, 1)
     base.stage(asStored(structuredClone(fewer)))
-    expect(base.apply()?.orgLoad).toBeDefined()
-    expect(base.list('orgLoad').map((row) => row.remaining)).toEqual([2, 4])
+    expect(base.apply()?.teamMembers).toBeDefined()
+    expect(base.list('teamMembers').map((row) => row.team_id)).toEqual(['b', 'c'])
     // a new order staged twice before one apply is still a change
     const moved = structuredClone(fewer)
-    moved.orgLoad.reverse()
+    moved.teamMembers.reverse()
     base.stage(asStored(structuredClone(moved)))
     base.stage(asStored(structuredClone(moved)))
-    expect(base.apply()?.orgLoad).toBeDefined()
-    expect(base.list('orgLoad').map((row) => row.remaining)).toEqual([4, 2])
-  })
-
-  it("gives a new flag set when a task's hidden subtasks come and go, and keeps the old one as it was", () => {
-    const base = createWorkspaceBase()
-    const snap = snapshotOf(['a', 'b'])
-    base.stage(asStored(structuredClone(snap)))
-    base.apply()
-    const before = base.flags('hiddenSubtaskParents')
-    snap.issues[0].has_hidden_subtasks = true
-    base.stage(asStored(structuredClone(snap)))
-    base.apply()
-    const on = base.flags('hiddenSubtaskParents')
-    expect([...on]).toEqual(['a'])
-    expect(on).not.toBe(before)
-    expect(before.size).toBe(0)
-    snap.issues[0].has_hidden_subtasks = false
-    base.stage(asStored(structuredClone(snap)))
-    base.apply()
-    expect(base.flags('hiddenSubtaskParents').size).toBe(0)
-    expect([...on]).toEqual(['a'])
-    // a change that leaves the flags alone keeps the same set
-    const off = base.flags('hiddenSubtaskParents')
-    snap.issues[1].title = 'Renamed'
-    base.stage(asStored(structuredClone(snap)))
-    base.apply()
-    expect(base.flags('hiddenSubtaskParents')).toBe(off)
-  })
-
-  it('keeps an id that starts with # as it is', () => {
-    const base = createWorkspaceBase()
-    // an id made before ids had to be uuids
-    const snap = snapshotOf(['#legacy-task', 'b'])
-    base.stage(asStored(structuredClone(snap)))
-    base.apply()
-    expect(base.map('issues').get('#legacy-task')?.id).toBe('#legacy-task')
-    expect(base.stagedTask('#legacy-task')?.id).toBe('#legacy-task')
-    snap.issues[0].title = 'Renamed'
-    base.stage(asStored(structuredClone(snap)))
-    expect([...(base.apply()?.issues?.keys() ?? [])]).toEqual(['#legacy-task'])
+    expect(base.apply()?.teamMembers).toBeDefined()
+    expect(base.list('teamMembers').map((row) => row.team_id)).toEqual(['c', 'b'])
   })
 })

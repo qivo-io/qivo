@@ -1,12 +1,12 @@
 /* One cache of people's loads, read live through planning.ownerLoads
-   (convex/planning.ts), for the delays of tasks the workspace does not
-   hold or cannot judge yet: the Board's and the Roadmap's bars a view's
-   answer brings (store/planner.ts viewDelay), every card in a session that
-   never asked for every task (store/planner.ts P.askTasks), the task
-   window's task (P.windowDelay), and the people an organization Viewer's
-   Team sync shows, whose agenda reads no load (P.watchSyncPeople); and for
-   the Roadmap's Team utilization and planning panel (store/viewDelay.ts
-   ownerItemsOf).
+   (convex/planning.ts), for the delay of every task the app shows, which
+   the workspace never holds: the Board's cards and the Roadmap's bars a
+   view's answer brings (store/planner.ts viewDelay), the task window's
+   task (P.windowDelay), and the people an organization Viewer's Team sync
+   shows, whose agenda reads no load (P.watchSyncPeople); and for the
+   Roadmap's Team utilization and planning panel (store/viewDelay.ts
+   ownerItemsOf). An owner whose load cannot be read leaves the delay
+   unknown, never free time.
 
    - A view registers the owners whose loads its cards need, by
      organization, and releases them when it closes. The cache subscribes
@@ -463,6 +463,10 @@ export function createOwnerLoadCache(deps: OwnerLoadDeps) {
     /** The calls live now, for tests and the report: organization and
         owners of each. */
     calls: (): Call[] => [...subs.values()].map((sub) => sub.call),
+    /** The owners whose last answer the cache keeps, by organization and
+        id, for tests and the report (store/viewRows.ts, the Board's
+        holders). */
+    kept: (): string[] => [...loads.keys()],
     /** Stops every call and forgets everything (a disposed store). */
     clear() {
       for (const sub of subs.values()) sub.stop()

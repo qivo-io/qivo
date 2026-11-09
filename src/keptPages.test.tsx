@@ -770,22 +770,17 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     expect(inbox.querySelector('[data-unread-divider]')).toBeNull()
   })
 
-  it('opens an address that once named all projects on the project chooser at once, asking for no task', async () => {
+  it('opens an address that once named all projects on the project chooser at once', async () => {
     const org = await boot((snap) => {
       underProgram(snap)
       // at the front door, with no scope chosen
       history.replaceState(null, '', '/app/testbed')
     })
-    const { __layerProbe } = await import('./store/planner')
     await waitFor(() => document.querySelector('[data-project-chooser]'), 'the chooser')
-    // what the boot asked for
-    __layerProbe?.asks()
     await go(`/app/${org}/roadmap/all`)
     await waitFor(() => document.querySelector('[data-project-chooser]'), 'the chooser')
     expect(document.querySelector('[data-workspace-view="roadmap"]')).toBeNull()
     expect(document.body.textContent).not.toContain('opens once every task has loaded')
-    // no view and no task of the workspace is asked for
-    expect(__layerProbe?.asks()).toEqual([])
   })
 
   it('mounts the pages of a new scope anew, and keeps the Inbox', async () => {
@@ -896,8 +891,6 @@ describe('Plan on roadmap while the Roadmap reads its answer', { timeout: 30_000
       'Plan on roadmap',
     )
     expect(plan.textContent).toBe(group ? 'Show on roadmap' : 'Plan on roadmap')
-    const { P } = await import('./store/planner')
-    expect(P.taskLoad()).toEqual({ state: 'not_asked' })
     await act(async () => plan.click())
     const roadmap = await shownPage('roadmap')
     await waitFor(
@@ -907,10 +900,6 @@ describe('Plan on roadmap while the Roadmap reads its answer', { timeout: 30_000
       'the Roadmap waiting for its answer',
     )
     expect(roadmap.textContent).not.toContain('opens once every task has loaded')
-    // the Roadmap asked for no task of the workspace
-    expect(P.taskLoad()).toEqual({ state: 'not_asked' })
-    const { __layerProbe } = await import('./store/planner')
-    expect(__layerProbe?.asks()).toEqual([])
     return org
   }
 

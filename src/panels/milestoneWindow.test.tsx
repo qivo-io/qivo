@@ -1364,7 +1364,6 @@ describe('tasks on demand', { timeout: 30_000 }, () => {
         inWindow('[data-milestone-section="past"]')?.querySelectorAll('[data-milestone-row]')
           .length,
       ).toBeGreaterThan(0)
-      expect(store.__layerProbe?.asks()).toEqual([])
       expect(store.__layerProbe?.faults()).toEqual([])
     } finally {
       history.replaceState(null, '', '/')

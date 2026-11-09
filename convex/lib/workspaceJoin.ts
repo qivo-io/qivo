@@ -1,20 +1,20 @@
-/* The workspace parts (workspace.ts) joined into the one workspace the app
- * keeps (src/store/workspaceBase.ts), and the reverse for stand-ins of the
+/* The root part (workspace.ts root) as the one workspace the app keeps
+ * (src/store/workspaceBase.ts), and the reverse for stand-ins of the
  * server. src/ and scripts/ import this module, so it must stay free of
- * server runtime: its imports are types and other such modules, named with
+ * server runtime. Its imports are types and other such modules, named with
  * their .ts extension, so Node runs it as it is.
  *
- * joinParts takes the root part and every part of every seat's
- * organization, as one Convex transition left them, and lists each section
- * per organization in seat order and, within one, window by window, so the
- * rows keep the order the windows give them: tasks by window key and
- * hidden load rows in their own order (lib/workspaceParts.ts byLoad). The
- * profiles, team memberships and teams are the caller's own, which the
- * root part sends; no part sends anyone else's, nor a label, nor a
- * project, grant or team grant, so the workspace holds none: the app reads
- * people and labels by id or a batch at a time, and every project it shows
- * through the navigation reads, projectNav.byIds and the views' own
- * answers (convex/projectNav.ts). */
+ * The app's workspace is the root part alone (rootWorkspace). Its
+ * profiles, team memberships and teams are the caller's own. No part sends
+ * anyone else's, nor a task, a label, a project, a grant or a team grant,
+ * so the workspace holds none. The app reads every task from its views'
+ * and its window's own answers, people and labels by id or a batch at a
+ * time, and every project it shows through the navigation reads,
+ * projectNav.byIds and the views' own answers (convex/projectNav.ts).
+ *
+ * joinParts and readWorkspace still join each organization's task windows
+ * beside the root, window by window in the order the windows give them,
+ * for the tests and scripts that read the tasks part. */
 
 import { joinLists } from './arrayLimit.ts'
 import { shownAvatarColor } from './avatarColors.ts'
@@ -64,16 +64,16 @@ export function partRows<A extends { state: 'ok'; more?: Record<string, unknown[
   return rest as Omit<A, 'more' | 'state' | 'split'>
 }
 
-/** The workspace of `root`'s seats from their organizations' parts, each
- * `orgs` entry for root.orgs at the same place. `deliveredAt` is when the
- * server held this state, the time of the transition that carried it.
+/** The workspace of `root`'s seats, as the app keeps it. `deliveredAt` is
+ * when the server held this state, the time of the transition that
+ * carried it.
  *
  * The profiles, memberships and teams are the root part's, the caller's
  * own. A membership goes out only for one of those profiles and one of
  * those teams of the profile's organization, as a removed seat's
  * memberships can outlive its profile for a moment (model/cascade.ts
  * removeProfile). */
-export function joinParts(root: RootSeats, orgs: readonly OrgParts[], deliveredAt: string) {
+export function rootWorkspace(root: RootSeats, deliveredAt: string) {
   const profiles = [...root.profiles]
   const teams = [...root.teams]
   const orgOfProfile = new Map(profiles.map((p) => [p.id, p.org_id]))
@@ -82,6 +82,27 @@ export function joinParts(root: RootSeats, orgs: readonly OrgParts[], deliveredA
     const org = orgOfProfile.get(m.profile_id)
     return org !== undefined && orgOfTeam.get(m.team_id) === org
   })
+  return {
+    auth_user_id: root.auth_user_id,
+    myProfileIds: root.myProfileIds,
+    orgs: root.orgs,
+    teams,
+    teamMembers,
+    profiles,
+    create: root.create,
+    delivered_at: deliveredAt,
+  }
+}
+
+/** The workspace as the app keeps it, the root part's answer for every
+ * seat. */
+export type Workspace = ReturnType<typeof rootWorkspace>
+
+/** The workspace of `root`'s seats with their organizations' task windows
+ * joined beside it, each `orgs` entry for root.orgs at the same place, as
+ * the tests and scripts that still read the tasks part take it
+ * (readWorkspace). The app subscribes no task window. */
+export function joinParts(root: RootSeats, orgs: readonly OrgParts[], deliveredAt: string) {
   const issues: TasksPart['issues'] = []
   const links: TasksPart['links'] = []
   const issueLabels: TasksPart['issueLabels'] = []
@@ -99,25 +120,18 @@ export function joinParts(root: RootSeats, orgs: readonly OrgParts[], deliveredA
     }
   }
   return {
-    auth_user_id: root.auth_user_id,
-    myProfileIds: root.myProfileIds,
-    orgs: root.orgs,
-    teams,
-    teamMembers,
-    profiles,
+    ...rootWorkspace(root, deliveredAt),
     issues,
     links,
     issueLabels,
     issueSubs,
     attachments,
     orgLoad,
-    create: root.create,
-    delivered_at: deliveredAt,
   }
 }
 
-/** The workspace as the app keeps it, every seat's organizations joined. */
-export type Workspace = ReturnType<typeof joinParts>
+/** The workspace with every seat's task windows joined (joinParts). */
+export type JoinedWorkspace = ReturnType<typeof joinParts>
 
 /** The rows a stand-in of the server holds beside the workspace's: every
  * profile, membership and team of each organization, not only the
@@ -180,7 +194,7 @@ export function rootOf(whole: ServerRows): RootSeats {
  * organization it does not list. A hidden load row names no task, so every
  * one goes to the first task window. */
 export function splitWorkspace(
-  workspace: Omit<Workspace, 'create'>,
+  workspace: Omit<JoinedWorkspace, 'create'>,
   windows: (orgId: string) => readonly IdWindow[],
 ) {
   /** `rows` of `orgId` cut into its task windows. */
@@ -243,7 +257,7 @@ function rowsOrThrow(name: string, answer: unknown) {
  * once rather than subscribing; its parts are read at different moments, so
  * a write meanwhile can show in some and not others.
  */
-export async function readWorkspace(query: QueryByName): Promise<Workspace | null> {
+export async function readWorkspace(query: QueryByName): Promise<JoinedWorkspace | null> {
   const root = (await query('workspace:root', {})) as RootAnswer
   if (root === null || 'deleting' in root) return null
   /** The answers of task window `w`, cut wherever one overflows or

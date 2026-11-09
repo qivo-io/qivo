@@ -6,15 +6,14 @@ import type { RoadmapAnswer } from '../../convex/lib/roadmap'
 import type { ViewRow } from '../../convex/lib/viewReads'
 import { MIN_BYTES } from '../lib/images'
 import { refParts } from '../lib/taskReference'
-import { fixture, ME, ORG, PAT, type Snapshot, type TaskAnswer } from './guard/writeRecipes.setup'
+import { fixture, ME, ORG, type Snapshot, type TaskAnswer } from './guard/writeRecipes.setup'
 import { type OwnerLoadsArgs, ownerLoadsStandIn } from './ownerLoadsStandIn.setup'
 import type { IssueVM } from './planner'
 import type { Row } from './rows'
 
-/* A create of the person's own in a store that never asked for every task,
-   as every session of the app is (store/planner.ts P.addIssue,
-   P.createParent, P.createLinked): it asks for no task, puts the new task
-   into the Board's and the Roadmap's rows from what it sends until the
+/* A create of the person's own (store/planner.ts P.addIssue,
+   P.createParent, P.createLinked): it puts the new task into the Board's
+   and the Roadmap's rows from what it sends until the
    server answers it, shows a window opened on it from its creating answer
    until the server took it and the window's own read answered, sends the
    window's changes behind it at once, and takes all of it away when the
@@ -173,7 +172,7 @@ const readsOf = (watch: ReturnType<typeof vi.spyOn>, uuid: string) =>
     .filter(([, args]) => JSON.stringify(args).includes(uuid))
     .map(([ref]) => getFunctionName(ref as never))
 
-async function boot(asked = false) {
+async function boot() {
   vi.resetModules()
   vi.clearAllMocks()
   snap = fixture()
@@ -207,7 +206,6 @@ async function boot(asked = false) {
     return new Promise((resolve, reject) => sent.push({ name, args, resolve, reject }))
   })
   liveParts = await import('./liveParts')
-  liveParts.TASKS.atBoot = asked
   store = await import('./planner')
   await store.initStore()
   // the views name the projects they show; this suite names them all
@@ -263,15 +261,12 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('a create in a store that never asked for every task', () => {
+describe("a create of the person's own", () => {
   it('asks for no task, subscribes no task window and answers a reference to its organization, preview number and uuid', async () => {
     await boot()
     const watch = vi.spyOn(double.live as Double, 'watch')
     const { open: made, uuid } = create()
     expect(refParts(made)).toEqual({ org: ORG, num: 4, uuid })
-    expect(P().handleOf(uuid)).toBeNull()
-    expect(store.__layerProbe?.asks()).toEqual([])
-    expect(P().taskLoad()).toEqual({ state: 'not_asked' })
     await settle()
     expect(waiting().map((s) => s.name)).toEqual(['issues:create'])
     const windows = watch.mock.calls.filter(([ref]) => getFunctionName(ref) === 'workspace:tasks')
@@ -511,7 +506,6 @@ describe('a create in a store that never asked for every task', () => {
     P().watchComments(uuid, ORG)
     await settle()
     const handle = P().taskDetail(uuid)?.view?.id ?? ''
-    store.__layerProbe?.answerMarks()
     void P().updateIssue(handle, { title: 'Order the spare sensors' })
     void P().updateIssue(handle, { status: 'progress' })
     await settle()
@@ -521,7 +515,6 @@ describe('a create in a store that never asked for every task', () => {
       'issues:update',
       'issues:update',
     ])
-    expect(store.__layerProbe?.answerMarks()).toEqual(['issues:update', 'issues:update'])
     const [, rename, status] = waiting()
     expect(rename.args.patch).toEqual({ title: 'Order the spare sensors' })
     expect((rename.args.expected as Record<string, unknown>).title).toBeDefined()
@@ -906,7 +899,6 @@ describe('a create in a store that never asked for every task', () => {
     expect(P().viewTask(BOARD, 'task-w')?.parent).toBe(P().viewTask(BOARD, parentId)?.id)
     expect(P().viewTask(BOARD, parentId)?.isGroup).toBe(true)
     expect(P().viewTask(BOARD, linkedId)?.title).toBe('Wire the rig')
-    expect(store.__layerProbe?.asks()).toEqual([])
   })
 
   it('judges the new card from the owner-load cache, as the window does', async () => {
@@ -1023,15 +1015,5 @@ describe('a create in a store that never asked for every task', () => {
     void P().updateIssue(handle, { title: 'Order the spare humidity sensors' })
     await settle()
     expect(take('issues:update').args.patch).toEqual({ title: 'Order the spare humidity sensors' })
-  })
-})
-
-describe('a create in a store that asked for every task', () => {
-  it('paints the workspace too and answers the held handle', async () => {
-    await boot(true)
-    const made = P().addIssue({ project: 'work', title: TITLE, assignee: PAT })
-    expect(made).not.toBeNull()
-    expect(P().issueById[made ?? '']?.title).toBe(TITLE)
-    expect(store.__layerProbe?.asks()).toEqual([])
   })
 })

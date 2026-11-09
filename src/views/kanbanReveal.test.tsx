@@ -4,7 +4,20 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { REVEAL_MS } from '../lib/reveal'
 import type { Snapshot } from '../store/plannerFixture.setup'
-import { BOARD_TEST_TIMEOUT, loadBoard, loadBoardWithTasks, taskRow } from './boardFixture.setup'
+import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
+
+/** The handle the Board names task `uuid` of the server's data by
+    (P.handleNow). */
+const handleOf = (
+  board: {
+    P: { handleNow(uuid: string, org: string, num: number): string }
+    snapshot: { issues: { id: string; org_id: string; num: number }[] }
+  },
+  uuid: string,
+) => {
+  const row = board.snapshot.issues.find((t) => t.id === uuid)
+  return row ? board.P.handleNow(row.id, row.org_id, row.num) : ''
+}
 
 /* A jump to the Board (Team sync, the Inbox, the task crumb, search)
    scrolls the task's card into the middle of the Board and rings it for a
@@ -129,9 +142,9 @@ const lanes = lanesOf(10)
 
 describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   it('scrolls a Team sync jump to task 900 in lane 9 into view and rings its card', async () => {
-    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan' })
+    const board = await loadBoard(network, lanes, { scope: 'plan' })
     await board.render(root)
-    const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
+    const id = handleOf(board, 't900')
     expect(card(id)).toBeNull()
     far = id
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
@@ -150,9 +163,9 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   })
 
   it('keeps the ring while a task window makes the Board inert', async () => {
-    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan' })
+    const board = await loadBoard(network, lanes, { scope: 'plan' })
     await board.render(root)
-    const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
+    const id = handleOf(board, 't900')
     far = id
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     // the task window opens over the Board with the jump
@@ -171,9 +184,9 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   })
 
   it('does not hold the ring for another task window opened after the first closed', async () => {
-    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan' })
+    const board = await loadBoard(network, lanes, { scope: 'plan' })
     await board.render(root)
-    const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
+    const id = handleOf(board, 't900')
     far = id
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     container.setAttribute('inert', '')
@@ -189,9 +202,9 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   })
 
   it('does not hold a ring that starts at once for a task window opened after it', async () => {
-    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan', phone: true })
+    const board = await loadBoard(network, lanes, { scope: 'plan', phone: true })
     await board.render(root)
-    const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
+    const id = handleOf(board, 't900')
     far = id
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     // the crumb closed the window and reveals the row
@@ -206,9 +219,9 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   })
 
   it("rings the task's new card when a change in its window moved it", async () => {
-    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan' })
+    const board = await loadBoard(network, lanes, { scope: 'plan' })
     await board.render(root)
-    const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
+    const id = handleOf(board, 't900')
     far = id
     container.setAttribute('inert', '')
     await board.reveal(id)
@@ -231,9 +244,9 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   })
 
   it('rings the row on the phone task list', async () => {
-    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan', phone: true })
+    const board = await loadBoard(network, lanes, { scope: 'plan', phone: true })
     await board.render(root)
-    const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
+    const id = handleOf(board, 't900')
     far = id
     await board.reveal(id)
     await run(() => scrolled.mock.calls.length > 0)
@@ -242,7 +255,7 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   })
 
   it('scrolls a near card smoothly and rings only its row in a shared card', async () => {
-    const board = await loadBoardWithTasks(network, (snap) => {
+    const board = await loadBoard(network, (snap) => {
       snap.issues.push(
         taskRow(snap, 'parent', 'todo', 1),
         { ...taskRow(snap, 'a', 'todo', 2), parent_id: 'parent' },
@@ -250,7 +263,7 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
       )
     })
     await board.render(root)
-    const id = board.P.issues.find((it) => it.uuid === 'b')?.id ?? ''
+    const id = handleOf(board, 'b')
     await board.reveal(id)
     await run(() => scrolled.mock.calls.length > 0)
     expect(card(id)?.hasAttribute('data-board-revealed')).toBe(true)
@@ -262,13 +275,11 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
     // three lanes of 100 open tasks, within the design size of a project
     const board = await loadBoard(network, lanesOf(3), { scope: 'plan' })
     await board.render(root)
-    expect(board.P.taskLoad()).toEqual({ state: 'not_asked' })
     const row = board.snapshot.issues.find((issue) => issue.id === 't300')
     if (!row) throw new Error('missing the task')
     // Search opens a task the workspace does not hold by a reference, and
     // App reveals the handle the Board's card carries
     const opened = board.P.openTask(row.id, row.org_id, row.num)
-    expect(board.P.handleOf(row.id)).toBeNull()
     const id = board.P.handleOfOpen(opened)
     expect(id).not.toBe(opened)
     far = id
@@ -277,13 +288,12 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
     await run(() => scrolled.mock.calls.length > 0)
     expect(card(id)?.closest('.board-card')?.hasAttribute('data-board-revealed')).toBe(true)
     expect(scrolled).toHaveBeenCalledWith({ top: 5000 + 50 - 400, left: 0, behavior: 'instant' })
-    expect(board.P.taskLoad()).toEqual({ state: 'not_asked' })
   })
 
   it('shows nothing for a task a filter hides', async () => {
-    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan' })
+    const board = await loadBoard(network, lanes, { scope: 'plan' })
     await board.render(root)
-    const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
+    const id = handleOf(board, 't900')
     await board.search('Task t1')
     await board.reveal(id)
     await run()

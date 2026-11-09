@@ -19,7 +19,7 @@ import { Button } from './ui/button'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
-  live: null as null | { hold(org: string | null): void; holdWindow(from: string | null): void },
+  live: null as null | { hold(org: string | null): void },
 }))
 vi.mock('../lib/convex', async () => {
   const { liveOver } = await import('../store/guard/liveDouble.setup')
@@ -33,9 +33,6 @@ vi.mock('../lib/auth', () => ({
   },
   signOut: vi.fn(),
 }))
-
-// where the last task window starts, which a load of every task holds
-const LAST_WINDOW = 'fc000000'
 
 /** A resolve the test answers: its arguments, and how to answer it. */
 type Ask = {
@@ -69,12 +66,9 @@ const settle = async () => {
   for (let i = 0; i < 4; i++) await act(async () => await vi.advanceTimersByTimeAsync(0))
 }
 
-/** Boots the real store on `next`; with `loading`, every task's load
-    stays on its way. */
-async function load(next: Snapshot, loading = false) {
+/** Boots the real store on `next`. */
+async function load(next: Snapshot) {
   vi.resetModules()
-  // 12,800 task numbers make 64 task windows, the last held on its way
-  if (loading) next.orgs[0].next_issue_num = 64 * 200
   snap = next
   asks = []
   network.onUpdate.mockImplementation((ref, args, receive, fail) => {
@@ -108,10 +102,6 @@ async function load(next: Snapshot, loading = false) {
   network.mutation.mockImplementation((ref) =>
     getFunctionName(ref) === 'projects:update' ? new Promise(() => {}) : Promise.resolve(null),
   )
-  // tasks load on demand, as in the app, but for a load held on its way
-  const { TASKS } = await import('../store/liveParts')
-  TASKS.atBoot = loading
-  if (loading) double.live?.holdWindow(LAST_WINDOW)
   store = await import('../store/planner')
   await store.initStore()
   rows = await import('./projectNavRows')
@@ -175,7 +165,6 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => root.unmount())
-  double.live?.holdWindow(null)
   double.live?.hold(null)
   container.remove()
   document.body.innerHTML = ''

@@ -159,8 +159,6 @@ const republish = () =>
     and the star by the stand-in's. */
 async function load(next: Snapshot) {
   vi.resetModules()
-  const { TASKS } = await import('../store/liveParts')
-  TASKS.atBoot = false
   snap = next
   subs = []
   favorites = new Set()
@@ -366,7 +364,6 @@ describe('browsing', { timeout: 60_000 }, () => {
     // eight pages and one back, each read once
     expect(asked('page')).toHaveLength(9)
     // no task asked, and no other read than the page
-    expect(store.__layerProbe?.asks()).toEqual([])
     expect(open().map((s) => s.name)).toEqual(['workspace:whole', 'projectNav:page'])
   })
 
@@ -771,7 +768,6 @@ describe('the expanded list', { timeout: 60_000 }, () => {
     expect(open('projectNav:children')).toEqual([])
     expect(document.querySelector('[data-directory-children]')).toBeNull()
     // the expanded list reads names only, never a task
-    expect(store.__layerProbe?.asks()).toEqual([])
   })
 
   it('asks for a search past a lowered cap, says a project it cannot open, and collapses on a page move or when the row leaves', async () => {
@@ -1026,6 +1022,5 @@ describe('a kept page and a hidden tab', { timeout: 60_000 }, () => {
     expect(rowNames()).toEqual([5, 6, 7, 8, 9].map((n) => named(n)))
     expect(reading()).toEqual(before)
     expect(document.querySelectorAll('[data-directory-child]')).toHaveLength(3)
-    expect(store.__layerProbe?.asks()).toEqual([])
   })
 })

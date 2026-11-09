@@ -155,10 +155,9 @@ const liveEditors = new Map<
     TEXT_MAX, removes the image instead, and the attachment is deleted again
     when no text keeps it, in the task's organization `org`, which the
     store may no longer know once the window that showed the task closed.
-    The task is the workspace's, or the one the window shows from its own
-    answer (P.taskShown), whose committed text holds a placeholder only
-    when it was saved while the workspace held the task, since such a
-    description is not saved from the answer (commit). */
+    The task is the one the window shows from its own answer (P.taskShown),
+    whose committed text holds no placeholder, since a description with an
+    upload under way waits for it before it saves (commit). */
 function finishUpload(
   uuid: string,
   org: string | undefined,
@@ -832,11 +831,10 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       // blurs, replace the draft. Keep the draft dirty with the Save bar up,
       // as for a task shown from an answer that is not current.
       if (P.refusePausedEdit() || P.refuseStaleEdit(issueKey)) return
-      // On a task the window shows from its own answer, a placeholder saved
-      // now could not become its image once the window closes, so the
-      // draft waits, dirty, and saves as the upload finishes (the upload
-      // routing below)
-      if (holdsUpload(text) && !P.issueById[issueKey] && P.taskShown(issueKey)) {
+      // A placeholder saved now could not become its image once the window
+      // closes, so the draft waits, dirty, and saves as the upload finishes
+      // (the upload routing below)
+      if (holdsUpload(text) && P.taskShown(issueKey)) {
         saveAfterUploadRef.current = true
         toast('An image is still uploading. The description saves once it has finished.')
         return

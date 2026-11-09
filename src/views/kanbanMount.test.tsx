@@ -95,11 +95,8 @@ const tasks =
 describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
   it('renders it once', async () => {
     const board = await loadBoard(network, tasks(25, 25))
-    // the Board walks no task list of the workspace, which holds none
-    const scoped = vi.spyOn(board.P, 'scopedIssues')
     await board.render(root)
     expect(cards()).toHaveLength(50)
-    expect(scoped).not.toHaveBeenCalled()
     expect(pane()?.hasAttribute('data-board-mount')).toBe(false)
   })
 

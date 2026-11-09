@@ -313,7 +313,7 @@ async function showMove(id = 'far') {
   await act(async () =>
     root.render(
       <TooltipProvider>
-        <dialogs.MoveIssueModal issueId={task.id} task={task} onClose={vi.fn()} onMove={vi.fn()} />
+        <dialogs.MoveIssueModal task={task} onClose={vi.fn()} onMove={vi.fn()} />
       </TooltipProvider>,
     ),
   )

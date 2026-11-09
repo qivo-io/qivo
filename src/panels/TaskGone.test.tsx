@@ -424,7 +424,6 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
     expect(stale()?.textContent).toContain(
       `Couldn't check ${task.key} for changes, so it shows as it was last loaded.`,
     )
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(dialog()?.textContent).toContain('Run the soak test')
     expect(document.querySelector('[data-task-gone]')).toBeNull()
     readMode = 'answer'
@@ -831,7 +830,7 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
     const task = await open('admin', undefined, 'inbox')
     await dropTask({ archived: true })
     // the pop-out names the task only by its handle, which the workspace
-    // no longer holds: it names the task the pane watches (P.unheldTask)
+    // no longer holds: it names the task the pane watches (P.watchedTask)
     await click(document.querySelector<HTMLElement>('[data-task-popout]'))
     const windows = () => [...document.querySelectorAll<HTMLElement>('[aria-label="Task"]')]
     await act(async () => {
@@ -1054,7 +1053,6 @@ describe('the task window on a task Search found that the workspace does not hol
     )
     // the archived task, read-only, under its note
     expect(dialog()?.dataset.taskArchived).toBe('')
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Run the soak test')
     expect(dialog()?.textContent).toContain('Measure the drift.')
     expect(document.querySelector('[data-task-gone-place]')?.textContent).toBe(
@@ -1076,7 +1074,6 @@ describe('the task window on a task Search found that the workspace does not hol
     snap.issues.push(row)
     await act(async () => deliver(snap))
     expect(document.querySelector('[data-task-gone]')).toBeNull()
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(dialog()?.textContent).toContain('Run the soak test')
     expect(dialog()?.textContent).toContain('Measure the drift.')
   })
@@ -1118,7 +1115,6 @@ describe('the task window on a task Search found that the workspace does not hol
     expect(note()?.textContent).toBe('Loading QN-27…')
     await answer()
     expect(document.querySelector('[data-task-gone]')).toBeNull()
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(dialog()?.textContent).toContain('Measure the drift.')
     // its fields take edits from the answer (src/panels/TaskDetail.test.tsx
     // says how)

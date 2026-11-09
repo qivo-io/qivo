@@ -289,8 +289,7 @@ function MessageRow({
           </div>
           {/* …and under the title, WHERE it is — project → sub-project, the
             same breadcrumb notation the task window's own crumb uses, from
-            the page's row, so every row says it, whether or not the
-            workspace holds its task. The counter beside the title promises
+            the page's row, so every row says it. The counter beside the title promises
             the news and the window's Activity section lists it in full;
             the one thing the row could not say was which board the task
             sits on. */}
@@ -368,9 +367,8 @@ type ListedRows = { id: string | null; ids: string[] }
     live page moves or drops the row while the menu is open. */
 type RowMenu = { x: number; y: number; row: InboxRowVM | null }
 
-/** The task a row opens, by its handle where the workspace holds the task
-    in the row's organization, else by a reference with the organization,
-    the number and the uuid, as two organizations can hold one task id
+/** The task a row opens, by a reference with the row's organization, the
+    task's number and its uuid, as two organizations can hold one task id
     (P.openTask). */
 const rowTask = (row: InboxRowVM): string => P.openTask(row.uuid, row.org, row.num)
 

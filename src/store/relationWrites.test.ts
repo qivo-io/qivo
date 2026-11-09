@@ -175,10 +175,6 @@ function last(name: string): Pending {
   if (!found) throw new Error(`${name} was not sent`)
   return found
 }
-const marks = () => {
-  if (!store.__layerProbe) throw new Error('the layer probe is test-only')
-  return store.__layerProbe.answerMarks()
-}
 const toasts = () =>
   (window.showToast as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => c[0])
 
@@ -209,7 +205,6 @@ describe("the window's own parent", { timeout: 30_000 }, () => {
       patch: { parent_id: PICK },
       expected: { parent_id: null, has_hidden_parent: true },
     })
-    expect(marks()).toEqual(['issues:update'])
     // the window's Parent row, a group now, without hours of its own
     expect(P.detail?.parent).toMatchObject({ uuid: PICK, title: 'Build the mast', isGroup: true })
     expect(P.detail?.parent?.remaining).toBeUndefined()
@@ -235,7 +230,6 @@ describe('the Subtasks writes', { timeout: 30_000 }, () => {
       patch: { parent_id: FAR },
       expected: { parent_id: OLD_PARENT, has_hidden_parent: false },
     })
-    expect(marks()).toEqual(['issues:update'])
     expect(P.sections?.subtasks.rows.map((r) => r.uuid)).toEqual([PICK])
     expect(P.detail?.view?.isGroup).toBe(true)
     last('issues:update').resolve(null)
@@ -282,7 +276,6 @@ describe('the Subtasks writes', { timeout: 30_000 }, () => {
     const made = P.addIssue({ project: 'work', title: 'New step', parent: H })
     expect(made).not.toBeNull()
     expect(last('issues:create').args).toMatchObject({ parent_id: FAR, title: 'New step' })
-    expect(marks()).toEqual(['issues:create'])
     expect(P.sections?.subtasks.rows.map((r) => r.title)).toEqual(['New step'])
     // a parent neither the workspace nor a current answer holds
     expect(P.addIssue({ project: 'work', title: 'Lost', parent: 'QN-999' })).toBeNull()
@@ -324,7 +317,6 @@ describe('the Linked tasks writes', { timeout: 30_000 }, () => {
     expect([relates.source_id, relates.target_id, relates.type]).toEqual(
       ['task-a', FAR].sort().concat('relates'),
     )
-    expect(marks()).toEqual(['issues:addLink', 'issues:addLink'])
   })
 
   it('refuses a new link once the complete links answer holds the limit', async () => {

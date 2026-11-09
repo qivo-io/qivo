@@ -80,7 +80,7 @@ import {
 import { attachmentBlock, linkBlock } from '../lib/taskCaps'
 import { markTaskFocus, restoreTaskFocus } from '../lib/taskFocus'
 import { type RefParts, refParts } from '../lib/taskReference'
-import { groupTotals, workspaceTotals } from '../lib/taskSections'
+import { groupTotals } from '../lib/taskSections'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { useBottomSnap } from '../lib/useBottomSnap'
 import { useConfirmArm } from '../lib/useConfirmArm'
@@ -113,7 +113,6 @@ import {
   MoveIssueModal,
   WAITS_FOR_CHECK,
   WAITS_FOR_SAVE,
-  WAITS_FOR_TASKS,
 } from './Modals'
 import { type CurrentRelation, type CurrentRelations, RelationPicker } from './RelationPicker'
 import { useTaskKey } from './taskKey'
@@ -133,11 +132,7 @@ function EditorSlot({ fallback, children }: { fallback: ReactNode; children: Rea
     </ViewBoundary>
   )
 }
-/* WAITS_FOR_TASKS (from Modals.tsx) says why moving, archiving or deleting
-   a task the workspace holds waits before it holds every task and no answer
-   of its own serves its subtasks, which only a store that asked for every
-   task reaches, since each acts on subtasks and blockers that may be still
-   to arrive. WAITS_FOR_SAVE says why the controls that read the server
+/* WAITS_FOR_SAVE (from Modals.tsx) says why the controls that read the server
    about the person's own new task wait while the window shows it from what
    its create sent (TaskDetailVM saving): the owner, Parent, Subtasks,
    Linked tasks and Subscribers pickers, a new parent's Remove subtask,
@@ -181,14 +176,11 @@ const storeLeads = (id: string) => {
 }
 
 /* One task in Parent, Subtasks or Linked tasks, from its row model
-   (RelatedTaskVM): the workspace's view of a task it holds, else the
-   section answer's short row, so a task still to arrive in a large
-   workspace is listed rather than left out. Opening it passes its handle
-   on, or for a task the workspace does not hold, a reference with its
-   organization, number and uuid (lib/taskReference.ts), so the window
-   shows it from its own read and the address names it. Its × removes the
-   relation from the row as the window shows it, whether or not the
-   workspace holds the task, and shows busy until that write answers. */
+   (RelatedTaskVM), the section answer's short row. Opening it passes a
+   reference with its organization, number and uuid
+   (lib/taskReference.ts), so the window shows it from its own read and the
+   address names it. Its × removes the relation from the row as the window
+   shows it, and shows busy until that write answers. */
 function MiniIssueRow({
   task,
   onOpen,
@@ -220,7 +212,7 @@ function MiniIssueRow({
       <Button
         type="button"
         variant="unstyled"
-        onClick={() => onOpen(task.held ? task.handle : P.openTask(task.uuid, task.org, task.num))}
+        onClick={() => onOpen(P.openTask(task.uuid, task.org, task.num))}
         className="flex min-w-0 flex-1 self-stretch items-center gap-2 rounded-md p-2 text-left text-text-1 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
       >
         <span className="[display:flex] [flex-direction:column] [gap:2px] [flex:1] [min-width:0]">
@@ -420,15 +412,14 @@ const relMapID = {
   relates: { label: 'Relates to', glyph: 'arrowLeftRight' },
 }
 
-/* A section of a task whose lists are not known yet: while a large
-   workspace still loads, before the section's answer (P.sectionsFor), it
-   reads as loading, never as another task's lists or as empty. */
+/* A section of a task whose lists are not known yet, before the section's
+   answer (P.sectionsFor): it reads as loading, never as another task's
+   lists or as empty. */
 const LOADING_SECTION: SectionVM<never> = {
   state: 'loading',
   rows: [],
   complete: false,
   delivered: false,
-  source: 'answer',
 }
 
 /* An archived group's Progress and Remaining: its answer holds none of its
@@ -496,11 +487,9 @@ function sectionNote(name: SectionName, section: SectionVM<unknown>, empty: stri
 }
 
 /* One file in Attachments. Opening and downloading mint its URL on the
-   press (P.attachmentUrl), also for a file only the section's answer holds.
-   Removing a file the workspace holds takes it off the list at once; one
-   only the section's answer holds, as of a task shown from its own read,
-   shows busy from the confirming press until that answer drops it, which
-   is when the removal resolves, and a refusal leaves it. */
+   press (P.attachmentUrl). Removing a file shows busy from the confirming
+   press until the section's answer drops it, which is when the removal
+   resolves, and a refusal leaves it. */
 function AttachmentRow({ att, canEdit }: { att: SectionAttachmentVM; canEdit: boolean }) {
   const removal = useConfirmArm<'remove'>()
   const arm = removal.armed !== null
@@ -514,7 +503,6 @@ function AttachmentRow({ att, canEdit }: { att: SectionAttachmentVM; canEdit: bo
   }, [])
   const remove = () => {
     const sent = P.removeAttachment(att.id)
-    if (att.held) return
     setRemoving(true)
     void sent.then(() => {
       if (mounted.current) setRemoving(false)
@@ -585,7 +573,7 @@ function AttachmentRow({ att, canEdit }: { att: SectionAttachmentVM; canEdit: bo
    attachments." shows only for a whole list without files, to a person
    without edit access; an editor keeps the drop zone. The browse control
    keeps the cap check before a write (attachmentBlock) on the larger of the
-   workspace's count and the whole list's (P.capInputs). */
+   model's count and the whole list's (P.capInputs). */
 function AttachmentsSection({
   it,
   canEdit,
@@ -628,7 +616,6 @@ function AttachmentsSection({
       className="task-section"
       data-section="attachments"
       data-section-state={sectionMark(section)}
-      data-section-source={section.source}
     >
       <SectionHead icon="paperclip" label={`Attachments${countOf(section)}`} />
       {list.length > 0 || uploading.length > 0 ? (
@@ -1029,7 +1016,7 @@ type GoneAnswer =
 /* The window's note on a task it shows no active task for, because it
    left the board while the window was open (someone archived or deleted
    it, or it moved where this person cannot open it), or because a task
-   the workspace does not hold opened by a reference (lib/taskReference.ts),
+   opened by a reference (lib/taskReference.ts),
    from a link, Back or Forward, Search, a list or a related row, from the
    window's own read of the task (`found`). It says the task was archived,
    with Restore for someone who can edit its project (`canRestore`), or
@@ -1283,46 +1270,20 @@ function ArchivedPlace({ project, archivedAt }: { project: string; archivedAt: n
 }
 
 /** The task a window on `issueId`, a handle or a reference
-    (lib/taskReference.ts), is about, by uuid and organization: the
-    workspace's task (`held`), else the task the window showed last when
-    `issueId` names it too (`shown`, as a reference and the handle it moved
-    to do, by uuid and organization, lib/router.ts sameTask), else what
-    the reference names once its uuid and organization are known
-    (`named`), or null. The window watches it (P.watchComments)
-    and shows it from its own read while the workspace does not hold it
-    (P.taskDetail). */
+    (lib/taskReference.ts), is about, by uuid and organization: the task
+    the window showed last when `issueId` names it too (`shown`, as a
+    reference and the handle it moved to do, by uuid and organization,
+    lib/router.ts sameTask), else what the reference names once its uuid
+    and organization are known (`named`), or null. The window watches it
+    (P.watchComments) and shows it from its own read (P.taskDetail). */
 function windowTaskOf(
   issueId: string | null,
-  held: IssueVM | undefined,
   named: ShownTask | undefined,
   shown: { at: string; task: ShownTask } | null,
 ): ShownTask | null {
   if (!issueId) return null
-  if (held) {
-    const { uuid, org, key, title, project } = held
-    return { uuid, org, key, title, project }
-  }
   if (shown && (shown.at === issueId || sameTask(shown.at, issueId))) return shown.task
   return named ?? null
-}
-
-/** The workspace's task that reference `ref` names once the workspace
-    holds it, before the reference moves to its handle (P.watchHandles),
-    by its uuid, or its number in its organization: never by reading the
-    reference as a handle. A held task of another organization than the
-    one the reference or its read names is another task of the same id,
-    so it is not that task. */
-function heldByRef(ref: RefParts | undefined, read: TaskRefVM | null): IssueVM | undefined {
-  if (!ref) return undefined
-  const uuid = ref.uuid ?? read?.task?.uuid
-  const org = ref.org ?? read?.task?.org
-  const handle = uuid
-    ? P.handleOf(uuid)
-    : ref.org && ref.num !== undefined
-      ? P.issueRefIn(ref.org, `${P.ISSUE_PREFIX}-${ref.num}`)
-      : null
-  const held = handle ? P.issueById[handle] : undefined
-  return held && (!org || held.org === org) ? held : undefined
 }
 
 /** What the window names a task opened by reference `ref` by while it
@@ -1755,30 +1716,25 @@ function IssueDetail({
     return () => window.removeEventListener('keydown', h)
   }, [onClose, embedded])
 
-  // the reference the window names a task the workspace does not hold by
-  // (lib/taskReference.ts), and where its read stands (P.reference)
+  // the reference the window names its task by (lib/taskReference.ts), and
+  // where its read stands (P.reference)
   const ref = refParts(issueId)
   const refRead = ref && P.reference?.ref === issueId ? P.reference : null
-  // the workspace's view of the task the handle names, or the reference
-  // names once the workspace holds it
-  const held = !issueId ? undefined : ref ? heldByRef(ref, refRead) : P.issueById[issueId]
   // what the reference names of its task once its uuid and organization are
-  // known, from the reference itself or its read's answer, or for a handle
-  // the workspace does not hold, the watched task it opens now, as for the
-  // pop-out over the Inbox pane on a task that left (P.unheldTask)
-  const named = held
-    ? undefined
-    : ref
-      ? refShownTask(ref, refRead)
-      : issueId
-        ? (P.unheldTask(issueId) ?? undefined)
-        : undefined
+  // known, from the reference itself or its read's answer, or for a
+  // handle, the watched task it opens now, as for the pop-out over the
+  // Inbox pane on a task that left (P.watchedTask)
+  const named = ref
+    ? refShownTask(ref, refRead)
+    : issueId
+      ? (P.watchedTask(issueId) ?? undefined)
+      : undefined
   // what the window last showed of this task, kept for once it is gone
   const shownTask = useRefID<{ at: string; task: ShownTask } | null>(null)
-  const identity = windowTaskOf(issueId, held, named?.uuid ? named : undefined, shownTask.current)
+  const identity = windowTaskOf(issueId, named?.uuid ? named : undefined, shownTask.current)
   // the window registers its reference, which the store reads until it
-  // names the task and moves to its handle once the workspace holds it
-  // (P.watchTaskRef); the pop-out over the Inbox pane leaves it to the pane
+  // names the task (P.watchTaskRef); the pop-out over the Inbox pane leaves
+  // it to the pane
   const watchRef = ref ? issueId : null
   useEffectID(() => {
     if (!holdThread) P.watchTaskRef(watchRef)
@@ -1789,11 +1745,12 @@ function IssueDetail({
     },
     [holdThread],
   )
-  // the task as the window shows it from its own read while the workspace
-  // does not hold it (P.taskDetail), of the organization the window names,
-  // as two organizations can hold one task id
-  const detail: TaskDetailVM | null =
-    !held && identity ? P.taskDetail(identity.uuid, identity.org || undefined) : null
+  // the task as the window shows it from its own read (P.taskDetail), of
+  // the organization the window names, as two organizations can hold one
+  // task id
+  const detail: TaskDetailVM | null = identity
+    ? P.taskDetail(identity.uuid, identity.org || undefined)
+    : null
   // the view of the last answer that held the task, active or archived,
   // also while a read after it failed or runs again (`stale`), so a
   // comment typed for the task stays; but not while this window's own
@@ -1806,24 +1763,23 @@ function IssueDetail({
     (detail.answered === 'ok' || detail.answered === 'archived')
       ? detail.view
       : null
-  const it = held ?? answerView
+  const it = answerView
   // the uuid of the task the window shows now, for work that finishes after
   // a switch; updated once a render commits
   const shownUuid = useRefID<string | null>(null)
   useLayoutEffectID(() => {
     shownUuid.current = it?.uuid ?? null
   })
-  // a task shown from its answer, which its editor changes from that answer
-  // (answerEdits), and of those an archived one, read-only with its note
-  // above it and no comments either
-  const fromAnswer = !held && !!it
-  const archived = fromAnswer && detail?.answered === 'archived'
+  // the window shows every task from its answer, which its editor changes
+  // from (answerEdits); an archived one is read-only with its note above
+  // it and no comments either
+  const archived = !!it && detail?.answered === 'archived'
   // the window shows the task as its last answer had it, because the read
   // after it failed, or runs again from Retry (the note above the task); a
   // new task whose first read failed shows as its create sent it
-  const stale = fromAnswer && (detail?.state === 'failed' || detail?.state === 'retrying')
-  // the window shows an active task: the workspace's, or one from its answer
-  const active = !!held || (fromAnswer && !archived)
+  const stale = !!it && (detail?.state === 'failed' || detail?.state === 'retrying')
+  // the window shows an active task from its answer
+  const active = !!it && !archived
   // the task the window showed follows its handle as it moves, as App's
   // address does, so the window goes on showing the same task
   useEffectID(
@@ -1842,27 +1798,15 @@ function IssueDetail({
   // the task as this render shows it, with its key and title from the
   // window's own answer once that names them, as for an archived task an
   // Inbox row opened by its uuid alone, whose reference names no number
-  const shownNow = windowTaskOf(issueId, held, named?.uuid ? named : undefined, shownTask.current)
-  // whether the window's read of the task has said nothing yet, or runs
-  // again after a failure
-  const unanswered = !detail || detail.state === 'loading' || detail.state === 'retrying'
-  // a handle the window cannot name while the tasks an ask loads are on
-  // their way may be a task still to arrive, and so may a task it showed
-  // before whose read has not answered yet: the window says it loads. It
-  // never waits in a session that never asks, nor after a load stopped
-  // (P.tasksArriving). A task opened by a reference and never shown shows
-  // its own loading line instead (TaskGone). Otherwise a handle without a
-  // task opens nothing, and says nothing of it.
-  const waiting =
-    !it && !!issueId && P.tasksArriving() && (identity ? !identity.opened && unanswered : !ref)
+  const shownNow = windowTaskOf(issueId, named?.uuid ? named : undefined, shownTask.current)
+
   // the window shows no active task for the task it is about, other than by
   // this window's own archive or delete while that is on its way: the
   // window says what became of it (TaskGone), also once its own call was
   // refused (stopLeaving), and above an archived task it shows read-only.
   // A reference whose read has not named its task yet says where that
   // read stands, with what the reference names.
-  const gone =
-    !active && !waiting && issueId && leaving.current !== taskKey ? (shownNow ?? named) : null
+  const gone = !active && issueId && leaving.current !== taskKey ? (shownNow ?? named) : null
   // what the window's read says became of it, for TaskGone: the archived
   // window's own answer, also while a read after it failed, else what the
   // read says now
@@ -1901,9 +1845,9 @@ function IssueDetail({
   const projectArchived =
     !!goneAnswer && typeof goneAnswer === 'object' && !!detail?.projectArchived
   // the caller's level on a task shown from its answer, which decides the
-  // controls offered there, together with the workspace's (canComment);
-  // an archived answer of an older backend holds none, and the workspace's
-  // decides alone, as before
+  // controls offered there, together with the project cache's
+  // (canComment); an archived answer of an older backend holds none, and
+  // the project cache's decides alone, as before
   const answerLevel = detail?.level ?? null
   const answerEditor = answerLevel === 'lead' || answerLevel === 'user'
   const canRestore =
@@ -1916,13 +1860,12 @@ function IssueDetail({
   const sayDiscarded = (what: string) => {
     if (!windowScope?.chosen()) window.showToast?.(`Unsaved ${what} discarded`)
   }
-  // someone the answer and the workspace both give Edit on the project of
-  // an active task shown from its answer, in any state of its read: their
+  // someone the answer and the project cache both give Edit on the project
+  // of an active task shown from its answer, in any state of its read: their
   // title, description and hours editors stay mounted with their drafts,
   // and a save waits while the read failed or runs again (P.refuseStaleEdit)
-  const answerEditorOn = !!it && fromAnswer && !archived && answerEditor && storeWrites(it.project)
-  // a title is typed for a task the workspace holds, or one shown from its
-  // answer for its editor
+  const answerEditorOn = !!it && !archived && answerEditor && storeWrites(it.project)
+  // a title is typed for a task shown from its answer for its editor
   useUpdateBlocker(editTitle && !!it && titleDraft !== it.title)
   useUnsaved(editTitle && !!it && titleDraft !== it.title, 'title')
   const reasonUnsent = unusedReason !== null && unusedReason !== copiedReason && !fateOpen
@@ -1944,24 +1887,6 @@ function IssueDetail({
     setUnusedReason(reason)
     setCopiedReason(copied)
   }, [goneUuid])
-  // a task that leaves the workspace while the window goes on showing it
-  // from its answer closes the pickers and the Move window it had open. The title typed for it stays, to save through
-  // the answer, when the answer gives its editor Edit; otherwise it goes,
-  // as for a task that leaves the board
-  const heldNow = useRefID({ taskKey, uuid: held?.uuid })
-  useEffectID(() => {
-    const was = heldNow.current
-    heldNow.current = { taskKey, uuid: held?.uuid }
-    if (was.taskKey !== taskKey || !was.uuid || held || gone) return
-    setLabelAnchor(null)
-    setSubAnchor(null)
-    setParentAnchor(null)
-    setLinkAnchor(null)
-    setMoveOpen(false)
-    if (!editTitle || answerEditorOn) return
-    if (titleDraft !== titleSeen) sayDiscarded('title')
-    setEditTitle(false)
-  }, [held?.uuid])
   // a kept title draft: the rename that refused its save becomes the title
   // the next save sends as seen, once the screen shows it
   const shownTitle = it?.title
@@ -1971,9 +1896,9 @@ function IssueDetail({
     setTitleSeen(shownTitle)
   }, [shownTitle, titleSeen])
   // remaining hours typed and not yet saved (the field saves on blur), in
-  // the field of a task the person can change, the workspace's or one shown
-  // from its answer, whose save waits while its read is not current
-  const hoursEditable = (!!held && P.canWrite(held.project)) || answerEditorOn
+  // the field of a task the person can change, shown from its answer,
+  // whose save waits while its read is not current
+  const hoursEditable = answerEditorOn
   const remainingUnsaved = useFieldUnsaved(
     () => P.editsPaused() || (!!it && P.answerSaveWaits(it.id)),
     `${it?.id}:${hoursEditable ? 'edit' : 'read'}:${it?.remaining ?? ''}`,
@@ -1985,7 +1910,7 @@ function IssueDetail({
     },
   )
   // point the store's one-thread comment cache at this task, with its
-  // organization, which a task the workspace does not hold is read in; keep
+  // organization, which the task is read in; keep
   // it while the window shows the task in any state, so the thread and the
   // history go on for an archived one; release it when the modal closes
   // (uuid null) or the component unmounts
@@ -2046,11 +1971,11 @@ function IssueDetail({
   // marks the task read (below), so an unfrozen mark would vanish while you
   // were looking at it. Assigned DURING render, before any effect runs.
   // That ordering is the whole trick. Keyed on the organization and the
-  // uuid, not issueId: on a cold deep link P.issueById[issueId] is still
-  // undefined on the first render, and a null key would freeze "nothing
-  // unread" forever. It comes from the task's inbox item, which the store
+  // uuid, not issueId: on a cold deep link the task's answer is still to
+  // come on the first render, and a null key would freeze "nothing unread"
+  // forever. It comes from the task's inbox item, which the store
   // reads beside the thread (P.inboxItem), so it is exact also for messages
-  // the workspace never loaded, and stays pending until that read's first
+  // the store never loaded, and stays pending until that read's first
   // ok, current answer, while no mark shows and no read goes out. Only the
   // item of the window's own organization counts, since the store moves
   // P.inboxItem only in the effect that watches the thread, and another
@@ -2090,8 +2015,7 @@ function IssueDetail({
   const unreadTs = frozen.current.unread?.ts ?? null
   const unreadPending = frozen.current.unread === null
   // …and once the start is frozen, read the whole item on the server, so
-  // what the badge counts goes also for messages the workspace never
-  // loaded. The store sends each `through` of the item once a visit, from
+  // what the badge counts goes also for messages the store never loaded. The store sends each `through` of the item once a visit, from
   // the organization, the task and the `through` of its own answer, never
   // for a snoozed item, a reminder that must return unread, and the pause
   // is part of the key, so a read it refused goes out once it ends
@@ -2132,7 +2056,7 @@ function IssueDetail({
   const upd = (patch) => {
     P.updateIssue(it.id, patch)
   }
-  const open = !!it || waiting || !!gone
+  const open = !!it || !!gone
   // Move and Archive open from the Task actions menu, which is gone when they
   // close, so they return focus to the button that opened that menu.
   const taskActionsButton = () =>
@@ -2152,8 +2076,10 @@ function IssueDetail({
       document.activeElement instanceof HTMLElement ? document.activeElement : null
     // Where in a task's card, or in another view's row of the task, the
     // opener was. Changing the task here can move its card, which replaces
-    // the opener.
-    let previousMark = markTaskFocus(previousFocus, issueId)
+    // the opener. A view's row names its task by the handle it opens by
+    // now, and the window may be open on a reference (P.openTarget).
+    const rowName = issueId ? P.handleOfOpen(issueId) : issueId
+    let previousMark = markTaskFocus(previousFocus, rowName)
     const outside = new Map<HTMLElement, boolean>()
     const focusable = () =>
       Array.from(
@@ -2177,7 +2103,7 @@ function IssueDetail({
       const landed = document.activeElement
       if (landed instanceof HTMLElement && landed !== document.body && !frame.contains(landed)) {
         previousFocus = landed
-        previousMark = markTaskFocus(landed, issueId)
+        previousMark = markTaskFocus(landed, rowName)
       }
       // The Inbox task lives inside main. Isolate sibling branches on the way
       // to body, rather than making its own ancestor inert. Menus and dialogs
@@ -2287,40 +2213,22 @@ function IssueDetail({
   // This task's own Subtasks, Linked tasks and Attachments (P.sectionsFor).
   // The store follows the task a window shows from that window's effects,
   // after the render that first shows it, so a task opened in place first
-  // finds another task's sections in the store; it shows its own lists
-  // from the workspace once it holds every task, and loading lines before
-  // then until its own lists answer.
+  // finds another task's sections in the store; it shows loading lines
+  // until its own lists answer.
   const sections = it ? P.sectionsFor(it.uuid) : null
   const subtasks = sections?.subtasks ?? { ...LOADING_SECTION, hidden: false }
   const linked = sections?.links ?? LOADING_SECTION
   const files = sections?.attachments ?? { ...LOADING_SECTION, count: 0 }
-  // whether the task is a group stays the workspace's, or its answer's for
-  // a task shown from it; its Progress and Remaining come from the subtask
-  // list, and say unknown without all of it, or, for the list a complete
-  // workspace holds before the answer, by the workspace's own rules. An
-  // archived group's answer holds no subtasks, so they are unknown.
-  const totals =
-    it && P.isGroup(it)
-      ? archived
-        ? UNKNOWN_TOTALS
-        : subtasks.source === 'workspace'
-          ? workspaceTotals(P.progressOf(it), P.remainingOf(it))
-          : groupTotals(subtasks)
-      : null
+  // whether the task is a group is its answer's; its Progress and
+  // Remaining come from the subtask list, and say unknown without all of
+  // it. An archived group's answer holds no subtasks, so they are unknown.
+  const totals = it && P.isGroup(it) ? (archived ? UNKNOWN_TOTALS : groupTotals(subtasks)) : null
   const prog = totals?.progress
-  // the Parent row: the workspace's, or the answer's for a task shown from
-  // it, and for a held task whose parent the workspace does not hold, as
-  // one the Parent picker offered, the window's own answer's
-  const parentUuid = held?.parent ? P.issueById[held.parent]?.uuid : undefined
-  const parentRow = held
-    ? parentUuid
-      ? P.relatedTask(parentUuid)
-      : P.shownParent(held.uuid)
-    : (detail?.parent ?? null)
+  // the Parent row, the answer's
+  const parentRow = detail?.parent ?? null
   const meta = it ? P.metaOf(it.project) : null
-  // a crumb's press shows its project on the Board, one the workspace
-  // holds at once and one only the project cache holds through the lists'
-  // open rule, which asks the server and shows it once the workspace holds
+  // a crumb's press shows its project on the Board through the lists' open
+  // rule, which asks the server and shows it once the project cache holds
   // it (components/projectNavRows.tsx). The rule's lines show in one toast
   // that each line replaces and that an open or a move takes away, as the
   // sidebar's do
@@ -2334,34 +2242,27 @@ function IssueDetail({
         : window.showToast?.(line, 'info', { key: CRUMB_TOAST }),
   )
   // A task lives in its sub-project. The parent may be navigation-only for a
-  // child grant, so all task edits must follow the task's own write level.
-  const canLabel = !!held && P.canWrite(held.project)
-  // A task shown from its answer takes the same edits from its answer, for
-  // someone both the answer and the workspace give Edit on its project,
-  // while the window's read of it is current (P.editsFromAnswer): each
-  // write sends the values the window showed as its expected values, which
-  // the server checks. A task shown from the read of the reference it was
-  // opened by takes none until the window's own read answered. Its
-  // relations take the same rule (canEdit).
-  const answerEdits = answerEditorOn && !stale && !!it && P.editsFromAnswer(it.id)
-  const canEdit = canLabel || answerEdits
+  // child grant, so all task edits follow the task's own write level. A
+  // task takes edits from its answer, for someone both the answer and the
+  // project cache give Edit on its project, while the window's read of it
+  // is current (P.editsFromAnswer): each write sends the values the window
+  // showed as its expected values, which the server checks. A task shown
+  // from the read of the reference it was opened by takes none until the
+  // window's own read answered. Its relations take the same rule
+  // (canEdit).
+  const canEdit = answerEditorOn && !stale && !!it && P.editsFromAnswer(it.id)
   // the person's own new task shown from what its create sent: the
   // controls that read the server about it wait until its own read
   // answered (WAITS_FOR_SAVE)
-  const saving = !held && !!detail?.saving
-  // every label of the task, named from the workspace or by id
-  // (taskLabels.ts useTaskLabels), so none is hidden for not being loaded
+  const saving = !!detail?.saving
+  // every label of the task, named by id (taskLabels.ts useTaskLabels), so none is hidden for not being loaded
   const taskLabels = useTaskLabels(it)
   const shownLabels = taskLabels.labels.filter((label) => label.state !== 'gone')
-  // Comments on a task shown from its answer need edit access by both the
-  // answer and the workspace, so a stale one only takes controls away. An
-  // archived task takes none.
-  const canComment = held ? canLabel : !!it && !archived && answerEditor && storeWrites(it.project)
-  const canLead = held
-    ? P.levelOn(held.project) === 'lead'
-    : !!it && !archived && answerLevel === 'lead' && storeLeads(it.project)
-  // the Inbox pane's owner, named from the workspace or by id
-  // (store/planner.ts P.person), so one not loaded never reads as
+  // Comments need edit access by both the answer and the project cache, so
+  // a stale one only takes controls away. An archived task takes none.
+  const canComment = !!it && !archived && answerEditor && storeWrites(it.project)
+  const canLead = !!it && !archived && answerLevel === 'lead' && storeLeads(it.project)
+  // the Inbox pane's owner, named by id (store/planner.ts P.person), so one not loaded never reads as
   // unassigned; the window names its people below (usePeople)
   const ownerName = it?.owner ? P.person(it.owner, it.org) : null
   // one sentence for every control the read-only case switches off, so a
@@ -2372,9 +2273,9 @@ function IssueDetail({
     ? undefined
     : answerEditorOn
       ? WAITS_FOR_CHECK
-      : fromAnswer && answerEditor && archived
+      : it && answerEditor && archived
         ? RESTORE_TO_CHANGE
-        : fromAnswer && answerLevel !== null && !answerEditor
+        : it && answerLevel !== null && !answerEditor
           ? READ_ONLY
           : ((it && P.writeNote(it.project)) ?? READ_ONLY)
   // The phone's Activity view keeps the two frequent edits within reach.
@@ -2460,25 +2361,20 @@ function IssueDetail({
   // never crossing one (0081), and says so at a confirmed empty end; a task
   // shown from its answer offers it to its editor in any state of its
   // read, saying why it waits
-  const canMove = canLabel || answerEditorOn
+  const canMove = answerEditorOn
   // Archive or delete, likewise
-  const canFate = canLabel || answerEditorOn
+  const canFate = answerEditorOn
   // Move and Archive or delete act on the task's whole subtask list and its
-  // holders (P.familyOf): a held task's once every task has loaded or its
-  // own answer serves it, else they wait for every task; one shown from
-  // its answer from that answer's whole list, while its read is current
-  const family = it && (canLabel || answerEditorOn) ? P.familyOf(it) : null
-  const fateTip = held
-    ? family
-      ? undefined
-      : WAITS_FOR_TASKS
-    : saving
-      ? WAITS_FOR_SAVE
-      : !answerEdits
-        ? WAITS_FOR_CHECK
-        : family
-          ? undefined
-          : FAMILY_UNKNOWN
+  // holders (P.familyOf), from the answer's whole list, while its read is
+  // current
+  const family = it && answerEditorOn ? P.familyOf(it) : null
+  const fateTip = saving
+    ? WAITS_FOR_SAVE
+    : !canEdit
+      ? WAITS_FOR_CHECK
+      : family
+        ? undefined
+        : FAMILY_UNKNOWN
   const fateWaits = fateTip !== undefined
 
   // issue numbers are org-scoped and immutable (0050), so this link is
@@ -2504,9 +2400,9 @@ function IssueDetail({
 
   // one level of subtasks, at most LIMITS.subtasks.max active ones: why this task can
   // take no subtask, or no parent, if it cannot
-  // The caps count the larger of the workspace's list and the whole section
-  // list (P.capInputs), so a list the workspace holds only part of disables
-  // more and never allows more.
+  // The caps count the larger of the model's list and the whole section
+  // list (P.capInputs), so a list that holds only part disables more and
+  // never allows more.
   const noSubtask = it ? subtaskBlock({ ...it, children: P.capInputs(it).children }) : undefined
   const noParent = it ? parentBlock(it) : undefined
   const hasParent = !!it && (!!it.parent || it.hasHiddenParent || !!parentRow)
@@ -2514,13 +2410,13 @@ function IssueDetail({
   // server's Linked tasks picker says so (convex/lib/relationPicker.ts).
   const noLink = it ? linkBlock(P.capInputs(it).links) : undefined
   // The Parent, Subtasks and Linked tasks changes of the window's task take
-  // the window's rule for its fields (canEdit). That is a held task the
-  // person can edit, or one shown from a current answer that both the
-  // answer and the workspace give them Edit on. A related row's change also
-  // reads that row's level together with the workspace's, so a stale source
-  // only takes a control away, and waits for a current read of the window's
-  // task, as a task shown from the read of its reference takes no change.
-  const current = !!held || (!!it && P.editsFromAnswer(it.id))
+  // the window's rule for its fields (canEdit): a task shown from a current
+  // answer that both the answer and the project cache give them Edit on. A
+  // related row's change also reads that row's level together with the
+  // project cache's, so a stale source only takes a control away, and waits
+  // for a current read of the window's task, as a task shown from the read
+  // of its reference takes no change.
+  const current = !!it && P.editsFromAnswer(it.id)
   const canRelate = canEdit
   const rowEditor = (row: RelatedTaskVM) =>
     (row.level === 'lead' || row.level === 'user') && storeWrites(row.project)
@@ -2546,9 +2442,9 @@ function IssueDetail({
   // the links the picker lists, those the person could take off in any
   // state of the window's read, so a picker opened while that read fails
   // or runs again lists them, locked
-  const linkLister = (row: RelatedTaskVM) => canLabel || answerEditorOn || rowEditor(row)
-  // the removals on their way of rows the workspace does not hold, which
-  // stay listed until their answer drops them
+  const linkLister = (row: RelatedTaskVM) => answerEditorOn || rowEditor(row)
+  // the removals on their way, whose rows stay listed until their answer
+  // drops them
   const [removing, setRemoving] = useStateID<ReadonlySet<string>>(new Set())
   const removeOnce = (uuid: string, send: () => Promise<boolean>) => {
     if (removing.has(uuid)) return
@@ -2567,9 +2463,9 @@ function IssueDetail({
   // show without taking a press. Each picker gets every relation its list
   // holds, those the person cannot take off marked `locked`, so one whose
   // access changed while the picker is open stays checked and locked
-  // rather than show as taken off. A subtask the workspace does not hold
-  // carries its row from the window's answer, so the picker can make it a
-  // subtask again once it took it off.
+  // rather than show as taken off. A subtask carries its row from the
+  // window's answer, so the picker can make it a subtask again once it took
+  // it off.
   const notWhole = (section: SectionVM<unknown>, what: string) =>
     section.state === 'loading'
       ? `Loading the current ${what}…`
@@ -2581,7 +2477,7 @@ function IssueDetail({
     rows: subtasks.rows.map(
       (row): CurrentRelation => ({
         ...row,
-        row: row.held ? undefined : (P.subtaskPickRow(row.uuid) ?? undefined),
+        row: P.subtaskPickRow(row.uuid) ?? undefined,
         ...(rowEditor(row) ? {} : { locked: true }),
       }),
     ),
@@ -2618,14 +2514,10 @@ function IssueDetail({
           ((!pinned.has(c.id) && !apart.has(c.id)) || c.id === editingComment),
       )
     : []
-  // a row names a task the workspace holds by its handle, and one it does
-  // not hold by its uuid (store/viewModels.ts shapeActivity)
+  // a row names its task by its uuid (store/viewModels.ts shapeActivity)
   const history = it
     ? P.threadEvents.filter(
-        (e) =>
-          !apart.has(e.id) &&
-          e.targetType === 'issue' &&
-          (e.targetId === it.id || e.targetId === it.uuid),
+        (e) => !apart.has(e.id) && e.targetType === 'issue' && e.targetId === it.uuid,
       )
     : []
   // the people the window shows, named while it shows: the task's holders
@@ -2929,7 +2821,7 @@ function IssueDetail({
               : '32vh',
         }
       : { flex: 1, minHeight: 0 }
-    return canLabel || answerEditorOn ? (
+    return answerEditorOn ? (
       // always-mounted, editable in place; while the editor chunk loads the
       // same content renders through Markdown, and both share the .md styles
       // so the swap is seamless. The border (solid twin of the attachments
@@ -3174,8 +3066,7 @@ function IssueDetail({
      focus window just its own close) and `live`, which is the difference
      between a window the task LIVES in and a view of one of its halves: only
      the live one lets you rename by clicking the title and offers the
-     whole-task pop-out. A task shown from its answer keeps its title as it
-     is (`held`). Every header links its project and sub-project to their
+     whole-task pop-out. Every header links its project and sub-project to their
      boards, including a section's focus window.
      Note both copies carry the SAME hooks. That is the honest encoding of "it
      is the same heading", and it is safe because the task window is rendered
@@ -3290,7 +3181,7 @@ function IssueDetail({
             it, because it is
             about the TASK, not the window. */}
         <div className="[flex:1] [min-width:0] [display:flex] [align-items:center] [gap:6px]">
-          {live && (held || answerEditorOn) && editTitle ? (
+          {live && answerEditorOn && editTitle ? (
             <LimitedTextarea
               limit={LIMITS.title}
               autoFocus
@@ -3361,11 +3252,11 @@ function IssueDetail({
               className="min-h-0 [margin:0] [font-size:var(--fs-xl)] [font-weight:600] [line-height:1.3] [letter-spacing:-0.01em] [font-family:var(--sans)] [color:var(--text-1)] [background:var(--surface-1)] [border:1px_solid_var(--border-strong)] [border-radius:var(--r-sm)] [padding:3px_8px] [outline:none] [resize:none]"
             />
           ) : (
-            <HoverTooltip content={live && (held || answerEditorOn) ? 'Edit title' : undefined}>
+            <HoverTooltip content={live && answerEditorOn ? 'Edit title' : undefined}>
               <h1
                 data-task-title
                 onClick={
-                  live && (held || answerEditorOn)
+                  live && answerEditorOn
                     ? () => {
                         setTitleDraft(it.title)
                         setTitleSeen(it.title)
@@ -3375,7 +3266,7 @@ function IssueDetail({
                       }
                     : undefined
                 }
-                style={{ cursor: live && (held || answerEditorOn) ? 'text' : 'default' }}
+                style={{ cursor: live && answerEditorOn ? 'text' : 'default' }}
                 className="[min-width:0] [margin:0] [font-size:var(--fs-xl)] [font-weight:600] [line-height:1.3] [letter-spacing:-0.01em] [color:var(--text-1)] break-words"
               >
                 {it.title}
@@ -3529,9 +3420,7 @@ function IssueDetail({
           data-mobile-task={mobile ? '' : undefined}
           data-mobile-task-compact={mobile && mobileFrame.height < 600 ? '' : undefined}
           data-mobile-tab={mobile ? mobileTab : undefined}
-          // for the drives: whether the task shows from the workspace or
-          // from the window's own read, and whether it is archived
-          data-task-source={held ? 'workspace' : it ? 'answer' : undefined}
+          // for the drives: whether the task is archived
           data-task-archived={archived ? '' : undefined}
           className={`flex flex-col overflow-hidden bg-background !outline-none ${
             embedded
@@ -3568,16 +3457,6 @@ function IssueDetail({
               mobile={mobile}
             />
           )}
-          {waiting && (
-            <div data-task-loading className="flex items-center gap-3 p-6 text-sm text-text-2">
-              <span role="status" className="flex-1">
-                Loading this task…
-              </span>
-              <Button type="button" variant="ghost" onClick={onClose}>
-                Close
-              </Button>
-            </div>
-          )}
           {it && (
             <>
               {/* Where the task lives, over its title, and the window's own
@@ -3607,7 +3486,7 @@ function IssueDetail({
                       <IssueSubscribers
                         key={it.uuid}
                         issue={it}
-                        disabled={held || P.editsFromAnswer(it.id) ? undefined : WAITS_FOR_CHECK}
+                        disabled={P.editsFromAnswer(it.id) ? undefined : WAITS_FOR_CHECK}
                         rosterWaits={saving ? WAITS_FOR_SAVE : undefined}
                       />
                     )}
@@ -3637,8 +3516,7 @@ function IssueDetail({
                             so only there does the menu offer the way over to it:
                             the same jump as the row's right-click entry, by the
                             same reference (P.openTask), for any task it shows
-                            with a project, held or from its answer, as the row
-                            menu offers it; App opens the project by the open
+                            with a project, as the row menu offers it; App opens the project by the open
                             rule of every scope, whose check says so where the
                             person cannot open it, and reveals the card the
                             Board's answer names it by */}
@@ -4063,9 +3941,7 @@ function IssueDetail({
                                 max={LIMITS.remainingHours.max}
                                 placeholder="—"
                                 // and whether the person can change the hours, so hours
-                                // typed in a field that turns read-only go with it, and
-                                // stay across the switch from the workspace's task to
-                                // its answer
+                                // typed in a field that turns read-only go with it
                                 key={`${it.id}:${hoursEditable ? 'edit' : 'read'}:${it.remaining != null ? it.remaining : ''}`}
                                 defaultValue={remainingValue(it.remaining)}
                                 disabled={!hoursEditable}
@@ -4094,22 +3970,15 @@ function IssueDetail({
                         </DetailField>
                         {(() => {
                           // an archived task shows no delay, as no view does
-                          const done = held ? P.isDone(held) : !!detail?.done
+                          const done = !!detail?.done
                           const overdue = !archived && !!it.due && it.due < P.TODAY_ISO && !done
                           // with delay tracking (0064) the chip carries the projected
                           // status — "Delayed" covers overdue; without it, the plain
-                          // overdue chip stays as before. Where the workspace cannot
-                          // judge it, before it holds every task or for a task shown
-                          // from its answer, the person's new task among them, the
-                          // owner's load comes from the server, as for a Board card
-                          // (P.windowDelay), so the window and the card of a task
-                          // the person just created show one verdict
-                          const verdict =
-                            archived || !P.tracksDelay(it)
-                              ? null
-                              : held && P.tasksHeld()
-                                ? P.delayOf(it)
-                                : P.windowDelay(it)
+                          // overdue chip stays as before. The owner's load comes
+                          // from the server, as for a Board card (P.windowDelay),
+                          // so the window and the card of a task, the person's
+                          // new task among them, show one verdict
+                          const verdict = archived || !P.tracksDelay(it) ? null : P.windowDelay(it)
                           const unknown = verdict === DELAY_UNKNOWN
                           const delay = unknown ? null : verdict
                           const late = delay ? delay.status === 'late' : overdue
@@ -4235,7 +4104,7 @@ function IssueDetail({
                           // a group shown from its answer whose subtasks the answer
                           // does not all hold has dates no one can know here; an
                           // archived one shows no subtasks at all
-                          const datesUnknown = fromAnswer && !!detail && !detail.datesKnown
+                          const datesUnknown = !!it && !!detail && !detail.datesKnown
                           return (
                             <DetailField label="Plan">
                               {datesUnknown ? (
@@ -4301,11 +4170,9 @@ function IssueDetail({
                                   variant="ghost"
                                   data-plan-on-roadmap
                                   className="text-text-1 h-control-sm"
-                                  disabled={
-                                    (!held && (archived || stale)) || saving || nothingToPlan
-                                  }
+                                  disabled={archived || stale || saving || nothingToPlan}
                                   title={
-                                    !held && (archived || stale)
+                                    archived || stale
                                       ? archived
                                         ? roTip
                                         : WAITS_FOR_CHECK
@@ -4504,9 +4371,7 @@ function IssueDetail({
                               // the one change left to a task with subtasks there
                               <div className="flex items-center gap-2 text-sm text-text-2 italic">
                                 <span className="flex-1">
-                                  {P.parentLoading(it)
-                                    ? 'The parent task is still loading.'
-                                    : 'The parent task is outside this view.'}
+                                  The parent task is outside this view.
                                 </span>
                                 <Button
                                   type="button"
@@ -4523,9 +4388,7 @@ function IssueDetail({
                               </div>
                             ) : (
                               <div className="text-sm text-text-2 italic">
-                                {/* a held task's parent is held, or marked hidden
-                                    while it may be still to come (hiddenParentsNow),
-                                    and the answer's word is exact */}
+                                {/* the answer's word is exact */}
                                 No parent task.
                               </div>
                             )}
@@ -4536,7 +4399,6 @@ function IssueDetail({
                             className="task-section"
                             data-section="subtasks"
                             data-section-state={sectionMark(subtasks)}
-                            data-section-source={subtasks.source}
                           >
                             <SectionHead
                               icon="child"
@@ -4607,7 +4469,6 @@ function IssueDetail({
                             className="task-section"
                             data-section="links"
                             data-section-state={sectionMark(linked)}
-                            data-section-source={linked.source}
                           >
                             <SectionHead
                               icon="link"
@@ -4710,11 +4571,10 @@ function IssueDetail({
       {/* Rendered outside the dialog: the cards' scale transform and the
           backdrop's backdrop-filter would each make them the containing block
           for this fixed-position popup and shift it off. */}
-      {it && (held || canEdit) && labelAnchor && (
+      {it && canEdit && labelAnchor && (
         <LabelPickerPopup it={it} anchor={labelAnchor} onDone={() => setLabelAnchor(null)} />
       )}
-      {/* The relation pickers, for the window's task held or shown from its
-          answer (lib/relationCandidates.ts names the window's own blocks,
+      {/* The relation pickers, for the window's task shown from its answer (lib/relationCandidates.ts names the window's own blocks,
           RelationPicker.tsx how each reads the server). Each keys on the
           window's task, so a reference that turns into its handle keeps
           the picker's rows and busy rows. */}
@@ -4838,9 +4698,8 @@ function IssueDetail({
       {/* stacked ModalShell (like the sub-issue modal): nothing moves until
           its Move button is pressed. It reads what the move takes along
           from the window's task (P.familyOf) */}
-      {it && (held || answerEditorOn) && moveOpen && (
+      {it && answerEditorOn && moveOpen && (
         <MoveIssueModal
-          issueId={it.id}
           task={it}
           onClose={() => setMoveOpen(false)}
           focusAfterClose={taskActionsButton}
@@ -4878,9 +4737,8 @@ function IssueDetail({
           with the choices the person made. A refusal renders the window
           again (stopLeaving), which shows TaskGone if the task is still
           gone. */}
-      {issueId && fateOpen && (held || answerEditorOn || leaving.current === taskKey) && (
+      {issueId && fateOpen && (answerEditorOn || leaving.current === taskKey) && (
         <ArchiveOrDeleteTaskModal
-          issueId={it?.id ?? issueId}
           task={it ?? undefined}
           initialReason={unusedReason ?? ''}
           onReasonChange={(reason) => {
@@ -4944,7 +4802,7 @@ function IssueDetail({
             const shown = it.key
             const opened = taskKey
             leaving.current = opened
-            const deleted = await P.deleteIssue(it.id, subtasks, true, reason)
+            const deleted = await P.deleteIssue(it.id, subtasks, reason)
             if (!deleted) {
               stopLeaving(opened)
               return false

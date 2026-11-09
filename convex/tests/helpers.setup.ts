@@ -32,7 +32,7 @@ import type { OrgRole } from '../lib/enums'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { loadRowFor, type OrgLoadRow } from '../lib/loadRows'
 import { taskOwnerId } from '../lib/review'
-import { readWorkspace, type Workspace } from '../lib/workspaceJoin'
+import { type JoinedWorkspace, readWorkspace } from '../lib/workspaceJoin'
 import { type ActivityEntry, insertActivity } from '../model/activity'
 import { insertTask, type TaskWithText, withText } from '../model/descriptions'
 import { ERASE_TIMERS, noteRestore } from '../model/fileHolds'
@@ -1273,7 +1273,9 @@ type Caller = ReturnType<typeof as>
  * oracle (projectsOracle.setup.ts), which no part sends since the app
  * reads its projects by id and a batch at a time. wholeOf adds everyone's
  * grants. Null without a seat. */
-export async function workspaceOf(caller: Caller): Promise<(Workspace & OracleProjects) | null> {
+export async function workspaceOf(
+  caller: Caller,
+): Promise<(JoinedWorkspace & OracleProjects) | null> {
   const snap = await readWorkspace((name, args) =>
     caller.query(makeFunctionReference<'query'>(name), args),
   )

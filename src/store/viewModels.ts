@@ -355,8 +355,10 @@ type Lookup<T> = { get(key: string): T | undefined }
 /** A membership test, such as a Set. */
 type Members = { has(key: string): boolean }
 
-/* the derivations shapeIssue folds in (store/taskIndex.ts): mirrored links,
-   child keys, label attachments, the attachment views, my subscriptions */
+/* the derivations shapeIssue folds in, which a view's row
+   (store/viewRows.ts) or a window's answer (store/taskDetail.ts) gives:
+   mirrored links, child keys, label attachments, the attachment views, my
+   subscriptions */
 type IssueShapeCtx = {
   uuidToKey: Lookup<string>
   uuidToDisplayKey: Lookup<string>
@@ -459,17 +461,15 @@ export const shapeMilestone = (m: Row<'milestones'>) => ({
 })
 export type MilestoneVM = ReturnType<typeof shapeMilestone>
 
-export const shapeActivity = (e: Row<'activity_events'>, uuidToKey: Lookup<string>) => ({
+export const shapeActivity = (e: Row<'activity_events'>) => ({
   id: e.id,
   ts: new Date(e.ts).getTime(),
   actor: e.actor_id,
   verb: e.verb,
   targetType: e.target_type,
-  // issue targets are stored as uuids (0026; the convention predates
-  // 0050's immutable keys and stays — uuids also survive deletion
-  // gracefully); derive the current key here. Rows holding a non-uuid
-  // target pass through unchanged.
-  targetId: e.target_type === 'issue' ? uuidToKey.get(e.target_id) || e.target_id : e.target_id,
+  // issue targets are stored as uuids (0026), which also survive a
+  // deletion, and the history names a task by its uuid
+  targetId: e.target_id,
   label: e.label,
   detail: e.detail || undefined,
   projectId: e.project_id || undefined,

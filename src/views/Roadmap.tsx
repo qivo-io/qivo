@@ -4,7 +4,7 @@
    and PlanCard shows workload while ResourceStrip shares the same week grid.
    Which tasks it shows, their headings' Remaining, the arrows and Auto-move's
    inputs come from the server's Roadmap reads (roadmap/useRoadmapView.ts),
-   never from the workspace's task lists, and Team utilization and the
+   and Team utilization and the
    planning panel read people's loads from the owner-load cache. Its
    milestone flags come from the server's range read for the weeks on
    screen (roadmap/useRoadmapMilestones.ts), never from the workspace's
@@ -392,7 +392,7 @@ function Roadmap({
     ),
   )
   /** The task handle `id` names on the Roadmap: one its answer brings, else
-      the workspace's or another view's. */
+      another view's. */
   const taskOf = (id: string): IssueVM | undefined => view.family.byId[id] ?? P.anyTask(id)
   // for the callbacks that keep one identity across renders
   const taskOfRef = useRefR(taskOf)
@@ -738,9 +738,8 @@ function Roadmap({
   const liveRef = useRefR({})
   const draftEpoch = useRefR(P.gridEpoch)
   const draftCurrent = draftEpoch.current === P.gridEpoch
-  /* A group's bar is its calculated span. The workspace's model holds it
-     with the person's pending edits; a model shaped from the answer's row
-     holds the server's, so its span is recalculated over its family on
+  /* A group's bar is its calculated span. A model shaped from the answer's
+     row holds the server's, so its span is recalculated over its family on
      screen (view.family), which the answer brings whole and the person's
      pending writes paint, and it follows a subtask's saved move at once.
      While a subtask is dragged the span is recalculated with the live
@@ -751,7 +750,7 @@ function Roadmap({
   const dragging = draftCurrent && Object.keys(live).length > 0
   const liveSpans = new Map<string, ReturnType<typeof view.family.span>>()
   const liveSpan = (it: IssueVM) => {
-    if (!P.isGroup(it) || (!dragging && P.handleOf(it.uuid) !== null)) return null
+    if (!P.isGroup(it)) return null
     if (!liveSpans.has(it.id))
       liveSpans.set(it.id, view.family.span(it, dragging ? (leaf) => live[leaf.id] : undefined))
     return liveSpans.get(it.id)
@@ -1040,8 +1039,8 @@ function Roadmap({
       takes the Roadmap's place, else undefined. Auto-fit places only this
       task. One the answer no longer names, as after another person moved
       it out of the selection, keeps the dates it has, and the session ends
-      below with a word (the session-gone effect), though the workspace or
-      another view may still hold the task (taskOf). */
+      below with a word (the session-gone effect), though another view may
+      still hold the task (taskOf). */
   const sessionTask = (s: PlanSession): IssueVM | undefined =>
     cannotPlanReason(view) === null ? view.family.byId[s.issueId] : undefined
   // The first fit of an unscheduled task, once an answer names the task.
@@ -1393,7 +1392,7 @@ function Roadmap({
 
   /* Auto-move works on the dependency answer's parts, the tasks linked to
      this Roadmap's tasks, here or in other projects, with the dates on
-     screen for each task the Roadmap or the workspace shows, so the count
+     screen for each task the Roadmap shows, so the count
      follows a saved drag at once. It moves nothing from part of its inputs:
      while they load, did not fit or failed, the button says why. It also
      waits while a write is on its way (P.roadmapUndo.busy), a Roadmap
@@ -1405,8 +1404,7 @@ function Roadmap({
     () =>
       autoMoveInputs &&
       autoMoveTasks(autoMoveInputs, isoToWeek, (uuid) => {
-        const handle = P.handleOf(uuid)
-        const it = handle === null ? P.viewTask(ROADMAP_SLOT, uuid) : P.issueById[handle]
+        const it = P.viewTask(ROADMAP_SLOT, uuid)
         return it ? { start: it.start, end: it.end, status: it.status } : undefined
       }),
     // the views' news covers every model and paint the dates come from
@@ -1438,9 +1436,9 @@ function Roadmap({
     const rowOf = new Map(partTasks.map((t) => [t.id, t.row]))
     P.batchRoadmapChanges(() => {
       for (const m of moves) {
-        // a task the Roadmap or the workspace shows moves as its bar does;
-        // one only the dependency answer holds moves from its stored dates
-        const handle = P.handleOf(m.id) ?? P.viewTask(ROADMAP_SLOT, m.id)?.id
+        // a task the Roadmap shows moves as its bar does; one only the
+        // dependency answer holds moves from its stored dates
+        const handle = P.viewTask(ROADMAP_SLOT, m.id)?.id
         if (handle) P.updateIssue(handle, { start: m.start, end: m.end })
         else {
           const row = rowOf.get(m.id)

@@ -155,8 +155,6 @@ async function openNewTask(path = '/app/testbed/overview/p/1') {
       : Promise.resolve(null)
   })
   // the app's boot, without every task
-  const { TASKS } = await import('../store/liveParts')
-  TASKS.atBoot = false
   const store = await import('../store/planner')
   await store.initStore()
   // App's views load their code only while the socket counts as connected

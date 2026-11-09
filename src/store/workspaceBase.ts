@@ -2,14 +2,15 @@
    (store/planner.ts). Each delivery is compared with the rows kept before
    it: a row that holds the same data keeps its object, and only the rows
    that changed are taken from the delivery, frozen. So a delivery that
-   changes one task costs one cheap comparison per row, and everything built
-   from the rows can tell exactly what changed (Changes).
+   changes one organization costs one cheap comparison per row, and
+   everything built from the rows can tell exactly what changed (Changes).
 
-   The profiles, teams and team memberships are the signed-in person's own,
-   which the root part sends (convex/lib/workspaceJoin.ts joinParts); no
-   section holds another person, a label or a project, which the views
-   read by id or a batch at a time (the store's project cache,
-   store/projectCache.ts, holds every project the app shows).
+   The rows are the root part's (convex/lib/workspaceJoin.ts rootWorkspace):
+   the caller's organizations and own profiles, team memberships and teams.
+   No section holds a task, another person, a label or a project: the views
+   and the task window read tasks from their own answers, people and labels
+   by id or a batch at a time, and the store's project cache
+   (store/projectCache.ts) holds every project the app shows.
 
    A delivery is staged when it arrives and applied at the start of the next
    workspace paint (store/rowMap.ts), so the rows on screen stay exactly what
@@ -20,7 +21,7 @@
 import type { Workspace } from '../../convex/lib/workspaceJoin'
 import { sameData } from './stable'
 
-/** The workspace as the live parts join into it (convex/lib/workspaceJoin.ts). */
+/** The workspace as the root part answers it (convex/lib/workspaceJoin.ts). */
 export type Snapshot = Workspace
 
 /** The row sections kept by key, and how each row's key reads. */
@@ -28,42 +29,22 @@ const KEYED = {
   orgs: (r: Snapshot['orgs'][number]) => r.id,
   teams: (r: Snapshot['teams'][number]) => r.id,
   profiles: (r: Snapshot['profiles'][number]) => r.id,
-  issues: (r: Snapshot['issues'][number]) => r.id,
-  links: (r: Snapshot['links'][number]) => r.id,
-  attachments: (r: Snapshot['attachments'][number]) => r.id,
 }
-/** The row sections kept as lists in delivery order, and their natural keys.
-    A hidden task's load row has no task id, so a load row is keyed by its
-    owner, then its place among that owner's rows (keysOf). Only those rows
-    are kept (hiddenLoad). */
+/** The row sections kept as lists in delivery order, and their natural
+    keys. */
 const LISTED = {
   teamMembers: (r: Snapshot['teamMembers'][number]) => `${r.team_id}:${r.profile_id}`,
-  issueLabels: (r: Snapshot['issueLabels'][number]) => `${r.issue_id}:${r.label_id}`,
-  issueSubs: (r: Snapshot['issueSubs'][number]) => `${r.issue_id}:${r.profile_id}`,
-  orgLoad: (r: Snapshot['orgLoad'][number]) =>
-    r.issue_id === null ? `hidden:${r.owner_id}` : `task:${r.issue_id}`,
 }
 
-/** Whether two rows of a section have the same key, by its fields. Two
-    hidden load rows of one owner count as the same here; keysOf tells them
-    apart by place. */
+/** Whether two rows of a section have the same key, by its fields. */
 const byId = (a: { id: string }, b: { id: string }) => a.id === b.id
 const SAME_KEY: Record<keyof typeof KEYED | keyof typeof LISTED, (a: never, b: never) => boolean> =
   {
     orgs: byId,
     teams: byId,
     profiles: byId,
-    issues: byId,
-    links: byId,
-    attachments: byId,
     teamMembers: (a: RowOf<'teamMembers'>, b: RowOf<'teamMembers'>) =>
       a.team_id === b.team_id && a.profile_id === b.profile_id,
-    issueLabels: (a: RowOf<'issueLabels'>, b: RowOf<'issueLabels'>) =>
-      a.issue_id === b.issue_id && a.label_id === b.label_id,
-    issueSubs: (a: RowOf<'issueSubs'>, b: RowOf<'issueSubs'>) =>
-      a.issue_id === b.issue_id && a.profile_id === b.profile_id,
-    orgLoad: (a: RowOf<'orgLoad'>, b: RowOf<'orgLoad'>) =>
-      a.issue_id === b.issue_id && (a.issue_id !== null || a.owner_id === b.owner_id),
   }
 
 export type KeyedName = keyof typeof KEYED
@@ -116,19 +97,9 @@ export function sameRow(a: object, b: object): boolean {
   return count === 0
 }
 
-/** The keys of `list` in order, read with `keyOf`. With `counted`, each
-    key also takes its place among the rows of that key, as an owner's
-    hidden load rows share one (orgLoad). Ids stay as they are otherwise,
-    whatever they hold. */
-function keysOf<R>(list: readonly R[], keyOf: (row: R) => string, counted: boolean): string[] {
-  if (!counted) return list.map(keyOf)
-  const seen = new Map<string, number>()
-  return list.map((row) => {
-    const key = keyOf(row)
-    const n = seen.get(key) ?? 0
-    seen.set(key, n + 1)
-    return `${key}#${n}`
-  })
+/** The keys of `list` in order, read with `keyOf`. */
+function keysOf<R>(list: readonly R[], keyOf: (row: R) => string): string[] {
+  return list.map(keyOf)
 }
 
 /** One section's staged state: its rows in delivery order and their keys,
@@ -162,12 +133,6 @@ export function createWorkspaceBase() {
   // the applied rows: the keyed sections by key, every section as a list
   const maps = new Map<KeyedName, Map<string, object>>()
   const lists = new Map<SectionName, readonly object[]>()
-  // the tasks flagged has_hidden_subtasks and has_hidden_parent, each Set
-  // replaced, never changed, so one handed out keeps what it held
-  const flagged = {
-    hiddenSubtaskParents: new Set<string>() as ReadonlySet<string>,
-    hiddenParentTasks: new Set<string>() as ReadonlySet<string>,
-  }
   let scalars: Scalars | null = null
   let stagedScalars: Scalars | null = null
 
@@ -177,8 +142,6 @@ export function createWorkspaceBase() {
       lists.set(name, Object.freeze([]))
     }
     for (const name of KEYED_SECTIONS) maps.set(name, new Map())
-    flagged.hiddenSubtaskParents = new Set()
-    flagged.hiddenParentTasks = new Set()
     scalars = null
     stagedScalars = null
   }
@@ -200,9 +163,7 @@ export function createWorkspaceBase() {
     // keys' fields tell without building every key
     const same = SAME_KEY[name] as (a: object, b: object) => boolean
     const sameKeys = next.length === prev.length && next.every((row, i) => same(prev[i], row))
-    const keys = sameKeys
-      ? state.keys
-      : keysOf(next, keyOf as (row: object) => string, name === 'orgLoad')
+    const keys = sameKeys ? state.keys : keysOf(next, keyOf as (row: object) => string)
     let list: object[]
     let changed = false
     if (sameKeys) {
@@ -279,21 +240,6 @@ export function createWorkspaceBase() {
           if (old === undefined ? now !== undefined : now === undefined || !sameRow(old, now))
             changed.set(key, old)
         }
-        if (name === 'issues' && changed.size) {
-          const next = {
-            hiddenSubtaskParents: new Set(flagged.hiddenSubtaskParents),
-            hiddenParentTasks: new Set(flagged.hiddenParentTasks),
-          }
-          for (const key of changed.keys()) {
-            const row = (map as Map<string, RowOf<'issues'>>).get(key)
-            if (row?.has_hidden_subtasks) next.hiddenSubtaskParents.add(key)
-            else next.hiddenSubtaskParents.delete(key)
-            if (row?.has_hidden_parent) next.hiddenParentTasks.add(key)
-            else next.hiddenParentTasks.delete(key)
-          }
-          for (const flag of ['hiddenSubtaskParents', 'hiddenParentTasks'] as const)
-            if (!sameData(next[flag], flagged[flag])) flagged[flag] = next[flag]
-        }
         // a list that only changed its order changed too
         if (changed.size || state.moved) changes[name] = changed
         state.pending = new Map()
@@ -310,22 +256,11 @@ export function createWorkspaceBase() {
     list<S extends SectionName>(name: S): readonly RowOf<S>[] {
       return lists.get(name) as readonly RowOf<S>[]
     },
-    /** The tasks the applied delivery flags with has_hidden_subtasks
-        (hiddenSubtaskParents) or has_hidden_parent (hiddenParentTasks). A
-        Set handed out never changes; an apply that changes it gives a new
-        one. */
-    flags: (name: 'hiddenSubtaskParents' | 'hiddenParentTasks') => flagged[name],
     /** Whether a delivery is staged that no apply took yet. */
     staging: () => stagedScalars !== null,
     /** The applied delivery's values outside the sections, or null before
         the first. */
     scalars: (): Scalars | null => scalars,
-    /** The staged task `id`, from the newest delivery. */
-    stagedTask(id: string): RowOf<'issues'> | undefined {
-      const state = staged.get('issues')
-      const at = state ? indexOf(state).get(id) : undefined
-      return at === undefined ? undefined : (state?.list[at] as RowOf<'issues'>)
-    },
     /** Forgets every row. */
     reset,
   }

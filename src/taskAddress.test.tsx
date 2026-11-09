@@ -25,7 +25,7 @@ import { queryProjectNav } from './store/projectNavStandIn.setup'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
-  live: null as null | { holdWindow(from: string | null): void },
+  live: null as null | object,
 }))
 vi.mock('./lib/convex', async () => {
   const { liveOver } = await import('./store/guard/liveDouble.setup')
@@ -41,9 +41,7 @@ vi.mock('./lib/auth', () => ({
 }))
 
 const AT = '2026-09-14T08:00:00.000Z'
-// 12,800 task numbers make 64 task windows; the last starts at fc000000
-const LAST_WINDOW = 'fc000000'
-// QN-2, in the last task window
+// QN-2
 const SOAK = 'fd000000-0000-4000-8000-000000000002'
 
 let container: HTMLDivElement
@@ -77,7 +75,6 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => root.unmount())
-  double.live?.holdWindow(null)
   container.remove()
   document.body.innerHTML = ''
   history.replaceState(null, '', '/')
@@ -100,11 +97,9 @@ function waitFor<T>(find: () => T | null | undefined, what: string) {
 }
 
 /** Boots on `address` as AuthGate does, the task it names read with the
-    first parts, on a large workspace whose last task window, holding QN-2,
-    is still to arrive. `shape` changes the workspace first, `board` forces
-    the Board's answer and `before` runs once the store holds the workspace,
-    before App renders. Answers the store and a way to let the last window
-    answer. */
+    first parts. `shape` changes the workspace first, `board` forces the
+    Board's answer and `before` runs once the store holds the workspace,
+    before App renders. Answers the store and the snapshot. */
 async function bootAt(
   address: string,
   {
@@ -123,7 +118,6 @@ async function bootAt(
   // the fixture's project under a top-level project, as every writer
   // stores one that holds tasks, so the project cache answers it
   const snap: Snapshot = underProgram(plannerFixture())
-  snap.orgs[0].next_issue_num = 64 * 200
   snap.issues.push({
     id: SOAK,
     org_id: snap.orgs[0].id,
@@ -164,11 +158,9 @@ async function bootAt(
   network.mutation.mockResolvedValue(null)
   const store = await import('./store/planner')
   const { addressedTask } = await import('./lib/router')
-  double.live?.holdWindow(LAST_WINDOW)
   await store.initStore(undefined, undefined, {
     address: addressedTask(location.pathname, location.hash),
   })
-  expect(store.P.stillLoading()).not.toBeNull()
   before?.(store)
   const { syncStatus } = await import('./lib/syncStatus')
   syncStatus.setSocket({ connected: true, everConnected: true })
@@ -180,12 +172,7 @@ async function bootAt(
       </TooltipProvider>,
     ),
   )
-  const arrive = () =>
-    act(async () => {
-      double.live?.holdWindow(null)
-      await new Promise((resolve) => setTimeout(resolve, 0))
-    })
-  return { store, snap, arrive }
+  return { store, snap }
 }
 
 /** The answer readWindowTask gives the soak test, active or archived, at
@@ -231,7 +218,7 @@ describe('a boot on a task address', { timeout: 30_000 }, () => {
     await waitFor(() => note() === 'Loading QN-2…', 'the loading frame')
     expect(location.pathname).toBe('/app/testbed/board/tasks/qn-2')
     await act(async () => reads[0]?.next(answerOf(snap)))
-    await waitFor(() => dialog()?.dataset.taskSource === 'answer', 'the task from its answer')
+    await waitFor(() => !!dialog()?.querySelector('[data-issue-key]'), 'the task from its answer')
     // closing it shows its project's Board, not My view
     await act(async () => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
@@ -295,7 +282,7 @@ describe('a boot on a task address', { timeout: 30_000 }, () => {
       { org_id: org, ref: SOAK },
     ])
     await act(async () => reads[1]?.next(answerOf(booted.snap)))
-    await waitFor(() => dialog()?.dataset.taskSource === 'answer', 'the task from its answer')
+    await waitFor(() => !!dialog()?.querySelector('[data-issue-key]'), 'the task from its answer')
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Run the soak test')
   })
 
@@ -311,7 +298,7 @@ describe('a boot on a task address', { timeout: 30_000 }, () => {
   it('opens the task when its Board is past its budget', async () => {
     const { snap } = await bootAt('/app/testbed/board/tasks/qn-2', { board: 'over_ceiling' })
     await act(async () => reads[0]?.next(answerOf(snap)))
-    await waitFor(() => dialog()?.dataset.taskSource === 'answer', 'the task from its answer')
+    await waitFor(() => !!dialog()?.querySelector('[data-issue-key]'), 'the task from its answer')
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Run the soak test')
   })
 
@@ -349,14 +336,10 @@ describe('a boot on a task address', { timeout: 30_000 }, () => {
 })
 
 describe('a boot on a task address, as the app boots', { timeout: 30_000 }, () => {
-  beforeEach(async () => {
-    const { TASKS } = await import('./store/liveParts')
-    TASKS.atBoot = false
-  })
+  beforeEach(async () => {})
   afterEach(async () => {
     // the boot asked for no task, and no write needed one
     const { __layerProbe } = await import('./store/planner')
-    expect(__layerProbe?.asks()).toEqual([])
     expect(__layerProbe?.faults()).toEqual([])
   })
 
@@ -376,20 +359,17 @@ describe('a boot on a task address, as the app boots', { timeout: 30_000 }, () =
     await waitFor(() => reads.length > 0, 'the read of the task')
     expect(reads.map((read) => read.args)).toEqual([{ org_id: org, ref: 'QN-2' }])
     await act(async () => reads[0]?.next(answerOf(snap)))
-    await waitFor(() => dialog()?.dataset.taskSource === 'answer', 'the task from its answer')
+    await waitFor(() => !!dialog()?.querySelector('[data-issue-key]'), 'the task from its answer')
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Run the soak test')
-    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
-    expect(store.P.handleOf(SOAK)).toBeNull()
   })
 
   it('shows the task from the read the boot started, editable from that answer, and asks for no task', async () => {
     const { store, snap } = await bootAt('/app/testbed/board/mine/tasks/qn-2')
     const org = snap.orgs[0].id
-    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
     // the read the boot subscribed with the first parts, the only ones
     expect(reads.map((read) => read.args)).toEqual([{ org_id: org, ref: 'QN-2' }])
     await act(async () => reads[0]?.next(answerOf(snap)))
-    await waitFor(() => dialog()?.dataset.taskSource === 'answer', 'the task from its answer')
+    await waitFor(() => !!dialog()?.querySelector('[data-issue-key]'), 'the task from its answer')
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Run the soak test')
     // the window's own read by uuid makes the task's answer its own, and
     // the editor edits from it with no ask
@@ -399,7 +379,5 @@ describe('a boot on a task address, as the app boots', { timeout: 30_000 }, () =
     )
     await act(async () => reads.find((read) => read.args.ref === SOAK)?.next(answerOf(snap)))
     await waitFor(() => store.P.editsFromAnswer(SOAK), 'the window editable from its answer')
-    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
-    expect(store.P.handleOf(SOAK)).toBeNull()
   })
 })

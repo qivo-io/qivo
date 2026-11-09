@@ -667,11 +667,8 @@ describe('Back to a task during the first load', { timeout: 30_000 }, () => {
 
 describe('Settings while a task is still to arrive', { timeout: 30_000 }, () => {
   afterEach(async () => {
-    // a page of Settings asks for no task, and sends no write on a path
-    // that needs every task
+    // a page of Settings reports no fault
     if (settingsStore) {
-      expect(settingsStore.P.taskLoad()).toEqual({ state: 'not_asked' })
-      expect(settingsStore.__layerProbe?.asks()).toEqual([])
       expect(settingsStore.__layerProbe?.faults()).toEqual([])
     }
     settingsStore = null
@@ -817,12 +814,11 @@ describe('Settings while a task is still to arrive', { timeout: 30_000 }, () => 
   })
 })
 
-describe('Back and Forward in a session that never asked for every task', {
+describe('Back and Forward on a task address', {
   timeout: 30_000,
 }, () => {
-  it('opens a task from its own read on Back, and again on Forward, with no ask', async () => {
+  it('opens a task from its own read on Back, and again on Forward', async () => {
     const { store, org, snap } = await bootLoading()
-    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
     const row = snap.issues.find((issue) => issue.id === 'fd000000-b')
     if (!row) throw new Error('no soak test')
     const okAnswer = {
@@ -845,7 +841,7 @@ describe('Back and Forward in a session that never asked for every task', {
     const address = `/app/${org}/board/tasks/qn-2`
     await back(board)
     await back(address)
-    // the window reads the task by its number, as no task is held
+    // the window reads the task by its number
     expect(reads.map((read) => read.args)).toContainEqual({ org_id: store.P.org.id, ref: 'QN-2' })
     await answerReads()
     await waitFor(() => title() === 'Run the soak test', "the task's window")
@@ -858,9 +854,6 @@ describe('Back and Forward in a session that never asked for every task', {
     await answerReads()
     await waitFor(() => title() === 'Run the soak test', "the task's window again")
     expect(location.pathname).toBe(address)
-    expect(store.__layerProbe?.asks()).toEqual([])
-    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
-    expect(store.P.handleOf(row.id)).toBeNull()
     expect(store.__layerProbe?.faults()).toEqual([])
   })
 })

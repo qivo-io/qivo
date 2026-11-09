@@ -57,10 +57,6 @@ export default defineConfig({
           name: 'node',
           environment: 'node',
           exclude: ['convex/**'],
-          /* Stores boot with every task here unless a suite turns it off;
-           * see src/store/guard/tasksAtBoot.setup.ts. The project's setup
-           * files come after the two above (extends: true). */
-          setupFiles: ['src/store/guard/tasksAtBoot.setup.ts'],
         },
       },
       {

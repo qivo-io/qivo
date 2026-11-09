@@ -1,30 +1,22 @@
-/* The Overview's server reads (convex/overview.ts) against the app's own
- * figures and the Overview's stand-in. Each case boots the real store from
- * the caller's real workspace, as boardParity.test.ts does, with the clock
- * frozen before the store loads so its TODAY_ISO and TODAY_WEEK are the day
- * and week the queries are sent, sends the clock the page sends
- * (src/views/overview/overviewArgs.ts overviewClock), and compares what the
- * queries answer for the same caller with what the store derives: the
- * summary against the oracle's overviewFigures (store/overviewOracle.setup.ts,
- * the page's figures before it read the server's) and statusCounts, the
- * Overdue & at risk rows against its list, as a set and in due-date order,
- * the Paused rows against its paused tasks by due date, undated last, and
- * the health table (overview.health) against the oracle's healthRows, its
- * rows both ways, each row's name, lead, sparkbar, Completion, Left,
- * Paused and Delayed and Slipping, with `loads` exactly where a guest's or
- * Viewer's row needs an owner past the lowest one the table needs, and for
- * Nora every column's order both ways against healthOrder, a cut and a
- * search. The stand-in the jsdom tests and the benchmark read
- * (store/overviewStandIn.setup.ts) answers the same summary and delays,
- * the same batches, rows, verdicts and fixed ends and the same health
- * table.
+/* The Overview's server reads (convex/overview.ts) against the Overview's
+ * stand-in (store/overviewStandIn.setup.ts), which the jsdom tests and the
+ * benchmark read. Each case boots the real store, as the app does, holding
+ * no task, from the caller's real workspace, with the clock frozen before
+ * the store loads so its TODAY_ISO and TODAY_WEEK are the day and week the
+ * queries are sent, sends the clock the page sends
+ * (src/views/overview/overviewArgs.ts overviewClock), and checks that the
+ * stand-in answers the same summary and delays, the same batches, rows,
+ * verdicts and fixed ends of the Overdue & at risk and Paused lists, and
+ * the same health table, for Nora in every column's order both ways, a cut
+ * and a search, as the queries answer for the same caller.
  *
  * The process runs in New York's time zone, so the client's local weeks
  * differ from UTC weeks near midnight; vitest runs each file in a process
  * of its own. Northstar runs as Nora (admin), Leo and Ben over every scope;
  * the small fixture runs every access shape for a user, a guest and a
  * viewer, and the admin, over plants the brief names. Cases that must fail
- * if a rule drifts compare a drifted rule with the server's answer. */
+ * if a rule drifts compare a drifted rule over the stored tasks with the
+ * server's answer. */
 
 import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -32,16 +24,12 @@ import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
 import { nameKey } from '../../convex/lib/nameKey'
 import type {
-  HealthAnswer,
   HealthSort,
   ListAnswer,
   OverviewScope,
   SummaryAnswer,
 } from '../../convex/lib/overview'
 import { OVERVIEW, WEEK_STARTS } from '../../convex/lib/overview'
-import { taskOwnerId } from '../../convex/lib/review'
-import { allWordsMatcher } from '../../convex/lib/search'
-import { DEFAULT_PLANNABLE_HOURS, plannableHoursOf } from '../../convex/lib/workload'
 import { SHAPES } from '../../convex/tests/accessShapes.setup'
 import { projectScope } from '../../convex/tests/board.setup'
 import {
@@ -61,8 +49,8 @@ import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { countOrg } from '../../convex/tests/overviewCounts.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
 import type { Whole as Snapshot } from './guard/liveDouble.setup'
-import { oracleScope, oracleStore } from './oracleScope.setup'
-import { OVERVIEW_BATCH, OVERVIEW_SPLIT, OVERVIEW_WEEKS } from './overviewLists'
+import { oracleLevels, oracleScope, oracleStore } from './oracleScope.setup'
+import { OVERVIEW_BATCH, OVERVIEW_SPLIT, OVERVIEW_WEEKS, type OverviewQuery } from './overviewLists'
 import {
   type ForcedOverview,
   HEALTH_ROWS,
@@ -97,7 +85,7 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-/** A fresh store whose first delivery is `snap`, with the page's figures
+/** A fresh store whose first delivery is `snap`, with the page's clock
  * read from the same store. */
 async function start(snap: Snapshot) {
   vi.resetModules()
@@ -112,20 +100,15 @@ async function start(snap: Snapshot) {
     else next(structuredClone(snap))
     return () => {}
   })
-  // the store half of this parity derives from every task held, which only a store that asked for every task has
-  const { TASKS } = await import('./liveParts')
-  TASKS.atBoot = true
   const store = await import('./planner')
   await store.initStore()
   await nameEveryone(store.P, snap)
-  // the oracle and the page's clock read this store
-  const figures = await import('./overviewOracle.setup')
+  // the page's clock reads this store
   const args = await import('../views/overview/overviewArgs')
-  return Object.assign(store.P, { figures, args, snapshot: snap })
+  return Object.assign(store.P, { args, snapshot: snap })
 }
 
 type Store = Awaited<ReturnType<typeof start>>
-type Issue = Store['issues'][number]
 
 /** The store booted for `profile` from their workspace, with the clock at
  * `now` before the store's modules load. */
@@ -197,10 +180,6 @@ const batchFacts = (batches: (ListAnswer & { state: 'ok' })[]) =>
     ends: b.next === null,
   }))
 
-/** The due dates of `items` in order, undated last as '~'. */
-const dues = (items: { due?: string | null; due_date?: string }[]) =>
-  items.map((it) => ('due_date' in it ? it.due_date : it.due) || '~')
-
 /** The health table's columns. */
 const HEALTH_SORTS: HealthSort[] = [
   'name',
@@ -213,114 +192,26 @@ const HEALTH_SORTS: HealthSort[] = [
   'paused',
 ]
 
-/** The rows of `rows`, the oracle's health rows, whose Delayed a guest or
- * an organization Viewer cannot be given: those with a task in a project
- * that tracks delay whose verdict needs an owner other than the lowest
- * owner id any row needs in that organization, as the server reads one
- * owner's load a query for them, in owner id order. An owner is needed by
- * a task without subtasks, not Done, with a planned end or a due date and
- * remaining hours, whose owner by the Reviewer rule is a profile with a
- * finite capacity (convex/lib/viewLoads.ts verdicts needs). */
-function needSecondOwner(P: Store, rows: ReturnType<Store['figures']['healthRows']>): Set<string> {
-  const raw = new Map(P.snapshot.issues.map((t) => [t.id, t]))
-  const people = new Map(P.snapshot.profiles.map((p) => [p.id, p]))
-  const needs = (it: Issue): string | null => {
-    const t = raw.get(it.uuid)
-    if (t === undefined || P.isGroup(it) || t.status === 'done') return null
-    if (t.end_week === undefined && t.due_date === undefined) return null
-    if (!((t.remaining_hours ?? 0) > 0)) return null
-    const id = taskOwnerId(t, false)
-    const owner = id === undefined ? undefined : people.get(id)
-    if (id === undefined || owner === undefined) return null
-    const capacity =
-      owner.org_id === t.org_id
-        ? plannableHoursOf({ plannableHours: owner.plannable_hours, kind: owner.kind })
-        : DEFAULT_PLANNABLE_HOURS
-    return Number.isFinite(capacity) && capacity > 0 ? id : null
-  }
-  const owners = new Map(
-    rows.map((r) => [
-      r.proj.id,
-      r.issues.filter((it) => P.tracksDelay(it)).flatMap((it) => needs(it) ?? []),
-    ]),
-  )
-  const lowest = new Map<string, string>()
-  for (const id of [...owners.values()].flat().sort()) {
-    const org = people.get(id)?.org_id ?? ''
-    if (!lowest.has(org)) lowest.set(org, id)
-  }
-  return new Set(
-    [...owners]
-      .filter(([, ids]) => ids.some((id) => lowest.get(people.get(id)?.org_id ?? '') !== id))
-      .map(([project]) => project),
-  )
-}
-
-/** Compares the five queries for `profile` over `scope`, the store scope
- * `scopeId`, with what store `P` derives; with `orders`, every column of
- * the health table both ways, a cut and a search too. Answers how many
- * tasks the scope held, for a caller that checks its cases compared
- * something. */
+/** Checks that the Overview's stand-in answers every read of `scope` as the
+ * server does for `profile`: the summary, the delays, every batch of the
+ * Overdue & at risk and Paused lists, and the health table, with `orders`
+ * every column's order both ways, a cut and a search too. Answers how many
+ * leaf tasks the summary counts. */
 async function expectParity(
   t: T,
   P: Store,
   profile: Doc<'profiles'>,
   scope: OverviewScope,
-  scopeId: string,
   label: string,
   orders = false,
 ): Promise<number> {
-  const info = oracleScope(P.snapshot, scopeId)
   const days = clientDays(P)
   const caller = as(t, profile)
+  const levels = oracleLevels(P.snapshot)
+  const stand = (query: OverviewQuery, args: OverviewArgs) =>
+    overviewStandIn(P.snapshot, query, args, { sees: (id) => levels.has(id) })
   const summary = await caller.query(api.overview.summary, { scope, day: days.day })
   const risk = await caller.query(api.overview.risk, { scope, ...days })
-  const stand = (query: 'summary' | 'risk' | 'attention' | 'paused', args: OverviewArgs) =>
-    overviewStandIn(P.snapshot, query, args, { sees: (id) => P.canSee(id) }) as ListAnswer
-  // a scope the store does not hold is one the server does not either, nor
-  // the stand-in
-  if (info === null) {
-    expect(summary, `${label}: unavailable`).toEqual({ state: 'unavailable' })
-    expect(risk, `${label}: risk unavailable`).toEqual({ state: 'unavailable' })
-    expect(stand('summary', { scope, day: days.day }), `${label}: stand-in`).toEqual(summary)
-    expect(stand('paused', { scope }), `${label}: stand-in list`).toEqual(summary)
-    return 0
-  }
-  if (summary.state !== 'ok' || risk.state !== 'ok')
-    throw new Error(`${label}: ${JSON.stringify([summary, risk])}`)
-  const scoped = P.scopedIssues(info)
-  const f = P.figures.overviewFigures(info, scoped)
-
-  // the summary
-  if (summary.counts.state !== 'ok') throw new Error(`${label}: ${JSON.stringify(summary.counts)}`)
-  const leaves = summary.counts.leaves
-  const total = Object.values(leaves).reduce((n, c) => n + c, 0)
-  expect({ done: leaves.done, total }, `${label}: completion`).toEqual({
-    done: f.prog.done,
-    total: f.prog.total,
-  })
-  expect(leaves.progress, `${label}: in progress`).toBe(f.inProgress)
-  expect(leaves.review, `${label}: in review`).toBe(f.inReview)
-  expect(leaves, `${label}: status distribution`).toEqual(P.figures.statusCounts(scoped))
-  expect(summary.counts.paused, `${label}: paused`).toBe(f.pausedIssues.length)
-  expect(summary.overdue, `${label}: overdue`).toEqual({ state: 'ok', count: f.overdueCount })
-  expect(summary.any_task, `${label}: any task`).toEqual({ state: 'ok', value: scoped.length > 0 })
-  if (scope.kind === 'project')
-    expect(sorted(summary.sub_projects ?? []), `${label}: sub-projects`).toEqual(
-      sorted(info.subIds),
-    )
-  // a guest or an organization Viewer gets at most one owner's load a
-  // query, so a projection that needs more is unavailable for that reason
-  const staff = profile.org_role === 'admin' || profile.org_role === 'user'
-  if (staff || risk.projected.state === 'ok')
-    expect(risk.projected, `${label}: projected`).toEqual({
-      state: 'ok',
-      count: f.atRiskIssues.length - f.overdueCount,
-    })
-  else
-    expect(risk.projected, `${label}: projected`).toEqual({ state: 'unavailable', reason: 'loads' })
-
-  // the stand-in answers the summary and the delays alike
   // sub-projects in creation order, which the stand-in reads from the
   // rows' created_at and the server from the documents', as sets
   const subsAsSet = (a: SummaryAnswer) =>
@@ -330,160 +221,62 @@ async function expectParity(
     `${label}: stand-in summary`,
   ).toEqual(subsAsSet(summary))
   expect(stand('risk', { scope, ...days }), `${label}: stand-in risk`).toEqual(risk)
-
-  // the Overdue & at risk list, as a set and in due-date order, ties as sets
-  const byUuid = new Map(Object.values(P.issueById).map((it: Issue) => [it.uuid, it]))
-  const attentionBatches = await wholeBatches(
+  if (summary.state !== 'ok') return 0
+  // a guest's or Viewer's At-risk batch stops at the second owner whose load
+  // it needs, and the next goes on from there
+  const staff = profile.org_role === 'admin' || profile.org_role === 'user'
+  const attention = await wholeBatches(
     (cursor) =>
       caller.query(api.overview.attention, { scope, ...days, ...(cursor ? { cursor } : {}) }),
     `${label}: at risk`,
     !staff,
   )
-  const attention = attentionBatches.flatMap((b) => b.rows)
-  // the stand-in's batches end and stop where the server's do, with the
-  // same rows and verdicts in the same order
   const standAttention = await wholeBatches(
-    (cursor) => stand('attention', { scope, ...days, ...(cursor ? { cursor } : {}) }),
+    (cursor) => stand('attention', { scope, ...days, ...(cursor ? { cursor } : {}) }) as ListAnswer,
     `${label}: stand-in at risk`,
     !staff,
   )
   expect(batchFacts(standAttention), `${label}: stand-in at-risk batches`).toEqual(
-    batchFacts(attentionBatches),
+    batchFacts(attention),
   )
-  expect(sorted(attention.map((r) => r.id)), `${label}: at-risk rows`).toEqual(
-    sorted(f.atRiskIssues.map((it) => it.uuid)),
-  )
-  expect(dues(attention), `${label}: at-risk order`).toEqual(dues(f.atRiskIssues))
-  for (const row of attention) {
-    const it = byUuid.get(row.id) as Issue
-    if (it.due < P.TODAY_ISO)
-      expect(row.at_risk, `${label}: ${it.key}`).toEqual({ kind: 'overdue' })
-    else {
-      const fin = P.delayOf(it)?.fin
-      expect(row.at_risk, `${label}: ${it.key}`).toEqual({
-        kind: 'projected',
-        finish_week: fin == null ? null : P.isoFromDate(P.weekToDate(fin)),
-      })
-    }
-  }
-
-  // the Paused list by due date, undated last, ties as sets
-  const pausedBatches = await wholeBatches(
+  const paused = await wholeBatches(
     (cursor) => caller.query(api.overview.paused, { scope, ...(cursor ? { cursor } : {}) }),
     `${label}: paused`,
   )
-  const paused = pausedBatches.flatMap((b) => b.rows)
   const standPaused = await wholeBatches(
-    (cursor) => stand('paused', { scope, ...(cursor ? { cursor } : {}) }),
+    (cursor) => stand('paused', { scope, ...(cursor ? { cursor } : {}) }) as ListAnswer,
     `${label}: stand-in paused`,
   )
-  expect(batchFacts(standPaused), `${label}: stand-in paused batches`).toEqual(
-    batchFacts(pausedBatches),
-  )
-  expect(sorted(paused.map((r) => r.id)), `${label}: paused rows`).toEqual(
-    sorted(f.pausedIssues.map((it) => it.uuid)),
-  )
-  const pausedOrder = [...f.pausedIssues].sort((a, b) => order(a.due || '~', b.due || '~'))
-  expect(dues(paused), `${label}: paused order`).toEqual(dues(pausedOrder))
-
-  // the health table, through overview.health, each answer the stand-in's
-  const mine = P.isMineScope(scopeId)
-  if (info.isMeta || mine) {
-    const rows = P.figures.healthRows(info, scoped, mine)
-    const byProject = new Map(rows.map((r) => [r.proj.id, r]))
-    const health = async (over: Partial<OverviewArgs> = {}) => {
-      const args = {
-        scope,
-        ...days,
-        sort: 'late' as HealthSort,
-        dir: 'desc' as 'asc' | 'desc',
-        limit: OVERVIEW.healthRows,
-        ...over,
-      }
-      const got = await caller.query(api.overview.health, args)
-      expect(
-        overviewStandIn(P.snapshot, 'health', args, { sees: (id) => P.canSee(id) }),
-        `${label}: stand-in health ${JSON.stringify(over)}`,
-      ).toEqual(got)
-      if (got.state !== 'ok') throw new Error(`${label}: health ${JSON.stringify(got)}`)
-      return got
+  expect(batchFacts(standPaused), `${label}: stand-in paused batches`).toEqual(batchFacts(paused))
+  // the health table, each answer the stand-in's too
+  const health = async (over: Partial<Record<string, unknown>> = {}) => {
+    const args = {
+      scope,
+      ...days,
+      sort: 'late' as HealthSort,
+      dir: 'desc' as 'asc' | 'desc',
+      limit: OVERVIEW.healthRows,
+      ...over,
     }
-    const table = await health()
-    // every row of the oracle and no other: My view leaves out a project
-    // with none of the person's tasks
-    expect(sorted(table.rows.map((r) => r.project_id)), `${label}: health rows`).toEqual(
-      sorted(byProject.keys()),
-    )
-    expect(table.total, `${label}: health total`).toBe(rows.length)
-    // a guest's or Viewer's rows that need a second owner answer loads
-    const loads = staff ? new Set<string>() : needSecondOwner(P, rows)
-    for (const row of table.rows) {
-      const o = byProject.get(row.project_id)
-      if (o === undefined || row.counts.state !== 'ok')
-        throw new Error(`${label}: health row ${JSON.stringify(row)}`)
-      const leaves = row.counts.leaves
-      const all = Object.values(leaves).reduce((n, c) => n + c, 0)
-      expect(
-        {
-          name: row.name,
-          lead: row.lead_id,
-          leaves,
-          done: leaves.done,
-          total: all,
-          pct: all ? Math.round((leaves.done / all) * 100) : 0,
-          remaining: row.counts.left_tenths / 10,
-          paused: row.counts.paused,
-          delays: row.delays,
-        },
-        `${label}: health of ${o.proj.name}`,
-      ).toEqual({
-        name: o.proj.name,
-        lead: P.leadOf(o.proj.id) ?? null,
-        leaves: P.figures.statusCounts(o.issues),
-        done: o.done,
-        total: o.total,
-        pct: o.pct,
-        remaining: o.remaining,
-        paused: o.paused,
-        delays: loads.has(o.proj.id)
-          ? { state: 'unavailable', reason: 'loads' }
-          : { state: 'ok', late: o.late, behind: o.behind },
-      })
-    }
-    expect(table.sort, `${label}: health order`).toEqual(
-      loads.size > 0
-        ? { key: 'name', dir: 'asc', by_name: 'delays', missing: 'loads' }
-        : { key: 'late', dir: 'desc' },
-    )
-    if (orders) {
-      const ids = (a: HealthAnswer) => (a.state === 'ok' ? a.rows.map((r) => r.project_id) : [])
-      for (const sort of HEALTH_SORTS)
-        for (const dir of ['asc', 'desc'] as const) {
-          const want = P.figures.healthOrder(rows, sort, dir).map((r) => r.proj.id)
-          const whole = await health({ sort, dir })
-          expect(whole.sort, `${label}: ${sort} ${dir}`).toEqual({ key: sort, dir })
-          expect(ids(whole), `${label}: ${sort} ${dir}`).toEqual(want)
-          // a cut is the first rows of the same order
-          expect(
-            ids(await health({ sort, dir, limit: 2 })),
-            `${label}: ${sort} ${dir} cut`,
-          ).toEqual(want.slice(0, 2))
-        }
-      // a search of one word of a row's name
-      const word = rows[0]?.proj.name.split(/\s+/)[0]
-      if (word !== undefined) {
-        const matches = allWordsMatcher(nameKey(word))
-        expect(sorted(ids(await health({ search: word }))), `${label}: search ${word}`).toEqual(
-          sorted(rows.filter((r) => matches(nameKey(r.proj.name))).map((r) => r.proj.id)),
-        )
-      }
-    }
+    const got = await caller.query(api.overview.health, args)
+    expect(stand('health', args), `${label}: stand-in health ${JSON.stringify(over)}`).toEqual(got)
+    return got
   }
-  return scoped.length
+  const table = await health()
+  if (orders && table.state === 'ok') {
+    for (const sort of HEALTH_SORTS)
+      for (const dir of ['asc', 'desc'] as const) {
+        await health({ sort, dir })
+        await health({ sort, dir, limit: 2 })
+      }
+    // a search of one word of a row's name
+    const word = table.rows[0]?.name.split(/\s+/)[0]
+    if (word !== undefined) await health({ search: word })
+  }
+  return summary.counts.state === 'ok'
+    ? Object.values(summary.counts.leaves).reduce((n, c) => n + c, 0)
+    : 0
 }
-
-/* -1, 0 or 1 as `a` sorts before, with or after `b` in code unit order. */
-const order = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 
 /** The scopes a caller's store offers: each top-level project it shows,
  * each of their sub-projects and My view. */
@@ -517,7 +310,7 @@ it("keeps the app's batch, split and week figures and the stand-in's health cap 
 // ---------------------------------------------------------------- Northstar
 
 describe('Northstar', () => {
-  it('answers what the store derives, for Nora, Leo and Ben, every scope', async () => {
+  it('answers as the stand-in does, for Nora, Leo and Ben, every scope', async () => {
     const t = newT()
     const { profiles } = await plantNorthstar(t)
     await withReach(t)
@@ -533,13 +326,12 @@ describe('Northstar', () => {
     const nora = await person('nora')
     for (const profile of [nora, ...(await Promise.all(['leo', 'ben'].map(person)))]) {
       const P = await storeOf(t, profile, now)
-      for (const [scopeLabel, scope, storeScope] of scopesOf(P, profile))
+      for (const [scopeLabel, scope] of scopesOf(P, profile))
         held += await expectParity(
           t,
           P,
           profile,
           scope,
-          storeScope,
           `${profile.name}, ${scopeLabel}`,
           profile === nora,
         )
@@ -690,26 +482,19 @@ async function compareShape(
     ['My view', { kind: 'mine' }, P.MINE_SCOPE],
   ]
   let held = 0
-  for (const [label, scope, storeScope] of scopes)
-    held += await expectParity(
-      t,
-      P,
-      subject,
-      scope,
-      storeScope,
-      `${role}, ${shape?.[0] ?? 'admin'}, ${label}`,
-    )
+  for (const [label, scope] of scopes)
+    held += await expectParity(t, P, subject, scope, `${role}, ${shape?.[0] ?? 'admin'}, ${label}`)
   return held
 }
 
 describe('access shapes', () => {
-  it('answers what the store derives for the fixture’s admin, who reads by grants', async () => {
+  it('answers as the stand-in does for the fixture’s admin, who reads by grants', async () => {
     expect(await compareShape(null, 'admin')).toBeGreaterThan(0)
   })
 
   // an admin's seat is judged by its own rows, as any member's
   for (const role of ['admin', 'user', 'guest', 'viewer'] as const)
-    it(`answers what the store derives for ${role === 'admin' ? 'an' : 'a'} ${role} in every shape`, async () => {
+    it(`answers as the stand-in does for ${role === 'admin' ? 'an' : 'a'} ${role} in every shape`, async () => {
       let showing = 0
       for (const shape of SHAPES) if ((await compareShape(shape, role)) > 0) showing++
       // a guest takes no team shares, so fewer shapes show them anything
@@ -732,7 +517,9 @@ describe('rules a drift would break', () => {
     const summary = await as(t, f.admin).query(api.overview.summary, { scope, day: P.TODAY_ISO })
     if (summary.state !== 'ok' || summary.counts.state !== 'ok' || summary.overdue.state !== 'ok')
       throw new Error(JSON.stringify(summary))
-    return { t, f, P, scoped: P.scopedIssues(info), scope, summary, counts: summary.counts }
+    // the stored tasks of the scope, which a drifted rule reads
+    const scoped = P.snapshot.issues.filter((row) => info.subIdSet.has(row.project_id))
+    return { t, f, P, scoped, scope, summary, counts: summary.counts }
   }
 
   it("differs from a rule that counts a group's own pause", async () => {
@@ -742,7 +529,9 @@ describe('rules a drift would break', () => {
 
   it("differs from a rule that takes a group's done state from its stored status", async () => {
     const { P, scoped, summary } = await adminCase()
-    const drifted = scoped.filter((it) => it.status !== 'done' && it.due && it.due < P.TODAY_ISO)
+    const drifted = scoped.filter(
+      (row) => row.status !== 'done' && row.due_date && row.due_date < P.TODAY_ISO,
+    )
     expect(summary.overdue).not.toEqual({ state: 'ok', count: drifted.length })
   })
 
@@ -761,9 +550,14 @@ describe('rules a drift would break', () => {
     if (got.state !== 'ok') throw new Error(JSON.stringify(got))
     const pcb = got.rows.find((r) => r.project_id === f.sub2.id)
     expect(pcb?.delays).toEqual({ state: 'ok', late: 0, behind: 0 })
-    // PCB holds an overdue task, which a rule without the tracking gate counts
-    const drifted = P.scopedIssues(info).filter(
-      (it) => it.project === f.sub2.id && P.delayOf(it)?.status === 'late',
+    // PCB holds an overdue task, which a rule without the tracking gate
+    // counts as Delayed, since a passed due date is late whatever the load
+    const drifted = P.snapshot.issues.filter(
+      (row) =>
+        row.project_id === f.sub2.id &&
+        row.status !== 'done' &&
+        !!row.due_date &&
+        row.due_date < P.TODAY_ISO,
     ).length
     expect(drifted).toBeGreaterThan(0)
   })
@@ -800,11 +594,13 @@ describe('rules a drift would break', () => {
     const info = oracleScope(P.snapshot, P.MINE_SCOPE)
     const group = info?.groups.find((g) => g.proj.id === f.meta.id)
     if (!info || !group) throw new Error('no TBED in My view')
-    // the oracle rounds once, as the server does; hours added up a
-    // sub-project at a time do not
-    expect(P.figures.healthRows(info, P.scopedIssues(info), true)[0]?.remaining).toBe(left)
+    // the server rounds once; hours added up a sub-project at a time do not
     const drifted = group.subIds.reduce(
-      (sum, id) => sum + P.figures.remainingIn([id], info.only),
+      (sum, id) =>
+        sum +
+        P.snapshot.issues
+          .filter((row) => row.project_id === id && row.assignee_id === f.admin.id)
+          .reduce((hours, row) => hours + (row.remaining_hours ?? 0), 0),
       0,
     )
     expect(drifted).not.toBe(left)
@@ -847,7 +643,7 @@ describe('rules a drift would break', () => {
     expect(days.day).toBe('2026-11-01')
     expect(days.week_end - days.week_starts[52]).toBe(169 * 3_600_000)
     const scope = projectScope(f.admin, f.sub.id)
-    expect(await expectParity(t, P, f.admin, scope, f.sub.id, 'fall-back week')).toBe(1)
+    expect(await expectParity(t, P, f.admin, scope, 'fall-back week')).toBe(1)
     // a week measured as 168 hours places the instant in the next one
     const fixed = { ...days, week_end: days.week_starts[52] + 168 * 3_600_000 }
     const local = await as(t, f.admin).query(api.overview.risk, { scope, ...days })

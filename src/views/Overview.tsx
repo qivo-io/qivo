@@ -18,8 +18,8 @@ import { HoverTooltip } from '@/components/ui/tooltip'
    collapsed Past 25 at a time, of the scope's top-level project or of My
    view's projects with `mine`
    (views/useScopeMilestones.ts, views/overview/OverviewMilestones.tsx),
-   with Next milestone from Upcoming's first row. The lists' rows still
-   read the workspace where it holds their tasks. */
+   with Next milestone from Upcoming's first row. Every list row is a model
+   the store shaped from its answer's row. */
 
 import {
   type MouseEvent,
@@ -444,12 +444,9 @@ const OvAtRiskRow = memo(
     sameRisk(a.risk, b.risk),
 )
 
-/** The model a list row shows: the workspace's where it holds the task,
-    else the model the store shaped from the answer's row, in the batch's
-    view slot or any other (store/viewRows.ts). */
+/** The model a list row shows, the one the store shaped from the answer's
+    row, in the batch's view slot or any other (store/viewRows.ts). */
 function modelOf(slot: string, row: OverviewRow): IssueVM | undefined {
-  const handle = P.handleOf(row.id)
-  if (handle !== null) return P.issueById[handle]
   return P.viewTask(slot, row.id) ?? P.anyTask(P.handleNow(row.id, row.org_id, row.num))
 }
 
@@ -623,9 +620,8 @@ function OvList({
   })
   // the people the list's loaded rows show, named while it shows
   usePeople(owners)
-  // as the Board's: a row with no model fails STALL.ms later while no task
-  // load is on its way, which could still bring its model
-  const stalled = useStall(missing > 0 && !P.tasksArriving(), kind)
+  // as the Board's: a row with no model fails STALL.ms later
+  const stalled = useStall(missing > 0, kind)
   const end = list.end && missing === 0
   const state = missing > 0 ? (stalled ? 'incomplete' : 'loading') : list.state
   // where earlier batches went, the first batch left on screen keeps its

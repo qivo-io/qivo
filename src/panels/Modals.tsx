@@ -1139,12 +1139,6 @@ function ParentChoiceList({
   )
 }
 
-/** Why moving, archiving or deleting a task the workspace holds waits
-    while tasks still load and no answer of its own serves its subtasks:
-    each acts on subtasks and blockers that may be still to arrive. Only a
-    store that asked for every task, as the scripts' and the benchmark's,
-    holds a task before every task has loaded. */
-export const WAITS_FOR_TASKS = 'Available once every task has loaded'
 /** Why a control of the person's own new task that reads the server about
     the task waits until it is saved (components/rowElements.tsx). */
 export { WAITS_FOR_SAVE }
@@ -1157,19 +1151,17 @@ export const WAITS_FOR_CHECK = 'Available once Qivo can check this task for chan
 export const FAMILY_UNKNOWN = 'Not available while Qivo cannot read every subtask of this task'
 
 /** Why a task's Move or Archive or delete window cannot act, with no
-    family (P.familyOf). A task the workspace holds waits for every task,
-    the person's new task shown from what its create sent waits until it
-    is saved, and one the window shows from its own read waits for that
-    read to be current again (P.answerSaveWaits), else for its whole
-    subtask list, as the task window's menu says (IssueDetail fateTip). */
+    family (P.familyOf). The person's new task shown from what its create
+    sent waits until it is saved, and one the window shows from its own
+    read waits for that read to be current again (P.answerSaveWaits), else
+    for its whole subtask list, as the task window's menu says (IssueDetail
+    fateTip). */
 const familyWait = (it: IssueVM) =>
-  P.issueById[it.id]
-    ? WAITS_FOR_TASKS
-    : P.taskDetail(it.uuid, it.org)?.saving
-      ? WAITS_FOR_SAVE
-      : P.answerSaveWaits(it.id)
-        ? WAITS_FOR_CHECK
-        : FAMILY_UNKNOWN
+  P.taskDetail(it.uuid, it.org)?.saving
+    ? WAITS_FOR_SAVE
+    : P.answerSaveWaits(it.id)
+      ? WAITS_FOR_CHECK
+      : FAMILY_UNKNOWN
 
 /** What the Move window says while the project cache has no facts of the
     task's or its parent's sub-project (P.moveWaits), which Move waits for. */
@@ -1191,28 +1183,23 @@ const MOVE_TARGET_WORDS: ChoiceWords = {
 }
 
 /* ---------- Move issue ----------
-   The task is the window's (`task`), the workspace's or one shown from
-   its own read, else the workspace's task `issueId`. What the move takes
-   along and who would lose access come from its family (P.familyOf),
-   read on every render, so a family that turns unknown while the window
-   is open, as when the task arrives in the workspace with every task
-   while no answer serves its family, shows the reason and refuses the
-   move. */
+   The task is the window's (`task`), shown from its own read. What the
+   move takes along and who would lose access come from its family
+   (P.familyOf), read on every render, so a family that turns unknown while
+   the window is open, as when the window's read fails, shows the reason
+   and refuses the move. */
 function MoveIssueModal({
-  issueId,
-  task,
+  task: it,
   onClose,
   onMove,
   focusAfterClose,
 }: {
-  issueId: string
-  task?: IssueVM
+  task: IssueVM
   onClose: () => void
   onMove: (target: string) => void
   focusAfterClose?: () => HTMLElement | null
 }) {
-  const it = task ?? P.issueById[issueId]
-  const family = it ? P.familyOf(it) : null
+  const family = P.familyOf(it)
   // Same-organization destinations with write access, from the server
   // (projectNav.targets in the task's organization, components/
   // TargetPicker.tsx), the task's own sub-project marked current. The
@@ -1225,22 +1212,19 @@ function MoveIssueModal({
   const [targetName, setTargetName] = useStateM('')
   // the chosen row, and the task's and its parent's sub-projects, whose
   // top-level projects decide what the move takes along (P.moveWaits)
-  const parentTask = it?.parent
-    ? ((family?.byId ?? P.issueById)[it.parent] ?? P.issueById[it.parent])
-    : undefined
-  const retryTarget = useProjects([target || null, it?.project, parentTask?.project])
+  const parentTask = it.parent ? family?.byId[it.parent] : undefined
+  const retryTarget = useProjects([target || null, it.project, parentTask?.project])
   // A move to another top-level project carries the subtasks, archived ones
   // included. Archived tasks are not in this view, so the server answers
   // whether any would move to the chosen sub-project.
   const [asked, setAsked] = useStateM<{ target: string; carries: boolean } | null>(null)
   const crossing =
-    !!it &&
     !!target &&
     !!P.project(target) &&
     target !== it.project &&
     P.topLevelOf(target) !== P.topLevelOf(it.project)
   useEffectM(() => {
-    if (!crossing || !it) return
+    if (!crossing) return
     let live = true
     P.moveCarriesSubtasks(it, target).then((carries) => {
       if (live && carries !== null) setAsked({ target, carries })
@@ -1248,8 +1232,7 @@ function MoveIssueModal({
     return () => {
       live = false
     }
-  }, [crossing, it?.uuid, target])
-  if (!it) return null
+  }, [crossing, it.uuid, target])
   // Move waits for the project cache's answer of the chosen row, one round
   // trip after the pick, as the store moves only into a target it answered
   // writable (P.moveIssue); one it answers gone, as a concurrently deleted
@@ -1272,7 +1255,7 @@ function MoveIssueModal({
   // leaves the parent and carries the subtasks along; the dialog says so
   const moved = moving && family && !waits ? P.moveFamily(it, target, family) : null
   const carries = !!moved?.carriesSubtasks || (asked?.target === target && asked.carries)
-  const parentKey = it.parent ? (family?.byId[it.parent] ?? P.issueById[it.parent])?.key : undefined
+  const parentKey = it.parent ? family?.byId[it.parent]?.key : undefined
   const notes = [
     !family && `${familyWait(it)}.`,
     waits && moveWaitNote(waits),
@@ -1359,7 +1342,7 @@ function MoveIssueModal({
    only: who loses sight, the tasks the caller may read (up to
    LIMITS.reassign.max, with a count of the rest and of those in projects
    the caller cannot see), and whether each choice passes the write's
-   rules, never a task or a figure from the tasks the workspace holds.
+   rules, never a task or a figure of the store's own.
    Keeping them as Viewers is selected first; reassigning hands every
    listed task to one person the server lists (ReassignPicker), or to
    nobody, and then removes the access. Removing someone whose grant is
@@ -2178,7 +2161,7 @@ type TaskPlans = {
 /* Both lists of a task from its family, or none while it is unknown. */
 const readPlans = (family: TaskFamily | null): TaskPlans =>
   family
-    ? { archive: archivePlan(family), delete: P.deletePlan(family.root.id, family) }
+    ? { archive: archivePlan(family), delete: P.deletePlan(family) }
     : { archive: { rows: [], hidden: false }, delete: { rows: [], deletable: [], hidden: false } }
 /* What a choice depends on, to tell whether it changed since the person read it. */
 const planKey = (plans: TaskPlans, fate: Fate) =>
@@ -2199,12 +2182,11 @@ const planKey = (plans: TaskPlans, fate: Fate) =>
    ignoring clicks for a second, so what leaves is what the person read. Both
    actions wait for the server, the window refuses to close meanwhile, and a
    refusal leaves it open on the lists as they are now. The task is the
-   window's (`task`), the workspace's or one shown from its own read, else
-   the workspace's task `issueId`, and its lists come from its family
-   (P.familyOf): while that is unknown, also once the window is open, it
-   says why and acts on nothing. */
+   window's (`task`), shown from its own read, and its lists come from its
+   family (P.familyOf): while that is unknown, also once the window is
+   open, it says why and acts on nothing. While its own archive or delete
+   is on its way the window shows no task, and nothing here either. */
 function ArchiveOrDeleteTaskModal({
-  issueId,
   task,
   onClose,
   onArchive,
@@ -2213,8 +2195,8 @@ function ArchiveOrDeleteTaskModal({
   initialReason = '',
   focusAfterClose,
 }: {
-  issueId: string
-  /** the task the window shows, the workspace's or one from its own read */
+  /** the task the window shows from its own read, none while its own
+      archive or delete is on its way */
   task?: IssueVM
   onClose: () => void
   /** the reason the field starts with, such as one the task window kept */
@@ -2229,12 +2211,12 @@ function ArchiveOrDeleteTaskModal({
   onDelete: (subtasks: string[], reason: string) => Promise<boolean>
   focusAfterClose?: () => HTMLElement | null
 }) {
-  const it = task ?? P.issueById[issueId]
+  const it = task
   const family = it ? P.familyOf(it) : null
   // the family as it is at a click, which a delivery since the last render
   // may have changed: the task as the window shows it now
   const familyNow = () => {
-    const now = task ? (P.taskShown(task.id) ?? task) : P.issueById[issueId]
+    const now = task ? (P.taskShown(task.id) ?? task) : undefined
     return now ? P.familyOf(now) : null
   }
   const [plans, setPlans] = useStateM(() => readPlans(family))
@@ -2258,7 +2240,7 @@ function ArchiveOrDeleteTaskModal({
   const hasSubtasks = rows.length > 0 || hidden
   const n = plan.deletable.length
   // the statuses as they are now; the rows are what the window opened with
-  const live = (row: IssueVM) => family?.byId[row.id] ?? P.issueById[row.id] ?? row
+  const live = (row: IssueVM) => family?.byId[row.id] ?? row
   const unfinishedRows = rows.filter((r) => !P.isDone(live(r.task))).length
   const readOnly = rows.some((r) => !r.editable)
   const withSubtasks = archiving ? archiveAll && hasSubtasks : deleteAll && n > 0

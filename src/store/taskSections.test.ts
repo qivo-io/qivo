@@ -491,7 +491,6 @@ describe("the task window's sections in the store", () => {
         uuid: 'kid-3',
         handle: 'QN-7',
         title: 'Elsewhere',
-        held: false,
       })
       // a new seat's organization holds the workspace; the answers still show
       double.live?.hold('org-2')

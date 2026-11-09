@@ -3,7 +3,7 @@ import { getFunctionName } from 'convex/server'
 import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BOARD_TEST_TIMEOUT, cell, loadBoardWithTasks, taskRow } from '../views/boardFixture.setup'
+import { BOARD_TEST_TIMEOUT, cell, loadBoard, taskRow } from '../views/boardFixture.setup'
 
 /* Closing a task window returns focus to the Board card it was opened
    from, also when an edit in the window moved that card to another cell,
@@ -65,7 +65,7 @@ afterEach(async () => {
 const settle = () => act(async () => await new Promise((resolve) => setTimeout(resolve, 50)))
 
 describe('closing a task window', { timeout: BOARD_TEST_TIMEOUT }, () => {
-  type Board = Awaited<ReturnType<typeof loadBoardWithTasks>>
+  type Board = Awaited<ReturnType<typeof loadBoard>>
   /* Opens A from its card's title, applies `edit` in the window, given a way
      to open another task there, and closes it. The window stays mounted
      with no task, as App keeps it. Returns the title of `uuid`'s card as
@@ -75,7 +75,7 @@ describe('closing a task window', { timeout: BOARD_TEST_TIMEOUT }, () => {
     uuid = 'a',
     backlog = 0,
   ) {
-    const board = await loadBoardWithTasks(network, (snap) => {
+    const board = await loadBoard(network, (snap) => {
       snap.issues.push(taskRow(snap, 'a', 'todo', 1), taskRow(snap, 'b', 'todo', 2))
       for (let n = 0; n < backlog; n++)
         snap.issues.push(taskRow(snap, `backlog-${n}`, 'backlog', n + 3))
@@ -105,7 +105,7 @@ describe('closing a task window', { timeout: BOARD_TEST_TIMEOUT }, () => {
 
   it('returns focus to the card where the edit moved it', async () => {
     const title = await openEditClose(({ P }) => {
-      const a = P.issues.find((it) => it.uuid === 'a')!
+      const a = P.viewTask('board:desktop', 'a')!
       P.updateIssue(a.id, { status: 'progress' })
     })
     expect(cell('progress')?.contains(title!)).toBe(true)
@@ -124,7 +124,7 @@ describe('closing a task window', { timeout: BOARD_TEST_TIMEOUT }, () => {
     )
     const title = await openEditClose(
       ({ P }) => {
-        const a = P.issues.find((it) => it.uuid === 'a')!
+        const a = P.viewTask('board:desktop', 'a')!
         P.updateIssue(a.id, { status: 'progress' })
       },
       'a',
@@ -159,7 +159,7 @@ describe('closing a task window', { timeout: BOARD_TEST_TIMEOUT }, () => {
     const title = await openEditClose(async (board, open) => {
       // the window moves on to B; elsewhere A is archived and B moved on, so
       // no card is left where A was
-      open(board.P.issues.find((it) => it.uuid === 'b')!.id)
+      open(board.P.viewTask('board:desktop', 'b')!.id)
       board.snapshot.issues = board.snapshot.issues.filter((issue) => issue.id !== 'a')
       board.snapshot.issues.find((issue) => issue.id === 'b')!.status = 'review'
       await board.deliver()
@@ -170,18 +170,27 @@ describe('closing a task window', { timeout: BOARD_TEST_TIMEOUT }, () => {
 })
 
 describe('archiving the task from its window', { timeout: BOARD_TEST_TIMEOUT }, () => {
-  type Board = Awaited<ReturnType<typeof loadBoardWithTasks>>
+  type Board = Awaited<ReturnType<typeof loadBoard>>
   type Status = Parameters<typeof taskRow>[2]
+  /* The archive the server holds until the test answers it: the task it
+     archives and the write's answer. */
+  let archive: { board: Board; id: string; accept: () => void } | null = null
   /** Loads the Board's store with `tasks` (uuid, status and whether it is
-      paused), with the server accepting an archive. */
+      paused), with the server accepting an archive once the test lets it
+      (archiveFrom). */
   async function load(tasks: [string, Status, boolean?][]) {
-    const board = await loadBoardWithTasks(network, (snap) => {
+    const board = await loadBoard(network, (snap) => {
       tasks.forEach(([uuid, status, paused = false], n) => {
         snap.issues.push({ ...taskRow(snap, uuid, status, n + 1), paused })
       })
     })
-    network.mutation.mockImplementation((ref) =>
-      getFunctionName(ref) === 'issues:archive' ? Promise.resolve(null) : new Promise(() => {}),
+    archive = null
+    network.mutation.mockImplementation((ref, args) =>
+      getFunctionName(ref) === 'issues:archive'
+        ? new Promise((resolve) => {
+            archive = { board, id: (args as { id: string }).id, accept: () => resolve(null) }
+          })
+        : new Promise(() => {}),
     )
     return board
   }
@@ -224,6 +233,13 @@ describe('archiving the task from its window', { timeout: BOARD_TEST_TIMEOUT }, 
         (b) => b.textContent === 'Archive',
       ),
     )
+    // the server archives the task: the views' answers drop it before the
+    // write answers, as Convex delivers them (lib/convexOrdering.test.ts)
+    const held = archive as { board: Board; id: string; accept: () => void } | null
+    if (!held) throw new Error('no archive was sent')
+    held.board.snapshot.issues = held.board.snapshot.issues.filter((row) => row.id !== held.id)
+    await held.board.deliver()
+    await act(async () => held.accept())
     await settle()
     expect(document.querySelector('[data-task-close]')).toBeNull()
   }
@@ -312,10 +328,8 @@ describe('archiving the task from its window', { timeout: BOARD_TEST_TIMEOUT }, 
     await renderOverview(board)
     await archiveFrom(pausedRow(pausedRows()[0]))
     expect(document.querySelector('[data-ovrow]')).toBeNull()
-    // the row leaves at once; the count is the server's summary, which waits
-    // for the answer that holds the archive, and the list shows no empty
-    // line before its answer ends with no row
-    expect(focused()).toBe('Paused tasks, 1')
-    expect(document.body.textContent).not.toContain('Nothing is paused right now.')
+    // the row leaves with the answers that hold the archive, and the
+    // heading's count is the server's summary of them
+    expect(focused()).toBe('Paused tasks')
   })
 })

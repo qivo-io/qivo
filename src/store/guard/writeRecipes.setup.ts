@@ -618,7 +618,7 @@ export const recipes: Recipe[] = [
     paintsOnAccept: true,
     pause: 'P',
     detail: { answer: (args) => (args ? { state: 'unavailable' } : windowAnswer()) },
-    act: (P) => P.deleteIssue('QN-80', [], true),
+    act: (P) => P.deleteIssue('QN-80', []),
   },
   {
     mutation: 'labels:toggle',
@@ -680,8 +680,8 @@ export const recipes: Recipe[] = [
   },
   {
     mutation: 'files:removeAttachment',
-    mutator: 'removeUnheldAttachment',
-    what: 'a file only the window’s attachments answer holds removed',
+    mutator: 'removeFile',
+    what: 'a file the window’s attachments answer holds removed',
     pause: 'P',
     detail: {
       answer: () => windowAnswer(),

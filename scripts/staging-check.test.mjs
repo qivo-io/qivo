@@ -1430,9 +1430,10 @@ describe('staging check REST contract', () => {
     expect(TASK_WINDOWS_QUERY).toBe('workspace:tasks')
     expect(ROADMAP_QUERY).toBe('tasks:roadmap')
     expect(ASSIGNEE_LOAD_QUERY).toBe('planning:assigneeLoad')
-    // the registry subscribes the workspace's task windows by that name
+    // the registry subscribes no task window, so a frame that adds one
+    // is a client the step must fail
     const parts = readFileSync(new URL('../src/store/liveParts.ts', import.meta.url), 'utf8')
-    expect(parts).toContain('watch(api.workspace.tasks, {')
+    expect(parts).not.toContain('api.workspace.tasks')
     const add = (udfPath) => ({ type: 'Add', queryId: 1, udfPath, args: [{}] })
     const frame = (...modifications) =>
       JSON.stringify({ type: 'ModifyQuerySet', baseVersion: 0, newVersion: 1, modifications })

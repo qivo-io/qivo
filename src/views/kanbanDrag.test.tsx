@@ -5,14 +5,20 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { IssueVM } from '../store/planner'
-import {
-  BOARD_TEST_TIMEOUT,
-  cell,
-  dragEvent,
-  loadBoard,
-  loadBoardWithTasks,
-  taskRow,
-} from './boardFixture.setup'
+import { BOARD_TEST_TIMEOUT, cell, dragEvent, loadBoard, taskRow } from './boardFixture.setup'
+
+/** The handle the Board names task `uuid` of the server's data by
+    (P.handleNow). */
+const handleOf = (
+  board: {
+    P: { handleNow(uuid: string, org: string, num: number): string }
+    snapshot: { issues: { id: string; org_id: string; num: number }[] }
+  },
+  uuid: string,
+) => {
+  const row = board.snapshot.issues.find((t) => t.id === uuid)
+  return row ? board.P.handleNow(row.id, row.org_id, row.num) : ''
+}
 
 /* Dragging a Board card on the real store, into a status and into a
    person's lane, where the write, not the browser, judges the person. */
@@ -79,7 +85,7 @@ afterEach(async () => {
 
 /* A card in To Do and twenty in In Progress. */
 const crowded = () =>
-  loadBoardWithTasks(network, (snap) => {
+  loadBoard(network, (snap) => {
     snap.issues.push(taskRow(snap, 'a', 'todo', 1))
     for (let n = 0; n < 20; n++) snap.issues.push(taskRow(snap, `p${n}`, 'progress', n + 2))
   })
@@ -119,7 +125,7 @@ describe('dragging a Board card', { timeout: BOARD_TEST_TIMEOUT }, () => {
   it('clears the highlight when the drag drops or ends', async () => {
     const board = await crowded()
     await board.render(root)
-    const status = () => board.P.issues.find((it) => it.uuid === 'a')?.status
+    const status = () => board.P.anyTask(handleOf(board, 'a'))?.status
     await act(async () => board.card('a')?.dispatchEvent(dragEvent('dragstart')))
     await over('review')
     await act(async () => board.card('a')?.dispatchEvent(dragEvent('dragend')))
@@ -136,7 +142,7 @@ describe('dragging a Board card', { timeout: BOARD_TEST_TIMEOUT }, () => {
   it('takes no drop from a drag that did not start on a card', async () => {
     const board = await crowded()
     await board.render(root)
-    const status = () => board.P.issues.find((it) => it.uuid === 'a')?.status
+    const status = () => board.P.anyTask(handleOf(board, 'a'))?.status
     // the card's own drag ends where the Board never hears of it
     await act(async () => board.card('a')?.dispatchEvent(dragEvent('dragstart')))
     // a file dragged in from the desktop carries no task
@@ -156,7 +162,7 @@ describe('dragging a Board card', { timeout: BOARD_TEST_TIMEOUT }, () => {
   })
 
   it('ends once the dragged card has left the page', async () => {
-    const board = await loadBoardWithTasks(network, (snap) => {
+    const board = await loadBoard(network, (snap) => {
       snap.issues.push(taskRow(snap, 'a', 'todo', 1), taskRow(snap, 'b', 'todo', 2))
     })
     await board.render(root)
@@ -263,7 +269,7 @@ describe('dragging a Board card', { timeout: BOARD_TEST_TIMEOUT }, () => {
   })
 
   it('keeps a drag whose card is still on the page', async () => {
-    const board = await loadBoardWithTasks(network, (snap) => {
+    const board = await loadBoard(network, (snap) => {
       snap.issues.push(taskRow(snap, 'a', 'todo', 1))
     })
     await board.render(root)

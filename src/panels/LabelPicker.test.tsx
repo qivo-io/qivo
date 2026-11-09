@@ -253,11 +253,14 @@ const task = () => P.taskDetail(taskUuid, org)?.view as IssueVM
 
 /* Opens the picker for the task `of` answers, the store's task by default,
    as the window renders it again with the task's model after each change
-   of the store, and returns its search field. */
+   of the store and of the window's own answer, which the store tells on
+   the comments channel as IssueDetail hears it, and returns its search
+   field. */
 async function open(of: () => IssueVM | undefined = task): Promise<HTMLInputElement> {
   const { usePlannerVersion } = await import('../store/usePlannerVersion')
   function Window() {
     usePlannerVersion()
+    usePlannerVersion('comments')
     const it = of()
     return it ? <picker.LabelPickerPopup it={it} anchor={{ x: 0, y: 0 }} onDone={vi.fn()} /> : null
   }

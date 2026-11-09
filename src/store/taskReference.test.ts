@@ -21,7 +21,7 @@ import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.se
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
-  live: null as null | { holdWindow(from: string | null): void; reconnect(): void },
+  live: null as null | { reconnect(): void },
 }))
 vi.mock('../lib/convex', async () => {
   const { liveOver } = await import('./guard/liveDouble.setup')
@@ -214,7 +214,6 @@ beforeEach(async () => {
 
 afterEach(() => {
   if (store?.__layerProbe) expect(store.__layerProbe.faults()).toEqual([])
-  double.live?.holdWindow(null)
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })

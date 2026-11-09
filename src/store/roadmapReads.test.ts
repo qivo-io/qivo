@@ -84,7 +84,7 @@ const watch = (board: Board, key: string | null, attempt = 0) =>
   })
 
 describe("the store's Roadmap reads", { timeout: BOARD_TEST_TIMEOUT }, () => {
-  it("brings the answer's rows into the views' rows, never the workspace's", async () => {
+  it("brings the answer's rows into the views' rows", async () => {
     const board = await loadBoard(network, two)
     const one = board.snapshot.projects[0].id
     await watch(board, keyOf(board, one).key)
@@ -92,8 +92,6 @@ describe("the store's Roadmap reads", { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(read.current).toBe(true)
     expect(read.value?.state).toBe('ok')
     expect(board.P.viewTask('roadmap', 'a')?.key).toBe('QN-1')
-    expect(board.P.handleOf('a')).toBeNull()
-    expect(board.P.tasksHeld()).toBe(false)
   })
 
   it('keeps the held answer for a new window or planned task until its own answer, and drops it for another scope', async () => {

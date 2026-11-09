@@ -186,8 +186,6 @@ async function app(snap: Snapshot, path: string) {
   })
   // the app's boot, which asks for no task, so the store holds none and
   // only the views name projects (the test default holds every task)
-  const { TASKS } = await import('../store/liveParts')
-  TASKS.atBoot = false
   const store = await import('../store/planner')
   await store.initStore()
   const { syncStatus } = await import('../lib/syncStatus')

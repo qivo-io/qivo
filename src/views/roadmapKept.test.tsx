@@ -4,7 +4,20 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { KeptView } from '../components/KeptView'
 import { withoutTaken } from '../lib/reveal'
-import { BOARD_TEST_TIMEOUT, loadBoardWithTasks, taskRow } from './boardFixture.setup'
+import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
+
+/** The handle the Board names task `uuid` of the server's data by
+    (P.handleNow). */
+const handleOf = (
+  board: {
+    P: { handleNow(uuid: string, org: string, num: number): string }
+    snapshot: { issues: { id: string; org_id: string; num: number }[] }
+  },
+  uuid: string,
+) => {
+  const row = board.snapshot.issues.find((t) => t.id === uuid)
+  return row ? board.P.handleNow(row.id, row.org_id, row.num) : ''
+}
 
 /* A kept Roadmap (components/KeptView) shown again runs its effects again
    with the props it held: a request to plan or show a task that it took
@@ -111,7 +124,7 @@ describe('a kept Roadmap shown again', { timeout: BOARD_TEST_TIMEOUT * 2 }, () =
     ['on a desktop-wide screen, as the desktop timeline', false],
   ])('shows itself %s after it hid with the landscape timeline open', async (_, phoneAgain) => {
     const phone = phoneScreen()
-    const board = await loadBoardWithTasks(network, (snap) => {
+    const board = await loadBoard(network, (snap) => {
       snap.issues.push(taskRow(snap, 't1', 'todo', 1))
     })
     const { Roadmap } = await import('./Roadmap')
@@ -144,14 +157,14 @@ describe('a kept Roadmap shown again', { timeout: BOARD_TEST_TIMEOUT * 2 }, () =
   })
 
   it('does not plan again a task it took to plan before it hid', async () => {
-    const board = await loadBoardWithTasks(network, (snap) => {
+    const board = await loadBoard(network, (snap) => {
       snap.issues.push({ ...taskRow(snap, 't1', 'todo', 1), assignee_id: null })
     })
     const { Roadmap } = await import('./Roadmap')
     const actions = new Proxy({}, { get: () => () => {} }) as Parameters<
       typeof Roadmap
     >[0]['actions']
-    const id = board.P.issues.find((it) => it.uuid === 't1')?.id ?? ''
+    const id = handleOf(board, 't1')
     const consumed = vi.fn()
     const plan = { id, n: 1 }
     const render = (shown: boolean) =>
@@ -182,7 +195,7 @@ describe('a kept Roadmap shown again', { timeout: BOARD_TEST_TIMEOUT * 2 }, () =
     expect(consumed).toHaveBeenCalledTimes(1)
   })
   it('says a task asked for is not on the roadmap any more when the loaded Roadmap does not hold it', async () => {
-    const board = await loadBoardWithTasks(network, (snap) => {
+    const board = await loadBoard(network, (snap) => {
       snap.issues.push({ ...taskRow(snap, 't1', 'todo', 1), assignee_id: null })
     })
     const { Roadmap } = await import('./Roadmap')
@@ -214,7 +227,7 @@ describe('a kept Roadmap shown again', { timeout: BOARD_TEST_TIMEOUT * 2 }, () =
   })
 
   it('leaves the request made while it hid, as it lets go of the one it held', async () => {
-    const board = await loadBoardWithTasks(network, (snap) => {
+    const board = await loadBoard(network, (snap) => {
       snap.issues.push({ ...taskRow(snap, 't1', 'todo', 1), assignee_id: null })
       snap.issues.push({ ...taskRow(snap, 't2', 'todo', 2), assignee_id: null })
     })
@@ -222,7 +235,7 @@ describe('a kept Roadmap shown again', { timeout: BOARD_TEST_TIMEOUT * 2 }, () =
     const actions = new Proxy({}, { get: () => () => {} }) as Parameters<
       typeof Roadmap
     >[0]['actions']
-    const idOf = (uuid: string) => board.P.issues.find((it) => it.uuid === uuid)?.id ?? ''
+    const idOf = (uuid: string) => handleOf(board, uuid)
     type Plan = { id: string; n: number } | null
     // App's request, and its Plan on roadmap
     let pending: Plan = null

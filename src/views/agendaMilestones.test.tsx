@@ -227,7 +227,6 @@ describe("the phone agenda's milestones", { timeout: BOARD_TEST_TIMEOUT }, () =>
         (s) => store.P.milestoneRead(s).state === 'loading',
       ),
     ).toBe(true)
-    expect(store.__layerProbe?.asks()).toEqual([])
   })
 
   it('stops while the task schedule and the landscape timeline show, keeps its Load more and Past, and is freed by P.releaseRoadmap', async () => {

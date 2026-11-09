@@ -59,23 +59,11 @@ const span = (issueUuid: string | null, hours: number): LoadSpan => ({
   remainingSet: null,
 })
 
-/** A store with `views` rows the workspace does not hold, `heldSpans` of
-    each owner's tasks it does hold, and the cache's `loads`. */
-function ctx(
-  views: ViewRow[],
-  loads: Record<string, OwnerLoad>,
-  held: Record<string, LoadSpan[]> = {},
-): ViewDelayCtx {
-  const heldIds = new Set(
-    Object.values(held)
-      .flat()
-      .map((s) => s.issueUuid),
-  )
+/** A store with the views' rows `views` and the cache's `loads`. */
+function ctx(views: ViewRow[], loads: Record<string, OwnerLoad>): ViewDelayCtx {
   return {
     load: (_org, owner) => loads[owner] ?? { state: 'waiting' },
-    held: (uuid) => heldIds.has(uuid),
     inView: (uuid) => views.some((r) => r.id === uuid),
-    heldSpans: (owner) => held[owner] ?? [],
     viewRows: () => views,
     capacity: () => 40,
     capacityWaits: () => false,
@@ -87,18 +75,21 @@ function ctx(
 const ok = (spans: LoadSpan[]): OwnerLoad => ({ state: 'ok', spans, hidden: 'counted' })
 
 describe("a view task's owner load", () => {
-  it('counts a task the rows hold once, from its row, and keeps hidden work', () => {
-    // the server's load of Ana: task t (10 h, before an edit), task h held by
-    // the workspace (3 h on the server, 5 h painted) and hidden work
+  it('counts a task the rows hold once, from its row, and keeps hidden work and work no view shows', () => {
+    // the server's load of Ana: task t (10 h, before an edit), task h that
+    // no view shows (3 h) and hidden work
     const t = row('t', 'ana', { remaining_hours: 12 })
     const load = ok([span('t', 10), span('h', 3), span(null, 7)])
-    const spans = viewLoadOf('org', 'ana', load as Extract<OwnerLoad, { state: 'ok' }>, {
-      ...ctx([t], { ana: load }, { ana: [span('h', 5)] }),
-    })
-    // t once, at its row's 12 h; h once, at the workspace's 5 h; hidden 7 h
+    const spans = viewLoadOf(
+      'org',
+      'ana',
+      load as Extract<OwnerLoad, { state: 'ok' }>,
+      ctx([t], { ana: load }),
+    )
+    // t once, at its row's 12 h; h at the server's 3 h; hidden 7 h
     const byTask = spans.map((s) => [s.issueUuid, s.remaining])
     expect(byTask.filter(([id]) => id === 't')).toEqual([['t', 12]])
-    expect(byTask.filter(([id]) => id === 'h')).toEqual([['h', 5]])
+    expect(byTask.filter(([id]) => id === 'h')).toEqual([['h', 3]])
     expect(byTask.filter(([id]) => id === null)).toEqual([[null, 7]])
     expect(spans).toHaveLength(3)
   })
@@ -188,51 +179,32 @@ describe("a person's work for Team utilization and the planning panel", () => {
       OwnerLoad,
       { state: 'ok' }
     >
-  /** The reconciler's store: `views` rows the workspace does not hold, and
-      the workspace's own `held` items of each owner. */
-  const itemsCtx = (views: ViewRow[], held: Record<string, OwnerItem[]> = {}): OwnerItemsCtx => {
-    const heldIds = new Set(
-      Object.values(held)
-        .flat()
-        .map((item) => item.uuid),
-    )
-    return {
-      held: (uuid) => heldIds.has(uuid),
-      inView: (uuid) => views.some((r) => r.id === uuid),
-      viewRows: () => views,
-      projectLive: () => true,
-      orgOf: () => 'org',
-      heldItems: (owner) => held[owner] ?? [],
-    }
-  }
+  /** The reconciler's store, with the views' rows `views`. */
+  const itemsCtx = (views: ViewRow[]): OwnerItemsCtx => ({
+    inView: (uuid) => views.some((r) => r.id === uuid),
+    viewRows: () => views,
+    projectLive: () => true,
+    orgOf: () => 'org',
+  })
   const byTask = (items: OwnerItem[]) =>
     items.map((item) => [item.uuid, item.project, item.remaining, item.paused])
 
   it('counts a task once whichever list holds it, from its row, its project and pause with it', () => {
-    // the server's load of Ana: t in work (10 h before an edit), h held by
-    // the workspace, busy time she is not shown, and a paused task p
+    // the server's load of Ana: t in work (10 h before an edit), h that no
+    // view shows, busy time she is not shown, and a paused task p
     const t = row('t', 'ana', { remaining_hours: 12 })
     const load = teamLoad(
       [span('t', 10), span('h', 3), span(null, 7)],
       ['work', 'pcb', null],
       [{ issueUuid: 'p', project: 'fw', start: TODAY_WEEK, end: TODAY_WEEK }],
     )
-    const held: OwnerItem = {
-      uuid: 'h',
-      project: 'pcb',
-      start: TODAY_WEEK,
-      end: TODAY_WEEK + 1,
-      remaining: 5,
-      remainingSet: null,
-      paused: false,
-    }
-    const items = ownerItemsOf('org', 'ana', load, itemsCtx([t], { ana: [held] }))
+    const items = ownerItemsOf('org', 'ana', load, itemsCtx([t]))
     const order = (a: unknown[], b: unknown[]) => (String(a[0]) < String(b[0]) ? -1 : 1)
     expect(byTask(items).sort(order)).toEqual(
       [
         [null, null, 7, false],
         ['p', 'fw', 0, true],
-        ['h', 'pcb', 5, false],
+        ['h', 'pcb', 3, false],
         ['t', 'work', 12, false],
       ].sort(order),
     )

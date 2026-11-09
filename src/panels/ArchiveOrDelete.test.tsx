@@ -260,11 +260,10 @@ async function openTask(uuid: string) {
       <TooltipProvider>
         <dialogs.ArchiveOrDeleteTaskModal
           key={uuid}
-          issueId={task.id}
           task={task}
           onClose={onClose}
           onArchive={async (reason, keep) => !!(await P.archiveIssue(task.id, reason, keep))}
-          onDelete={(subs, reason) => P.deleteIssue(task.id, subs, true, reason)}
+          onDelete={(subs, reason) => P.deleteIssue(task.id, subs, reason)}
         />
       </TooltipProvider>,
     ),
@@ -416,7 +415,6 @@ describe('Archive or delete a task', () => {
       root.render(
         <TooltipProvider>
           <dialogs.ArchiveOrDeleteTaskModal
-            issueId={task.id}
             task={task}
             onClose={onClose}
             onArchive={failed}
@@ -670,11 +668,10 @@ describe('Archive or delete a task the window shows from its own answer', () => 
       root.render(
         <TooltipProvider>
           <dialogs.ArchiveOrDeleteTaskModal
-            issueId={task.id}
             task={task}
             onClose={vi.fn()}
             onArchive={async (reason, keep) => !!(await P.archiveIssue(task.id, reason, keep))}
-            onDelete={(subs, reason) => P.deleteIssue(task.id, subs, true, reason)}
+            onDelete={(subs, reason) => P.deleteIssue(task.id, subs, reason)}
           />
         </TooltipProvider>,
       ),

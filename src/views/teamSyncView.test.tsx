@@ -677,8 +677,7 @@ describe('a card only the agenda brings', () => {
         },
       )
       expect(state()).toBe('ok')
-      // the workspace holds no task: every card is a model of the answer's row
-      expect(P.tasksHeld()).toBe(false)
+      // every card is a model of the answer's row
       const handle = (n: number) => P.syncTask(`t${n}`)?.id ?? ''
       expect(card(handle(1))?.querySelector('[data-delay]')?.getAttribute('data-delay')).toBe(
         'late',
@@ -779,30 +778,6 @@ describe('a card only the agenda brings', () => {
         name: 'pickers:canOwn',
         args: { org_id: snapshot.orgs[0].id, issue_id: 't1', field: 'recipient', ids: [AISHA] },
       })
-    },
-    BOARD_TEST_TIMEOUT,
-  )
-
-  it(
-    'draws no banner for a held task the agenda finds on track, whatever the workspace says',
-    async () => {
-      const { P } = await open(
-        (snap) => {
-          snap.projects[0].track_delay = true
-          people({ due_date: '2001-01-01' })(snap)
-        },
-        (snap) => ({ scope: `project:${meta(snap)}`, step: me(snap) }),
-        { tasks: true },
-        (b) => {
-          b.server.sync.edit = rowsEdit({ 1: { delay: null } })
-        },
-      )
-      const handle = P.handleOf('t1') ?? ''
-      expect(handle).not.toBe('')
-      // the workspace holds the task and judges it late, past its due date
-      expect(P.delayOf(P.issueById[handle])?.status).toBe('late')
-      expect(card(handle)).not.toBeNull()
-      expect(card(handle)?.querySelector('[data-delay]')).toBeNull()
     },
     BOARD_TEST_TIMEOUT,
   )

@@ -166,8 +166,6 @@ async function app(snap: Snapshot, path = '/app/testbed/board/p/1') {
       : null,
   )
   network.mutation.mockResolvedValue(null)
-  const { TASKS } = await import('../store/liveParts')
-  TASKS.atBoot = false
   const store = await import('../store/planner')
   // the double outlives the store, so each load says where its reads go
   double.live?.forceProjectNav(byIdsHere ? 'client' : null)
