@@ -27,8 +27,9 @@ type AppearanceState = {
       null before its first answer. */
   preferences: AppearancePreferences | null
   /** `loading` before the first answer, `failed` once the read failed,
-      with its error, else `ok`. */
-  preferencesState: 'loading' | 'ok' | 'failed'
+      with its error, `retrying` from Try again after a failure until the
+      new read answers, else `ok`. */
+  preferencesState: 'loading' | 'ok' | 'failed' | 'retrying'
   preferencesError?: unknown
   /** Whether `preferences` is current, which it is once it arrived on the
       socket's newest connection while the socket is up. */

@@ -169,6 +169,11 @@ export function AppearanceProvider({
   const [preferencesArrived, setPreferencesArrived] = useState(false)
   // Try again's count, which subscribes the read afresh
   const [preferencesAttempt, setPreferencesAttempt] = useState(0)
+  // from Try again until its read answers, while the page shows Loading
+  // instead of the failure; the failure itself stays for every other
+  // reader (usesDaily and the background), so nothing behind the page
+  // moves until the new answer arrives
+  const [preferencesRetrying, setPreferencesRetrying] = useState(false)
   const socketDown = useSyncExternalStore(syncStatus.subscribeDown, syncStatus.down, () => false)
   const [dailyImage, setDailyImage] = useState<DailyImage | null>(null)
   const [dailyLoaded, setDailyLoaded] = useState(false)
@@ -260,6 +265,7 @@ export function AppearanceProvider({
             setPreferences(result.value)
             setPreferencesError(undefined)
           } else setPreferencesError(result.error)
+          setPreferencesRetrying(false)
           setPreferencesArrived(true)
         },
         (connection) => {
@@ -277,13 +283,17 @@ export function AppearanceProvider({
       )
     } catch (error) {
       setPreferencesError(error)
+      setPreferencesRetrying(false)
     }
     return () => {
       active = false
       unsubscribe?.()
     }
   }, [preferencesAttempt])
-  const retryPreferences = useCallback(() => setPreferencesAttempt((n) => n + 1), [])
+  const retryPreferences = useCallback(() => {
+    setPreferencesRetrying(true)
+    setPreferencesAttempt((n) => n + 1)
+  }, [])
 
   useEffect(() => {
     if (!usesDaily) {
@@ -574,7 +584,13 @@ export function AppearanceProvider({
     <AppearanceContext.Provider
       value={{
         preferences,
-        preferencesState: preferencesFailed ? 'failed' : preferences ? 'ok' : 'loading',
+        preferencesState: preferencesFailed
+          ? preferencesRetrying
+            ? 'retrying'
+            : 'failed'
+          : preferences
+            ? 'ok'
+            : 'loading',
         ...(preferencesFailed ? { preferencesError } : {}),
         preferencesCurrent: preferencesArrived && !socketDown,
         retryPreferences,

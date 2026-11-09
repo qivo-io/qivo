@@ -717,8 +717,27 @@ describe("the account's appearance the provider reads", () => {
     await settle()
     expect(store.state.fresh).toBe(1)
     expect(store.watchers.size).toBe(1)
+    // the failure goes at once, and Loading shows until the new read answers
+    expect(page()?.getAttribute('data-appearance-state')).toBe('loading')
+    expect(container.querySelector('[data-appearance-error]')).toBeNull()
+    expect(container.querySelector('[data-appearance-loading]')?.textContent).toBe(
+      'Loading appearance…',
+    )
     await act(async () => store.deliver(preferences('none')))
     expect(page()?.getAttribute('data-appearance-state')).toBe('current')
+  })
+
+  it('shows the failure again when the read Try again started fails too', async () => {
+    await renderSettings()
+    await act(async () => store.fail(new Error('Appearance could not load.')))
+    const again = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Try again',
+    )
+    await act(async () => again?.click())
+    await settle()
+    expect(page()?.getAttribute('data-appearance-state')).toBe('loading')
+    await act(async () => store.fail(new Error('Appearance could not load.')))
+    expect(page()?.getAttribute('data-appearance-state')).toBe('failed')
   })
 
   it('marks Settings stale with the choices disabled after a reconnect until the value arrives again', async () => {

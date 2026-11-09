@@ -199,7 +199,9 @@ export function AppearanceSettings() {
   const id = useId()
   const appearance = useAppearance()
   const failed = appearance.preferencesState === 'failed'
-  const preferences = failed ? null : appearance.preferences
+  // Try again shows Loading until the new read answers
+  const retrying = appearance.preferencesState === 'retrying'
+  const preferences = failed || retrying ? null : appearance.preferences
   const loadError = failed ? errorText(appearance.preferencesError) : ''
   // a value held from before a reconnect or an outage, until it arrives again
   const stale = preferences !== null && !appearance.preferencesCurrent
