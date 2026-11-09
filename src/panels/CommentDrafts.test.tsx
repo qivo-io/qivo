@@ -151,7 +151,7 @@ afterEach(async () => {
 const later = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
 
 async function open() {
-  const task = P.issues.find((it) => it.uuid === 'task-a')
+  const task = { id: P.openTask('task-a', P.homeOrg, null), uuid: 'task-a' }
   if (!task) throw new Error('missing the task')
   await act(async () =>
     root.render(

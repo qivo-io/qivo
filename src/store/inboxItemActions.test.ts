@@ -1,7 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 import type { Row } from './rows'
 
 /* The store's Inbox row actions (store/planner.ts P.readItem, P.unreadItem,
@@ -92,7 +92,7 @@ beforeEach(async () => {
   showToast = vi.fn()
   vi.stubGlobal('window', { showToast, setTimeout, clearTimeout })
   vi.spyOn(console, 'error').mockImplementation(() => {})
-  snapshot = plannerFixture()
+  snapshot = underProgram(plannerFixture())
   for (const [n, id] of ['task-a', 'task-b'].entries())
     snapshot.issues.push({
       id,

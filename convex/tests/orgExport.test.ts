@@ -1,4 +1,9 @@
-import { makeFunctionReference } from 'convex/server'
+/* What the organization export reads of each live section, through the
+ * job's own bounded reads (orgExport.ts readBatch, model/orgExportRead.ts):
+ * which tables and fields it classifies, which rows and fields it sends,
+ * and what it leaves out while a deleted item is in flight. The job's own
+ * suites (orgExportJob.test.ts, orgExportDeleted.test.ts) check the
+ * archive it writes and who may ask for it. */
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
@@ -7,8 +12,8 @@ import { STORED_TABLES } from '../lib/enums'
 import {
   DELETED_SECTIONS,
   exportName,
+  ORG_EXPORT_ORDER,
   ORG_EXPORT_SECTIONS,
-  type OrgExportPage,
   type OrgExportRow,
   type OrgExportSection,
 } from '../lib/orgExport'
@@ -17,7 +22,6 @@ import { moveTasksToTrash } from '../model/deletedItems'
 import schema from '../schema'
 import {
   as,
-  expectRefusal,
   NOW,
   newT,
   plantIssue,
@@ -27,16 +31,11 @@ import {
   uuid,
   withReadingAdmin,
 } from './helpers.setup'
+import { sectionBatches, sectionRows } from './orgExport.setup'
 
 declare class Blob {
   constructor(parts: unknown[], options?: { type?: string })
 }
-
-const page = makeFunctionReference<
-  'query',
-  { org_id: string; section: OrgExportSection; parent_id?: string; cursor: string | null },
-  OrgExportPage
->('orgExport:page')
 
 /* Personal surfaces retain their existing owner-only permissions. Account,
  * authentication, operations and shared background data do not belong to an
@@ -265,30 +264,6 @@ const DELETED_TASKS_FIELDS: Record<string, string> = {
   search_text: 'a search copy, like a name key',
 }
 
-async function readAll(
-  caller: ReturnType<T['withIdentity']>,
-  orgId: string,
-  section: OrgExportSection,
-  parentId?: string,
-): Promise<OrgExportRow[]> {
-  const rows: OrgExportRow[] = []
-  let cursor: string | null = null
-  // an issues page in flight holds two tasks, so 200 pages hold 400
-  for (let guard = 0; guard < 200; guard++) {
-    const result: OrgExportPage = await caller.query(page, {
-      org_id: orgId,
-      section,
-      ...(parentId === undefined ? {} : { parent_id: parentId }),
-      cursor,
-    })
-    rows.push(...result.rows)
-    if (result.isDone) return rows
-    expect(result.continueCursor).not.toBe(cursor)
-    cursor = result.continueCursor
-  }
-  throw new Error('export pagination did not finish')
-}
-
 /* A Deleted items row for a project item of `project` in `state`, planted
  * without its stored rows. */
 const plantProjectItem = (t: T, project: Doc<'projects'>, state: DeletedItemState) =>
@@ -353,28 +328,11 @@ describe('organization export', () => {
       if (section.table !== 'deleted_items') expect(section.name).toBe(exportName(section.table))
   })
 
-  it('requires an active admin in the requested organization on every page', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const args = { org_id: f.org.id, section: 'profiles' as const, cursor: null }
-    await expectRefusal(t.query(page, args), 'forbidden', /not signed in/)
-    for (const profile of [f.user, f.viewer, f.guest]) {
-      await expectRefusal(as(t, profile).query(page, args), 'forbidden', /organization admins/)
-    }
-    await expectRefusal(as(t, f.otherAdmin).query(page, args), 'forbidden', /no profile/)
-    const caller = as(t, f.admin)
-    expect((await caller.query(page, args)).rows.length).toBeGreaterThan(0)
-    await t.run(async (ctx) => await ctx.db.patch(f.admin._id, { active: false }))
-    await expectRefusal(caller.query(page, args), 'forbidden', /no profile/)
-  })
-
   it('leaves the retired Gravatar setting out of the organization row', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     await t.run((ctx) => ctx.db.patch(f.org._id, { gravatar_avatars: true }))
-    const [row] = (
-      await as(t, f.admin).query(page, { org_id: f.org.id, section: 'organizations', cursor: null })
-    ).rows
+    const [row] = await sectionRows(t, f.org.id, 'organizations')
     expect(row).toMatchObject({ id: f.org.id })
     expect(row).not.toHaveProperty('gravatar_avatars')
   })
@@ -383,17 +341,16 @@ describe('organization export', () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const caller = as(t, f.admin)
-    const organization = async () =>
-      (await caller.query(page, { org_id: f.org.id, section: 'organizations', cursor: null }))
-        .rows[0]
-    expect(await organization()).toMatchObject({ next_issue_num: 1, next_project_num: 5 })
+    const organization = async () => (await sectionRows(t, f.org.id, 'organizations'))[0]
+    // the archive names the task counter next_task_num
+    expect(await organization()).toMatchObject({ next_task_num: 1, next_project_num: 5 })
     await caller.mutation(api.issues.create, {
       org_id: f.org.id,
       id: uuid(),
       project_id: f.sub.id,
       title: 'Counted',
     })
-    expect(await organization()).toMatchObject({ next_issue_num: 2, next_project_num: 5 })
+    expect(await organization()).toMatchObject({ next_task_num: 2, next_project_num: 5 })
   })
 
   it("exports each person's Team sync stamp from their sync_stamps row on the profile row", async () => {
@@ -412,9 +369,7 @@ describe('organization export', () => {
     })
     const stamps = await t.run((ctx) => ctx.db.query('sync_stamps').collect())
     const at = (id: string) => stamps.find((row) => row.profile_id === id)?.at
-    const profiles = (
-      await caller.query(page, { org_id: f.org.id, section: 'profiles', cursor: null })
-    ).rows
+    const profiles = await sectionRows(t, f.org.id, 'profiles')
     const row = (id: string) => profiles.find((p) => p.id === id)
     expect(row(f.user.id)).toMatchObject({ sync_at: at(f.user.id) })
     expect(row(f.user.id)).not.toHaveProperty('sync_since')
@@ -560,16 +515,8 @@ describe('organization export', () => {
       ),
     ).toMatchObject({ org_id: f.org.id, name_key: 'automation' })
     const exported = {} as Record<OrgExportSection, OrgExportRow[]>
-    for (const section of Object.keys(ORG_EXPORT_SECTIONS) as OrgExportSection[]) {
-      const parent = ORG_EXPORT_SECTIONS[section]
-      exported[section] =
-        parent === null
-          ? await readAll(caller, f.org.id, section)
-          : (
-              await Promise.all(
-                exported[parent].map((row) => readAll(caller, f.org.id, section, row.id as string)),
-              )
-            ).flat()
+    for (const section of ORG_EXPORT_ORDER) {
+      exported[section] = await sectionRows(t, f.org.id, exportName(section))
       expect(exported[section].length, section).toBeGreaterThan(0)
       for (const row of exported[section]) {
         expect(row).not.toHaveProperty('_id')
@@ -681,27 +628,20 @@ describe('organization export', () => {
     await plantProjectItem(t, moving, 'moving')
     await t.run((ctx) => ctx.db.delete(moving._id))
 
-    const caller = as(t, f.admin)
-    const tasks = await readAll(caller, f.org.id, 'issues')
+    const tasks = await sectionRows(t, f.org.id, 'tasks')
     expect(tasks.map((row) => row.id)).toEqual([kept.id, blocked.id, child.id])
     expect(tasks.find((row) => row.id === child.id)).not.toHaveProperty('parent_id')
-    expect(await readAll(caller, f.org.id, 'comments', kept.id)).toHaveLength(1)
-    expect((await readAll(caller, f.org.id, 'issue_links', kept.id)).map((row) => row.id)).toEqual([
+    const comments = await sectionRows(t, f.org.id, 'comments')
+    expect(comments.filter((row) => row.task_id === kept.id)).toHaveLength(1)
+    // the stranded task's comment stays out with its task
+    expect(comments.filter((row) => row.task_id === stranded.id)).toEqual([])
+    const links = await sectionRows(t, f.org.id, 'task_links')
+    expect(links.filter((row) => row.source_id === kept.id).map((row) => row.id)).toEqual([
       liveLink,
     ])
-    await expectRefusal(
-      caller.query(page, {
-        org_id: f.org.id,
-        section: 'comments',
-        parent_id: stranded.id,
-        cursor: null,
-      }),
-      'not_found',
-      /export parent not found/,
-    )
   })
 
-  it('reads the parents of a page of tasks only while a deleted item is in flight, two tasks a page then', async () => {
+  it('reads the parents of a batch of tasks only while a deleted item is in flight, two tasks a batch then', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withReadingAdmin(t)
     // 10 parents, then a child under each
@@ -713,21 +653,14 @@ describe('organization export', () => {
       children.push(
         (await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: parent.id })).id,
       )
-    const caller = as(t, f.admin)
     const childRows = (rows: OrgExportRow[]) =>
       new Map(rows.filter((row) => children.includes(row.id as string)).map((row) => [row.id, row]))
-    const firstChildPage = async () => {
-      let cursor: string | null = null
-      for (let guard = 0; guard < 100; guard++) {
-        const result: OrgExportPage = await caller.query(page, {
-          org_id: f.org.id,
-          section: 'issues',
-          cursor,
-        })
-        if (result.rows.some((row) => row.id === children[0])) return result
-        cursor = result.continueCursor
-      }
-      throw new Error('no page holds the first child')
+    const firstChildBatch = async () => {
+      const batch = (await sectionBatches(t, f.org.id, 'tasks')).find((each) =>
+        each.rows.some((row) => row.id === children[0]),
+      )
+      if (batch === undefined) throw new Error('no batch holds the first child')
+      return batch
     }
     // the last child's parent sits under a project whose row is gone
     const moving = await plantProject(t, {
@@ -752,21 +685,23 @@ describe('organization export', () => {
     const done = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
     await plantProjectItem(t, done, 'ready')
     await t.run((ctx) => ctx.db.delete(done._id))
-    let exported = childRows(await readAll(caller, f.org.id, 'issues'))
+    let exported = childRows(await sectionRows(t, f.org.id, 'tasks'))
     expect(exported.size).toBe(10)
     for (const [index, id] of children.slice(0, 9).entries())
       expect(exported.get(id)).toHaveProperty('parent_id', parents[index].id)
     expect(exported.get(children[9])).toHaveProperty('parent_id', stranded.id)
-    // a page holds six tasks, each read with its description rows
-    expect((await firstChildPage()).rows).toHaveLength(6)
+    // one wide batch holds every task, each with its description
+    const wide = await firstChildBatch()
+    expect(wide.rows).toHaveLength(21)
+    expect(wide.done).toBe(true)
 
-    // While a project item is in flight, a page holds two tasks and reads
+    // While a project item is in flight, a batch holds two tasks and reads
     // their parents, so the one parent under the moving project is left out.
     await plantProjectItem(t, moving, 'moving')
-    const inFlight = await firstChildPage()
+    const inFlight = await firstChildBatch()
     expect(inFlight.rows).toHaveLength(2)
-    expect(inFlight.isDone).toBe(false)
-    exported = childRows(await readAll(caller, f.org.id, 'issues'))
+    expect(inFlight.done).toBe(false)
+    exported = childRows(await sectionRows(t, f.org.id, 'tasks'))
     expect(exported.size).toBe(10)
     for (const [index, id] of children.slice(0, 9).entries())
       expect(exported.get(id)).toHaveProperty('parent_id', parents[index].id)
@@ -800,63 +735,16 @@ describe('organization export', () => {
         })
     })
     await t.run((ctx) => ctx.db.delete(gone._id))
-    const caller = as(t, f.admin)
-    const taskIds = async () => (await readAll(caller, f.org.id, 'issues')).map((row) => row.id)
+    const taskIds = async () => (await sectionRows(t, f.org.id, 'tasks')).map((row) => row.id)
+    const linksOf = async (id: string) =>
+      (await sectionRows(t, f.org.id, 'task_links')).filter((row) => row.source_id === id)
     expect(await taskIds()).toEqual(expect.arrayContaining([task.id, ...targets]))
-    expect(await readAll(caller, f.org.id, 'issue_links', source.id)).toHaveLength(3)
+    expect(await linksOf(source.id)).toHaveLength(3)
 
     // the same tasks and links stay out once an item is in flight
     await plantProjectItem(t, gone, 'moving')
     expect(await taskIds()).not.toContain(task.id)
-    expect(await readAll(caller, f.org.id, 'issue_links', source.id)).toEqual([])
-  })
-
-  it('requires owned parents and refuses malformed section scopes', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    const foreignTask = await plantIssue(t, {
-      org_id: f.otherOrg.id,
-      project_id: f.otherProject.id,
-    })
-    const foreignTeam = await t.run(async (ctx) => {
-      const id = uuid()
-      const { _id, _creationTime, ...team } = f.team
-      await ctx.db.insert('teams', { ...team, id, org_id: f.otherOrg.id })
-      return id
-    })
-    const caller = as(t, f.admin)
-    const foreignParents = {
-      teams: foreignTeam,
-      profiles: f.otherAdmin.id,
-      projects: f.otherProject.id,
-      issues: foreignTask.id,
-    }
-    for (const section of Object.keys(ORG_EXPORT_SECTIONS) as OrgExportSection[]) {
-      const parent = ORG_EXPORT_SECTIONS[section]
-      if (parent === null) continue
-      await expectRefusal(
-        caller.query(page, { org_id: f.org.id, section, cursor: null }),
-        'bad_request',
-        /requires a parent/,
-      )
-      for (const parentId of [uuid(), foreignParents[parent]]) {
-        await expectRefusal(
-          caller.query(page, { org_id: f.org.id, section, parent_id: parentId, cursor: null }),
-          'not_found',
-          /export parent/,
-        )
-      }
-    }
-    await expectRefusal(
-      caller.query(page, {
-        org_id: f.org.id,
-        section: 'issues',
-        parent_id: f.sub.id,
-        cursor: null,
-      }),
-      'bad_request',
-      /does not take a parent/,
-    )
+    expect(await linksOf(source.id)).toEqual([])
   })
 
   it('does not disclose foreign endpoints through damaged membership, grant, label, or issue links', async () => {
@@ -910,21 +798,23 @@ describe('organization export', () => {
         level: 'user',
       })
     })
-    const caller = as(t, f.admin)
-    for (const [section, parentId] of [
-      ['issue_labels', task.id],
-      ['issue_links', task.id],
-      ['project_access', f.sub.id],
-      ['project_team_access', f.meta.id],
+    for (const [key, field, parentId] of [
+      ['task_labels', 'task_id', task.id],
+      ['task_links', 'source_id', task.id],
+      ['project_access', 'project_id', f.sub.id],
+      ['project_team_access', 'project_id', f.meta.id],
     ] as const) {
-      expect(await readAll(caller, f.org.id, section, parentId)).toEqual([])
+      const rows = await sectionRows(t, f.org.id, key)
+      expect(rows.filter((row) => row[field] === parentId)).toEqual([])
     }
     expect(
-      (await readAll(caller, f.org.id, 'team_members', f.team.id)).map((row) => row.profile_id),
+      (await sectionRows(t, f.org.id, 'team_members'))
+        .filter((row) => row.team_id === f.team.id)
+        .map((row) => row.profile_id),
     ).not.toContain(f.otherAdmin.id)
   })
 
-  it('paginates all retained history beyond the snapshot cap and rechecks demotion mid-export', async () => {
+  it('reads all retained history past the old snapshot cap, 100 rows a read', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     await t.run(async (ctx) => {
@@ -949,25 +839,12 @@ describe('organization export', () => {
         label: 'Foreign event',
       })
     })
-    const caller = as(t, f.admin)
-    const args = { org_id: f.org.id, section: 'activity_events' as const, cursor: null }
-    const first = await caller.query(page, args)
-    expect(first.rows).toHaveLength(100)
-    expect(first.isDone).toBe(false)
-    const all = await readAll(caller, f.org.id, 'activity_events')
+    const batches = await sectionBatches(t, f.org.id, 'activity_events')
+    expect(batches[0].rows).toHaveLength(100)
+    expect(batches[0].done).toBe(false)
+    const all = await sectionRows(t, f.org.id, 'activity_events')
     expect(all).toHaveLength(603)
     expect(new Set(all.map((row) => row.id)).size).toBe(603)
     expect(all.map((row) => row.id)).not.toContain('foreign-event')
-    await t.run(async (ctx) => await ctx.db.patch(f.admin._id, { org_role: 'user' }))
-    await expectRefusal(
-      caller.query(page, { ...args, cursor: first.continueCursor }),
-      'forbidden',
-      /organization admins/,
-    )
-    await expectRefusal(
-      t.query(page, { ...args, cursor: first.continueCursor }),
-      'forbidden',
-      /not signed in/,
-    )
   })
 })

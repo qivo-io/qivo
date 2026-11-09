@@ -4,7 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 import type { Row } from '../store/rows'
 
 /* "Show earlier comments" in the task window, on the real store. The
@@ -80,7 +80,7 @@ async function load({
   kind?: 'comment' | 'change'
 } = {}) {
   vi.resetModules()
-  const snap: Snapshot = plannerFixture()
+  const snap: Snapshot = underProgram(plannerFixture())
   me = snap.profiles[0].id
   org = snap.orgs[0].id
   snap.issues.push({
@@ -167,7 +167,7 @@ afterEach(async () => {
 })
 
 async function open() {
-  const task = P.issues.find((it) => it.uuid === 'task-a')
+  const task = { id: P.openTask('task-a', P.homeOrg, null), uuid: 'task-a' }
   if (!task) throw new Error('missing the task')
   await act(async () =>
     root.render(

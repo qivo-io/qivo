@@ -5,7 +5,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 
 /* The task window reads P.editsPaused(): opening a task marks its inbox
    item read unless edits pause, and sends the read once they no longer do
@@ -58,7 +58,7 @@ afterEach(async () => {
 describe('the task window while snapshot trouble pauses edits', { timeout: 30_000 }, () => {
   it('marks the task read once the trouble ends', async () => {
     vi.resetModules()
-    const snap: Snapshot = plannerFixture()
+    const snap: Snapshot = underProgram(plannerFixture())
     snap.issues.push({
       id: 'task-a',
       org_id: snap.orgs[0].id,
@@ -107,7 +107,7 @@ describe('the task window while snapshot trouble pauses edits', { timeout: 30_00
       live?.fail(new ConvexError({ code: 'forbidden', message: 'not signed in' })),
     )
     expect(store.P.editsPaused()).toBe(true)
-    const task = store.P.issues.find((it) => it.uuid === 'task-a')
+    const task = { id: store.P.openTask('task-a', store.P.homeOrg, null), uuid: 'task-a' }
     if (!task) throw new Error('missing the task')
     await act(async () =>
       root.render(

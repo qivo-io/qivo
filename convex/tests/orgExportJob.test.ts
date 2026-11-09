@@ -4,12 +4,12 @@
  * A job reads the organization in bounded queries, stores its archive as
  * compressed parts and keeps a ready archive four hours. These tests run
  * jobs to the end on fake timers, unzip the parts and compare them with
- * what the browser export's `page` returns for the same data, then check
+ * the organization's rows read straight from its tables (orgExport.setup.ts
+ * tableRows), then check
  * joining, retries, recovery, expiry, refusals, the size cap, Convex's real
  * limits and every teardown that must remove the job's rows and files. */
 /// <reference types="vite/client" />
 
-import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -17,14 +17,9 @@ import type { QueryCtx } from '../_generated/server'
 import type { DeletedItemState } from '../lib/enums'
 import { TEXT_MAX } from '../lib/limits'
 import {
-  archiveRow,
-  exportName,
   JOB_ORDER,
   LIVE_READ_WARNING,
   ORG_EXPORT_ORDER,
-  ORG_EXPORT_SECTIONS,
-  type OrgExportPage,
-  type OrgExportRow,
   type OrgExportSection,
   partEntry,
   ZIP_END_BYTES,
@@ -77,6 +72,7 @@ import {
   START,
   settle,
   storedFiles,
+  tableRows,
 } from './orgExport.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
@@ -94,55 +90,10 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-const page = makeFunctionReference<
-  'query',
-  { org_id: string; section: OrgExportSection; parent_id?: string; cursor: string | null },
-  OrgExportPage
->('orgExport:page')
-
 /** A task's text of about 600 characters, the `n`th, as people write
  * ordinary descriptions. */
 const ordinaryText = (n: number) =>
   `<p>Bench run ${n}: replaced the fan controller, logged the readings at idle and under load, and compared them with the last calibration. The intake temperature stayed within two degrees of the target, and the exhaust fan held its speed through the whole run.</p><p>Next: repeat the run with the lid closed, attach the log to this task and ask the review group to sign off before the rig goes back into the shared pool for the week.</p>`
-
-/** Every section as the browser export reads it through `page`, by archive
- * name, each row as the archive writes it (lib/orgExport.ts archiveRow). */
-async function pagedRows(t: T, profile: Doc<'profiles'>, orgId: string) {
-  const caller = as(t, profile)
-  const readAll = async (section: OrgExportSection, parentId?: string) => {
-    const rows: OrgExportRow[] = []
-    let cursor: string | null = null
-    for (let guard = 0; guard < 2000; guard++) {
-      const result: OrgExportPage = await caller.query(page, {
-        org_id: orgId,
-        section,
-        ...(parentId === undefined ? {} : { parent_id: parentId }),
-        cursor,
-      })
-      rows.push(...result.rows)
-      if (result.isDone) return rows
-      cursor = result.continueCursor
-    }
-    throw new Error('export pagination did not finish')
-  }
-  const bySection = {} as Record<OrgExportSection, OrgExportRow[]>
-  for (const section of ORG_EXPORT_ORDER) {
-    const parent = ORG_EXPORT_SECTIONS[section]
-    bySection[section] =
-      parent === null
-        ? await readAll(section)
-        : (
-            await Promise.all(bySection[parent].map((row) => readAll(section, row.id as string)))
-          ).flat()
-  }
-  return Object.fromEntries(
-    ORG_EXPORT_ORDER.map((section) => [
-      exportName(section),
-      // as JSON carries them
-      JSON.parse(JSON.stringify(bySection[section].map(archiveRow))) as OrgExportRow[],
-    ]),
-  )
-}
 
 /** Work in every exported section: an archived task with a label, a link,
  * a comment and an attachment whose stored file is gone, a milestone, a
@@ -337,7 +288,7 @@ const exportRowsLeft = (t: T, orgId: string) =>
   })
 
 describe('organization export job', () => {
-  it('prepares an archive whose parts hold exactly the rows page returns, without reading file bytes', async () => {
+  it("prepares an archive whose parts hold exactly the organization's rows, without reading file bytes", async () => {
     const t = newT()
     const f = await withOrg(t)
     const planted = await plantWork(t, f)
@@ -365,9 +316,10 @@ describe('organization export job', () => {
     expect(archive.zip.length).toBe(job.archive.bytes)
     expect(job.archive.parts).toBe(archive.parts.length)
 
-    // exactly the rows the browser export reads, with the archive's names,
+    // exactly the organization's rows as its tables hold them, with the
+    // archive's names,
     // and an empty Deleted items section after them
-    const expected = await pagedRows(t, f.admin, f.org.id)
+    const expected = await tableRows(t, f.org.id)
     expect(Object.keys(archive.tables)).toEqual(JOB_ORDER.map((section) => section.key))
     expect(Object.keys(archive.tables).filter((key) => !key.startsWith('deleted/'))).toEqual(
       Object.keys(expected),
@@ -784,12 +736,12 @@ describe('organization export job', () => {
       files: ['data/milestones/0001.json'],
       records: 0,
     })
-    const expected = await pagedRows(t, f.admin, f.org.id)
+    const expected = await tableRows(t, f.org.id)
     for (const [name, rows] of Object.entries(expected))
       expect(archive.tables[name], name).toEqual(rows)
   })
 
-  it('goes on with child sections across pages of parents, as page reads them', async () => {
+  it('goes on with child sections across pages of parents, holding every child', async () => {
     const t = newT()
     const f = await withOrg(t)
     // the first page of 100 profiles holds no agent and is not the last:
@@ -846,7 +798,7 @@ describe('organization export job', () => {
     expect(archive.tables.comments.map((row) => row.task_id)).toEqual(tasks)
     expect(archive.tables.task_labels).toHaveLength(105)
     expect(archive.tables.agent_keys.map((row) => row.profile_id)).toEqual([agent.id])
-    const expected = await pagedRows(t, f.admin, f.org.id)
+    const expected = await tableRows(t, f.org.id)
     for (const [name, rows] of Object.entries(expected))
       expect(archive.tables[name], name).toEqual(rows)
   })
@@ -1193,7 +1145,7 @@ describe('organization export job', () => {
     expect(tasks.reduce((sum, part) => sum + part.records, 0)).toBe(9)
   })
 
-  it('reads 300 open tasks of ordinary text 100 a page with their texts, as page reads them', async () => {
+  it('reads 300 open tasks of ordinary text 100 a page with their texts, holding every task', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     // a sub-project's open tasks at their design size, everyday elsewhere
@@ -1238,8 +1190,8 @@ describe('organization export job', () => {
     })
     expect(archive.tables.tasks.map((row) => row.description)).toEqual(texts)
     expect(texts[7]).toBe(ordinaryText(7))
-    // and the browser export's page still reads the same tasks
-    const expected = await pagedRows(t, f.admin, f.org.id)
+    // and the tables hold the same tasks
+    const expected = await tableRows(t, f.org.id)
     expect(archive.tables.tasks).toEqual(expected.tasks)
   })
 
@@ -1446,7 +1398,7 @@ describe("an export reads only the organization's own rows", () => {
       expect(await read(section, id), section).toMatchObject({ rows: [], done: true })
   })
 
-  it('leaves out a child row that names another organization, in the job and in page', async () => {
+  it('leaves out a child row that names another organization', async () => {
     const t = newT()
     const f = await withOrg(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -1473,13 +1425,6 @@ describe("an export reads only the organization's own rows", () => {
     })
     const batch = await t.run((ctx) => readBatch(ctx, f.org.id, kept('issue_attachments', task.id)))
     expect(batch.rows.map((row) => row.name)).toEqual(['own.txt'])
-    const paged = await as(t, f.admin).query(page, {
-      org_id: f.org.id,
-      section: 'issue_attachments',
-      parent_id: task.id,
-      cursor: null,
-    })
-    expect(paged.rows.map((row) => row.name)).toEqual(['own.txt'])
   })
 })
 

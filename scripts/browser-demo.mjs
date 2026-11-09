@@ -239,18 +239,37 @@ export async function cleanupDemoArtifacts(browser, demo, artifacts) {
         // Use the dev app's authenticated singleton so cleanup awaits backend
         // completion, including after a failed optimistic browser operation.
         const { convex } = await import('/src/lib/convex.ts')
-        const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
-          (name, args) => convex.query(name, args),
-        )
-        const org = snapshot.orgs.find((candidate) => candidate.slug === orgSlug)
+        const org = window.PLANNER.orgs.find((candidate) => candidate.slug === orgSlug)
         if (!org) throw new Error('Cleanup organization is unavailable')
         const deleted = []
         if (issueTitle) {
-          for (const issue of snapshot.issues.filter(
-            (it) => it.org_id === org.id && it.title === issueTitle,
-          )) {
-            await convex.mutation('issues:deleteDeep', { org_id: org.id, id: issue.id })
-            deleted.push(issue.id)
+          // the drive's tasks by their title, through main Search in the
+          // organization (search.page), every page of it, as the store
+          // holds no task. A search that fails or could not cover
+          // everything throws, so the cleanup never reports success after
+          // missing one.
+          const tasks = []
+          for (let cursor = null, pages = 0; ; pages++) {
+            const found = await window.PLANNER.fetchSearchPage(issueTitle, {
+              includeArchived: false,
+              scope: { org_id: org.id },
+              cursor,
+            })
+            if (found.state !== 'ok') throw new Error('Cleanup cannot search for its tasks')
+            if (!found.coverage.complete)
+              throw new Error('Cleanup could not search every project for its tasks')
+            tasks.push(
+              ...found.rows.filter(
+                (row) => row.kind === 'task' && row.org_id === org.id && row.title === issueTitle,
+              ),
+            )
+            if (found.nextCursor === null) break
+            if (pages >= 40) throw new Error('Cleanup search did not end within 40 pages')
+            cursor = found.nextCursor
+          }
+          for (const task of tasks) {
+            await convex.mutation('issues:deleteDeep', { org_id: org.id, id: task.id })
+            deleted.push(task.id)
           }
         }
         // The workspace holds nobody but the signed-in person, so people

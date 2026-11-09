@@ -11,13 +11,15 @@
  * without that period: every write waits for checkout, so it holds nothing
  * customers made. The terms of service promise these periods.
  *
- * Admins are emailed when the period starts, unless one of them downloaded
- * an export within EXPORT_FRESH_DAYS before the service ended
- * (organizations.last_export_at), which today means the browser export once
- * its download starts. An export job's archive does not count, whether only
- * prepared or served by the /exports/ route, because the backend cannot know
- * that the client received it; a later app stage records that download once
- * the browser confirms it finished. */
+ * Admins are emailed when the period starts, unless one of them saved an
+ * export within EXPORT_FRESH_DAYS before the service ended
+ * (organizations.last_export_confirmed_at), which orgRemovals.ts
+ * recordExport sets once the desktop app or a browser confirmed the saved
+ * archive. The older last_export_at does not count, since the browser
+ * export of earlier releases set it when a download started. An export
+ * job's archive does not count by itself, whether only prepared or served by
+ * the /exports/ route, because the backend cannot know that the client
+ * received it. */
 
 import { makeFunctionReference, type WithoutSystemFields } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
@@ -203,7 +205,7 @@ async function queueDeletionNotices(ctx: MutationCtx, removal: Doc<'org_removals
   const org = await byId(ctx, 'organizations', removal.org_id)
   if (!org) return
   const freshAfter = Date.parse(removal.ended_at) - EXPORT_FRESH_DAYS * DAY_MS
-  if (org.last_export_at && Date.parse(org.last_export_at) >= freshAfter) return
+  if (org.last_export_confirmed_at && Date.parse(org.last_export_confirmed_at) >= freshAfter) return
   const profiles = await ctx.db
     .query('profiles')
     .withIndex('by_org', (q) => q.eq('org_id', removal.org_id))

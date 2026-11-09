@@ -9,8 +9,10 @@ import {
   LIMITS,
   type Limit,
   linksFull,
+  MIB,
   trimMarkdown,
 } from '../lib/limits'
+import { ARCHIVE_TTL_MS, DEMO_ARCHIVE_BYTES, MAX_ARCHIVE_BYTES } from '../model/orgExports'
 
 describe('the limits registry', () => {
   it.each(Object.entries(LIMITS) as [string, Limit][])(
@@ -23,6 +25,15 @@ describe('the limits registry', () => {
       expect(limit.refusal.charAt(0)).toBe(limit.refusal.charAt(0).toLowerCase())
     },
   )
+
+  it("gives the organization export's cap, the demo's cap and its hours their numbers", () => {
+    expect(MAX_ARCHIVE_BYTES).toBe(95 * 1024 * 1024)
+    expect(DEMO_ARCHIVE_BYTES).toBe(2 * 1024 * 1024)
+    expect(ARCHIVE_TTL_MS).toBe(4 * 60 * 60 * 1000)
+    expect(MAX_ARCHIVE_BYTES).toBe(LIMITS.exportSize.max * MIB)
+    expect(DEMO_ARCHIVE_BYTES).toBe(LIMITS.demoExportSize.max * MIB)
+    expect(ARCHIVE_TTL_MS).toBe(LIMITS.exportHours.max * 3_600_000)
+  })
 
   it('builds the sentences that name a value from the same numbers', () => {
     expect(attachmentTooLarge(7)).toContain('7 MiB')

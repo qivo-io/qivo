@@ -93,7 +93,7 @@ describe('the task editor while its code waits for the connection', { timeout: 2
     // down, but not yet long enough for the offline notice
     syncStatus.setSocket({ connected: false, everConnected: true })
 
-    const task = store.P.issues.find((it) => it.uuid === 'task-a')
+    const task = { id: store.P.openTask('task-a', store.P.homeOrg, null), uuid: 'task-a' }
     if (!task) throw new Error('missing the task')
     await act(async () =>
       root.render(

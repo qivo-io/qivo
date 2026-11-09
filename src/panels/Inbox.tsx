@@ -19,7 +19,15 @@
    messages and allow read/snooze/delete actions; notification content
    remains server-owned. */
 import { CheckCheck, ListX, Minus, Plus } from 'lucide-react'
-import React, { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, {
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -78,6 +86,7 @@ import { notificationPermission, requestNotificationPermission } from '../lib/no
 import { pageEnd, usePagedPages, useSettledSearch } from '../lib/pagedList'
 import { sameTask, taskFacts } from '../lib/router'
 import { fmtSnoozeUntil, SNOOZE_UNIT_MS, type SnoozeUnit, snoozeStepMax } from '../lib/snooze'
+import type { UnreadStart } from '../lib/spine'
 import { useMobile } from '../lib/useMobile'
 import { OUT_OF_USE } from '../lib/viewHidden'
 import {
@@ -176,6 +185,9 @@ function SnoozeRow({
     </div>
   )
 }
+
+/* A start of nothing unread, which the pop-out opens with. */
+const NO_UNREAD: UnreadStart = { ts: null, change: false }
 
 const KIND_LABELS: Record<string, string> = {
   mention: 'Mentions',
@@ -289,8 +301,7 @@ function MessageRow({
           </div>
           {/* …and under the title, WHERE it is — project → sub-project, the
             same breadcrumb notation the task window's own crumb uses, from
-            the page's row, so every row says it, whether or not the
-            workspace holds its task. The counter beside the title promises
+            the page's row, so every row says it. The counter beside the title promises
             the news and the window's Activity section lists it in full;
             the one thing the row could not say was which board the task
             sits on. */}
@@ -368,9 +379,8 @@ type ListedRows = { id: string | null; ids: string[] }
     live page moves or drops the row while the menu is open. */
 type RowMenu = { x: number; y: number; row: InboxRowVM | null }
 
-/** The task a row opens, by its handle where the workspace holds the task
-    in the row's organization, else by a reference with the organization,
-    the number and the uuid, as two organizations can hold one task id
+/** The task a row opens, by a reference with the row's organization, the
+    task's number and its uuid, as two organizations can hold one task id
     (P.openTask). */
 const rowTask = (row: InboxRowVM): string => P.openTask(row.uuid, row.org, row.num)
 
@@ -616,6 +626,27 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   // A move with no task here ends it too, such as leaving the Inbox, which
   // stays loaded (components/KeptView): the next task opens in the pane.
   if (poppedOut && !openIssue) setPoppedOut(false)
+  // Where the pop-out's unread part starts. It starts nowhere, since the
+  // pane behind it showed this visit's New mark already, until a return to
+  // a hidden page freezes the pane's mark again while the pop-out is open,
+  // which the pop-out then shows too. That start is kept with the task it
+  // was frozen for. A task followed from it inside the pop-out, which moves
+  // the pane too, starts nowhere, so the pop-out never shows one task's
+  // mark on another, and back on the first task it shows again.
+  const [popUnread, setPopUnread] = useState<{ task: string | null; start: UnreadStart }>({
+    task: null,
+    start: NO_UNREAD,
+  })
+  const paneReturned = useCallback(
+    (start: UnreadStart) => {
+      if (poppedOut) setPopUnread({ task: paneId, start })
+    },
+    [poppedOut, paneId],
+  )
+  const popOut = () => {
+    setPopUnread({ task: null, start: NO_UNREAD })
+    setPoppedOut(true)
+  }
   // the text typed in the pane and its pop-out, and in the pop-out alone,
   // so closing either asks first (DiscardPrompt)
   const taskScope = useContext(UnsentScopeContext)
@@ -1104,7 +1135,8 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
             closeLabel="Back to inbox"
             onOpen={showTask}
             onPlanOnRoadmap={onPlanOnRoadmap}
-            onPopOut={() => setPoppedOut(true)}
+            onPopOut={popOut}
+            onReturnUnread={paneReturned}
             onShowOnBoard={showOnBoard}
           />
         ) : (
@@ -1289,8 +1321,9 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
           <IssueDetail
             issueId={paneId}
             holdThread
-            // the pane behind it showed this visit's New mark already
-            unread={{ ts: null, change: false }}
+            // the pane behind it showed this visit's New mark already,
+            // until a return froze it again on this task
+            unread={sameTask(popUnread.task, paneId) ? popUnread.start : NO_UNREAD}
             onPopOut={undefined} // this IS the pop-out
             onShowOnBoard={showOnBoard}
             onClose={() => closeOrAsk([popScope], () => setPoppedOut(false))}

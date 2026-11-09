@@ -21,7 +21,7 @@ const server = vi.hoisted(() => ({
   // the organization's removal state, as its subscription delivers it
   state: {
     slug: 'northstar-labs',
-    last_export_at: null as string | null,
+    last_export_confirmed_at: null as string | null,
     deletion: null as null | {
       reason: 'requested'
       delete_after: string
@@ -39,14 +39,16 @@ vi.mock('../lib/convex', () => ({
   },
 }))
 vi.mock('../lib/orgRemovalState', () => ({
-  useOrgRemovalState: () =>
-    useSyncExternalStore(
+  useOrgRemovalState: () => ({
+    state: useSyncExternalStore(
       (listener) => {
         server.listeners.add(listener)
         return () => server.listeners.delete(listener)
       },
       () => server.state,
     ),
+    refreshing: false,
+  }),
 }))
 /** Delivers the scheduled deletion, or with `false` its stop, as the
     state's subscription does. */
@@ -118,6 +120,23 @@ async function askAndConfirm() {
 }
 
 describe('the Delete organization question', () => {
+  it('says whether a saved export was confirmed, never that an export was made', async () => {
+    // an export recorded before confirmed saves, which a backend from before
+    // them answers alone, is no confirmed save
+    const before = server.state
+    server.state = Object.assign({ ...before }, { last_export_at: '2026-11-05T10:00:00.000Z' })
+    for (const listener of server.listeners) listener()
+    await act(async () => document.querySelector<HTMLElement>('[data-org-delete]')?.click())
+    expect(dialog()?.textContent).toContain('No saved export has been confirmed yet.')
+    await act(async () => button('Cancel').click())
+    await endClosing()
+    server.state = { ...before, last_export_confirmed_at: '2026-11-05T10:00:00.000Z' }
+    for (const listener of server.listeners) listener()
+    await act(async () => document.querySelector<HTMLElement>('[data-org-delete]')?.click())
+    expect(dialog()?.textContent).toMatch(/The last saved export was confirmed on .*2026\./)
+    server.state = { ...server.state, last_export_confirmed_at: null }
+  })
+
   it('keeps the typed address while it closes after Cancel, and a press then does nothing', async () => {
     await askAndConfirm()
     expect(confirm()?.disabled).toBe(false)

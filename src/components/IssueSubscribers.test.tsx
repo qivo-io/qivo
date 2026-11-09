@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { LIMITS } from '../../convex/lib/limits'
 import { endClosing, playClosingAnimations } from '../lib/closingAnimation.setup'
 import { subscribersStandIn, taskFollowersStandIn } from '../store/followerStandIn.setup'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 import { TooltipProvider } from './ui/tooltip'
 
 /* A task's subscribers popover on the real store as it closes. A close
@@ -19,7 +19,9 @@ import { TooltipProvider } from './ui/tooltip'
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
   convex: network,
-  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
+  live: (await import('../store/guard/liveDouble.setup')).liveOver(network, {
+    taskWindow: 'client',
+  }),
 }))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
@@ -46,6 +48,11 @@ let followers: string[] = []
 /* The roster's arguments, and the window's read of a task the workspace
    does not hold. */
 let rosterArgs: Record<string, unknown>[] = []
+/* The roster's open subscriptions, and, while `holdRoster` is set, the
+   answers it holds back until a test gives them, or fails them. */
+let rosterOpen = 0
+let holdRoster = false
+let heldRoster: { answer: () => void; fail: (error: unknown) => void }[] = []
 let windowRead: ((value: unknown) => void) | null = null
 /* The Add list's reads, each a batch the popover asked for. */
 let candidateReads: Record<string, unknown>[] = []
@@ -67,7 +74,7 @@ beforeEach(async () => {
   )
   playClosingAnimations()
   vi.resetModules()
-  const snap: Snapshot = plannerFixture()
+  const snap: Snapshot = underProgram(plannerFixture())
   org = snap.orgs[0].id
   projectId = snap.projects[0].id
   const me = snap.profiles[0]
@@ -81,6 +88,9 @@ beforeEach(async () => {
     snap.profiles.push({ ...me, id, name: `Person ${id.slice(7)}`, auth_user_id: `account-${id}` })
   }
   rosterArgs = []
+  rosterOpen = 0
+  holdRoster = false
+  heldRoster = []
   candidateReads = []
   windowRead = null
   snap.issues.push({
@@ -98,25 +108,33 @@ beforeEach(async () => {
     has_hidden_subtasks: false,
     has_hidden_parent: false,
   })
-  network.onUpdate.mockImplementation((ref, args, next) => {
+  network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') next(structuredClone(snap))
     if (name === 'taskWindow:task') windowRead = next
     if (name === 'issues:subscribers') {
       rosterArgs.push(args)
-      const server = {
-        ...snap,
-        issueSubs: followers.map((id) => ({
-          issue_id: String(args.issue_id),
-          profile_id: id,
-          created_at: NOW,
-        })),
+      rosterOpen++
+      const answer = () => {
+        const server = {
+          ...snap,
+          issueSubs: followers.map((id) => ({
+            issue_id: String(args.issue_id),
+            profile_id: id,
+            created_at: NOW,
+          })),
+        }
+        next(
+          subscribersStandIn(server, args as { org_id: string; issue_id: string }, {
+            canManage: true,
+          }),
+        )
       }
-      next(
-        subscribersStandIn(server, args as { org_id: string; issue_id: string }, {
-          canManage: true,
-        }),
-      )
+      if (holdRoster) heldRoster.push({ answer, fail: (error) => fail?.(error) })
+      else answer()
+      return () => {
+        rosterOpen--
+      }
     }
     return () => {}
   })
@@ -143,19 +161,11 @@ beforeEach(async () => {
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
-  const issue = P.issues.find((it) => it.uuid === 'task-a')
-  if (!issue) throw new Error('missing the task')
-  await act(async () =>
-    root.render(
-      <TooltipProvider>
-        <ui.IssueSubscribers issue={issue} />
-      </TooltipProvider>,
-    ),
-  )
 })
 
 afterEach(async () => {
   await act(async () => root.unmount())
+  Reflect.deleteProperty(document, 'visibilityState')
   container.remove()
   document.body.innerHTML = ''
   vi.restoreAllMocks()
@@ -163,6 +173,18 @@ afterEach(async () => {
 })
 
 const popover = () => document.querySelector('[data-task-subscribers]')
+const roster = () => document.querySelector('[data-task-subscribers-roster]')
+const listed = () =>
+  [...document.querySelectorAll('[data-task-subscriber]')].map((row) =>
+    row.getAttribute('data-task-subscriber'),
+  )
+/** Sets the page's visibility, as the browser does when a tab hides. */
+const setVisibility = (value: 'visible' | 'hidden') =>
+  act(async () => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => value })
+    document.dispatchEvent(new Event('visibilitychange'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
 const search = () => document.querySelector<HTMLInputElement>('[data-task-subscriber-search]')
 const offered = () =>
   [...document.querySelectorAll('[data-task-subscriber-add]')].map((row) =>
@@ -171,8 +193,8 @@ const offered = () =>
 const press = (selector: string) =>
   act(async () => document.querySelector<HTMLElement>(selector)?.click())
 
-/* Renders the popover for task QN-40, which the workspace does not hold,
-   from the window's own answer of it (P.taskDetail). */
+/* Renders the popover for task QN-40 from the window's own answer of it
+   (P.taskDetail), as the app shows every task. */
 async function showFromAnswer() {
   network.mutation.mockClear()
   P.watchComments('far', org)
@@ -290,6 +312,79 @@ describe('the task subscribers popover of a task the window shows from its own a
         { org_id: org, issue_id: 'far', profile_id: 'person-0996', subscribed: true },
       ])
     })
+
+    it('keeps the roster across a hidden page and reads it once on return', {
+      timeout: 30_000,
+    }, async () => {
+      followers = ['aisha', 'leo']
+      await showFromAnswer()
+      await press('[data-task-subscribe]')
+      await vi.waitFor(() => expect(listed()).toEqual(['aisha', 'leo']))
+      const opened = rosterArgs.length
+      expect(rosterOpen).toBe(1)
+      await setVisibility('hidden')
+      expect(rosterOpen).toBe(0)
+      expect(listed()).toEqual(['aisha', 'leo'])
+      holdRoster = true
+      await setVisibility('visible')
+      // one read on return, and the held roster, busy, while it runs
+      expect(rosterArgs.length).toBe(opened + 1)
+      expect(rosterOpen).toBe(1)
+      expect(roster()?.getAttribute('aria-busy')).toBe('true')
+      expect(listed()).toEqual(['aisha', 'leo'])
+      expect(document.body.textContent).not.toContain('Loading subscribers')
+      // add and remove stay open while it refreshes
+      expect(
+        document.querySelector<HTMLButtonElement>('[data-task-subscriber-remove="aisha"]')
+          ?.disabled,
+      ).toBe(false)
+      followers = ['aisha']
+      await act(async () => {
+        for (const held of heldRoster) held.answer()
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      expect(roster()?.getAttribute('aria-busy')).toBeNull()
+      expect(listed()).toEqual(['aisha'])
+    })
+  })
+})
+
+describe('the task subscribers popover while the page is hidden', () => {
+  afterEach(() => {
+    followers = []
+  })
+
+  it('reads nothing while closed, nor while hidden, and an opening starts from nothing', async () => {
+    followers = ['aisha']
+    await showFromAnswer()
+    expect(rosterArgs).toEqual([])
+    await setVisibility('hidden')
+    await press('[data-task-subscribe]')
+    expect(rosterArgs).toEqual([])
+    expect(document.body.textContent).toContain('Loading subscribers')
+    await setVisibility('visible')
+    await vi.waitFor(() => expect(listed()).toEqual(['aisha']))
+    // a close and an opening start over, with no roster until it answers
+    await press('[data-task-subscribers-backdrop]')
+    holdRoster = true
+    await press('[data-task-subscribe]')
+    expect(listed()).toEqual([])
+    expect(roster()?.getAttribute('data-task-subscribers-roster') ?? null).toBeNull()
+    expect(document.body.textContent).toContain('Loading subscribers')
+  })
+
+  it('says so when the roster fails', async () => {
+    followers = ['aisha']
+    holdRoster = true
+    await showFromAnswer()
+    await press('[data-task-subscribe]')
+    await act(async () => {
+      for (const held of heldRoster) held.fail(new Error('Server Error'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(document.body.textContent).toContain(
+      'Couldn’t load subscribers. Close and reopen to try again.',
+    )
   })
 })
 
@@ -312,6 +407,7 @@ describe('the task subscribers popover past the followers cap', () => {
     try {
       // Person 0000 followed last, past the cap
       followers = ['leo', 'aisha', 'person-0000']
+      await showFromAnswer()
       await press('[data-task-subscribe]')
       const listed = [...document.querySelectorAll('[data-task-subscriber]')].map((row) =>
         row.getAttribute('data-task-subscriber'),
@@ -329,6 +425,7 @@ describe('the task subscribers popover past the followers cap', () => {
 
 describe('the task subscribers popover', () => {
   it('keeps the person search while it closes, and starts over when it opens', async () => {
+    await showFromAnswer()
     await press('[data-task-subscribe]')
     await press('[data-task-subscriber-add-open]')
     const field = search()

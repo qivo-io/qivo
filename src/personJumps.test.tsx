@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setup'
+import { oracleLevels } from './store/oracleScope.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 import {
@@ -127,14 +128,17 @@ async function app(snap: Snapshot, path: string, row: Record<string, unknown> = 
     else if (name.startsWith('overview:')) answerOverview(server, name, args, next, fail)
     else if (isMilestoneRead(name)) answerMilestones(server, name, args, next, fail)
     else if (isProjectNavRead(name)) answerProjectNav(server, name, args, next, fail)
-    else if (name === 'teamSync:agenda')
+    else if (name === 'teamSync:agenda') {
+      // the agenda judges sight by the server's rule, as the server does,
+      // not by what the store's project cache has read so far
+      const levels = oracleLevels(server)
       next(
         teamSyncStandIn(server, args as SyncArgs, {
-          sees: (id) => store?.P.canSee(id) ?? true,
-          writes: (id) => store?.P.canWrite(id) ?? false,
+          sees: (id) => levels.has(id),
+          writes: (id) => levels.get(id) === 'lead' || levels.get(id) === 'user',
         }),
       )
-    else if (name === 'teamSync:lastComments') next({ rows: [], complete: true })
+    } else if (name === 'teamSync:lastComments') next({ rows: [], complete: true })
     return () => {}
   })
   network.query.mockImplementation(async (ref, args) => {

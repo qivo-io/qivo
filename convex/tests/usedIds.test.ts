@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { BACKFILL_PAGE, RUN } from '../internal/usedIdsBackfill'
-import { insertUsed, keepUsedId, newWindowKey } from '../lib/db'
+import { byId, insertUsed, keepUsedId, newWindowKey } from '../lib/db'
 import { rule } from '../lib/functions'
 import { deleteOrgDeep, REMOVAL_BUDGET } from '../model/cascade'
 import { insertTask } from '../model/descriptions'
@@ -336,7 +336,11 @@ describe('a used task or project id', () => {
  * row the deletion checks are gone. */
 async function deleteInSteps(t: T, f: OrgFixture, count: number) {
   Object.assign(REMOVAL_BUDGET, { rows: 4 })
-  await as(t, f.admin).mutation(api.orgRemovals.recordExport, { org_id: f.org.id })
+  // a recent saved export, so no deletion email is queued
+  await t.run(async (ctx) => {
+    const org = await byId(ctx, 'organizations', f.org.id)
+    if (org) await ctx.db.patch(org._id, { last_export_confirmed_at: new Date().toISOString() })
+  })
   const { delete_after } = await as(t, f.admin).action(api.orgRemovals.request, {
     org_id: f.org.id,
     confirm: f.org.slug,

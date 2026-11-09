@@ -23,7 +23,9 @@ import {
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
   convex: network,
-  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
+  live: (await import('../store/guard/liveDouble.setup')).liveOver(network, {
+    taskWindow: 'client',
+  }),
 }))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
@@ -81,8 +83,6 @@ afterEach(async () => {
   container.remove()
   document.body.innerHTML = ''
   history.replaceState(null, '', '/')
-  const { TASKS } = await import('../store/liveParts')
-  TASKS.atBoot = true
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -183,8 +183,6 @@ async function app(path: string) {
     behind = answered
     return answered
   })
-  const { TASKS } = await import('../store/liveParts')
-  TASKS.atBoot = false
   const store = await import('../store/planner')
   await store.initStore()
   const { syncStatus } = await import('../lib/syncStatus')
@@ -274,7 +272,7 @@ async function hintOf(element: Element | null | undefined) {
 
 describe('the window of a task just created', { timeout: 30_000 }, () => {
   it('opens by its reference with focus in it, toasts its key and shows its card, asking for no task', async () => {
-    const store = await app('/app/testbed/board/p/2')
+    await app('/app/testbed/board/p/2')
     await createTask('Run the soak test')
     // the window shows the task from what its create sent
     await waitFor(
@@ -289,8 +287,6 @@ describe('the window of a task just created', { timeout: 30_000 }, () => {
     )
     // its card shows on the Board under the window
     expect(document.querySelector('[data-card="QN-41"]')).not.toBeNull()
-    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
-    expect(store.__layerProbe?.asks()).toEqual([])
   })
 
   it("shows the new task on the window's first render, before the window watches it", async () => {

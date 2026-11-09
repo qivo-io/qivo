@@ -384,18 +384,17 @@ or later, whose organization counts are whole, as
 `internal/overviewCountsBackfill` left them. Against an older backend, or
 while the counts read **Counting…**, the step fails. It then records the
 frames the page sends on its sync socket and opens its project's Board,
-one fixture task's address and its project's Roadmap in fresh loads, none
-of which may subscribe the workspace's task windows (`workspace:tasks`).
-The Roadmap must reach its ok state and show that task's row, having
-subscribed its own read (`tasks:roadmap`) and never the planning panel's
-old read (`planning:assigneeLoad`) (`ui/tasks-on-demand`). It reads only,
+one fixture task's address and its project's Roadmap in fresh loads, each
+of which reads its tasks from its own read. The Roadmap must reach its ok
+state and show that task's row, having subscribed its own read
+(`tasks:roadmap`) and never the planning panel's old read
+(`planning:assigneeLoad`) (`ui/own-reads`). It reads only,
 and an app from before the Roadmap read the server fails it. Next it makes a
 sub-project of its own with its run tag under the run project, with one task, over REST,
 records the frames the page sends and receives on its sync socket from a
 fresh load of that sub-project's Board, presses **New task in To Do**,
 creates a task with its run tag through the dialog and renames it in its
-window at once. No frame may subscribe the workspace's task windows, and
-no read of the new task (`taskWindow:task`, `snapshot:threadComments` or
+window at once. No read of the new task (`taskWindow:task`, `snapshot:threadComments` or
 `inbox:item`) may be sent before the answer to the create's `issues:create`
 mutation arrives. The step knows the task by the uuid its create sent and
 its key by the number that answer stored, since another create in the
@@ -535,6 +534,27 @@ projects without a scope, and deletes it for good once **Delete now**
 counts no earlier items (`ui/deleted-items`). The
 cleanup deletes the 26 tasks again with its project. Against a backend from
 before v0.1.131 that step fails.
+Next it makes a task of its own and deletes it over REST, then, with a file
+of the browser's origin private file system standing in for the save
+picker, which no headless browser can press, presses **Export data** in
+**Settings → Organization → General** as Nora. It waits up to five minutes
+for the deployment's export job to be ready, its own job and not an earlier
+ready archive, which it tells apart by the job's id, notes how long it
+took, waits for the automatic save into that file and its record, reads
+the file back,
+unzips it and checks its format 4 manifest, t0 in `data/tasks`, its deleted
+task in `deleted/tasks` and `deleted/items`, no file contents and its size,
+and that the record line shows today's date (`ui/org-export`). It writes on
+t0's organization what an admin's export writes: a job with its parts for
+four hours and its rows for 30 days, the end of an earlier ready archive and
+the organization's last saved export. Afterwards it deletes the file and its
+Deleted item for good, also after a failure. It finds the item by its id
+in the archive, or, when it failed before it read the archive, in
+**Deleted items** searched by the task's tagged title, once the search
+answered and only as the one row with the task's key and title, so it never
+deletes another item. A purge that is refused or fails, or that finds no
+such row, is a NOTE, and the item then stays 30 days. Against a backend before the release after v0.1.161, whose record
+takes no export id, that step fails.
 It makes a sub-project of its own under the run project, led by Leo
 Martins, with a task in it, picks the task's assignee (the run's Standard
 agent), its reviewer (Nora) and **No reviewer** in the task's window and
@@ -689,37 +709,6 @@ restores `BILLING_ENABLED` only while it is still the `true` the run set,
 and otherwise removes just the mark, so a setting someone changed since
 stays. Run one local run per backend at a time.
 
-### Which parts a rename re-sends
-
-`scripts/rename-resend-probe.mjs` checks that a change to one task re-sends
-only the one tasks window that holds it. It signs in a Northstar fixture
-person (Nora unless `--as` names another) with the fixture password, loads
-the workspace through the app's own part registry, renames the lowest
-numbered active task assigned to that person (or the task `--task` names),
-renames it back, and prints, for each change, every part that sent a new
-answer and its size. It waits until every part answered, the pieces of a
-window cut in two included, before the first rename. The title is the only
-field it changes, but each of the two writes is a rename like one in the
-app: it sets the task's update time, adds a history row, sends a
-`task.updated` event to each webhook that takes it and sends every other
-follower of the task an inbox notice of the new title. The probe puts the title back also after a
-failure, a timeout or a first Ctrl-C, when the backend accepts that write
-within a minute, and otherwise prints the title to set; a second signal or
-a kill exits without. A title that still ends in ` (rename probe)` stops
-the probe before any write. Each write carries the title it replaces, so a
-rename by someone else meanwhile keeps their title and fails the probe. It
-exits 0 when each change re-sent only that window. Run it through the
-staging helper:
-
-```sh
-"${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-staging" \
-  node scripts/rename-resend-probe.mjs --staging
-```
-
-It takes the same targets and refusals as the end-to-end check above, and
-for `--local` the same `--app-url`, `--convex-url`, `--api-url` and
-`--deployment`.
-
 ### A large organization on a local backend
 
 To check the Board at scale by hand, grow that local Northstar copy with
@@ -728,8 +717,9 @@ which takes the same loopback origins, `QIVO_FIXTURE_LOCAL=true` and
 `QIVO_LOCAL_ADMIN_KEY` as the Northstar seed and refuses every other
 target. It adds 10,000 tasks and a parent for every 25 of them, as Nora,
 the organization's admin, through the app's own task mutations, one at a
-time. `--tasks` sets any count from 0 to 30,000, which the app's workspace
-parts load in windows. The tasks come in every status, with subtasks, due dates, pauses,
+time. `--tasks` sets any count from 0 to 30,000, for the Board's, the
+Roadmap's and Search's reads of a large organization, which read their own
+answers. The tasks come in every status, with subtasks, due dates, pauses,
 long titles and unowned tasks. Their titles read like Northstar's, so the
 Board's card height estimates meet realistic text, and each description
 names the task's number. Run it again to add only the tasks still missing;
@@ -784,10 +774,7 @@ window shows 20 of 100 tasks done and Σ 133h. The task's own description is
 task made for it: 70 in Luma Sensor's sub-projects, 15 in Luma Cloud's and
 Pilot & Launch's, and 15 in **Partner pilot**, a project the seed makes that
 only Nora sees, so anyone else who is no organization admin finds those
-links left out. Five of the linked tasks have one subtask each. The run
-ends by naming the task's window key, which the backend chose: a workspace
-that loads in stages (`--tasks 6000` or more) watches its task windows from
-the lowest keys up, so the key says which stage brings the task. A second
+links left out. Five of the linked tasks have one subtask each. A second
 run adds only what is missing. It leaves archived subtasks and linked tasks
 archived and says how many of them the task's window no longer lists.
 
@@ -962,9 +949,10 @@ the app from the release after v0.1.161 on reads its projects through
 desktop notifications through `inbox.feed`, all of which that release first
 ships, so never return the backend to a commit before the release after
 v0.1.161. Every app before
-the release after v0.1.161 subscribes a workspace part that later backends
-no longer have, `workspace.projects` and `workspace.inbox`, and before the
-release after v0.1.160 also `workspace.people` and `workspace.catalog`, so
+the release after v0.1.161 subscribes workspace parts that later backends
+no longer have, `workspace.projects`, `workspace.tasks` and
+`workspace.inbox`, and before the release after v0.1.160 also
+`workspace.people` and `workspace.catalog`, so
 it cannot load its workspace against them, and that includes a tab already
 open when the release deploys, until it reloads. Never return the app or
 the demo alone, Vercel Instant Rollback included, to a deployment of a
@@ -2295,6 +2283,61 @@ Board's **New task** dialog lists the project's two sub-projects from
 and writes nothing. The release changes no table, field or index, and needs
 no backfill and no release step.
 
+From the release after v0.1.161, the app subscribes no task window and holds
+no task. Every view and the task window show what their own reads answer,
+and every delay a card, a Roadmap bar or the task window shows comes from
+`planning.ownerLoads`. The release removes `workspace.tasks` with its reader
+and its hidden load rows, the root part's `active_tasks`, and the five
+indexes only that part read: `issues.by_org_archived_window`,
+`by_org_task_archived_key` on `issue_links`, `issue_labels` and
+`issue_attachments`, and `issue_subscriptions.by_profile_task_archived_key`.
+It keeps the `window_key` and `task_key` fields and their writers, so it
+changes no stored row, and a backend rollback builds the indexes again at
+its deploy. No page or action of the app from the release after v0.1.161
+subscribes `workspace.tasks`, so the app floor stays the one "Rollback and
+hotfixes" names. The staging check's `ui/own-reads` step, which replaces
+`ui/tasks-on-demand`, opens the run's project's Board, a fixture task's
+address and the project's Roadmap in fresh loads and checks that each shows
+its tasks from its own read. The same release stops a hidden or minimized
+tab's or window's reads of an open task (its thread, history, task, links,
+attachments and inbox item), the subscriber list, Billing's details and
+Organization › General's export and deletion state, and reads them again
+when it shows, so news that arrived meanwhile stays unread until then.
+Settings › Appearance's own watch of `appearance.get` is removed, not paused,
+since the page shows the value the app already reads. This changes no server
+function and reads no new query, so it sets no new floor. Its staging check
+step `ui/hidden-task-window` mentions Nora on t0 while the page is hidden
+and removes that notification again. The desktop shell now reports a window
+started hidden at login as hidden until it is first shown, which reaches
+people only with a new desktop build. The same release prepares
+**Settings → Organization → General → Export data** with the server job
+(`orgExport.request`, `status` and `cancel`) and saves its archive through
+`orgExport.claimDownload` and the `/exports/` route instead of building a
+ZIP in the tab, and removes `orgExport.page`. The route now exposes
+`Retry-After` to the app's origins and answers its refusals as attachments
+with no body, so a link loaded as a page never replaces the page that
+asked. Browsers without a file picker download the link in a hidden frame
+of the page. Only a save the desktop app or the browser confirms calls
+`orgRemovals.recordExport`, which now takes the export's id and records
+only a served archive of that organization that is ready or ended less
+than 30 minutes before. It records the save in the new optional field
+`organizations.last_export_confirmed_at`, which the export section, the
+Delete organization and Cancel subscription questions,
+`orgRemovals.state`, Billing's details and the deletion reminder now read
+alone. Until this release the browser export set `last_export_at` when its
+download started, so an export recorded before this release does not count
+as a confirmed save, and the reminder goes out for it. Nothing writes or
+reads `last_export_at` any more. Code from before this release does not
+accept an organizations row that holds `last_export_confirmed_at`, so once
+a save is recorded a backend from before this release fails to deploy; it
+is a rollback floor anyway (see Rollback and hotfixes). The field needs no
+backfill. The app needs a backend from v0.1.153 (`b4dc7775`) on for its
+export, which first shipped `claimDownload` and the route, and the floors
+above already hold it. Against a backend from v0.1.153 to before this
+release the archive downloads but its record is refused, and the app shows
+no confirmed save, so the deletion reminder still goes out. The release
+needs no backfill and no release step.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
@@ -2444,38 +2487,32 @@ people who have none, so those stamps are lost for everyone stamped before.
 Roll forward instead.
 
 Every task and project has a `window_key`, a random point the server picks
-when it stores the row. A task's key places it in the app's task windows of
-the workspace (`convex/lib/workspaceParts.ts`). From the release after
-v0.1.161 the app holds no project, so nothing reads a project's key or the
-`by_org_window` index any more, though the server still gives each project
-one. The release that replaced `snapshot.forMe` with the workspace parts
-added the field. A task stored before has none until the one-time
-`internal/windowKeysBackfill` gives it one, and until then it loads in the
-first task window, so an organization with more such tasks than one window
-holds cannot load. The backfill gives projects stored before a key too. A
-restore from Deleted items gives a task or project stored before keys a
-key as it writes it back, and the task's relation rows the same key.
-Earlier releases brought such a task back without a key, so a deployment
-that ran the backfill before it served the release that keys restores
-needs `remaining` checked again once it does, and another run if a page
-reports rows.
-Run the backfill on every hosted deployment once it serves that release, as
-the module's header says, and check that `remaining` reports 0 on every
-page of both tables. Earlier releases do not accept the field, so a
-rollback past that release fails to deploy; it is a rollback floor anyway
-(see Rollback and hotfixes).
+when it stores the row, and each task's relation rows carry its key as
+`task_key`. The release that replaced `snapshot.forMe` with the workspace
+parts added the fields, and until the release after v0.1.161 a task's key
+placed it in the app's task windows of the workspace. From the release
+after v0.1.161 the app subscribes no task window and holds no task or
+project, so a key places nothing in the app and no read uses one, though
+the server still gives every new task and project a key, its relation
+rows the task's, and a restore from Deleted items gives a copy stored
+before keys one as it writes it back. A task stored before the fields has
+no key until the one-time `internal/windowKeysBackfill` gives it one,
+which now changes nothing anyone sees, so the backfill needs no run on a
+deployment that serves the release after v0.1.161 or later. Earlier
+releases do not accept the fields, so a rollback past the release that
+added them fails to deploy; it is a rollback floor anyway (see Rollback
+and hotfixes).
 
 Each organization's `org_counters` row counts its active tasks and its
-live projects (`active_tasks`, `live_projects`). `active_tasks` alone sizes
-the app's task windows, as the app starts as many as those rows need. From the
-release after v0.1.161 the app holds no project, so `live_projects` serves
-only the organization's usage figures (`convex/model/usage.ts`). Every
-write that adds, archives, restores or deletes a task or project keeps the
-counts, and a new organization starts at zero. An organization created
-before the release that added them has none until the one-time
-`internal/liveCountsBackfill` counts it, and until then the app sizes its
-task windows by the task numbers handed out, as earlier releases did, so it
-loads as before. Run the
+live projects (`active_tasks`, `live_projects`). Until the release after
+v0.1.161 `active_tasks` sized the app's task windows. From the release
+after v0.1.161 the app subscribes no task window and holds no project, so
+both counts serve only the organization's usage figures in the operator
+console (`convex/model/usage.ts`), which show no count while an
+organization is not counted. Every write that adds, archives, restores or
+deletes a task or project keeps the counts, and a new organization starts
+at zero. An organization created before the release that added them has
+none until the one-time `internal/liveCountsBackfill` counts it. Run the
 backfill on every hosted deployment once it serves that release, as the
 module's header says: read its dry run first, then run it. A call that
 does not finish in about five minutes answers a `cursor`; call it again
@@ -2935,15 +2972,18 @@ are missing or late, so such a message is removed at most 28 days after its
 retention period ends. Deleting the one `message_sweep_seeds` row makes the
 next night's run start with the full pass.
 
-Organization exports can run as a server job (`convex/orgExport.ts`), which
-nothing in the app starts yet; the browser export still reads
-`orgExport.page`. A job keeps its state in `org_exports`, one row per admin
+Organization exports run as a server job (`convex/orgExport.ts`), which
+**Settings → Organization → General → Export data** starts; the browser
+export and its read, `orgExport.page`, are gone. A job keeps its state in `org_exports`, one row per admin
 who asked for it in `org_export_requests`, and its archive as compressed
 parts in storage, one `org_export_parts` row per part. The archive is
 format 4: the live tables under `data/`, then the organization's retained
 Deleted items under `deleted/`, each item marked complete or partial. Any
 active admin downloads a ready archive from the `/exports/` route through a
-two-minute link that `orgExport.claimDownload` answers. The route checks the
+two-minute link that `orgExport.claimDownload` answers, which the export
+page uses at once: the desktop app downloads it into the Downloads folder, a
+browser with the File System Access API streams it into a file the person
+chose, and other browsers download it themselves. The route checks the
 admin on every request, takes a lease on the job row, and records an
 archive it served whole in the job's `served_at`. On a local backend the
 runtime read the archive into the response as fast as storage gave it,
@@ -2951,9 +2991,14 @@ whatever the client took, so the lease and the checks before each part and
 of each part's size cover the backend's read, not the client's transfer,
 and `served_at` means the backend read the whole archive, not that the
 client received it. A served archive does not count as an export for the
-deletion reminder, which still goes out. Only the browser export's
-`recordExport` writes `organizations.last_export_at`, and a later app stage
-records a server export's download once the browser confirms it finished.
+deletion reminder by itself. Only `orgRemovals.recordExport` writes
+`organizations.last_export_confirmed_at`, which the reminder reads, and
+which the app calls once the desktop app or the browser confirmed a saved
+file of exactly the archive's bytes. It records only a served archive of
+that organization that is ready or ended less than 30 minutes before. Other
+browsers' downloads record nothing, so the reminder still goes out after
+them. The older `organizations.last_export_at`, which earlier releases set
+when a browser download started, is no longer written or read.
 A ready archive whose file is gone fails as incomplete. A ready archive stays
 four hours, then its expiry, scheduled when it became ready, erases the
 parts; a newer archive of the same organization ends it as soon as the
@@ -2967,8 +3012,7 @@ progress, and `organization export sweep` (every 15 minutes) expires ready
 archives whose timer was lost, restarts erase legs that stopped and deletes
 history older than 30 days. A branch preview registers neither, so there
 only the steps, the erase legs and the scheduled expiry run. The tables start
-empty, need no backfill, and `organizations.last_export_at` keeps its
-meaning.
+empty and need no backfill.
 
 A rollback past the release that added the job deploys, because Convex
 leaves the rows of tables the schema does not list alone, but the earlier

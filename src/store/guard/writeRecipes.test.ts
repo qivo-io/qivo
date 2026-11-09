@@ -41,7 +41,10 @@ vi.mock('../../lib/convex', async () => {
   const { createConvexDouble } = await import('./convexOrder.setup')
   const { liveOver } = await import('./liveDouble.setup')
   double.current = createConvexDouble()
-  return { convex: double.current.client, live: liveOver(double.current.client) }
+  return {
+    convex: double.current.client,
+    live: liveOver(double.current.client, { taskWindow: 'client' }),
+  }
 })
 vi.mock('../../lib/auth', () => ({
   armConvexAuth: async () => true,
@@ -56,6 +59,22 @@ vi.mock('../../lib/images', async (original) => ({
 }))
 
 const QUERY_FAILURE = '[CONVEX Q(workspace:whole)] Server Error'
+
+/* Task `id` of the published whole as the window's own answer sends it
+   (convex/taskWindow.ts task). */
+function taskAnswerOf(whole: Snapshot, id: string) {
+  const row = whole.issues.find((t) => t.id === id)
+  if (!row) throw new Error(`no ${id}`)
+  return {
+    state: 'ok',
+    task: { ...row, has_subtasks: false },
+    level: 'lead',
+    labels: whole.issueLabels.filter((l) => l.issue_id === id),
+    follow: whole.issueSubs.find((f) => f.issue_id === id) ?? null,
+    parent: null,
+    subtasks: { rows: [], complete: true },
+  }
+}
 const THREAD_FAILURE = '[CONVEX Q(snapshot:threadComments)] Server Error'
 const WINDOW_FAILURE = '[CONVEX Q(taskWindow:task)] Server Error'
 const REFUSAL = () => new ConvexError({ code: 'forbidden', message: 'no write access' })
@@ -118,9 +137,21 @@ async function boot(recipe: Recipe) {
     'recipes',
     snap.projects.filter((p) => !p.archived_at).map((p) => p.id),
   )
-  P().watchComments('task-a')
+  // task-a's window, which shows the task from its own answer, as the app
+  // shows every task
+  d.publish('taskWindow:task', taskAnswerOf(snap, 'task-a'), false)
+  P().watchComments('task-a', ORG)
   // a boot run again, such as the seat claim's recipe, waits like any write
   d.holdClaims()
+  await settle()
+  // a write on a task only the Board's answer brings, a Roadmap change and
+  // its undo among them, runs with the Board's read open
+  if (recipe.view) {
+    d.publish('tasks:board', recipe.view.answer(), false)
+    P().watchBoard(recipe.view.slot, '{}')
+    await settle()
+    if (!P().viewTask(recipe.view.slot, 'task-v')) throw new Error('the Board brought no task-v')
+  }
   await recipe.prepare?.(P(), {
     answer: async (name, value, edit) => {
       await settle()
@@ -129,14 +160,12 @@ async function boot(recipe: Recipe) {
       edit?.(snap)
       d.acceptWith(request, value, edit ? snap : undefined)
     },
+    publish: async (name, value) => {
+      d.publish(name, value)
+      await settle()
+    },
   })
   await settle()
-  if (recipe.view) {
-    d.publish('tasks:board', recipe.view.answer(), false)
-    P().watchBoard(recipe.view.slot, '{}')
-    await settle()
-    if (!P().viewTask(recipe.view.slot, 'task-v')) throw new Error('the Board brought no task-v')
-  }
   if (recipe.detail) {
     d.publish('taskWindow:task', recipe.detail.answer(), false)
     if (recipe.detail.files) d.publish('taskWindow:attachments', recipe.detail.files(), false)
@@ -314,7 +343,8 @@ describe.each(recipes.map((recipe) => [`${recipe.mutation} (${recipe.what})`, re
           else if (recipe.detail) {
             server().fail('taskWindow:task', new Error(WINDOW_FAILURE))
             // a write from the window's answer that also paints the
-            // workspace, as a create does, waits for both
+            // workspace, as a create paints the next task number, waits for
+            // both
             if (recipe.truth) server().fail('workspace:whole', new Error(QUERY_FAILURE))
           } else server().fail('workspace:whole', new Error(QUERY_FAILURE))
         }
@@ -324,11 +354,19 @@ describe.each(recipes.map((recipe) => [`${recipe.mutation} (${recipe.what})`, re
       // a change painted when it was sent is still there once accepted
       if (paintsAtSend(recipe)) expect(probe().rows(true)).toEqual(beforeAnswer)
       const shown = probe().rows()
-      // another painted write that still goes out, refused
+      // another painted write that still goes out, refused: a comment on
+      // the task the window shows, or a follow of it from its own answer
+      // where its read did not fail
       if (thread) void P().addComment('task-a', 'Refused comment')
+      // with the workspace and the window's read failed, the read of an
+      // Inbox item, the person's own mark
+      else if (recipe.detail && recipe.truth)
+        void P().readItem({ org: ORG, task: 'task-a', through: Date.parse(NOW) })
+      else if (recipe.detail) void P().addComment(WINDOW_TASK, 'Refused comment')
       else {
-        const other = ['QN-1', 'QN-2', 'QN-3'].find((key) => P().issueById[key])!
-        P().setIssueSubscribed(other, !P().issueById[other].subscribed)
+        const shown = P().taskDetail('task-a', ORG)?.view
+        if (!shown) throw new Error('the window shows no task-a')
+        P().setIssueSubscribed(shown.id, !shown.subscribed)
       }
       await settle()
       const refused = server().take()

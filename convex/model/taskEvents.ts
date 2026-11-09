@@ -211,7 +211,7 @@ export async function emitTaskEvent(
     ? Array.from(new Set([...Object.keys(a.issue), ...Object.keys(a.before)])).filter(
         (key) =>
           // relations_marked is the archive steps' bookkeeping and window_key
-          // places the task in the app's windows, never news; status_at
+          // placed the task in the app's former windows, never news; status_at
           // moves only with status or project_id, which are listed
           ![
             '_id',

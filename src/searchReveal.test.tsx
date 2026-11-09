@@ -18,21 +18,21 @@ import { queryProjectNav } from './store/projectNavStandIn.setup'
    and the Board rings the task's card, which only its answer brings, as
    the workspace holds no task: App reveals the handle the Board names a
    referenced task by (P.handleOfOpen). And an Inbox row of another
-   organization's task with the id of a task the workspace holds, which
+   organization's task with the id of the home organization's task, which
    the Inbox pane shows with that organization's New mark, reads on open,
    comments on, saves a title to and uploads an image to in that
-   organization, through that task's own answer, never as the held task,
-   whose files its lists never show, even with every task held. A refused
-   title save there rebases on that task's own title, and an upload there
-   that the person discarded is removed in that organization once the pane
-   shows the held task. And two rows of one task id
-   in two organizations, neither held, where the pane goes from the first
-   row's task to the second's and reads the second's item. */
+   organization, through that task's own answer, never as the home task,
+   whose files its lists never show. A refused title save there rebases on
+   that task's own title, and an upload there that the person discarded is
+   removed in that organization once the pane shows the home task. And two
+   unread rows of one task id in two organizations, where the pane goes
+   from the first row's task to the second's and reads the second's
+   item. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => {
   const { liveOver } = await import('./store/guard/liveDouble.setup')
-  return { convex: network, live: liveOver(network) }
+  return { convex: network, live: liveOver(network, { taskWindow: 'client' }) }
 })
 vi.mock('./lib/auth', () => ({
   armConvexAuth: async () => true,
@@ -75,8 +75,6 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => root.unmount())
-  const { TASKS } = await import('./store/liveParts')
-  TASKS.atBoot = true
   container.remove()
   document.body.innerHTML = ''
   history.replaceState(null, '', '/')
@@ -170,12 +168,8 @@ describe('a task picked in Search over the Board', { timeout: 30_000 }, () => {
           : null,
     )
     network.mutation.mockResolvedValue(null)
-    const { TASKS } = await import('./store/liveParts')
-    // the app's boot, without the test default's every task
-    TASKS.atBoot = false
     const store = await import('./store/planner')
     await store.initStore()
-    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
     const { syncStatus } = await import('./lib/syncStatus')
     syncStatus.setSocket({ connected: true, everConnected: true })
     const { default: App } = await import('./App')
@@ -188,7 +182,6 @@ describe('a task picked in Search over the Board', { timeout: 30_000 }, () => {
     )
     const card = () => document.querySelector<HTMLElement>('[data-card="QN-2"]')
     await waitFor(card, "the Board's card")
-    expect(store.P.handleOf(SOAK)).toBeNull()
     await act(async () => document.querySelector<HTMLElement>('[data-sidebar-search]')?.click())
     const input = await waitFor(
       () =>
@@ -211,7 +204,6 @@ describe('a task picked in Search over the Board', { timeout: 30_000 }, () => {
       () => card()?.closest('.board-card')?.hasAttribute('data-board-revealed'),
       'the ring',
     )
-    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
   })
 })
 
@@ -257,8 +249,6 @@ describe("an Inbox row's Open task in board", { timeout: 30_000 }, () => {
     })
     network.query.mockResolvedValue(null)
     network.mutation.mockResolvedValue(null)
-    const { TASKS } = await import('./store/liveParts')
-    TASKS.atBoot = false
     const store = await import('./store/planner')
     await store.initStore()
     const { syncStatus } = await import('./lib/syncStatus')
@@ -275,7 +265,6 @@ describe("an Inbox row's Open task in board", { timeout: 30_000 }, () => {
       () => document.querySelector<HTMLElement>(`[data-message="${SOAK}"]`),
       "the Inbox's row",
     )
-    expect(store.P.handleOf(SOAK)).toBeNull()
     await act(async () => {
       row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
     })
@@ -291,7 +280,6 @@ describe("an Inbox row's Open task in board", { timeout: 30_000 }, () => {
       'the ring',
     )
     expect(document.querySelector('[role="dialog"]')).not.toBeNull()
-    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
   })
 })
 
@@ -352,8 +340,6 @@ describe("the Inbox pane's Open task in board", { timeout: 30_000 }, () => {
     })
     network.query.mockResolvedValue(null)
     network.mutation.mockResolvedValue(null)
-    const { TASKS } = await import('./store/liveParts')
-    TASKS.atBoot = false
     const store = await import('./store/planner')
     await store.initStore()
     const { syncStatus } = await import('./lib/syncStatus')
@@ -370,7 +356,6 @@ describe("the Inbox pane's Open task in board", { timeout: 30_000 }, () => {
       () => document.querySelector<HTMLElement>(`[data-message="${SOAK}"] .inbox-message-open`),
       "the Inbox's row",
     )
-    expect(store.P.handleOf(SOAK)).toBeNull()
     await act(async () => open.click())
     // the pane shows the task from its own read
     await waitFor(
@@ -403,25 +388,23 @@ describe("the Inbox pane's Open task in board", { timeout: 30_000 }, () => {
     // the window opened the task by the same reference as the row menu
     const { refParts } = await import('./lib/taskReference')
     expect(refParts(store.P.reference?.ref)).toEqual({ org: snap.orgs[0].id, num: 2, uuid: SOAK })
-    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
   })
 })
 
 /* The guest organization of the two-organization Inbox cases. */
 const GUEST = 'org-guest'
-/* The held home task's file in the two-organization Inbox cases. */
+/* The home task's file in the two-organization Inbox cases. */
 const HOME_FILE = 'fa000000-0000-4000-8000-000000000001'
 
 /* Two organizations that each hold a task of id SOAK, on App's Inbox: the
-   home organization's QN-2 'Run the soak test', which the workspace holds
-   when `homeHeld`, else only the server does, and the guest
-   organization's QN-7 'Calibrate the guest rig', which only the server
-   holds. The held home task has a file, HOME_FILE. Each has an Inbox
+   home organization's QN-2 'Run the soak test', with a file, HOME_FILE,
+   when `homeFile`, and the guest organization's QN-7 'Calibrate the guest
+   rig'. Only the server holds them. Each has an Inbox
    item, the home one read when `homeRead`, and the guest one unread with
    a comment on its thread after it. The window's own read answers the
    task of the organization it names, and its links and attachments reads
    never answer. */
-async function twoOrganizations({ homeHeld, homeRead }: { homeHeld: boolean; homeRead: boolean }) {
+async function twoOrganizations({ homeFile, homeRead }: { homeFile: boolean; homeRead: boolean }) {
   vi.resetModules()
   history.replaceState(null, '', '/app/~/inbox')
   const snap: Snapshot = underProgram(plannerFixture())
@@ -471,7 +454,7 @@ async function twoOrganizations({ homeHeld, homeRead }: { homeHeld: boolean; hom
   // the tasks the parts do not send, which only the server holds
   const homeTask = task(home, snap.projects[0].id, 2, 'Run the soak test')
   const guestTask = task(GUEST, guestProject.id, 7, 'Calibrate the guest rig')
-  if (homeHeld) {
+  if (homeFile) {
     snap.issues.push(homeTask)
     snap.attachments.push({
       id: HOME_FILE,
@@ -484,7 +467,7 @@ async function twoOrganizations({ homeHeld, homeRead }: { homeHeld: boolean; hom
       created_at: AT,
     } as Snapshot['attachments'][number])
   }
-  const unheld = homeHeld ? [guestTask] : [homeTask, guestTask]
+  const unheld = homeFile ? [guestTask] : [homeTask, guestTask]
   Object.assign(snap, { unheld: { issues: unheld } })
   for (const [org, recipient, read] of [
     [home, me.id, homeRead],
@@ -635,32 +618,26 @@ async function pasteImage() {
   })
 }
 
-describe("an Inbox row of another organization's task with a held task's id", {
+describe("an Inbox row of another organization's task with the home task's id", {
   timeout: 30_000,
 }, () => {
-  it("shows, reads and edits that organization's task in the pane, never the held one", async () => {
+  it("shows, reads and edits that organization's task in the pane, never the home one", async () => {
     const { store, home, rowOpen, title, reads, renameGuest } = await twoOrganizations({
-      homeHeld: true,
+      homeFile: true,
       homeRead: true,
     })
-    // every task is held, so a window waiting for its lists' answers lists
-    // the workspace's rows of its task, but only of a task held in its own
-    // organization
-    await act(async () => store.P.askTasks('script'))
-    await waitFor(() => store.P.tasksHeld(), 'every task')
-    expect(store.P.issueById[store.P.handleOf(SOAK) ?? '']?.org).toBe(home)
     const divider = () => document.querySelector('.inbox-detail-frame [data-unread-divider]')
-    // the held task's row opens it, whose item is read, so it shows no New
+    // the home task's row opens it, whose item is read, so it shows no New
     // mark and sends no read
     const homeRow = await rowOpen(home)
     await act(async () => homeRow.click())
-    await waitFor(() => title() === 'Run the soak test', "the held task's title")
+    await waitFor(() => title() === 'Run the soak test', "the home task's title")
     await waitFor(
       () =>
         store.P.inboxItem?.org === home &&
         store.P.inboxItem.state === 'ok' &&
         store.P.inboxItem.current,
-      "the held task's item",
+      "the home task's item",
     )
     expect(divider()).toBeNull()
     const pane = () => document.querySelector('.inbox-detail-frame > *')
@@ -673,7 +650,7 @@ describe("an Inbox row of another organization's task with a held task's id", {
     await waitFor(() => title() === 'Calibrate the guest rig', "the guest task's title")
     expect(pane()).not.toBe(homePane)
     // with that organization's New mark, frozen from its own item, not the
-    // held task's read one
+    // home task's read one
     await waitFor(divider, "the guest task's New mark")
     expect(divider()?.getAttribute('data-unread-divider')).toBe('mark')
     // and its read on open reads that organization's item
@@ -682,7 +659,7 @@ describe("an Inbox row of another organization's task with a held task's id", {
     expect(location.pathname).toBe('/app/guest/inbox/tasks/qn-7')
     expect(title()).toBe('Calibrate the guest rig')
     // its pop-out shows its lists, which wait for its own answers and never
-    // list the held task's file, which a Remove there would delete
+    // list the home task's file, which a Remove there would delete
     await act(async () =>
       document.querySelector<HTMLElement>('.inbox-detail-frame [data-task-popout]')?.click(),
     )
@@ -694,7 +671,6 @@ describe("an Inbox row of another organization's task with a held task's id", {
     expect(store.P.detail?.org).toBe(GUEST)
     expect(store.P.sections?.task).toBe(SOAK)
     expect(store.P.sections?.attachments.rows).toEqual([])
-    expect(files.getAttribute('data-section-source')).toBe('answer')
     expect(files.textContent).not.toContain('soak-log.txt')
     await act(async () => popOut()?.querySelector<HTMLElement>('[data-task-close]')?.click())
     expect(popOut()).toBeNull()
@@ -714,9 +690,9 @@ describe("an Inbox row of another organization's task with a held task's id", {
     // answer. Another member renames the task while the field is open, so
     // the server refuses the first save over that rename, and the field
     // opens again with the draft over that organization's title, never the
-    // held task's. It refuses the next save for another reason, and the
+    // home task's. It refuses the next save for another reason, and the
     // field opens again with the draft, whose last save goes through over
-    // the rename, while the held task of the same id keeps its title
+    // the rename
     const refusals: unknown[] = [
       new ConvexError({
         code: 'conflict',
@@ -730,7 +706,6 @@ describe("an Inbox row of another organization's task with a held task's id", {
       const refusal = getFunctionName(ref) === 'issues:update' ? refusals.shift() : undefined
       return refusal ? Promise.reject(refusal) : Promise.resolve(null)
     })
-    const held = () => store.P.issueById[store.P.handleOf(SOAK) ?? '']
     const titleField = () =>
       waitFor(
         () => document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]'),
@@ -754,12 +729,8 @@ describe("an Inbox row of another organization's task with a held task's id", {
       seen('Calibrate the guest rig at noon'),
     ])
     expect(title()).toBe('Calibrate the guest rig twice')
-    expect(held()?.title).toBe('Run the soak test')
-    // the id alone names either task, so a write by it fails closed
-    expect(await store.P.updateIssue(SOAK, { title: 'Calibrate by id' })).toBe(false)
-    expect(sentArgs('issues:update')).toHaveLength(3)
     // an image pasted into its description uploads to that organization's
-    // task too, and its file never shows on the held task
+    // task too
     stubUploads({ hold: false })
     await pasteImage()
     await waitFor(() => sentArgs('files:attach').length === 1, "the image's attach")
@@ -769,19 +740,18 @@ describe("an Inbox row of another organization's task with a held task's id", {
     expect(sentArgs('files:attach')).toEqual([
       expect.objectContaining({ org_id: GUEST, issue_id: SOAK, inline: true }),
     ])
-    expect(held()?.attachments.map((file) => file.id)).toEqual([HOME_FILE])
   })
 
-  it('removes an image of that task whose draft was discarded in that organization, though the pane moved to the held task before it uploaded', async () => {
+  it('removes an image of that task whose draft was discarded in that organization, though the pane moved to the home task before it uploaded', async () => {
     const { store, home, rowOpen, title } = await twoOrganizations({
-      homeHeld: true,
+      homeFile: true,
       homeRead: true,
     })
     const guestRow = await rowOpen(GUEST)
     await act(async () => guestRow.click())
     await waitFor(() => title() === 'Calibrate the guest rig', "the guest task's title")
     // an image pasted into its description uploads, and the person
-    // discards the draft and opens the held task's row before it finished
+    // discards the draft and opens the home task's row before it finished
     const upload = stubUploads({ hold: true })
     await pasteImage()
     await waitFor(() => upload.posts() === 1, "the image's post")
@@ -795,10 +765,10 @@ describe("an Inbox row of another organization's task with a held task's id", {
     await act(async () => discard.click())
     const homeRow = await rowOpen(home)
     await act(async () => homeRow.click())
-    await waitFor(() => title() === 'Run the soak test', "the held task's title")
-    await waitFor(() => store.P.detail?.org !== GUEST, 'the store on the held task')
+    await waitFor(() => title() === 'Run the soak test', "the home task's title")
+    await waitFor(() => store.P.detail?.org !== GUEST, 'the store on the home task')
     // the upload finishes in that organization's task, which no text holds,
-    // so its file goes again, in that organization, never the held task's
+    // so its file goes again, in that organization, never the home task's
     await upload.release()
     await waitFor(() => sentArgs('files:removeAttachment').length === 1, "the image's removal")
     const [attach] = sentArgs('files:attach')
@@ -807,15 +777,14 @@ describe("an Inbox row of another organization's task with a held task's id", {
   })
 })
 
-describe('two Inbox rows of one task id in two organizations, neither held', {
+describe('two Inbox rows of one task id in two organizations, both unread', {
   timeout: 30_000,
 }, () => {
   it("switches the pane from the first row's task to the second's and reads it there", async () => {
     const { store, home, rowOpen, title, reads } = await twoOrganizations({
-      homeHeld: false,
+      homeFile: false,
       homeRead: false,
     })
-    expect(store.P.handleOf(SOAK)).toBeNull()
     // the home organization's row opens its task from its own read, and
     // reads its item
     const homeRow = await rowOpen(home)

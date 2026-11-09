@@ -1,6 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { refParts } from '../lib/taskReference'
 import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 import type { Row } from './rows'
 
@@ -10,7 +11,7 @@ const double = vi.hoisted(() => ({
 }))
 vi.mock('../lib/convex', async () => {
   const { liveOver } = await import('./guard/liveDouble.setup')
-  double.live = liveOver(network)
+  double.live = liveOver(network, { taskWindow: 'client' })
   return { convex: network, live: double.live }
 })
 vi.mock('../lib/auth', () => ({
@@ -45,6 +46,8 @@ type Deferred<T> = { resolve: (value: T) => void; reject: (reason: unknown) => v
 
 const AT = '2026-09-14T08:00:00.000Z'
 const SECTIONS = ['taskWindow:task', 'taskWindow:links', 'taskWindow:attachments']
+/* The lists a window reads only while it shows the task's details. */
+const LISTS = ['taskWindow:links', 'taskWindow:attachments']
 
 /* The task window's Subtasks, Linked tasks and Attachments in the store.
    They subscribe their own side queries (convex/taskWindow.ts task, links
@@ -159,13 +162,15 @@ describe("the task window's sections in the store", () => {
     one('taskWindow:attachments').deliver(filesAnswer([file('file-1')]))
   }
   const sections = () => store.P.sections
+  /* The handle the window shows task-a by, from its own answer. */
+  const openHandle = () => store.P.taskDetail('task-a', org)?.view?.id ?? ''
   const subtaskIds = () => sections()?.subtasks.rows.map((r) => r.uuid)
   const linkIds = () => sections()?.links.rows.map((r) => r.uuid)
   const fileIds = () => sections()?.attachments.rows.map((r) => r.id)
   /* Opens task-a in a window that shows its sections, with the lists the
      server holds delivered. */
   const opened = () => {
-    store.P.watchComments('task-a')
+    store.P.watchComments('task-a', org)
     store.P.showSections(pane, true)
     deliverAll()
   }
@@ -228,15 +233,17 @@ describe("the task window's sections in the store", () => {
   })
 
   describe('owners', () => {
-    it('asks for no list while no window shows the sections', () => {
-      store.P.watchComments('task-a')
-      expect(subs.map((s) => s.name)).toEqual(['snapshot:threadComments'])
+    it('asks for no list while no window shows the sections, only the task it shows', () => {
+      store.P.watchComments('task-a', org)
+      // the window shows the task from its own answer, which it reads
+      // whether or not a window shows its details
+      expect(subs.map((s) => s.name).sort()).toEqual(['snapshot:threadComments', 'taskWindow:task'])
       expect(sections()).toBeNull()
     })
 
     it("subscribes the three lists once each with the task's organization while a window shows them", () => {
       const { P } = store
-      P.watchComments('task-a')
+      P.watchComments('task-a', org)
       P.showSections(pane, true)
       expect(one('taskWindow:task').args).toEqual({ org_id: org, ref: 'task-a' })
       expect(one('taskWindow:links').args).toEqual({ org_id: org, issue_id: 'task-a' })
@@ -262,29 +269,29 @@ describe("the task window's sections in the store", () => {
       for (const name of SECTIONS) expect(one(name).closed).toBe(false)
       expect(subtaskIds()).toEqual(['kid-1', 'kid-2'])
       P.showSections(popOut, false)
-      for (const name of SECTIONS) expect(open(name)).toEqual([])
+      for (const name of LISTS) expect(open(name)).toEqual([])
       expect(sections()).toBeNull()
-      // the thread keeps its subscription
+      // the thread and the task's own read keep their subscriptions
       expect(one('snapshot:threadComments').closed).toBe(false)
-      // back again, the lists ask afresh, showing the workspace's meanwhile
+      expect(one('taskWindow:task').closed).toBe(false)
+      // back again, the lists ask afresh
       P.showSections(pane, true)
-      expect(sections()?.subtasks).toMatchObject({ source: 'workspace', delivered: false })
-      for (const name of SECTIONS) expect(named(name)).toHaveLength(2)
+      for (const name of LISTS) expect(named(name)).toHaveLength(2)
     })
 
     it('follows the watched task, and a late answer for the task before changes nothing', () => {
       const { P } = store
       opened()
       const before = SECTIONS.map(one)
-      P.watchComments('task-b')
+      P.watchComments('task-b', org)
       for (const live of before) expect(live.closed).toBe(true)
       expect(one('taskWindow:task').args).toEqual({ org_id: org, ref: 'task-b' })
       expect(one('taskWindow:links').args).toEqual({ org_id: org, issue_id: 'task-b' })
-      // task-b's own lists, as the workspace holds them, until its answers
+      // task-b's own lists, empty until its answers
       const own = {
         task: 'task-b',
-        subtasks: { source: 'workspace', rows: [] },
-        links: { source: 'workspace', rows: [] },
+        subtasks: { delivered: false, rows: [] },
+        links: { delivered: false, rows: [] },
       }
       expect(sections()).toMatchObject(own)
       before[0].deliver(taskAnswer([short(row('kid-1'))]))
@@ -297,8 +304,9 @@ describe("the task window's sections in the store", () => {
       P.showSections(pane, true)
       const key = P.addIssue({ project: snap.projects[0].id, title: 'New task' })
       if (!key) throw new Error('the task was not created')
-      const created = P.issueById[key]
-      P.watchComments(created.uuid)
+      // a reference that names the new task's organization, number and uuid
+      const created = { uuid: refParts(key)?.uuid ?? '' }
+      P.watchComments(created.uuid, org)
       expect(sections()).toMatchObject({
         task: created.uuid,
         subtasks: { state: 'ready', complete: true, rows: [] },
@@ -349,43 +357,6 @@ describe("the task window's sections in the store", () => {
   })
 
   describe('states', () => {
-    it("lists a complete workspace's rows until an answer, then whole or incomplete as the answer says", () => {
-      const { P } = store
-      P.watchComments('task-a')
-      P.showSections(pane, true)
-      // the workspace is complete, so it lists what it holds meanwhile
-      const fromWorkspace = {
-        state: 'ready',
-        complete: true,
-        delivered: false,
-        source: 'workspace',
-      }
-      expect(sections()).toMatchObject({
-        task: 'task-a',
-        subtasks: { ...fromWorkspace, hidden: false },
-        links: fromWorkspace,
-        attachments: { ...fromWorkspace, count: 1 },
-      })
-      expect(subtaskIds()).toEqual(['kid-1', 'kid-2'])
-      expect(linkIds()).toEqual(['task-c'])
-      expect(fileIds()).toEqual(['file-1'])
-      // an answer that agrees changes nothing but where the list comes from
-      const before = sections()?.subtasks.rows
-      one('taskWindow:task').deliver(taskAnswer([short(row('kid-1')), short(row('kid-2'))]))
-      expect(sections()?.subtasks).toMatchObject({
-        state: 'ready',
-        complete: true,
-        source: 'answer',
-      })
-      expect(sections()?.subtasks.rows).toEqual(before)
-      one('taskWindow:task').deliver(taskAnswer([short(row('kid-1'))]))
-      expect(subtaskIds()).toEqual(['kid-1'])
-      one('taskWindow:links').deliver(linksAnswer([], [], false))
-      expect(sections()?.links).toMatchObject({ state: 'ready', complete: false, rows: [] })
-      // the other lists wait on their own
-      expect(sections()?.attachments.source).toBe('workspace')
-    })
-
     it('reads unavailable, with no rows, for an unavailable or archived answer', () => {
       opened()
       one('taskWindow:task').deliver({ state: 'archived', task: { id: 'task-a' } })
@@ -414,22 +385,6 @@ describe("the task window's sections in the store", () => {
       one('taskWindow:links').deliver(linksAnswer([], []))
       expect(sections()?.links).toMatchObject({ state: 'ready', complete: true, rows: [] })
     })
-
-    it("fails before any answer beside a complete workspace's rows", () => {
-      const { P } = store
-      P.watchComments('task-a')
-      P.showSections(pane, true)
-      one('taskWindow:task').fail(new ConvexError({ code: 'forbidden', message: 'No seat' }))
-      expect(sections()?.subtasks).toMatchObject({
-        state: 'failed',
-        delivered: false,
-        source: 'workspace',
-      })
-      expect(subtaskIds()).toEqual(['kid-1', 'kid-2'])
-      // Retry does nothing for a list that did not fail
-      P.retrySection('attachments')
-      expect(named('taskWindow:attachments')).toHaveLength(1)
-    })
   })
 
   describe("the person's own writes", () => {
@@ -446,81 +401,14 @@ describe("the task window's sections in the store", () => {
     const accept = (name: string, value: unknown = null) =>
       writes.find((w) => w.name === name)?.answer.resolve(value)
 
-    it('hides a removed link at once while the links answer still holds it, and a refusal brings it back', async () => {
-      const { P } = store
-      opened()
-      P.removeLink(P.handleOf('task-a') ?? '', P.handleOf('task-c') ?? '')
-      expect(linkIds()).toEqual([])
-      refuse('issues:removeLink')
-      await settle()
-      expect(linkIds()).toEqual(['task-c'])
-    })
-
-    it('keeps a removed link hidden through its echo, without a flicker', async () => {
-      const { P } = store
-      opened()
-      const seen = watch(linkIds)
-      P.removeLink(P.handleOf('task-a') ?? '', P.handleOf('task-c') ?? '')
-      // the server's echo: the workspace and the links answer without it
-      snap.links = []
-      double.live?.batch(() => {
-        publishWhole(snap)
-        one('taskWindow:links').deliver(linksAnswer([], []))
-      })
-      expect(linkIds()).toEqual([])
-      await later()
-      expect(linkIds()).toEqual([])
-      accept('issues:removeLink')
-      await settle()
-      await later()
-      expect(linkIds()).toEqual([])
-      expect(seen.every((ids) => Array.isArray(ids) && ids.length === 0)).toBe(true)
-    })
-
-    it('shows a new link at once, keeps it through its echo, and takes it away on a refusal', async () => {
-      const { P } = store
-      opened()
-      P.addLink(P.handleOf('task-a') ?? '', 'blocked_by', P.handleOf('task-b') ?? '')
-      expect(sections()?.links.rows.map((r) => [r.uuid, r.type])).toEqual([
-        ['task-c', 'blocks'],
-        ['task-b', 'blocked_by'],
-      ])
-      refuse('issues:addLink')
-      await settle()
-      expect(linkIds()).toEqual(['task-c'])
-      P.addLink(P.handleOf('task-a') ?? '', 'relates', P.handleOf('task-b') ?? '')
-      const sent = writes.filter((w) => w.name === 'issues:addLink').at(-1)
-      const id = String(sent?.args.id)
-      const seen = watch(linkIds)
-      // the server's row, made after the link to task-c
-      const echo = {
-        ...link(id, 'task-a', 'task-b', 'relates'),
-        created_at: new Date().toISOString(),
-      }
-      snap.links.push(echo as Snapshot['links'][number])
-      double.live?.batch(() => {
-        publishWhole(snap)
-        one('taskWindow:links').deliver(
-          linksAnswer(
-            [link('link-ac', 'task-a', 'task-c'), echo],
-            [short(row('task-c')), short(row('task-b'))],
-          ),
-        )
-      })
-      expect(linkIds()).toEqual(['task-c', 'task-b'])
-      await later()
-      expect(linkIds()).toEqual(['task-c', 'task-b'])
-      sent?.answer.resolve(null)
-      await settle()
-      await later()
-      expect(linkIds()).toEqual(['task-c', 'task-b'])
-      expect(seen.every((ids) => Array.isArray(ids) && ids.length === 2)).toBe(true)
-    })
-
     it('hides a subtask whose parent a write clears, and a refusal brings it back', async () => {
       const { P } = store
       opened()
-      P.updateIssue(P.handleOf('kid-1') ?? '', { parent: null })
+      P.setSubtaskParent(
+        openHandle(),
+        { uuid: 'kid-1', parent: 'task-a', hiddenParent: false },
+        false,
+      )
       expect(subtaskIds()).toEqual(['kid-2'])
       refuse('issues:update')
       await settle()
@@ -531,7 +419,11 @@ describe("the task window's sections in the store", () => {
       const { P } = store
       opened()
       const seen = watch(subtaskIds)
-      P.updateIssue(P.handleOf('kid-1') ?? '', { parent: null })
+      P.setSubtaskParent(
+        openHandle(),
+        { uuid: 'kid-1', parent: 'task-a', hiddenParent: false },
+        false,
+      )
       const kid = row('kid-1')
       delete kid.parent_id
       double.live?.batch(() => {
@@ -548,26 +440,17 @@ describe("the task window's sections in the store", () => {
       expect(seen.every((ids) => JSON.stringify(ids) === '["kid-2"]')).toBe(true)
     })
 
-    it('shows a task given the open task as parent at once, and a refusal takes it away', async () => {
-      const { P } = store
-      opened()
-      P.updateIssue(P.handleOf('task-b') ?? '', { parent: P.handleOf('task-a') })
-      expect(subtaskIds()).toEqual(['kid-1', 'kid-2', 'task-b'])
-      refuse('issues:update')
-      await settle()
-      expect(subtaskIds()).toEqual(['kid-1', 'kid-2'])
-    })
-
     it('shows a subtask created under the open task at once, through its echo', async () => {
       const { P } = store
       opened()
       const key = P.addIssue({
         project: snap.projects[0].id,
         title: 'Calibrate',
-        parent: P.handleOf('task-a'),
+        parent: openHandle(),
       })
       if (!key) throw new Error('the subtask was not created')
-      const created = P.issueById[key].uuid
+      // a reference that names the new task's organization, number and uuid
+      const created = refParts(key)?.uuid ?? ''
       expect(subtaskIds()).toEqual(['kid-1', 'kid-2', created])
       const seen = watch(subtaskIds)
       snap.issues.push(task(created, 6, { title: 'Calibrate', parent_id: 'task-a' }))
@@ -590,52 +473,11 @@ describe("the task window's sections in the store", () => {
     it('takes a subtask create away when the server refuses it', async () => {
       const { P } = store
       opened()
-      P.addIssue({ project: snap.projects[0].id, title: 'Calibrate', parent: P.handleOf('task-a') })
+      P.addIssue({ project: snap.projects[0].id, title: 'Calibrate', parent: openHandle() })
       expect(subtaskIds()).toHaveLength(3)
       refuse('issues:create')
       await settle()
       expect(subtaskIds()).toEqual(['kid-1', 'kid-2'])
-    })
-
-    it('hides a removed file at once, and a refusal brings it back', async () => {
-      const { P } = store
-      opened()
-      P.removeAttachment('file-1')
-      expect(fileIds()).toEqual([])
-      refuse('files:removeAttachment')
-      await settle()
-      expect(fileIds()).toEqual(['file-1'])
-    })
-
-    it('hides a subtask whose archive the server accepted before its delivery', async () => {
-      const { P } = store
-      opened()
-      // the task's inbox item answers beside its thread, a transition that
-      // would hold the archive if it came after its answer
-      await settle()
-      const archived = P.archiveIssue(P.handleOf('kid-1') ?? '')
-      // nothing paints while the archive is on its way
-      expect(subtaskIds()).toEqual(['kid-1', 'kid-2'])
-      accept('issues:archive', { archived: true })
-      await archived
-      await settle()
-      expect(subtaskIds()).toEqual(['kid-2'])
-    })
-
-    it('marks a link the answer alone holds, between two held tasks, as not held', () => {
-      opened()
-      // the server has a link to task-b that no workspace delivery holds yet
-      one('taskWindow:links').deliver(
-        linksAnswer(
-          [link('link-ac', 'task-a', 'task-c'), link('link-ab', 'task-b', 'task-a')],
-          [short(row('task-c')), short(row('task-b'))],
-        ),
-      )
-      expect(sections()?.links.rows.map((r) => [r.uuid, r.type, r.held, r.linkHeld])).toEqual([
-        // the same creation time, so by id
-        ['task-b', 'blocked_by', true, false],
-        ['task-c', 'blocks', true, true],
-      ])
     })
 
     it("shows another person's change when its answer arrives, also while the workspace is held", () => {
@@ -649,7 +491,6 @@ describe("the task window's sections in the store", () => {
         uuid: 'kid-3',
         handle: 'QN-7',
         title: 'Elsewhere',
-        held: false,
       })
       // a new seat's organization holds the workspace; the answers still show
       double.live?.hold('org-2')
@@ -675,7 +516,6 @@ describe("the task window's sections in the store", () => {
       opened()
       one('taskWindow:attachments').deliver(filesAnswer([file('file-1'), file('file-2')]))
       expect(fileIds()).toEqual(['file-1', 'file-2'])
-      expect(sections()?.attachments.rows.map((r) => r.held)).toEqual([true, false])
       network.query.mockImplementation(async (ref, args: { attachment_ids?: string[] }) =>
         getFunctionName(ref) === 'files:mintUrls'
           ? mintAnswer(args.attachment_ids?.[0] ?? '')
@@ -698,10 +538,14 @@ describe("the task window's sections in the store", () => {
   })
 
   describe('the cap checks before a write', () => {
-    it('count the larger of the workspace and the whole list', () => {
+    it("count the subtasks the task's own answer lists", () => {
       const { P } = store
       opened()
-      const it = () => P.issueById[P.handleOf('task-a') ?? '']
+      const it = () => {
+        const view = P.taskDetail('task-a', org)?.view
+        if (!view) throw new Error('the window shows no task-a')
+        return view
+      }
       expect(P.capInputs(it()).children).toHaveLength(2)
       // 100 subtasks listed, two held
       const listed = Array.from({ length: 100 }, (_, n) =>
@@ -709,9 +553,9 @@ describe("the task window's sections in the store", () => {
       )
       one('taskWindow:task').deliver(taskAnswer(listed))
       expect(P.capInputs(it()).children).toHaveLength(100)
-      // an incomplete list allows nothing more and takes nothing away
+      // an incomplete list counts what it lists, and the server checks again
       one('taskWindow:task').deliver(taskAnswer(listed.slice(0, 50), false))
-      expect(P.capInputs(it()).children).toHaveLength(2)
+      expect(P.capInputs(it()).children).toHaveLength(50)
       expect(P.capInputs(it()).attachments).toBe(1)
     })
   })

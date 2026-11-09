@@ -6,14 +6,15 @@
 // runs on the worker's thread, so the page's script time holds only what a
 // real client does: decode the text and update the app.
 //
-// It serves the workspace in live parts (convex/workspace.ts), its tasks
-// in the id windows the app asks for, cut from the whole workspace it holds
-// (convex/lib/workspaceJoin.ts splitWorkspace), and the root part with the
-// signed-in person's own profiles, memberships and teams alone (rootOf),
-// so the app holds nobody else and no label, and names every other person,
-// team and label through the reads by id and the pickers, which answer
-// from the whole. After a write it sends every
-// part whose JSON changed, and only those, in one transition, as Convex does.
+// It serves the workspace's one live part (convex/workspace.ts), the root
+// part with the signed-in person's own profiles, memberships and teams
+// alone (convex/lib/workspaceJoin.ts rootOf), so the app holds nobody else,
+// no label and no task, and names every other person, team and label
+// through the reads by id and the pickers, which answer from the whole it
+// holds. The whole keeps its tasks as the server's rows, which the views'
+// reads and the task window's answer from. After a write it sends every
+// read whose JSON changed, and only those, in one transition, as Convex
+// does.
 // The whole it holds keeps the planted milestones and projects as the
 // server's rows, which no part sends; the milestone reads and the
 // navigation reads answer from them (src/store/milestoneStandIn.setup.ts,
@@ -27,8 +28,9 @@
 // server does not serve answers an error that says so (readPart). Measure
 // such a build in a checkout of its own. It answers the task
 // window's own queries (taskWindow:task, links and attachments) from the
-// workspace it holds, which a write sends
-// again with the parts it changed. The task window's relation pickers' read
+// workspace it holds through the stand-in the store tests share
+// (src/store/taskWindowStandIn.setup.ts), which a write sends again with
+// the parts it changed. The task window's relation pickers' read
 // (taskWindow:relationCandidates), which the app reads once a batch, comes
 // from a stand-in (src/store/relationPickerStandIn.setup.ts) before the
 // task window's other reads.
@@ -71,9 +73,10 @@
 //                        scripts/perf/entry.tsx), so past it a picture
 //                        waits as the person's initials with few people
 //   hidden (4)           projects the signed-in person cannot see, as full
-//                        of tasks as the visible ones; they reach the
-//                        workspace only as anonymized load rows and the
-//                        has_hidden_subtasks and has_hidden_parent flags
+//                        of tasks as the visible ones; they reach the app
+//                        only as owner load spans that name no task
+//                        (planning:ownerLoads) and as the hidden flags of
+//                        the rows the views and the task window answer
 //   programs (1)         visible top-level projects, the visible tasks
 //                        spread over all their sub-projects, so the first,
 //                        which the app opens as the project the person
@@ -174,8 +177,18 @@
 //   loads                a state the owner loads (planning:ownerLoads)
 //                        answer for screenshots of Team utilization, the
 //                        planning panel and the delays: unavailable (every
-//                        owner past the reader's bounds) or loading (no
-//                        answer)
+//                        owner past the reader's bounds), failed (every
+//                        call fails) or loading (no answer). The first two
+//                        show unknown cells in Team utilization and, with
+//                        shape=varied, whose projects track delays, Delay
+//                        unknown on the cards whose verdict needs a load. A
+//                        guest's or Viewer's capped calls need no state:
+//                        such a person reads one owner a call and a view at
+//                        most GUEST_CALLS (50) of them
+//                        (src/store/ownerLoadCache.ts), so
+//                        tasks=300&people=200&shape=varied&role=viewer
+//                        shows Delay unknown on the cards of the owners past
+//                        the cap, where role=admin shows none
 //   labelpage            a state Settings › Labels' batches answer whatever
 //                        the labels say, for screenshots of states a seeded
 //                        backend cannot reach: counting (every count being
@@ -232,6 +245,13 @@
 //                        batches of five), error (both reads fail) and
 //                        viewer (the caller may not manage the followers);
 //                        several joined by commas
+//   subscribers          a state the subscriber popover's roster
+//                        (issues:subscribers) answers, for screenshots of
+//                        states a seeded backend reaches only by timing:
+//                        loading (the read never answers, so the popover
+//                        says it is loading) or error (the read fails, so
+//                        it says it could not load); the Add list answers
+//                        as the followers say
 //   userspage            a state Settings › Users' pages answer whatever the
 //                        people say (people:settingsPage and people:get,
 //                        src/store/peopleSettingsStandIn.setup.ts), for
@@ -264,9 +284,10 @@
 //                        looked at), error (every read fails) and small
 //                        (batches of five); several joined by commas.
 //                        tokens=30&apps=30 reaches Load more and the search
-//   shownload=1          also send the load rows of the tasks the person is
-//                        shown, as the server did before the app derived
-//                        them from the task rows (an older baseline)
+//   shownload=1          also send, in snapshot:forMe, the load rows of the
+//                        tasks the person is shown, as the server did
+//                        before the app derived them from the task rows
+//                        (an older baseline)
 //   done                 the share of the default shape's tasks in Done, from
 //                        0 to 1, spread over the numbers; by default a sixth
 //   titles               the length of the default shape's task titles in
@@ -287,14 +308,6 @@
 //                        person's own grants reach, as anyone's, and
 //                        Settings' project lists and project pages reach
 //                        the hidden program by management
-//   unheld (0)           leaves the N highest-numbered visible tasks without
-//                        a parent or subtasks out of the workspace's parts
-//                        and snapshot:forMe, with their labels, files,
-//                        follows and links, while tasks:board, search:page
-//                        and the task window's queries still answer them
-//                        and writes still change them, so a Board card or
-//                        a Search result of one opens its task window from
-//                        the window's own answer
 //   window               a state the task window's own read of a task
 //                        answers, for screenshots of states a seeded
 //                        backend reaches only by timing: failed (the read
@@ -316,6 +329,23 @@
 //                        window cannot see), and rows-N (N tasks a batch,
 //                        for Load more and the held rows); several joined
 //                        by commas
+//   orgexport            states of Settings › Organization › General ›
+//                        Export data that a seeded backend reaches slowly or
+//                        not at all, from the stand-in the panel's tests use
+//                        (src/store/orgExportStandIn.setup.ts), several
+//                        joined by commas: collecting (reading tasks),
+//                        deleted (reading deleted/comments), others (another
+//                        admin's job, not joined), joined, ready, claimed
+//                        (the automatic download already taken), older (a
+//                        collecting job beside an older ready archive),
+//                        failed (deleted_changing), too-large, cancelled,
+//                        expired, skipped (a ready archive that left tasks
+//                        out), served, record-error (recordExport fails)
+//                        and error (status fails); with the parameter at
+//                        all, orgexport=open for none. Its claim answers a
+//                        link to a small ZIP the page serves
+//                        (scripts/perf/exportZip.mjs). Open it with
+//                        role=admin on Settings › Organization › General.
 //   removal              a state the removal window's reads answer
 //                        whatever the workspace says, for screenshots of
 //                        states a seeded backend cannot reach inside the
@@ -671,12 +701,10 @@
 // gateway's CORS answer (scripts/perf/files.mjs routePerfFiles). A data:
 // URL cannot carry `v`.
 import { chunkLists } from '../../convex/lib/arrayLimit'
-import { idWindows, startWindows } from '../../convex/lib/idWindows'
 import { creatorGrant } from '../../convex/lib/projectGrants'
 import { matchesTerms, scoreOf, searchTerms } from '../../convex/lib/searchTerms'
-import { parseIssueRef } from '../../convex/lib/taskRefs'
 import { nextSyncStamp } from '../../convex/lib/teamSync'
-import { rootOf, splitWorkspace } from '../../convex/lib/workspaceJoin'
+import { rootOf } from '../../convex/lib/workspaceJoin'
 import { boardStandIn } from '../../src/store/boardStandIn.setup'
 import {
   credentialListsStandIn,
@@ -706,6 +734,7 @@ import {
 import { mentionStandIn } from '../../src/store/mentionStandIn.setup'
 import { milestoneStandIn } from '../../src/store/milestoneStandIn.setup'
 import { createNotificationsStandIn } from '../../src/store/notificationsStandIn.setup'
+import { orgExportStandIn } from '../../src/store/orgExportStandIn.setup'
 import { overviewStandIn } from '../../src/store/overviewStandIn.setup'
 import { ownerLoadsStandIn } from '../../src/store/ownerLoadsStandIn.setup'
 import { OWNER_CHECK_SLOW_MS, ownerPickersStandIn } from '../../src/store/ownerPickersStandIn.setup'
@@ -727,8 +756,10 @@ import { projectSettingsStandIn } from '../../src/store/projectSettingsStandIn.s
 import { relationPickerStandIn } from '../../src/store/relationPickerStandIn.setup'
 import { reassignChoicesStandIn, removalPreviewStandIn } from '../../src/store/removalStandIn.setup'
 import { dependenciesStandIn, roadmapStandIn } from '../../src/store/roadmapStandIn.setup'
+import { TASK_WINDOW_NO_ANSWER, taskWindowStandIn } from '../../src/store/taskWindowStandIn.setup'
 import { isTeamSettingsRead, teamSettingsStandIn } from '../../src/store/teamSettingsStandIn.setup'
 import { teamSyncStandIn } from '../../src/store/teamSyncStandIn.setup'
+import { EXPORT_ZIP } from './exportZip.mjs'
 
 // the page passes its parameters as the worker's name (scripts/perf/transport.mjs)
 /* The most rows one bulk inbox batch changes, convex/model/messages.ts
@@ -916,6 +947,8 @@ const forcedTeamPicker = (() => {
    the follower stand-in's options take them, beside whether the caller
    manages the followers. */
 const forcedFollowers = new Set((parameters.get('followers') ?? '').split(',').filter(Boolean))
+/* The subscriber roster's forced state (the `subscribers` parameter). */
+const forcedSubscribers = parameters.get('subscribers') ?? undefined
 /* The navigation reads' forced states (the `projectnav` parameter), as the
    stand-in's `force` takes them; `favorites` names its programs once they
    exist (projectNavForce). */
@@ -956,7 +989,6 @@ const shownLoad = parameters.get('shownload') === '1'
 const appearance = parameters.get('appearance') === 'light' ? 'light' : 'dark'
 const viewer = parameters.get('role') === 'viewer'
 const admin = parameters.get('role') === 'admin'
-const unheldCount = option('unheld', 0)
 const forcedWindow = parameters.get('window') ?? undefined
 /* The inbox reads' forced state (the `inbox` parameter), as the stand-in's
    `force` takes it. */
@@ -1132,6 +1164,16 @@ const forcedDeleted = (() => {
 const deletedCount = option('deleted', 0)
 /* The removal window's forced states (the `removal` parameter). */
 const forcedRemoval = new Set((parameters.get('removal') ?? '').split(',').filter(Boolean))
+// orgexport: the export section's job, from the panel's stand-in, or null
+// without the parameter, when the server serves no export read
+const orgExport = parameters.has('orgexport')
+  ? orgExportStandIn({
+      now: () => Date.now(),
+      states: (parameters.get('orgexport') ?? '').split(',').filter(Boolean),
+      link: 'https://perf.invalid/exports/perf-export?e=1&m=perf&t=perf',
+      bytes: EXPORT_ZIP.length,
+    })
+  : null
 /* The owner lists' and the Mention window's forced states (the `owners`
    parameter), as the stand-in's `force` takes them. */
 const forcedOwners = new Set((parameters.get('owners') ?? '').split(',').filter(Boolean))
@@ -1154,7 +1196,7 @@ const random = () => {
 }
 const org = '00000000-0000-4000-8000-000000000001'
 /* A row id of kind `kind`, the `n`th: a UUID whose first part is a hash,
-   spread like the random ids the app makes (convex/lib/idWindows.ts). */
+   spread like the random ids the app makes. */
 export const id = (kind, n) => {
   let hash = 0x811c9dc5
   for (const ch of `${kind}:${n}`) hash = Math.imul(hash ^ ch.charCodeAt(0), 0x01000193) >>> 0
@@ -1554,13 +1596,17 @@ const hiddenSubtaskParents = new Set(hiddenTasks.map((row) => row.parent_id).fil
     countsAsSubtask; every project here is active). */
 const parentsOf = () => new Set(allTasks.filter((row) => row.parent_id).map((row) => row.parent_id))
 let parents = parentsOf()
-/** Task `row` as the workspace sends it (convex/lib/workspaceParts.ts
-    readTasks), and as forMe sent it to baseline builds. */
+/** Task `row` as the server's working set holds it (lib/workingSet.ts,
+    convex/tests/tasksOracle.setup.ts), which the stand-ins answer from, and
+    as forMe sent it to baseline builds. */
 const wireTask = (row) => {
   const { parent_id: parent, ...rest } = row
   const out = parent && shown.has(parent) ? { ...rest, parent_id: parent } : rest
   out.has_hidden_parent = !!parent && !shown.has(parent)
   out.has_hidden_subtasks = hiddenSubtaskParents.has(row.id)
+  // the server's group fact counts every active subtask, hidden ones
+  // included, so the window's stand-in reads it from the row
+  out.has_subtasks = parents.has(row.id)
   return out
 }
 /** The load row the snapshot sends for task `row`, or null:
@@ -1667,9 +1713,9 @@ const snapshot = {
       slug: 'testbed',
       created_at: now,
       next_issue_num: count + hiddenTasks.length + 1,
-      // every task is active; the root sends no project number or count,
-      // which the server keeps in org_counters (nextProjectNum below)
-      active_tasks: count + hiddenTasks.length,
+      // the root sends no project number and no count of tasks or
+      // projects, which the server keeps in org_counters (nextProjectNum
+      // below)
       date_format: 'iso',
       week_start: 1,
       week_one_rule: 'first4day',
@@ -1723,7 +1769,6 @@ if (deletedStates.has('two-orgs')) {
       name: 'Partner Co',
       slug: 'partner',
       next_issue_num: 1,
-      active_tasks: 0,
     },
   ]
   snapshot.myProfileIds = [...snapshot.myProfileIds, seat]
@@ -1781,40 +1826,11 @@ function settleTasks() {
 }
 settleTasks()
 
-/* The visible tasks the workspace's parts and forMe leave out (`unheld`):
-   the highest-numbered ones without a parent or subtasks, so no task the
-   workspace holds names one as its parent or child. */
-const unheld = new Set(
-  tasks
-    .filter((row) => !row.parent_id && !parents.has(row.id))
-    .sort((a, b) => b.num - a.num)
-    .slice(0, unheldCount)
-    .map((row) => row.id),
-)
-/** The workspace as its task parts and forMe send it: without the unheld
-    tasks and the rows hung on them. Its people, teams and labels are every
-    one the server holds; the root part sends the signed-in person's own
-    alone, and no part sends a project, which the app reads through the
-    navigation reads and projectNav.byIds. */
-function partsWorkspace() {
-  if (unheld.size === 0) return snapshot
-  const held = (row) => !unheld.has(row.issue_id)
-  return {
-    ...snapshot,
-    issues: snapshot.issues.filter((row) => !unheld.has(row.id)),
-    issueLabels: snapshot.issueLabels.filter(held),
-    attachments: snapshot.attachments.filter(held),
-    issueSubs: snapshot.issueSubs.filter(held),
-    links: snapshot.links.filter(
-      (link) => !unheld.has(link.source_id) && !unheld.has(link.target_id),
-    ),
-  }
-}
-
-/** The snapshot as forMe sends it: its long lists past 8,192 values in
-    parts (convex/lib/arrayLimit.ts). */
+/** The snapshot as forMe sends it, the whole the server holds, for a
+    baseline build: its long lists past 8,192 values in parts
+    (convex/lib/arrayLimit.ts). */
 function wireSnapshot() {
-  const { auth_user_id, myProfileIds, orgs, messages, ...rest } = partsWorkspace()
+  const { auth_user_id, myProfileIds, orgs, messages, ...rest } = snapshot
   const { delivered_at, ...lists } = rest
   return { auth_user_id, myProfileIds, orgs, ...chunkLists(lists), messages, delivered_at }
 }
@@ -1909,6 +1925,10 @@ let writes = 0
 const listeners = new Map()
 const delay = () => new Promise((resolve) => setTimeout(resolve, latency))
 const comments = []
+/* The arguments of the comment thread the page read last, as a
+   subscription or a watched part, kept once its read stops, so comments
+   delivered while a hidden page paused it reach it when it reads again. */
+let lastThread = null
 /* The task window's thread on the task the benchmark opens (the thread,
    threadchanges and threadstate parameters): the task, its history oldest
    first in insertion order, and per kind the oldest place an earlier read
@@ -2094,54 +2114,18 @@ let messageCount = 0
   }
 }
 const roadmapCounts = new Map()
-/* The windows of each organization's parts, as the app chooses them from
-   its counts (src/store/liveParts.ts), kept from the first read, so a
-   window keeps its bounds while rows come and go. */
-const windowsByOrg = new Map()
-/** The windows of organization `orgId`'s parts. */
-function windowsOf(orgId) {
-  let windows = windowsByOrg.get(orgId)
-  if (windows === undefined) {
-    const start = startWindows(snapshot.orgs.find((row) => row.id === orgId) ?? snapshot.orgs[0])
-    windows = {
-      tasks: idWindows(start.tasks),
-    }
-    windowsByOrg.set(orgId, windows)
-  }
-  return windows
-}
-/* The parts cut from the workspace as it is now, one set an organization,
-   until the next change. */
-let partsCache = null
-/** The parts of the workspace as convex/workspace.ts answers them. */
-function partsNow() {
-  partsCache ??= splitWorkspace(partsWorkspace(), (orgId) => windowsOf(orgId).tasks)
-  return partsCache
-}
-const PART_KINDS = {
-  'workspace:tasks': 'tasks',
-}
-/** What workspace part `name` answers for `args`. A part this server does
-    not serve, such as the projects part a build from before its removal
-    subscribes, throws an error that names it and says how to measure such
-    a build. */
-function readPart(name, args) {
-  const parts = partsNow()
-  // the organization's parts the read names, the first one's by default
-  const part = parts.find((p) => p.org_id === args.org_id) ?? parts[0]
+/** What workspace part `name` answers for `args`: the root part, the one
+    the server has. Any other, such as the tasks or projects part a build
+    from before their removal subscribes, throws an error that names it
+    and says how to measure such a build. */
+function readPart(name, _args) {
   // the signed-in person's own profiles, memberships and teams
   // (convex/lib/workspaceParts.ts readRoot)
-  if (name === 'workspace:root') return rootOf(partsWorkspace())
-  const kind = PART_KINDS[name]
-  if (kind === undefined)
-    throw new Error(
-      `${name} is no workspace part this perf server serves (workspace:root and ${Object.keys(PART_KINDS).join(', ')} only); a build from before the workspace's projects part went cannot load here, so measure it with its own checkout's benchmark (scripts/benchmark-browser.mjs)`,
-    )
-  const at = windowsOf(part.org_id)[kind].findIndex((w) => w.from === args.from)
-  return { state: 'ok', ...chunkLists(part[kind][at]) }
+  if (name === 'workspace:root') return rootOf(snapshot)
+  throw new Error(
+    `${name} is no workspace part this perf server serves (workspace:root only); a build from before the workspace's tasks and projects parts went cannot load here, so measure it with its own checkout's benchmark (scripts/benchmark-browser.mjs)`,
+  )
 }
-/* -1, 0 or 1 as `a` sorts before, with or after `b` in code unit order. */
-const order = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
 /* The reads of a task, by their organization and ref, that answered
    once, for window=failed, which fails every later answer of that read.
    Keyed by the read, not the task, so a task opened by its number reads
@@ -2196,102 +2180,39 @@ const refusalOf = (error) =>
   error && typeof error === 'object' && error.data && typeof error.data === 'object'
     ? { data: error.data }
     : {}
-/** The task `ref` names in organization `orgId` as convex/lib/taskWindow.ts
-    taskByRef reads it: a uuid in any case, or a number bare or as QN-12 in
-    that organization only. */
-function taskByRef(byId, orgId, ref) {
-  const named = typeof ref === 'string' ? parseIssueRef(ref) : null
-  if (!named) return undefined
-  if ('uuid' in named) {
-    const task = byId.get(named.uuid)
-    return task?.org_id === orgId ? task : undefined
-  }
-  return snapshot.issues.find((row) => row.org_id === orgId && row.num === named.num)
-}
-/** What the task window's query `name` answers for `args`, in the shapes
-    of convex/lib/taskWindow.ts: the open task with its parent and its
+/** What the task window's query `name` answers for `args`, through the
+    shared stand-in (src/store/taskWindowStandIn.setup.ts), the shapes of
+    convex/lib/taskWindow.ts: the open task with its parent and its
     subtasks as short rows, its links with their other ends, or its
-    attachment rows. The signed-in person is shown every visible task, the
-    unheld ones too, so every list is complete unless window=incomplete
-    says otherwise, and a task it does not hold answers unavailable. With
-    window=failed, each read of the task, by its arguments, fails after its
-    first answer, which a transition soon after brings; with window=error
-    it fails from the first, and with window=loading it never answers. */
+    attachment rows. The signed-in person is shown every visible task, so
+    every list is complete unless window=incomplete
+    says otherwise for the task's subtasks, and a task it does not hold
+    answers unavailable. With window=failed, each read of the task, by its
+    arguments, fails after its first answer, which a transition soon after
+    brings; with window=error it fails from the first, and with
+    window=loading it never answers. */
 function readTaskWindow(name, args) {
-  const byId = new Map(snapshot.issues.map((row) => [row.id, row]))
-  if (name === 'taskWindow:task' && forcedWindow === 'loading') return NO_ANSWER
   if (name === 'taskWindow:task' && forcedWindow === 'error')
     throw new Error("the task window's read fails, as window=error asks")
-  const task =
-    name === 'taskWindow:task'
-      ? taskByRef(byId, args.org_id ?? org, args.ref)
-      : byId.get(args.issue_id)
-  if (!task) return { state: 'unavailable' }
-  if (name === 'taskWindow:task' && forcedWindow === 'failed') {
-    const read = JSON.stringify([args.org_id ?? org, args.ref])
+  const asked = { ...args, org_id: args.org_id ?? org }
+  const force =
+    name !== 'taskWindow:task'
+      ? undefined
+      : forcedWindow === 'loading'
+        ? 'loading'
+        : forcedWindow === 'incomplete'
+          ? 'incomplete'
+          : undefined
+  const answer = taskWindowStandIn(snapshot, name, asked, force)
+  if (answer === TASK_WINDOW_NO_ANSWER) return NO_ANSWER
+  if (name === 'taskWindow:task' && forcedWindow === 'failed' && answer.state === 'ok') {
+    const read = JSON.stringify([asked.org_id, args.ref])
     if (windowAnswered.has(read))
       throw new Error("the task window's read fails, as window=failed asks")
     windowAnswered.add(read)
     setTimeout(() => void transition(), 2 * latency + 500)
   }
-  // the person's grant on the visible program
-  const level = access[0].level
-  const short = (row) => {
-    const {
-      description: _text,
-      parent_id: _parent,
-      has_hidden_parent: _hiddenParent,
-      has_hidden_subtasks: _hidden,
-      ...rest
-    } = row
-    return { ...rest, has_subtasks: parents.has(row.id), level }
-  }
-  const byCreation = (a, b) => order(a.created_at, b.created_at) || order(a.id, b.id)
-  if (name === 'taskWindow:task') {
-    const kids = snapshot.issues
-      .filter((row) => row.parent_id === task.id)
-      .sort((a, b) => a.num - b.num || order(a.id, b.id))
-    const parent = task.parent_id ? byId.get(task.parent_id) : undefined
-    // a list that is not whole says it holds hidden subtasks, as the
-    // server's does (convex/lib/taskWindow.ts windowTask)
-    const incomplete = forcedWindow === 'incomplete'
-    return {
-      state: 'ok',
-      task: {
-        ...task,
-        has_subtasks: parents.has(task.id),
-        ...(incomplete ? { has_hidden_subtasks: true } : {}),
-      },
-      level,
-      labels: snapshot.issueLabels.filter((row) => row.issue_id === task.id),
-      follow:
-        snapshot.issueSubs.find((row) => row.issue_id === task.id && row.profile_id === me.id) ??
-        null,
-      parent: parent ? short(parent) : null,
-      subtasks: {
-        rows: (incomplete ? kids.slice(0, Math.floor(kids.length / 2)) : kids).map(short),
-        complete: !incomplete,
-      },
-    }
-  }
-  if (name === 'taskWindow:links') {
-    const other = (link) => (link.source_id === task.id ? link.target_id : link.source_id)
-    const links = snapshot.links
-      .filter(
-        (link) =>
-          (link.source_id === task.id || link.target_id === task.id) && byId.has(other(link)),
-      )
-      .sort(byCreation)
-    const ends = [...new Set(links.map(other))]
-    return { state: 'ok', links, tasks: ends.map((id) => short(byId.get(id))), complete: true }
-  }
-  const rows = snapshot.attachments.filter((row) => row.issue_id === task.id).sort(byCreation)
-  return {
-    state: 'ok',
-    rows,
-    count: rows.filter((row) => row.dropped_at === undefined).length,
-    complete: true,
-  }
+  return answer
 }
 /* The rows of a page of main Search. */
 const SEARCH_ROWS = 25
@@ -2485,6 +2406,10 @@ const read = (name, args = {}) => {
     const answer = notifications.settings(forcedNotifications)
     return answer === 'loading' ? NO_ANSWER : answer
   }
+  // the export section's job and the removal state's record line, from the
+  // stand-in under orgexport
+  if (orgExport && (name === 'orgExport:status' || name === 'orgRemovals:state'))
+    return orgExport.query(name)
   // the feed the desktop alert client watches, which answers nothing under
   // inboxfeed=loading
   if (name === 'inbox:feed') {
@@ -2605,8 +2530,9 @@ const read = (name, args = {}) => {
     // the owner loads the delays of tasks only the Board's answer brings
     // read (src/store/ownerLoadsStandIn.setup.ts)
     case 'planning:ownerLoads':
-      // loads=loading never answers
+      // loads=loading never answers, and loads=failed fails every call
       if (forcedLoads === 'loading') return NO_ANSWER
+      if (forcedLoads === 'failed') throw new Error('the owner loads fail, as loads=failed asks')
       return ownerLoadsStandIn(snapshot, args, {
         unavailable: forcedLoads === 'unavailable' ? args.owner_ids : [],
       })
@@ -2616,6 +2542,9 @@ const read = (name, args = {}) => {
     // leads, unless followers=viewer
     case 'issues:subscribers':
     case 'pickers:taskFollowers': {
+      if (name === 'issues:subscribers' && forcedSubscribers === 'loading') return NO_ANSWER
+      if (name === 'issues:subscribers' && forcedSubscribers === 'error')
+        throw new Error("the subscriber roster's read fails, as subscribers=error asks")
       const options = {
         canManage: !forcedFollowers.has('viewer'),
         batch: forcedFollowers.has('small') ? 5 : undefined,
@@ -2746,7 +2675,6 @@ function transition() {
 /** Sends the workspace's changes: to an app before the parts its one
     query, else the parts that changed. */
 function emitWorkspace() {
-  partsCache = null
   return Promise.all([emit('snapshot:forMe'), watchedParts.size ? transition() : null])
 }
 /* The server's prune of one inbox item after a read (convex/model/messages.ts
@@ -2855,6 +2783,15 @@ async function mutate(name, args) {
     const answer = write(deletedWorld(), args, forcedDeleted)
     writes++
     await Promise.all(DELETED_READS.map((read) => emit(read)))
+    return answer
+  }
+  // the export's writes under orgexport, then the reads they changed
+  if (orgExport && (name.startsWith('orgExport:') || name === 'orgRemovals:recordExport')) {
+    const answer = orgExport.mutation(name, args)
+    // a claim's link is served whole, as the route records
+    if (name === 'orgExport:claimDownload' && answer?.url) orgExport.serve(args.export_id)
+    writes++
+    await transition()
     return answer
   }
   // a change of Notification delivery, then the settings watches it
@@ -3196,10 +3133,7 @@ function createTask(args) {
   shown.add(row.id)
   wireRows.set(row.id, wireTask(row))
   loadRows.set(row.id, loadRow(row))
-  snapshot.orgs = [
-    { ...orgRow, next_issue_num: row.num, active_tasks: orgRow.active_tasks + 1 },
-    ...snapshot.orgs.slice(1),
-  ]
+  snapshot.orgs = [{ ...orgRow, next_issue_num: row.num }, ...snapshot.orgs.slice(1)]
   settleTasks()
   const { description: _text, ...answer } = row
   return answer
@@ -3242,10 +3176,11 @@ const scenarios = {
     return emitWorkspace()
   },
   deliverRemote(n) {
-    patchTask(tasks[n].id, { title: `Renamed elsewhere ${Date.now()}` })
-    return emitWorkspace()
+    const title = `Renamed elsewhere ${Date.now()}`
+    patchTask(tasks[n].id, { title })
+    return emitWorkspace().then(() => title)
   },
-  /* Another person creates a task in the first project. */
+  /* Another person creates a task in the first project; answers its id. */
   deliverCreate() {
     const n = tasks.length + hiddenTasks.length
     const row = taskRow(n, id('4', 900000 + n), projects[0], undefined)
@@ -3256,12 +3191,9 @@ const scenarios = {
     wireRows.set(row.id, wireTask(row))
     loadRows.set(row.id, loadRow(row))
     const [org] = snapshot.orgs
-    snapshot.orgs = [
-      { ...org, next_issue_num: org.next_issue_num + 1, active_tasks: org.active_tasks + 1 },
-      ...snapshot.orgs.slice(1),
-    ]
+    snapshot.orgs = [{ ...org, next_issue_num: org.next_issue_num + 1 }, ...snapshot.orgs.slice(1)]
     settleTasks()
-    return emitWorkspace()
+    return emitWorkspace().then(() => row.id)
   },
   /* That person deletes the task deliverCreate made last, so the
      top-level project the app opens holds the tasks it held before. At
@@ -3282,8 +3214,6 @@ const scenarios = {
     shown.delete(gone)
     wireRows.delete(gone)
     loadRows.delete(gone)
-    const [org] = snapshot.orgs
-    snapshot.orgs = [{ ...org, active_tasks: org.active_tasks - 1 }, ...snapshot.orgs.slice(1)]
     settleTasks()
     return emitWorkspace()
   },
@@ -3309,20 +3239,29 @@ const scenarios = {
     )
     return emitWorkspace()
   },
-  deliverComments() {
+  /* Another person posts `count` comments at once on the one open thread,
+     which reach it in one delivery; answers the last one's text. With no
+     thread read live, as while a hidden page pauses its reads, they go to
+     the thread the page read last, which answers them when it reads
+     again. */
+  deliverComments(count = 1) {
     const active = [
       ...(listeners.get('snapshot:threadComments') || []),
       ...[...watchedParts.values()].filter((part) => part.name === 'snapshot:threadComments'),
     ]
-    if (active.length !== 1) throw new Error('Benchmark requires one open comment thread')
-    const body = `Benchmark delivered comment ${comments.length + 1}`
-    comments.push({
-      id: id('5', 800000 + comments.length),
-      issue_id: active[0].args.issue_id,
-      author: profiles[1].id,
-      body,
-      created_at: new Date().toISOString(),
-    })
+    const thread = active.length === 0 ? lastThread : active.length === 1 ? active[0].args : null
+    if (thread === null) throw new Error('Benchmark requires one open comment thread')
+    let body = ''
+    for (let k = 0; k < count; k++) {
+      body = `Benchmark delivered comment ${comments.length + 1}`
+      comments.push({
+        id: id('5', 800000 + comments.length),
+        issue_id: thread.issue_id,
+        author: profiles[1].id,
+        body,
+        created_at: new Date().toISOString(),
+      })
+    }
     void emit('snapshot:threadComments')
     if (watchedParts.size) void transition()
     return body
@@ -3368,7 +3307,9 @@ async function write(data, turn) {
       data.name.startsWith('deletedItems:') ||
       data.name === 'projectNav:setFavorite' ||
       data.name === 'issues:create' ||
-      data.name === 'notifications:setDelivery'
+      data.name === 'notifications:setDelivery' ||
+      data.name.startsWith('orgExport:') ||
+      data.name === 'orgRemovals:recordExport'
         ? refusalOf(error).data
         : undefined
     post(
@@ -3403,6 +3344,7 @@ port.onmessage = async ({ data }) => {
         },
       }
       subscriptions.set(sub, { name, subscription })
+      if (name === 'snapshot:threadComments') lastThread = args
       const group = listeners.get(name) || new Set()
       listeners.set(name, group)
       group.add(subscription)
@@ -3412,6 +3354,7 @@ port.onmessage = async ({ data }) => {
       return
     }
     case 'watch': {
+      if (data.name === 'snapshot:threadComments') lastThread = data.args
       watchedParts.set(data.id, {
         name: data.name,
         args: data.args,

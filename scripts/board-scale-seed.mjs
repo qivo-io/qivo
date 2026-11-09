@@ -257,7 +257,6 @@ import { makeFunctionReference } from 'convex/server'
 import { LIMITS } from './limits.mjs'
 import { DemoCliError, isLoopbackOrigin, resolveTarget } from './marketing-demo.mjs'
 import { pngOf } from './perf/files.mjs'
-import { readWorkspace } from './workspaceJoin.mjs'
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const ACTOR = 'nora@demo.qivo.io'
@@ -1076,14 +1075,19 @@ async function mintCredential(scheme) {
   return { id: crypto.randomUUID(), secret, hash: hex(new Uint8Array(digest)) }
 }
 
-/** What the seed reads of the workspace `client` reads as Nora: its parts,
-    which send no project since the app reads them by id, with the live
-    projects of her organizations, neither archived nor under an archived
-    parent, from the tables (tableRows) through a client of the local admin
-    key itself, since a system table answers no person the admin acts as. */
+/** What the seed reads as Nora through `client`: the workspace's root
+    part, her seats and organizations, and from the tables (tableRows),
+    through a client of the local admin key itself since a system table
+    answers no person the admin acts as, her organizations' live projects,
+    neither archived nor under an archived parent, their active tasks, the
+    unmarked label rows of those tasks and the unmarked links between them.
+    No part sends a task, so the tables are where a seed run finds what an
+    earlier run made. */
 async function seedSnapshot(client, target) {
-  const snapshot = await readWorkspace((name, args) => client.query(ref(name), args))
-  const orgs = new Set(snapshot.orgs.map((o) => o.id))
+  const root = await client.query(ref('workspace:root'), {})
+  if (root === null || 'deleting' in root)
+    throw new DemoCliError('Nora holds no seat this backend opens.')
+  const orgs = new Set(root.orgs.map((o) => o.id))
   const admin = new ConvexHttpClient(target.url, { logger: false })
   admin.setAdminAuth(target.key)
   const rows = (await tableRows(admin, 'projects')).filter((p) => orgs.has(p.org_id))
@@ -1091,7 +1095,17 @@ async function seedSnapshot(client, target) {
   const projects = rows.filter(
     (p) => !p.archived_at && !(p.parent_id && byId.get(p.parent_id)?.archived_at),
   )
-  return { ...snapshot, projects }
+  const issues = (await tableRows(admin, 'issues')).filter(
+    (task) => orgs.has(task.org_id) && !task.archived_at,
+  )
+  const active = new Set(issues.map((task) => task.id))
+  const issueLabels = (await tableRows(admin, 'issue_labels')).filter(
+    (row) => active.has(row.issue_id) && !row.task_archived,
+  )
+  const links = (await tableRows(admin, 'issue_links')).filter(
+    (link) => active.has(link.source_id) && active.has(link.target_id) && !link.task_archived,
+  )
+  return { ...root, projects, issues, issueLabels, links }
 }
 
 /** Every row of `table` as the local admin reads it, page by page. */
@@ -1580,8 +1594,7 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   const org = snapshot.orgs.find((o) => o.id === actor.org_id)?.id
   if (!org) throw new DemoCliError('Nora cannot see Northstar; seed it again.')
   // Northstar's own rows: the snapshot holds every organization Nora is in
-  const joined = (name) =>
-    [...snapshot[name], ...(snapshot.more?.[name] ?? []).flat()].filter((row) => row.org_id === org)
+  const joined = (name) => snapshot[name].filter((row) => row.org_id === org)
   const issues = joined('issues')
   // --files plans before anything is seeded, so a count that does not fit
   // refuses with nothing made
@@ -1793,8 +1806,7 @@ const RATE_REFUSAL = /^too many comments on this task.*Try again in (\d+) second
    it and it is missing, and the label toggled. */
 async function seedThread(count, { client, target, people, actor, org, log }) {
   const snapshot = await seedSnapshot(client, target)
-  const joined = (name) =>
-    [...snapshot[name], ...(snapshot.more?.[name] ?? []).flat()].filter((row) => row.org_id === org)
+  const joined = (name) => snapshot[name].filter((row) => row.org_id === org)
   const active = joined('issues')
   const live = new Set(active.map((task) => task.id))
   const fromSeed = [...seededTasks(active).entries()]
@@ -1834,7 +1846,7 @@ async function seedThread(count, { client, target, people, actor, org, log }) {
         (p.id === actor.id || owners.has(p.id)),
     )
     .sort((a, b) => (a.id < b.id ? -1 : 1))
-  const labels = [...snapshot.issueLabels, ...(snapshot.more?.issueLabels ?? []).flat()]
+  const labels = snapshot.issueLabels
     .filter((row) => row.issue_id === task.id)
     .map((row) => row.label_id)
   const plan = planThread(count, { task, present, posters, history, labels })
@@ -1980,8 +1992,7 @@ async function seedDeleted(
     tasks, by number, where the run holds none. */
 async function seedLabels(count, { client, org, seeded, target, log }) {
   const snapshot = await seedSnapshot(client, target)
-  const joined = (name) =>
-    [...snapshot[name], ...(snapshot.more?.[name] ?? []).flat()].filter((row) => row.org_id === org)
+  const joined = (name) => snapshot[name].filter((row) => row.org_id === org)
   const active = joined('issues')
   const live = new Set(active.map((task) => task.id))
   const fromSeed = [...seeded.keys()]
@@ -1992,10 +2003,7 @@ async function seedLabels(count, { client, org, seeded, target, log }) {
     ? fromSeed
     : [...active].sort((a, b) => a.num - b.num).map((task) => task.id)
   const on = new Map()
-  for (const { issue_id, label_id } of [
-    ...snapshot.issueLabels,
-    ...(snapshot.more?.issueLabels ?? []).flat(),
-  ]) {
+  for (const { issue_id, label_id } of snapshot.issueLabels) {
     if (!live.has(issue_id)) continue
     on.set(issue_id, [...(on.get(issue_id) ?? []), label_id])
   }
@@ -2287,12 +2295,9 @@ async function seedRelations({
     present: {
       projects: new Set(projects.map((project) => project.id)),
       tasks: new Set([...joined('issues').map((task) => task.id), ...archivedIds]),
-      // a link row in the workspace carries no organization; Nora sees only
-      // her own links
-      links: new Set([
-        ...[...snapshot.links, ...(snapshot.more?.links ?? []).flat()].map((l) => l.id),
-        ...storedLinks,
-      ]),
+      // the stored links between active tasks of Nora's organizations
+      // (seedSnapshot)
+      links: new Set([...snapshot.links.map((l) => l.id), ...storedLinks]),
     },
   })
   // what archiving took out of the task's lists, which stays out
@@ -2340,21 +2345,6 @@ async function seedRelations({
       ? `Done: the task ${expected.family} has ${shown.subtasks} active subtasks and ${shown.links} links to active tasks on ${target.url}.`
       : `Done: the task ${expected.family} has ${expected.subtasks} subtasks and ${expected.links} links on ${target.url}; its window shows ${expected.done} of ${expected.total} tasks done and Σ ${expected.remaining}h.`,
   )
-  // The app's task windows range over window keys, which the server sets
-  // at random (convex/lib/db.ts newWindowKey), so the task's key, not its
-  // id, says which task window brings it once a page asks for every task.
-  client.setAdminAuth(target.key)
-  const row = (await tableRows(client, 'issues')).find((task) => task.id === expected.family)
-  client.setAdminAuth(target.key, identityOf(actor.auth_user_id))
-  if (row?.window_key) log(windowKeyNote(row.window_key))
-}
-
-/** What the seed says of the --relations task's window key `key`: how far
-    into the key space it is, which names the task window that brings it
-    once a page asks for every task (src/store/liveParts.ts). */
-export function windowKeyNote(key) {
-  const share = Math.round((Number.parseInt(key, 16) / 2 ** 32) * 100)
-  return `Its window key is ${key}, ${share}% into the key space. The app loads its task windows only when a page needs every task, all of them at once, so the key names the window that brings it then.`
 }
 
 /** Marks the seeded tasks `ids` archived in `seeded` (seededTasks), as a
@@ -2388,8 +2378,7 @@ async function seedArchive(ids, { client, org, target, log }) {
    now, which `client` reads as Nora, each comment as its poster's login. */
 async function seedInbox(count, { client, target, people, actor, org, log }) {
   const snapshot = await seedSnapshot(client, target)
-  const joined = (name) =>
-    [...snapshot[name], ...(snapshot.more?.[name] ?? []).flat()].filter((row) => row.org_id === org)
+  const joined = (name) => snapshot[name].filter((row) => row.org_id === org)
   const live = new Set(
     joined('projects')
       .filter((project) => project.type === 'project' && !project.archived_at)

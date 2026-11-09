@@ -264,16 +264,13 @@ const roadmapAsks = (board: Board) =>
     .map((sub) => sub.args as { window: { from: string }; planned_task?: { id: string } })
 
 describe('the Roadmap from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
-  it("shows the answer's tasks as the shaped models of its rows, asking for no task of the workspace", async () => {
+  it("shows the answer's tasks as the shaped models of its rows", async () => {
     const board = await loadBoard(network, plan, { scope: 'plan' })
-    board.probe?.asks()
     await renderRoadmap(board)
     expect(state()).toBe('ok')
     expect(busy()).toBe(false)
     expect(rows().sort()).toEqual(['QN-1', 'QN-2'])
-    expect(board.P.tasksHeld()).toBe(false)
-    expect(board.probe?.asks()).toEqual([])
-    // a task the answer leaves out does not show, though the workspace has it
+    // a task the answer leaves out does not show, though the server has it
     board.server.roadmap.edit = (name, answer) =>
       name === 'tasks:roadmap' && (answer as RoadmapAnswer).state === 'ok'
         ? {
@@ -1049,8 +1046,7 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
   })
 
   it('places no task that left the roadmap as its first load arrives, and ends the session', async () => {
-    // One's Roadmap, and the workspace holds every task, as after Team
-    // sync loaded them, so one-1 is still found once its answer drops it
+    // One's Roadmap
     const board = await loadBoard(network, (snap) => {
       plan(snap)
       const one = snap.issues[0]
@@ -1058,7 +1054,6 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
       Reflect.deleteProperty(one, 'end_week')
       one.remaining_hours = 100
     })
-    await board.ask()
     board.P.roadmapContext(true, false)
     board.server.holdLoads = true
     network.mutation.mockClear()
@@ -1079,7 +1074,6 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
     // as well, so a few of the store's tasks run
     for (let turn = 0; turn < 3; turn++) await settle()
     await flush()
-    expect(board.P.anyTask('QN-1')?.project).toBe('two')
     // no fitted end went to the task that left
     expect(datesSent('one-1')).toEqual([starter])
     expect(

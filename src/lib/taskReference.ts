@@ -2,13 +2,12 @@
    organization and its number, its uuid, or both, so a window opens it from
    the server (store/planner.ts P.watchTaskRef) rather than by a handle.
 
-   A handle is a home key ("QN-482") or a uuid, and only names a task the
-   workspace holds (store/taskIndex.ts). A reference is a string kept apart
-   from both. It starts with REF, so no lookup of a handle (P.issueById,
-   P.anyTask, P.handleOf) ever finds it and none reads as a home key. App
-   holds it as its open task, the address names the task by it
-   (lib/router.ts), and the store moves it to the task's handle in the
-   repaint in which the workspace first holds the task (P.watchHandles).
+   A handle is a home key ("QN-482") or a uuid, and names a task a view's
+   answer brought (store/viewRows.ts, store/planner.ts P.handleNow). A
+   reference is a string kept apart from both. It starts with REF, so no
+   lookup of a handle (P.anyTask, P.viewTask) ever finds it and none reads
+   as a home key. App holds it as its open task, and the address names the
+   task by it (lib/router.ts).
 
    Every opener that knows the task's organization names it: Search, a
    Board card, a phone row, an Overview row, Parent, Subtasks, Linked tasks

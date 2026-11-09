@@ -3,6 +3,7 @@ import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FIELD_CHANGED } from '../../convex/lib/fieldPrints'
 import { COMMENTS_COUNTING } from '../../convex/lib/limits'
+import { refParts } from '../lib/taskReference'
 import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -11,7 +12,7 @@ const double = vi.hoisted(() => ({
 }))
 vi.mock('../lib/convex', async () => {
   const { liveOver } = await import('./guard/liveDouble.setup')
-  double.live = liveOver(network)
+  double.live = liveOver(network, { taskWindow: 'client' })
   return { convex: network, live: double.live }
 })
 vi.mock('../lib/auth', () => ({
@@ -250,25 +251,6 @@ describe('a task the workspace does not hold, in the store', () => {
       expect(named('taskWindow:task')).toHaveLength(1)
     })
 
-    it('reads no task answer for a held task while no window shows the sections', () => {
-      const { P } = store
-      P.watchComments('task-a', org)
-      expect(named('taskWindow:task')).toEqual([])
-      expect(one('snapshot:threadComments').args).toEqual({ org_id: org, issue_id: 'task-a' })
-      expect(detail('task-a')).toBeNull()
-      // without an organization, a task the workspace does not hold has an
-      // empty thread and no read, as before
-      P.watchComments('far-1')
-      expect(open('snapshot:threadComments')).toEqual([])
-      expect(named('taskWindow:task')).toEqual([])
-      expect(detail('far-1')).toBeNull()
-      expect(P.commentsLoaded).toBe(true)
-      // the organization a later call brings starts them
-      P.watchComments('far-1', org)
-      expect(one('snapshot:threadComments').args).toEqual({ org_id: org, issue_id: 'far-1' })
-      expect(one('taskWindow:task').args).toEqual({ org_id: org, ref: 'far-1' })
-    })
-
     it('starts the watch over when a later call brings the organization', () => {
       const { P } = store
       P.showSections(pane, true)
@@ -289,12 +271,12 @@ describe('a task the workspace does not hold, in the store', () => {
       const { P } = store
       const key = P.addIssue({ project: snap.projects[0].id, title: 'New task' })
       if (!key) throw new Error('the task was not created')
-      P.watchComments(P.issueById[key].uuid, org)
+      // a reference that names the new task's organization, number and uuid
+      P.watchComments(refParts(key)?.uuid ?? '', org)
       const created = {
         state: 'ready',
         complete: true,
         delivered: true,
-        source: 'answer',
         rows: [],
       }
       P.showSections(pane, true)
@@ -369,7 +351,6 @@ describe('a task the workspace does not hold, in the store', () => {
         handle: 'QN-41',
         org,
         num: 41,
-        held: false,
         isGroup: true,
       })
     })
@@ -527,39 +508,6 @@ describe('a task the workspace does not hold, in the store', () => {
       expect(P.detail).toBeNull()
     })
 
-    it('starts a fresh read when a held task leaves, and stops it when a task arrives', () => {
-      const { P } = store
-      P.watchComments('task-a', org)
-      expect(named('taskWindow:task')).toEqual([])
-      // someone archives it: the workspace leaves it out
-      const held = snap.issues.splice(0, 1)
-      publishWhole(snap)
-      expect(one('taskWindow:task').args).toEqual({ org_id: org, ref: 'task-a' })
-      expect(detail('task-a')).toMatchObject({ state: 'loading', view: null })
-      one('taskWindow:task').deliver(archivedAnswer('task-a', 1))
-      expect(detail('task-a')?.state).toBe('archived')
-      // restored, it arrives again: the read stops without a section owner
-      snap.issues.push(...held)
-      publishWhole(snap)
-      expect(open('taskWindow:task')).toEqual([])
-      expect(detail('task-a')).toBeNull()
-      // with one, the read goes on for the Subtasks section
-      P.showSections(pane, true)
-      const read = one('taskWindow:task')
-      snap.issues.splice(0, 1)
-      publishWhole(snap)
-      snap.issues.push(...held)
-      publishWhole(snap)
-      expect(one('taskWindow:task')).toBe(read)
-      // and a task whose create is on its way reads nothing
-      P.showSections(pane, false)
-      const key = P.addIssue({ project: snap.projects[0].id, title: 'New task' })
-      if (!key) throw new Error('the task was not created')
-      P.watchComments(P.issueById[key].uuid, org)
-      expect(open('taskWindow:task')).toEqual([])
-      expect(open('snapshot:threadComments')).toEqual([])
-    })
-
     it('subscribes again with the kept organization after the parts start over, and keeps the view meanwhile', async () => {
       const { P } = store
       P.watchComments('guest-1', GUEST)
@@ -609,11 +557,6 @@ describe('a task the workspace does not hold, in the store', () => {
       read.deliver(okAnswer('far-1', 40))
       expect(one('snapshot:threadComments').args).toEqual({ org_id: org, issue_id: 'far-1' })
       expect(one('snapshot:threadHistory').args).toEqual({ org_id: org, issue_id: 'far-1' })
-      // a held task keeps its thread whatever the answer says
-      P.watchComments('task-a', org)
-      P.showSections(pane, true)
-      one('taskWindow:task').deliver({ state: 'unavailable' })
-      expect(one('snapshot:threadComments').args).toEqual({ org_id: org, issue_id: 'task-a' })
     })
 
     it('asks for no thread or history of a gone task as later deliveries come, until it comes back', () => {
@@ -634,7 +577,6 @@ describe('a task the workspace does not hold, in the store', () => {
       publishWhole(snap)
       snap.issues = snap.issues.map((t) => (t.id === 'task-a' ? { ...t, title: 'Renamed' } : t))
       publishWhole(snap)
-      expect(P.issues.find((t) => t.uuid === 'task-a')?.title).toBe('Renamed')
       expect(asked()).toBe(before)
       // nor does Retry for a failed thread
       P.retryComments()
@@ -649,10 +591,6 @@ describe('a task the workspace does not hold, in the store', () => {
     it('moves the handle of the task a window shows from its answer when the home organization changes, and no reference', async () => {
       const { P } = store
       const { taskRef } = await import('../lib/taskReference')
-      // the partner organization holds its own QN-40
-      snap.issues.push(task('guest-40', 40, { org_id: GUEST, project_id: GUEST_PROJECT }))
-      publishWhole(snap)
-      expect(P.handleOf('guest-40')).toBe('guest-40')
       // a window shows the home organization's QN-40 from its answer, opened
       // by a reference, which names its organization by id
       const ref = taskRef({ org, num: 40, uuid: 'far-1' })
@@ -671,11 +609,10 @@ describe('a task the workspace does not hold, in the store', () => {
       )
       publishWhole(snap)
       expect(P.homeOrg).toBe(GUEST)
-      // one move of every handle at once: the partner's task takes QN-40,
-      // and the task the window shows from its answer keeps its own by
-      // uuid; the reference does not move
+      // one move of every handle at once: the task the window shows from
+      // its answer keeps its own by uuid; the reference does not move
       expect(moves).toHaveLength(1)
-      expect(moves[0]).toMatchObject({ 'guest-40': 'QN-40', 'QN-40': 'far-1' })
+      expect(moves[0]).toMatchObject({ 'QN-40': 'far-1' })
       expect(Object.keys(moves[0])).not.toContain(ref)
       expect(P.handleNow('far-1', org, 40)).toBe('far-1')
       // the window's read goes on for the same task
@@ -889,95 +826,6 @@ describe('a task the workspace does not hold, in the store', () => {
       expect(
         network.query.mock.calls.filter(([ref]) => getFunctionName(ref) === 'files:mintUrls'),
       ).toHaveLength(1)
-    })
-
-    it("mints a held task's file as before", async () => {
-      const { P } = store
-      snap.attachments.push({
-        id: 'file-1',
-        issue_id: 'task-a',
-        name: 'spec.pdf',
-        size_bytes: 1200,
-        mime: 'application/pdf',
-        storage_id: 'storage-file-1',
-        uploaded_by: snap.profiles[0].id,
-        created_at: AT,
-      } as Snapshot['attachments'][number])
-      publishWhole(snap)
-      network.query.mockImplementation(async (ref) =>
-        getFunctionName(ref) === 'files:mintUrls' ? mintAnswer('file-1') : null,
-      )
-      expect(await P.attachmentUrl('file-1')).toContain('file-1')
-      const mints = network.query.mock.calls.filter(
-        ([ref]) => getFunctionName(ref) === 'files:mintUrls',
-      )
-      expect(mints.map(([, args]) => args)).toEqual([{ org_id: org, attachment_ids: ['file-1'] }])
-    })
-
-    it('shows a held image through the inline loader and forgets its bytes once the store forgets the file', async () => {
-      const { P } = store
-      const file = (id: string) =>
-        ({
-          id,
-          issue_id: 'task-a',
-          name: `${id}.webp`,
-          size_bytes: 1200,
-          mime: 'image/webp',
-          storage_id: `storage-${id}`,
-          uploaded_by: snap.profiles[0].id,
-          created_at: AT,
-        }) as Snapshot['attachments'][number]
-      snap.attachments.push(file('file-1'), file('file-2'))
-      publishWhole(snap)
-      network.query.mockImplementation(async (ref, args: { attachment_ids?: string[] }) =>
-        getFunctionName(ref) === 'files:mintUrls'
-          ? {
-              attachments: Object.fromEntries(
-                (args.attachment_ids ?? []).map((id) => [
-                  id,
-                  { url: `https://files.test/files/${id}?t=1`, exp: Date.now() / 1000 + 600 },
-                ]),
-              ),
-              avatars: {},
-            }
-          : null,
-      )
-      const image = new Blob([new Uint8Array(1200)], { type: 'image/webp' })
-      const fetcher = vi.fn(async () => ({ ok: true, status: 200, blob: async () => image }))
-      vi.stubGlobal('fetch', fetcher)
-      vi.stubGlobal(
-        'Image',
-        class {
-          src = ''
-          naturalWidth = 640
-          naturalHeight = 480
-          decode = async () => {}
-        },
-      )
-      let serial = 0
-      vi.spyOn(URL, 'createObjectURL').mockImplementation(() => `blob:file-${++serial}`)
-      const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
-      for (const id of ['file-1', 'file-2']) {
-        P.inlineImages.watch(id, () => {})
-        P.inlineImages.pin(id)
-      }
-      await vi.waitFor(() => expect(P.inlineImages.snapshot('file-2').state).toBe('ready'))
-      // both images in one call
-      expect(
-        network.query.mock.calls
-          .filter(([ref]) => getFunctionName(ref) === 'files:mintUrls')
-          .map(([, args]) => args),
-      ).toEqual([{ org_id: org, attachment_ids: ['file-1', 'file-2'] }])
-      // file-2 goes out of reach, then a delivery no longer holds it
-      P.inlineImages.unpin('file-2')
-      snap.attachments = snap.attachments.filter((a) => a.id !== 'file-2')
-      publishWhole(snap)
-      expect(revoke).toHaveBeenCalledWith('blob:file-2')
-      // the person removes file-1 while it shows
-      void P.removeAttachment('file-1')
-      expect(P.inlineImages.snapshot('file-1').state).toBe('gone')
-      expect(revoke).toHaveBeenCalledWith('blob:file-1')
-      expect(fetcher).toHaveBeenCalledTimes(2)
     })
   })
 })

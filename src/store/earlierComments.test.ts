@@ -1,7 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 import type { Row } from './rows'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -59,7 +59,7 @@ describe('earlier comments in the store', () => {
     vi.clearAllMocks()
     vi.stubGlobal('window', { showToast: vi.fn() })
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    snap = plannerFixture()
+    snap = underProgram(plannerFixture())
     author = snap.profiles[0].id
     snap.issues.push({
       id: 'task-a',
@@ -103,7 +103,7 @@ describe('earlier comments in the store', () => {
     })
     store = await import('./planner')
     await store.initStore()
-    store.P.watchComments('task-a')
+    store.P.watchComments('task-a', snap.orgs[0].id)
   })
 
   afterEach(() => {
@@ -127,7 +127,7 @@ describe('earlier comments in the store', () => {
     P.watchComments(null)
     const again = store.initStore()
     await settle()
-    P.watchComments('task-a')
+    P.watchComments('task-a', snap.orgs[0].id)
     publish({ comments: range(0, 3), earlier: false })
     await settle()
     answerWhole()
@@ -277,7 +277,7 @@ describe('earlier comments in the store', () => {
     publish({ comments: range(102, 152), earlier: true })
     const check = asked[0]
     P.watchComments(null)
-    P.watchComments('task-a')
+    P.watchComments('task-a', snap.orgs[0].id)
     publish({ comments: range(100, 150), earlier: true })
     publish({ comments: range(102, 152), earlier: true })
     check.answer.resolve({ comments: range(51, 101), earlier: true })
@@ -452,7 +452,7 @@ describe('earlier comments in the store', () => {
     publish({ comments: range(100, 150), earlier: true })
     const page = load()
     P.watchComments(null)
-    P.watchComments('task-a')
+    P.watchComments('task-a', snap.orgs[0].id)
     publish({ comments: range(100, 150), earlier: true })
     page.answer.resolve({ comments: range(50, 100), earlier: false })
     await settle()

@@ -55,8 +55,8 @@ import {
   restTasks,
   type T,
   uuid,
+  wholeOf,
   withReadingAdmin,
-  workspaceOf,
 } from './helpers.setup'
 import { orgLoadRows } from './orgLoad.setup'
 import { orgProjectView } from './orgProjectView.setup'
@@ -189,7 +189,7 @@ async function cases(fx: Fx) {
  * does not track delay paints nothing (planner.ts tracksDelay). */
 async function appDelays(fx: Fx, person: Doc<'profiles'>): Promise<Map<string, DelayJson | null>> {
   setWeekConfig(fx.org.week_start, fx.org.week_one_rule, new Date(NOW))
-  const snap = await workspaceOf(as(fx.t, person))
+  const snap = await wholeOf(fx.t, person)
   if (snap === null) throw new Error(`${person.name} has no snapshot`)
   const rows = snap.issues.filter((i) => i.org_id === fx.org.id)
   const byId: Record<string, DatedGroupIssue> = {}
@@ -218,8 +218,9 @@ async function appDelays(fx: Fx, person: Doc<'profiles'>): Promise<Map<string, D
       plannableHoursOf({ plannableHours: p.plannable_hours ?? null, kind: p.kind }),
     ]),
   )
-  // the store's load: the rows of the tasks it shows and the snapshot's of
-  // those it does not (src/store/taskIndex.ts), each owner's in canonical order
+  // the reference load (helpers.setup.ts appLoadRows) holds the rows of
+  // the tasks the reader is shown and the oracle's of those it is not,
+  // each owner's in canonical order
   const load = new Map<string, LoadSpan[]>()
   for (const r of appLoadRows(snap)) {
     const spans = load.get(r.owner_id) ?? []

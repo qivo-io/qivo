@@ -17,15 +17,17 @@ const booted = async () => ({
   ...(await import('../components/ui/tooltip')),
 })
 
-/* A Board card of a task only the Board's answer brings, whose task the
-   workspace has not received (store/viewRows.ts): it shows, its delay comes
+/* A Board card of a task only the Board's answer brings
+   (store/viewRows.ts): it shows, its delay comes
    from the owner-load cache with Delay unknown where the load cannot be
    read, it drags, its owner changes, and it opens in the task window. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
   convex: network,
-  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
+  live: (await import('../store/guard/liveDouble.setup')).liveOver(network, {
+    taskWindow: 'client',
+  }),
 }))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
@@ -67,7 +69,7 @@ afterEach(async () => {
 })
 
 /** Task `far` as the Board's answer sends it, planned this week and next
-    with 10 hours left and due in two weeks, which the workspace lacks. */
+    with 10 hours left and due in two weeks. */
 function far(snap: Snapshot): ViewRow {
   const { description: _text, ...fields } = taskRow(snap, 'far', 'progress', 50)
   return {
@@ -80,9 +82,9 @@ function far(snap: Snapshot): ViewRow {
   }
 }
 
-/** A Board whose project shows delays, one task the workspace holds, and
-    the answer's task `far` the workspace lacks, with `prepare`'s changes,
-    as the phone's task list with `phone`. */
+/** A Board whose project shows delays, task `a` on the server, and the
+    answer's task `far`, which only the answer brings, with `prepare`'s
+    changes, as the phone's task list with `phone`. */
 async function farBoard(prepare: (snap: Snapshot) => void = () => {}, phone = false) {
   const board = await loadBoard(
     network,
@@ -93,8 +95,6 @@ async function farBoard(prepare: (snap: Snapshot) => void = () => {}, phone = fa
     },
     { phone },
   )
-  // the workspace holds every task it has, which leaves out far
-  await board.ask()
   board.server.edit = (answer) =>
     answer.state === 'ok' ? { ...answer, rows: [...answer.rows, far(board.snapshot)] } : answer
   await board.render(root)
@@ -105,9 +105,9 @@ async function farBoard(prepare: (snap: Snapshot) => void = () => {}, phone = fa
 /** A second person of the organization. */
 const OTHER = 'other-person'
 
-/** Gives the held task `a` to OTHER, in progress with hours left, planned
-    and due, so its verdict would read OTHER's load if the cache judged it. */
-function heldByOther(snap: Snapshot) {
+/** Gives task `a` to OTHER, in progress with hours left, planned and
+    due, so its verdict reads OTHER's load. */
+function givenToOther(snap: Snapshot) {
   snap.profiles.push({
     ...snap.profiles[0],
     id: OTHER,
@@ -147,10 +147,9 @@ const writes = () =>
 
 describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () => {
   it("shows Delay unknown once its owner's load cannot be read, and sizes its card again", async () => {
-    const board = await farBoard(heldByOther)
+    const board = await farBoard(givenToOther)
     const card = () => board.card('far')
     expect(card()).not.toBeNull()
-    expect(board.P.handleOf('far')).toBeNull()
     // the stand-in reads the owner's load: on track, no band
     expect(card()?.querySelector('[data-delay]')).toBeNull()
     const model = board.P.viewTask('board:desktop', 'far')
@@ -168,13 +167,11 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     expect(after).not.toBe(model)
     if (!after) throw new Error('no model')
     expect(estimate(group(after), () => null, 280, 'pooled', 'todo')).toBeGreaterThan(before)
-    // and a held task keeps the workspace's own delay: its owner's load is
-    // never asked for, though its verdict would read one
+    // the verdict read the owner's load from the owner-load cache
     const asked = network.onUpdate.mock.calls
       .filter(([ref]) => getFunctionName(ref) === 'planning:ownerLoads')
       .flatMap(([, args]) => (args as { owner_ids: string[] }).owner_ids)
     expect(asked).toContain(board.snapshot.profiles[0].id)
-    expect(asked).not.toContain(OTHER)
   })
 
   it('drags to another status, painted at once', async () => {
@@ -187,8 +184,7 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     expect(cell('review')?.contains(board.card('far'))).toBe(true)
   })
 
-  it('drops a card of a session that never asked, marked as a write on the answer’s task', async () => {
-    // the app's state: no task held, every card the answer's row
+  it('drops a card and changes its owner, as a write on the answer’s task', async () => {
     const board = await loadBoard(network, (snap) => {
       snap.issues.push(taskRow(snap, 'a', 'todo', 1), {
         ...taskRow(snap, 'b', 'todo', 2),
@@ -196,9 +192,7 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
       })
     })
     await board.render(root)
-    expect(board.P.taskLoad()).toEqual({ state: 'not_asked' })
     board.probe?.faults()
-    board.probe?.answerMarks()
     await drop(board, 'a', 'review')
     // an owner change on the card too, from its row
     const b = board.card('b')?.dataset.card ?? ''
@@ -207,10 +201,7 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
       { status: 'review' },
       { assignee_id: board.snapshot.profiles[0].id },
     ])
-    // the view write's mark lets both through the guard, with no ask
-    expect(board.probe?.answerMarks()).toEqual(['issues:update', 'issues:update'])
     expect(board.probe?.faults()).toEqual([])
-    expect(board.P.taskLoad()).toEqual({ state: 'not_asked' })
   })
 
   it('changes its owner from the owner picker, on the server’s people', async () => {
@@ -348,39 +339,6 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     await board.answer()
     const id = board.P.viewTask('board:desktop', 'far')?.id ?? ''
     expect(board.P.anyTask(id)?.status).toBe('review')
-  })
-
-  it('keeps the Board loading while a loaded subtask waits for a parent only the answer brings', async () => {
-    const board = await loadBoard(network, (snap) => {
-      snap.issues.push({ ...taskRow(snap, 'y', 'todo', 2), parent_id: 'x' })
-    })
-    // its parent x, in a part of the workspace still to come, which the
-    // server names as y's parent and sends among the answer's parents
-    const { description: _text, ...fields } = taskRow(board.snapshot, 'x', 'todo', 1)
-    const parent: ViewRow = { ...fields, has_subtasks: true, group_done: false }
-    board.server.edit = (answer) =>
-      answer.state === 'ok'
-        ? {
-            ...answer,
-            rows: answer.rows.map((row) => (row.id === 'y' ? { ...row, parent_id: 'x' } : row)),
-            parents: [...answer.parents, parent],
-          }
-        : answer
-    // y is held, and a load of every task is on its way
-    await board.ask()
-    const loading = vi.spyOn(board.P, 'tasksArriving').mockReturnValue(true)
-    await board.render(root)
-    await board.answer()
-    const state = () => document.querySelector<HTMLElement>('[data-board-root]')?.dataset.boardState
-    expect(board.P.handleOf('y')).not.toBeNull()
-    expect(board.P.viewTask('board:desktop', 'x')).toBeDefined()
-    // the card shows, and the Board does not say it is complete
-    expect(board.card('y')).not.toBeNull()
-    expect(state()).toBe('loading')
-    // once every task has loaded, the workspace would hold x too
-    loading.mockReturnValue(false)
-    await board.answer()
-    expect(state()).toBe('ok')
   })
 
   it("renders for its own news, not for the workspace's, as a kept Board that hides", async () => {
@@ -526,7 +484,7 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     expect(busy()).toBe(false)
   })
 
-  it('opens in the task window by a reference to its organization, number and uuid, and a held card by its handle', async () => {
+  it('opens in the task window by a reference to its organization, number and uuid', async () => {
     const board = await farBoard()
     const opened: (string | null)[] = []
     await board.render(root, (task) => {
@@ -541,7 +499,7 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
       uuid: 'far',
     })
     await act(async () => board.card('a')?.click())
-    expect(opened.at(-1)).toBe(board.P.handleOf('a'))
+    expect(refParts(opened.at(-1))).toMatchObject({ org: board.snapshot.orgs[0].id, uuid: 'a' })
   })
 
   it('opens from a phone row by a reference to its organization, number and uuid', async () => {
@@ -553,7 +511,6 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     })
     const row = board.card('far')
     expect(row?.classList.contains('mobile-task-row')).toBe(true)
-    expect(board.P.handleOf('far')).toBeNull()
     const { refParts } = await import('../lib/taskReference')
     await act(async () => row?.click())
     expect(refParts(opened.at(-1))).toEqual({
@@ -562,6 +519,6 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
       uuid: 'far',
     })
     await act(async () => board.card('a')?.click())
-    expect(opened.at(-1)).toBe(board.P.handleOf('a'))
+    expect(refParts(opened.at(-1))).toMatchObject({ org: board.snapshot.orgs[0].id, uuid: 'a' })
   })
 })

@@ -15,14 +15,13 @@ import {
 } from './boardFixture.setup'
 
 /* The Board from the server's answer (board/useBoardView.ts): the answer
-   decides which tasks show, each as the store's own card, or as its row
-   where the store lacks the task (store/viewRows.ts); the filter row on
-   screen narrows at once; the person's own pending writes show as painted;
-   until the answer for the arguments on screen arrives the Board shows its
-   loading frame, or narrows the answer on screen while typing only adds to
-   its text filter; a Board that cannot show its tasks says why. The store
-   boots without the workspace's tasks, as the app does, and the cases
-   about the store's own cards ask for every task first (board.ask). */
+   decides which tasks show, each as the model of its row
+   (store/viewRows.ts); the filter row on screen narrows at once; another
+   person's edits show with the next answer; the person's own pending
+   writes show as painted; until the answer for the arguments on screen
+   arrives the Board shows its loading frame, or narrows the answer on
+   screen while typing only adds to its text filter; a Board that cannot
+   show its tasks says why. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -157,61 +156,55 @@ async function setVisibility(value: 'visible' | 'hidden') {
 }
 
 describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
-  it("shows the answer's tasks as the store's own cards, and only those", async () => {
+  it("shows the answer's tasks as the models of its rows, and only those", async () => {
     const board = await loadBoard(network, three)
-    await board.ask()
     board.server.edit = (answer) =>
       answer.state === 'ok' ? { ...answer, rows: answer.rows.filter((r) => r.id !== 'c') } : answer
     await board.render(root)
     expect(state()).toBe('ok')
-    expect(board.card('a')?.dataset.card).toBe(board.P.issues.find((it) => it.uuid === 'a')?.id)
+    expect(board.card('a')?.dataset.card).toBe(board.P.viewTask('board:desktop', 'a')?.id)
     expect(board.card('b')).not.toBeNull()
-    // the store holds c, but the answer leaves it out
-    expect(board.P.issues.some((it) => it.uuid === 'c')).toBe(true)
+    // the server holds c, but the answer leaves it out
+    expect(board.snapshot.issues.some((it) => it.id === 'c')).toBe(true)
     expect(board.card('c')).toBeNull()
     expect(count('todo')).toBe('2')
     expect(busy()).toBe(false)
   })
 
-  it('narrows at once when another person edits a task out of the filters, and widens only with the answer', async () => {
+  it('narrows and widens with the answer when another person edits a task across the filters', async () => {
     const board = await loadBoard(network, (snap) => {
       three(snap)
       snap.issues.push({ ...taskRow(snap, 'd', 'todo', 4), priority: 'low' })
     })
-    // the workspace's view models narrow at once, so every task is held
-    await board.ask()
     await board.render(root)
     await board.filter({ priority: 'medium' })
     await board.answer()
     expect(state()).toBe('ok')
     expect([board.card('a'), board.card('d')].map((card) => card !== null)).toEqual([true, false])
     board.server.hold = true
-    // the workspace brings each edit before the Board's answer does
+    // another person's edits reach the Board only with its answer
     const task = (id: string) => {
       const found = board.snapshot.issues.find((t) => t.id === id)
       if (!found) throw new Error(`no task ${id}`)
       return found
     }
     task('a').priority = 'low'
-    await board.deliver()
-    expect(board.card('a')).toBeNull()
-    expect(state()).toBe('ok')
-    // one edited into the filters waits for the answer
     task('d').priority = 'medium'
     await board.deliver()
+    expect(board.card('a')).not.toBeNull()
     expect(board.card('d')).toBeNull()
+    expect(state()).toBe('ok')
     await board.answer()
     expect(board.card('d')).not.toBeNull()
     expect(board.card('a')).toBeNull()
   })
 
-  it('narrows at once when another person moves a task out of the selection or to Done under Focus, and out of a search once the answer says so', async () => {
+  it('narrows with the answer when another person moves a task out of the selection, to Done under Focus or out of a search', async () => {
     const board = await loadBoard(network, (snap) => {
       plan(snap)
       for (const [n, id] of ['a', 'b', 'c'].entries())
         snap.issues.push({ ...taskRow(snap, id, 'todo', n + 10), title: `Order cable ${id}` })
     })
-    await board.ask()
     await board.render(root)
     expect(state()).toBe('ok')
     await board.filter({ focus: true })
@@ -231,36 +224,26 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     task('b').status = 'done'
     task('c').title = 'Order the case'
     await board.deliver()
-    // the text verdict is the answer's: the store cannot read every name a
-    // text matches, so a held card stays until the answer for the text
-    // leaves it out
-    expect(['a', 'b', 'c'].map((id) => board.card(id) !== null)).toEqual([false, false, true])
+    // every card stays until the answer leaves it out
+    expect(['a', 'b', 'c'].map((id) => board.card(id) !== null)).toEqual([true, true, true])
     board.server.hold = false
     await board.answer()
     expect(['a', 'b', 'c'].map((id) => board.card(id) !== null)).toEqual([false, false, false])
     expect(state()).toBe('ok')
   })
 
-  it("shows the person's own pending writes as painted, both ways", async () => {
-    const board = await loadBoard(network, (snap) => {
-      three(snap)
-      snap.issues.push({ ...taskRow(snap, 'd', 'todo', 4), priority: 'low' })
-    })
-    // a priority edit needs the task the workspace holds
-    await board.ask()
+  it("shows the person's own pending writes as painted, and a task they create", async () => {
+    const board = await loadBoard(network, three)
     await board.render(root)
-    await board.filter({ priority: 'medium' })
+    await board.filter({ mine: true })
     await board.answer()
     board.server.hold = true
     const { P } = board
-    const handle = (uuid: string) => P.issues.find((it) => it.uuid === uuid)?.id ?? ''
-    // an edit of their own takes a task out at once…
-    await act(async () => void P.updateIssue(handle('b'), { priority: 'low' }))
+    const handle = (uuid: string) => P.viewTask('board:desktop', uuid)?.id ?? ''
+    // an edit of their own takes a task out at once
+    await act(async () => void P.updateIssue(handle('b'), { assignee: null }))
     expect(board.card('b')).toBeNull()
-    // …and brings one the answer left out in at once
-    expect(board.card('d')).toBeNull()
-    await act(async () => void P.updateIssue(handle('d'), { priority: 'medium' }))
-    expect(board.card('d')).not.toBeNull()
+    expect(board.card('a')).not.toBeNull()
     // a task they create shows before any answer names it
     let created: string | null = null
     await act(async () => {
@@ -269,10 +252,12 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
         title: 'New one',
         status: 'todo',
         priority: 'medium',
+        assignee: board.snapshot.profiles[0].id,
       })
     })
     expect(created).not.toBeNull()
-    expect(board.card(P.issueById[created ?? '']?.uuid ?? '')).not.toBeNull()
+    const { refParts } = await import('../lib/taskReference')
+    expect(board.card(refParts(created)?.uuid ?? '')).not.toBeNull()
     expect(state()).toBe('ok')
   })
 
@@ -281,11 +266,10 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
       three(snap)
       snap.orgs[0].next_issue_num = 3
     })
-    await board.ask()
     await board.render(root)
     board.server.hold = true
     const { P } = board
-    const handle = (uuid: string) => P.issues.find((it) => it.uuid === uuid)?.id ?? ''
+    const handle = (uuid: string) => P.viewTask('board:desktop', uuid)?.id ?? ''
     const order = () =>
       [...(cell('todo')?.querySelectorAll<HTMLElement>('[data-card]') ?? [])].map(
         (card) => card.dataset.card,
@@ -293,7 +277,7 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     const keys = ['a', 'b', 'c'].map(handle)
     expect(order()).toEqual(keys)
     // a pending edit keeps its card in its number's place…
-    await act(async () => void P.updateIssue(handle('b'), { title: 'Task b, renamed' }))
+    await act(async () => void P.updateIssue(handle('b'), { remaining: 5 }))
     expect(order()).toEqual(keys)
     // …and a pending new task, numbered after them, lands last
     let created: string | null = null
@@ -306,7 +290,8 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
       })
     })
     expect(created).not.toBeNull()
-    expect(order()).toEqual([...keys, created])
+    // the card names the new task by the handle its reference opens
+    expect(order()).toEqual([...keys, P.handleOfOpen(created ?? '')])
   })
 
   it("shows the person's new task at once in its place, asking for no task, and from the answer once the server took it", async () => {
@@ -317,9 +302,6 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     const { P } = board
     const made = await addTask(board, { title: 'New one', status: 'todo', priority: 'medium' })
     // a reference: the workspace holds no task, and nothing asked for any
-    expect(P.handleOf(made.uuid)).toBeNull()
-    expect(board.probe?.asks()).toEqual([])
-    expect(P.taskLoad()).toEqual({ state: 'not_asked' })
     const order = () =>
       [...(cell('todo')?.querySelectorAll<HTMLElement>('[data-card]') ?? [])].map(
         (card) => card.dataset.card,
@@ -435,7 +417,6 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     })
     await board.answer()
     // the heading and the card are the answer's rows, and the count stands
-    expect(board.P.handleOf('par')).toBeNull()
     expect(state()).toBe('ok')
     expect(document.querySelector('[data-parent-heading]')?.textContent).toContain('Task par')
     expect(board.card('kid')).not.toBeNull()
@@ -443,31 +424,6 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     await board.deliver()
     expect(state()).toBe('ok')
     expect(document.querySelector('[data-parent-heading]')?.textContent).toContain('Task par')
-  })
-
-  it("shows a task the store lacks from its answer row at once, and the store's once it arrives", async () => {
-    const board = await loadBoard(network, three)
-    await board.ask()
-    await board.render(root)
-    expect(state()).toBe('ok')
-    // the server holds a task the workspace has not brought yet
-    board.snapshot.issues.push(taskRow(board.snapshot, 'late', 'todo', 4))
-    await board.answer()
-    expect(board.P.handleOf('late')).toBeNull()
-    expect(state()).toBe('ok')
-    expect(busy()).toBe(false)
-    expect(board.card('late')).not.toBeNull()
-    expect(count('todo')).toBe('4')
-    // a card the answer brings is the same object while its row holds
-    const model = board.P.viewTask('board:desktop', 'late')
-    await board.answer()
-    expect(board.P.viewTask('board:desktop', 'late')).toBe(model)
-    // the workspace brings it, and the card is the store's own
-    await board.deliver()
-    expect(board.P.handleOf('late')).not.toBeNull()
-    expect(board.P.viewTask('board:desktop', 'late')).toBeUndefined()
-    expect(board.card('late')).not.toBeNull()
-    expect(count('todo')).toBe('4')
   })
 
   it('never looks empty or unmatched while a row the answer names has not arrived', async () => {
@@ -527,53 +483,6 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     }
   })
 
-  it('names the tasks a pending write changed and the parents it moved one between, no others', async () => {
-    const board = await loadBoard(network, (snap) => {
-      three(snap)
-      snap.issues.push(taskRow(snap, 'd', 'todo', 4), taskRow(snap, 'e', 'todo', 5))
-      for (const t of snap.issues) if (t.id === 'a' || t.id === 'b') t.parent_id = 'c'
-    })
-    await board.ask()
-    await board.render(root)
-    const id = (uuid: string) => board.P.issues.find((it) => it.uuid === uuid)?.id ?? ''
-    // the paint reads parent c, a copy that matches its applied row; the
-    // move names c all the same, and not its other subtasks
-    await act(async () => void board.P.updateIssue(id('d'), { parent: id('c') }))
-    expect([...board.P.ownPaintedTasks()].sort()).toEqual(['c', 'd'])
-    // a move from c to e names both
-    await act(async () => void board.P.updateIssue(id('a'), { parent: id('e') }))
-    expect([...board.P.ownPaintedTasks()].sort()).toEqual(['a', 'c', 'd', 'e'])
-  })
-
-  it('shows at once a parent a pending write makes a plain task, and hides one it makes a group', async () => {
-    const board = await loadBoard(network, (snap) => {
-      snap.issues.push(
-        taskRow(snap, 'par', 'backlog', 1),
-        { ...taskRow(snap, 'sub', 'todo', 2), parent_id: 'par' },
-        taskRow(snap, 'lone', 'backlog', 3),
-        taskRow(snap, 'mover', 'todo', 4),
-      )
-    })
-    await board.ask()
-    await board.render(root)
-    // the search finds a task in Backlog, and no group, whose own status
-    // does not count
-    await board.search('Backlog')
-    await wait(300)
-    expect(state()).toBe('ok')
-    expect(board.card('par')).toBeNull()
-    expect(board.card('lone')).not.toBeNull()
-    board.server.hold = true
-    const id = (uuid: string) => board.P.issues.find((it) => it.uuid === uuid)?.id ?? ''
-    // par's last subtask leaves it, a task in Backlog of its own now
-    await act(async () => void board.P.updateIssue(id('sub'), { parent: null }))
-    expect(board.card('par')).not.toBeNull()
-    // lone gains its first subtask, a group now, which the search misses
-    await act(async () => void board.P.updateIssue(id('mover'), { parent: id('lone') }))
-    expect(board.card('lone')).toBeNull()
-    expect(board.card('par')).not.toBeNull()
-  })
-
   it('puts the phone note above its sections, with no empty card', async () => {
     const board = await loadBoard(network, three, { phone: true })
     const { STALL } = await import('../store/liveParts')
@@ -612,16 +521,13 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
 
   it('stays loading while a row the answer names has not arrived, then says so past the bound', async () => {
     const board = await loadBoard(network, three)
-    // the workspace brings the missing task at the end
-    await board.ask()
     const { STALL } = await import('../store/liveParts')
     const stall = STALL.ms
     STALL.ms = 60
     try {
       await board.render(root)
       expect(state()).toBe('ok')
-      // the server holds a task the workspace has not brought yet, whose
-      // row the source has not brought either
+      // the server holds a task whose row the source has not brought
       withoutRows(board.P, ['late'])
       board.snapshot.issues.push(taskRow(board.snapshot, 'late', 'todo', 4))
       await board.answer()
@@ -640,8 +546,10 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
       const asked = board.server.asked.length
       await act(async () => retry?.click())
       expect(board.server.asked.length).toBe(asked + 1)
-      // the workspace brings it, and the Board is whole
-      await board.deliver()
+      // the row arrives with the answer Try again asked for, and the Board
+      // is whole
+      vi.mocked(board.P.viewTask).mockRestore()
+      await board.answer()
       expect(state()).toBe('ok')
       expect(board.card('late')).not.toBeNull()
       expect(count('todo')).toBe('4')
@@ -1127,11 +1035,9 @@ describe('what the Board says in place of its columns', { timeout: BOARD_TEST_TI
   })
 
   it('ends a drag and the slices when a live answer leaves ok', async () => {
-    const many = (snap: Snapshot) => {
-      for (let n = 1; n <= 400; n++) snap.issues.push(taskRow(snap, `t${n}`, 'todo', n))
-    }
-    const board = await loadBoard(network, many)
-    await board.ask()
+    // more cards than the Board mounts at once, 134 in each of three
+    // sub-projects, under the design size of one
+    const board = await loadBoard(network, spread(134), { scope: 'plan' })
     await board.render(root)
     expect(state()).toBe('ok')
     const { isUpdateBlocked } = await import('../lib/updateSafety')

@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -349,7 +348,6 @@ describe('the Overview from its answers', { timeout: BOARD_TEST_TIMEOUT }, () =>
     const stall = STALL.ms
     STALL.ms = 40
     try {
-      expect(board.P.taskLoad()).toEqual({ state: 'not_asked' })
       expect(list('paused')?.dataset.ovListState).toBe('ok')
       // the source of a row's task brings nothing for held0, which the
       // answer still names
@@ -545,7 +543,6 @@ describe('rows and the person’s own writes', { timeout: BOARD_TEST_TIMEOUT }, 
         : answer
     await board.answer()
     const row = rows('paused').at(-1)
-    expect(board.P.handleOf('far')).toBeNull()
     await click(row)
     const { refParts } = await import('../lib/taskReference')
     expect(refParts(opened.at(-1))).toEqual({
@@ -553,24 +550,6 @@ describe('rows and the person’s own writes', { timeout: BOARD_TEST_TIMEOUT }, 
       num: 90,
       uuid: 'far',
     })
-  })
-
-  it('takes away at once the row of a task the person archives, and nothing else', async () => {
-    const { board } = await overview(work())
-    // the archive of a task the workspace holds
-    await board.ask()
-    // the server accepts the archive; no delivery holds it yet
-    network.mutation.mockImplementation((ref) =>
-      getFunctionName(ref) === 'issues:archive' ? Promise.resolve(null) : new Promise(() => {}),
-    )
-    const [first] = rows('paused')
-    await act(async () => {
-      await board.P.archiveIssue(first?.dataset.ovrow ?? '')
-    })
-    expect(rows('paused').map((r) => r.dataset.ovrow)).not.toContain(first?.dataset.ovrow)
-    expect(rows('paused')).toHaveLength(2)
-    // the count is the summary's, which waits for the answer
-    expect(figure('paused', strip())?.textContent).toContain('3')
   })
 })
 
@@ -1302,17 +1281,5 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'late', dir: 'desc', limit: 10 })
     expect(healthState()).toBe('ok')
     expect(cards()).toHaveLength(2)
-  })
-
-  it('shows the table from the server while every task loads', async () => {
-    const { board, render } = await overview(work())
-    vi.spyOn(board.P, 'tasksArriving').mockReturnValue(true)
-    const scoped = vi.spyOn(board.P, 'scopedIssues')
-    await render()
-    expect(document.querySelector('[data-ov-table]')).not.toBeNull()
-    expect(cards()).toHaveLength(2)
-    expect(document.body.textContent).not.toContain('opens once every task has loaded')
-    expect(scoped).not.toHaveBeenCalled()
-    expect(state()).toBe('ok')
   })
 })

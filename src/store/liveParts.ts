@@ -1,86 +1,51 @@
-/* The workspace's live parts (convex/workspace.ts) as the store adopts
-   them: once per Convex transition, all together (lib/liveQueries.ts).
+/* The workspace's live part (convex/workspace.ts) as the store adopts it:
+   once per Convex transition, with the side queries (lib/liveQueries.ts).
 
    The registry subscribes to the root part, which carries the caller's
    seats, organizations and own profiles, team memberships and teams, and
-   and nothing per organization until tasks are asked (below). No part
-   sends another person, a team the caller is not in, a label, a message or
-   a project; the views read people and labels by id or a batch at a time,
-   the Inbox through convex/inbox.ts, and every project the app shows
-   through the navigation reads, the store's project cache
-   (store/projectCache.ts, projectNav.byIds) and the views' own answers.
-   So until tasks are asked the root's answer alone completes the
-   workspace. After
-   each transition it tells the store (report) whether every part it needs
-   holds a current answer. Only then is the workspace complete, joined from
-   them (convex/lib/workspaceJoin.ts); otherwise the store keeps what it
-   shows, and nothing a transition brought is dropped, since the next
-   complete one holds it.
+   to nothing per organization. No part sends a task, another person, a
+   team the caller is not in, a label, a message or a project. Every view
+   and the task window read their own answers (tasks.board, tasks.roadmap,
+   teamSync.agenda, the Overview's reads, taskWindow.task and the others),
+   the views read people and labels by id or a batch at a time, the Inbox
+   reads convex/inbox.ts, and every project the app shows comes through
+   the navigation reads, the store's project cache (store/projectCache.ts,
+   projectNav.byIds) and the views' own answers. So the root's current
+   answer alone completes the workspace (convex/lib/workspaceJoin.ts
+   rootWorkspace). After each transition the registry tells the store
+   (report) whether the root holds a current answer. Only then is the
+   workspace complete; otherwise the store keeps what it shows, and
+   nothing a transition brought is dropped, since the next complete one
+   holds it.
 
-   Tasks load on demand. The windows of the workspace's tasks
-   (workspace.tasks) are subscribed only once something that needs every
-   task asks (askTasks), or from the start for a registry created with
-   `ask`. Until then a complete report holds no task (`tasks:
-   'not_asked'`), and the views show the server's own answers. The ask
-   sizes each organization's task windows (convex/lib/idWindows.ts
-   startWindows) from the root part's current answer and subscribes all of
-   them at once, never while another part waits for its answer. From the
-   ask until every task window answered, a transition with every other part
-   current reports `partial` with no task at all and the share of task
-   windows that answered, so the Inbox stays live during the load while the
-   store never holds part of the tasks. The first transition in which every task window answered reports
-   `complete` with `tasks: 'all'`, and the registry is never partial again.
-   A partial transition holds no write for certain, since the window a
-   write changed may not have arrived.
-
-   One socket runs one update at a time, and every part subscribed before
-   an update starts arrives with it.
-
-   - A window that answers `split` keeps serving while its two halves load,
-     and gives way to them in the first complete transition that holds both.
-   - A window that answers `overflow` has no rows to show, so the workspace
-     waits for its pieces: as many as the answer names, else its halves
-     (convex/lib/idWindows.ts piecesAfter).
-   - A new seat's organization waits for its parts. A seat that
-     goes leaves with the root part's answer, quietly. When the last seats
-     go because their organization is being deleted, the root part says so
-     and the report passes it on.
+   - A seat that goes leaves with the root part's answer, quietly. When the
+     last seats go because their organization is being deleted, the root
+     part says so and the report passes it on.
    - After the socket reconnects, Convex sends every result again, and none
      counts until it arrived again.
-   - A part that failed, or refused to load with a sentence, makes the
-     workspace fail when nothing else can show its rows: a window that
-     asked to be cut and then failed gives way to its pieces once they
-     answer, and a piece's failure waits while its window still shows.
-     Retry runs only the parts whose failure holds the workspace again.
-     Until every task arrived once, a task window that fails holds only the
-     task load: the report stays `partial` and names the failure
-     (`tasksFailed`), so the rest of the tab keeps working, and retryTasks
-     runs those windows again. After that, a task window that fails holds
-     the workspace as any part does.
-   - A workspace that stays incomplete while online, with no part answering
-     for STALL.ms, from the start on, fails, so a part that never answers
-     shows instead of a frozen screen. Where only task windows are silent,
-     only the task load fails.
+   - A root that failed, or refused to load with a sentence, fails the
+     workspace, and Retry runs it again.
+   - A workspace that stays incomplete while online, with the root not
+     answering for STALL.ms, from the start on, fails, so a root that never
+     answers shows instead of a frozen screen.
 
    Named side queries ride along (SideName): the open task's comment thread
-   and, while a window shows All, its history, and while a window shows the
-   task's details, its subtasks, links and attachments
-   (convex/taskWindow.ts), the task with its subtasks also while a window
-   shows a task the workspace does not hold from it, and the read of a
-   task a window names by a reference before it knows the task's uuid and
-   organization (store/planner.ts P.watchTaskRef). A boot on a task's
-   address subscribes that read itself, once the root part names the
-   organization the address's slug names and before any task window
-   (createLiveParts `address`), so the task's answer comes with the first
-   parts. A transition that brings the workspace and the sides repaints
-   once. Each side is its own. Its failure never holds the workspace or
-   another side.
+   and, while a window shows All, its history, the window's task with its
+   subtasks, and while a window shows the task's details, its links and
+   attachments (convex/taskWindow.ts), and the read of a task a window
+   names by a reference before it knows the task's uuid and organization
+   (store/planner.ts P.watchTaskRef). A boot on a task's address subscribes
+   that read itself, once the root part names the organization the
+   address's slug names (createLiveParts `address`), so the task's answer
+   comes with the first transitions. A transition that brings the
+   workspace and the sides repaints once. Each side is its own. Its failure
+   never holds the workspace or another side.
 
    Three sides concern the Inbox. The unread summary (convex/inbox.ts
    summary) is watched by every registry as it starts, right after the
    root part, so its first answer comes with the first parts, and a retry's
    or a re-init's registry watches it again. It runs while the tab is
-   hidden, as the parts do, since the badge counts unread tasks also then.
+   hidden, as the root does, since the badge counts unread tasks also then.
    The open task's inbox item (convex/inbox.ts item) rides with the thread
    (store/planner.ts subscribeThread), with the thread's own arguments. The
    feed of new unread events (convex/inbox.ts feed) is watched by the
@@ -96,27 +61,29 @@
    again, as the task side does when it reads the task a reference read
    named. No side takes another's: the store never starts a reference read
    with the arguments the task side reads with (store/planner.ts
-   runRefRead). */
+   runRefRead).
+
+   The open task's reads pause while the page is hidden (VIEW_SIDES). The
+   store tells the registry so (pauseViews), from the one visibility watch
+   of store/planner.ts (watchWindowVisibility), and a registry created
+   while the page is hidden starts paused (createLiveParts `paused`), the
+   boot's address read included. A paused view side holds no
+   subscription and keeps its registration, its query and arguments, so
+   sideArgs still answers them and the store's checks of what runs hold.
+   Watching a view side while paused registers the new arguments, and
+   stopping it drops them. On return every registered view side
+   subscribes afresh at once, so its first news is a new run, never an
+   answer held from before the pause. The summary and the feed never
+   pause. */
 
 import { type FunctionReference, getFunctionName } from 'convex/server'
 import { ConvexError, type Value } from 'convex/values'
 import { api } from '../../convex/_generated/api'
 import {
-  type IdWindow,
-  idShare,
-  idWindows,
-  piecesAfter,
-  startWindows,
-  tasksIn,
-} from '../../convex/lib/idWindows'
-import {
-  joinParts,
-  type OrgParts,
-  partRows,
   type RootAnswer,
   rootOrgs,
+  rootWorkspace,
   type Seatless,
-  type TasksPart,
   type Workspace,
 } from '../../convex/lib/workspaceJoin'
 import type { LiveQueries } from '../lib/liveQueries'
@@ -125,39 +92,12 @@ import type { LiveQueries } from '../lib/liveQueries'
     while online before it fails. Tests lower it. */
 export const STALL = { ms: 60_000 }
 
-/* Where a test build keeps TASKS.atBoot: on globalThis, so every fresh copy
-   of this module that vi.resetModules makes reads the choice the test setup
-   or a suite made before it loaded. */
-type TasksAtBoot = { qivoTasksAtBoot?: boolean }
-const TEST_BUILD = import.meta.env.MODE === 'test'
-let atBoot = false
-
-/** Whether a store asks for every task as it boots (store/planner.ts
-    startParts). The app boots without (false). The test setup turns it on
-    for the suites that test the store with every task held
-    (store/guard/tasksAtBoot.setup.ts), and the Board and not-asked suites
-    turn it off. */
-export const TASKS = {
-  get atBoot(): boolean {
-    return TEST_BUILD ? (globalThis as TasksAtBoot).qivoTasksAtBoot === true : atBoot
-  },
-  set atBoot(on: boolean) {
-    if (TEST_BUILD) (globalThis as TasksAtBoot).qivoTasksAtBoot = on
-    else atBoot = on
-  },
-}
-
-/** The sentence of a task load whose windows stayed silent for STALL.ms. */
-export const TASKS_STALLED = 'Every task did not arrive in time. Try again in a moment.'
-
 /** The side queries that ride along with the workspace: the open task's
-    comment thread and, while a window shows All, its history, and while a
-    window shows the task's details, the task with its subtasks, its links
-    and its attachments (convex/taskWindow.ts task, links and
-    attachments). The task side also runs while a window shows a task the
-    workspace does not hold, from that answer (store/planner.ts
-    P.taskDetail). `reference` reads a task a window names by a reference
-    (lib/taskReference.ts) by its number, or by its uuid in one
+    comment thread and, while a window shows All, its history, the task a
+    window shows with its subtasks, and while a window shows the task's
+    details, its links and its attachments (convex/taskWindow.ts task, links
+    and attachments). `reference` reads a task a window names by a
+    reference (lib/taskReference.ts) by its number, or by its uuid in one
     organization after another, until an answer names its uuid and
     organization (store/planner.ts P.watchTaskRef). `summary` is the
     unread summary across the login's seats (convex/inbox.ts summary),
@@ -177,6 +117,22 @@ export const SIDE_NAMES = [
   'feed',
 ] as const
 export type SideName = (typeof SIDE_NAMES)[number]
+
+/** The side queries a hidden page pauses (pauseViews), the open task
+    window's reads, its thread, history, task, links, attachments, the
+    reference read and the inbox item. `summary` and `feed` never pause,
+    by the owner's rule that the unread count and notifications keep
+    running while nobody looks. */
+export const VIEW_SIDES: readonly SideName[] = [
+  'thread',
+  'history',
+  'task',
+  'links',
+  'attachments',
+  'reference',
+  'item',
+]
+const isViewSide = (name: SideName) => VIEW_SIDES.includes(name)
 
 /** What one transition brought a side query: its answer or its failure. */
 export type SideNews = { value: unknown } | { error: unknown }
@@ -200,25 +156,8 @@ export type PartsReport = {
             deletion holds the caller's seats or an organization
             deactivated it (convex/lib/workspaceParts.ts readRoot) */
         seatless?: Seatless
-        /** whether any part changed since the last complete report */
+        /** whether the root part changed since the last complete report */
         changed: boolean
-        /** whether the workspace holds every task the caller may see
-            ('all'), or none since nothing asked for them ('not_asked') */
-        tasks: 'not_asked' | 'all'
-      }
-    | {
-        /** tasks were asked and some task windows have not answered yet,
-            with every other part current: the workspace holds no task */
-        state: 'partial'
-        value: Workspace
-        /** whether a part other than a task window changed since the last
-            report that held the workspace's rows */
-        changed: boolean
-        /** the share of task windows that answered, from 0 to 1 */
-        loaded: number
-        /** why the task load stopped: a task window failed or refused, or
-            every silent one stayed silent for STALL.ms */
-        tasksFailed?: unknown
       }
     | { state: 'held' }
     | { state: 'failed'; error: unknown }
@@ -240,76 +179,53 @@ type Slot = {
   fresh: boolean
   /** the side query it is, for a side query's slot */
   side?: SideName
-  /** whether it is a window of the workspace's tasks */
-  task?: true
 }
-
-/* A task window, its own part, and the pieces it gives way to once it
-   asked to be cut. */
-type Node = IdWindow & { slot: Slot; pieces: Node[] | null }
-
-/* What the registry holds for one organization. */
-type Org = {
-  id: string
-  /** its task windows */
-  tasks: Node[]
-  /** whether its task windows were subscribed, which they are once tasks
-      were asked */
-  tasksStarted: boolean
-}
-
-/* An answer with rows of a part. */
-type Answer = { state: string; split?: boolean; pieces?: number; message?: string }
-
-const isAnswer = (value: unknown): value is Answer =>
-  typeof value === 'object' && value !== null && 'state' in value
 
 /** The task a boot's address names under an organization's slug
     (lib/router.ts addressedTask), with its ref as taskWindow.task reads it,
     `QN-12` or a lowercase uuid. */
 export type AddressedTask = { slug: string; ref: string }
 
-/* Whether side slot `slot` watches query `ref` with `args`. */
-const sameQuery = (slot: Slot, ref: FunctionReference<'query'>, args: Record<string, Value>) =>
+/* A side's query and arguments, which a paused view side keeps without
+   a subscription. */
+type Registration = { ref: FunctionReference<'query'>; args: Record<string, Value> }
+
+/* Whether side `slot` watches, or will watch, query `ref` with `args`. */
+const sameQuery = (
+  slot: Registration,
+  ref: FunctionReference<'query'>,
+  args: Record<string, Value>,
+) =>
   getFunctionName(slot.ref) === getFunctionName(ref) &&
   JSON.stringify(slot.args) === JSON.stringify(args)
 
 /** Creates a registry over `live` that reports to `report`. `online` says
     whether the stall check may fail the workspace, false while the socket
-    is down or saves pause offline. With `ask`, the registry subscribes
-    every organization's task windows from the start, as after askTasks.
-    With `address`, it subscribes the `reference` side to the task the
-    boot's address names, taskWindow.task in the organization its slug
-    names, once the root part names that organization, and before any task
-    window. A slug the root part does not name subscribes nothing. */
+    is down or saves pause offline. With `address`, it subscribes the
+    `reference` side to the task the boot's address names, taskWindow.task
+    in the organization its slug names, once the root part names that
+    organization. A slug the root part does not name subscribes nothing.
+    With `paused`, as for a page hidden when the registry starts, the view
+    sides start paused (pauseViews). */
 export function createLiveParts(
   live: LiveQueries,
   report: (news: PartsReport) => void,
   online: () => boolean,
-  opts?: { ask?: boolean; address?: AddressedTask },
+  opts?: { address?: AddressedTask; paused?: boolean },
 ) {
   let stopped = false
   let connection: number | null = null
   const slots = new Map<string, Slot>()
-  let root: Slot | null = null
-  const orgs = new Map<string, Org>()
-  // whether a part other than a task window changed since the last report
-  // that held the workspace's rows, and whether a task window did since
-  // the last complete one
+  // whether the root part changed since the last complete report
   let dirty = true
-  let tasksDirty = false
   const sides = new Map<SideName, Slot>()
+  // whether the view sides pause, and the registrations of those that
+  // wait for the page to show, apart from the slots, since none holds a
+  // subscription or a token
+  let viewsPaused = opts?.paused === true
+  const waiting = new Map<SideName, Registration>()
   let lastAt = 0
   let stallTimer: ReturnType<typeof setTimeout> | null = null
-  // whether every task is wanted, whether the ask still waits for a settle
-  // in which no part waits, and whether a complete report with every task
-  // went out, after which the workspace is never partial again
-  let asked = !!opts?.ask
-  let askWaits = false
-  let completed = false
-  // whether the task windows' silence stopped the task load (watchStall),
-  // until a task window answers
-  let tasksStalled = false
   // whether the root part's first answer was read for the boot's address
   let addressed = !opts?.address
 
@@ -324,238 +240,42 @@ export function createLiveParts(
     if (slots.get(slot.token) === slot) slots.delete(slot.token)
   }
 
-  const node = (orgId: string, w: IdWindow): Node => {
-    const slot = watch(api.workspace.tasks, { org_id: orgId, from: w.from, to: w.to })
-    slot.task = true
-    return { ...w, slot, pieces: null }
-  }
-  const windows = (orgId: string, list: IdWindow[]) => list.map((w) => node(orgId, w))
+  let root: Slot | null = null
 
   /** The root part's current answer, or undefined while it has none. */
   const rootAnswer = (): RootAnswer | undefined =>
     root?.fresh && root.error === undefined ? (root.value as RootAnswer) : undefined
 
-  /** Subscribes the task windows of every organization whose windows were
-      not started, as many as the root part's current answer says it
-      fills. */
-  function startTasks(answer: RootAnswer) {
-    for (const row of rootOrgs(answer)) {
-      const org = orgs.get(row.id)
-      if (!org || org.tasksStarted) continue
-      org.tasks = windows(row.id, idWindows(startWindows(row).tasks))
-      org.tasksStarted = true
-      tasksDirty = true
-    }
-  }
-
-  /** Brings the organizations in line with the root part's answer, and
-      windows in line with their parts' answers. Answers
-      whether anything changed. */
-  function reconcile(): boolean {
-    let moved = false
+  /** Subscribes the boot's address once the root part first answers. */
+  function readAddress() {
     const answer = rootAnswer()
-    if (answer === undefined) return false
-    if (!addressed && opts?.address) {
-      addressed = true
-      const { slug, ref } = opts.address
-      const org = rootOrgs(answer).find((row) => row.slug === slug.toLowerCase())
-      if (org) watchSide('reference', api.taskWindow.task, { org_id: org.id, ref })
-    }
-    const wanted = new Set(rootOrgs(answer).map((org) => org.id))
-    for (const [id, org] of orgs) {
-      if (wanted.has(id)) continue
-      for (const slot of orgSlots(org)) drop(slot)
-      orgs.delete(id)
-      moved = true
-    }
-    // each new organization's task windows, as many as its counts say it
-    // fills, only once tasks were asked and the ask no longer waits
-    const tasksNow = asked && !askWaits
-    for (const row of rootOrgs(answer)) {
-      if (orgs.has(row.id)) continue
-      orgs.set(row.id, {
-        id: row.id,
-        tasks: tasksNow ? windows(row.id, idWindows(startWindows(row).tasks)) : [],
-        tasksStarted: tasksNow,
-      })
-      moved = true
-    }
-    // a window that asked to be cut gets its pieces
-    for (const org of orgs.values())
-      for (const n of nodesOf(org.tasks))
-        if (n.pieces === null && n.slot.fresh && isAnswer(n.slot.value)) {
-          const pieces = piecesAfter(n, n.slot.value)
-          if (pieces) {
-            n.pieces = pieces.map((w) => node(org.id, w))
-            moved = true
-          }
-        }
-    return moved
+    if (addressed || answer === undefined || !opts?.address) return
+    addressed = true
+    const { slug, ref } = opts.address
+    const org = rootOrgs(answer).find((row) => row.slug === slug.toLowerCase())
+    if (org) watchSide('reference', api.taskWindow.task, { org_id: org.id, ref })
   }
 
-  /** Every node of `list`, pieces included. */
-  function* nodesOf(list: readonly Node[]): Generator<Node> {
-    for (const n of list) {
-      yield n
-      if (n.pieces) yield* nodesOf(n.pieces)
-    }
-  }
-  function* orgSlots(org: Org): Generator<Slot> {
-    for (const n of nodesOf(org.tasks)) yield n.slot
-  }
-
-  /** Whether the root part or a part watched has no answer since the
-      socket last connected. */
-  function waiting(): boolean {
-    if (root && !root.fresh) return true
-    for (const org of orgs.values()) for (const slot of orgSlots(org)) if (!slot.fresh) return true
-    return false
-  }
-
-  /** The rows of the part `slot` answered, or null without a current
-      answer that has rows. */
-  function rowsOfSlot<P>(slot: Slot): P | null {
-    if (!slot.fresh || !isAnswer(slot.value) || slot.value.state !== 'ok') return null
-    // the transport hands out the server's answer as it came
-    return partRows(slot.value as Answer & { state: 'ok' }) as P
-  }
-
-  /** The rows of `n`'s window from its pieces when all are ready, else its
-      own answer, or null while neither can show it. */
-  function rowsOf<P>(n: Node): P[] | null {
-    if (n.pieces) {
-      const rows: P[] = []
-      let ready = true
-      for (const piece of n.pieces) {
-        const got = ready ? rowsOf<P>(piece) : null
-        if (got === null) ready = false
-        else rows.push(...got)
-      }
-      if (ready) return rows
-    }
-    const own = rowsOfSlot<P>(n.slot)
-    return own === null ? null : [own]
-  }
-
-  /** `list` with each window whose pieces are all ready replaced by
-      them, as a complete transition just showed them. */
-  function adoptPieces(list: readonly Node[]): Node[] {
-    return list.flatMap((n) => {
-      if (!n.pieces?.every((piece) => rowsOf(piece) !== null)) return [n]
-      drop(n.slot)
-      return adoptPieces(n.pieces)
-    })
-  }
-
-  /** The error `slot` holds, a refusal as one, or undefined. */
-  function errorOf(slot: Slot): unknown {
-    if (slot.error !== undefined) return slot.error
-    if (slot.fresh && isAnswer(slot.value) && slot.value.state === 'refused')
-      return new ConvexError({ code: 'rule', message: slot.value.message })
-    return undefined
-  }
-
-  /** The slots complete() needs an answer from other than task windows:
-      the root. */
-  function* neededParts(): Generator<Slot> {
-    if (root) yield root
-  }
-  /** The task window slots complete() needs an answer from: each window
-      that shows its rows neither itself nor through its pieces (rowsOf),
-      or, when it has pieces, the pieces that cannot. */
-  function* neededTasks(): Generator<Slot> {
-    for (const org of orgs.values()) for (const n of org.tasks) yield* neededIn(n)
-  }
-  function* neededIn(n: Node): Generator<Slot> {
-    if (rowsOf(n) !== null) return
-    if (n.pieces === null) yield n.slot
-    else for (const piece of n.pieces) yield* neededIn(piece)
-  }
-
-  /** The first error among `list`, or undefined. */
-  function firstError(list: Iterable<Slot>): unknown {
-    for (const slot of list) {
-      const error = errorOf(slot)
-      if (error !== undefined) return error
-    }
-    return undefined
-  }
-
-  /** The first error that fails the workspace, or undefined: a part's, and
-      a task window's once every task arrived (`completed`). Before that a
-      task window's error fails only the task load (tasksFailure). */
+  /** The error the root part holds, a refusal as one, or undefined. */
   function failure(): unknown {
-    const error = firstError(neededParts())
-    if (error !== undefined || !completed) return error
-    return firstError(neededTasks())
+    if (!root) return undefined
+    if (root.error !== undefined) return root.error
+    const value = root.value
+    if (root.fresh && typeof value === 'object' && value !== null && 'state' in value) {
+      const answer = value as { state: unknown; message?: string }
+      if (answer.state === 'refused')
+        return new ConvexError({ code: 'rule', message: answer.message })
+    }
+    return undefined
   }
 
-  /** Why the task load stopped while it has not completed, or undefined. */
-  function tasksFailure(): unknown {
-    if (completed || !asked) return undefined
-    const error = firstError(neededTasks())
-    if (error !== undefined) return error
-    return tasksStalled ? new ConvexError({ code: 'rule', message: TASKS_STALLED }) : undefined
-  }
-
-  /** The workspace when every part it needs is current, else null. With
-      `withTasks`, every task window must be current too once tasks were
-      asked, and every organization's task windows started, and the
-      workspace holds their tasks; without, the task windows do not count
-      and the workspace holds no task. `loaded` is the share of task windows
-      that answered, each organization weighted by its task count. */
-  function join(
-    withTasks: boolean,
-  ): { value: Workspace | null; loaded: number; seatless?: Seatless } | null {
-    if (!root?.fresh || root.error !== undefined) return null
-    const answer = root.value as RootAnswer | undefined
+  /** The workspace when the root part holds a current answer, else null. */
+  function join(): { value: Workspace | null; seatless?: Seatless } | null {
+    const answer = rootAnswer()
     if (answer === undefined) return null
-    if (answer === null) return withTasks ? { value: null, loaded: 1 } : null
-    if ('deleting' in answer) return withTasks ? { value: null, loaded: 1, seatless: answer } : null
-    const parts: OrgParts[] = []
-    let loaded = 0
-    const weight = (row: (typeof answer.orgs)[number]) => Math.max(1, tasksIn(row))
-    const allTasks = answer.orgs.reduce((n, row) => n + weight(row), 0)
-    for (const row of answer.orgs) {
-      const org = orgs.get(row.id)
-      if (!org) return null
-      if (withTasks && asked && !org.tasksStarted) return null
-      /** Every task window in order, or null while one is not ready. */
-      const taskRows = (): TasksPart[] | null => {
-        const rows: TasksPart[] = []
-        for (const n of org.tasks) {
-          const got = rowsOf<TasksPart>(n)
-          if (got === null) return null
-          rows.push(...got)
-        }
-        return rows
-      }
-      for (const n of org.tasks)
-        if (rowsOf(n) !== null) loaded += (idShare(n) * weight(row)) / allTasks
-      const tasks = withTasks ? taskRows() : []
-      if (!tasks) return null
-      parts.push({ tasks })
-    }
-    return { value: joinParts(answer, parts, new Date(lastAt).toISOString()), loaded }
-  }
-
-  /** The report of a task load in progress, with no task: the partial
-      workspace when every part but some task windows is current, else
-      null. */
-  function arriving(): PartsReport['workspace'] | null {
-    if (!asked || completed) return null
-    const some = join(false)
-    if (!some?.value) return null
-    const tasksFailed = tasksFailure()
-    const workspace: PartsReport['workspace'] = {
-      state: 'partial',
-      value: some.value,
-      changed: dirty,
-      loaded: some.loaded,
-      ...(tasksFailed === undefined ? {} : { tasksFailed }),
-    }
-    dirty = false
-    return workspace
+    if (answer === null) return { value: null }
+    if ('deleting' in answer) return { value: null, seatless: answer }
+    return { value: rootWorkspace(answer, new Date(lastAt).toISOString()) }
   }
 
   /** Tells the store the workspace's state after a transition, `news` the
@@ -565,41 +285,23 @@ export function createLiveParts(
       transition brought yet. */
   function settle(transition?: { news?: PartsReport['sides']; progress?: boolean }) {
     if (stopped) return
-    if (reconcile()) dirty = true
-    // an ask that waited starts its task windows once no part waits
-    const answer = rootAnswer()
-    if (askWaits && answer !== undefined && !waiting()) {
-      askWaits = false
-      startTasks(answer)
-    }
+    readAddress()
     const error = failure()
     let workspace: PartsReport['workspace']
     if (error !== undefined) workspace = { state: 'failed', error }
     else {
-      const done = transition ? join(true) : null
+      const done = transition ? join() : null
       if (done) {
         workspace = {
           state: 'complete',
           value: done.value,
-          changed: dirty || tasksDirty,
-          tasks: asked ? 'all' : 'not_asked',
+          changed: dirty,
           ...(done.seatless ? { seatless: done.seatless } : {}),
         }
         dirty = false
-        tasksDirty = false
-        if (asked) {
-          completed = true
-          tasksStalled = false
-        }
-        // the pieces hold the rows the window held, so nothing changes
-        for (const org of orgs.values())
-          if (org.tasks.some((n) => n.pieces)) org.tasks = adoptPieces(org.tasks)
-      } else workspace = (transition && arriving()) || { state: 'held' }
+      } else workspace = { state: 'held' }
     }
-    watchStall(
-      workspace.state === 'held' || workspace.state === 'partial',
-      transition?.progress === true,
-    )
+    watchStall(workspace.state === 'held', transition?.progress === true)
     if (transition || workspace.state === 'failed')
       report({
         at: lastAt,
@@ -610,9 +312,7 @@ export function createLiveParts(
   }
 
   /** Starts or ends the stall check of an incomplete workspace, starting
-      it over when a part answered (`progress`). Where every part but some
-      task windows is current when it fires, only the task load stops, until
-      a task window answers or Try again (retryTasks). */
+      it over when the root part answered (`progress`). */
   function watchStall(held: boolean, progress: boolean) {
     if (!held || progress) {
       if (stallTimer) clearTimeout(stallTimer)
@@ -626,12 +326,6 @@ export function createLiveParts(
         return
       }
       stallTimer = null
-      if (!completed && asked && join(false)?.value) {
-        tasksStalled = true
-        const workspace = arriving()
-        if (workspace) report({ at: lastAt, connection: connection ?? 0, workspace })
-        return
-      }
       report({
         at: lastAt,
         connection: connection ?? 0,
@@ -654,12 +348,22 @@ export function createLiveParts(
       instead, and the news it answers is that subscription's current
       answer, when one arrived on the newest connection, else undefined.
       Only the reference side's is handed over: a read that another side
-      needs goes on, and the caller never watches its arguments again. */
+      needs goes on, and the caller never watches its arguments again.
+      While the view sides pause, a view side only registers its query and
+      arguments, a reference registration of the same query moving over
+      to it, and answers no news. */
   function watchSide(
     name: SideName,
     ref: FunctionReference<'query'>,
     args: Record<string, Value>,
   ): SideNews | undefined {
+    if (viewsPaused && isViewSide(name)) {
+      const reference = waiting.get('reference')
+      if (name !== 'reference' && reference && sameQuery(reference, ref, args))
+        waiting.delete('reference')
+      waiting.set(name, { ref, args })
+      return undefined
+    }
     const before = sides.get(name)
     for (const [other, slot] of sides) {
       if (other !== 'reference' || other === name || !sameQuery(slot, ref, args)) continue
@@ -678,22 +382,20 @@ export function createLiveParts(
     return undefined
   }
 
-  /** Runs `slots` again from fresh subscriptions (Convex never keeps a
+  /** Runs `slot` again from a fresh subscription (Convex never keeps a
       failed run). */
-  function rerun(list: readonly Slot[]) {
-    for (const slot of list) {
-      slot.stop()
-      const again = live.watch(slot.ref, slot.args)
-      slots.delete(slot.token)
-      Object.assign(slot, {
-        token: again.token,
-        stop: again.stop,
-        value: undefined,
-        error: undefined,
-        fresh: false,
-      })
-      slots.set(slot.token, slot)
-    }
+  function rerun(slot: Slot) {
+    slot.stop()
+    const again = live.watch(slot.ref, slot.args)
+    slots.delete(slot.token)
+    Object.assign(slot, {
+      token: again.token,
+      stop: again.stop,
+      value: undefined,
+      error: undefined,
+      fresh: false,
+    })
+    slots.set(slot.token, slot)
   }
 
   const stopTransitions = live.onTransition((transition) => {
@@ -725,15 +427,10 @@ export function createLiveParts(
         news ??= {}
         news[slot.side] = error === undefined ? { value } : { error }
       } else {
-        // a side query never holds the workspace, so it is no progress
+        // a side query never holds the workspace, so only the root's
+        // answer is progress
         progress = true
-        // a task window's answer moves the share until the load ends, and
-        // the complete report after it holds the tasks; it also ends a
-        // stall, which stands only while the windows stay silent
-        if (slot.task) {
-          tasksDirty = true
-          tasksStalled = false
-        } else dirty = true
+        dirty = true
       }
     }
     settle({ news, progress })
@@ -747,62 +444,60 @@ export function createLiveParts(
   watchStall(true, false)
 
   return {
-    /** Subscribes every organization's task windows, once: at once when no
-        part waits for its answer, else at the first settle in which none
-        does. Each organization's windows are sized from the root part's
-        current
-        answer. The stall check runs from here, so windows that never answer
-        stop the task load STALL.ms later. */
-    askTasks() {
-      if (asked || stopped) return
-      asked = true
-      const answer = rootAnswer()
-      if (answer !== undefined && !waiting()) startTasks(answer)
-      else askWaits = true
-      settle()
-    },
-    /** Runs the task windows that failed again from fresh subscriptions,
-        and after a stall the ones with no current answer, while the task
-        load has not completed. Answers whether there was one. */
-    retryTasks(): boolean {
-      if (completed || !asked) return false
-      const failed = [...neededTasks()].filter(
-        (slot) => errorOf(slot) !== undefined || (tasksStalled && !slot.fresh),
-      )
-      tasksStalled = false
-      rerun(failed)
-      if (failed.length > 0) settle()
-      return failed.length > 0
-    },
-    /** Runs every failed part the workspace needs again, from a fresh
-        subscription (Convex never keeps a failed run), task windows
-        included. Answers whether there was one. */
+    /** Runs the root part again from a fresh subscription when it failed
+        (Convex never keeps a failed run). Answers whether it did. */
     retry(): boolean {
-      const failed = [...neededParts(), ...neededTasks()].filter(
-        (slot) => errorOf(slot) !== undefined,
-      )
-      rerun(failed)
-      if (failed.length > 0) settle()
-      return failed.length > 0
+      if (!root || failure() === undefined) return false
+      rerun(root)
+      settle()
+      return true
     },
     watchSide,
     /** The arguments side `name` watches with, or undefined while it does
         not run. */
-    sideArgs: (name: SideName): Record<string, Value> | undefined => sides.get(name)?.args,
+    sideArgs: (name: SideName): Record<string, Value> | undefined =>
+      sides.get(name)?.args ?? waiting.get(name)?.args,
     /** Runs side `name` again from a fresh subscription when its latest
         result is a failure, as Convex never keeps a failed run. Answers
-        whether it did. */
+        whether it did, and false for a paused view side, which has no
+        result. */
     rerunSide(name: SideName): boolean {
       const slot = sides.get(name)
       if (!slot || slot.error === undefined) return false
-      rerun([slot])
+      rerun(slot)
       return true
     },
-    /** Stops the side query `name`, and keeps the others. */
+    /** Stops the side query `name`, and keeps the others. A paused view
+        side loses its registration. */
     stopSide(name: SideName) {
       const slot = sides.get(name)
       if (slot) drop(slot)
       sides.delete(name)
+      waiting.delete(name)
+    },
+    /** Pauses the view sides (VIEW_SIDES) or ends the pause. A pause stops
+        each view side's subscription and keeps its registration; its end
+        subscribes every registered view side afresh, so their news are
+        new runs and reach the report as any side's do. The summary and
+        the feed keep running throughout. */
+    pauseViews(paused: boolean) {
+      if (stopped || paused === viewsPaused) return
+      viewsPaused = paused
+      if (paused) {
+        for (const [name, slot] of sides) {
+          if (!isViewSide(name)) continue
+          drop(slot)
+          sides.delete(name)
+          waiting.set(name, { ref: slot.ref, args: slot.args })
+        }
+        return
+      }
+      for (const [name, { ref, args }] of waiting) {
+        const slot = watch(ref, args)
+        slot.side = name
+        sides.set(name, slot)
+      }
+      waiting.clear()
     },
     /** Stops every subscription, the side queries included. */
     stop() {
@@ -811,8 +506,8 @@ export function createLiveParts(
       if (stallTimer) clearTimeout(stallTimer)
       // a Map lets its loop delete the entry it is on
       for (const slot of slots.values()) drop(slot)
-      orgs.clear()
       sides.clear()
+      waiting.clear()
     },
   }
 }

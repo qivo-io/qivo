@@ -8,6 +8,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { deletionBegun } from '../lib/billingAccess'
 import { byId } from '../lib/db'
 import { demoForOrg, isDemoDeployment } from '../lib/demo'
+import { LIMITS, MIB } from '../lib/limits'
 import { eraseFile } from './fileHolds'
 
 /** The most bytes one archive may hold: its stored parts and their ZIP
@@ -17,8 +18,9 @@ import { eraseFile } from './fileHolds'
  * so the download, which the /exports/ route (http.ts) streams as one ZIP
  * file, keeps 5 MiB of room under it. A job that would pass it fails with `too_large`
  * and erases its parts. Parts and their rows depend on no single file, so
- * several archive files can come later without a format change. */
-export const MAX_ARCHIVE_BYTES = 95 * 1024 * 1024
+ * several archive files can come later without a format change. The
+ * number is lib/limits.ts LIMITS.exportSize, which the guide prints. */
+export const MAX_ARCHIVE_BYTES = LIMITS.exportSize.max * MIB
 
 /** About how many bytes of JSON one data part collects before the step
  * compresses and stores it. A part can pass it by one readBatch answer
@@ -37,8 +39,9 @@ export const PART_RAW_BYTES = 4 * 1024 * 1024
  * 65,731 for the Northstar seed on a local backend), so this leaves a
  * visitor about 30 times that for their own work. With one collecting job
  * and one ready archive per organization, a demo holds at most twice this
- * in export parts, which count against no upload budget. */
-export const DEMO_ARCHIVE_BYTES = 2 * 1024 * 1024
+ * in export parts, which count against no upload budget. The number is
+ * lib/limits.ts LIMITS.demoExportSize. */
+export const DEMO_ARCHIVE_BYTES = LIMITS.demoExportSize.max * MIB
 
 /** The job's limits, a mutable object so tests can lower them
  * (convex/tests restore them from a copy after each case):
@@ -84,11 +87,11 @@ export const EXPORT_LIMITS = {
 /** The delivery's own budgets (orgExport.ts claimDownload and the
  * /exports/ route in http.ts), a mutable object so tests can lower them:
  * - tokenSeconds: how long a download link may start a download. The
- *   export page sends the browser to the link at once, and two minutes
- *   cover a slow claim and the desktop app's hand-off of the link to the
- *   system browser. The route checks the admin again on every request,
- *   whatever the link's age, so the lifetime only bounds when a forwarded
- *   link may start one.
+ *   export page asks for the file first and claims the link just before it
+ *   starts the request (src/lib/orgExport.ts), and two minutes cover a slow
+ *   claim and the desktop app's start of its own download. The route checks
+ *   the admin again on every request, whatever the link's age, so the
+ *   lifetime only bounds when a forwarded link may start one.
  * - streams: the downloads of one archive that may run at once, counted by
  *   a lease on the job row (orgExport.ts leaseDelivery). A download holds
  *   an HTTP action for as long as its body is read, and Convex runs a
@@ -106,6 +109,8 @@ export const EXPORT_LIMITS = {
  *   their own; a quarter of the smallest plan's actions.
  * - streamMs: how long a lease holds when its download never releases it,
  *   an action's longest run. A download that outlives it no longer counts.
+ *   orgRemovals.ts recordExport also records a confirmed save up to this
+ *   long after its archive ended (recordable).
  * - retrySeconds: the Retry-After of a download refused past either count.
  * - slice: the most bytes the route hands its reader, the runtime, at a
  *   time, so the record of a download served whole waits until the runtime
@@ -132,8 +137,8 @@ export const archiveCap = (): number =>
 /** How long a ready archive stays downloadable: four hours after it is
  * ready, unless a newer archive of its organization ends it sooner
  * (orgExport.ts commitFinish). Downloads and later requests never extend
- * it. */
-export const ARCHIVE_TTL_MS = 4 * 60 * 60 * 1000
+ * it. The hours are lib/limits.ts LIMITS.exportHours. */
+export const ARCHIVE_TTL_MS = LIMITS.exportHours.max * 60 * 60 * 1000
 
 /** How long an ended job and its request rows stay as export history. */
 export const HISTORY_MS = 30 * 24 * 60 * 60 * 1000
@@ -295,13 +300,39 @@ export const jobsOf = (ctx: QueryCtx, orgId: string) =>
 /** Sets job `job`'s `served_at` the first time the route serves its
  * archive whole, every byte read into the response by the backend, which
  * does not wait for the client (http.ts archiveStream). It leaves
- * organizations.last_export_at alone, because the backend cannot know that
- * the client received the archive, so a served archive never stops the
- * deletion reminder (model/orgRetention.ts); a later app stage records the
- * download once the browser confirms it finished. */
+ * organizations.last_export_confirmed_at alone, because the backend cannot
+ * know that the client received the archive, so a served archive never
+ * stops the deletion reminder (model/orgRetention.ts). The app records a download
+ * only once the desktop app or the browser confirmed the saved file
+ * (orgRemovals.ts recordExport). */
 export async function noteDelivered(ctx: MutationCtx, job: Doc<'org_exports'>): Promise<void> {
   if (job.served_at === undefined)
     await ctx.db.patch(job._id, { served_at: new Date().toISOString() })
+}
+
+/** The record's refusal of an archive recordable rejects, which the export
+ * page shows. It names the window, DELIVERY.streamMs, in minutes. */
+export const notRecordable = (): string =>
+  `This export can no longer be recorded. A saved export counts only when its download finishes within ${Math.round(DELIVERY.streamMs / 60_000)} minutes after the export ends. Prepare a new export.`
+
+/** Whether `job` is an archive whose saved download orgRemovals.ts
+ * recordExport may record at `now` (epoch ms): one that reached ready, that
+ * the /exports/ route served whole (served_at), and that is still ready or
+ * expired, which includes one a newer archive ended, with its end (ended_at,
+ * else expires_at) less than DELIVERY.streamMs, an action's longest run,
+ * before `now`. So a save that finished just after the archive ended still
+ * counts, while a failed or cancelled job, an archive nobody fetched and an
+ * old one never do. The window starts at the archive's end, not at the
+ * download's start, so a download that starts shortly before the end,
+ * which a two-minute link still allows, must finish within
+ * DELIVERY.streamMs of the end to count. A large archive on a slow link may
+ * not, and the reminder then goes out as for any save Qivo did not record
+ * (notRecordable says so). */
+export function recordable(job: Doc<'org_exports'>, now: number): boolean {
+  if (job.completed_at === undefined || job.served_at === undefined) return false
+  if (job.state !== 'ready' && job.state !== 'expired') return false
+  const end = job.ended_at ?? job.expires_at
+  return end !== undefined && Date.parse(end) + DELIVERY.streamMs > now
 }
 
 /** The leases of job `job`'s downloads that have not run out at `now`

@@ -75,12 +75,12 @@ export function assertNewRowId(id: string): void {
 
 declare const crypto: { randomUUID(): string }
 
-/** A new window key for a task or project: 8 random hex digits, the point
- * of lib/idWindows.ts's space that places a task in the app's task windows
- * (lib/workspaceParts.ts). The server picks it, never the writer, so no
- * writer can crowd its rows into one window, which could then not load.
- * Every insert of a task or project sets it; no read uses a project's,
- * which the window keys' data stage removes with the field. */
+/** A new window key for a task or project: 8 random hex digits, which
+ * placed a row in the app's windows of the workspace's tasks and projects
+ * parts. The server picks it, never the writer. Every insert of a task or
+ * project sets it, and a task's relation rows copy it (schema.ts taskKey);
+ * no read uses it since those parts went, and the window keys' data stage
+ * recorded in later-work removes it with the fields. */
 export const newWindowKey = (): string => crypto.randomUUID().slice(0, 8)
 
 /** The relation rows of task `id` (label assignments, attachments, the

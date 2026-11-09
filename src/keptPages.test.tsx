@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setup'
+import { oracleLevels } from './store/oracleScope.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, underProgram } from './store/plannerFixture.setup'
 import {
@@ -26,13 +27,9 @@ import { taskRow } from './views/boardFixture.setup'
    holds it, only while the person stays on the Roadmap. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-const double = vi.hoisted(() => ({
-  live: null as null | { holdWindow(from: string | null): void },
-}))
 vi.mock('./lib/convex', async () => {
   const { liveOver } = await import('./store/guard/liveDouble.setup')
-  double.live = liveOver(network)
-  return { convex: network, live: double.live }
+  return { convex: network, live: liveOver(network, { taskWindow: 'client' }) }
 })
 vi.mock('./lib/auth', () => ({
   armConvexAuth: async () => true,
@@ -131,12 +128,10 @@ async function waitFor<T>(find: () => T | null | undefined | false, what: string
 
 type Snapshot = ReturnType<typeof plannerFixture>
 
-/** Boots App on the fixture workspace, with what `prepare` adds, and the
-    task window from `held` on still to load. Answers the organization's
-    slug. */
-/* Whether boot's server answers the task window's read of a task
-   (windowTask), which the suite of Plan on roadmap turns on. */
-let answersTasks = false
+/* The task whose window read boot's server holds back while it is set, by
+   its number as the read names it (qn-5), and the read it holds back. */
+let heldTask: string | null = null
+let releaseTask = () => {}
 /* The Roadmap's reads boot's server holds back until `answerRoadmaps`
    answers them from the snapshot (store/roadmapStandIn.setup.ts), while
    `holdRoadmaps` is on. */
@@ -175,7 +170,9 @@ function windowTask(snap: Snapshot, ref: string) {
   }
 }
 
-async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string | null = null) {
+/** Boots App on the fixture workspace, with what `prepare` adds. Answers
+    the organization's slug. */
+async function boot(prepare: (snap: Snapshot) => void = () => {}) {
   vi.resetModules()
   const snap = plannerFixture()
   for (let n = 1; n <= 3; n++) snap.issues.push(taskRow(snap, `t${n}`, 'todo', n))
@@ -190,8 +187,6 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
   milestoneWatches.length = 0
   holdMilestones = false
   heldMilestones.length = 0
-  // the store, once it loaded, for what the person sees and may edit
-  let P: typeof import('./store/planner')['P'] | null = null
   // sends the workspace as the server holds it now
   let publishWhole = () => {}
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
@@ -200,14 +195,17 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
       publishWhole = () => next(structuredClone(snap))
       publishWhole()
     } else if (name === 'tasks:board') next(boardStandIn(snap, args as BoardArgs))
-    else if (name === 'teamSync:agenda')
+    else if (name === 'teamSync:agenda') {
+      // the agenda judges sight by the server's rule, as the server does,
+      // not by what the store's project cache has read so far
+      const levels = oracleLevels(snap)
       next(
         teamSyncStandIn(snap, args as SyncArgs, {
-          sees: (id) => P?.canSee(id) ?? true,
-          writes: (id) => P?.canWrite(id) ?? false,
+          sees: (id) => levels.has(id),
+          writes: (id) => levels.get(id) === 'lead' || levels.get(id) === 'user',
         }),
       )
-    else if (name === 'tasks:roadmap' || name === 'tasks:roadmapDependencies') {
+    } else if (name === 'tasks:roadmap' || name === 'tasks:roadmapDependencies') {
       const answer = () => next(structuredClone(answerRoadmap(snap, name, args)))
       if (!holdRoadmaps) answer()
       else {
@@ -231,11 +229,17 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
       }
     } else if (name === 'teamSync:lastComments')
       next({ rows: [{ issue_id: 't1', at: '2026-09-10T08:00:00.000Z' }], complete: true })
-    else if (name === 'taskWindow:task' && answersTasks) {
-      // the window's own read of a task the workspace does not hold, by its
-      // number or uuid; another stays on its way
-      const answer = windowTask(snap, String((args as { ref: string }).ref))
-      if (answer) next(answer)
+    else if (name === 'taskWindow:task') {
+      // the window's own read of a task, by its number or uuid; one the
+      // server does not hold here stays on its way, and so does `heldTask`
+      // until releaseTask
+      const ref = String((args as { ref: string }).ref)
+      const answer = () => {
+        const found = windowTask(snap, ref)
+        if (found) next(found)
+      }
+      if (heldTask !== null && ref.toLowerCase() === heldTask) releaseTask = answer
+      else answer()
     } else if (name === 'snapshot:threadComments') {
       next({ comments: [], earlier: false })
       const thread = { stopped: false }
@@ -274,8 +278,6 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
     return null
   })
   const store = await import('./store/planner')
-  P = store.P
-  double.live?.holdWindow(held)
   await store.initStore()
   const { syncStatus } = await import('./lib/syncStatus')
   syncStatus.setSocket({ connected: true, everConnected: true })
@@ -667,11 +669,10 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
   it('keeps the remembered project under task addresses, at boot, on Back or Forward and for a task still to load', async () => {
     let key = ''
     let other = { org_id: '', project_id: 'other' }
-    // 12,800 task numbers make 64 task windows; the last, from fc000000,
-    // holds QN-5 back
+    // QN-5's window read stays on its way until releaseTask
+    heldTask = 'qn-5'
     const org = await boot((snap) => {
       underProgram(snap)
-      snap.orgs[0].next_issue_num = 64 * 200
       snap.issues.push(
         taskRow(snap, '01000000-early', 'todo', 4),
         taskRow(snap, 'fd000000-late', 'todo', 5),
@@ -682,7 +683,7 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
       key = `planner.ui.v1:${snap.myProfileIds[0]}`
       localStorage.setItem(key, JSON.stringify({ lastProject: other, view: 'kanban' }))
       history.replaceState(null, '', '/app/testbed/inbox/tasks/qn-4')
-    }, 'fc000000')
+    })
     try {
       const { P } = await import('./store/planner')
       // the scope beneath the Inbox is not remembered
@@ -694,20 +695,26 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
       await go(`/app/${org}/inbox/tasks/qn-4`)
       await shownPage('inbox')
       expect(P.loadUI().lastProject).toEqual(other)
-      // a task still to load, which the app opens once it arrived
+      // a task still to load, which the app opens once its read answered
       await go(`/app/${org}/inbox/tasks/qn-5`)
+      expect(P.loadUI().lastProject).toEqual(other)
       await act(async () => {
-        double.live?.holdWindow(null)
+        releaseTask()
         await new Promise((resolve) => realTimeout(resolve, 0))
       })
-      await waitFor(() => P.stillLoading() === null, 'every task')
-      await waitFor(() => location.pathname.endsWith('/inbox/tasks/qn-5'), 'the task that arrived')
+      await waitFor(
+        () => P.taskDetail('fd000000-late', other.org_id)?.state === 'ok',
+        'the task that arrived',
+      )
+      expect(location.pathname).toMatch(/\/inbox\/tasks\/qn-5$/)
       expect(P.loadUI().lastProject).toEqual(other)
       // nor the sub-project of the Board Back opens for a task's address
       await go(`/app/${org}/board/tasks/qn-4`)
       await shownPage('kanban')
       expect(P.loadUI().lastProject).toEqual(other)
     } finally {
+      heldTask = null
+      releaseTask = () => {}
       localStorage.removeItem(key)
     }
   })
@@ -763,24 +770,17 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     expect(inbox.querySelector('[data-unread-divider]')).toBeNull()
   })
 
-  it('opens an address that once named all projects on the project chooser at once, asking for no task', async () => {
-    // 12,800 task numbers make 64 task windows; the last starts at fc000000
+  it('opens an address that once named all projects on the project chooser at once', async () => {
     const org = await boot((snap) => {
       underProgram(snap)
-      snap.orgs[0].next_issue_num = 64 * 200
       // at the front door, with no scope chosen
       history.replaceState(null, '', '/app/testbed')
-    }, 'fc000000')
-    const { __layerProbe } = await import('./store/planner')
+    })
     await waitFor(() => document.querySelector('[data-project-chooser]'), 'the chooser')
-    // what the boot asked for
-    __layerProbe?.asks()
     await go(`/app/${org}/roadmap/all`)
     await waitFor(() => document.querySelector('[data-project-chooser]'), 'the chooser')
     expect(document.querySelector('[data-workspace-view="roadmap"]')).toBeNull()
     expect(document.body.textContent).not.toContain('opens once every task has loaded')
-    // no view and no task of the workspace is asked for
-    expect(__layerProbe?.asks()).toEqual([])
   })
 
   it('mounts the pages of a new scope anew, and keeps the Inbox', async () => {
@@ -844,18 +844,12 @@ describe('Plan on roadmap while the Roadmap reads its answer', { timeout: 30_000
      back until `answerRoadmaps`. */
   const LAUNCH = '01000000-0000-4000-8000-000000000005'
   beforeEach(async () => {
-    answersTasks = true
     holdRoadmaps = true
     answerRoadmaps = () => {}
-    const { TASKS } = await import('./store/liveParts')
-    TASKS.atBoot = false
   })
   afterEach(async () => {
-    answersTasks = false
     holdRoadmaps = false
     answerRoadmaps = () => {}
-    const { TASKS } = await import('./store/liveParts')
-    TASKS.atBoot = true
     // no write went out on a path that needs every task, and no paint threw
     const { __layerProbe } = await import('./store/planner')
     expect(__layerProbe?.faults()).toEqual([])
@@ -897,8 +891,6 @@ describe('Plan on roadmap while the Roadmap reads its answer', { timeout: 30_000
       'Plan on roadmap',
     )
     expect(plan.textContent).toBe(group ? 'Show on roadmap' : 'Plan on roadmap')
-    const { P } = await import('./store/planner')
-    expect(P.taskLoad()).toEqual({ state: 'not_asked' })
     await act(async () => plan.click())
     const roadmap = await shownPage('roadmap')
     await waitFor(
@@ -908,10 +900,6 @@ describe('Plan on roadmap while the Roadmap reads its answer', { timeout: 30_000
       'the Roadmap waiting for its answer',
     )
     expect(roadmap.textContent).not.toContain('opens once every task has loaded')
-    // the Roadmap asked for no task of the workspace
-    expect(P.taskLoad()).toEqual({ state: 'not_asked' })
-    const { __layerProbe } = await import('./store/planner')
-    expect(__layerProbe?.asks()).toEqual([])
     return org
   }
 

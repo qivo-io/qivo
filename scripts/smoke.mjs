@@ -235,13 +235,39 @@ async function boardMounted(page) {
   )
 }
 
-/* Tasks load on demand: the workspace holds none until something that
-   needs every task asks for them. A step that reads the whole list
-   (PLANNER.issues or issueById) asks first and waits until the page's
-   store holds every task. */
-async function everyTask(page) {
-  await page.evaluate(() => window.PLANNER.askTasks('script'))
-  await page.waitForFunction(() => window.PLANNER.tasksHeld(), null, { timeout: 60000 })
+/* The task window's read of task `ref`, its key or uuid, in the
+   organization the person signed in on `page` has open (taskWindow.task),
+   as the window reads it: the store holds no task, so the drive reads a
+   stored task through the reads the app uses. Asks again every 250 ms
+   until `holds(answer)`, for up to 15 s, and answers the last answer. */
+async function windowRead(page, ref, holds = (answer) => answer?.state === 'ok') {
+  const deadline = Date.now() + 15000
+  for (;;) {
+    const answer = await page.evaluate(async (ref) => {
+      const { convex } = await import('/src/lib/convex.ts')
+      return convex.query('taskWindow:task', { org_id: window.PLANNER.org.id, ref })
+    }, ref)
+    if (holds(answer) || Date.now() > deadline) return answer
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+}
+
+/* Deletes task `uuid`, which the task window on `page` shows, as the
+   window's Delete does (P.deleteIssue): once the window shows it from a
+   current answer of its own read (P.editsFromAnswer) and knows its
+   subtasks (P.familyOf), since a delete sends nothing before both.
+   Answers whether the server deleted it. */
+async function deleteShown(page, uuid) {
+  await page.waitForFunction(
+    (uuid) => {
+      const P = window.PLANNER
+      const shown = P.taskShown(uuid)
+      return !!shown && P.editsFromAnswer(uuid) && P.familyOf(shown) !== null
+    },
+    uuid,
+    { timeout: 30000 },
+  )
+  return page.evaluate((uuid) => window.PLANNER.deleteIssue(uuid), uuid)
 }
 
 async function storedBackground({ clear = false } = {}) {
@@ -854,27 +880,28 @@ try {
   // caret/selection behavior while arrows and Enter still operate the results.
   // Search matches whole words on the server, the last one also as the start
   // of a longer word, so the query is the start of a word that at least
-  // three task titles or project names hold: "firm" finds the Firmware
-  // project and its firmware tasks.
-  await everyTask(pageA)
-  // the projects whose names hold "firm", from the navigation search, as
-  // the store holds no project list
-  const firmNames = (await navRows(pageA, 'projectNav:search', { search: 'firm' })).map(
-    (project) => project.name,
-  )
-  const paletteQuery = await pageA.evaluate((projectNames) => {
+  // three results hold: Northstar's "firm" finds the Firmware project and
+  // its firmware tasks. Each word is asked of the search the palette shows
+  // (P.fetchSearchPage, search:page): "firm" first, then the words of four
+  // letters or more that most titles of a Board's answer hold, where a
+  // Board's read holds one, as the store holds no task list.
+  const paletteQuery = await pageA.evaluate(async () => {
+    const P = window.PLANNER
     const words = (text) => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
-    const texts = [...window.PLANNER.issues.map((issue) => issue.title), ...projectNames]
-    const holding = (start) => texts.filter((t) => words(t).some((w) => w.startsWith(start)))
-    if (holding('firm').length >= 3) return 'firm'
-    // else the word of four letters or more that most titles hold
+    const rows = ['board:desktop', 'board:phone'].flatMap(
+      (slot) => P.boardRead(slot).value?.rows ?? [],
+    )
     const counts = new Map()
-    for (const text of texts)
-      for (const word of new Set(words(text)))
+    for (const row of rows)
+      for (const word of new Set(words(row.title)))
         if (word.length >= 4) counts.set(word, (counts.get(word) ?? 0) + 1)
-    const [word, count] = [...counts].sort((a, b) => b[1] - a[1])[0] ?? [null, 0]
-    return count >= 3 ? word : null
-  }, firmNames)
+    const common = [...counts].sort((a, b) => b[1] - a[1]).map(([word]) => word)
+    for (const word of ['firm', ...common.slice(0, 5)]) {
+      const found = await P.fetchSearchPage(word, { includeArchived: false })
+      if (found.state === 'ok' && found.rows.length >= 3) return word
+    }
+    return null
+  })
   if (!paletteQuery) await fail('Northstar has too few tasks for the search keyboard check')
   const searchButton = pageA.locator('button[data-sidebar-search]')
   const palette = pageA.getByRole('dialog', { name: 'Search tasks and projects', exact: true })
@@ -970,20 +997,26 @@ try {
   await openPalette()
   // Opening a task marks its messages read. Pick an existing task with no
   // unread messages, so this regression does not alter the demo notification state.
-  await everyTask(pageA)
-  // the task's inbox item says whether it holds an unread message
-  const enterTarget = await palette.locator('[cmdk-item]').evaluateAll(async (items) => {
+  // The results' tasks come from the search the palette shows
+  // (P.fetchSearchPage), by their rows' values, and the task's inbox item
+  // says whether it holds an unread message.
+  const enterTarget = await palette.locator('[cmdk-item]').evaluateAll(async (items, query) => {
     const { convex } = await import('/src/lib/convex.ts')
+    const found = await window.PLANNER.fetchSearchPage(query, { includeArchived: false })
+    if (found.state !== 'ok') return null
+    const tasks = new Map(
+      found.rows.filter((row) => row.kind === 'task').map((row) => [`issue-${row.handle}`, row]),
+    )
     for (const [index, item] of items.entries()) {
       const value = item.getAttribute('data-value') || ''
-      const issue = value.startsWith('issue-') && window.PLANNER.issueById[value.slice(6)]
-      if (!issue) continue
-      const read = await convex.query('inbox:item', { org_id: issue.org, issue_id: issue.uuid })
+      const task = tasks.get(value)
+      if (!task) continue
+      const read = await convex.query('inbox:item', { org_id: task.org_id, issue_id: task.id })
       if (read?.state === 'ok' && (read.item === null || read.item.unread_count === 0))
-        return { index, value, key: issue.key }
+        return { index, value, key: task.key }
     }
     return null
-  })
+  }, paletteQuery)
   if (!enterTarget)
     await fail('Search has no result safe to open without marking demo messages read')
   for (let index = 0; index < enterTarget.index; index++) await searchInput.press('ArrowDown')
@@ -1617,11 +1650,12 @@ try {
   if (!(await frameBeforeRotation.evaluate((element) => element.isConnected)))
     await fail('Physical phone rotation remounted the active timeline layer')
   await frameBeforeRotation.dispose()
+  // each bar's task as the Roadmap's answer brings it (P.anyTask)
   const landscapeTask = await landscape.locator('[data-bar]').evaluateAll(async (items) => {
     const { convex } = await import('/src/lib/convex.ts')
     for (const element of items) {
       const id = element.getAttribute('data-bar')
-      const issue = window.PLANNER.issueById[id]
+      const issue = window.PLANNER.anyTask(id)
       if (!issue) continue
       // opening it must not mark an unread message read (inbox.item)
       const read = await convex.query('inbox:item', { org_id: issue.org, issue_id: issue.uuid })
@@ -1652,8 +1686,8 @@ try {
     await pageA.waitForURL(roadmapURL)
     await checkLandscape('natural')
     const datesPreserved = await pageA.evaluate(({ id, start, end }) => {
-      const issue = window.PLANNER.issueById[id]
-      return issue.start === start && issue.end === end
+      const issue = window.PLANNER.anyTask(id)
+      return issue?.start === start && issue?.end === end
     }, landscapeTask)
     if (!datesPreserved) await fail('Opening a timeline task changed its schedule')
     // Closing the task consumes its entry. The next Back closes the landscape
@@ -2427,14 +2461,17 @@ try {
   ) {
     await fail('Task details show Created by or offer a Reporter editor')
   }
-  const savedReporter = await pageA.evaluate(async (title) => {
+  // the stored task as the task window reads it (taskWindow.task), and its
+  // creator among the signed-in person's own profiles, which the root part
+  // sends (workspace.root)
+  const saved = await windowRead(pageA, key)
+  if (saved?.state !== 'ok' || saved.task.title !== TITLE)
+    await fail(`The task window's read of ${key} answered ${saved?.state ?? 'nothing'}`)
+  const savedTask = saved.task
+  const savedReporter = await pageA.evaluate(async (task) => {
     const { convex } = await import('/src/lib/convex.ts')
-    const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
-      (name, args) => convex.query(name, args),
-    )
-    const task = snapshot.issues.find((row) => row.title === title)
-    if (!task) throw new Error('Created task is absent from the saved snapshot')
-    const actor = snapshot.profiles.find((row) => row.id === task.created_by)
+    const root = await convex.query('workspace:root', {})
+    const actor = root?.profiles?.find((row) => row.id === task.created_by)
     return {
       reporter: task.reporter_id,
       actor: actor?.id,
@@ -2451,7 +2488,7 @@ try {
       due: task.due_date ?? null,
       description: task.description,
     }
-  }, TITLE)
+  }, savedTask)
   if (
     savedReporter.project !== subProj ||
     savedReporter.status !== expectedStatus ||
@@ -2536,32 +2573,26 @@ try {
   log(`A: picked ${savedReporter.name} as reviewer`)
   await pickFieldOption('Status', 'In Review')
   log('A: moved the task to In Review')
-  const reviewed = await pageA.evaluate(
-    async ({ title, me }) => {
-      const { convex } = await import('/src/lib/convex.ts')
-      const deadline = Date.now() + 15000
-      for (;;) {
-        const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
-          (name, args) => convex.query(name, args),
-        )
-        const task = snapshot.issues.find((row) => row.title === title)
-        if (task && task.reviewer_id === me && task.status === 'review') {
-          // the sub-project's resolved Review time (projectNav.byIds), its
-          // own, else its parent's, else the default
-          const { rows } = await convex.query('projectNav:byIds', { ids: [task.project_id] })
-          const sub = rows.find((row) => row.id === task.project_id)
-          return {
-            remaining: task.remaining_hours ?? null,
-            stamped: !!task.remaining_set_at,
-            expected: sub?.review_hours ?? null,
-          }
+  // the stored task as the task window reads it (taskWindow.task)
+  const inReview = (answer) =>
+    answer?.state === 'ok' &&
+    answer.task.reviewer_id === currentProfile &&
+    answer.task.status === 'review'
+  const reviewedAnswer = await windowRead(pageA, key, inReview)
+  const reviewed = inReview(reviewedAnswer)
+    ? await pageA.evaluate(async (task) => {
+        const { convex } = await import('/src/lib/convex.ts')
+        // the sub-project's resolved Review time (projectNav.byIds), its
+        // own, else its parent's, else the default
+        const { rows } = await convex.query('projectNav:byIds', { ids: [task.project_id] })
+        const sub = rows.find((row) => row.id === task.project_id)
+        return {
+          remaining: task.remaining_hours ?? null,
+          stamped: !!task.remaining_set_at,
+          expected: sub?.review_hours ?? null,
         }
-        if (Date.now() > deadline) return null
-        await new Promise((resolve) => setTimeout(resolve, 250))
-      }
-    },
-    { title: TITLE, me: currentProfile },
-  )
+      }, reviewedAnswer.task)
+    : null
   if (!reviewed) await fail('The saved task never carried the chosen reviewer and In Review')
   log(`A: saved task is In Review with ${savedReporter.name} as reviewer`)
   if (reviewed.remaining !== reviewed.expected || !reviewed.stamped) {
@@ -2604,18 +2635,28 @@ try {
     `A: attachment row for ${PNG_NAME} rendered (transient "Uploading…" ${sawUploading ? 'seen' : 'too fast to catch'})`,
   )
 
-  // the store row: exact server-recorded size must equal the bytes we sent
-  await everyTask(pageA)
-  const att = await pageA.evaluate((k) => {
-    const it = window.PLANNER.issues.find((i) => i.key === k)
-    const a = it?.attachments?.[0]
-    return a ? { id: a.id, name: a.name, size: a.size, mime: a.mime } : null
-  }, key)
-  if (!att) await fail('no attachment row in the store after upload')
+  // the stored row, from the window's attachments read
+  // (taskWindow.attachments): exact server-recorded size must equal the
+  // bytes we sent
+  const att = await pageA.evaluate(async (uuid) => {
+    const { convex } = await import('/src/lib/convex.ts')
+    const deadline = Date.now() + 15000
+    for (;;) {
+      const answer = await convex.query('taskWindow:attachments', {
+        org_id: window.PLANNER.org.id,
+        issue_id: uuid,
+      })
+      const a = answer?.state === 'ok' ? answer.rows[0] : undefined
+      if (a) return { id: a.id, name: a.name, size: Number(a.size_bytes), mime: a.mime ?? null }
+      if (Date.now() > deadline) return null
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+  }, savedTask.id)
+  if (!att) await fail("no attachment row in the window's attachments read after upload")
   if (att.name !== PNG_NAME) await fail(`attachment name ${att.name}, expected ${PNG_NAME}`)
   if (att.size !== PNG.length)
     await fail(`server size_bytes ${att.size}, uploaded ${PNG.length} (byte identity broken)`)
-  log(`A: store row ${att.id} — name+size exact (${att.size} bytes, mime ${att.mime})`)
+  log(`A: stored row ${att.id} — name+size exact (${att.size} bytes, mime ${att.mime})`)
   await pageA.screenshot({ path: `${SHOTS}/smoke-attachment.png` })
 
   // ---- 7b. serve: minted /files/ URL answers 200 with the EXACT bytes
@@ -2645,71 +2686,134 @@ try {
   log(`A: /files/ serve — 200, ${served.len} bytes exact, image/png, cache-control "${served.cc}"`)
   log(`   url ${served.u.slice(0, 110)}…`)
 
-  // The organization export must contain the real attachment bytes, not
-  // expiring URLs, and preserve the row/UUID relationship in its JSON files.
-  await pageA.goto(`${BASE}/app/${demo.orgSlug}/settings/org-general`, {
-    waitUntil: 'domcontentloaded',
-  })
-  const exportTimeout = 120000
-  const exportAlert = pageA.locator('[data-org-export] [role="alert"]')
-  const [result] = await Promise.all([
-    Promise.race([
+  // The organization export, prepared on the server's job, saved into a
+  // chosen file and recorded, holds the task and its attachment record as
+  // data, with no file contents and no personal data. A file of the
+  // origin private file system stands in for the save picker, which a
+  // headless browser cannot press, so the app's real createWritable,
+  // pipeTo and close run; the stand-in answers only under its session
+  // flag, which the step clears after.
+  const PICKER_FLAG = 'smoke-export-picker'
+  const EXPORT_FILE = 'smoke-org-export.zip'
+  await ctxA.addInitScript(
+    ([flag, name]) => {
+      try {
+        if (sessionStorage.getItem(flag) !== '1') return
+      } catch {
+        return
+      }
+      window.showSaveFilePicker = async () =>
+        (await navigator.storage.getDirectory()).getFileHandle(name, { create: true })
+    },
+    [PICKER_FLAG, EXPORT_FILE],
+  )
+  await pageA.evaluate((flag) => sessionStorage.setItem(flag, '1'), PICKER_FLAG)
+  try {
+    await pageA.goto(`${BASE}/app/${demo.orgSlug}/settings/org-general`, {
+      waitUntil: 'domcontentloaded',
+    })
+    const section = pageA.locator('[data-org-export][data-export-state]')
+    await section.waitFor({ timeout: 60000 })
+    await pageA.waitForFunction(
+      () =>
+        document.querySelector('[data-org-export]')?.getAttribute('data-export-state') !==
+        'unknown',
+      undefined,
+      { timeout: 60000 },
+    )
+    if ((await section.getAttribute('data-export-delivery')) !== 'file')
+      await fail('The export panel does not save into a chosen file in Chromium')
+    await pageA.locator('[data-export-start]').click()
+    const exportAlert = pageA.locator('[data-org-export] [role="alert"]')
+    const outcome = await Promise.race([
       pageA
-        .waitForEvent('download', { timeout: exportTimeout })
-        .then((download) => ({ kind: 'downloaded', download })),
-      exportAlert.waitFor({ state: 'visible', timeout: exportTimeout }).then(async () => ({
-        kind: 'failed',
-        message: (await exportAlert.textContent())?.trim(),
-      })),
-    ]),
-    pageA.locator('[data-export-download]').click(),
-  ])
-  if (result.kind === 'failed') {
-    await fail(`Organization export failed: ${result.message || 'unknown error'}`)
+        .locator('[data-export-recorded]')
+        .first()
+        .waitFor({ timeout: 180000 })
+        .then(() => 'saved'),
+      exportAlert.waitFor({ state: 'visible', timeout: 180000 }).then(() => 'failed'),
+    ])
+    if (outcome === 'failed')
+      await fail(`Organization export failed: ${(await exportAlert.textContent())?.trim()}`)
+    if (
+      (await pageA
+        .locator('[data-export-recorded]')
+        .first()
+        .getAttribute('data-export-recorded')) !== 'true'
+    )
+      await fail('The saved export was not recorded')
+    const bytes = Number(
+      await pageA.locator('[data-export-bytes]').first().getAttribute('data-export-bytes'),
+    )
+    const saved = await pageA.evaluate(async (name) => {
+      const file = await (
+        await (await navigator.storage.getDirectory()).getFileHandle(name)
+      ).getFile()
+      const data = new Uint8Array(await file.arrayBuffer())
+      let text = ''
+      for (let i = 0; i < data.length; i += 0x8000)
+        text += String.fromCharCode(...data.subarray(i, i + 0x8000))
+      return btoa(text)
+    }, EXPORT_FILE)
+    const archive = Buffer.from(saved, 'base64')
+    if (archive.length !== bytes)
+      await fail(`The saved export holds ${archive.length} bytes, the archive ${bytes}`)
+    const zip = unzipSync(archive)
+    const names = Object.keys(zip)
+    const rows = (folder) =>
+      names
+        .filter((name) => name.startsWith(`${folder}/`) && name.endsWith('.json'))
+        .flatMap((name) => JSON.parse(strFromU8(zip[name])))
+    const manifest = JSON.parse(strFromU8(zip['manifest.json']))
+    const exportedTask = rows('data/tasks').find((task) => task.title === TITLE)
+    const exportedAttachment = rows('data/task_attachments').find(
+      (attachment) => attachment.id === att.id,
+    )
+    if (
+      manifest.format !== 'qivo-organization-export' ||
+      manifest.version !== 4 ||
+      manifest.organization.slug !== demo.orgSlug ||
+      !exportedTask ||
+      exportedAttachment?.task_id !== exportedTask.id
+    )
+      await fail('Organization export did not hold its task and attachment record')
+    if (names.some((name) => name.startsWith('files/')))
+      await fail('Organization export held file contents')
+    if (rows('data/profiles').some((profile) => 'auth_user_id' in profile))
+      await fail('Organization export exposed account identity references')
+    if (names.some((name) => /^data\/(messages|user_prefs|mcp_tokens)\//.test(name)))
+      await fail('Organization export included private account data')
+    await pageA.screenshot({ path: `${SHOTS}/smoke-export.png` })
+    log(
+      `A: organization export prepared on the server, saved (${bytes} bytes) and recorded; task and attachment record as data, no file contents, personal data excluded`,
+    )
+  } finally {
+    await pageA
+      .evaluate(
+        async ([flag, name]) => {
+          sessionStorage.removeItem(flag)
+          try {
+            await (await navigator.storage.getDirectory()).removeEntry(name)
+          } catch {
+            // nothing was saved
+          }
+        },
+        [PICKER_FLAG, EXPORT_FILE],
+      )
+      .catch(() => {})
   }
-  const exported = result.download
-  if (!exported.suggestedFilename().endsWith('.zip')) await fail('Export did not download a ZIP')
-  const stream = await exported.createReadStream()
-  if (!stream) await fail('Export download is unavailable')
-  const chunks = []
-  for await (const chunk of stream) chunks.push(chunk)
-  const zip = unzipSync(Buffer.concat(chunks))
-  const manifest = JSON.parse(strFromU8(zip['manifest.json']))
-  const exportedTasks = JSON.parse(strFromU8(zip['data/tasks.json']))
-  const exportedAttachments = JSON.parse(strFromU8(zip['data/task_attachments.json']))
-  const exportedProfiles = JSON.parse(strFromU8(zip['data/profiles.json']))
-  const exportedTask = exportedTasks.find((task) => task.title === TITLE)
-  const exportedAttachment = exportedAttachments.find((attachment) => attachment.id === att.id)
-  const file = manifest.files.find((item) => item.kind === 'attachment' && item.id === att.id)
-  if (
-    manifest.format !== 'qivo-organization-export' ||
-    manifest.version !== 2 ||
-    manifest.organization.slug !== demo.orgSlug ||
-    !exportedTask ||
-    exportedAttachment?.task_id !== exportedTask.id ||
-    !file ||
-    !zip[file.path] ||
-    Buffer.compare(Buffer.from(zip[file.path]), PNG) !== 0
-  )
-    await fail('Organization ZIP did not preserve its task, attachment record and exact bytes')
-  if (exportedProfiles.some((profile) => 'auth_user_id' in profile))
-    await fail('Organization export exposed account identity references')
-  if (zip['data/messages.json'] || zip['data/user_prefs.json'] || zip['data/mcp_tokens.json'])
-    await fail('Organization export included private account data')
-  await pageA.screenshot({ path: `${SHOTS}/smoke-export.png` })
-  log('A: organization ZIP contains task JSON and exact uploaded bytes; personal data excluded')
 
-  // ---- 8. cleanup: A deletes the smoke issue, which moves it with its
-  // attachment to Deleted items (the final cleanup deletes it for good); B
-  // watches it leave WITHOUT reload — the delete is fire-and-forget on the
-  // client, so B's removal doubles as the ordering proof
-  await everyTask(pageA)
-  smokeTaskId = await pageA.evaluate(
-    (k) => window.PLANNER.issues.find((i) => i.key === k)?.id ?? null,
-    key,
-  )
-  const gone = await pageA.evaluate((k) => window.PLANNER.deleteIssue(k), key)
-  void gone
+  // ---- 8. cleanup: A deletes the smoke issue from its task window, opened
+  // by its address, which moves it with its attachment to Deleted items
+  // (the final cleanup deletes it for good by its uuid); B watches it leave
+  // WITHOUT reload, so B's removal doubles as the ordering proof
+  smokeTaskId = savedTask.id
+  await pageA.goto(taskUrl, { waitUntil: 'domcontentloaded' })
+  await pageA
+    .locator('[data-task-scrim] [data-issue-key]')
+    .filter({ hasText: key })
+    .waitFor({ timeout: 30000 })
+  if (!(await deleteShown(pageA, smokeTaskId))) await fail(`The task window did not delete ${key}`)
   await pageB.waitForFunction((t) => !document.body.innerText.includes(t), TITLE, {
     timeout: 15000,
   })
@@ -2719,8 +2823,8 @@ try {
     waitUntil: 'domcontentloaded',
   })
   await pageB.locator('[data-settings-page]').waitFor({ state: 'visible', timeout: 30000 })
-  if (await pageB.locator('[data-export-download]').count())
-    await fail('A non-admin can see the organization export control')
+  if (await pageB.locator('[data-org-export]').count())
+    await fail('A non-admin can see the organization export section')
 
   // ---- 8b. Team sync, on temporaries only. Every change made from a row
   // stamps the page owner's last sync (a sync_stamps row), and no client
@@ -2782,19 +2886,23 @@ try {
   )
   // The bare address opens the scope the user last picked on the team
   // opening, naming it in place, or asks to choose one when none is saved,
-  // never All projects by default, with the sidebar row lit either way.
+  // never All projects by default, with the sidebar row lit either way. A
+  // saved scope that names a team or project gone since, as after another
+  // drive's cleanup on the same backend, says it is not available.
   await pageA.goto(`${BASE}/app/${demo.orgSlug}/sync`, { waitUntil: 'domcontentloaded' })
   await pageA
-    .locator('[data-sync-page]:is([data-sync-state="ok"], [data-sync-state="choose"])')
+    .locator(
+      '[data-sync-page]:is([data-sync-state="ok"], [data-sync-state="choose"], [data-sync-state="unavailable"])',
+    )
     .waitFor({ timeout: 30000 })
   await pageA.waitForURL(new RegExp(`/app/${demo.orgSlug}/sync(/(all|p/\\d+|team/[0-9a-f-]+))?$`))
   if (!(await pageA.locator('[data-sync-nav][aria-current="page"]').count()))
     await fail('The sidebar Team sync row is not lit on the page')
-  log('A: Team sync opened on its saved scope, or asked to choose one')
+  log('A: Team sync opened on its saved scope, asked to choose one, or said the saved one is gone')
   // All projects holds the task whatever scope is saved; opening it by
   // address saves nothing, so the user's saved scope stays as it was. The
-  // page reads its meeting from the server and asks for no task, so the
-  // task is the agenda's (P.syncTask), held or not.
+  // page reads its meeting from the server, so the task is the agenda's
+  // (P.syncTask).
   await pageA.goto(`${BASE}/app/${demo.orgSlug}/sync/all`, { waitUntil: 'domcontentloaded' })
   await pageA.locator('[data-sync-page][data-sync-state="ok"]').waitFor({ timeout: 30000 })
   const syncKey = await pageA.evaluate(
@@ -2842,10 +2950,12 @@ try {
       const stampOf = (p) => `${p.stamp?.at ?? ''}|${p.stamp?.since ?? ''}`
       const deadline = Date.now() + 15000
       for (;;) {
-        const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
-          (name, args) => convex.query(name, args),
-        )
-        const task = snapshot.issues.find((row) => row.id === id)
+        // the stored task as the task window reads it (taskWindow.task)
+        const read = await convex.query('taskWindow:task', {
+          org_id: window.PLANNER.org.id,
+          ref: id,
+        })
+        const task = read?.state === 'ok' ? read.task : null
         // the stamps are the agenda's walkers' (SyncPerson.stamp), as the
         // store holds nobody but the signed-in person
         const agenda = await convex.query('teamSync:agenda', JSON.parse(syncRequest('all').key))
@@ -2874,10 +2984,15 @@ try {
   if (!/^1 of \d+ tasks? reviewed$/.test(syncProgress))
     await fail(`The sync footer reads "${syncProgress}" after one edited row`)
   log('A: the row saved Remaining 4 h, ticked itself and stamped only the agent')
-  // Delete the task, then remove the agent and its stamp with it. A delete
-  // writes a task the workspace holds, so the leg asks for every task first.
-  await everyTask(pageA)
-  await pageA.evaluate((k) => window.PLANNER.deleteIssue(k), syncKey)
+  // Delete the task from its window, which its card's title opens over
+  // Team sync, then remove the agent and its stamp with it.
+  await syncCard.locator(`[data-sync-open="${syncKey}"]`).click()
+  await pageA
+    .locator('[data-task-scrim] [data-issue-key]')
+    .filter({ hasText: syncKey })
+    .waitFor({ timeout: 15000 })
+  if (!(await deleteShown(pageA, syncTaskId)))
+    await fail(`The task window did not delete ${syncKey}`)
   await syncCard.waitFor({ state: 'detached', timeout: 15000 })
   const syncGone = await pageA.evaluate(
     async ({ id, agent, agentName }) => {
@@ -2891,11 +3006,10 @@ try {
           await new Promise((resolve) => setTimeout(resolve, 250))
         }
       }
-      const { readWorkspace } = await import('/convex/lib/workspaceJoin.ts')
-      const taskGone = async () => {
-        const snapshot = await readWorkspace((name, args) => convex.query(name, args))
-        return !snapshot.issues.some((row) => row.id === id)
-      }
+      // a deleted task's window read answers unavailable (taskWindow.task)
+      const taskGone = async () =>
+        (await convex.query('taskWindow:task', { org_id: P.org.id, ref: id }))?.state ===
+        'unavailable'
       // the store holds nobody but the signed-in person, so the agent is
       // looked for through the mention popup's read (pickers.mentions) by
       // its run-unique name, every batch of it
@@ -2922,7 +3036,7 @@ try {
   )
   if (syncGone) await fail(syncGone)
   await syncAgent.waitFor({ state: 'detached', timeout: 15000 })
-  log(`A deleted ${syncKey} and removed ${SYNC_AGENT}; both left the page and the saved snapshot`)
+  log(`A deleted ${syncKey} and removed ${SYNC_AGENT}; both left the page and the server's reads`)
 
   // ---- 9. final sweeps + sign-out both
   await noDisabledCopy(pageA, 'A final')

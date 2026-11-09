@@ -321,7 +321,7 @@ for (const path of isDemoDeployment()
  *   GET /backgrounds/<image uuid>?e=<exp>&m=<owner auth-user id>&t=<mac>
  *
  * The organization export's /exports/ route below shares these headers,
- * this 404 and the preflight.
+ * this 404 and the preflight, and also exposes Retry-After.
  *
  * The MAC (lib/fileTokens: HMAC-SHA256 over kind/uuid/minter/exp, key derived
  * from BETTER_AUTH_SECRET) admits the request; the MINTER's access is then
@@ -339,7 +339,8 @@ for (const path of isDemoDeployment()
 
 const INLINE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/avif']
 
-/* <img> tags are no-cors, but imgActions' fetch(url) (copy/download) and the
+/* <img> tags are no-cors, but imgActions' fetch(url) (copy/download), the
+ * export page's save into a chosen file (src/lib/orgExport.ts) and the
  * smoke's byte asserts are cross-origin reads from the app origin. Origin-echo
  * against the configured exact app origins — never `*` — keeps any future
  * cookie-authenticated fallback from requiring a CORS redesign. */
@@ -491,8 +492,15 @@ http.route({ pathPrefix: '/background-previews/', method: 'OPTIONS', handler: pr
  * whether an export exists. Every answer carries the gateway's headers:
  * nosniff, the sandbox CSP and the app-origin echo, never `*` and with no
  * credentials, so the archive never runs as content on this origin, which
- * carries the sign-in cookies. The archive holds no file contents and the
- * route grants nothing else. */
+ * carries the sign-in cookies. To an echoed app origin it also exposes
+ * Retry-After beside Content-Disposition, because the export page reads the
+ * route with fetch from the app's origin when it saves into a file the
+ * person chose (src/lib/orgExport.ts), and says how long to wait after a
+ * 429. Every refusal, the 404 and the 429, is also an attachment with no
+ * body, so a browser that loaded the link as a page, which sends no Origin
+ * to echo, shows at most a failed download and never replaces the page
+ * that asked; the export page loads it in a hidden frame for that reason.
+ * The archive holds no file contents and the route grants nothing else. */
 
 /* What deliveryOf answers for an archive the route may serve. */
 type Delivery = {
@@ -525,10 +533,16 @@ type Delivery = {
  * then, and a file erased three seconds into a download no longer stopped
  * it. So the record says that the backend read the whole archive into the
  * response, not that the client received it, and it leaves
- * organizations.last_export_at, which the deletion reminder reads, alone.
+ * organizations.last_export_confirmed_at, which the deletion reminder reads,
+ * alone.
+ * The app records a saved download itself once the desktop app or the
+ * browser confirmed it (orgRemovals.ts recordExport).
  * The per-part checks and the lease cover that read too, not the client's
  * transfer. Convex documents at most 30 minutes for an action; whether a
- * slow client's transfer counts toward it was not measured.
+ * slow client's transfer counts toward it was not measured. The app's
+ * record of a saved download counts only within DELIVERY.streamMs after
+ * the archive ends (model/orgExports.ts recordable), so a download that
+ * starts shortly before the end must finish within that window to count.
  */
 function archiveStream(
   ctx: ActionCtx,
@@ -626,8 +640,11 @@ const EXPORTS = '/exports/'
 const serveExport = answerAfterBody(async (ctx, request) => {
   const url = new URL(request.url)
   const headers = gatewayHeaders(request.headers.get('Origin'))
+  if (headers.get('Access-Control-Allow-Origin') !== null)
+    headers.set('Access-Control-Expose-Headers', 'Content-Disposition, Retry-After')
   const refuse = (status = 404): Response => {
     headers.set('Cache-Control', 'no-store')
+    headers.set('Content-Disposition', 'attachment')
     return new Response(null, { status, headers })
   }
   const id = url.pathname.slice(EXPORTS.length)

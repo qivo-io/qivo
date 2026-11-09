@@ -7,6 +7,11 @@ that the client needs:
 - The window has no application menu row. Closing it keeps Qivo running in
   the system tray by default. The tray menu offers **Open Qivo** and **Quit
   Qivo**.
+- A window started hidden at login reports itself hidden to the page until it
+  is first shown ([windowOptions.ts](windowOptions.ts)), so the app's view
+  reads stay paused while nobody can see it, as they do in a minimized or
+  tray-hidden window. Electron paints a window created hidden unless told
+  not to, and its page then reports visible.
 - Inbox events can raise native desktop notifications. Clicking one restores
   Qivo and opens the Inbox. The shell also tells the page when the computer
   wakes from sleep ([power.ts](power.ts)), so the app checks for missed Inbox
@@ -19,6 +24,11 @@ that the client needs:
   Linux builds have no feed and never update themselves.
 - OAuth provider pages open in the system browser. A short-lived, one-time
   `qivo://` callback returns the result to the waiting Qivo window.
+- Organization exports download into the Downloads folder, and the app tells
+  Qivo when one finished, which deletion reminders count. The download runs
+  in the app and shows no progress, and it cannot be stopped from the page.
+  When the shell refuses an export link, the page downloads it as a browser
+  does, which Qivo does not count.
 
 ## Security
 
@@ -27,9 +37,19 @@ The shell follows Electron's
 
 - The renderer has context isolation, the Chromium sandbox and no Node.js.
   The preload exposes only `window.qivoDesktop`, whose members are the
-  settings, notifications, updates, power (the wake from sleep) and sign-in
-  bridges, and every IPC handler accepts calls only from the top-level page
-  of the configured app origin.
+  settings, notifications, updates, power (the wake from sleep),
+  organization export and sign-in bridges, and every IPC handler accepts
+  calls only from the top-level page of the configured app origin.
+- The shell downloads only organization export links the app's own page
+  asks for ([exportDownload.ts](exportDownload.ts)), in the export route's
+  shape. A packaged build takes them only from production's export origin,
+  `https://api.qivo.io`, compared whole with its port
+  ([appURL.ts](appURL.ts)). A run from source takes a Convex site over
+  HTTPS or a local backend over HTTP. It downloads one at a time, a ZIP file
+  up to the export's 95 MiB cap, into the Downloads folder under the name
+  the answer gives, made unique, never where the page says. It removes the
+  file of a download that did not finish, and names it to the page when it
+  cannot. Every other download keeps Electron's own save dialog.
 - The window loads only pages of the configured app origin. A link, a
   redirect or `window.open` to any other page, sign-in providers included,
   goes to the system instead: `http`, `https`, `mailto` and `tel` links open

@@ -1,5 +1,4 @@
-/* The organization export's reads, which the paging query orgExport.page
- * and the export job's readBatch (orgExport.ts) share. Every read is
+/* The organization export job's reads (orgExport.ts readBatch). Every read is
  * bounded and scoped to one organization; an export spanning many reads is
  * a live traversal, not an atomic database backup. Archived rows and the
  * entire retained activity history are included. The live sections leave
@@ -8,16 +7,15 @@
  * (model/deletedItems.ts) is skipped, with its comments, labels, links and
  * attachments, and a live task's reference to it as a parent is left out.
  * The job reads the retained Deleted items afterwards in a section of
- * their own (storedBatch and itemsBatch at the end of this file); the
- * browser export's `page` never does. Only a deleted item that
+ * their own (storedBatch and itemsBatch at the end of this file). Only a
+ * deleted item that
  * is not ready leaves tasks in issues under an absent project, so the
  * issues section reads each task's parent only while the organization has
  * one, on a smaller page still. Each task's text comes from its description
  * rows (model/descriptions.ts), two documents at most a row. The job reads
  * tasks 100 a page with their texts under TEXT_ROOM (descriptionsOf) while
  * nothing is in flight, and six a page, each text through a range of its
- * own (descriptionOf), when a page's texts do not fit, as the browser
- * export's `page` always does.
+ * own (descriptionOf), when a page's texts do not fit.
  *
  * Convex runs one paginated read in a query, so readBatch pages at most
  * once and reads the children of further parents as whole ranges. */
@@ -52,8 +50,8 @@ export const PAGE_SIZE = 100
 export const JOINED_PAGE_SIZE = 10
 /* A narrow issues page, whose rows each read the task's text, two
  * description rows at most of up to Convex's 1 MiB document limit: 6 rows
- * read 12 MiB beside the page's own rows. The browser export's `page` reads
- * it, and the job when a wide page's texts do not fit (TEXT_ROOM). */
+ * read 12 MiB beside the page's own rows. The job reads it when a wide
+ * page's texts do not fit (TEXT_ROOM). */
 export const ISSUES_PAGE_SIZE = 6
 /* An issue_links page read while a project item is in flight. Each row can
  * also read its target task, up to Convex's 1 MiB document limit, and the
@@ -307,7 +305,8 @@ export function exportRow(
   delete row.gravatar_avatars
   // a task's archive-mark flag is the archive steps' bookkeeping
   delete row.relations_marked
-  // a task's or project's window key only places it in the app's windows
+  // a task's or project's window key only placed it in the app's former
+  // windows
   delete row.window_key
   // a name key, or its copy on a membership, grant or team share, only
   // serves name-ordered index reads, and so does a project's archive state

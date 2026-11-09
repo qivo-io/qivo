@@ -33,7 +33,6 @@ import {
   type T,
   uuid,
   withReadingAdmin,
-  workspaceOf,
 } from './helpers.setup'
 import { plantTicket } from './uploadTickets.setup'
 
@@ -650,15 +649,20 @@ describe('files.attach', () => {
     expect(events[events.length - 1].verb).toBe('added an image to')
   })
 
-  it("stores the task's organization on the row, and neither the answer nor the snapshot shows it", async () => {
+  it("stores the task's organization on the row, and neither the answer nor the task window's list shows it", async () => {
     const { t, fx, issue } = await setup()
     const sid = await storeBlob(t, 64, 'application/pdf')
     const result = await attachAs(t, fx, fx.user, issue, sid)
     if ('refused' in result) throw new Error(`unexpected refusal: ${result.refused.message}`)
     const [row] = await attachmentRows(t)
     expect(row).toMatchObject({ org_id: fx.org.id, issue_id: issue.id })
-    const snap = await workspaceOf(as(t, fx.user))
-    const shown = snap?.attachments.find((a) => a.id === row.id)
+    // the task window's attachment list, the app's read of a task's files
+    const list = await as(t, fx.user).query(api.taskWindow.attachments, {
+      org_id: fx.org.id,
+      issue_id: issue.id,
+    })
+    if (list.state !== 'ok') throw new Error(list.state)
+    const shown = list.rows.find((a) => a.id === row.id)
     expect(shown).toMatchObject({ issue_id: issue.id, name: 'spec.pdf', size_bytes: 64 })
     for (const answer of [result.attachment, shown]) expect(answer).not.toHaveProperty('org_id')
   })

@@ -38,6 +38,9 @@ A view never shows a number it could not count whole as if it were complete. Whe
 | Background image size | 8 MiB | A background image must be at most 8 MiB. Choose a smaller image. |
 | Text file from attach_text_file | 256 KiB as UTF-8 | text must be at most 256 KiB (262,144 bytes) as UTF-8. Split it into several files. |
 | Uploads in progress | 20 uploads in progress per person in an organization | You already have 20 uploads in progress, the most one person can have at once. Try again once one has finished. An upload that is never finished stops counting an hour after it started. |
+| Organization export size | 95 MiB as one download | An organization export must be at most 95 MiB as one download. Qivo stops a larger export and deletes its files. |
+| Organization export size on the public demo | 2 MiB as one download | An organization export on the public demo must be at most 2 MiB as one download. Qivo stops a larger export and deletes its files. |
+| Organization export availability | 4 hours after it is ready | An organization export stays available for 4 hours after it is ready, or until a newer export of the organization is ready. Prepare a new export after that. |
 
 ## Tasks and organizations
 

@@ -6,7 +6,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MENTION_DETAILS } from '../../convex/lib/messageDetails'
 import { TooltipProvider } from '../components/ui/tooltip'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 import type { Row } from '../store/rows'
 
 /* The task window's New divider, its tail note and its read on open from
@@ -117,7 +117,7 @@ async function load(
   vi.resetModules()
   // vi.resetModules keeps the live double, and with it a state forced before
   double.live?.forceInbox(null)
-  snap = plannerFixture()
+  snap = underProgram(plannerFixture())
   me = snap.profiles[0].id
   for (const [n, id] of ['task-a', 'task-b'].entries())
     snap.issues.push({
@@ -201,8 +201,11 @@ const settle = () => act(async () => await new Promise((resolve) => setTimeout(r
 
 async function openTask(uuid = 'task-a') {
   const { IssueDetail } = await import('./IssueDetail')
-  const task = P.issues.find((it) => it.uuid === uuid)
-  if (!task) throw new Error(`missing ${uuid}`)
+  const row = snap.issues.find((it) => it.id === uuid)
+  if (!row) throw new Error(`missing ${uuid}`)
+  // the store holds no task, so the window opens by a reference and shows
+  // the task from its own answer
+  const task = { id: P.openTask(row.id, row.org_id, row.num) }
   await act(async () =>
     root.render(
       <TooltipProvider>
@@ -548,7 +551,26 @@ describe("the task window's read on open", { timeout: 20_000 }, () => {
       snap.orgs.push({ ...snap.orgs[0], id: org, name: 'Second', slug: 'second' })
       snap.profiles.push({ ...snap.profiles[0], id: seat, org_id: org, org_role: 'guest' })
       snap.myProfileIds.push(seat)
-      snap.projects.push({ ...snap.projects[0], id: 'project-x', org_id: org, key: 'SEC' })
+      // its sub-project under a top-level project of its own
+      snap.projects.push(
+        {
+          ...snap.projects[0],
+          id: 'program-x',
+          org_id: org,
+          key: 'SEP',
+          type: 'meta',
+          parent_id: undefined,
+          lead_id: undefined,
+        },
+        {
+          ...snap.projects[0],
+          id: 'project-x',
+          org_id: org,
+          key: 'SEC',
+          parent_id: 'program-x',
+          lead_id: undefined,
+        },
+      )
       snap.access.push({ project_id: 'project-x', profile_id: seat, level: 'user' })
       snap.issues.push({
         ...snap.issues[0],
@@ -807,5 +829,312 @@ describe('the Inbox pane and its pop-out', { timeout: 20_000 }, () => {
     // the pop-out shows no mark of its own, and sends no second read
     expect(thread(dialog)).not.toContain('New')
     expect(itemReads()).toHaveLength(1)
+  })
+
+  it('shows news that arrived while the page was hidden under New in the pop-out too, and reads it once', async () => {
+    await load([], [message('task-a', 5, { kind: 'comment' })])
+    await openInbox()
+    const row = document.querySelector<HTMLElement>('[data-message="task-a"] .inbox-message-open')
+    if (!row) throw new Error('missing the row')
+    await act(async () => row.click())
+    await settle()
+    expect(itemReads()).toHaveLength(1)
+    // the server read the item, and confirmed the read
+    snap.messages = snap.messages.map((m) => ({ ...m, read_at: at(6) }))
+    await act(async () => publish())
+    await act(async () => writes[0].answer())
+    await settle()
+    await comments(range(1, 7))
+    const button = pane().querySelector<HTMLElement>('[data-task-popout]')
+    if (!button) throw new Error('missing the pop-out button')
+    await act(async () => button.click())
+    await settle()
+    expect(thread(popOut() ?? document)).not.toContain('New')
+    // the page hides, and a comment's message arrives meanwhile
+    await act(async () => {
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        get: () => 'hidden',
+      })
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await settle()
+    beyond = [message('task-a', 8)]
+    await act(async () => publish())
+    await settle()
+    expect(itemReads()).toHaveLength(1)
+    await act(async () => {
+      Reflect.deleteProperty(document, 'visibilityState')
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await settle()
+    await comments(range(1, 9))
+    await settle()
+    const dialog = popOut()
+    if (!dialog) throw new Error('the pop-out closed')
+    // the pop-out the person looks at shows it under New, as the pane does
+    expect(thread(dialog).slice(-3)).toEqual(['Check 7', 'New', 'Check 8'])
+    expect(thread(pane()).slice(-3)).toEqual(['Check 7', 'New', 'Check 8'])
+    expect(itemReads()).toEqual([
+      { org_id: snap.orgs[0].id, issue_id: 'task-a', through: Date.parse(at(5)) },
+      { org_id: snap.orgs[0].id, issue_id: 'task-a', through: Date.parse(at(8)) },
+    ])
+  })
+
+  it('opens a pop-out after a return with no mark, though the pane behind it shows that return under New', async () => {
+    await load([], [message('task-a', 5, { kind: 'comment' })])
+    await openInbox()
+    const row = document.querySelector<HTMLElement>('[data-message="task-a"] .inbox-message-open')
+    if (!row) throw new Error('missing the row')
+    await act(async () => row.click())
+    await settle()
+    // the server read the item, and confirmed the read
+    snap.messages = snap.messages.map((m) => ({ ...m, read_at: at(6) }))
+    await act(async () => publish())
+    await act(async () => writes[0].answer())
+    await settle()
+    await comments(range(1, 7))
+    // the page hides with the task in the pane, and a comment's message
+    // arrives meanwhile
+    await act(async () => {
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        get: () => 'hidden',
+      })
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await settle()
+    beyond = [message('task-a', 8)]
+    await act(async () => publish())
+    await settle()
+    await act(async () => {
+      Reflect.deleteProperty(document, 'visibilityState')
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await settle()
+    await comments(range(1, 9))
+    await settle()
+    expect(thread(pane()).slice(-3)).toEqual(['Check 7', 'New', 'Check 8'])
+    // the pop-out opens after that return, so it starts nowhere
+    const button = pane().querySelector<HTMLElement>('[data-task-popout]')
+    if (!button) throw new Error('missing the pop-out button')
+    await act(async () => button.click())
+    await settle()
+    const dialog = popOut()
+    if (!dialog) throw new Error('the pop-out did not open')
+    expect(thread(dialog)).toContain('Check 8')
+    expect(thread(dialog)).not.toContain('New')
+  })
+
+  it("shows a return's New in the pop-out on its own task alone, never on a task followed from it", async () => {
+    // task-b is task-a's subtask, which the pop-out lists
+    await load([], [message('task-a', 5, { kind: 'comment' })], (s) => {
+      const b = s.issues.find((it) => it.id === 'task-b')
+      if (b) b.parent_id = 'task-a'
+    })
+    await openInbox()
+    const row = document.querySelector<HTMLElement>('[data-message="task-a"] .inbox-message-open')
+    if (!row) throw new Error('missing the row')
+    await act(async () => row.click())
+    await settle()
+    // the server read the item, and confirmed the read
+    snap.messages = snap.messages.map((m) => ({ ...m, read_at: at(6) }))
+    await act(async () => publish())
+    await act(async () => writes[0].answer())
+    await settle()
+    await comments(range(1, 7))
+    const button = pane().querySelector<HTMLElement>('[data-task-popout]')
+    if (!button) throw new Error('missing the pop-out button')
+    await act(async () => button.click())
+    await settle()
+    // the page hides with task-a popped out, and news of it arrives
+    await act(async () => {
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        get: () => 'hidden',
+      })
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await settle()
+    beyond = [message('task-a', 8)]
+    await act(async () => publish())
+    await settle()
+    await act(async () => {
+      Reflect.deleteProperty(document, 'visibilityState')
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await settle()
+    await comments(range(1, 9))
+    await settle()
+    expect(thread(popOut() ?? document).slice(-3)).toEqual(['Check 7', 'New', 'Check 8'])
+    /* Follows the pop-out's row of the task titled `title`, which moves
+       the pane too, and delivers the thread of the task it opens. */
+    const follow = async (title: string, rows: Row<'comments'>[]) => {
+      const link = [
+        ...(popOut()?.querySelectorAll<HTMLElement>('[data-related-task] button') ?? []),
+      ].find((b) => b.textContent?.includes(title))
+      if (!link) throw new Error(`missing the row of ${title}`)
+      await act(async () => link.click())
+      await settle()
+      await comments(rows)
+      await settle()
+      const dialog = popOut()
+      if (!dialog) throw new Error('the pop-out closed')
+      return dialog
+    }
+    // task-b, which holds nothing unread, shows no New of task-a's
+    const onB = await follow(
+      'Write the report',
+      [20, 21].map((n) => ({ ...comment(n), issue_id: 'task-b' })),
+    )
+    expect(thread(onB)).toEqual(['Check 20', 'Check 21'])
+    expect(thread(pane())).toEqual(['Check 20', 'Check 21'])
+    const onA = await follow('Run the soak test', range(1, 9))
+    // back on task-a, from task-b's parent row, it shows again, as the
+    // pane behind it does, whose item is still unread
+    expect(thread(onA).slice(-3)).toEqual(['Check 7', 'New', 'Check 8'])
+    expect(thread(pane()).slice(-3)).toEqual(['Check 7', 'New', 'Check 8'])
+  })
+})
+
+describe('a return to a hidden page', { timeout: 20_000 }, () => {
+  afterEach(() => {
+    Reflect.deleteProperty(document, 'visibilityState')
+  })
+  /** Sets the page's visibility, as the browser does when a tab hides. */
+  const setVisibility = (value: 'visible' | 'hidden') =>
+    act(async () => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => value })
+      document.dispatchEvent(new Event('visibilitychange'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+  const reads = () => document.querySelector('[aria-label="Task"]')
+  const state = () => reads()?.getAttribute('data-task-window-reads')
+
+  it('marks the window refreshing from the hide until its reads answer again, for assistive technology only', async () => {
+    await load([message('task-a', 5)])
+    await openTask()
+    await comments(range(1, 6))
+    expect(state()).toBe('current')
+    expect(reads()?.getAttribute('aria-busy')).toBeNull()
+    await setVisibility('hidden')
+    expect(state()).toBe('refreshing')
+    expect(reads()?.getAttribute('aria-busy')).toBe('true')
+    // the held thread stays on screen
+    expect(thread()).toContain('Check 5')
+    await setVisibility('visible')
+    // the item and the task answered again; the thread has not yet
+    expect(state()).toBe('refreshing')
+    await comments(range(1, 6))
+    expect(state()).toBe('current')
+    expect(reads()?.getAttribute('aria-busy')).toBeNull()
+  })
+
+  it('leaves news that arrived while hidden unread, then shows it under New and reads it once', async () => {
+    await load()
+    await openTask()
+    await comments(range(1, 5))
+    expect(thread()).not.toContain('New')
+    await setVisibility('hidden')
+    beyond = [message('task-a', 6)]
+    await act(async () => publish())
+    await settle()
+    // the badge counts it, and nothing reads it
+    expect(P.inboxSummary.answer?.unread_count).toBe(1)
+    expect(itemReads()).toEqual([])
+    await setVisibility('visible')
+    await comments(range(1, 7))
+    expect(thread()).toEqual([
+      'Check 1',
+      'Check 2',
+      'Check 3',
+      'Check 4',
+      'Check 5',
+      'New',
+      'Check 6',
+    ])
+    expect(itemReads()).toEqual([
+      { org_id: snap.orgs[0].id, issue_id: 'task-a', through: Date.parse(at(6)) },
+    ])
+  })
+
+  it("keeps the visit's mark on a return with no news", async () => {
+    await load([message('task-a', 5)])
+    await openTask()
+    await comments(range(1, 8))
+    expect(thread().indexOf('New')).toBe(4)
+    expect(itemReads()).toHaveLength(1)
+    // the server read it, and confirmed the read
+    beyond = beyond.map((m) => ({ ...m, read_at: at(6) }))
+    await act(async () => publish())
+    await act(async () => writes[0].answer())
+    await settle()
+    await setVisibility('hidden')
+    await setVisibility('visible')
+    await comments(range(1, 8))
+    expect(thread().indexOf('New')).toBe(4)
+    expect(itemReads()).toHaveLength(1)
+  })
+
+  it("draws no new mark for the person's own Mark as unread on a return", async () => {
+    await load([], [message('task-a', 5, { kind: 'comment', read_at: at(6) })])
+    await openTask()
+    await comments(range(1, 8))
+    expect(thread()).not.toContain('New')
+    await act(async () =>
+      P.unreadItem({ org: snap.orgs[0].id, task: 'task-a', through: Date.parse(at(5)) }),
+    )
+    const unread = writes.find((w) => w.name === 'messages:unreadItem')
+    if (!unread) throw new Error('no unread write went out')
+    snap.messages = snap.messages.map(({ read_at: _, ...m }) => m)
+    await act(async () => publish())
+    await act(async () => unread.answer())
+    await settle()
+    await setVisibility('hidden')
+    await setVisibility('visible')
+    await comments(range(1, 8))
+    expect(P.inboxItem?.item).toMatchObject({ unread_count: 1 })
+    expect(thread()).not.toContain('New')
+    expect(itemReads()).toEqual([])
+  })
+
+  it('freezes a window opened while hidden on its first answer after the page shows', async () => {
+    await load([message('task-a', 5)])
+    await setVisibility('hidden')
+    await openTask()
+    expect(itemReads()).toEqual([])
+    expect(threads.filter((t) => !t.closed)).toEqual([])
+    await setVisibility('visible')
+    await comments(range(1, 8))
+    expect(thread().indexOf('New')).toBe(4)
+    expect(itemReads()).toHaveLength(1)
+  })
+
+  it('keeps the start of nothing it was given on a return with news', async () => {
+    await load()
+    const { IssueDetail } = await import('./IssueDetail')
+    const row = snap.issues.find((it) => it.id === 'task-a')
+    if (!row) throw new Error('missing task-a')
+    const task = { id: P.openTask(row.id, row.org_id, row.num) }
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <IssueDetail
+            issueId={task.id}
+            onClose={vi.fn()}
+            onOpen={vi.fn()}
+            unread={{ ts: null, change: false }}
+          />
+        </TooltipProvider>,
+      ),
+    )
+    await settle()
+    await comments(range(1, 5))
+    await setVisibility('hidden')
+    beyond = [message('task-a', 6)]
+    await act(async () => publish())
+    await setVisibility('visible')
+    await comments(range(1, 7))
+    expect(thread()).not.toContain('New')
   })
 })

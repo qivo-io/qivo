@@ -8,6 +8,7 @@
 // to 64 MiB whatever its bytes. Each answer waits `delayMs` first, so the
 // downloads the app keeps in flight at once show in `stats`.
 import { deflateSync } from 'node:zlib'
+import { EXPORT_ZIP } from './exportZip.mjs'
 
 const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
   let c = n
@@ -72,10 +73,11 @@ export function pngOf(width, height, noise = 0.1, seed = 1) {
   ])
 }
 
-/** The bytes a perf.invalid URL answers: a picture, a description image or
-    a big one. */
+/** The bytes a perf.invalid URL answers: a picture, a description image, a
+    big one or an export's ZIP. */
 export function bytesFor(url) {
   const { pathname, searchParams } = new URL(url)
+  if (pathname.startsWith('/exports/')) return Buffer.from(EXPORT_ZIP)
   if (pathname.startsWith('/avatars/')) return pngOf(256, 256, 0.035, 7)
   if (searchParams.get('size') === 'big') return pngOf(4096, 4096, 0.02, 11)
   return pngOf(1200, 800, 0.013, 3)
@@ -90,7 +92,9 @@ const FILE_PARAMETERS = ['images', 'bigimages', 'pictures']
     of FILE_PARAMETERS above 0. */
 export function servesFiles(query) {
   const parameters = new URLSearchParams(query)
-  return FILE_PARAMETERS.some((name) => Number(parameters.get(name)) > 0)
+  return (
+    FILE_PARAMETERS.some((name) => Number(parameters.get(name)) > 0) || parameters.has('orgexport')
+  )
 }
 
 /** Serves `page`'s requests to perf.invalid with generated images and the
@@ -128,8 +132,12 @@ export async function routePerfFiles(page, { delayMs = 150 } = {}) {
     stats.mostInFlight[kind] = Math.max(stats.mostInFlight[kind], stats.inFlight[kind])
     stats.log.push({ kind, url, at: Date.now() })
     try {
-      const sizeKey =
-        kind === 'avatars' ? 'avatar' : new URL(url).searchParams.get('size') || 'photo'
+      const exported = new URL(url).pathname.startsWith('/exports/')
+      const sizeKey = exported
+        ? 'export'
+        : kind === 'avatars'
+          ? 'avatar'
+          : new URL(url).searchParams.get('size') || 'photo'
       let body = cache.get(sizeKey)
       if (!body) {
         body = bytesFor(url)
@@ -141,8 +149,9 @@ export async function routePerfFiles(page, { delayMs = 150 } = {}) {
         status: 200,
         body,
         headers: {
-          'content-type': 'image/png',
-          'cache-control': 'private, max-age=600, immutable',
+          'content-type': exported ? 'application/zip' : 'image/png',
+          'content-length': String(body.length),
+          'cache-control': exported ? 'private, no-store' : 'private, max-age=600, immutable',
           'access-control-allow-origin': origin ?? '*',
           vary: 'Origin',
         },

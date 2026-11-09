@@ -72,7 +72,8 @@ describe('planner refresh boundaries', () => {
         publish = receive
         receive(structuredClone(snapshot))
       } else if (getFunctionName(ref) === 'teamSync:lastComments') publishTeamSync = receive
-      else publishComments = (comments) => receive({ comments, earlier: false, events: [] })
+      else if (getFunctionName(ref) === 'snapshot:threadComments')
+        publishComments = (comments) => receive({ comments, earlier: false, events: [] })
       return vi.fn()
     })
     store = await import('./planner')
@@ -81,6 +82,21 @@ describe('planner refresh boundaries', () => {
     await (await import('./oracleScope.setup')).nameProjects(store.P, snapshot)
     await Promise.resolve()
   })
+
+  /* task-a as its window shows it from its own answer (P.taskDetail), once
+     a window watches it. */
+  const windowTask = () => {
+    const view = store.P.taskDetail('task-a', snapshot.orgs[0].id)?.view
+    if (!view) throw new Error('the window shows no task-a')
+    return view
+  }
+  /* Opens task-a's window and lets its answer arrive. */
+  const openWindow = async () => {
+    store.P.watchComments('task-a', snapshot.orgs[0].id)
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    vi.advanceTimersByTime(0)
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+  }
   afterEach(() => {
     store?.disposeDemoStore()
     vi.unstubAllGlobals()
@@ -99,28 +115,29 @@ describe('planner refresh boundaries', () => {
     for (let i = 0; i < 8; i++) await Promise.resolve()
   }
 
-  it('refreshes overdue status and cancels stale grid gestures without a server delivery', () => {
+  it('refreshes overdue status and cancels stale grid gestures without a server delivery', async () => {
     const { P } = store
+    await openWindow()
     const epoch = P.gridEpoch
     expect(P.TODAY_ISO).toBe('2026-10-04')
-    expect(P.delayOf(P.issues[0])?.status).toBe('ok')
+    expect(P.windowDelay(windowTask())).toMatchObject({ status: 'ok' })
     vi.advanceTimersByTime(500)
     expect(P.TODAY_ISO).toBe('2026-10-05')
-    expect(P.delayOf(P.issues[0])?.status).toBe('late')
+    // a passed due date is late whatever the load
+    expect(P.windowDelay(windowTask())).toMatchObject({ status: 'late' })
     expect(P.gridEpoch).toBe(epoch + 1)
-    expect(P.isoFromDate(P.weekToDate(P.issues[0].start!))).toBe('2026-09-28')
+    expect(P.isoFromDate(P.weekToDate(windowTask().start!))).toBe('2026-09-28')
     vi.setSystemTime(new Date(2026, 9, 6, 9))
     browser.dispatchEvent(new Event('focus'))
     expect(P.TODAY_ISO).toBe('2026-10-06')
     expect(P.gridEpoch).toBe(epoch + 1)
   })
 
-  it('keeps task, project and delay identities on comment delivery and successful writes', async () => {
+  it('keeps task and project identities on comment delivery and successful writes', async () => {
     const { P } = store
-    const tasks = P.issues
+    await openWindow()
+    const task = windowTask()
     const project = P.project(snapshot.projects[0].id)
-    const delay = P.delayOf(tasks[0])
-    P.watchComments('task-a')
     publishComments([comment()])
     P.updateComment('comment-a', 'Optimistic edit')
     publishComments([comment('Saved edit')])
@@ -128,9 +145,8 @@ describe('planner refresh boundaries', () => {
     resolve(null)
     await settle()
     expect(P.comments[0].body).toBe('Saved edit')
-    expect(P.issues).toBe(tasks)
+    expect(windowTask()).toBe(task)
     expect(P.project(snapshot.projects[0].id)).toBe(project)
-    expect(P.delayOf(tasks[0])).toBe(delay)
   })
 
   it('notifies thread observers and legacy subscribers without rerendering the workspace', async () => {
@@ -144,20 +160,20 @@ describe('planner refresh boundaries', () => {
     P.updates.teamSync.subscribe(sync)
     P.subscribe(legacy)
     const version = P.updates.workspace.getSnapshot()
-    P.watchComments('task-a')
-    // the task's inbox item answers beside its thread, on the comments'
-    // channel (P.inboxItem)
+    P.watchComments('task-a', snapshot.orgs[0].id)
+    // the task's inbox item and its window's own answer answer beside its
+    // thread, on the comments' channel (P.inboxItem, P.taskDetail)
     await settle()
     publishComments([comment()])
     P.updateComment('comment-a', 'Optimistic edit')
-    expect(detail).toHaveBeenCalledTimes(4)
+    expect(detail).toHaveBeenCalledTimes(5)
     publishComments([comment('Saved edit')])
-    expect(detail).toHaveBeenCalledTimes(4)
+    expect(detail).toHaveBeenCalledTimes(5)
     resolve(null)
     await settle()
     expect(P.comments[0].body).toBe('Saved edit')
-    expect(detail).toHaveBeenCalledTimes(5)
-    expect(legacy).toHaveBeenCalledTimes(5)
+    expect(detail).toHaveBeenCalledTimes(6)
+    expect(legacy).toHaveBeenCalledTimes(6)
     expect(workspace).not.toHaveBeenCalled()
     expect(sync).not.toHaveBeenCalled()
     expect(P.updates.workspace.getSnapshot()).toBe(version)
@@ -184,10 +200,10 @@ describe('planner refresh boundaries', () => {
 
   it('ignores an old subscription after the same task or Team sync page is reopened', () => {
     const { P } = store
-    P.watchComments('task-a')
+    P.watchComments('task-a', snapshot.orgs[0].id)
     const oldThread = publishComments
     P.watchComments(null)
-    P.watchComments('task-a')
+    P.watchComments('task-a', snapshot.orgs[0].id)
     publishComments([comment('Current thread')])
     oldThread([comment('Outdated thread')])
     expect(P.comments[0].body).toBe('Current thread')
@@ -207,7 +223,7 @@ describe('planner refresh boundaries', () => {
 
   it('flushes a held workspace and comment delivery together to every affected observer', async () => {
     const { P } = store
-    P.watchComments('task-a')
+    P.watchComments('task-a', snapshot.orgs[0].id)
     // the task's inbox item answers beside its thread first
     await settle()
     publishComments([comment()])
@@ -216,14 +232,14 @@ describe('planner refresh boundaries', () => {
     const detail = vi.fn()
     P.updates.workspace.subscribe(workspace)
     P.updates.comments.subscribe(detail)
-    snapshot.issues[0].title = 'Renamed remotely'
+    snapshot.orgs[0].name = 'Renamed remotely'
     publish(snapshot)
     publishComments([comment('Saved edit')])
     expect(workspace).not.toHaveBeenCalled()
     expect(detail).not.toHaveBeenCalled()
     resolve(null)
     await settle()
-    expect(P.issues[0].title).toBe('Renamed remotely')
+    expect(P.org.name).toBe('Renamed remotely')
     expect(P.comments[0].body).toBe('Saved edit')
     expect(workspace).toHaveBeenCalledTimes(1)
     expect(detail).toHaveBeenCalledTimes(1)
@@ -231,26 +247,27 @@ describe('planner refresh boundaries', () => {
 
   it("shows another person's change within a task while my edit waits, mine on top", async () => {
     const { P } = store
-    P.updateIssue(P.issues[0].id, { status: 'review' })
+    await openWindow()
+    P.updateIssue(windowTask().id, { status: 'review' })
     snapshot.issues[0].title = 'Renamed remotely'
     publish(structuredClone(snapshot))
     // an echo of my own write would answer first; this one waits a task
-    expect(P.issues[0].title).toBe('Due today')
+    expect(windowTask().title).toBe('Due today')
     vi.advanceTimersByTime(0)
-    expect(P.issues[0].title).toBe('Renamed remotely')
-    expect(P.issues[0].status).toBe('review')
+    expect(windowTask().title).toBe('Renamed remotely')
+    expect(windowTask().status).toBe('review')
     // Convex delivers the write before it answers
     snapshot.issues[0].status = 'review'
     publish(structuredClone(snapshot))
     resolve(null)
     await settle()
-    expect(P.issues[0].title).toBe('Renamed remotely')
-    expect(P.issues[0].status).toBe('review')
+    expect(windowTask().title).toBe('Renamed remotely')
+    expect(windowTask().status).toBe('review')
   })
 
   it('restores the original comment after a refused optimistic edit without a new delivery', async () => {
     const { P } = store
-    P.watchComments('task-a')
+    P.watchComments('task-a', snapshot.orgs[0].id)
     // the task's inbox item answers beside its thread first
     await settle()
     publishComments([comment()])

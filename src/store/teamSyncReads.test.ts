@@ -24,7 +24,7 @@ const double = vi.hoisted(() => ({
 }))
 vi.mock('../lib/convex', async () => {
   const { liveOver } = await import('./guard/liveDouble.setup')
-  double.live = liveOver(network)
+  double.live = liveOver(network, { taskWindow: 'client' })
   return { convex: network, live: double.live }
 })
 vi.mock('../lib/auth', () => ({
@@ -191,8 +191,6 @@ beforeEach(async () => {
     else if (name === 'taskWindow:task') taskReads.set(String(args.ref), receive)
     return () => {}
   })
-  const { TASKS } = await import('./liveParts')
-  TASKS.atBoot = false
   store = await import('./planner')
   await store.initStore()
   vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -231,7 +229,7 @@ describe("Team sync's read", () => {
     expect(asked).toHaveLength(1)
   })
 
-  it('brings its rows into the views, shaped where the workspace lacks them, and no owner load for staff', async () => {
+  it('brings its rows into the views, shaped from the answer, and no owner load for staff', async () => {
     answer = ok([row('far', 9, { delay: 'late', blocked_by: ['QN-2'] })])
     await watch(await keyOf({ kind: 'all' }))
     const far = store.P.syncTask('far')
@@ -239,8 +237,6 @@ describe("Team sync's read", () => {
     expect(store.P.anyTask(far?.id ?? '')).toBe(far)
     // the read shows no delays from the cache: the answer carries them
     expect(loads.size).toBe(0)
-    // the rows never enter the workspace's lists
-    expect(store.P.handleOf('far')).toBeNull()
   })
 
   it('drops the rows on a new scope', async () => {
@@ -749,29 +745,10 @@ describe('the week a person’s pending edits move', () => {
     // rounding each third first would say 0.9, which must fail
     expect(roundTenths(delta)).not.toBe(roundTenths(3 * roundTenths(1 / 3)))
   })
-
-  it('re-counts a held task’s pending edit from the workspace’s row, after an ask', async () => {
-    const start = iso(week())
-    snapshot.issues.push({
-      ...row('held', 1, { start_week: start, end_week: start, remaining_hours: 3 }),
-      description: '',
-    } as unknown as Snapshot['issues'][number])
-    const savedRow = row('held', 1, { start_week: start, end_week: start, remaining_hours: 3 })
-    deliver(snapshot)
-    await turn()
-    answer = ok([savedRow], 3)
-    await watch(await keyOf({ kind: 'all' }))
-    store.P.askTasks('script')
-    for (let i = 0; i < 10 && !store.P.tasksHeld(); i++) await turn()
-    const handle = store.P.handleOf('held') ?? ''
-    expect(handle).not.toBe('')
-    void store.P.updateIssue(handle, { remaining: 5 })
-    expect(store.P.syncLoadChanges(saved([savedRow]), week()).get(me())).toBe(2)
-  })
 })
 
 describe("the view write path's Remaining and Pause", () => {
-  it('writes Remaining and Pause on a task only the agenda brings, with the row on screen as expected values and the answer mark', async () => {
+  it('writes Remaining and Pause on a task only the agenda brings, with the row on screen as expected values', async () => {
     answer = ok([row('far', 9, { remaining_hours: 4 })])
     await watch(await keyOf({ kind: 'all' }))
     const id = store.P.syncTask('far')?.id ?? ''
@@ -788,7 +765,6 @@ describe("the view write path's Remaining and Pause", () => {
       args: { id: 'far', patch: { paused: true }, expected: { paused: false } },
     })
     expect(store.P.syncTask('far')?.paused).toBe(true)
-    // the guard saw both carry the answer mark, so neither faulted (afterEach)
   })
 
   it('paints a move into In Review with the review hours, and a refusal takes the paint away', async () => {

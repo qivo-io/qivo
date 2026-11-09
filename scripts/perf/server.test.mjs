@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { idWindows, startWindows } from '../../convex/lib/idWindows'
 
 /* The browser benchmark's stand-in server (scripts/perf/server.mjs), loaded
    as its worker would be, with the page's parameters as the worker's name. */
@@ -416,7 +415,8 @@ describe('the benchmark server', () => {
       reason: 'access_unchecked',
     })
     expect((await roadmap('tasks=100&roadmap=error')).answer.error).toContain('roadmap=error')
-    // the owner loads answer every owner unavailable, or not at all
+    // the owner loads answer every owner unavailable, fail, or answer not
+    // at all
     const loads = async (params) => {
       const { posted, send } = await server(`latency=0&mbps=100000&tasks=100&${params}`)
       await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
@@ -424,9 +424,11 @@ describe('the benchmark server', () => {
       const args = { org_id: snap.orgs[0].id, owner_ids: [snap.profiles[0].id] }
       await send({ type: 'query', id: 'loads', name: 'planning:ownerLoads', args })
       const answer = posted.find((m) => m.to === 'loads')
-      return answer ? JSON.parse(answer.text) : null
+      if (!answer) return null
+      return answer.error ? { error: answer.error } : JSON.parse(answer.text)
     }
     expect((await loads('loads=unavailable')).owners[0].state).toBe('unavailable')
+    expect((await loads('loads=failed')).error).toContain('loads=failed')
     expect(await loads('loads=loading')).toBeNull()
     expect((await loads('')).owners[0].state).toBe('ok')
     // an organization Viewer may edit no project of a part
@@ -466,7 +468,8 @@ describe('the benchmark server', () => {
     expect(grown.state).toBe('ok')
     expect(grown.rows).toHaveLength(before.length + 1)
     const made = grown.rows.map((row) => row.id).filter((id) => !before.includes(id))
-    expect(made).toHaveLength(1)
+    // the scenario answers the new task's id, which the benchmark waits for
+    expect(made).toEqual([posted.find((m) => m.type === 'answer' && m.id === 'create').value])
     await send({ type: 'scenario', id: 'delete', name: 'deliverDelete', args: [] })
     const back = await roadmap()
     expect(back.state).toBe('ok')
@@ -1199,6 +1202,25 @@ describe('the benchmark server', () => {
         }))
       ).answer.error,
     ).toContain('fails')
+    // the roster alone fails or never answers, and the Add list answers
+    const failed = await read('subscribers=error', 'issues:subscribers', (snap) => ({
+      issue_id: task(snap),
+    }))
+    expect(failed.answer.error).toContain('subscribers=error')
+    expect(
+      (
+        await read('subscribers=error', 'pickers:taskFollowers', (snap) => ({
+          issue_id: task(snap),
+        }))
+      ).answer.state,
+    ).toBe('ready')
+    expect(
+      (
+        await read('subscribers=loading', 'issues:subscribers', (snap) => ({
+          issue_id: task(snap),
+        }))
+      ).answer,
+    ).toBe('none')
   }, 60_000)
 
   it("answers Settings › Users, the agents' keys and the creators line from the workspace, with the states the page asks for", async () => {
@@ -1427,7 +1449,7 @@ describe('the benchmark server', () => {
     expect(new Set(snap.milestones.map((m) => m.id)).size).toBe(8)
   }, 60_000)
 
-  it('sends no milestone in its workspace parts, while the milestone reads answer the planted ones', async () => {
+  it('sends no milestone and no task in its root part, serves no tasks part, while the milestone reads answer the planted ones', async () => {
     const { posted, send } = await server(
       'tasks=20&latency=0&mbps=100000&programs=3&milestoneweeks=3&milestoneprograms=2',
     )
@@ -1441,16 +1463,15 @@ describe('the benchmark server', () => {
     const snap = await read('snapshot:forMe', {})
     expect(snap.milestones).toHaveLength(12)
     const root = await read('workspace:root', {})
-    const org = root.orgs[0]
-    const parts = []
-    for (const w of idWindows(startWindows(org).tasks))
-      parts.push(await read('workspace:tasks', { org_id: org.id, ...w }))
-    expect(parts.length).toBeGreaterThan(0)
-    for (const part of parts) {
-      expect(part.state).toBe('ok')
-      expect(part).not.toHaveProperty('milestones')
-      expect(part.more ?? {}).not.toHaveProperty('milestones')
-    }
+    for (const section of ['milestones', 'issues', 'links', 'issueLabels', 'orgLoad'])
+      expect(root).not.toHaveProperty(section)
+    // no organization row counts its tasks, as the server's root sends none
+    for (const org of root.orgs) expect(org).not.toHaveProperty('active_tasks')
+    // the tasks part a build from before its removal subscribes is refused
+    // with a sentence that names it
+    const id = `q${posted.length}`
+    await send({ type: 'query', id, name: 'workspace:tasks', args: { from: '', to: null } })
+    expect(posted.find((m) => m.to === id)?.error).toMatch(/workspace:tasks is no workspace part/)
     // the milestone reads answer them, upcoming and past
     const hosts = [...new Set(snap.milestones.map((m) => m.project_id))]
     const from = snap.milestones[0].week
@@ -2309,6 +2330,58 @@ describe('the benchmark server', () => {
     expect(grantsOf('declined')).toEqual([])
   })
 
+  it('delivers as many comments at once as the scenario asks, in one result', async () => {
+    const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
+    const args = { issue_id: TASK_1 }
+    await send({ type: 'subscribe', id: 'thread', name: 'snapshot:threadComments', args })
+    const results = () =>
+      posted.filter((m) => m.type === 'result' && m.to === 'thread').map((m) => JSON.parse(m.text))
+    await vi.waitFor(() => expect(results()).toHaveLength(1))
+    const before = results()[0].comments.length
+    await send({ type: 'scenario', id: 'three', name: 'deliverComments', args: [3] })
+    await vi.waitFor(() => expect(results()).toHaveLength(2))
+    const after = results()[1].comments
+    expect(after).toHaveLength(Math.min(before + 3, 50))
+    // the answer is the last comment's text, the newest of the thread
+    const last = posted.find((m) => m.type === 'answer' && m.id === 'three').value
+    expect(after.at(-1).body).toBe(last)
+    expect(after.slice(-3).map((c) => c.body.replace(/\d+$/, ''))).toEqual(
+      Array(3).fill('Benchmark delivered comment '),
+    )
+    // one comment by default
+    await send({ type: 'scenario', id: 'one', name: 'deliverComments', args: [] })
+    await vi.waitFor(() => expect(results()).toHaveLength(3))
+    expect(results()[2].comments.at(-1).body).toBe(
+      posted.find((m) => m.type === 'answer' && m.id === 'one').value,
+    )
+  })
+
+  it('keeps comments delivered while no thread read is live for the thread read last, answering them when it reads again', async () => {
+    const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
+    const args = { issue_id: TASK_1 }
+    await send({ type: 'subscribe', id: 'thread', name: 'snapshot:threadComments', args })
+    const results = (to) =>
+      posted.filter((m) => m.type === 'result' && m.to === to).map((m) => JSON.parse(m.text))
+    await vi.waitFor(() => expect(results('thread')).toHaveLength(1))
+    // a hidden page pauses the read
+    await send({ type: 'unsubscribe', id: 'thread' })
+    await send({ type: 'scenario', id: 'hidden', name: 'deliverComments', args: [2] })
+    const last = posted.find((m) => m.type === 'answer' && m.id === 'hidden')
+    expect(last?.failure).toBeUndefined()
+    expect(results('thread')).toHaveLength(1)
+    // shown again, the thread reads both
+    await send({ type: 'subscribe', id: 'again', name: 'snapshot:threadComments', args })
+    await vi.waitFor(() => expect(results('again')).toHaveLength(1))
+    expect(
+      results('again')[0]
+        .comments.slice(-2)
+        .map((c) => c.body),
+    ).toEqual([
+      `Benchmark delivered comment ${Number(last.value.match(/\d+$/)[0]) - 1}`,
+      last.value,
+    ])
+  })
+
   it('answers a scenario that fails with its failure', async () => {
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
     // no comment thread is open
@@ -2340,34 +2413,13 @@ describe('the benchmark server', () => {
     expect(order).toEqual(['result', 'first', 'result', 'second'])
   }, 60_000)
 
-  it('leaves the unheld tasks out of the workspace, and answers them in Search and in the task window', async () => {
-    // forMe, which a baseline build reads, leaves them out too; each server
-    // this file loads takes the worker's place, so this one goes first
-    const { snapshot } = await snapshotOf('tasks=40&unheld=3')
-    expect(snapshot.issues).toHaveLength(37)
-    const { posted, send } = await server('tasks=40&latency=0&mbps=100000&unheld=3')
-    await send({ type: 'query', id: 'root', name: 'workspace:root', args: {} })
-    const [org] = JSON.parse(posted.find((m) => m.to === 'root').text).orgs
-    const windows = idWindows(startWindows(org).tasks)
-    for (const [i, w] of windows.entries())
-      send({ type: 'watch', id: `w${i}`, name: 'workspace:tasks', args: { org_id: org.id, ...w } })
-    await vi.waitFor(() => expect(posted.some((m) => m.type === 'transition')).toBe(true))
-    const parts = posted
-      .filter((m) => m.type === 'transition')
-      .flatMap((m) => m.results.map((r) => JSON.parse(r.text)))
-    const held = new Set(parts.flatMap((part) => part.issues.map((row) => row.id)))
-    // every task is visible here; the three highest-numbered loose ones are
-    // not held, nor any row hung on them, nor a parent link to them
-    expect(held.size).toBe(37)
-    const missing = [...Array(40).keys()].map((n) => id('4', n)).filter((uuid) => !held.has(uuid))
-    expect(missing).toHaveLength(3)
-    for (const part of parts) {
-      for (const row of part.issueLabels ?? []) expect(missing).not.toContain(row.issue_id)
-      for (const row of part.issues) expect(missing).not.toContain(row.parent_id)
-    }
-    // the window's read answers one of them, and a write changes it and sends
-    // its read again
-    await send({ type: 'watch', id: 'window', name: 'taskWindow:task', args: { ref: missing[0] } })
+  it('answers a task in the task window, sends its read again after a write, and finds it in Search', async () => {
+    const { posted, send } = await server('tasks=40&latency=0&mbps=100000')
+    // the highest-numbered task, which the window opens by its uuid
+    const opened = [id('4', 39)]
+    // the window's read answers it, and a write changes it and sends its
+    // read again
+    await send({ type: 'watch', id: 'window', name: 'taskWindow:task', args: { ref: opened[0] } })
     await vi.waitFor(() =>
       expect(
         posted.some((m) => m.type === 'transition' && m.results.some((r) => r.to === 'window')),
@@ -2378,18 +2430,18 @@ describe('the benchmark server', () => {
         .filter((m) => m.type === 'transition')
         .flatMap((m) => m.results.filter((r) => r.to === 'window'))
         .map((r) => JSON.parse(r.text))
-    expect(answers().at(-1)).toMatchObject({ state: 'ok', task: { id: missing[0] } })
+    expect(answers().at(-1)).toMatchObject({ state: 'ok', task: { id: opened[0] } })
     await send({
       type: 'mutation',
       id: 'label',
       name: 'labels:toggle',
-      args: { issue_id: missing[0], label_id: id('8', 0), on: true },
+      args: { issue_id: opened[0], label_id: id('8', 0), on: true },
     })
     await send({
       type: 'mutation',
       id: 'follow',
       name: 'issues:subscribe',
-      args: { issue_id: missing[0] },
+      args: { issue_id: opened[0] },
     })
     await vi.waitFor(() => expect(answers().at(-1)?.follow).not.toBeNull())
     expect(
@@ -2401,7 +2453,7 @@ describe('the benchmark server', () => {
       type: 'mutation',
       id: 'unfollow',
       name: 'issues:unsubscribe',
-      args: { issue_id: missing[0] },
+      args: { issue_id: opened[0] },
     })
     await vi.waitFor(() => expect(answers().at(-1)?.follow).toBeNull())
     // Search still finds it
@@ -2412,7 +2464,7 @@ describe('the benchmark server', () => {
       args: { text: answers().at(-1).task.title, include_archived: false },
     })
     const found = JSON.parse(posted.find((m) => m.to === 'search').text).rows
-    expect(found.map((row) => row.id)).toContain(missing[0])
+    expect(found.map((row) => row.id)).toContain(opened[0])
   })
 
   it("fails the task window's read after its first answer, or answers its subtask list cut short, as the page asks", async () => {
@@ -2449,6 +2501,21 @@ describe('the benchmark server', () => {
     expect(answer.subtasks.complete).toBe(false)
     expect(answer.task).toMatchObject({ has_subtasks: true, has_hidden_subtasks: true })
     expect(answer.subtasks.rows.length).toBeLessThan(2)
+  })
+
+  it("answers a task whose only subtasks are in hidden projects as a group, as the server's read does", async () => {
+    // in the varied fixture, task 15 has no visible subtask and one in a
+    // hidden project (the server's hidden tasks part their parents among
+    // tasks 5, 15, 25 and 35)
+    const { posted, send } = await server('tasks=40&latency=0&mbps=100000&shape=varied')
+    await send({ type: 'query', id: 'group', name: 'taskWindow:task', args: { ref: id('4', 15) } })
+    const answer = JSON.parse(posted.find((m) => m.to === 'group').text)
+    expect(answer).toMatchObject({ state: 'ok', subtasks: { rows: [], complete: true } })
+    expect(answer.task).toMatchObject({ has_subtasks: true, has_hidden_subtasks: true })
+    // a task with no subtask at all is no group
+    await send({ type: 'query', id: 'leaf', name: 'taskWindow:task', args: { ref: id('4', 16) } })
+    const leaf = JSON.parse(posted.find((m) => m.to === 'leaf').text)
+    expect(leaf.task).toMatchObject({ has_subtasks: false, has_hidden_subtasks: false })
   })
 
   it("answers the Inbox's unread summary and the open task's item, and reads the item to its through", async () => {
@@ -2781,26 +2848,108 @@ describe('the benchmark server', () => {
     expect(limited.watched).toEqual([{ delivery: 'recent' }])
   })
 
-  it('serves the workspace in parts and re-sends only the window a remote rename changed, in one transition', async () => {
+  it("answers the export section's job from the panel's stand-in for each orgexport state, its claim a ZIP the page serves", async () => {
+    const { ORG_EXPORT_STATES } = await import('../../src/store/orgExportStandIn.setup')
+    const { EXPORT_ZIP } = await import('./exportZip.mjs')
+    const { bytesFor, servesFiles } = await import('./files.mjs')
+    const status = async (params) => {
+      const { posted, send } = await server(`tasks=20&latency=0&mbps=100000&role=admin&${params}`)
+      await send({ type: 'query', id: 'status', name: 'orgExport:status', args: { org_id: 'o' } })
+      const answer = posted.find((m) => m.to === 'status')
+      return {
+        answer: answer.error || answer.failure ? { failed: true } : JSON.parse(answer.text),
+        posted,
+        send,
+      }
+    }
+    // without the parameter the read is one the server does not serve
+    expect((await status('')).answer).toEqual({ failed: true })
+    const latest = async (state) => (await status(`orgexport=${state}`)).answer.latest
+    expect(await latest('collecting')).toMatchObject({
+      state: 'collecting',
+      progress: { section: 'tasks' },
+    })
+    expect(await latest('deleted')).toMatchObject({ progress: { section: 'deleted/comments' } })
+    expect(await latest('others')).toMatchObject({ requested: false, requested_by: 'Ola Berg' })
+    expect(await latest('joined')).toMatchObject({ requested: true, requested_by: 'Ola Berg' })
+    expect(await latest('ready')).toMatchObject({
+      state: 'ready',
+      archive_bytes: EXPORT_ZIP.length,
+    })
+    expect((await latest('claimed')).auto_download_at).toEqual(expect.any(String))
+    expect(await latest('failed')).toMatchObject({ error: { code: 'deleted_changing' } })
+    expect(await latest('too-large')).toMatchObject({ error: { code: 'too_large' } })
+    expect(await latest('cancelled')).toMatchObject({
+      state: 'cancelled',
+      cancelled_by: 'Ola Berg',
+    })
+    expect(await latest('expired')).toMatchObject({ state: 'expired' })
+    expect((await latest('skipped')).skipped_tasks).toBe(3)
+    expect((await latest('served')).served_at).toEqual(expect.any(String))
+    const older = (await status('orgexport=older')).answer
+    expect(older.latest.state).toBe('collecting')
+    expect(older.ready).toMatchObject({ state: 'ready' })
+    expect((await status('orgexport=error')).answer).toEqual({ failed: true })
+    expect(ORG_EXPORT_STATES).toHaveLength(15)
+    // a claim answers the page's own ZIP, served whole, and the record fails
+    // under record-error
+    const ready = await status('orgexport=ready')
+    const id = ready.answer.latest.id
+    await ready.send({
+      type: 'mutation',
+      id: 'claim',
+      name: 'orgExport:claimDownload',
+      args: { org_id: 'o', export_id: id, automatic: true },
+    })
+    await vi.waitFor(() => expect(ready.posted.some((m) => m.id === 'claim')).toBe(true))
+    const claim = ready.posted.find((m) => m.id === 'claim').value
+    expect(claim.url).toMatch(/^https:\/\/perf\.invalid\/exports\//)
+    expect(Buffer.from(bytesFor(claim.url))).toEqual(Buffer.from(EXPORT_ZIP))
+    expect(servesFiles('orgexport=ready')).toBe(true)
+    await ready.send({
+      type: 'mutation',
+      id: 'record',
+      name: 'orgRemovals:recordExport',
+      args: { org_id: 'o', export_id: id },
+    })
+    await vi.waitFor(() => expect(ready.posted.some((m) => m.id === 'record')).toBe(true))
+    expect(ready.posted.find((m) => m.id === 'record')).toMatchObject({ value: null })
+    const failing = await status('orgexport=ready,record-error')
+    await failing.send({
+      type: 'mutation',
+      id: 'record',
+      name: 'orgRemovals:recordExport',
+      args: { org_id: 'o', export_id: failing.answer.latest.id },
+    })
+    await vi.waitFor(() => expect(failing.posted.some((m) => m.id === 'record')).toBe(true))
+    expect(failing.posted.find((m) => m.id === 'record').value).toBeUndefined()
+  })
+
+  it('serves the workspace as its root part alone, which a remote rename does not send again', async () => {
     const { posted, send } = await server('tasks=500&latency=0&mbps=100000')
-    await send({ type: 'query', id: 'root', name: 'workspace:root', args: {} })
-    const [org] = JSON.parse(posted.find((m) => m.to === 'root').text).orgs
-    const windows = idWindows(startWindows(org).tasks)
-    expect(windows.length).toBeGreaterThan(2)
-    for (const [i, w] of windows.entries())
-      send({ type: 'watch', id: `w${i}`, name: 'workspace:tasks', args: { org_id: org.id, ...w } })
+    send({ type: 'watch', id: 'root', name: 'workspace:root', args: {} })
     await vi.waitFor(() => expect(posted.some((m) => m.type === 'transition')).toBe(true))
-    const first = posted.filter((m) => m.type === 'transition')
-    expect(first).toHaveLength(1)
-    expect(first[0].results).toHaveLength(windows.length)
-    const issues = first[0].results.flatMap((r) => JSON.parse(r.text).issues)
-    expect(issues.length).toBeGreaterThan(400)
-    expect(issues).toHaveLength(new Set(issues.map((i) => i.id)).size)
+    const [first] = posted.filter((m) => m.type === 'transition')
+    expect(first.results.map((r) => r.to)).toEqual(['root'])
+    expect(JSON.parse(first.results[0].text)).not.toHaveProperty('issues')
+    // the renamed task's own window read, which a rename sends again
+    const renamed = id('4', 250)
+    send({ type: 'watch', id: 'window', name: 'taskWindow:task', args: { ref: renamed } })
+    await vi.waitFor(() =>
+      expect(
+        posted.some((m) => m.type === 'transition' && m.results.some((r) => r.to === 'window')),
+      ).toBe(true),
+    )
     posted.length = 0
     await send({ type: 'scenario', id: 'rename', name: 'deliverRemote', args: [250] })
     await vi.waitFor(() => expect(posted.some((m) => m.type === 'transition')).toBe(true))
-    const [change] = posted.filter((m) => m.type === 'transition')
-    expect(change.results).toHaveLength(1)
+    // one transition with the window's answer, and nothing of the root
+    const changes = posted.filter((m) => m.type === 'transition')
+    expect(changes.flatMap((m) => m.results.map((r) => r.to))).toEqual(['window'])
+    // the scenario answers the new title, the one the window's answer holds
+    const title = posted.find((m) => m.type === 'answer' && m.id === 'rename').value
+    expect(title).toMatch(/^Renamed elsewhere /)
+    expect(JSON.parse(changes[0].results[0].text).task.title).toBe(title)
   })
 })
 

@@ -2,7 +2,7 @@ import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LIMITS } from '../../convex/lib/limits'
-import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture as fixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
 type Planner = typeof import('./planner')['P']
 
@@ -46,7 +46,7 @@ describe('refusal sentences in restore and upload toasts', () => {
     showToast = vi.fn()
     vi.stubGlobal('window', { showToast })
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    snap = fixture()
+    snap = underProgram(fixture())
     snap.issues = [
       {
         id: 'task-1',
@@ -66,8 +66,12 @@ describe('refusal sentences in restore and upload toasts', () => {
     ]
     answers = {}
     network.query.mockResolvedValue(null)
-    network.onUpdate.mockImplementation((_ref, _args, next) => {
-      next(structuredClone(snap))
+    network.onUpdate.mockImplementation((ref, _args, next) => {
+      const name = getFunctionName(ref)
+      // a task window's thread and history start empty
+      if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+      else if (name === 'snapshot:threadHistory') next({ events: [], earlier: false, next: null })
+      else next(structuredClone(snap))
       return () => {}
     })
     network.mutation.mockImplementation((ref, args) => {
@@ -77,6 +81,10 @@ describe('refusal sentences in restore and upload toasts', () => {
     const store = await import('./planner')
     P = store.P
     await store.initStore()
+    // the uploads below are on task-1, which its window shows from its own
+    // answer, as the app shows every task
+    P.watchComments('task-1', snap.orgs[0].id)
+    await vi.waitFor(() => expect(P.taskDetail('task-1', snap.orgs[0].id)?.view).toBeTruthy())
   })
 
   afterEach(() => {

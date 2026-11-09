@@ -69,29 +69,28 @@ import { vEventFilters, vEventName, vEventOwner } from './lib/taskEvents'
 import { vUsageCounts, vUsageMetric } from './lib/usage'
 
 /* `task_archived` on a task's relation rows (links, label assignments, follows
- * and attachments) marks a row that two readers skip by index: the filter
- * row's search of the Board and the Roadmap (lib/viewFilters.ts
- * filterSearch) where it reads a label's assignments (issue_labels
- * by_label), and the app's windows (lib/workspaceParts.ts readTasks). Only
- * a background step sets it, for a task it finds archived in its own
+ * and attachments) marks a row that the filter row's search of the Board and
+ * the Roadmap (lib/viewFilters.ts filterSearch) skips by index where it reads
+ * a label's assignments (issue_labels by_label), and that the archive steps
+ * read apart (model/archiveMarks.ts). Only a background step sets it, for a task it finds archived in its own
  * transaction, and that step also sets the task's `relations_marked`. After
  * a restore, other steps clear the marks, and only the one that finds none
  * left while the task is active unsets the flag (model/archiveMarks.ts).
  * Every marked row therefore belongs to a task with relations_marked, a
- * link through at least one end, and both readers read such a task through
- * its own rows. A row written after the archive, or before marks existed,
+ * link through at least one end. A row written after the archive, or before marks existed,
  * stays unmarked, and readers filter it as before. Every other reader, the
  * label search of REST and MCP (lib/activeTaskPage.ts searchRule) and
  * billing's storage totals included, sees marked rows like any other. */
 const taskArchived = v.optional(v.literal(true))
 
 /* `task_key` on a task's relation rows (label assignments, attachments,
- * follows, and a link's on its source's behalf): the task's window_key, so
- * the app's windows read the rows of their tasks in one range
- * (lib/workspaceParts.ts readTasks). A writer copies it from the task; a
- * task's key never changes once set. Rows stored before keys have none, as
- * their tasks have none, and both sort first, into the first window, until
- * internal/windowKeysBackfill gives the task a key and its rows the same. */
+ * follows, and a link's on its source's behalf): the task's window_key,
+ * which placed the rows in the app's task windows. No read uses the keys
+ * since the workspace's tasks part went, and the window keys' data stage
+ * recorded in later-work removes them with the tasks' and projects'
+ * window_key. A writer still copies it from the task, and a task's key never
+ * changes once set; internal/windowKeysBackfill gives a task stored before
+ * keys a key and its rows the same. */
 const taskKey = v.optional(v.string())
 
 /* The ten tables whose rows a deleted task or project keeps in deleted_rows
@@ -292,9 +291,11 @@ const issuesTable = defineTable({
   // server-owned: some relation rows of this task may carry task_archived
   // (above). Never sent to clients, REST, MCP, webhooks or the export.
   relations_marked: v.optional(v.literal(true)),
-  // server-owned: where the task sorts in the app's windows (lib/db.ts
+  // server-owned, set once when the task is stored (lib/db.ts
   // newWindowKey), as projects' window_key above; its relation rows carry
-  // it as task_key
+  // it as task_key. It placed the task in the app's task windows, which no
+  // read uses since the workspace's tasks part went, and the window keys'
+  // data stage recorded in later-work removes it
   window_key: v.optional(v.string()),
   created_at: v.string(),
   updated_at: v.string(),
@@ -303,9 +304,6 @@ const issuesTable = defineTable({
   .index('by_org', ['org_id'])
   // The working snapshot and planning reads do not scan archived task bodies.
   .index('by_org_archived', ['org_id', 'archived_at'])
-  // the app's task and hidden load windows: a range of active tasks' window
-  // keys (lib/workspaceParts.ts)
-  .index('by_org_archived_window', ['org_id', 'archived_at', 'window_key'])
   // The nightly archive reads only a live project's Done tasks past the
   // threshold. The views read a sub-project's active tasks by status
   // through it too (lib/viewReads.ts selectionTasks), and Team sync's
@@ -382,8 +380,6 @@ const issueLinksTable = defineTable({
 })
   // The archive steps' reads of one end's unmarked or marked rows.
   .index('by_org_task_archived_source', ['org_id', 'task_archived', 'source_id'])
-  // the app's windows: the unmarked links from a range of window keys
-  .index('by_org_task_archived_key', ['org_id', 'task_archived', 'task_key'])
   .index('by_org_task_archived_target', ['org_id', 'task_archived', 'target_id'])
   .index('by_uuid', ['id'])
   .index('by_source', ['source_id'])
@@ -399,8 +395,6 @@ const issueLabelsTable = defineTable({
   task_key: taskKey,
 })
   .index('by_org_task_archived_issue', ['org_id', 'task_archived', 'issue_id'])
-  // the app's windows: the unmarked rows of a range of window keys
-  .index('by_org_task_archived_key', ['org_id', 'task_archived', 'task_key'])
   .index('by_issue', ['issue_id'])
   // a label's assignments; the filter row's search of the Board and the
   // Roadmap reads only its unmarked ones (lib/viewFilters.ts filterSearch)
@@ -419,8 +413,6 @@ const issueSubscriptionsTable = defineTable({
   // one person's unmarked follows; profile cleanup takes the whole profile
   // range
   .index('by_profile_task_archived', ['profile_id', 'task_archived'])
-  // one person's unmarked follows of a range of window keys (the app's windows)
-  .index('by_profile_task_archived_key', ['profile_id', 'task_archived', 'task_key'])
   .index('by_issue_profile', ['issue_id', 'profile_id'])
 
 // A task holds at most LIMITS.attachments.max rows (lib/limits.ts) without a
@@ -447,8 +439,6 @@ const issueAttachmentsTable = defineTable({
   dropped_at: v.optional(v.string()),
 })
   .index('by_org_task_archived_issue', ['org_id', 'task_archived', 'issue_id'])
-  // the app's windows: the unmarked rows of a range of window keys
-  .index('by_org_task_archived_key', ['org_id', 'task_archived', 'task_key'])
   // An organization's rows in the order they were stored. Archiving a task
   // moves its rows within by_org_task_archived_issue but not here, so Qivo
   // Admin's monthly usage pages through this one (model/usage.ts filesPage).
@@ -1241,13 +1231,18 @@ export default defineSchema({
         renewal_date: v.union(v.string(), v.null()),
       }),
     ),
-    // The last export an admin downloaded, set by the browser export when
-    // its download starts (orgRemovals.ts recordExport). An export job's
-    // archive does not set it, whether only prepared or served by the
-    // /exports/ route, since the backend cannot know that the client
-    // received it; a later app stage records it once the browser confirms
-    // the download. Qivo cannot see the file reach disk, so this only
-    // decides whether to remind admins.
+    // The last export an admin saved, set by orgRemovals.ts recordExport
+    // once the desktop app or a browser confirmed that it saved exactly the
+    // archive's bytes. An export job's archive does not set it, whether only
+    // prepared or served by the /exports/ route, since the backend cannot
+    // know that the client received it. Qivo cannot see the file reach disk
+    // itself, so this only decides whether to remind admins. The settings
+    // pages, Billing and the deletion reminder read it alone.
+    last_export_confirmed_at: v.optional(v.string()),
+    // The last export before last_export_confirmed_at existed. Until the
+    // release after v0.1.161 the browser export set it when its download
+    // started, so a value may record a download that never finished.
+    // Nothing writes or reads it any more, and later work removes it.
     last_export_at: v.optional(v.string()),
   })
     .index('by_uuid', ['id'])
@@ -1314,13 +1309,11 @@ export default defineSchema({
     org_id: v.string(),
     next_issue_num: v.number(),
     next_project_num: v.number(),
-    // The rows the app's windows read (lib/workspaceParts.ts): the
-    // organization's active tasks (in issues, no archived_at) and its
-    // projects in the live tables, archived ones included. Every write that
-    // adds, removes, archives or restores one keeps them (model/orgs.ts
-    // tallyRow, and numberNewTask for a new task), and the app sizes an
-    // organization's first windows by them (lib/idWindows.ts startWindows).
-    // Absent until internal/liveCountsBackfill counts the organization.
+    // The organization's active tasks (in issues, no archived_at) and its
+    // projects in the live tables, archived ones included, which Qivo
+    // Admin's monthly usage reads (model/usage.ts). Every write that adds,
+    // removes, archives or restores one keeps them (model/orgs.ts tallyRow,
+    // and numberNewTask for a new task). Absent until internal/liveCountsBackfill counts the organization.
     // While it counts, `counted` holds the task and project numbers it has
     // counted through, and a write moves the counts only for a row at or
     // below them.
@@ -1362,9 +1355,9 @@ export default defineSchema({
   // job and its request rows stay 30 days as export history.
   // completed_at says when an archive was prepared and served_at when the
   // backend first read it whole into a download's response. Neither
-  // preparing nor serving an archive sets organizations.last_export_at, the
-  // record of exports an admin downloaded, which the deletion reminder
-  // reads. Code from before the release of served_at, streams and the
+  // preparing nor serving an archive sets
+  // organizations.last_export_confirmed_at, the record of exports an admin's
+  // app confirmed as saved, which the deletion reminder reads. Code from before the release of served_at, streams and the
   // step's Deleted items state does not accept a row that holds one
   // (docs/deployment.md).
   org_exports: defineTable({
@@ -1484,7 +1477,8 @@ export default defineSchema({
   })
     .index('by_profile', ['profile_id'])
     .index('by_org', ['org_id'])
-    // the stamps of one of the app's people windows (lib/workspaceParts.ts)
+    // read only by the tests' published whole since the workspace's people
+    // part went
     .index('by_org_profile', ['org_id', 'profile_id']),
 
   teams: defineTable({
@@ -1589,7 +1583,7 @@ export default defineSchema({
     // the organization's people in name order, all of them or one role
     .index('by_org_name', ['org_id', 'name_key', 'id'])
     .index('by_org_role_name', ['org_id', 'org_role', 'name_key', 'id'])
-    // the app's people windows: a range of profile ids (lib/workspaceParts.ts)
+    // read by nothing since the workspace's people part went
     .index('by_org_id', ['org_id', 'id'])
     .index('by_auth', ['auth_user_id'])
     .index('by_email', ['email']) // cross-org claim scan (identity.ts)

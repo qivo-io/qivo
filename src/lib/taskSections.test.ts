@@ -6,52 +6,13 @@ import {
   type LinkEnds,
   linkViews,
   type SectionState,
-  type Standing,
-  shownIds,
-  shows,
   type TotalsRow,
-  workspaceTotals,
 } from './taskSections'
 
 const AT = '2026-09-14T08:00:00.000Z'
 const LATER = '2026-09-14T09:00:00.000Z'
 
-describe('the merge of a section answer with the rows on screen', () => {
-  it('lets the painted rows decide where they differ from the applied ones', () => {
-    // a layer adds it, which the answer cannot know yet
-    expect(shows({ base: false, painted: true, answer: false })).toBe(true)
-    // a layer takes it away, which the answer still holds
-    expect(shows({ base: true, painted: false, answer: true })).toBe(false)
-  })
-
-  it('lets the answer decide where the applied and the painted rows agree', () => {
-    // held nowhere in the workspace, such as a task still to arrive
-    expect(shows({ base: false, painted: false, answer: true })).toBe(true)
-    // the workspace holds it, but the server no longer lists it
-    expect(shows({ base: true, painted: true, answer: false })).toBe(false)
-    expect(shows({ base: true, painted: true, answer: true })).toBe(true)
-    expect(shows({ base: false, painted: false, answer: false })).toBe(false)
-  })
-
-  it('names each shown candidate once, in the order first named', () => {
-    const standing: Record<string, Standing> = {
-      // only the answer holds it
-      answerOnly: { base: false, painted: false, answer: true },
-      // a layer moved this subtask away, the answer still lists it
-      movedAway: { base: true, painted: false, answer: true },
-      // a layer made this a subtask before the server knows it
-      paintedNew: { base: false, painted: true, answer: false },
-      // base and painted agree on it, the answer does not
-      dropped: { base: true, painted: true, answer: false },
-      kept: { base: true, painted: true, answer: true },
-    }
-    const ids = shownIds(
-      ['answerOnly', 'movedAway', 'kept', 'kept', 'dropped', 'paintedNew', 'answerOnly'],
-      (id) => standing[id],
-    )
-    expect(ids).toEqual(['answerOnly', 'kept', 'paintedNew'])
-  })
-
+describe("the order of a section's rows", () => {
   it('orders subtasks by number, then id, and the rest by creation, then id', () => {
     const tasks = [
       { id: 'b', num: 2 },
@@ -177,20 +138,6 @@ describe("a group's Progress and Remaining", () => {
     expect(groupTotals(list('ready', [leaf(true), group, leaf(false, 1)]))).toEqual({
       progress: { state: 'visible', done: 1, total: 2 },
       remaining: { state: 'unknown' },
-    })
-  })
-})
-
-describe("a group's totals by the workspace's rules", () => {
-  it('counts every visible leaf, and says completion is unknown beside hidden subtasks', () => {
-    expect(workspaceTotals({ done: 1, total: 3, pct: 33, unknown: false }, 4.5)).toEqual({
-      progress: { state: 'complete', done: 1, total: 3, pct: 33 },
-      remaining: { state: 'complete', hours: 4.5 },
-    })
-    expect(workspaceTotals({ done: 2, total: 5, pct: 40, unknown: true }, undefined)).toEqual({
-      progress: { state: 'visible', done: 2, total: 5 },
-      // the subtree's own total, never unknown, as before the sections
-      remaining: { state: 'complete', hours: undefined },
     })
   })
 })

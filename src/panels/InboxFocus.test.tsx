@@ -118,7 +118,7 @@ async function openInbox(
   })
   const store = await import('../store/planner')
   await store.initStore()
-  const handle = (n: number) => store.P.issues.find((it) => it.uuid === uuids[n])?.id ?? null
+  const handle = (n: number) => store.P.openTask(uuids[n], store.P.homeOrg, null)
   const { Inbox } = await import('./Inbox')
   const { usePlannerVersion } = await import('../store/usePlannerVersion')
   const { KeptView } = await import('../components/KeptView')

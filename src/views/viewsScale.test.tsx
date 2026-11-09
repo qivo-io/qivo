@@ -3,16 +3,14 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TODAY_WEEK, weekToISO } from '../lib/dates'
-import { oracleScope } from '../store/oracleScope.setup'
 import type { IssueFilters } from '../store/planner'
 import type { Snapshot } from '../store/plannerFixture.setup'
-import { loadBoard, loadBoardWithTasks, spread, taskRow } from './boardFixture.setup'
+import { loadBoard, spread, taskRow } from './boardFixture.setup'
 
 /* The phone's task schedule mounts its first screen at once and the rest
    in slices, the Overview's lists show the server's batches with Load
    more, the Overview's group health shows the server's rows 10 at a time,
-   the store's figures for many groups read them in one pass over the
-   tasks, and the Roadmap holds its figures at the design size, one figure
+   and the Roadmap holds its figures at the design size, one figure
    a case, from its server answer, with its milestone flags from the range
    read of the weeks on screen. */
 
@@ -105,6 +103,22 @@ const finish = async () => {
 }
 const count = (selector: string) => document.querySelectorAll(selector).length
 
+/** Opens the Board's read of the board's scope with no filter, as the
+    Board asks for it, and answers its tasks' models in the stored order. */
+async function boardModels(board: Awaited<ReturnType<typeof loadBoard>>) {
+  const { P, snapshot } = board
+  const { boardRequest, staleCutoff } = await import('./board/boardArgs')
+  const info = P.scopeInfo(snapshot.projects[0].id)
+  if (!info) throw new Error('no scope')
+  const request = boardRequest(info, NO_FILTERS, staleCutoff(Date.now()))
+  if (request.kind !== 'ask') throw new Error('asks nothing')
+  await act(async () => P.watchBoard('board:desktop', request.key))
+  return snapshot.issues.flatMap((row) => {
+    const it = P.viewTask('board:desktop', row.id)
+    return it ? [it] : []
+  })
+}
+
 /** `n` paused tasks, overdue since last year. */
 const paused = (n: number) => (snap: Snapshot) => {
   for (let i = 1; i <= n; i++)
@@ -133,7 +147,9 @@ describe('a long list on another view', () => {
   })
 
   it("mounts the first screen of the phone's task schedule, then the rest", async () => {
-    const board = await loadBoardWithTasks(network, paused(LONG))
+    const board = await loadBoard(network, paused(LONG))
+    const tasks = await boardModels(board)
+    expect(tasks).toHaveLength(LONG)
     const { MobileRoadmap } = await import('./MobileRoadmap')
     const { useScopeMilestones } = await import('./useScopeMilestones')
     const { AGENDA_MILESTONE_SLOTS } = await import('../store/planner')
@@ -155,8 +171,8 @@ describe('a long list on another view', () => {
           <MobileRoadmap
             milestones={milestones}
             info={info}
-            // the Roadmap's tasks, as its answer brings them
-            tasks={board.P.issues}
+            // the tasks' models, as the Board's answer brings them
+            tasks={tasks}
             filterControls={null}
             actions={{}}
             onTimeline={noop}
@@ -199,7 +215,7 @@ describe('an Overview row', () => {
 
 describe('a delivery on the desktop Roadmap', () => {
   it('renders the rows of the task it changed, not every row', async () => {
-    const board = await loadBoardWithTasks(network, (snap) => {
+    const board = await loadBoard(network, (snap) => {
       // a sub-project's 300 open tasks at the design size, with due dates,
       // so every row draws its due mark when it renders
       for (let n = 1; n <= 300; n++)
@@ -268,9 +284,7 @@ describe('a delivery on the desktop Roadmap', () => {
     })
     await board.deliver()
     expect(schedule.moves).toBeGreaterThan(before.moves)
-    expect(
-      board.P.issueById[board.P.issues.find((it) => it.uuid === 't150')?.id ?? '']?.start,
-    ).toBe(board.P.TODAY_WEEK + 2)
+    expect(board.P.viewTask('roadmap', 't150')?.start).toBe(board.P.TODAY_WEEK + 2)
   })
 
   it('renders the rows of one track on a drag of its flag in My view, and its flags alone on a rename', async () => {
@@ -354,7 +368,7 @@ describe('a delivery on the desktop Roadmap', () => {
   })
 
   it('keeps the rows that only shift when another task goes', async () => {
-    const board = await loadBoardWithTasks(network, (snap) => {
+    const board = await loadBoard(network, (snap) => {
       for (let n = 1; n <= 100; n++) snap.issues.push(taskRow(snap, `t${n}`, 'todo', n))
     })
     const { Roadmap } = await import('./Roadmap')
@@ -492,14 +506,8 @@ const designProject = (snap: Snapshot) => {
    November 2026 the three cases at 1,000 rows took 4.0 to 5.3 s each, the
    others under 0.4 s, on a large Boat sandbox. */
 describe('the Roadmap at the design size', () => {
-  it("shows a project's 800 open and 200 Done tasks at their sum, walking no list of the workspace's", async () => {
+  it("shows a project's 800 open and 200 Done tasks at their sum, from its answer", async () => {
     const board = await loadBoard(network, designProject, { scope: 'plan' })
-    // the store's whole-list readers, which throw before every task is held
-    // (store/planner.ts wholeListRead)
-    const scoped = vi.spyOn(board.P, 'scopedIssues')
-    const remaining = vi.spyOn(board.P, 'remainingByGroups')
-    const groupsRead = vi.spyOn(board.P, 'issuesInGroups')
-    const issues = vi.spyOn(board.P, 'issues', 'get')
     await renderRoadmap(board)
     expect(roadmapState()).toBe('ok')
     expect(count('[data-roadmap-task-top]')).toBe(1000)
@@ -508,11 +516,6 @@ describe('the Roadmap at the design size', () => {
     const headings = [...document.querySelectorAll('[data-track]')].map((el) => el.textContent)
     expect(headings.join(' ')).toContain('1068h')
     expect(headings.join(' ')).toContain('1064h')
-    expect(board.P.tasksHeld()).toBe(false)
-    expect(scoped).not.toHaveBeenCalled()
-    expect(remaining).not.toHaveBeenCalled()
-    expect(groupsRead).not.toHaveBeenCalled()
-    expect(issues).not.toHaveBeenCalled()
   })
 
   it("spreads Team over the owners of a design-size project's rows, every cell a figure", async () => {
@@ -811,7 +814,7 @@ describe('the Roadmap at the design size', () => {
 
 describe("Team sync's opening", () => {
   it('takes its loading marks with it when it goes before its lists finish', async () => {
-    const board = await loadBoardWithTasks(network, (snap) => {
+    const board = await loadBoard(network, (snap) => {
       // urgent tasks with no owner: Needs an owner mounts in slices
       for (let n = 1; n <= LONG; n++)
         snap.issues.push({
@@ -820,6 +823,8 @@ describe("Team sync's opening", () => {
           priority: 'urgent',
         })
     })
+    const tasks = await boardModels(board)
+    expect(tasks).toHaveLength(LONG)
     const { TeamOpening } = await import('./teamSync/TeamOpening')
     const { syncDay } = await import('../lib/teamSync')
     let show = true
@@ -827,10 +832,10 @@ describe("Team sync's opening", () => {
       <div data-scroll data-sync-page>
         {show && (
           <TeamOpening
-            rows={board.P.issues}
-            tasks={board.P.issues}
+            rows={tasks}
+            tasks={tasks}
             humans={[]}
-            subIds={new Set(board.P.issues.map((it) => it.project))}
+            subIds={new Set(tasks.map((it) => it.project))}
             metaIds={new Set()}
             day={syncDay(Date.now())}
             now={Date.now()}
@@ -881,17 +886,12 @@ const groups = (snap: Snapshot) => {
 }
 
 describe("the Overview's group health", () => {
-  it('shows 30 groups 10 rows at a time from the server, with no pass over the tasks', async () => {
+  it('shows 30 groups 10 rows at a time from the server', async () => {
     const board = await loadBoard(network, groups, { scope: 'plan' })
     const { Overview } = await import('./Overview')
     const actions = new Proxy({}, { get: () => () => {} }) as Parameters<
       typeof Overview
     >[0]['actions']
-    // the store's whole-list readers, which a read before every task is held
-    // would throw from too (store/planner.ts wholeListRead)
-    const groupsRead = vi.spyOn(board.P, 'issuesInGroups')
-    const remaining = vi.spyOn(board.P, 'remainingByGroups')
-    const scoped = vi.spyOn(board.P, 'scopedIssues')
     await board.renderView(root, (info) => <Overview info={info} actions={actions} />)
     expect(count('[data-ov-strip]')).toBe(1)
     expect(count('[data-ovcard]')).toBe(10)
@@ -902,83 +902,5 @@ describe("the Overview's group health", () => {
       expect(count('[data-ovcard]')).toBe(rows)
     }
     expect(count('[data-ov-health-more]')).toBe(0)
-    // the scope's completion is the server's summary, the rows' figures the
-    // server's health table, and nothing on the page walks the tasks, which
-    // the workspace does not hold
-    expect(board.P.tasksHeld()).toBe(false)
-    expect(groupsRead).not.toHaveBeenCalled()
-    expect(remaining).not.toHaveBeenCalled()
-    expect(scoped).not.toHaveBeenCalled()
-  })
-})
-
-/** Numbers from [0, 1), the same on every run. */
-function seeded(seed: number) {
-  return () => {
-    seed = (seed * 1103515245 + 12345) % 2147483648
-    return seed / 2147483648
-  }
-}
-
-describe('figures for many groups at once', () => {
-  it('equal progressIn and remainingIn for every group', async () => {
-    const random = seeded(7)
-    const statuses = ['backlog', 'todo', 'progress', 'review', 'done'] as const
-    const board = await loadBoardWithTasks(
-      network,
-      (snap) => {
-        const base = snap.projects[0]
-        snap.projects.push({ ...base, id: 'plan', type: 'meta', key: 'PLAN', num: 2, name: 'Plan' })
-        Object.assign(base, { parent_id: 'plan' })
-        for (let n = 2; n <= 30; n++)
-          snap.projects.push({
-            ...base,
-            id: `sub${n}`,
-            key: `S${n}`,
-            num: n + 1,
-            parent_id: 'plan',
-          })
-        const ids = snap.projects.filter((p) => p.parent_id === 'plan').map((p) => p.id)
-        // the varied workspace's mix: every status, a parent for every 25
-        // tasks, fractional hours and tasks without an estimate, 20 tasks a
-        // sub-project
-        for (let n = 1; n <= 600; n++) {
-          const parent = n % 25 === 0 ? undefined : `t${Math.ceil(n / 25) * 25}`
-          snap.issues.push({
-            ...taskRow(snap, `t${n}`, statuses[Math.floor(random() * 5)], n),
-            project_id: ids[Math.floor(random() * ids.length)],
-            parent_id: random() < 0.3 ? parent : undefined,
-            assignee_id: random() < 0.5 ? snap.profiles[0].id : undefined,
-            ...(random() < 0.8
-              ? {
-                  remaining_hours: Math.round(random() * 400) / 10,
-                  remaining_set_at: new Date().toISOString(),
-                }
-              : {}),
-          })
-        }
-      },
-      { scope: 'plan' },
-    )
-    const { P } = board
-    const info = oracleScope(board.snapshot, 'plan')
-    if (!info) throw new Error('missing the scope')
-    // the scope's groups, a few overlapping lists, and an empty one
-    const lists = [
-      ...info.groups.map((g) => g.subIds),
-      info.subIds,
-      info.subIds.slice(3, 9),
-      [info.subIds[0], info.subIds[0]],
-      [],
-    ]
-    // the Overview's oracle holds the one-group sums the store gave up
-    const { progressByGroups, progressIn, remainingIn } = await import(
-      '../store/overviewOracle.setup'
-    )
-    const mine = (it: { owner: string | null }) => it.owner === P.issues[0].owner
-    for (const only of [null, mine]) {
-      expect(progressByGroups(lists, only)).toEqual(lists.map((l) => progressIn(l, only)))
-      expect(P.remainingByGroups(lists, only)).toEqual(lists.map((l) => remainingIn(l, only)))
-    }
   })
 })

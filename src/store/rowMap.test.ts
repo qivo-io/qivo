@@ -8,32 +8,20 @@ import { createWorkspaceBase } from './workspaceBase'
    whole-section paint finds its rows without copying them, and copies only
    the rows it then changes. */
 
-const AT = '2026-09-14T08:00:00.000Z'
-
-/** Rows over a base holding two teams' memberships and three tasks. */
+/** Rows over a base holding two teams' memberships and three people, the
+    fixture's admin and two users. */
 function rowsOf() {
   const snap = plannerFixture()
   const [me] = snap.profiles
+  snap.profiles.push(
+    { ...me, id: 'p2', auth_user_id: undefined, name: 'Person 2', org_role: 'user' },
+    { ...me, id: 'p3', auth_user_id: undefined, name: 'Person 3', org_role: 'user' },
+  )
   snap.teamMembers = [
     { team_id: 't1', profile_id: me.id, is_leader: false },
     { team_id: 't1', profile_id: 'p2', is_leader: false },
     { team_id: 't2', profile_id: me.id, is_leader: false },
   ]
-  snap.issues = ['a', 'b', 'c'].map((id, n) => ({
-    id,
-    org_id: snap.orgs[0].id,
-    project_id: snap.projects[0].id,
-    num: n + 1,
-    title: `Task ${id}`,
-    description: '',
-    status: n === 0 ? 'done' : 'todo',
-    priority: 'medium',
-    created_at: AT,
-    updated_at: AT,
-    paused: false,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
-  }))
   const base = createWorkspaceBase()
   base.stage(asStored(snap))
   const rows = createWorkspaceRows(base)
@@ -78,25 +66,26 @@ describe('kept list rows', () => {
 
 describe('whole-section reads', () => {
   it('find rows among the server rows, copies, deletes and inserts, copying only what they hand to a paint', () => {
-    const { base, rows } = rowsOf()
+    const { base, rows, me } = rowsOf()
+    const admin = (row: { org_role: string }) => row.org_role === 'admin'
     rows.paint(() => {
-      // a copy (b), a delete (c) and an insert (d)
-      const b = rows.issues.get('b')
-      if (b) b.status = 'done'
-      rows.issues.delete('c')
-      rows.issues.set('d', { ...(base.map('issues').get('a') as object), id: 'd' } as never)
+      // a copy (p2), a delete (p3) and an insert (p4)
+      const p2 = rows.profiles.get('p2')
+      if (p2) p2.org_role = 'admin'
+      rows.profiles.delete('p3')
+      rows.profiles.set('p4', { ...(base.map('profiles').get(me) as object), id: 'p4' } as never)
     })
-    const done = (row: { status: string }) => row.status === 'done'
-    expect(rows.issues.keysWhere(done)).toEqual(['a', 'b', 'd'])
-    expect([...rows.issues.peekValues()].map((row) => row.id)).toEqual(['a', 'b', 'd'])
-    // outside a pass `where` hands out what is shown, the server's row for a
+    // outside a pass `where` hands out what is shown, the server's row of
+    // the fixture's admin among them
+    expect(rows.profiles.where(admin).map((row) => row.id)).toEqual([me, 'p2', 'p4'])
+    expect(rows.profiles.where(admin)[0]).toBe(base.map('profiles').get(me))
     rows.paint(() => {
-      const found = rows.issues.where(done)
-      expect(found.map((row) => row.id)).toEqual(['a', 'b', 'd'])
+      const found = rows.profiles.where(admin)
+      expect(found.map((row) => row.id)).toEqual([me, 'p2', 'p4'])
       // inside a pass each is a copy a paint may change
-      for (const row of found) row.title = 'Changed'
+      for (const row of found) row.name = 'Changed'
     })
-    expect(base.map('issues').get('a')?.title).toBe('Task a')
-    expect(rows.issues.peek('a')?.title).toBe('Changed')
+    expect(base.map('profiles').get(me)?.name).not.toBe('Changed')
+    expect(rows.profiles.peek(me)?.name).toBe('Changed')
   })
 })

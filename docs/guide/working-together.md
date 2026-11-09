@@ -194,9 +194,8 @@ project, sends none.
 **Subscriptions.** Click the eye button in a task window to open
 **Subscribers**, then use the eye beside **Me** to subscribe or unsubscribe.
 Anyone with access to the task can see its subscriber list, including viewers.
-The eye and **Subscribers** work in every task window, also on a task that
-has not loaded into the workspace yet, except while Qivo cannot check that
-task for changes. An archived task's window has no eye button.
+The eye and **Subscribers** work in every task window, except while Qivo
+cannot check that task for changes. An archived task's window has no eye button.
 
 Organization admins and the named project lead can remove other subscribers
 with **×** or use **+ Add** to subscribe an active person or Standard user
@@ -292,7 +291,10 @@ does the same
 The address follows the selected task, such as `/app/<org>/inbox/tasks/qn-14`,
 so saved links and reloads reopen it. **Esc** closes a pop-out first, then the
 selected task, then the inbox. New updates on an open task are marked read as
-they arrive. Once you mark the task unread or unsnooze it, Qivo leaves it
+they arrive while you can see it. In a browser tab or desktop window that is
+hidden or minimized, Qivo leaves them unread, so your other devices still
+count them, and when you come back it shows them under **New** and marks
+them read. Once you mark the task unread or unsnooze it, Qivo leaves it
 unread while it stays open, until you mark it read from its row. A **New**
 divider marks unread comments and stays in place while you read. It marks
 where the unread part starts. Unread changes without comments show a note

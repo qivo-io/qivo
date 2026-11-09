@@ -22,7 +22,7 @@ const double = vi.hoisted(() => ({
 }))
 vi.mock('../lib/convex', async () => {
   const { liveOver } = await import('./guard/liveDouble.setup')
-  double.live = liveOver(network)
+  double.live = liveOver(network, { taskWindow: 'client' })
   return { convex: network, live: double.live }
 })
 vi.mock('../lib/auth', () => ({
@@ -196,8 +196,9 @@ describe('the rows a view brings', () => {
     expect(par?.start).not.toBeNull()
     expect(kid?.parent).toBe(par?.id)
     expect(P.anyTask(kid?.id ?? '')).toBe(kid)
-    // a held task is the workspace's, never a model of the answer's row
-    expect(P.viewTask(SLOT, 'task-a')).toBeUndefined()
+    // every task the answer brings is a model of its row, as the store
+    // holds no task of its own
+    expect(P.viewTask(SLOT, 'task-a')?.title).toBe('Task task-a')
     // the same data keeps the object; a changed row gives a new one
     await serve(structuredClone(answer))
     expect(P.viewTask(SLOT, 'kid')).toBe(kid)
@@ -208,20 +209,6 @@ describe('the rows a view brings', () => {
     await serve(ok([row('kid', 8, { parent_id: 'par' })], [{ ...parent, group_done: false }]))
     const after = P.viewTask(SLOT, 'par')
     expect(after && P.isDone(after)).toBe(false)
-  })
-
-  it('lets the workspace win where it holds a task, and the row stand in once it drops it', async () => {
-    answer = ok([row('task-a', 1, { title: 'From the answer' })])
-    await open()
-    const handle = store.P.handleOf('task-a') ?? ''
-    expect(store.P.anyTask(handle)?.title).toBe('Task task-a')
-    expect(store.P.viewTask(SLOT, 'task-a')).toBeUndefined()
-    // the workspace no longer holds it, while the answer still names it
-    snapshot.issues = snapshot.issues.filter((t) => t.id !== 'task-a')
-    deliver(structuredClone(snapshot))
-    await turn()
-    expect(store.P.handleOf('task-a')).toBeNull()
-    expect(store.P.viewTask(SLOT, 'task-a')?.title).toBe('From the answer')
   })
 
   it("keeps a view's rows while its read stops, and lets them go on other arguments or when its page leaves", async () => {
@@ -263,11 +250,11 @@ describe('a handle two models share', () => {
     views.beginPaint()
     views.insert(SLOT, row('mine', 4, { title: 'New bench check' }))
     const ctx = { handleNow: (_uuid: string, _org: string, num: number) => `QN-${num}` }
-    views.reshape(() => false, { ...ctx, wins: (uuid) => uuid === 'mine' })
+    views.reshape({ ...ctx, wins: (uuid) => uuid === 'mine' })
     expect(views.byHandle('QN-4')?.uuid).toBe('mine')
     expect(views.model(SLOT, 'theirs')?.key).toBe('QN-4')
     // without one on its way, the first row the view holds names it
-    views.reshape(() => false, ctx)
+    views.reshape(ctx)
     expect(views.byHandle('QN-4')?.uuid).toBe('theirs')
     expect(views.numbered(org)).toEqual(new Map([[4, 'theirs']]))
   })
@@ -283,21 +270,21 @@ describe('a model shaped from a row', () => {
     let handle = 'QN-9'
     let grid = 1
     const ctx = () => ({ handleNow: () => handle, grid })
-    views.reshape(() => false, ctx())
+    views.reshape(ctx())
     const first = views.model('v', 'far')
     expect(first?.id).toBe('QN-9')
-    expect(views.reshape(() => false, ctx())).toBe(false)
+    expect(views.reshape(ctx())).toBe(false)
     expect(views.model('v', 'far')).toBe(first)
     // the home organization moved, so the task opens by its uuid now
     handle = 'far'
-    expect(views.reshape(() => false, ctx())).toBe(true)
+    expect(views.reshape(ctx())).toBe(true)
     const moved = views.model('v', 'far')
     expect(moved?.id).toBe('far')
     expect(views.byHandle('far')).toBe(moved)
     expect(views.byHandle('QN-9')).toBeUndefined()
     // a re-anchored week grid gives week indexes on the new grid
     grid = 2
-    expect(views.reshape(() => false, ctx())).toBe(true)
+    expect(views.reshape(ctx())).toBe(true)
     expect(views.model('v', 'far')).not.toBe(moved)
   })
 })
@@ -398,7 +385,7 @@ describe('a write on a task only a view brings', () => {
     await open()
     const P = store.P
     // a write of the person's own waits, so the views' paint waits with it
-    void P.updateIssue(P.handleOf('task-a') ?? '', { title: 'Renamed' })
+    void P.updateIssue(P.viewTask(SLOT, 'far')?.id ?? '', { title: 'Renamed' })
     await turn()
     let views = 0
     const stop = P.updates.views.subscribe(() => views++)
@@ -424,12 +411,8 @@ describe('a write on a task only a view brings', () => {
     store.P.releaseView(SLOT)
     writes[0]?.resolve(null)
     await turn()
-    // its view part went with the rows; its workspace part, which paints
-    // the task once the workspace holds it, goes with the next workspace
-    // delivery, as every accepted write's does
-    expect(probe().layerCount()).toBe(1)
-    deliver(structuredClone(snapshot))
-    await turn()
+    // its view part went with the rows, and it paints nothing else, as the
+    // workspace holds no task
     expect(probe().layerCount()).toBe(0)
   })
 })
@@ -669,15 +652,6 @@ describe('the delays of tasks only a view brings', () => {
     await turn()
     await turn()
     expect(verdict()).toMatchObject({ status: 'late' })
-  })
-
-  it("asks no load for a held task, whose delay stays the workspace's", async () => {
-    snapshot.projects[0].track_delay = true
-    deliver(structuredClone(snapshot))
-    await turn()
-    answer = ok([{ ...planned('task-a', 1) }])
-    await open()
-    expect(loads.size).toBe(0)
   })
 })
 

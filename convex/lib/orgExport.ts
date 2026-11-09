@@ -1,12 +1,12 @@
 import { type Infer, type Value, v } from 'convex/values'
 import type { StoredTable } from './enums'
 
-/* The live sections of an organization export, which the browser export's
- * `page` and the export job share; the job's archive adds a Deleted items
- * section after them (DELETED_SECTIONS, JOB_ORDER).
+/* The live sections of an organization export, which the export job reads
+ * in order; its archive adds a Deleted items section after them
+ * (DELETED_SECTIONS, JOB_ORDER).
  *
- * Order is significant: clients read organization tables first, then traverse
- * the exported parent UUIDs. Personal inboxes, subscriptions, view preferences,
+ * Order is significant: the job reads organization tables first, then
+ * traverses the parent UUIDs it read. Personal inboxes, subscriptions, view preferences,
  * MCP credentials, roadmap undo receipts, account appearance, platform data
  * and operational billing/metering ledgers are outside this list. Billing
  * terms and usage retain their separate admin-only projections; raw provider
@@ -33,11 +33,6 @@ export const ORG_EXPORT_SECTIONS = {
 
 export type OrgExportSection = keyof typeof ORG_EXPORT_SECTIONS
 export type OrgExportRow = Record<string, Value | undefined>
-export type OrgExportPage = {
-  rows: OrgExportRow[]
-  continueCursor: string
-  isDone: boolean
-}
 
 /** The sections in the order every export reads them. */
 export const ORG_EXPORT_ORDER = Object.keys(ORG_EXPORT_SECTIONS) as OrgExportSection[]
@@ -65,8 +60,8 @@ export function archiveRow(row: OrgExportRow): OrgExportRow {
   )
 }
 
-/** What every archive format leaves out alike; each format adds its own
- * entries about files. */
+/** What every archive leaves out, before the entries about files that
+ * format 4 adds (JOB_EXCLUSIONS). */
 export const COMMON_EXCLUSIONS = [
   'Private inbox messages (messages)',
   'Personal task subscriptions (task_subscriptions)',
@@ -449,10 +444,12 @@ export function zipEnd(count: number, directoryBytes: number, directoryOffset: n
 
 /** The file name a download of an archive of organization `slug` (its id
  * when it has none) completed on `completedAt` gets:
- * qivo-<slug>-<YYYY-MM-DD>.zip, the slug cleaned as the browser export
- * cleans it (src/lib/orgExport.ts safeName). The browser export names its
- * file by the day collection started; the route names it by the day the
- * archive was ready, as the archive holds what was read until then. */
+ * qivo-<slug>-<YYYY-MM-DD>.zip, the slug cleaned of path separators and of
+ * characters and names that file systems refuse. The route names the file
+ * by the day the archive was ready, as the archive holds what was read
+ * until then, and the export page suggests the same name with the day it
+ * asks (src/lib/orgExport.ts chooseExportFile). It imports nothing, so the
+ * app can call it. */
 export function archiveFileName(slug: string, completedAt: string): string {
   const leaf = slug.split(/[\\/]/).pop() ?? ''
   const cleaned = Array.from(leaf)

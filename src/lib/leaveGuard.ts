@@ -27,6 +27,9 @@ import { useLatest } from './useLatest'
    throws the text away (components/DiscardPrompt). */
 
 const leases = new Set<symbol>()
+// the leases of organization export saves (lib/orgExport.ts), so a
+// sign-out can say what it would lose
+const exportLeases = new Set<symbol>()
 // set once the page leaves on purpose, after the person was told what it loses
 let leaving = false
 // when the page last heard beforeunload (pageLeaving)
@@ -46,14 +49,20 @@ export const pageLeaving = () => performance.now() - unloadAt < LEAVING_MS
 /** Whether an editor or an upload holds something unsent. */
 export const hasUnsaved = () => leases.size > 0
 
-/** Holds a lease until the answered function is called. */
-export function holdUnsaved(): () => void {
+/** Holds a lease until the answered function is called. `kind` 'export'
+    marks an organization export's save, which a sign-out names. */
+export function holdUnsaved(kind?: 'export'): () => void {
   const lease = Symbol()
   leases.add(lease)
+  if (kind === 'export') exportLeases.add(lease)
   return () => {
     leases.delete(lease)
+    exportLeases.delete(lease)
   }
 }
+
+/** Whether the only unsent work is an organization export's save. */
+export const onlyExportUnsaved = () => leases.size > 0 && exportLeases.size === leases.size
 
 /** The unsent text one window holds, so a close can ask first. A lease held
     in a window inside another one counts for both. */

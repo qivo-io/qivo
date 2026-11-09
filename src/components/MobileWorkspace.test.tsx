@@ -2,13 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import {
-  BOARD_TEST_TIMEOUT,
-  loadBoard,
-  loadBoardWithTasks,
-  spread,
-  taskRow,
-} from '../views/boardFixture.setup'
+import { BOARD_TEST_TIMEOUT, loadBoard, spread, taskRow } from '../views/boardFixture.setup'
 
 /* The phone's task list on the real store renders again only the row of
    the task that changed. Each row draws its owner's portrait once, so the
@@ -131,7 +125,7 @@ describe('the phone task list', { timeout: BOARD_TEST_TIMEOUT }, () => {
     vi.stubGlobal('innerHeight', 400)
     // 220 To Do and 110 Done tasks over three sub-projects, more than the
     // list mounts at once
-    const board = await loadBoardWithTasks(
+    const board = await loadBoard(
       network,
       spread(110, (num) => (num % 3 ? 'todo' : 'done')),
       { phone: true, scope: 'plan' },
@@ -143,7 +137,7 @@ describe('the phone task list', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(document.querySelector('[data-status="done"] .mobile-task-row')).toBeNull()
     await act(async () => row?.focus())
     // the row names the task by its key, the snapshot by its uuid
-    const uuid = id ? board.P.issueById[id]?.uuid : undefined
+    const uuid = id ? board.P.anyTask(id)?.uuid : undefined
     const task = board.snapshot.issues.find((it) => it.id === uuid)
     if (!task) throw new Error('missing the focused task')
     task.status = 'done'

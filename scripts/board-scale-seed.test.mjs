@@ -37,7 +37,6 @@ import {
   threadCommentBody,
   threadCommentId,
   threeByteText,
-  windowKeyNote,
 } from './board-scale-seed.mjs'
 
 /* A local backend the seed talks to: Nora and the people in `fake.people`,
@@ -71,7 +70,7 @@ const fake = vi.hoisted(() => ({
   removals: [],
   // the live projects Nora's organizations hold, one sub-project when null
   projects: null,
-  // the issue_links table, which holds links the workspace leaves out
+  // the issue_links table
   linkRows: [],
   // the projects, issue_attachments, deleted_rows and used_ids tables, for
   // --files
@@ -86,7 +85,7 @@ const fake = vi.hoisted(() => ({
   threadComments: [],
   threadHistory: [],
   rateRefusals: 0,
-  // the issue_labels rows the workspace's tasks part answers
+  // the issue_labels table
   issueLabels: [],
 }))
 vi.mock('convex/browser', () => ({
@@ -137,6 +136,9 @@ vi.mock('convex/browser', () => ({
             ],
             mcp_tokens: fake.tokens,
             issue_links: fake.linkRows,
+            // the label rows the seed reads beside the workspace
+            // (seedSnapshot)
+            issue_labels: fake.issueLabels,
             // the live projects the seed reads beside the workspace
             // (seedSnapshot) and the stored rows the file seed counts
             // (storedIdsOf), each id once
@@ -185,7 +187,8 @@ vi.mock('convex/browser', () => ({
           next: page.earlier ? page.rows[0].id : null,
         }
       }
-      // the workspace parts (convex/workspace.ts), one window of each kind
+      // the workspace's root part (convex/workspace.ts) and the reads the
+      // seed asks as Nora
       return {
         'workspace:root': {
           auth_user_id: 'nora-login',
@@ -201,15 +204,6 @@ vi.mock('convex/browser', () => ({
         'billing:usageFigures': { period_kind: 'paid', period_key: fake.period },
         // no label the run looks up by id is there yet
         'labels:byIds': { rows: [] },
-        'workspace:tasks': {
-          state: 'ok',
-          issues: fake.issues,
-          links: [],
-          issueLabels: fake.issueLabels,
-          attachments: [],
-          issueSubs: [],
-          orgLoad: [],
-        },
       }[name]
     }
     async mutation(ref, fields) {
@@ -1310,11 +1304,7 @@ describe('board-scale-seed --relations', () => {
     )
   })
 
-  it("says where the task's window key puts it, never that its id does", async () => {
-    expect(windowKeyNote('00000000')).toContain('00000000, 0% into the key space')
-    expect(windowKeyNote('40000000')).toContain('40000000, 25% into the key space')
-    expect(windowKeyNote('ffffffff')).toContain('100% into the key space')
-    // the run reads the stored task's key, which the server chose
+  it('ends the relations run with what the task holds, and names no window key, which no read uses', async () => {
     fake.projects = KEYS.map((key) => ({
       id: `project-${key}`,
       key,
@@ -1336,8 +1326,8 @@ describe('board-scale-seed --relations', () => {
       fake.issues = []
     }
     expect(fake.calls.filter(([name]) => name === 'issues:create')).toHaveLength(205)
-    expect(lines.at(-1)).toBe(windowKeyNote('c0000000'))
-    expect(lines.join('\n')).not.toMatch(/first stage/)
+    expect(lines.at(-1)).toMatch(/^Done: the task /)
+    expect(lines.join('\n')).not.toMatch(/window key|c0000000|first stage/)
   })
 })
 

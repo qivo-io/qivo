@@ -434,6 +434,16 @@ describe('one path per query', () => {
     await tick()
     transition([])
     expect(named).toEqual([[]])
+    // Try again starts the live watches again, but the listener still holds
+    // the client's subscription, so the server is asked for nothing and no
+    // transition names it either (a reconnect would, since every result
+    // arrives again then)
+    const again = live.watch(anyApi.notifications.settings, {}, { fresh: true })
+    expect(again.joined).toBe(false)
+    await tick()
+    transition([])
+    expect(named).toEqual([[], []])
+    again.stop()
     // only a change names it
     transition([{ queryId: 0, value: { delivery: 'all' } }])
     expect(named.at(-1)).toEqual([watch.token])

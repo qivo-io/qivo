@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react'
 import { api } from '../convex/_generated/api'
 import { type CanvasImageState, createCanvasImageLoader, decodeCanvasImage } from './lib/appearance'
@@ -27,6 +28,7 @@ import { watchCanvasWeek } from './lib/canvasWeek'
 import { convex } from './lib/convex'
 import { watchDemoCanvas } from './lib/demoCanvas'
 import { DEMO_MODE } from './lib/demoMode'
+import { syncStatus } from './lib/syncStatus'
 import { useViewVisibility, watchVisibility } from './lib/viewVisibility'
 import { type AppearancePreferences, P } from './store/planner'
 
@@ -138,7 +140,15 @@ function usePrivateImage(imageId: string | null, previewVersion: number | null, 
  * weekly image without a derivative the image the canvas shows. It never
  * fetches an original for a preview. While the page is hidden the weekly
  * image's read (the demo's public feed poll in the demo) and the custom
- * lease's renewal pause, keeping the background and the last answer. */
+ * lease's renewal pause, keeping the background and the last answer.
+ *
+ * The account's appearance (appearance.get) is read here alone, on the
+ * live transport and outside the visibility gate, since the theme and
+ * background the app paints must be right the moment a page shows. The
+ * provider hands it to Settings › Appearance with its state, whether it
+ * is current (it arrived on the socket's newest connection and the socket
+ * is up) and a Try again that has the server run it afresh, so the page
+ * holds no read of its own. */
 export function AppearanceProvider({
   children,
   accountId,
@@ -152,7 +162,19 @@ export function AppearanceProvider({
   // hidden; the background and the last answer stay
   const { visible: pageVisible } = useViewVisibility()
   const [preferences, setPreferences] = useState<AppearancePreferences | null>(null)
-  const [preferencesFailed, setPreferencesFailed] = useState(false)
+  // the read's failure, undefined while it has none
+  const [preferencesError, setPreferencesError] = useState<unknown>(undefined)
+  const preferencesFailed = preferencesError !== undefined
+  // whether the latest answer arrived on the socket's newest connection
+  const [preferencesArrived, setPreferencesArrived] = useState(false)
+  // Try again's count, which subscribes the read afresh
+  const [preferencesAttempt, setPreferencesAttempt] = useState(0)
+  // from Try again until its read answers, while the page shows Loading
+  // instead of the failure; the failure itself stays for every other
+  // reader (usesDaily and the background), so nothing behind the page
+  // moves until the new answer arrives
+  const [preferencesRetrying, setPreferencesRetrying] = useState(false)
+  const socketDown = useSyncExternalStore(syncStatus.subscribeDown, syncStatus.down, () => false)
   const [dailyImage, setDailyImage] = useState<DailyImage | null>(null)
   const [dailyLoaded, setDailyLoaded] = useState(false)
   const [background, setBackground] = useState<CanvasImageState>({
@@ -228,22 +250,49 @@ export function AppearanceProvider({
   useEffect(() => {
     let active = true
     let unsubscribe: (() => void) | undefined
-    const fail = () => {
-      if (active) setPreferencesFailed(true)
-    }
+    // the newest connection a transition named, and the one the latest
+    // answer came on, null for one read at once from a joined watch
+    let newest = 0
+    let came: number | null | undefined
+    setPreferencesArrived(false)
     try {
-      unsubscribe = P.watchAppearance((value) => {
-        if (!active) return
-        setPreferences(value)
-        setPreferencesFailed(false)
-      }, fail)
-    } catch {
-      fail()
+      unsubscribe = P.watchAppearance(
+        (result, connection) => {
+          if (!active) return
+          came = connection
+          if (connection !== null && connection > newest) newest = connection
+          if ('value' in result) {
+            setPreferences(result.value)
+            setPreferencesError(undefined)
+          } else setPreferencesError(result.error)
+          setPreferencesRetrying(false)
+          setPreferencesArrived(true)
+        },
+        (connection) => {
+          if (!active || connection <= newest) return
+          const first = newest === 0
+          newest = connection
+          if (came === null && first) came = connection
+          // after a reconnect the answer held is not current until it
+          // arrives again
+          if (came !== undefined && came !== connection) setPreferencesArrived(false)
+        },
+        // Try again has the server run it afresh, so no failure Convex
+        // kept answers it
+        { fresh: preferencesAttempt > 0 },
+      )
+    } catch (error) {
+      setPreferencesError(error)
+      setPreferencesRetrying(false)
     }
     return () => {
       active = false
       unsubscribe?.()
     }
+  }, [preferencesAttempt])
+  const retryPreferences = useCallback(() => {
+    setPreferencesRetrying(true)
+    setPreferencesAttempt((n) => n + 1)
   }, [])
 
   useEffect(() => {
@@ -534,6 +583,17 @@ export function AppearanceProvider({
   return (
     <AppearanceContext.Provider
       value={{
+        preferences,
+        preferencesState: preferencesFailed
+          ? preferencesRetrying
+            ? 'retrying'
+            : 'failed'
+          : preferences
+            ? 'ok'
+            : 'loading',
+        ...(preferencesFailed ? { preferencesError } : {}),
+        preferencesCurrent: preferencesArrived && !socketDown,
+        retryPreferences,
         mode,
         backgroundStatus,
         backgroundQuality,

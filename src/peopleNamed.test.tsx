@@ -465,23 +465,23 @@ describe('people the workspace does not hold, on each page', () => {
   it(
     'names the task window’s reporter, holders and its relation rows’ owners, loading and then by name',
     async () => {
-      const { board, names } = await load(
-        (snap) => {
-          snap.issues.push({
-            ...taskRow(snap, 'parent', 'progress', 1),
-            assignee_id: GINA,
-            reporter_id: HAL,
-          })
-          snap.issues.push({
-            ...taskRow(snap, 'child', 'todo', 2),
-            parent_id: 'parent',
-            assignee_id: HAL,
-          })
-        },
-        { tasks: true },
-      )
+      const { board, names } = await load((snap) => {
+        snap.issues.push({
+          ...taskRow(snap, 'parent', 'progress', 1),
+          assignee_id: GINA,
+          reporter_id: HAL,
+        })
+        snap.issues.push({
+          ...taskRow(snap, 'child', 'todo', 2),
+          parent_id: 'parent',
+          assignee_id: HAL,
+        })
+      }, {})
       const { IssueDetail } = await import('./panels/IssueDetail')
-      const handle = board.P.handleOf('parent') ?? ''
+      // the window opens each task by its reference and shows it from its
+      // own read, as the app opens every task
+      const org = board.snapshot.orgs[0].id
+      const handle = board.P.openTask('parent', org, 1)
       await board.renderView(root, () => (
         <IssueDetail issueId={handle} onClose={() => {}} onOpen={() => {}} />
       ))
@@ -496,7 +496,7 @@ describe('people the workspace does not hold, on each page', () => {
       expect(reporter()).toContain('Hal Hidden')
       expect(names.unnamed()).toEqual([])
       // the child's window draws its Parent row's owner, Gina, and names her
-      const child = board.P.handleOf('child') ?? ''
+      const child = board.P.openTask('child', org, 2)
       await board.renderView(root, () => (
         <IssueDetail issueId={child} onClose={() => {}} onOpen={() => {}} />
       ))

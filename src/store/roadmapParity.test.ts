@@ -1,22 +1,17 @@
 /* The Roadmap's server reads (convex/tasks.ts roadmap and
- * roadmapDependencies) against the app's own rules, and the stand-in the
- * jsdom tests and the benchmark answer with (store/roadmapStandIn.setup.ts)
- * against the server's reads. Each case boots the real store from the
- * caller's real workspace, as boardParity.test.ts does, and compares what
- * the queries answer for the same caller, selection, window and filter row
- * with the stand-in's answer, and with what the store's own rules derive
- * from every task it holds (store/roadmapOracle.setup.ts), which the
- * Roadmap still applies on screen when it narrows: the rows, the phone
- * agenda's set
- * (scopedIssues, isRoadmapTaskVisible, passesFilters), each group row's
- * Done and span, the shown parents and a group row's other shown
- * descendants, each sub-project's heading Remaining in tenths, My view's
- * tracks (Roadmap.tsx held), and for the dependency inputs the arrows'
- * pairs, the parts of the dependency graph over every task the workspace
- * holds, the write levels, and Auto-move's moves over the answer, through
- * the app's own builder (views/roadmap/autoMoveInputs.ts), against its
- * moves over the workspace within those parts, and the planning session's
- * task, which skips the filter row alone. Northstar runs as Nora
+ * roadmapDependencies) against the stand-in the jsdom tests and the
+ * benchmark answer with (store/roadmapStandIn.setup.ts), and against the
+ * narrowing the Roadmap still runs on screen over its models. Each case
+ * boots the real store from the caller's real workspace, as
+ * boardParity.test.ts does, and compares what the queries answer for the
+ * same caller, selection, window and filter row with the stand-in's
+ * answer: the rows, parents and subtasks in order with their facts, My
+ * view's tracks, each sub-project's heading Remaining in tenths, and for
+ * the dependency inputs the arrows' pairs, the parts' tasks and pairs and
+ * the write levels. Every row of an answer then passes the Roadmap's own
+ * narrowing (src/views/roadmap/useRoadmapView.ts passes), and each part
+ * task's links, as the Roadmap builds them from the pairs' order, are the
+ * order its window lists the stored relations in. Northstar runs as Nora
  * (admin), Leo and Ben over every selection; the small fixture runs every
  * access shape for a user, a guest and a viewer, and the admin. Cases that
  * must fail if a rule drifts compare a drifted rule with the server's
@@ -25,10 +20,9 @@
  * Team utilization's inputs come the same way. planning.ownerLoads for
  * every person of the organization, asked as the owner-load cache asks
  * and compared with the stand-in, read through the app's own reconciler
- * (store/viewDelay.ts ownerItemsOf), with no task held and with the
- * store's rows of every task, give each person's hours a week and paused
- * weeks that the store's rules derive from the workspace, under All
- * projects and This project, in the default window and over 52 weeks. */
+ * (store/viewDelay.ts ownerItemsOf) with no view's rows, give each person
+ * the answer's spans with their projects and its paused tasks, and the
+ * planning panel the figures planning.assigneeLoad gave. */
 
 import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -62,14 +56,14 @@ import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { countOrg } from '../../convex/tests/overviewCounts.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
 import { dependenciesFor, NO_ROADMAP_FILTERS, roadmapFor } from '../../convex/tests/roadmap.setup'
-import type { LoadIssue, LoadItem } from '../lib/workload'
+import { linkViews } from '../lib/taskSections'
+import type { LoadItem } from '../lib/workload'
 import type { Whole as Snapshot } from './guard/liveDouble.setup'
-import { oracleScope, oracleStore } from './oracleScope.setup'
+import { oracleLevels, oracleScope, oracleStore } from './oracleScope.setup'
 import { CALL_OWNERS } from './ownerLoadCache'
 import { ownerLoadsStandIn } from './ownerLoadsStandIn.setup'
 import { peopleSettingsStandIn } from './peopleSettingsStandIn.setup'
 import { nameEveryone } from './personShown.setup'
-import type { TeamMode } from './roadmapOracle.setup'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -110,7 +104,8 @@ async function start(snap: Snapshot) {
   await nameEveryone(store.P, snap)
   return Object.assign(store.P, {
     dates: await import('../lib/dates'),
-    oracle: await import('./roadmapOracle.setup'),
+    visibility: await import('../lib/roadmapVisibility'),
+    rows: await import('./viewRows'),
     schedule: await import('../lib/schedule'),
     // the app's own builders and the stand-in, of the store's module
     // instances, whose week grid is the store's
@@ -124,7 +119,6 @@ async function start(snap: Snapshot) {
 }
 
 type Store = Awaited<ReturnType<typeof start>>
-type Issue = Store['issues'][number]
 
 /** The store booted for `profile` from their workspace, with the clock at
  * `now`. */
@@ -166,10 +160,14 @@ function deskFilters(P: Store, scopeId: string, f: RoadmapFilters) {
   }
 }
 
-/** Compares `answer`, tasks.roadmap's for the store scope `scopeId` in
- * `weeks` with `f`, with what store `P` derives, the task with store id
- * `session` being the planning session's; answers the rows' ids. */
-function expectRows(
+/** Checks that every row of `answer`, tasks.roadmap's for the store scope
+ * `scopeId` in `weeks` with `f`, passes the narrowing the Roadmap runs on
+ * screen over its models (src/views/roadmap/useRoadmapView.ts passes): the
+ * answer's selection, My view's P.isMine, isRoadmapTaskVisible in the
+ * window and P.passesFilters with the text left to the answer, the task
+ * with store id `session` past the filter row. A selection the caller
+ * cannot see answers unavailable. Answers the rows' ids. */
+function expectNarrowing(
   P: Store,
   answer: RoadmapAnswer,
   scopeId: string,
@@ -185,140 +183,25 @@ function expectRows(
   }
   if (answer.state !== 'ok') throw new Error(`${label}: ${JSON.stringify(answer)}`)
   const { desk } = deskFilters(P, scopeId, f)
-  const names = P.oracle.textNames(P.snapshot)
-  const rows = P.oracle.roadmapRows(info, weeks[0], weeks[1], desk, names, session)
-  const rowIds = new Set(answer.rows.map((row) => row.id))
-  expect(sorted(rowIds), `${label}: rows`).toEqual(sorted(rows.map((it) => it.uuid)))
-  const byUuid = new Map(Object.values(P.issueById).map((it) => [it.uuid, it]))
-  const parentOf = (it: Issue) => (it.parent ? P.issueById[it.parent] : undefined)
-  // the shown ancestors that are not rows, and the shown descendants of
-  // group rows that are neither
-  const ancestors = new Set<string>()
-  for (const it of rows) {
-    const seen = new Set([it.uuid])
-    for (let p = parentOf(it); p !== undefined && !seen.has(p.uuid); p = parentOf(p)) {
-      seen.add(p.uuid)
-      if (!rowIds.has(p.uuid)) ancestors.add(p.uuid)
-    }
+  const views = P.rows.createViewRows(P.dates.isoToWeek)
+  views.take('parity', [...answer.rows, ...answer.parents, ...answer.subtasks])
+  views.beginPaint()
+  views.reshape({ handleNow: P.handleNow })
+  const selection = answer.held_sub_projects ? null : new Set(answer.projects ?? [])
+  for (const row of answer.rows) {
+    const it = views.model('parity', row.id)
+    if (!it) throw new Error(`${label}: no model of ${row.id}`)
+    const done = views.factsOf(it)?.done ?? false
+    expect(
+      (selection === null || selection.size === 0 || selection.has(it.project)) &&
+        (!info.mine || P.isMine(it)) &&
+        P.visibility.isRoadmapTaskVisible(it, done, weeks[0], weeks[1]) &&
+        (session === it.uuid || P.passesFilters(it, { ...desk, search: '' })),
+      `${label}: ${it.key} passes`,
+    ).toBe(true)
   }
-  expect(sorted(answer.parents.map((r) => r.id)), `${label}: parents`).toEqual(sorted(ancestors))
-  const below = new Set<string>()
-  const seen = new Set<string>()
-  const stack = rows.filter((it) => P.isGroup(it)).flatMap((it) => it.children ?? [])
-  for (let key = stack.pop(); key !== undefined; key = stack.pop()) {
-    const kid = P.issueById[key]
-    if (!kid || seen.has(kid.uuid)) continue
-    seen.add(kid.uuid)
-    if (!rowIds.has(kid.uuid) && !ancestors.has(kid.uuid)) below.add(kid.uuid)
-    stack.push(...(kid.children ?? []))
-  }
-  expect(sorted(answer.subtasks.map((r) => r.id)), `${label}: subtasks`).toEqual(sorted(below))
-  // each row's group facts against the store's
-  for (const row of [...answer.rows, ...answer.parents, ...answer.subtasks]) {
-    const it = byUuid.get(row.id)
-    if (it === undefined) throw new Error(`${label}: the store does not show ${row.id}`)
-    const what = `${label}: ${it.key}`
-    expect(row.has_subtasks, `${what} group`).toBe(P.isGroup(it))
-    expect(row.parent_id ?? null, `${what} parent`).toBe(parentOf(it)?.uuid ?? null)
-    if (!row.has_subtasks) continue
-    expect(row.group_done, `${what} done`).toBe(P.isDone(it))
-    const week = (iso: string | undefined) => (iso === undefined ? null : P.dates.isoToWeek(iso))
-    expect(week(row.span?.start_week), `${what} start`).toBe(it.start)
-    expect(week(row.span?.end_week), `${what} end`).toBe(it.end)
-  }
-  // the headings, before the filters, absent keys 0
-  const remaining = P.oracle.remainingTenths(info)
-  if (answer.remaining.state !== 'ok')
-    throw new Error(`${label}: Remaining ${answer.remaining.reason}`)
-  const tenths = answer.remaining.tenths
-  for (const id of info.subIds)
-    expect(tenths[id] ?? 0, `${label}: Remaining of ${P.project(id)?.name}`).toBe(remaining[id])
-  // My view's tracks
-  const held = P.oracle.heldSubProjects(info)
-  if (held === null) expect(answer, `${label}: no tracks`).not.toHaveProperty('held_sub_projects')
-  else expect(sorted(answer.held_sub_projects ?? []), `${label}: tracks`).toEqual(held)
-  return rowIds
+  return new Set(answer.rows.map((row) => row.id))
 }
-
-/** Compares `answer`, tasks.roadmapDependencies's for the store scope
- * `scopeId`, with the parts the oracle finds over every task the store
- * holds, and Auto-move over the answer with Auto-move over the workspace
- * within those parts. Answers whether any move was compared. */
-function expectDependencies(
-  P: Store,
-  answer: DependencyAnswer,
-  scopeId: string,
-  label: string,
-): number {
-  const info = oracleScope(P.snapshot, scopeId)
-  if (info === null) {
-    expect(answer, `${label}: unavailable`).toEqual({ state: 'unavailable' })
-    return 0
-  }
-  if (answer.state !== 'ok' || answer.auto_move.state !== 'ok')
-    throw new Error(`${label}: ${JSON.stringify(answer)}`)
-  const uuidOf = (key: string) => P.issueById[key]?.uuid ?? key
-  const selected = P.scopedIssues(info)
-  const parts = P.oracle.dependencyParts(selected)
-  const pairKey = (p: { blocker: string; blocked: string }) => `${p.blocker}>${p.blocked}`
-  expect(sorted(answer.auto_move.tasks.map((r) => r.id)), `${label}: part tasks`).toEqual(
-    sorted(parts.tasks.map((it) => it.uuid)),
-  )
-  expect(sorted(answer.auto_move.pairs.map(pairKey)), `${label}: part pairs`).toEqual(
-    sorted(
-      parts.pairs.map((p) => pairKey({ blocker: uuidOf(p.blocker), blocked: uuidOf(p.blocked) })),
-    ),
-  )
-  // the arrows are every pair between two selected tasks with a span
-  const dated = new Set(selected.filter((it) => it.start != null).map((it) => it.id))
-  const arrows = P.schedule
-    .dependencyPairs(P.issues)
-    .filter((p) => dated.has(p.blocker) && dated.has(p.blocked))
-  expect(sorted(answer.pairs.map(pairKey)), `${label}: arrows`).toEqual(
-    sorted(arrows.map((p) => pairKey({ blocker: uuidOf(p.blocker), blocked: uuidOf(p.blocked) }))),
-  )
-  // the write levels
-  const editable = new Set(answer.auto_move.editable_projects)
-  for (const row of answer.auto_move.tasks)
-    expect(editable.has(row.project_id), `${label}: Edit on ${row.project_id}`).toBe(
-      P.canWrite(row.project_id),
-    )
-  // Auto-move over the answer, each task's links built from the pairs in
-  // their order, against Auto-move over the workspace within the parts
-  const moves = movesOf(P, answer.auto_move)
-  const inParts = new Set(parts.tasks.map((it) => it.uuid))
-  const expected = P.oracle
-    .workspaceMoves()
-    .map((m) => ({ ...m, id: uuidOf(m.id) }))
-    .filter((m) => inParts.has(m.id))
-  const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : 1)
-  expect([...moves].sort(byId), `${label}: moves`).toEqual([...expected].sort(byId))
-  // each part task's links in the order the app lists them (its window's
-  // and the workspace's model, lib/taskSections.ts linkViews), which the
-  // Roadmap builds from the pairs' order
-  const links = partLinks(P, answer.auto_move)
-  for (const [uuid, built] of Object.entries(links)) {
-    const it = Object.values(P.issueById).find((t) => t.uuid === uuid)
-    if (!it) continue
-    const own = (it.links ?? [])
-      .filter((l) => l.type === 'blocks' || l.type === 'blocked_by')
-      .map((l) => ({ type: l.type, id: uuidOf(l.id) }))
-      .filter((l) => inParts.has(l.id))
-    expect(built, `${label}: ${it.key}'s links`).toEqual(own)
-  }
-  // the pairs in another order build another order of links, which this
-  // comparison catches
-  const reversed = partLinks(P, {
-    ...answer.auto_move,
-    pairs: [...answer.auto_move.pairs].reverse(),
-  })
-  orderChecks.push(JSON.stringify(reversed) !== JSON.stringify(links))
-  return moves.length
-}
-
-/* For each comparison of a selection's parts with a task of more than one
-   link, whether the pairs in reverse order built other links. */
-const orderChecks: boolean[] = []
 
 /** Auto-move over `inputs` as the Roadmap builds the solver's tasks from
  * them (views/roadmap/autoMoveInputs.ts), with weeks on the store's grid,
@@ -338,6 +221,32 @@ function partLinks(P: Store, inputs: AutoMoveInputs) {
       .map((t) => [t.id, t.links]),
   )
 }
+
+/** Checks Auto-move's inputs `inputs`, a selection's parts, as the
+ * Roadmap builds the solver's tasks from them: each part task's links,
+ * built from the pairs in their order, are its blocks links within the
+ * parts in the order its window lists them (lib/taskSections.ts linkViews),
+ * over the relations stored for store `P`'s caller. Notes whether the pairs
+ * in reverse order built other links, and answers how many moves Auto-move
+ * gives over the inputs. */
+function expectPartLinks(P: Store, inputs: AutoMoveInputs, label: string) {
+  const inParts = new Set(inputs.tasks.map((row) => row.id))
+  const links = partLinks(P, inputs)
+  for (const [uuid, built] of Object.entries(links)) {
+    const stored = P.snapshot.links.filter((l) => l.source_id === uuid || l.target_id === uuid)
+    const own = linkViews(uuid, stored, (other) => inParts.has(other))
+      .filter((l) => l.type === 'blocks' || l.type === 'blocked_by')
+      .map((l) => ({ type: l.type, id: l.other }))
+    expect(built, `${label}: ${uuid}'s links`).toEqual(own)
+  }
+  const reversed = partLinks(P, { ...inputs, pairs: [...inputs.pairs].reverse() })
+  orderChecks.push(JSON.stringify(reversed) !== JSON.stringify(links))
+  return movesOf(P, inputs).length
+}
+
+/* For each comparison of a selection's parts, whether the pairs in reverse
+   order built other links. */
+const orderChecks: boolean[] = []
 
 /** The facts of view rows `rows` a Roadmap reads, by id in order. */
 const rowFacts = (rows: readonly ViewRow[]) =>
@@ -402,11 +311,15 @@ function expectDependencyStandIn(stood: DependencyAnswer, answer: DependencyAnsw
 }
 
 /** What the stand-in reads besides the workspace for store `P`: whether
- * its person sees a project and may edit it, as the store says. */
-const standInOptions = (P: Store) => ({
-  sees: (id: string) => P.canSee(id),
-  canEdit: (id: string) => P.canWrite(id),
-})
+ * its person sees a project and may edit it, as the server judges it over
+ * the caller's whole (oracleScope.setup.ts oracleLevels). */
+function standInOptions(P: Store) {
+  const levels = oracleLevels(P.snapshot)
+  return {
+    sees: (id: string) => levels.has(id),
+    canEdit: (id: string) => levels.get(id) === 'lead' || levels.get(id) === 'user',
+  }
+}
 
 /** A filter row named for a case's label. */
 type Filters = [label: string, filters: Partial<RoadmapFilters>]
@@ -415,10 +328,11 @@ type Filters = [label: string, filters: Partial<RoadmapFilters>]
  * shows, each of their sub-projects and My view. */
 function selectionsOf(P: Store, profile: Doc<'profiles'>) {
   const out: [string, RoadmapScope, string][] = []
-  for (const meta of oracleStore(P.snapshot).visibleProjects()) {
+  const seen = oracleStore(P.snapshot)
+  for (const meta of seen.visibleProjects()) {
     out.push([meta.name, projectScope(profile, meta.id), meta.id])
     for (const id of meta.children ?? [])
-      if (P.canSee(id)) out.push([P.project(id)?.name ?? id, projectScope(profile, id), id])
+      if (seen.canSee(id)) out.push([seen.project(id)?.name ?? id, projectScope(profile, id), id])
   }
   out.push(['My view', { kind: 'mine' }, P.MINE_SCOPE])
   return out
@@ -456,7 +370,7 @@ async function compareAll(
           answer,
           label,
         )
-        const ids = expectRows(P, answer, storeScope, weeks, f, label)
+        const ids = expectNarrowing(P, answer, storeScope, weeks, f, label)
         found.set(filterLabel, (found.get(filterLabel) ?? 0) + ids.size)
       }
     const dependencies = await dependenciesFor(t, profile, scope)
@@ -465,12 +379,8 @@ async function compareAll(
       dependencies,
       `${profile.name}, ${scopeLabel}`,
     )
-    moves += expectDependencies(
-      P,
-      dependencies,
-      storeScope,
-      `${profile.name}, ${scopeLabel}, dependencies`,
-    )
+    if (dependencies.state === 'ok' && dependencies.auto_move.state === 'ok')
+      moves += expectPartLinks(P, dependencies.auto_move, `${profile.name}, ${scopeLabel}`)
   }
   return { found, moves }
 }
@@ -512,12 +422,13 @@ describe('Northstar', () => {
     ]
     // two days into the dataset's anchor week
     const now = Date.parse('2026-09-09T18:00:00.000Z')
-    let moves = 0
     for (const profile of [nora, leo, ben]) {
       const P = await storeOf(t, profile, now)
       // a narrow window over the weeks of Northstar's Done tasks
-      const doneWeeks = P.issues.filter((it) => it.status === 'done' && it.start != null)
-      const narrow = doneWeeks.length > 0 ? (doneWeeks[0].start as number) : P.dates.TODAY_WEEK
+      const doneStart = P.snapshot.issues.find(
+        (row) => row.status === 'done' && row.start_week !== undefined,
+      )?.start_week
+      const narrow = doneStart ? P.dates.isoToWeek(doneStart) : P.dates.TODAY_WEEK
       const result = await compareAll(
         t,
         P,
@@ -526,11 +437,9 @@ describe('Northstar', () => {
         windowsOf(P, narrow),
         rows,
       )
-      moves += result.moves
       if (profile === nora)
         for (const [label] of rows) expect(result.found.get(label), label).toBeGreaterThan(0)
     }
-    console.log('Auto-move moves compared over Northstar:', moves)
     // a reading that drops the pairs' order fails somewhere
     expect(orderChecks.some(Boolean)).toBe(true)
   })
@@ -708,42 +617,6 @@ describe('access shapes', () => {
 // ------------------------------------------------- the rules that must hold
 
 describe('the rules that must hold', () => {
-  it('differs from a rule that hides a group stored in Backlog, from a window one week off, and from Remaining read after the filters', async () => {
-    const { t, f, P, subject } = await compareShape(null, 'admin')
-    const scope = projectScope(subject, f.sub.id)
-    const narrow = P.dates.isoToWeek(weekDay(0))
-    const weeks: Weeks = [narrow, narrow + 1]
-    const answer = await roadmapFor(t, subject, scope, {}, windowOf(P, weeks))
-    if (answer.state !== 'ok') throw new Error(answer.state)
-    const ids = sorted(answer.rows.map((r) => r.id))
-    const info = oracleScope(P.snapshot, f.sub.id)
-    if (info === null) throw new Error('FW')
-    const desk = deskFilters(P, f.sub.id, NO_ROADMAP_FILTERS).desk
-    const names = P.oracle.textNames(P.snapshot)
-    const rows = (w: Weeks) => P.oracle.roadmapRows(info, w[0], w[1], desk, names)
-    expect(sorted(rows(weeks).map((it) => it.uuid))).toEqual(ids)
-    // a Backlog group hidden
-    const noBacklogGroup = rows(weeks).filter((it) => !(P.isGroup(it) && it.status === 'backlog'))
-    expect(sorted(noBacklogGroup.map((it) => it.uuid))).not.toEqual(ids)
-    // a window one week off
-    expect(sorted(rows([weeks[0] + 1, weeks[1] + 1]).map((it) => it.uuid))).not.toEqual(ids)
-    // Remaining after the filters
-    const high = await roadmapFor(t, subject, scope, { priority: 'high' }, windowOf(P, weeks))
-    if (high.state !== 'ok' || high.remaining.state !== 'ok') throw new Error('Remaining')
-    const filtered = Math.round(
-      P.issues
-        .filter(
-          (it) =>
-            it.project === f.sub.id &&
-            !P.isGroup(it) &&
-            it.status !== 'done' &&
-            P.passesFilters(it, { ...desk, priority: 'high' }),
-        )
-        .reduce((s, it) => s + (it.remaining || 0), 0) * 10,
-    )
-    expect(high.remaining.tenths[f.sub.id]).not.toBe(filtered)
-  })
-
   it('differs from a ceiling that counts no group, and from parts kept inside the selection', async () => {
     const { t, f, P, subject } = await compareShape(null, 'admin')
     const scope = projectScope(subject, f.sub.id)
@@ -785,13 +658,15 @@ describe('the rules that must hold', () => {
 // ------------------------------------------------------ the planning session
 
 describe('the planning session', () => {
-  it("keeps the session's task past the filter row as Roadmap.tsx passes does, and never past the visibility rule or the selection", async () => {
+  it("keeps the session's task past the filter row, as Roadmap.tsx passes does, and never past the visibility rule or the selection", async () => {
     const { t, f, P, subject } = await compareShape(null, 'admin')
-    /** The store's task titled `title`, in `project` where given. */
+    /** The server's task titled `title`, in `project` where given. */
     const named = (title: string, project?: string) => {
-      const it = P.issues.find((x) => x.title === title && (!project || x.project === project))
-      if (it === undefined) throw new Error(title)
-      return it
+      const row = P.snapshot.issues.find(
+        (x) => x.title === title && (!project || x.project_id === project),
+      )
+      if (row === undefined) throw new Error(title)
+      return { uuid: row.id, project: row.project_id }
     }
     const { w0, w1 } = P.dates.resolveWin(P.dates.DEFAULT_WIN)
     const narrow = P.dates.isoToWeek(weekDay(0))
@@ -804,7 +679,7 @@ describe('the planning session', () => {
       storeScope: string,
       filters: Partial<RoadmapFilters>,
       weeks: Weeks,
-      task: Issue,
+      task: { uuid: string; project: string },
       kept: boolean,
     ][] = [
       [
@@ -905,12 +780,14 @@ describe('the planning session', () => {
       // without the session the filter row, the window or the selection
       // hides the task
       const without = await roadmapFor(t, subject, scope, server, windowOf(P, weeks))
-      expect(expectRows(P, without, storeScope, weeks, row, label).has(it.uuid), label).toBe(false)
+      expect(expectNarrowing(P, without, storeScope, weeks, row, label).has(it.uuid), label).toBe(
+        false,
+      )
       const answer = await roadmapFor(t, subject, scope, server, windowOf(P, weeks), {
         id: it.uuid,
         project_id: it.project,
       })
-      const ids = expectRows(P, answer, storeScope, weeks, row, `${label}, planned`, it.id)
+      const ids = expectNarrowing(P, answer, storeScope, weeks, row, `${label}, planned`, it.uuid)
       expect(ids.has(it.uuid), `${label}, planned`).toBe(kept)
     }
   })
@@ -951,92 +828,49 @@ async function ownerLoadsFor(t: T, P: Store, profile: Doc<'profiles'>, ids: read
   return Object.assign(out, { hidden: staff ? ('counted' as const) : ('own_only' as const) })
 }
 
-/** What a reading of the answers leaves out or ignores, for the cases
- * that must fail: spans without a task kept as a project's, the paused
- * list dropped, or the spans' projects dropped, as a backend before
- * v0.1.125 sends them. */
-type Drift = { keepHidden?: boolean; dropPaused?: boolean; dropProjects?: boolean }
-
-/** How the reconciler reads a person's rows: none held, so every span and
- * paused task comes from the answer, or the store's rows of every task,
- * which then come from the rows instead (store/viewDelay.ts ownerItemsOf). */
-type Held = 'none' | 'store'
-
-/** The tasks Team utilization spreads from `owners`' answers on store
- * `P`'s grid, through the app's own cache reading (ownerLoadOf) and
- * reconciler (ownerItemsOf), with the rows `held` names. Work without a
- * project, busy time the reader is not shown, stays out, as the strip
- * leaves it out (views/Resources.tsx). */
-function teamTasksOf(
-  P: Store,
-  owners: OwnerAnswers,
-  drift: Drift = {},
-  held: Held = 'none',
-): LoadIssue[] {
-  const { hidden } = owners
-  const out: LoadIssue[] = []
+/** Checks that the app's reconciler over `owners`' answers, through its
+ * cache reading (store/ownerLoadCache.ts ownerLoadOf) and with no view's
+ * rows (store/viewDelay.ts ownerItemsOf), gives each owner the answer's
+ * own spans, each with its project, and its paused list, so Team
+ * utilization and the planning panel count each span once and a paused
+ * task as no hours. With `dropPaused`, as a reading that dropped the
+ * paused list, answers whether any owner's paused work went missing.
+ * Answers how many spans and paused tasks it compared. */
+function expectReconciled(P: Store, owners: OwnerAnswers, label: string, dropPaused = false) {
+  const seen = { spans: 0, paused: 0, missing: false }
   for (const one of owners) {
     if (one.state !== 'ok') throw new Error(`${one.owner_id} is ${one.state}`)
-    const sent = {
-      ...one,
-      paused: drift.dropPaused ? [] : one.paused,
-      spans: one.spans.map((span) => (drift.dropProjects ? { ...span, project_id: null } : span)),
-    }
-    const load = P.views.ownerLoadOf(sent, hidden)
+    const sent = dropPaused ? { ...one, paused: [] } : one
+    const load = P.views.ownerLoadOf(sent, owners.hidden)
     if (load?.state !== 'ok') throw new Error(`${one.owner_id} read as ${load?.state}`)
     const org = P.snapshot.profiles.find((p) => p.id === one.owner_id)?.org_id ?? ''
-    const items =
-      held === 'store' && P.probe
-        ? P.probe.ownerItems(org, one.owner_id, load)
-        : P.views.ownerItemsOf(org, one.owner_id, load, {
-            held: () => false,
-            inView: () => false,
-            viewRows: () => [],
-            projectLive: () => true,
-            orgOf: () => org,
-            heldItems: () => [],
-          })
-    for (const item of items) {
-      if (item.project === null && !drift.keepHidden) continue
-      out.push({
-        owner: one.owner_id,
-        project: item.project ?? 'hidden',
-        start: item.start,
-        end: item.end,
-        remaining: item.remaining,
-        remainingSet: item.remainingSet,
-        paused: item.paused,
-      })
+    const items = P.views.ownerItemsOf(org, one.owner_id, load, {
+      inView: () => false,
+      viewRows: () => [],
+      projectLive: () => true,
+      orgOf: () => org,
+    })
+    const paused = items.filter((item) => item.paused).map((item) => [item.uuid, item.project])
+    const answered = one.paused.map((item) => [item.issue_id, item.project_id])
+    if (dropPaused) {
+      if (paused.length < answered.length) seen.missing = true
+      continue
     }
+    const spans = items
+      .filter((item) => !item.paused)
+      .map((item) => [item.uuid, item.project, item.remaining])
+    expect(spans, `${label}: spans of ${one.owner_id}`).toEqual(
+      one.spans.map((span) => [
+        span.issue_id ?? null,
+        span.issue_id ? (span.project_id ?? null) : null,
+        span.remaining != null ? Number(span.remaining) : 0,
+      ]),
+    )
+    expect(paused, `${label}: paused of ${one.owner_id}`).toEqual(answered)
+    seen.spans += spans.length
+    seen.paused += paused.length
   }
-  return out
-}
-
-/** Each of `people`'s hours in each week of `weeks` and their paused weeks
- * in Team utilization's figures `load`, hours to a millionth (the two
- * sides add the same floats in different orders); a person `load` does
- * not name has no hours and no paused weeks. */
-function teamFigures(
-  load: ReturnType<Store['oracle']['teamLoad']>,
-  people: readonly string[],
-  [w0, w1]: Weeks,
-) {
-  return Object.fromEntries(
-    people.map((id) => {
-      const hours: number[] = []
-      for (let w = w0; w <= w1; w++) {
-        let total = 0
-        load.loads
-          .get(id)
-          ?.get(w)
-          ?.forEach((h) => {
-            total += h
-          })
-        hours.push(Math.round(total * 1e6) / 1e6)
-      }
-      return [id, { hours, paused: [...(load.paused.get(id) ?? [])].sort((a, b) => a - b) }]
-    }),
-  )
+  return seen
 }
 
 /** The profile ids of organization `orgId`, every one of them. */
@@ -1049,94 +883,6 @@ const orgPeople = (t: T, orgId: string) =>
         .collect()
     ).map((p) => p.id),
   )
-
-/** The windows Team compares, in store `P`'s weeks, the app's default and
- * 52 weeks around it. */
-function teamWindows(P: Store): [string, Weeks][] {
-  const { w0, w1 } = P.dates.resolveWin(P.dates.DEFAULT_WIN)
-  return [
-    ['the default window', [w0, w1]],
-    ['52 weeks', [w0 - 20, w0 + 31]],
-  ]
-}
-
-/** Compares Team utilization from `owners`' answers with what store `P`
- * derives, for every selection of `scopes`, both modes where the strip
- * offers them and every window. Answers how many hours, paused weeks and
- * paused people the comparison saw. */
-function expectTeam(P: Store, owners: OwnerAnswers, scopes: readonly string[], label: string) {
-  const people = owners.map((o) => o.owner_id)
-  const tasks = teamTasksOf(P, owners)
-  // the same figures where the rows of every task the store holds stand in
-  // for the answer's spans, each task counted once
-  const fromRows = teamTasksOf(P, owners, {}, 'store')
-  const seen = { hours: 0, paused: 0, pausedPeople: new Set<string>() }
-  for (const scopeId of scopes) {
-    const info = oracleScope(P.snapshot, scopeId)
-    if (info === null) continue
-    const modes: TeamMode[] = info.wide ? ['all'] : ['all', 'scope']
-    for (const [windowLabel, weeks] of teamWindows(P))
-      for (const mode of modes) {
-        const what = `${label}, ${info.name}, ${mode}, ${windowLabel}`
-        const derived = P.oracle.teamLoad(info, mode, ...weeks)
-        // every person the strip shows was asked
-        for (const id of [...derived.loads.keys(), ...derived.paused.keys()])
-          expect(people, `${what}: ${id} asked`).toContain(id)
-        const want = teamFigures(derived, people, weeks)
-        expect(
-          teamFigures(P.oracle.teamLoad(info, mode, ...weeks, tasks), people, weeks),
-          what,
-        ).toEqual(want)
-        expect(
-          teamFigures(P.oracle.teamLoad(info, mode, ...weeks, fromRows), people, weeks),
-          `${what}, from the store's rows`,
-        ).toEqual(want)
-        for (const [id, f] of Object.entries(want)) {
-          seen.hours += f.hours.filter((h) => h > 0).length
-          seen.paused += f.paused.length
-          if (f.paused.length > 0) seen.pausedPeople.add(id)
-        }
-      }
-  }
-  return seen
-}
-
-/** Whether Team utilization from `owners`' answers read with `drift`, or
- * under `serverMode` where the strip shows `mode`, differs from what store
- * `P` derives anywhere in `scopes`. */
-function teamDiffers(
-  P: Store,
-  owners: OwnerAnswers,
-  scopes: readonly string[],
-  drift: Drift,
-  mode: TeamMode,
-  serverMode: TeamMode = mode,
-) {
-  const people = owners.map((o) => o.owner_id)
-  const tasks = teamTasksOf(P, owners, drift)
-  return scopes.some((scopeId) => {
-    const info = oracleScope(P.snapshot, scopeId)
-    if (info === null || (mode === 'scope' && info.wide)) return false
-    return teamWindows(P).some(([, weeks]) => {
-      const want = teamFigures(P.oracle.teamLoad(info, mode, ...weeks), people, weeks)
-      const got = teamFigures(P.oracle.teamLoad(info, serverMode, ...weeks, tasks), people, weeks)
-      return JSON.stringify(got) !== JSON.stringify(want)
-    })
-  })
-}
-
-/** Every selection a Team case compares for store `P`, My view, each
- * top-level project the store shows and each of their sub-projects it
- * shows. No view has a selection over all projects; the strip's All
- * projects mode covers them for each of these. */
-function teamScopes(P: Store): string[] {
-  const out = [P.MINE_SCOPE]
-  for (const meta of oracleStore(P.snapshot).visibleProjects()) {
-    out.push(meta.id)
-    for (const id of meta.children ?? []) if (P.canSee(id)) out.push(id)
-  }
-  return out
-}
 
 /** The work every Team access case plants over the withOrg fixture for
  * `subject`, dated around NOW's week. The subject and the user get
@@ -1221,7 +967,7 @@ async function teamShape(shape: (typeof SHAPES)[number] | null, role: 'user' | '
 }
 
 describe('Team utilization', () => {
-  it('derives each person’s hours and paused weeks from the owner loads as the strip does, for Nora, Leo and Ben on Northstar', async () => {
+  it('reconciles each person’s spans and paused tasks from the owner loads, for Nora, Leo and Ben on Northstar', async () => {
     const t = newT()
     const { org, profiles } = await plantNorthstar(t)
     await withReach(t)
@@ -1239,27 +985,16 @@ describe('Team utilization', () => {
     for (const profile of [nora, leo, ben]) {
       const P = await storeOf(t, profile, now)
       const owners = await ownerLoadsFor(t, P, profile, people)
-      const scopes = teamScopes(P)
-      const seen = expectTeam(P, owners, scopes, profile.name)
-      expect(seen.hours, `${profile.name}: hours compared`).toBeGreaterThan(0)
+      const seen = expectReconciled(P, owners, profile.name)
+      expect(seen.spans, `${profile.name}: spans compared`).toBeGreaterThan(0)
       if (profile !== nora) continue
-      // the stand-in was compared for both paused tasks' owners, and the
-      // strip marks their weeks
+      // both paused tasks' owners answer one paused task each
       for (const owner of [emil, daniel]) {
         const one = owners.find((o) => o.owner_id === owner.id)
         expect(one?.state === 'ok' && one.paused.length, owner.name).toBe(1)
-        expect(seen.pausedPeople.has(owner.id), owner.name).toBe(true)
       }
-      // these must fail, dropping the paused list, and reading every span
-      // as in the selection under This project
-      expect(teamDiffers(P, owners, scopes, { dropPaused: true }, 'all')).toBe(true)
-      expect(teamDiffers(P, owners, scopes, {}, 'scope', 'all')).toBe(true)
-      // spans read without their projects, as from a backend before
-      // v0.1.125, lose This project's work
-      expect(teamDiffers(P, owners, scopes, { dropProjects: true }, 'scope')).toBe(true)
-      // and the answers read as built match everywhere
-      expect(teamDiffers(P, owners, scopes, {}, 'all')).toBe(false)
-      expect(teamDiffers(P, owners, scopes, {}, 'scope')).toBe(false)
+      // a reading that drops the paused list must fail
+      expect(expectReconciled(P, owners, profile.name, true).missing).toBe(true)
     }
   })
 
@@ -1276,7 +1011,8 @@ describe('Team utilization', () => {
       const P = await storeOf(t, profile, now)
       const owners = await ownerLoadsFor(t, P, profile, people)
       const { w0, w1 } = P.dates.resolveWin(P.dates.DEFAULT_WIN)
-      const name = (projectId: string) => P.project(projectId)?.name ?? null
+      const name = (projectId: string) =>
+        P.snapshot.projects.find((p) => p.id === projectId)?.name ?? null
       let compared = 0
       for (const one of owners) {
         if (one.state !== 'ok') continue
@@ -1297,12 +1033,10 @@ describe('Team utilization', () => {
         const load = P.views.ownerLoadOf(one, owners.hidden)
         if (load?.state !== 'ok') throw new Error(`${one.owner_id} read as ${load?.state}`)
         const items = P.views.ownerItemsOf(profile.org_id, one.owner_id, load, {
-          held: () => false,
           inView: () => false,
           viewRows: () => [],
           projectLive: () => true,
           orgOf: () => profile.org_id,
-          heldItems: () => [],
         })
         const after = P.views.planItemsOf(items, name)
         const buckets = (list: typeof before) =>
@@ -1323,47 +1057,12 @@ describe('Team utilization', () => {
   })
 
   for (const role of ['user', 'guest', 'viewer'] as const)
-    it(`derives what the strip does for a ${role} in every shape`, async () => {
+    it(`reconciles the owner loads for a ${role} in every shape`, async () => {
       let paused = 0
       for (const shape of SHAPES) {
         const { P, owners, subject } = await teamShape(shape, role)
-        const seen = expectTeam(P, owners, teamScopes(P), `${subject.name}, ${shape[0]}`)
-        paused += seen.paused
+        paused += expectReconciled(P, owners, `${subject.name}, ${shape[0]}`).paused
       }
       expect(paused).toBeGreaterThan(0)
     })
-
-  it('differs from a reading that keeps spans without a task, ignores their projects or drops the paused list', async () => {
-    // a user who sees TBED and not SKNK
-    const onTbed: (typeof SHAPES)[number] = [
-      'user grant on TBED',
-      (ctx, f, me) =>
-        ctx.db.insert('project_access', {
-          project_id: f.meta.id,
-          profile_id: me.id,
-          level: 'user',
-        }),
-    ]
-    const { P, owners, f, subject, sibling } = await teamShape(onTbed, 'user')
-    const scopes = teamScopes(P)
-    // the user's work in SKNK, which the subject cannot see, comes as busy
-    // time without a task id to a staff seat
-    const user = owners.find((o) => o.owner_id === f.user.id)
-    expect(user?.state === 'ok' && user.spans.some((s) => s.issue_id === null)).toBe(true)
-    expect(teamDiffers(P, owners, scopes, { keepHidden: true }, 'all')).toBe(true)
-    // the subject's work in PCB and the sibling, outside FW
-    expect(oracleScope(P.snapshot, f.sub.id)?.wide).toBe(false)
-    expect(teamDiffers(P, owners, [f.sub.id], {}, 'scope', 'all')).toBe(true)
-    expect(teamDiffers(P, owners, [f.sub.id, sibling.id], {}, 'scope')).toBe(false)
-    // the subject's paused leaves
-    expect(teamDiffers(P, owners, scopes, { dropPaused: true }, 'all')).toBe(true)
-    // the subject's paused leaves of FW, PCB and the sibling; the paused
-    // group, the leaf in SKNK and the unplanned one stay out, and the paused
-    // hand-off is its reviewer's
-    const me = owners.find((o) => o.owner_id === subject.id)
-    expect(me?.state === 'ok' && me.paused.map((p) => p.project_id).sort()).toEqual(
-      [f.sub.id, f.sub2.id, sibling.id].sort(),
-    )
-    expect(teamDiffers(P, owners, scopes, {}, 'all')).toBe(false)
-  })
 })

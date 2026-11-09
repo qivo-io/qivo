@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { ConvexError } from 'convex/values'
-import { act } from 'react'
+import { act, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -16,8 +16,8 @@ import { AppearanceSettings } from './AppearanceSettings'
 /* What Settings › Appearance says for a custom background whose preview
    the demo's storage left no room for, how it shows a refusal, and that
    its previews come from the provider's preview, never a mint of its own.
-   The store's appearance read and save are answered by hand, and the
-   provider's context by a stand-in. */
+   The page shows the account's appearance from the provider's context,
+   answered here by a stand-in, and the store's save is answered by hand. */
 
 const store = vi.hoisted(() => ({
   deliver: null as ((value: AppearancePreferences) => void) | null,
@@ -26,10 +26,6 @@ const store = vi.hoisted(() => ({
 }))
 vi.mock('../store/planner', () => ({
   P: {
-    watchAppearance: (next: (value: AppearancePreferences) => void) => {
-      store.deliver = next
-      return () => {}
-    },
     setAppearance: store.save,
     mintAppearanceImageUrl: store.mint,
   },
@@ -44,10 +40,17 @@ const context = vi.hoisted(() => ({
 }))
 function Provider({ children }: { children: React.ReactNode }) {
   const base = useAppearance()
+  const [preferences, setPreferences] = useState<AppearancePreferences | null>(null)
+  useEffect(() => {
+    store.deliver = setPreferences
+  }, [])
   return (
     <AppearanceContext.Provider
       value={{
         ...base,
+        preferences,
+        preferencesState: preferences ? 'ok' : 'loading',
+        preferencesCurrent: true,
         dailyImage: context.dailyImage,
         preview: context.preview ?? NO_PREVIEW,
         wantPreview: () => {

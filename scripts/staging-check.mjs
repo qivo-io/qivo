@@ -90,14 +90,13 @@
  * hold that sub-project's row with those two tasks' figures, and opens the
  * sub-project's Board from the row (ui/overview). It records the frames the
  * page sends on its sync socket and opens its project's Board, a fixture
- * task's address and its project's Roadmap in fresh loads, none of which may
- * subscribe the workspace's task windows (workspace.tasks), the Roadmap
- * subscribing its own read (tasks.roadmap) and showing the task's row with
- * no read of planning.assigneeLoad (ui/tasks-on-demand), so the
- * deployment's app loads every task only for a page that needs them. The
- * relation pickers step waits for each window's Link task and Add subtask
- * to turn on, which they do once the window's own read of its task has
- * answered, since a task address loads no task window. It makes a label with
+ * task's address and its project's Roadmap in fresh loads, each of which
+ * reads its tasks from its own read, the Roadmap subscribing its own read
+ * (tasks.roadmap) and showing the task's row with no read of
+ * planning.assigneeLoad (ui/own-reads). The relation pickers step waits
+ * for each window's Link task and Add subtask to turn on, which they do
+ * once the window's own read of its task has answered, since a task
+ * address reads its task only through the window. It makes a label with
  * its run tag over REST and puts it on a fixture task, opens Settings ›
  * Labels on the deployment's live batches (labels.settingsPage), finds the
  * label by search with its count of active tasks, renames it in place and
@@ -217,6 +216,15 @@
  * scope, and deletes it for good from its row menu once Delete now counts
  * no earlier items (deletedItems.purgeSummary)
  * (ui/deleted-items).
+ * It makes a task of its own in Alpha and deletes it over REST, then, with
+ * an origin private file system file standing in for the save picker,
+ * presses Export data in Settings › Organization › General as Nora, waits
+ * up to five minutes for the deployment's export job to be ready, for the
+ * automatic save into that file and its record, reads the file back,
+ * unzips it and checks its format 4 manifest, t0 in data/tasks, its
+ * deleted task in deleted/tasks and deleted/items, no file contents and
+ * its size, and that the record line shows today; it deletes the file
+ * and its Deleted item for good afterwards (ui/org-export).
  * It makes a milestone with its run tag over REST on its project, and
  * another in a week before the run's own, presses the first one's row on
  * the project's Overview, which opens the Milestones window on the
@@ -241,7 +249,7 @@
  * with the project's name and drop it once it is deleted over REST
  * (ui/overview-milestones). It makes a task of the Standard agent's in Alpha over
  * REST and opens Team sync on its project in a fresh load, which must
- * subscribe Team sync's agenda (teamSync.agenda) and no task window, and
+ * subscribe Team sync's agenda (teamSync.agenda), and
  * show the task's card on the agent's line from the rail (ui/team-sync).
  * It makes a sub-project under M led by Leo Martins, with a task in it, and
  * picks the task's assignee, reviewer and No reviewer in its window and its
@@ -256,10 +264,14 @@
  * whose window must draw the New divider above that comment from its inbox
  * item (inbox.item) and read the item (messages.readItem), so the summary
  * drops back, and removes t0's item from Nora's Inbox with the row's own
- * action, messages.removeItem (ui/inbox-badge). It mentions Nora on t0
- * again and opens the Inbox in a fresh load, which must list t0's row
- * from the deployment's pages (inbox.page) with M and Alpha in its crumb
- * and subscribe no task window, find it by a search on the server, send
+ * action, messages.removeItem (ui/inbox-badge). With t0 open at its
+ * address and the page hidden, the window's reads must leave the socket,
+ * a mention from the Standard agent must reach the badge and no read go
+ * out, and on show the reads must come back, the comment stand under the
+ * New divider and one read go out (ui/hidden-task-window). It mentions
+ * Nora on t0 again and opens the Inbox in a fresh load, which must list t0's row
+ * from the deployment's pages (inbox.page) with M and Alpha in its crumb,
+ * find it by a search on the server, send
  * the row's read, unread, snooze and remove by organization and task,
  * and open Alpha's Board on it (ui/inbox-list).
  * It reads the run's project, Alpha and Zulu, an id of no project and a
@@ -5792,16 +5804,12 @@ async function labelMentionPickersCheck() {
   }
 }
 
-/** The step that checks over the socket that the app loads tasks on demand
- *  (tasksOnDemandCheck). */
-export const ON_DEMAND_STEP = 'ui/tasks-on-demand'
-
-/** The query of the workspace's task windows, which the app subscribes only
- *  once a page that needs every task asks for them (src/store/liveParts.ts). */
-export const TASK_WINDOWS_QUERY = 'workspace:tasks'
+/** The step that checks over the socket that the Board, a task's address
+ *  and the Roadmap read their tasks from their own reads (ownReadsCheck). */
+export const OWN_READS_STEP = 'ui/own-reads'
 
 /** The Roadmap's own read (convex/tasks.ts roadmap), which it subscribes
- *  for its tasks in place of the task windows. */
+ *  for its tasks. */
 export const ROADMAP_QUERY = 'tasks:roadmap'
 
 /** The planning panel's one-shot read before it read the owner loads,
@@ -5826,19 +5834,18 @@ export function addsQuery(text, udfPath) {
   )
 }
 
-/** The app loads tasks on demand, over the deployment's socket: a fresh
- *  load of the run project's Board by its address, as ui/board reads it,
- *  reaches its ok state without subscribing a task window
- *  (TASK_WINDOWS_QUERY), a fresh load of run.t0's address shows its title
- *  without one, and a fresh load of the run project's Roadmap by its
- *  address reaches its ok state and shows run.t0's row (an unscheduled To
- *  Do task has one) without one either, having subscribed its own read
+/** The pages read their tasks from their own reads, over the deployment's
+ *  socket: a fresh load of the run project's Board by its address, as
+ *  ui/board reads it, reaches its ok state, a fresh load of run.t0's
+ *  address shows its title, and a fresh load of the run project's Roadmap
+ *  by its address reaches its ok state and shows run.t0's row (an
+ *  unscheduled To Do task has one), having subscribed its own read
  *  (ROADMAP_QUERY) and never the planning panel's old read
  *  (ASSIGNEE_LOAD_QUERY). It reads only, and leaves the saved view on the
  *  Board for the steps after it. It runs before the run archives M. */
-async function tasksOnDemandCheck() {
+async function ownReadsCheck() {
   const { M } = run.projects
-  await check(ON_DEMAND_STEP, async () => {
+  await check(OWN_READS_STEP, async () => {
     expect(Number.isInteger(M.num), 'the run project has no number')
     // the frames each fresh load sends on its sync socket
     let sent = []
@@ -5850,12 +5857,10 @@ async function tasksOnDemandCheck() {
         await app.goto(url, { waitUntil: 'domcontentloaded' })
       }
       const adds = (query) => sent.filter((f) => addsQuery(f, query)).length
-      const taskWindows = () => adds(TASK_WINDOWS_QUERY)
       await fresh(`${cfg.appOrigin}/app/${ORG_SLUG}/board/p/${M.num}`)
       await app
         .locator('[data-workspace-view] [data-board-root][data-board-state="ok"]')
         .waitFor({ timeout: 60_000 })
-      eq(taskWindows(), 0, 'the Board subscribed task windows')
       await fresh(`${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${run.t0.key.toLowerCase()}`)
       const title = app.locator('[role="dialog"] [data-task-title]')
       await title.waitFor({ timeout: 60_000 })
@@ -5863,7 +5868,6 @@ async function tasksOnDemandCheck() {
         await until(async () => ((await title.textContent()) ?? '').trim() === run.t0.title),
         `the window of ${run.t0.key} does not show its title`,
       )
-      eq(taskWindows(), 0, 'a task address subscribed task windows')
       // the Roadmap reads its tasks from the server, asking for no task
       await fresh(`${cfg.appOrigin}/app/${ORG_SLUG}/roadmap/p/${M.num}`)
       await app
@@ -5874,13 +5878,12 @@ async function tasksOnDemandCheck() {
         .filter({ hasText: run.t0.title })
         .first()
         .waitFor({ timeout: 60_000 })
-      eq(taskWindows(), 0, 'the Roadmap subscribed task windows')
       expect(adds(ROADMAP_QUERY) > 0, 'the Roadmap did not subscribe its read')
       eq(adds(ASSIGNEE_LOAD_QUERY), 0, "the Roadmap asked for the planning panel's old read")
       const view = (name) =>
         app.locator('[data-view-switch]').getByRole('radio', { name, exact: true })
       await view('Board').click()
-      return `opened the Board, ${run.t0.key} and the Roadmap without task windows, the Roadmap on its own read`
+      return `opened the Board, ${run.t0.key} and the Roadmap, the Roadmap on its own read`
     } finally {
       app.off('websocket', record)
     }
@@ -5972,8 +5975,8 @@ export function addsQueryFor(text, udfPath, uuid) {
  *  sent): the new task's uuid from the create's request, whether a frame
  *  answers it and the number that answer stored the task with (`num`), and
  *  the frames sent before that answer that subscribe a read of the new task
- *  (NEW_TASK_READS) or the task windows (TASK_WINDOWS_QUERY), which a
- *  correct app never sends. Null when no create went out. */
+ *  (NEW_TASK_READS), which a correct app never sends. Null when no create
+ *  went out. */
 export function createOrder(frames) {
   const at = frames.findIndex((f) => f.out && mutationRequest(f.text, CREATE_MUTATION) !== null)
   if (at < 0) return null
@@ -5988,7 +5991,6 @@ export function createOrder(frames) {
     early: before
       .filter((f) => f.out && NEW_TASK_READS.some((query) => addsQueryFor(f.text, query, uuid)))
       .map((f) => f.text),
-    taskWindows: frames.filter((f) => f.out && addsQuery(f.text, TASK_WINDOWS_QUERY)).length,
   }
 }
 
@@ -5998,8 +6000,7 @@ export function createOrder(frames) {
  *  shows its columns: from a fresh load of that sub-project's Board it
  *  presses New task in To Do, types the run's tagged title, presses
  *  Create, and once the window shows it renames the task in the window at
- *  once. On the frames of that load it checks that nothing subscribed the
- *  task windows (TASK_WINDOWS_QUERY) and that no read of the new task
+ *  once. On the frames of that load it checks that no read of the new task
  *  (NEW_TASK_READS) was subscribed before the create's answer arrived
  *  (createOrder). It knows the task by the uuid its create sent and its key
  *  by the number that answer stored, since another create in the
@@ -6068,7 +6069,6 @@ async function createAnswerCheck() {
       })()
       expect(order, 'no create went out on the socket')
       expect(order.answered, "the create's answer did not arrive")
-      eq(order.taskWindows, 0, 'the create subscribed task windows')
       eq(order.early.length, 0, 'a read of the new task went out before its create answered')
       expect(order.num !== null, "the create's answer names no number")
       // the key the server stored it under, which the window and the card
@@ -6094,7 +6094,7 @@ async function createAnswerCheck() {
         }),
         `${key} does not hold the new title`,
       )
-      return `created ${key} through the Board in ${sub.name} and renamed it in its window at once, with no read of it before its create answered and no task window`
+      return `created ${key} through the Board in ${sub.name} and renamed it in its window at once, with no read of it before its create answered`
     } finally {
       app.off('websocket', record)
     }
@@ -6327,8 +6327,8 @@ export const AGENDA_QUERY = 'teamSync:agenda'
  *  line of a fresh load of Team sync for the run project M by its address,
  *  on ui/task-link's fresh-load approach. The load's frames must add
  *  AGENDA_QUERY at least once, as a reconnect or a new day or week grid
- *  during the load adds it again on a correct app, and TASK_WINDOWS_QUERY
- *  never, and the page must reach its ok state (data-sync-state). It
+ *  during the load adds it again on a correct app, and the page must reach
+ *  its ok state (data-sync-state). It
  *  writes nothing in the app: the address saves no scope and opening a step
  *  stamps no one.
  *  The cleanup, which deletes M, removes the task. It runs before the run
@@ -6358,10 +6358,9 @@ async function teamSyncCheck() {
       await page.waitFor({ timeout: 60_000 })
       const adds = (query) => sent.filter((f) => addsQuery(f, query)).length
       expect(adds(AGENDA_QUERY) >= 1, 'the load did not subscribe the agenda')
-      eq(adds(TASK_WINDOWS_QUERY), 0, 'Team sync subscribed task windows')
       await page.locator(`[data-sync-rail] [data-sync-jump="${std.id}"]`).click()
       await page.locator(`[data-sync-card="${t.key}"]`).waitFor({ timeout: 60_000 })
-      return `opened ${M.key}'s meeting on the agenda without task windows, with ${t.key} on its agent's line`
+      return `opened ${M.key}'s meeting on the agenda, with ${t.key} on its agent's line`
     } finally {
       app.off('websocket', record)
     }
@@ -6659,6 +6658,187 @@ async function inboxBadgeCheck() {
   })
 }
 
+/** The step that holds an open task window's reads to a hidden page
+ *  (hiddenTaskWindowCheck). */
+export const HIDDEN_TASK_WINDOW_STEP = 'ui/hidden-task-window'
+
+/** The task window's reads the step watches leave a hidden page and come
+ *  back on show: its thread, its inbox item and its own read of the task. */
+export const HIDDEN_WINDOW_READS = ['snapshot:threadComments', 'inbox:item', 'taskWindow:task']
+
+/** The queries that frames `frames` a page sent on its sync sockets add
+ *  and remove, in order, each `{ change, query }`. A frame is `{ socket,
+ *  text }`, `socket` a number for each connection. A Remove carries only
+ *  its queryId, so it is named by the Add of that id on the same socket,
+ *  and is null when the frames hold none. Any other frame, also one that
+ *  is no JSON, changes nothing. */
+export function querySetChanges(frames) {
+  const names = new Map()
+  const changes = []
+  for (const { socket, text } of frames) {
+    let message
+    try {
+      message = JSON.parse(text)
+    } catch {
+      continue
+    }
+    if (message?.type !== 'ModifyQuerySet' || !Array.isArray(message.modifications)) continue
+    for (const m of message.modifications) {
+      const id = `${socket}:${m?.queryId}`
+      if (m?.type === 'Add') {
+        names.set(id, m.udfPath)
+        changes.push({ change: 'add', query: m.udfPath })
+      } else if (m?.type === 'Remove')
+        changes.push({ change: 'remove', query: names.get(id) ?? null })
+    }
+  }
+  return changes
+}
+
+/** An open task window stops its reads while its page is hidden and reads
+ *  again on return. As Nora it opens t0 at its address, waits for the
+ *  item's current answer, records the page's socket frames, and hides the
+ *  page by overriding document.visibilityState and dispatching
+ *  visibilitychange. The frames must then remove HIDDEN_WINDOW_READS. The
+ *  Standard agent mentions Nora on t0 over REST, the unread summary must
+ *  count it, and no messages.readItem may leave in the next 15 s. It then
+ *  shows the page, and the frames must add those reads again, the agent's
+ *  comment must stand right under the New divider, one messages.readItem
+ *  must leave and the summary must drop back. Its cleanup shows the page
+ *  and removes t0's notification from the Inbox row's menu, as
+ *  ui/inbox-badge does, so the next step finds Nora's Inbox as this one
+ *  did. It runs after ui/inbox-badge, while t0 is active. */
+async function hiddenTaskWindowCheck() {
+  const s = run.creds.stdKey
+  const { t0, nora } = run
+  await check(HIDDEN_TASK_WINDOW_STEP, async () => {
+    const taskAddress = `${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${t0.key.toLowerCase()}`
+    /** The store's unread summary, once it holds a current answer. */
+    const summary = async () => {
+      const now = await evaluate(app, () => window.PLANNER?.inboxSummary ?? null)
+      return now?.state === 'ok' && now.current ? now : null
+    }
+    /** The store's inbox item of t0, once it holds a current answer. */
+    const item = async () => {
+      const now = await evaluate(app, () => window.PLANNER?.inboxItem ?? null)
+      return now?.task === t0.id && now.state === 'ok' && now.current ? now : null
+    }
+    /** Hides or shows the page as the browser does for a background tab. */
+    const setHidden = (hidden) =>
+      evaluate(
+        app,
+        (on) => {
+          Object.defineProperty(document, 'visibilityState', {
+            configurable: true,
+            get: () => (on ? 'hidden' : 'visible'),
+          })
+          document.dispatchEvent(new Event('visibilitychange'))
+        },
+        hidden,
+      )
+    const frames = []
+    let sockets = 0
+    const record = (ws) => {
+      const socket = ++sockets
+      ws.on('framesent', (frame) => frames.push({ socket, text: String(frame.payload) }))
+    }
+    /** The queries changed `change` ('add' or 'remove') since frame `from`. */
+    const changed = (change, from) =>
+      querySetChanges(frames)
+        .slice(querySetChanges(frames.slice(0, from)).length)
+        .filter((c) => c.change === change)
+        .map((c) => c.query)
+    const reads = (from) =>
+      frames.slice(from).filter((f) => sentMutation(f.text, 'messages:readItem') !== null).length
+    /** Whether `after` counts one more than `before`, or both more than 99. */
+    const oneMore = (before, after) =>
+      before.answer.unread_more
+        ? after.answer.unread_more
+        : after.answer.unread_count === before.answer.unread_count + 1 ||
+          (before.answer.unread_count === 99 && after.answer.unread_more)
+    app.on('websocket', record)
+    try {
+      await app.goto(taskAddress, { waitUntil: 'domcontentloaded' })
+      expect(await until(async () => (await item()) !== null, 60_000), "t0's item did not answer")
+      expect(
+        await until(async () => ((await item())?.item?.unread_count ?? 0) === 0, 60_000),
+        'opening t0 did not read its item',
+      )
+      expect(await until(async () => (await summary()) !== null, 60_000), 'no summary answered')
+      const before = await summary()
+      const hiddenAt = frames.length
+      await setHidden(true)
+      expect(
+        await until(
+          async () => HIDDEN_WINDOW_READS.every((q) => changed('remove', hiddenAt).includes(q)),
+          30_000,
+        ),
+        `the hidden page kept the window's reads: ${JSON.stringify(changed('remove', hiddenAt))}`,
+      )
+      const comment = await restOk(s, 'POST', `/tasks/${t0.key}/comments`, {
+        body: `${run.tag} hidden window for @[${nora.name}](user:${nora.id})`,
+      })
+      let after = null
+      expect(
+        await until(async () => {
+          after = await summary()
+          return after !== null && oneMore(before, after)
+        }, 60_000),
+        `the summary did not count the mention while hidden: ${JSON.stringify(after?.answer ?? null)}`,
+      )
+      await sleep(15_000)
+      eq(reads(hiddenAt), 0, 'reads of the item sent while the page was hidden')
+      const shownAt = frames.length
+      await setHidden(false)
+      expect(
+        await until(
+          async () => HIDDEN_WINDOW_READS.every((q) => changed('add', shownAt).includes(q)),
+          30_000,
+        ),
+        `the shown page did not read the window again: ${JSON.stringify(changed('add', shownAt))}`,
+      )
+      const under = () =>
+        evaluate(
+          app,
+          (id) => {
+            const mark = document.querySelector('[data-spine] > [data-unread-divider="mark"]')
+            return mark?.nextElementSibling?.getAttribute('data-comment') === id
+          },
+          comment.id,
+        )
+      expect(await until(under, 60_000), "the agent's comment is not under the New divider")
+      expect(await until(async () => reads(shownAt) === 1, 60_000), 'the return sent no read')
+      let back = null
+      expect(
+        await until(async () => {
+          back = await summary()
+          if (back === null || back.answer.unread_more !== before.answer.unread_more) return false
+          return (
+            before.answer.unread_more || back.answer.unread_count === before.answer.unread_count
+          )
+        }, 60_000),
+        `the summary did not drop back: ${JSON.stringify(back?.answer ?? null)}`,
+      )
+      eq(reads(shownAt), 1, 'reads of the item sent on return')
+      return `the hidden page removed ${HIDDEN_WINDOW_READS.join(', ')}, the badge counted the mention with no read for 15 s, and the return added them again, drew New above the comment and sent one read`
+    } finally {
+      app.off('websocket', record)
+      await setHidden(false).catch(() => {})
+      // the row's own Remove notification leaves Nora's Inbox as it was
+      try {
+        await app.goto(`${cfg.appOrigin}/app/~/inbox`, { waitUntil: 'domcontentloaded' })
+        const row = app.locator(`[data-message="${t0.id}"]`)
+        await row.waitFor({ timeout: 30_000 })
+        await row.click({ button: 'right' })
+        await app.locator('[data-msg-menu] button', { hasText: 'Remove notification' }).click()
+        await until(async () => (await row.count()) === 0, 30_000)
+      } catch (e) {
+        console.error(`${HIDDEN_TASK_WINDOW_STEP}: could not remove t0's notification:`, e)
+      }
+    }
+  })
+}
+
 /** The step that lists Nora's Inbox from the deployment's pages and acts
  *  on a row by its organization and task (inboxListCheck). */
 export const INBOX_LIST_STEP = 'ui/inbox-list'
@@ -6707,10 +6887,8 @@ export function sentMutation(text, udfPath) {
  *  Nora, after the Standard agent mentions her in a comment on t0 over
  *  REST, a fresh load of /app/~/inbox must show t0's row, by its task and
  *  organization, on the first page with M's name and then Alpha's in its
- *  crumb, having subscribed the page and no task window
- *  (TASK_WINDOWS_QUERY). A search by t0's key, and then by M's name, must
- *  subscribe the page with that search and hold t0's row, still with no
- *  task window. From the row's menu it sends Mark as read
+ *  crumb, having subscribed the page. A search by t0's key, and then by M's
+ *  name, must subscribe the page with that search and hold t0's row. From the row's menu it sends Mark as read
  *  (messages.readItem with t0's organization, task and a cutoff), Mark as
  *  unread (messages.unreadItem), Snooze for an hour (messages.snoozeItem
  *  with a time), after which the row leaves, Show snoozed brings it back
@@ -6719,7 +6897,7 @@ export function sentMutation(text, udfPath) {
  *  its card ringed. Back in the Inbox, when the first page has a Next, Next
  *  and Previous must show t0's row again; else it notes one page. Last,
  *  Remove notification (messages.removeItem with the cutoff) leaves Nora's
- *  Inbox as the step found it. It runs after ui/inbox-badge, which removed
+ *  Inbox as the step found it. It runs after ui/hidden-task-window, which removed
  *  t0's item, and before the run archives M, which holds t0; the cleanup,
  *  which deletes M, removes the comment with t0. */
 async function inboxListCheck() {
@@ -6748,9 +6926,7 @@ async function inboxListCheck() {
         "t0's row's crumb",
       )
       const pages = () => sent.flatMap((f) => addedArgs(f, INBOX_PAGE_QUERY))
-      const windows = () => sent.filter((f) => addsQuery(f, TASK_WINDOWS_QUERY)).length
       expect(pages().length >= 1, 'the load did not subscribe the Inbox page')
-      eq(windows(), 0, 'the Inbox subscribed task windows')
       // the search goes to the server, by t0's key and by M's name
       const search = app.locator(`[${m.search}]`)
       for (const text of [t0.key, M.name]) {
@@ -6761,7 +6937,6 @@ async function inboxListCheck() {
         )
         await row.waitFor({ timeout: 60_000 })
       }
-      eq(windows(), 0, "the Inbox's search subscribed task windows")
       await search.fill('')
       /** The arguments of the first `udfPath` sent after frame `from`. */
       const wrote = async (udfPath, from, what) => {
@@ -9903,6 +10078,10 @@ export const DELETED_ITEMS_MARKS = {
   showAll: 'data-show-all',
   end: 'data-deleted-page-end',
   state: 'data-deleted-state',
+  // a row's task key and title, by which the export step's cleanup tells
+  // its own item (exportItemOf)
+  key: 'data-deleted-key',
+  title: 'data-deleted-title',
 }
 
 /** The class of the app's visible toasts (src/App.tsx ToastHost). */
@@ -10069,6 +10248,310 @@ async function deletedItemsCheck() {
     )
     return `restored ${made.length} tasks from two pages as one action of two calls, and deleted ${sub.name} for good after Delete now counted no earlier items`
   })
+}
+
+/** The step that prepares, saves and unzips an organization export through
+ *  the app (orgExportCheck). */
+export const ORG_EXPORT_STEP = 'ui/org-export'
+
+/** The marks the step waits for on the export section
+ *  (src/panels/OrganizationExport.tsx). */
+export const ORG_EXPORT_MARKS = {
+  section: 'data-org-export',
+  state: 'data-export-state',
+  // the latest job's id, so the step tells its own job from an earlier
+  // ready archive
+  id: 'data-export-id',
+  delivery: 'data-export-delivery',
+  start: 'data-export-start',
+  saved: 'data-export-saved',
+  recorded: 'data-export-recorded',
+  bytes: 'data-export-bytes',
+  lastExport: 'data-org-last-export',
+}
+
+/** The session flag under which the init script stands in for the save
+ *  picker, so later navigations of the page keep the browser's own. */
+export const ORG_EXPORT_PICKER_FLAG = 'stgchk-export-picker'
+
+/** The file the stand-in picker answers, in the origin private file system. */
+export const ORG_EXPORT_FILE = 'stgchk-org-export.zip'
+
+/** The init script that answers showSaveFilePicker with a file of the
+ *  origin private file system while the session flag is set, so the app's
+ *  real createWritable, pipeTo and close run. The native picker cannot be
+ *  pressed in a headless browser. */
+export const ORG_EXPORT_PICKER = `(() => {
+  try {
+    if (sessionStorage.getItem('${ORG_EXPORT_PICKER_FLAG}') !== '1') return
+  } catch {
+    return
+  }
+  window.showSaveFilePicker = async () => {
+    const root = await navigator.storage.getDirectory()
+    return await root.getFileHandle('${ORG_EXPORT_FILE}', { create: true })
+  }
+})()`
+
+/** How long the step waits for the export to be ready. */
+export const ORG_EXPORT_READY_MS = 5 * 60_000
+
+/** Settings › Organization › General › Export data on the deployment's
+ *  export job (orgExport.request, status and claimDownload, the /exports/
+ *  route) and its record (orgRemovals.recordExport), as Nora on t0's
+ *  organization. Over REST the run makes `<tag> Exported deleted` in Alpha
+ *  and deletes it, so the archive holds a Deleted item of the run's own.
+ *  With the stand-in picker on (ORG_EXPORT_PICKER) it opens the page,
+ *  waits for the section's state from the deployment's answer, checks that
+ *  the page saves into a chosen file, presses Export data, waits until the
+ *  section shows its own job, collecting or under another id than the
+ *  latest before, so an earlier ready archive never stands in for it, and
+ *  then until that job is ready (ORG_EXPORT_READY_MS for both, the time
+ *  it took in its note), then
+ *  for the saved line and the recorded mark, reads the file back from the
+ *  origin private file system, unzips it with fflate and checks the
+ *  manifest (format qivo-organization-export, version 4, the
+ *  organization's slug), that data/tasks holds t0, that deleted/tasks and
+ *  deleted/items hold the deleted task, that no file contents are in it,
+ *  and that its size is the panel's archive_bytes. The record line must
+ *  show today's date as the page formats it. Its finally deletes the file,
+ *  turns the stand-in off and deletes the run's Deleted item for good, on
+ *  a failure too. It finds the item by its id in the archive, or, when the
+ *  step failed before it read the archive, in Settings › Projects ›
+ *  Deleted items searched by the task's tagged title, once the search
+ *  answered and only as the one row of the task's key and title. A purge
+ *  that is refused, fails or finds no such row is a NOTE, since the item
+ *  then stays 30 days (purgeExportItem). It
+ *  writes on t0's organization what an admin's export writes: a job with
+ *  its parts for four hours and its rows for 30 days, the end of an
+ *  earlier ready archive, and the organization's last saved export
+ *  (last_export_confirmed_at). It needs
+ *  a backend from the release after v0.1.161 on, whose record takes the
+ *  export's id. */
+async function orgExportCheck() {
+  const w = run.creds.writeToken
+  const m = ORG_EXPORT_MARKS
+  const { A } = run.projects
+  await check(ORG_EXPORT_STEP, async () => {
+    const title = `${run.tag} Exported deleted`
+    const gone = await restOk(w, 'POST', '/tasks', { project: A.id, title })
+    run.created.push(gone)
+    const r = await rest(w, 'DELETE', `/tasks/${gone.id}`)
+    expect(r.status === 200, `DELETE ${gone.key} answered HTTP ${r.status}`)
+    let itemId = null
+    await context.addInitScript(ORG_EXPORT_PICKER)
+    try {
+      await evaluate(app, (flag) => sessionStorage.setItem(flag, '1'), ORG_EXPORT_PICKER_FLAG)
+      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/org-general`, {
+        waitUntil: 'domcontentloaded',
+      })
+      const section = app.locator(`[${m.section}][${m.state}]`)
+      await section.waitFor({ timeout: 60_000 })
+      expect(
+        await until(async () => (await section.getAttribute(m.state)) !== 'unknown', 60_000),
+        'the export section never read the deployment',
+      )
+      eq(await section.getAttribute(m.delivery), 'file', 'how the page saves an export')
+      const before = await section.getAttribute(m.state)
+      if (before === 'collecting')
+        throw new Error('an export of the organization is already being prepared')
+      // an earlier ready archive, within its four hours, reads ready too
+      const earlier = await section.getAttribute(m.id)
+      const started = Date.now()
+      await app.locator(`[${m.start}]`).click()
+      const own = async () =>
+        (await section.getAttribute(m.state)) === 'collecting' ||
+        (await section.getAttribute(m.id)) !== earlier
+      expect(
+        await until(own, ORG_EXPORT_READY_MS),
+        `the section still shows the export from before the press, ${earlier ?? 'none'}`,
+      )
+      const ready = await until(
+        async () =>
+          (await section.getAttribute(m.id)) !== earlier &&
+          (await section.getAttribute(m.state)) === 'ready',
+        Math.max(1, ORG_EXPORT_READY_MS - (Date.now() - started)),
+      )
+      expect(
+        ready,
+        `the export reads ${await section.getAttribute(m.state)} after ${ORG_EXPORT_READY_MS / 60_000} minutes`,
+      )
+      const took = Math.round((Date.now() - started) / 1000)
+      const recorded = app.locator(`[${m.recorded}]`)
+      expect(
+        await until(async () => (await recorded.count()) > 0, 120_000),
+        'the page never said whether the save was recorded',
+      )
+      eq(await recorded.first().getAttribute(m.recorded), 'true', 'the record of the saved export')
+      const bytes = Number(await app.locator(`[${m.bytes}]`).first().getAttribute(m.bytes))
+      const saved = await evaluate(
+        app,
+        async (name) => {
+          const root = await navigator.storage.getDirectory()
+          const file = await (await root.getFileHandle(name)).getFile()
+          const data = new Uint8Array(await file.arrayBuffer())
+          let text = ''
+          for (let i = 0; i < data.length; i += 0x8000)
+            text += String.fromCharCode(...data.subarray(i, i + 0x8000))
+          return btoa(text)
+        },
+        ORG_EXPORT_FILE,
+        60_000,
+      )
+      const zip = new Uint8Array(Buffer.from(saved, 'base64'))
+      eq(zip.length, bytes, 'the saved file against the archive size')
+      const { unzipSync, strFromU8 } = await import('fflate')
+      const entries = unzipSync(zip)
+      const names = Object.keys(entries)
+      const manifest = JSON.parse(strFromU8(entries['manifest.json']))
+      eq(manifest.format, 'qivo-organization-export', 'the manifest format')
+      eq(manifest.version, 4, 'the manifest version')
+      eq(manifest.organization?.slug, ORG_SLUG, "the manifest's organization")
+      const rows = (folder) =>
+        names
+          .filter((name) => name.startsWith(`${folder}/`) && name.endsWith('.json'))
+          .flatMap((name) => JSON.parse(strFromU8(entries[name])))
+      expect(
+        rows('data/tasks').some((row) => row.id === run.t0.id),
+        `data/tasks does not hold ${run.t0.key}`,
+      )
+      expect(
+        rows('deleted/tasks').some((row) => row.id === gone.id),
+        `deleted/tasks does not hold ${gone.key}`,
+      )
+      const item = rows('deleted/items').find((row) => row.target_id === gone.id)
+      expect(item !== undefined, `deleted/items holds no item of ${gone.key}`)
+      itemId = item.id
+      expect(!names.some((name) => name.startsWith('files/')), 'the archive holds file contents')
+      const today = await evaluate(app, () =>
+        new Date().toLocaleDateString(undefined, {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric',
+        }),
+      )
+      const line = ((await app.locator(`[${m.lastExport}]`).textContent()) ?? '').trim()
+      expect(
+        line.startsWith(`Last saved export confirmed on ${today}.`),
+        `the record line reads ${short(line)}`,
+      )
+      return `prepared t0's organization's export in ${took} s, saved ${bytes} bytes into the chosen file, recorded it, and found ${run.t0.key} and the deleted ${gone.key} in the archive`
+    } finally {
+      await evaluate(
+        app,
+        async ([flag, name]) => {
+          sessionStorage.removeItem(flag)
+          try {
+            await (await navigator.storage.getDirectory()).removeEntry(name)
+          } catch {
+            // nothing was saved
+          }
+        },
+        [ORG_EXPORT_PICKER_FLAG, ORG_EXPORT_FILE],
+      ).catch(() => {})
+      await purgeExportItem(itemId, gone, title)
+    }
+  })
+}
+
+/** Deletes the export step's own Deleted item of task `gone` for good:
+ *  `itemId`, the archive's item whose target is the task, or, without one,
+ *  the one row Settings › Projects › Deleted items lists with the task's
+ *  key and tagged `title` under the run's project M (deletedTaskItem). It
+ *  purges no other id. Says a NOTE when it finds no such item, or when
+ *  Delete now is refused or fails, since the item then stays 30 days, and
+ *  never fails the step itself. */
+async function purgeExportItem(itemId, gone, title) {
+  const label = `${ORG_EXPORT_STEP}/deleted-item`
+  try {
+    const found = itemId === null ? await deletedTaskItem({ key: gone.key, title }) : { id: itemId }
+    if (found.id === null) {
+      say(
+        'NOTE',
+        label,
+        `deleted nothing, as ${found.why}; ${gone.key}'s Deleted item stays in Deleted items for 30 days`,
+      )
+      return
+    }
+    const id = found.id
+    const outcome = await evaluate(
+      app,
+      (id) => window.PLANNER.purgeDeletedItems([{ id, org_id: window.PLANNER.homeOrg }]),
+      id,
+      60_000,
+    )
+    if (!outcome?.done?.includes(id) && !outcome?.stepping?.includes(id))
+      say(
+        'NOTE',
+        label,
+        `Delete now of ${gone.key}'s Deleted item was not done (${short(JSON.stringify(outcome))}); an admin can delete it in Deleted items`,
+      )
+  } catch (error) {
+    say(
+      'NOTE',
+      label,
+      `could not delete ${gone.key}'s Deleted item for good: ${short(String(error?.message ?? error))}`,
+    )
+  }
+}
+
+/** Which Deleted items row on screen is the item of task `own`, from
+ *  `rows` as the page lists them ({ id, key, title }, null for a missing
+ *  mark). It answers undefined while the search for `own.title` has not
+ *  answered, as the page keeps its earlier rows until it does, which shows
+ *  as no row or a row of another title. Then it answers `{ id }` of the one
+ *  row of `own.key` and `own.title`, or `{ id: null, why }` when no row or
+ *  more than one has that key. */
+export function exportItemOf(rows, own) {
+  if (rows.length === 0 || rows.some((row) => row.title !== own.title)) return undefined
+  const mine = rows.filter((row) => row.key === own.key && row.id)
+  if (mine.length === 1) return { id: mine[0].id }
+  return {
+    id: null,
+    why: `Deleted items lists ${mine.length === 0 ? 'no row' : `${mine.length} rows`} of ${own.key} titled “${own.title}”`,
+  }
+}
+
+/** The run's Deleted item of task `own` ({ key, title }), deleted from a
+ *  sub-project of the run's project M, as Settings › Projects › Deleted
+ *  items lists it for that scope, kind Tasks and the title as its search.
+ *  It answers `{ id }` once the search answered with the one row of the
+ *  task (exportItemOf), else `{ id: null, why }`, also when the search
+ *  lists nothing or has not answered within a minute. */
+async function deletedTaskItem(own) {
+  const m = DELETED_ITEMS_MARKS
+  const { M } = run.projects
+  await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/projects-deleted`, {
+    waitUntil: 'domcontentloaded',
+  })
+  await app.locator(`[${m.page}]`).waitFor({ timeout: 60_000 })
+  await pickProject(app.locator(`[${m.scope}]`), M.name, M.id)
+  await app.getByRole('radio', { name: 'Tasks', exact: true }).click()
+  await app.locator(`[${m.search}]`).fill(own.title)
+  const none = DELETED_ITEMS_EXPECTED.none(own.title)
+  let found = { id: null, why: `the search for “${own.title}” did not answer within a minute` }
+  await until(async () => {
+    if ((await app.locator(`[${m.state}="ok"]`).count()) === 0) return false
+    const ends = await app.locator(`[${m.end}]`).allTextContents()
+    if (ends.some((line) => line.trim() === none)) {
+      found = { id: null, why: `Deleted items lists nothing for “${own.title}”` }
+      return true
+    }
+    const rows = await app.locator(`[${m.row}]`).evaluateAll(
+      (els, [row, key, title]) =>
+        els.map((el) => ({
+          id: el.getAttribute(row),
+          key: el.querySelector(`[${key}]`)?.textContent?.trim() ?? null,
+          title: el.querySelector(`[${title}]`)?.textContent?.trim() ?? null,
+        })),
+      [m.row, m.key, m.title],
+    )
+    const mine = exportItemOf(rows, own)
+    if (mine === undefined) return false
+    found = mine
+    return true
+  }, 60_000)
+  return found
 }
 
 /** The Settings page Archived tasks opens with its search as the first
@@ -11942,9 +12425,9 @@ async function main() {
   await labelMentionPickersCheck()
   // the Overview of a sub-project of its own, while the project is active
   await overviewCheck()
-  // the Board and a task address without task windows, then the Roadmap
-  // with them, while the project is active
-  await tasksOnDemandCheck()
+  // the Board, a task address and the Roadmap, each on its own read, while
+  // the project is active
+  await ownReadsCheck()
   // a task created through the Board and changed in its window at once, in
   // a sub-project of its own, while the project is active
   await createAnswerCheck()
@@ -12002,6 +12485,9 @@ async function main() {
   // Deleted items on the server's page, with tasks and a sub-project of its
   // own, restored past 25 in steps and deleted for good
   await deletedItemsCheck()
+  // the organization's export on the deployment's job, saved into a chosen
+  // file, unzipped and recorded, with a Deleted item of its own
+  await orgExportCheck()
   // the Milestones window opened from the project's Overview, on a
   // milestone of its own, while the project is active
   await milestoneWindowCheck()
@@ -12021,6 +12507,9 @@ async function main() {
   // the Inbox badge from the deployment's unread summary, and the read of
   // a mentioned task on opening it, while t0 is active
   await inboxBadgeCheck()
+  // an open task window's reads leave a hidden page and come back on show,
+  // with the read on open held until then, while t0 is active
+  await hiddenTaskWindowCheck()
   // the Inbox list from the deployment's pages, with a row's actions by
   // organization and task, while t0 is active
   await inboxListCheck()

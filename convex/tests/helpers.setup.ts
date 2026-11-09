@@ -32,7 +32,7 @@ import type { OrgRole } from '../lib/enums'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { loadRowFor, type OrgLoadRow } from '../lib/loadRows'
 import { taskOwnerId } from '../lib/review'
-import { readWorkspace, type Workspace } from '../lib/workspaceJoin'
+import { type RootAnswer, rootWorkspace, type Workspace } from '../lib/workspaceJoin'
 import { type ActivityEntry, insertActivity } from '../model/activity'
 import { insertTask, type TaskWithText, withText } from '../model/descriptions'
 import { ERASE_TIMERS, noteRestore } from '../model/fileHolds'
@@ -43,6 +43,7 @@ import { shownAvatarColor } from '../model/people'
 import { memberCount } from '../model/teamCounts'
 import schema from '../schema'
 import { type OracleProjects, projectsOracle } from './projectsOracle.setup'
+import { type TaskSections, tasksOracleOf } from './tasksOracle.setup'
 import { teamJson } from './teamMembers.setup'
 
 export type T = TestConvex<typeof schema>
@@ -1263,34 +1264,59 @@ export async function restArchivedPage(
 /* A caller as as() gives one. */
 type Caller = ReturnType<typeof as>
 
-/** The workspace the app holds for `caller`, read through the workspace
- * parts that still run, with the projects the caller sees beside it: the
- * root and every organization's tasks once every part answered
- * (lib/workspaceJoin.ts readWorkspace), its delivery time blank so two
- * reads of the same data compare equal, and the caller's projects with
- * their team grants and the caller's own grants on them from the test
- * oracle (projectsOracle.setup.ts), which no part sends since the app
- * reads its projects by id and a batch at a time. wholeOf adds everyone's
- * grants. Null without a seat. */
+/** The workspace the app holds for `caller`, the root part as the app
+ * keeps it (lib/workspaceJoin.ts rootWorkspace), its delivery time blank
+ * so two reads of the same data compare equal, with the projects the
+ * caller sees beside it: their team grants and the caller's own grants on
+ * them from the test oracle (projectsOracle.setup.ts), which no part sends
+ * since the app reads its projects by id and a batch at a time. It holds
+ * no task: workingSetOf adds the caller's tasks from the tests' oracle,
+ * and wholeOf everyone's grants and rows. Null without a seat. */
 export async function workspaceOf(caller: Caller): Promise<(Workspace & OracleProjects) | null> {
-  const snap = await readWorkspace((name, args) =>
-    caller.query(makeFunctionReference<'query'>(name), args),
+  const root = (await caller.query(
+    makeFunctionReference<'query'>('workspace:root'),
+    {},
+  )) as RootAnswer
+  if (root === null || 'deleting' in root) return null
+  const snap = rootWorkspace(root, '')
+  const projects = await caller.run(
+    async (ctx) => await projectsOracle(ctx, await seatsOf(ctx, snap)),
   )
-  if (snap === null) return null
-  const projects = await caller.run(async (ctx) => {
-    const seats: Doc<'profiles'>[] = []
-    for (const id of snap.myProfileIds) {
-      const seat = await ctx.db
-        .query('profiles')
-        .withIndex('by_uuid', (q) => q.eq('id', id))
-        .unique()
-      if (seat !== null) seats.push(seat)
-    }
-    return await projectsOracle(ctx, seats)
-  })
   const own = new Set(snap.myProfileIds)
   const access = projects.access.filter((g) => own.has(g.profile_id))
-  return { ...snap, ...projects, access, delivered_at: '' }
+  return { ...snap, ...projects, access }
+}
+
+/* The stored profiles of the seats `snap` names, in its order. */
+async function seatsOf(
+  ctx: Parameters<Parameters<Caller['run']>[0]>[0],
+  snap: Pick<Workspace, 'myProfileIds'>,
+) {
+  const seats: Doc<'profiles'>[] = []
+  for (const id of snap.myProfileIds) {
+    const seat = await ctx.db
+      .query('profiles')
+      .withIndex('by_uuid', (q) => q.eq('id', id))
+      .unique()
+    if (seat !== null) seats.push(seat)
+  }
+  return seats
+}
+
+/** The caller's workspace (workspaceOf) with the task sections of every
+ * seat from the tests' oracle beside it (tasksOracle.setup.ts): the tasks
+ * the caller is shown with their relation rows and the anonymized load of
+ * the tasks they are not shown, which the workspace's tasks part sent
+ * before it went. Reference data for the tests that compare a read with
+ * the caller's working set; an access rule is pinned on the read the app
+ * uses. Null without a seat. */
+export async function workingSetOf(
+  caller: Caller,
+): Promise<(Workspace & OracleProjects & TaskSections) | null> {
+  const snap = await workspaceOf(caller)
+  if (snap === null) return null
+  const tasks = await caller.run(async (ctx) => await tasksOracleOf(ctx, await seatsOf(ctx, snap)))
+  return { ...snap, ...tasks }
 }
 
 /* A stored row as the app would receive it, without Convex's system fields
@@ -1306,11 +1332,14 @@ function appRow<R extends { _id: unknown; _creationTime: number; name_key?: stri
  * (workspaceOf), which holds only the login's own profiles, memberships and
  * teams, with every profile of each of its organizations and that
  * profile's Team sync stamp, every team, membership and label beside it, as
- * the stand-ins of the reads by id, the pickers and the agenda answer them.
+ * the stand-ins of the reads by id, the pickers and the agenda answer them,
+ * and each seat's tasks with their relation rows and the anonymized load of
+ * the tasks it is not shown, from the test oracle (tasksOracle.setup.ts),
+ * which the stand-ins of the task window and the views answer from.
  * Null without a seat.
  */
 export async function wholeOf(t: T, profile: Doc<'profiles'>) {
-  const snap = await workspaceOf(as(t, profile))
+  const snap = await workingSetOf(as(t, profile))
   if (snap === null) return null
   const orgIds = snap.orgs.map((org) => org.id)
   const projectIds = snap.projects.map((project) => project.id)
@@ -1375,20 +1404,22 @@ export async function wholeOf(t: T, profile: Doc<'profiles'>) {
   return { ...snap, ...rows }
 }
 
-/** The load rows the app works with for workspace `snap`: a row for each
- * task it shows that passes the server's fence, taken from the task rows
- * the way the store derives them (src/store/taskIndex.ts), then the rows
- * the server sends for the tasks the reader is not shown. The workspace
- * holds no other person, so an owner counts as one of the task's
+/** The tasks of a published test whole (wholeOf) and the projects beside
+ * them, which appLoadRows and appPausedRows read. */
+type WholeTasks = Pick<TaskSections, 'issues' | 'orgLoad'> & Pick<OracleProjects, 'projects'>
+
+/** The load rows of a reader's working set in `whole` (wholeOf), as an
+ * independent reference for planning.ownerLoads: a row for each task the
+ * reader is shown that passes the server's fence, taken from the task rows
+ * as the app derived them while it held tasks, then the tests' oracle's
+ * anonymized rows for the tasks the reader is not shown
+ * (tasksOracle.setup.ts). An owner counts as one of the task's
  * organization unless `gone` names them, as the app files a row for any
  * owner people.byIds has not said is gone (src/store/viewDelay.ts
  * ownerInOrg): the fixtures these serve hold their owners, and the
- * server's own fence checks them (lib/workspaceParts.ts). A test with an
- * owner who is no profile of the organization passes them in `gone`. */
-export function appLoadRows(
-  snap: Workspace & OracleProjects,
-  gone: ReadonlySet<string> = new Set(),
-): OrgLoadRow[] {
+ * server's own fence checks them (lib/loadRows.ts). A test with an owner
+ * who is no profile of the organization passes them in `gone`. */
+export function appLoadRows(snap: WholeTasks, gone: ReadonlySet<string> = new Set()): OrgLoadRow[] {
   const parents = new Set(snap.issues.flatMap((task) => task.parent_id ?? []))
   const projects = new Map(snap.projects.map((project) => [project.id, project]))
   const shown = snap.issues.flatMap((task) => {
@@ -1415,14 +1446,14 @@ export type AppPausedRow = {
   end_week: string
 }
 
-/** The paused tasks the app marks for workspace `snap`, beside
- * appLoadRows. They are the tasks it shows that are paused and not groups
- * (the store's isPaused), not Done, scheduled, not archived and in a live
- * project, owned (lib/review.ts taskOwnerId), as src/views/Resources.tsx
- * passes them to pausedWeeksByPerson, the owner counted as one of the
- * task's organization as appLoadRows counts them. The workspace holds only
- * tasks of projects the reader can see. */
-export function appPausedRows(snap: Workspace & OracleProjects): AppPausedRow[] {
+/** The paused tasks of a reader's working set in `whole` (wholeOf),
+ * beside appLoadRows. They are the tasks the reader is shown that are
+ * paused and not groups, not Done, scheduled, not archived and in a live
+ * project, owned (lib/review.ts taskOwnerId), as Team utilization marks
+ * them (src/views/Resources.tsx pausedWeeksByPerson), the owner counted as
+ * one of the task's organization as appLoadRows counts them. The whole
+ * holds only tasks of projects the reader can see. */
+export function appPausedRows(snap: WholeTasks): AppPausedRow[] {
   const parents = new Set(snap.issues.flatMap((task) => task.parent_id ?? []))
   const projects = new Map(snap.projects.map((project) => [project.id, project]))
   return snap.issues.flatMap((task) => {

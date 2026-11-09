@@ -92,6 +92,19 @@ const power = {
   },
 }
 
+type ExportDownloadAnswer =
+  | { state: 'completed'; file: string; bytes: number }
+  | { state: 'failed'; leftover: string }
+  | { state: 'cancelled' | 'interrupted' | 'failed' | 'busy' | 'refused' | 'declined' }
+
+// An organization export's download into the Downloads folder, answered
+// when it finished (main.ts, exportDownload.ts). The shell takes only the
+// export route's links and chooses the file itself.
+const orgExport = {
+  download: async (url: string): Promise<ExportDownloadAnswer> =>
+    (await ipcRenderer.invoke('qivo:org-export:download', url)) as ExportDownloadAnswer,
+}
+
 const auth = {
   beginOAuth: async (): Promise<{ callbackURL: string }> =>
     (await ipcRenderer.invoke('qivo:auth:begin-oauth')) as { callbackURL: string },
@@ -106,5 +119,6 @@ contextBridge.exposeInMainWorld('qivoDesktop', {
   notifications,
   updates,
   power,
+  orgExport,
   auth,
 })

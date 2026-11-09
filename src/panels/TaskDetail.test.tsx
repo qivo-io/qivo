@@ -23,20 +23,17 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
    description saved once it has uploaded, and an archived task's
    read-only window. Mira leads Work, where the family task
    "Calibrate the sensor" (QN-27) lives, and only views Manuals. The far
-   tasks (QN-40 on) are on the server but not in the workspace: in a task
-   window still to arrive while every task loads (`loading`), else not in
-   it at all. */
+   tasks (QN-40 on) are on the server's data with `far`, else not at all. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
   live: null as null | {
-    holdWindow(from: string | null): void
     forceProjectNav(force: 'client' | null): void
   },
 }))
 vi.mock('../lib/convex', async () => {
   const { liveOver } = await import('../store/guard/liveDouble.setup')
-  double.live = liveOver(network)
+  double.live = liveOver(network, { taskWindow: 'client' })
   return { convex: network, live: double.live }
 })
 vi.mock('../lib/auth', () => ({
@@ -167,9 +164,9 @@ const comment = (id: string, issue: string, author: string, body: string) => ({
 })
 
 /* Mira, Leo, Work under Plan (Mira leads it, with delay tracking) and
-   Manuals under Docs (Mira views it), the family task, and with `loading`
-   the far tasks in a task window still to arrive. */
-function fixture(loading: boolean) {
+   Manuals under Docs (Mira views it), the family task, and with `withFar`
+   the far tasks. */
+function fixture(withFar: boolean) {
   const next = plannerFixture()
   snap = next
   const me = next.profiles[0]
@@ -211,10 +208,9 @@ function fixture(loading: boolean) {
     color: '#335577',
     created_at: AT,
   })
-  // 12,800 task numbers make 64 task windows
-  next.orgs[0].next_issue_num = loading ? 64 * 200 : 60
+  next.orgs[0].next_issue_num = 60
   next.issues.push(task(FAM, 27, { title: 'Calibrate the sensor', status: 'progress' }))
-  if (loading)
+  if (withFar)
     next.issues.push(
       far(),
       task(FAR_RO, 41, { title: 'Read the far manual', project_id: 'manuals' }),
@@ -222,12 +218,12 @@ function fixture(loading: boolean) {
   return next
 }
 
-/* Loads the store, its fixture changed by `edit`; with `loading`, the last
-   task window stays back until arrive(). */
-async function load(loading = false, edit?: (next: Snapshot) => void) {
+/* Loads the store, its fixture changed by `edit`; with `withFar`, the far
+   tasks are on the server too. */
+async function load(withFar = false, edit?: (next: Snapshot) => void) {
   vi.resetModules()
   network.mutation.mockClear()
-  snap = fixture(loading)
+  snap = fixture(withFar)
   edit?.(snap)
   subs = []
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
@@ -247,15 +243,12 @@ async function load(loading = false, edit?: (next: Snapshot) => void) {
   network.mutation.mockResolvedValue(null)
   const store = await import('../store/planner')
   P = store.P
-  if (loading) double.live?.holdWindow('fc000000')
   await store.initStore()
-  expect(P.stillLoading() !== null).toBe(loading)
 }
 
-/* The last task window arrives, and with it every task. */
-const arrive = () =>
+/* The server's data arrives again, unchanged. */
+const deliverAgain = () =>
   act(async () => {
-    double.live?.holdWindow(null)
     publish(snap)
   })
 
@@ -265,6 +258,24 @@ const arrive = () =>
 async function noteTask(row: Task) {
   const { taskRef } = await import('../lib/taskReference')
   return taskRef({ org: row.org_id, num: row.num, uuid: row.id })
+}
+
+/* The reference of the server's task with uuid `id`, which a window opens
+   it by, as the app opens every task. */
+async function refOf(id: string) {
+  return noteTask(rowOf(id))
+}
+/* The server's task with uuid `id`. */
+function rowOf(id: string) {
+  const row = snap.issues.find((t) => t.id === id)
+  if (!row) throw new Error(`no task ${id}`)
+  return row
+}
+/* Opens the window on the server's task with uuid `id` by its reference,
+   and answers its read with the task, as the server would. */
+async function openShown(id: string) {
+  await openWindow(await refOf(id))
+  await answer('taskWindow:task', okAnswer(rowOf(id)))
 }
 
 /* Opens the window on handle `first`, which follows the tasks it opens
@@ -340,7 +351,6 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   document.body.innerHTML = ''
-  double.live?.holdWindow(null)
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -488,7 +498,6 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     expect(reads()).toHaveLength(2)
     await answer('taskWindow:task', okAnswer(far()))
     expect(document.querySelector('[data-task-gone]')).toBeNull()
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Tune the antenna')
     expect(dialog()?.textContent).toContain('three')
     // archived meanwhile: the note above the task, read-only
@@ -502,44 +511,18 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     expect(note()?.textContent).toBe(
       'QN-40 is no longer here. It was deleted, or you can no longer open it.',
     )
-    expect(dialog()?.dataset.taskSource).toBeUndefined()
     expect(dialog()?.textContent).not.toContain('three')
   })
 
-  it('waits for a handle it knows nothing of, while tasks load, and opens nothing once loaded', async () => {
-    await load(true)
-    await openWindow('QN-99')
-    expect(document.querySelector('[data-task-loading]')?.textContent).toContain(
-      'Loading this task…',
-    )
-    expect(reads()).toEqual([])
-    await act(async () => root.unmount())
-    root = createRoot(container)
+  it('opens nothing for a handle it knows nothing of', async () => {
     await load()
     await openWindow('QN-99')
     expect(dialog()?.getAttribute('aria-hidden')).toBe('true')
     expect(document.querySelector('[data-task-loading], [data-task-gone]')).toBeNull()
   })
 
-  it('says a task it showed is no longer on the board until its read answers, and loading while tasks load', async () => {
+  it('says a task it showed is no longer on the board once its read says so, and loads it again on Retry', async () => {
     await load()
-    await openWindow('QN-27')
-    expect(dialog()?.dataset.taskSource).toBe('workspace')
-    // its details column asked for its read, which has not answered yet
-    expect(one('taskWindow:task').args).toEqual({ org_id: snap.orgs[0].id, ref: FAM })
-    const left = structuredClone(snap)
-    left.issues = left.issues.filter((t) => t.id !== FAM)
-    await act(async () => publish(left))
-    expect(note()?.textContent).toBe('QN-27 is no longer on the board.')
-    // the same read goes on, now for the window's view of the task
-    expect(reads()).toHaveLength(1)
-    await answer('taskWindow:task', archivedAnswer(snap.issues[0]))
-    expect(dialog()?.dataset.taskArchived).toBe('')
-    // while tasks still load, a task the window showed before waits for its
-    // read as for the tasks still to come, once no answer shows it
-    await act(async () => root.unmount())
-    root = createRoot(container)
-    await load(true)
     const handle = await noteTask(far())
     await openWindow(handle)
     await answer('taskWindow:task', okAnswer(far()))
@@ -547,11 +530,7 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     await act(async () => one('taskWindow:task').fail(new Error('Server Error')))
     expect(note()?.textContent).toBe("QN-40 is no longer on the board. Couldn't check the archive.")
     await click(buttonNamed('Retry'))
-    expect(document.querySelector('[data-task-loading]')?.textContent).toContain(
-      'Loading this task…',
-    )
     await answer('taskWindow:task', okAnswer(far()))
-    expect(dialog()?.dataset.taskSource).toBe('answer')
   })
 
   it('keeps a task and the comment typed for it through a failed read and its Retry, until the server says it is gone', async () => {
@@ -569,7 +548,6 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     expect(stale()?.textContent).toContain(
       "Couldn't check QN-40 for changes, so it shows as it was last loaded.",
     )
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(document.querySelector('[data-task-gone]')).toBeNull()
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Tune the antenna')
     expect((await editorOf('Leave a comment')).getText()).toBe('Gain looks low')
@@ -595,7 +573,6 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     expect(note()?.textContent).toBe(
       'QN-40 is no longer here. It was deleted, or you can no longer open it.',
     )
-    expect(dialog()?.dataset.taskSource).toBeUndefined()
     expect(document.querySelector('[role="textbox"][aria-label="Leave a comment"]')).toBeNull()
     expect(stale()).toBeNull()
   })
@@ -612,7 +589,6 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
       comments: [comment('c-1', FAR, 'mira', 'Measured at one metre')],
       earlier: false,
     })
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     for (const label of ['Status', 'Priority', 'Assignee', 'Reviewer'])
       expect(field(label)?.disabled, label).toBe(false)
     const update = () => sentArgs('issues:update').at(-1)
@@ -644,10 +620,16 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     await act(async () => remaining.focus())
     await typeInto(remaining, '12')
     await act(async () => remaining.blur())
-    expect(update()).toMatchObject({
-      patch: { remaining_hours: 12 },
-      expected: { remaining_hours: 400 },
-    })
+    // the save goes out once the field's blur settles, which a busy runner
+    // can take a turn longer for
+    await act(async () =>
+      vi.waitFor(() =>
+        expect(update()).toMatchObject({
+          patch: { remaining_hours: 12 },
+          expected: { remaining_hours: 400 },
+        }),
+      ),
+    )
     // the due date, from its calendar
     const due = [...document.querySelectorAll('.task-field')]
       .find((f) => f.querySelector('.task-field-label')?.textContent === 'Due')
@@ -1134,32 +1116,6 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     expect(document.querySelector('[data-plan-unknown]')?.textContent).toBe('Unknown')
   })
 
-  it('turns to the workspace’s view in place when the task arrives, keeping a title and a comment typed meanwhile', async () => {
-    await load(true)
-    const handle = await noteTask(far())
-    await openWindow(handle)
-    await answer('taskWindow:task', okAnswer(far()))
-    await answer('snapshot:threadComments', { comments: [], earlier: false })
-    expect(field('Priority')?.disabled).toBe(false)
-    const composer = await editorOf('Leave a comment')
-    await act(async () => composer.commands.insertContent('Gain looks low'))
-    await click(document.querySelector('[data-task-title]'))
-    const title = document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')
-    if (!title) throw new Error('the title field did not open')
-    await typeInto(title, 'Tune the antenna twice')
-    await arrive()
-    expect(dialog()?.dataset.taskSource).toBe('workspace')
-    expect(field('Priority')?.disabled).toBe(false)
-    expect(document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')?.value).toBe(
-      'Tune the antenna twice',
-    )
-    expect((await editorOf('Leave a comment')).getText()).toBe('Gain looks low')
-    expect(composer.isDestroyed).toBe(false)
-    // the read stops with no section to read it for; the details column's
-    // sections ask afresh
-    expect(open('taskWindow:task')).toHaveLength(1)
-  })
-
   it('offers no relation change over a number address until the task side answers, then offers them', async () => {
     await load()
     holdRelations()
@@ -1184,39 +1140,9 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
       expect(control?.disabled, control?.getAttribute('aria-label') ?? '').toBe(false)
   })
 
-  it('keeps a relation picker open with its rows and a pick on its way when the task arrives', async () => {
-    await load(true)
-    const held = holdRelations()
-    network.mutation.mockImplementation(() => new Promise(() => {}))
-    const handle = await noteTask(far())
-    await openWindow(handle)
-    await answer('taskWindow:task', okAnswer(far()))
-    await click(document.querySelector('[aria-label="Link task"]'))
-    await nextFrame()
-    // the picker reads once it mounts, a frame after the press
-    await act(async () => {
-      await vi.waitFor(() => expect(held).toHaveLength(1))
-    })
-    await held[0]?.answer(pickerBatch([pickerRow(task(PICKED, 44, { title: 'Wire it' }))]))
-    const row = () => document.querySelector<HTMLElement>(`[data-picker-row="${PICKED}"]`)
-    await act(async () => {
-      await vi.waitFor(() => expect(row()).not.toBeNull())
-    })
-    await click(row())
-    expect(row()?.dataset.pickerBusy).toBe('')
-    await arrive()
-    await act(async () => {
-      await vi.waitFor(() => expect(dialog()?.dataset.taskSource).toBe('workspace'))
-    })
-    // the same picker, its rows and its busy row, with no read again
-    expect(row()?.dataset.pickerBusy).toBe('')
-    expect(row()?.getAttribute('aria-pressed')).toBe('true')
-    expect(held).toHaveLength(1)
-  })
-
   it('opens a related task the workspace does not hold from its own read, and names its organization in the address', async () => {
     await load()
-    await openWindow('QN-27')
+    await openWindow(await noteTask(snap.issues[0]))
     const kidRow = task(FAR_KID, 42, { title: 'Wind the coil', parent_id: FAM })
     await answer(
       'taskWindow:task',
@@ -1243,49 +1169,6 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     )
   })
 
-  it('keeps All, the Details tab and a title typed when the reference it opened by turns into its handle', async () => {
-    viewport(true)
-    await load(true)
-    const ref = await noteTask(far())
-    await openWindow(ref)
-    await answer('taskWindow:task', okAnswer(far()))
-    // All under Activity reads the history, and the Details tab the lists
-    await click(buttonNamed('All'))
-    expect(open('snapshot:threadHistory')).toHaveLength(1)
-    await click(buttonNamed('Details'))
-    expect(open('taskWindow:links')).toHaveLength(1)
-    await click(document.querySelector('[data-task-title]'))
-    const title = document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')
-    if (!title) throw new Error('the title field did not open')
-    await typeInto(title, 'Tune the antenna twice')
-    // the workspace brings the task, and the reference turns into its handle
-    await arrive()
-    expect(shownHandle).toBe('QN-40')
-    expect(dialog()?.dataset.taskSource).toBe('workspace')
-    // the same window, as it was
-    expect(document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')?.value).toBe(
-      'Tune the antenna twice',
-    )
-    expect(open('snapshot:threadHistory')).toHaveLength(1)
-    expect(open('taskWindow:links')).toHaveLength(1)
-    expect(window.showToast).not.toHaveBeenCalledWith('Unsaved title discarded')
-  })
-
-  it('keeps the remaining hours typed when the reference it opened by turns into its handle', async () => {
-    await load(true)
-    await openWindow(await noteTask(far()))
-    await answer('taskWindow:task', okAnswer(far()))
-    const remaining = document.querySelector<HTMLInputElement>('[data-remaining-input]')
-    if (!remaining) throw new Error('missing the Remaining field')
-    await act(async () => remaining.focus())
-    await typeInto(remaining, '12')
-    await arrive()
-    expect(shownHandle).toBe('QN-40')
-    expect(dialog()?.dataset.taskSource).toBe('workspace')
-    expect(document.querySelector<HTMLInputElement>('[data-remaining-input]')?.value).toBe('12')
-    expect(document.activeElement).toBe(document.querySelector('[data-remaining-input]'))
-  })
-
   it('keeps the read and the view when a phone switches from Details back to Activity', async () => {
     viewport(true)
     await load()
@@ -1299,160 +1182,7 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     await click(buttonNamed('Activity'))
     expect(open('taskWindow:links')).toEqual([])
     expect(one('taskWindow:task')).toBe(read)
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Tune the antenna')
-  })
-})
-
-describe('the task window as the workspace and the answer disagree', { timeout: 30_000 }, () => {
-  /* The family task as the workspace holds it. */
-  const fam = () => {
-    const row = snap.issues.find((t) => t.id === FAM)
-    if (!row) throw new Error('missing the family task')
-    return row
-  }
-  /* A delivery of the workspace without the family task. */
-  const withoutFam = () => {
-    const left = structuredClone(snap)
-    left.issues = left.issues.filter((t) => t.id !== FAM)
-    return left
-  }
-  const leadEdit = () =>
-    document.querySelector('[data-comment="c-2"] [aria-label="Edit comment (project lead)"]')
-
-  it('offers the composer, lead edits and Restore only when both the answer and the workspace allow them', async () => {
-    await load()
-    // the answer says Mira leads Manuals, which the workspace says she views
-    const row = task(FAR_RO, 41, { title: 'Read the far manual', project_id: 'manuals' })
-    await openWindow(await noteTask(row))
-    await answer('taskWindow:task', okAnswer(row, { level: 'lead' }))
-    await answer('snapshot:threadComments', {
-      comments: [comment('c-2', FAR_RO, 'leo', 'Theirs')],
-      earlier: false,
-    })
-    expect(dialog()?.dataset.taskSource).toBe('answer')
-    expect(document.querySelector('[data-composer]')).toBeNull()
-    expect(leadEdit()).toBeNull()
-    // and every other control: read-only where the workspace says so
-    for (const label of ['Status', 'Priority', 'Assignee']) {
-      expect(field(label)?.disabled, label).toBe(true)
-      expect(await hintOf(field(label)), label).toBe(READ_ONLY)
-    }
-    expect(document.querySelector('button[aria-label="Add label"]')).toBeNull()
-    expect(document.querySelector<HTMLInputElement>('[data-remaining-input]')?.disabled).toBe(true)
-    await answer('taskWindow:task', archivedAnswer(row, 'lead'))
-    expect(note()?.textContent).toContain('was archived')
-    expect(buttonNamed('Restore')).toBeUndefined()
-    // and the other way: the answer says she views Work, which she leads
-    await act(async () => root.unmount())
-    root = createRoot(container)
-    await load()
-    await openWindow(await noteTask(far()))
-    await answer('taskWindow:task', okAnswer(far(), { level: 'viewer' }))
-    await answer('snapshot:threadComments', {
-      comments: [comment('c-2', FAR, 'leo', 'Theirs')],
-      earlier: false,
-    })
-    expect(dialog()?.dataset.taskSource).toBe('answer')
-    expect(document.querySelector('[data-composer]')).toBeNull()
-    expect(leadEdit()).toBeNull()
-    // the answer's word holds for the fields too, and the eye needs sight
-    for (const label of ['Status', 'Priority', 'Assignee']) {
-      expect(field(label)?.disabled, label).toBe(true)
-      expect(await hintOf(field(label)), label).toBe(READ_ONLY)
-    }
-    expect(document.querySelector('button[aria-label="Add label"]')).toBeNull()
-    expect(document.querySelector<HTMLButtonElement>('[data-task-subscribe]')?.disabled).toBe(false)
-    await answer('taskWindow:task', archivedAnswer(far(), 'viewer'))
-    expect(buttonNamed('Restore')).toBeUndefined()
-    // both agree: all of them
-    await answer('taskWindow:task', okAnswer(far()))
-    expect(document.querySelector('[data-composer]')).not.toBeNull()
-    expect(leadEdit()).not.toBeNull()
-    for (const label of ['Status', 'Priority', 'Assignee'])
-      expect(field(label)?.disabled, label).toBe(false)
-    expect(document.querySelector('button[aria-label="Add label"]')).not.toBeNull()
-    await answer('taskWindow:task', archivedAnswer(far()))
-    expect(buttonNamed('Restore')).toBeDefined()
-  })
-
-  it('discards a comment typed for a task its answer then says is archived, and says so', async () => {
-    await load()
-    await openWindow(await noteTask(far()))
-    await answer('taskWindow:task', okAnswer(far()))
-    await answer('snapshot:threadComments', { comments: [], earlier: false })
-    const composer = await editorOf('Leave a comment')
-    await act(async () => composer.commands.insertContent('Gain looks low'))
-    await answer('taskWindow:task', archivedAnswer(far()))
-    expect(dialog()?.dataset.taskArchived).toBe('')
-    expect(document.querySelector('[role="textbox"][aria-label="Leave a comment"]')).toBeNull()
-    expect(window.showToast).toHaveBeenCalledWith('Unsaved comment discarded', 'error')
-  })
-
-  it('keeps a title typed for a task that leaves the workspace, and saves it through an answer that gives Edit', async () => {
-    await load()
-    await openWindow('QN-27')
-    await answer('taskWindow:task', okAnswer(fam()))
-    await click(document.querySelector('[data-task-title]'))
-    const title = document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')
-    if (!title) throw new Error('the title field did not open')
-    await typeInto(title, 'Calibrate the sensor twice')
-    await act(async () => publish(withoutFam()))
-    expect(dialog()?.dataset.taskSource).toBe('answer')
-    const kept = document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')
-    expect(kept?.value).toBe('Calibrate the sensor twice')
-    expect(window.showToast).not.toHaveBeenCalledWith('Unsaved title discarded')
-    await act(async () => kept?.blur())
-    expect(sentArgs('issues:update')).toEqual([
-      {
-        org_id: snap.orgs[0].id,
-        id: FAM,
-        patch: { title: 'Calibrate the sensor twice' },
-        expected: { title: printOf(trimmedForm('Calibrate the sensor')) },
-      },
-    ])
-  })
-
-  it('discards a title typed for a task that leaves the workspace when its answer gives no Edit', async () => {
-    await load()
-    await openWindow('QN-27')
-    await answer('taskWindow:task', okAnswer(fam(), { level: 'viewer' }))
-    await click(document.querySelector('[data-task-title]'))
-    const title = document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')
-    if (!title) throw new Error('the title field did not open')
-    await typeInto(title, 'Calibrate the sensor twice')
-    await act(async () => publish(withoutFam()))
-    expect(dialog()?.dataset.taskSource).toBe('answer')
-    expect(document.querySelector('[aria-label="Task title"]')).toBeNull()
-    expect(document.querySelector('[data-task-title]')?.textContent).toBe('Calibrate the sensor')
-    expect(window.showToast).toHaveBeenCalledWith('Unsaved title discarded')
-    expect(
-      network.mutation.mock.calls.filter(([ref]) => getFunctionName(ref).startsWith('issues:')),
-    ).toEqual([])
-  })
-
-  it('closes a picker of a task that leaves the workspace, so it does not open again when the task comes back', async () => {
-    await load()
-    await openWindow('QN-27')
-    await answer('taskWindow:task', okAnswer(fam()))
-    const picker = () => document.querySelector('input[placeholder="Add labels…"]')
-    // the window takes focus a frame after it opens, which would close a
-    // picker opened before; the picker opens a frame after the press
-    await act(async () => {
-      await vi.waitFor(() => {
-        if (!dialog()?.contains(document.activeElement))
-          throw new Error('the window has no focus yet')
-      })
-    })
-    await click(document.querySelector('button[aria-label="Add label"]'))
-    await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
-    expect(picker()).not.toBeNull()
-    await act(async () => publish(withoutFam()))
-    expect(dialog()?.dataset.taskSource).toBe('answer')
-    expect(picker()).toBeNull()
-    await act(async () => publish(snap))
-    expect(dialog()?.dataset.taskSource).toBe('workspace')
-    expect(picker()).toBeNull()
   })
 })
 
@@ -1467,18 +1197,6 @@ describe('an image pasted into a description shown from its answer', { timeout: 
         preventDefault: () => {},
       } as unknown as ClipboardEvent)
     })
-  /* The family task as the workspace holds it, and a delivery of the
-     workspace without it. */
-  const fam = () => {
-    const row = snap.issues.find((t) => t.id === FAM)
-    if (!row) throw new Error('missing the family task')
-    return row
-  }
-  const withoutFam = () => {
-    const left = structuredClone(snap)
-    left.issues = left.issues.filter((t) => t.id !== FAM)
-    return left
-  }
   /* Holds the upload's URL until `finish` or `fail` lets it go, and answers
      its attach with the row the server stores and every other write with
      null. `finish` answers the attachment's id. The image's address is
@@ -1566,33 +1284,6 @@ describe('an image pasted into a description shown from its answer', { timeout: 
     const attId = await upload.finish()
     expect(descriptions()).toHaveLength(1)
     expect(holdsImage(descriptions()[0], attId)).toBe(true)
-  })
-
-  it('saves a waiting draft once, with its image, when the task left the workspace while it uploaded', async () => {
-    await load()
-    await openWindow('QN-27')
-    await answer('taskWindow:task', okAnswer(fam()))
-    const upload = holdUpload()
-    const description = await editorOf('Task description')
-    await paste(description, image())
-    await upload.asked()
-    // saved while the workspace holds the task, with the image uploading
-    await click(buttonNamed('Save'))
-    const saved = descriptions()[0] ?? ''
-    expect(saved).toContain('](uploading:')
-    // the task leaves the workspace, and its answer holds that save
-    await act(async () => publish(withoutFam()))
-    await answer('taskWindow:task', okAnswer({ ...fam(), description: saved }))
-    expect(dialog()?.dataset.taskSource).toBe('answer')
-    // more is typed and saved while the image still uploads, which waits
-    await act(async () => description.chain().focus('end').insertContent(' Twice.').run())
-    await click(buttonNamed('Save'))
-    expect(window.showToast).toHaveBeenCalledWith(STILL_UPLOADING, 'error')
-    expect(descriptions()).toHaveLength(1)
-    const attId = await upload.finish()
-    // the upload saves the waiting draft, and patches nothing over it
-    expect(descriptions()).toHaveLength(2)
-    expect(holdsImage(descriptions()[1], attId)).toBe(true)
   })
 
   it('removes an image whose draft was discarded, in the task’s organization, though the window closed before it uploaded', async () => {
@@ -1687,53 +1378,20 @@ describe('the task window when the home organization changes', { timeout: 30_000
       for (const p of next.profiles) if (p.id === 'mira') p.org_role = 'guest'
       await act(async () => publish(next))
       expect(P.homeOrg).toBe(BETA)
-      expect(P.issueById['QN-40']?.title).toBe('Beta task 40')
       // the reference names its organization by id, so it does not move,
       // and the window goes on showing the task
       expect(shownHandle).toBe(ref)
       expect(document.querySelector('[data-task-title]')?.textContent).toBe('Tune the antenna')
-      expect(dialog()?.dataset.taskSource).toBe('answer')
       expect(dialog()?.hasAttribute('data-task-archived')).toBe(state === 'archived')
       expect(one('taskWindow:task').args).toEqual({ org_id: snap.orgs[0].id, ref: FAR })
       // and the address and Copy link name it in Testbed
       expect(address()).toBe('/app/testbed/board/tasks/qn-40')
       expect(issueLink(FAR)).toBe('/app/testbed/tasks/qn-40')
     })
-
-  it('keeps saying what became of a task that left, rather than show the new home task of its number', async () => {
-    await load(false, (next) => {
-      withBeta(next)
-      next.issues.push(
-        task('beta-27', 27, { org_id: BETA, project_id: 'beta-work', title: 'Beta task 27' }),
-      )
-    })
-    await openWindow('QN-27')
-    expect(dialog()?.dataset.taskSource).toBe('workspace')
-    // someone deletes it: it leaves the board before its read answers
-    const left = structuredClone(snap)
-    left.issues = left.issues.filter((t) => t.id !== FAM)
-    await act(async () => publish(left))
-    expect(note()?.textContent).toBe('QN-27 is no longer on the board.')
-    const { buildPath } = await import('../lib/router')
-    for (const p of left.profiles) if (p.id === 'mira') p.org_role = 'guest'
-    await act(async () => publish(left))
-    expect(P.issueById['QN-27']?.title).toBe('Beta task 27')
-    // the window follows it, saying the same of it, and its read answers
-    expect(shownHandle).toBe(FAM)
-    expect(note()?.textContent).toBe('QN-27 is no longer on the board.')
-    await answer('taskWindow:task', { state: 'unavailable' })
-    expect(note()?.textContent).toBe(
-      'QN-27 is no longer here. It was deleted, or you can no longer open it.',
-    )
-    expect(document.querySelector('[data-task-title]')).toBeNull()
-    expect(buildPath({ view: 'kanban', openIssue: shownHandle })).toBe(
-      '/app/testbed/board/tasks/qn-27',
-    )
-  })
 })
 
 describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () => {
-  it("judges from the owner's load from the server while tasks load, and the workspace's verdict once they have", async () => {
+  it("judges from the owner's load from the server, and keeps the verdict through a delivery", async () => {
     await load(true)
     const handle = await noteTask(far())
     await openWindow(handle)
@@ -1761,47 +1419,13 @@ describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () 
       owners: [{ owner_id: 'mira', state: 'ok', spans: [] }],
     })
     expect(delayChip()?.dataset.delayChip).toBe('late')
-    await arrive()
+    await deliverAgain()
     // 400 hours do not fit in two weeks of Mira's time
     expect(delayChip()?.dataset.delayChip).toBe('late')
     expect(delayChip()?.textContent).toBe('Delayed')
   })
 
-  it('says the delay of a held group is unknown while some of its subtasks load, naming them as the cause', async () => {
-    // the family task is a group due in two weeks: one subtask ends within
-    // a week, and one in three weeks, still to come
-    await load(true, (next) => {
-      const fam = next.issues.find((t) => t.id === FAM)
-      Object.assign(fam ?? {}, { due_date: day(14), has_subtasks: true })
-      next.issues.push(
-        task('01000000-0000-4000-8000-000000000029', 29, {
-          parent_id: FAM,
-          start_week: day(0),
-          end_week: day(7),
-        }),
-        task(FAR_KID, 42, { parent_id: FAM, start_week: day(0), end_week: day(21) }),
-      )
-    })
-    // the workspace holds no task while every task loads; the group and its
-    // near subtask held before the rest, as the person's own new tasks are
-    const { __layerProbe } = await import('../store/planner')
-    await act(async () =>
-      __layerProbe?.plantTasks(
-        snap.issues.filter((t) => t.id === FAM || t.id === '01000000-0000-4000-8000-000000000029'),
-      ),
-    )
-    await openWindow(P.handleOf(FAM) ?? '')
-    expect(dialog()?.dataset.taskSource).toBe('workspace')
-    expect(delayChip()?.dataset.delayChip).toBe('unknown')
-    expect(await hintOf(delayChip())).toBe(
-      "Its subtasks' dates decide it, and they have not all loaded yet.",
-    )
-    // the subtask still to come ends after the due date
-    await arrive()
-    expect(delayChip()?.dataset.delayChip).toBe('late')
-  })
-
-  it('judges a group shown from its answer with hidden subtasks by its visible span, while tasks load too', async () => {
+  it('judges a group shown from its answer with hidden subtasks by its visible span', async () => {
     await load(true)
     await openWindow(await noteTask(far()))
     const kid = short(task(FAR_KID, 42, { parent_id: FAR, start_week: day(0), end_week: day(7) }))
@@ -1812,7 +1436,6 @@ describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () 
         subtasks: { rows: [kid], complete: true },
       }),
     )
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     // hidden subtasks prove neither on track nor behind, loaded or not
     expect(delayChip()).toBeNull()
     // a visible span that ends past the due date proves it late
@@ -1857,7 +1480,6 @@ describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () 
         subtasks: { rows: [kid], complete: true },
       }),
     )
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     // the span ends before the due date, on track as the card is
     const verdict = () => P.delayOf(P.viewTask('board:desktop', FAR) ?? '')?.status
     expect(verdict()).toBe('ok')
@@ -1974,9 +1596,7 @@ describe('the archived task window', { timeout: 30_000 }, () => {
       ([ref]) => getFunctionName(ref) === 'issues:unarchive',
     )
     expect(restores.map(([, args]) => args)).toEqual([{ org_id: snap.orgs[0].id, id: FAR }])
-    snap.issues.push(far())
-    await act(async () => publish(snap))
-    expect(dialog()?.dataset.taskSource).toBe('workspace')
+    await answer('taskWindow:task', okAnswer(far()))
     expect(document.querySelector('[data-task-gone]')).toBeNull()
     expect(field('Priority')?.disabled).toBe(false)
   })
@@ -2030,7 +1650,12 @@ describe('the archived task window', { timeout: 30_000 }, () => {
       'QN-40 was archived. Restore it to bring it back to the board.',
     )
     expect(dialog()?.dataset.taskArchived).toBeUndefined()
-    expect(document.querySelector('[data-task-gone-place]')?.textContent).toBe('Plan, Work')
+    // the place comes from the project cache, which the answer names it to
+    await act(async () =>
+      vi.waitFor(() =>
+        expect(document.querySelector('[data-task-gone-place]')?.textContent).toBe('Plan, Work'),
+      ),
+    )
     expect(dialog()?.textContent).not.toContain('No description.')
   })
 })
@@ -2038,13 +1663,8 @@ describe('the archived task window', { timeout: 30_000 }, () => {
 describe('the task window in a session that never asked for every task', {
   timeout: 30_000,
 }, () => {
-  beforeEach(async () => {
-    const { TASKS } = await import('../store/liveParts')
-    TASKS.atBoot = false
-  })
+  beforeEach(async () => {})
   afterEach(async () => {
-    const { TASKS } = await import('../store/liveParts')
-    TASKS.atBoot = true
     // no write went out on a path that needs every task, and no paint threw
     const { __layerProbe } = await import('../store/planner')
     expect(__layerProbe?.faults()).toEqual([])
@@ -2053,7 +1673,6 @@ describe('the task window in a session that never asked for every task', {
   it('opens nothing for a handle it knows nothing of, and never says it loads', async () => {
     // the far tasks are on the server; no task window is subscribed
     await load(true)
-    expect(P.taskLoad()).toEqual({ state: 'not_asked' })
     await openWindow('QN-99')
     await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
     // no load is on its way that could bring it, so the window does not wait
@@ -2068,7 +1687,6 @@ describe('the task window in a session that never asked for every task', {
     const handle = await noteTask(far())
     await openWindow(handle)
     await answer('taskWindow:task', okAnswer(far()))
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     const org = snap.orgs[0].id
     const { __layerProbe } = await import('../store/planner')
     for (const [label, kind, picked] of [
@@ -2090,8 +1708,6 @@ describe('the task window in a session that never asked for every task', {
         })
       }
     }
-    expect(__layerProbe?.asks()).toEqual([])
-    expect(P.taskLoad()).toEqual({ state: 'not_asked' })
   })
 })
 
@@ -2117,8 +1733,8 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
   }
   /* Opens the window on `handle` and waits the frame in which it takes
      focus, as a person does before a press. */
-  const openSettled = async (handle: string) => {
-    await openWindow(handle)
+  const openSettled = async (id: string) => {
+    await openShown(id)
     await act(async () => await new Promise((r) => setTimeout(r, 50)))
   }
   const fieldName = (label: string) =>
@@ -2159,7 +1775,7 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
       if (fam) fam.assignee_id = 'leo'
     })
     await pickersAnswer()
-    await openSettled(P.handleOf(FAM) ?? '')
+    await openSettled(FAM)
     expect(field('Assignee')?.disabled).toBe(false)
     // the store holds nobody but the signed-in person, so the window names
     // Leo by id, and shows that it waits for the name meanwhile
@@ -2200,7 +1816,7 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
       )
     })
     await pickersAnswer()
-    await openWindow(P.handleOf('01000000-0000-4000-8000-000000000031') ?? '')
+    await openShown('01000000-0000-4000-8000-000000000031')
     expect(field('Assignee')?.disabled).toBe(true)
     expect(await hintOf(field('Assignee'))).toBe(READ_ONLY)
     await faces()
@@ -2219,7 +1835,7 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
       if (fam) fam.assignee_id = 'gina'
     })
     await pickersAnswer()
-    await openSettled(P.handleOf(FAM) ?? '')
+    await openSettled(FAM)
     expect(fieldName('Assignee')).toBe('Loading…')
     expect(field('Assignee')?.getAttribute('aria-label')).toBe('Assignee, Loading…')
     expect(byIds().map((s) => s.args)).toEqual([{ org_id: snap.orgs[0].id, ids: ['gina'] }])
@@ -2235,7 +1851,7 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
       if (fam) fam.assignee_id = 'gone-person'
     })
     await pickersAnswer()
-    await openSettled(P.handleOf(FAM) ?? '')
+    await openSettled(FAM)
     expect(fieldName('Assignee')).toBe('Loading…')
     vi.spyOn(console, 'error').mockImplementation(() => {})
     await act(async () => byIds()[0].fail(new Error('Server Error')))
@@ -2253,7 +1869,7 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
       const fam = next.issues.find((t) => t.id === FAM)
       if (fam) fam.assignee_id = 'gone-person'
     })
-    await openSettled(P.handleOf(FAM) ?? '')
+    await openSettled(FAM)
     await act(async () => byIds()[0].deliver({ rows: [] }))
     await repaint()
     expect(fieldName('Assignee')).toBe('Unassigned')
@@ -2264,14 +1880,16 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
       const fam = next.issues.find((t) => t.id === FAM)
       if (fam) fam.assignee_id = 'gina'
     })
+    const ref = await refOf(FAM)
     const { IssueDetail } = await import('./IssueDetail')
     await act(async () =>
       root.render(
         <TooltipProvider>
-          <IssueDetail issueId={P.handleOf(FAM) ?? ''} onClose={onClose} onOpen={onOpen} embedded />
+          <IssueDetail issueId={ref} onClose={onClose} onOpen={onOpen} embedded />
         </TooltipProvider>,
       ),
     )
+    await answer('taskWindow:task', okAnswer(rowOf(FAM)))
     const owner = () => document.querySelector('[data-task-assignee-name]')?.textContent
     expect(owner()).toBe('Loading…')
     await act(async () => byIds()[0].deliver({ rows: [GINA] }))
@@ -2284,7 +1902,6 @@ describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () =>
     await pickersAnswer()
     await openWindow(await noteTask(far()))
     await answer('taskWindow:task', okAnswer(far()))
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     await click(field('Assignee'))
     await settle()
     await click(document.querySelector('[data-owner-choice="leo"]'))
@@ -2364,7 +1981,7 @@ describe('the task window’s Move', { timeout: 30_000 }, () => {
 
   it('says the task moved only once the server took the move, and never after its refusal', async () => {
     await load()
-    await openWindow('QN-27')
+    await openShown(FAM)
     // the server refuses: a holder of the task would lose access, which
     // the store logs
     vi.spyOn(console, 'error').mockImplementation(() => {})

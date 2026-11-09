@@ -3,10 +3,12 @@
  * Requires the matching backend and a running dev server. Creates only
  * temporary tasks/milestones; finally removes them and reads the milestones
  * again to check none is left, never seeds or resets.
- * It asks for every task (P.askTasks, reason script) and looks its tasks up
- * in the workspace, so it drives the Roadmap's writes of held tasks; the
- * writes of tasks only the Roadmap's answer brings are the jsdom suites'
- * (src/store/roadmapWrites.test.ts, src/views/roadmapView.test.tsx). The
+ * It looks its tasks up in the Roadmap's answer (P.viewTask, P.anyTask), so
+ * it drives the Roadmap's writes of the answer's rows (src/store/planner.ts
+ * updateViewTask), which the jsdom suites pin too
+ * (src/store/roadmapWrites.test.ts, src/views/roadmapView.test.tsx), and
+ * checks what the backend saved through the task window's read of each
+ * task (taskWindow.task). The
  * workspace holds no milestone, so it picks its project, checks what the
  * backend saved and cleans up through the server's milestone reads
  * (milestones.between, and milestones.get by id for its first milestone
@@ -26,7 +28,6 @@ import {
   purgeDeletedTasks,
   signInDemo,
 } from './browser-demo.mjs'
-import { readWorkspace } from './workspaceJoin.mjs'
 
 const demo = loadBrowserDemo(process.argv[2] ?? 'http://localhost:5199')
 const before = await inspectBrowserDemo(demo)
@@ -137,30 +138,52 @@ async function firstMilestone(client) {
   return [{ id, name, week, project_id }]
 }
 
+/* The run's tasks' stored dates, through the task window's read of each
+   by its uuid (taskWindow.task), as the store holds no task, and the run's
+   milestones, over a fresh HTTP client once no write is on its way. */
 async function persisted() {
   await page.waitForFunction(() => window.__roadmapSmokeConnection().inflightMutations === 0)
   const client = await clientOf(page)
-  const snapshot = await readWorkspace((name, args) =>
-    client.query(makeFunctionReference(name), args),
+  const rows = await Promise.all(
+    tasks.map(async ({ id }) => {
+      const answer = await client.query(makeFunctionReference('taskWindow:task'), {
+        org_id: fixture.org,
+        ref: id,
+      })
+      assert.equal(answer?.state, 'ok', 'A temporary task disappeared')
+      return answer.task
+    }),
   )
   return {
-    tasks: tasks.map(({ id }) => {
-      const row = snapshot.issues.find((issue) => issue.id === id)
-      assert.ok(row, 'A temporary task disappeared')
-      return {
-        id,
-        start: row.start_week ?? null,
-        end: row.end_week ?? null,
-      }
-    }),
+    tasks: rows.map((row) => ({
+      id: row.id,
+      start: row.start_week ?? null,
+      end: row.end_week ?? null,
+    })),
     milestones: await runMilestones(client, fixture.project, fixture.weeks),
   }
 }
 
+/* The handles of the run's tasks, once the Roadmap's answer brings all
+   three (P.viewTask on the Roadmap's slot), in the run's order. */
+async function roadmapHandles() {
+  const uuids = tasks.map(({ id }) => id)
+  await page.waitForFunction(
+    (uuids) => uuids.every((uuid) => window.PLANNER.viewTask('roadmap', uuid)),
+    uuids,
+    { timeout: 30000 },
+  )
+  return page.evaluate(
+    (uuids) => uuids.map((uuid) => window.PLANNER.viewTask('roadmap', uuid).id),
+    uuids,
+  )
+}
+
 async function dragWeeks(id, weeks) {
   await bar(id).scrollIntoViewIfNeeded()
+  // the bar's task as the Roadmap's answer brings it
   const span = await page.evaluate((id) => {
-    const it = window.PLANNER.issueById[id]
+    const it = window.PLANNER.anyTask(id)
     return it.end - it.start + 1
   }, id)
   const box = await bar(id).boundingBox()
@@ -175,16 +198,16 @@ async function dragWeeks(id, weeks) {
 }
 
 /* A group's dates are calculated from its scheduled subtasks, so the parent's
-   span in the client store must match its only subtask, whatever the
-   parent's stored row holds. Waits because the store rebuilds after the
-   server's write arrives. */
+   span in the Roadmap's answer (its row's span) must match its only
+   subtask, whatever the parent's stored row holds. Waits because the
+   answer follows the server's write. */
 async function spanFollows(group, child, message) {
   await page
     .waitForFunction(
       ([group, child]) => {
         const P = window.PLANNER
-        const g = P.issueById[group]
-        const c = P.issueById[child]
+        const g = P.anyTask(group)
+        const c = P.anyTask(child)
         return !!g && !!c && c.start != null && g.start === c.start && g.end === c.end
       },
       [group, child],
@@ -223,13 +246,12 @@ async function cleanup() {
       async ({ ids, milestones, orgSlug, initialUI }) => {
         const P = window.PLANNER
         const { convex } = await import('/src/lib/convex.ts')
-        const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
-          (name, args) => convex.query(name, args),
-        )
-        const org = snapshot.orgs.find((row) => row.slug === orgSlug)
+        const org = P.orgs.find((row) => row.slug === orgSlug)
         if (!org) throw new Error('Cleanup organization is unavailable')
         for (const id of [...ids].reverse()) {
-          if (snapshot.issues.some((row) => row.id === id && row.org_id === org.id))
+          // a task the run made answers the task window's read
+          const read = await convex.query('taskWindow:task', { org_id: org.id, ref: id })
+          if (read?.state === 'ok')
             await convex.mutation('issues:deleteDeep', { org_id: org.id, id })
         }
         // each milestone's project by id (projectNav.byIds), as the store
@@ -348,6 +370,7 @@ try {
       })
       // every milestone the run makes lies in this week or the next two
       return {
+        org: P.org.id,
         project: project.id,
         name: project.name,
         today,
@@ -356,23 +379,12 @@ try {
     },
     { tasks, milestone, listed },
   )
-  // tasks load on demand: the page's store holds the new tasks once it
-  // asked for every task, as the Roadmap does when it opens
-  await page.evaluate(() => window.PLANNER.askTasks('script'))
-  await page.waitForFunction(
-    (ids) =>
-      window.PLANNER.tasksHeld() &&
-      ids.every((id) => window.PLANNER.issues.some((it) => it.uuid === id)),
-    tasks.map(({ id }) => id),
-  )
-  const [parent, child, leaf] = await page.evaluate(
-    (ids) => ids.map((id) => window.PLANNER.issues.find((it) => it.uuid === id).id),
-    tasks.map(({ id }) => id),
-  )
   await page.locator('aside').getByText(fixture.name, { exact: true }).click()
   await selectView('Roadmap')
   await page.locator('[data-roadmap-toolbar]').waitFor()
   await page.getByPlaceholder('Filter tasks…').fill(prefix)
+  // the run's tasks by their handles, from the Roadmap's answer
+  const [parent, child, leaf] = await roadmapHandles()
   await settled(0)
   await undoShows(false, 'Undo is available before any change')
   assert.equal(await page.locator('[data-roadmap-revert-all]').count(), 0)
@@ -499,9 +511,10 @@ try {
   await selectView('Roadmap')
   await page.locator('.mobile-roadmap-agenda').waitFor()
   const mobileBaseline = await persisted()
+  // the agenda's row of the leaf, a write of the Roadmap's answer's row
   await page.evaluate((id) => {
     const P = window.PLANNER
-    const it = P.issueById[id]
+    const it = P.anyTask(id)
     P.updateIssue(id, { start: it.start - 1, end: it.end - 1 })
   }, leaf)
   await settled(1)

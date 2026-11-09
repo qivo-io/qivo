@@ -1,6 +1,7 @@
 /* The task window's own reads (taskWindow.ts, lib/taskWindow.ts): parity
- * with the workspace's tasks part on Northstar and on the small fixture for
- * guest, viewer, member and admin seats, one unavailable answer for every
+ * with the tests' tasks oracle (tasksOracle.setup.ts), which reads each
+ * caller's working set as the tasks part sent it, on Northstar and on the
+ * small fixture for guest, viewer, member and admin seats, one unavailable answer for every
  * refusal, what links, parents and subtasks reveal, the ref forms, the
  * attachment list, and reads that stay within TASK_WINDOW under Convex's
  * transaction limits. */
@@ -31,6 +32,7 @@ import {
   withReadingAdmin,
 } from './helpers.setup'
 import { plantNorthstar } from './northstar.setup'
+import { tasksOracle } from './tasksOracle.setup'
 
 const DEFAULT_TASK_WINDOW = structuredClone(TASK_WINDOW)
 const DEFAULT_OWN_READS = structuredClone(OWN_READS)
@@ -38,8 +40,6 @@ afterEach(() => {
   Object.assign(TASK_WINDOW, structuredClone(DEFAULT_TASK_WINDOW))
   Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
 })
-
-const whole = { from: '', to: null }
 
 /* The largest description the server accepts, of three-byte characters:
  * about 60 KB stored. */
@@ -52,7 +52,7 @@ const byCreation = (a: { created_at: string; id: string }, b: { created_at: stri
 const byNumber = (a: { num: number; id: string }, b: { num: number; id: string }) =>
   a.num - b.num || order(a.id, b.id)
 
-/* The tasks part's row of a task cut to the short row the window sends. */
+/* The oracle's row of a task cut to the short row the window sends. */
 function cut(row: TaskRow, level: string | null | undefined) {
   const {
     description: _text,
@@ -64,24 +64,20 @@ function cut(row: TaskRow, level: string | null | undefined) {
   return { ...rest, has_subtasks: rest.has_subtasks ?? false, level }
 }
 
-/* A caller as as() gives one. */
-type Caller = ReturnType<typeof as>
-
-/** The tasks part of `caller` over the whole window. */
-async function tasksPart(caller: Caller, orgId: string) {
-  const part = await caller.query(api.workspace.tasks, { org_id: orgId, ...whole })
-  if (part.state !== 'ok') throw new Error(`the tasks part answered ${part.state}`)
-  return part
-}
+/** The tasks oracle's sections for seat `person`, the reference the
+ * window's reads are held to. */
+const oracleOf = (t: T, person: Doc<'profiles'>) =>
+  t.run(async (ctx) => await tasksOracle(ctx, (await ctx.db.get(person._id)) as Doc<'profiles'>))
 
 /**
- * Checks that the task window answers `person` what their tasks part says
- * of every task it holds, and unavailable or archived for every other task
- * of the organization. Answers how many tasks it compared.
+ * Checks that the task window answers `person` what the tasks oracle says
+ * of every task in their working set, and unavailable or archived for
+ * every other task of the organization. Answers how many tasks it
+ * compared.
  */
 async function expectParity(t: T, orgId: string, person: Doc<'profiles'>): Promise<number> {
   const caller = t.withIdentity({ subject: person.auth_user_id as string })
-  const part = await tasksPart(caller, orgId)
+  const part = await oracleOf(t, person)
   const read = await t.run(async (ctx) => {
     const me = (await ctx.db.get(person._id)) as Doc<'profiles'>
     const tasks = await ctx.db
@@ -374,8 +370,8 @@ async function plantWorld(t: T, f: OrgFixture) {
   }
 }
 
-describe('parity with the tasks part', () => {
-  it('answers what the tasks part says of every task, for guest, viewer, member, admin and FW-only seats', async () => {
+describe('parity with the tasks oracle', () => {
+  it('answers what the tasks oracle says of every task, for guest, viewer, member, admin and FW-only seats', async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     const w = await plantWorld(t, f)
@@ -418,14 +414,15 @@ describe('parity with the tasks part', () => {
       'archived',
       'unavailable',
     ])
-    // the part sends each marked link once: into the restored task from an
-    // unflagged source with that task, and between flagged tasks with its source
-    const part = await tasksPart(as(t, f.guest), f.org.id)
+    // the oracle holds each marked link once, as the part sent it: into the
+    // restored task from an unflagged source with that task, and between
+    // flagged tasks with its source
+    const part = await oracleOf(t, f.guest)
     for (const link of [w.links.intoMarked, w.links.markedToMarked, w.links.fromMarked])
       expect(part.links.filter((row) => row.id === link.id)).toHaveLength(1)
   })
 
-  it('answers what the tasks part says of every Northstar task, for every person', async () => {
+  it('answers what the tasks oracle says of every Northstar task, for every person', async () => {
     const t = newT()
     const { org, profiles } = await plantNorthstar(t)
     let compared = 0
@@ -447,7 +444,7 @@ describe('parity with the tasks part', () => {
     expect(guest.subtasks.rows.map((row) => row.id)).toEqual([w.kids.shown.id, w.kids.other.id])
     expect(JSON.stringify(guest)).not.toContain(w.kids.hidden.id)
     expect(JSON.stringify(guest)).not.toContain(w.kids.shelved.id)
-    const part = await tasksPart(as(t, f.guest), f.org.id)
+    const part = await oracleOf(t, f.guest)
     expect(part.issues.find((row) => row.id === w.parent.id)?.has_hidden_subtasks).toBe(true)
     const admin = await ask(f.admin)
     if (admin.state !== 'ok') throw new Error(admin.state)

@@ -47,7 +47,7 @@ import {
   type T,
   uuid,
   wholeOf,
-  workspaceOf,
+  workingSetOf,
 } from '../../convex/tests/helpers.setup'
 import { NORTHSTAR_ANCHOR, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
@@ -328,7 +328,7 @@ describe('the milestone stand-in against the reads', () => {
     }
     if (!person) throw new Error('no Northstar person holds work')
     const caller = as(t, person)
-    const snap = await workspaceOf(caller)
+    const snap = await workingSetOf(caller)
     if (snap === null) throw new Error(`${person.name} holds no seat`)
     const projects = MILESTONE_READ.projects
     MILESTONE_READ.projects = listed - 1

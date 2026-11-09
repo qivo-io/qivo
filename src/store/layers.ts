@@ -43,11 +43,11 @@ export type Paint = () => void
     `milestones` paints the milestones the store's milestone reads hold
     (store/milestoneRows.ts), every copy of a milestone it changes, and
     once the server accepted it only the copies of the reads that have not
-    delivered it (store/planner.ts milestoneNeeds). A write on a task the
-    workspace does not hold paints `view`, `detail` and `workspace`, whose
-    paint skips until the workspace holds the task, so the write shows
-    from whichever source the screen takes the task from. A milestone
-    write paints `milestones` alone, as the workspace holds no milestone. */
+    delivered it (store/planner.ts milestoneNeeds). A write on a task
+    paints `view` and `detail`, as the workspace holds no task, so the
+    write shows from whichever source the screen takes the task from. A
+    milestone write paints `milestones` alone, as the workspace holds no
+    milestone. */
 export type View = {
   workspace?: Paint
   thread?: { task: string; paint: Paint }

@@ -254,17 +254,16 @@ describe('background loading', () => {
     expect(order).toEqual([])
   })
 
-  it('covers every workspace module, the editor only for an editor and the export for an admin', async () => {
+  it('covers every workspace module, the editor only for an editor', async () => {
     const chunks = await import('./workspaceChunks')
     const loaders = Object.entries(chunks).filter(
       ([name, value]) => 'peek' in value && name !== 'loadTaskCreation',
     )
-    const all = chunks.workspaceModules({ editor: true, admin: true })
+    const all = chunks.workspaceModules({ editor: true })
     for (const [name, load] of loaders) expect(all, name).toContain(load)
     expect(all).toHaveLength(loaders.length)
-    const member = chunks.workspaceModules({ editor: false, admin: false })
+    const member = chunks.workspaceModules({ editor: false })
     expect(member).not.toContain(chunks.loadDescEditor)
-    expect(member).not.toContain(chunks.loadOrgExport)
   })
 
   it('leaves no lazily loaded code outside the shared loaders', async () => {
@@ -274,7 +273,6 @@ describe('background loading', () => {
       'lib/lazyModule.ts',
       'lib/workspaceChunks.ts',
       'lib/workspacePreload.ts',
-      'lib/orgExport.ts',
     ])
     const found: string[] = []
     const walk = (dir: string, rel = '') => {

@@ -9,10 +9,10 @@
    every row. Layer rule 1 (store/layers.ts) already forbids keeping a row
    object, so paints work unchanged.
 
-   A paint that walks a whole section to find a few rows (an archive, a
-   delete) reads it with `where`, `keysWhere` or `peekValues`, which copy
-   only the rows it then changes, reads a list with `peekList` and filters
-   one with `keepList`, which copy none. A plain walk inside a pass copies every row it hands out.
+   A paint that walks a whole section to find a few rows (a person's other
+   seats) reads it with `where`, which copies only the rows it hands out,
+   reads a list with `peekList` and filters one with `keepList`, which copy
+   none. A plain walk inside a pass copies every row it hands out.
 
    The rows also record what changed, in two ways:
    - since the last rebuild (takeDirty), so the store reshapes only those
@@ -28,7 +28,6 @@ import {
   type KeyedName,
   LISTED_SECTIONS,
   type ListedName,
-  type RowOf,
   sameRow,
   type WorkspaceBase,
 } from './workspaceBase'
@@ -36,9 +35,6 @@ import {
 /** The row type of each list as the store reads it. */
 type ListRow = {
   teamMembers: Row<'team_members'>
-  issueLabels: Row<'issue_labels'>
-  issueSubs: Row<'issue_subscriptions'>
-  orgLoad: RowOf<'orgLoad'>
 }
 
 /* How many rows copyRow copied, for the tests' cost checks (rowCopies). */
@@ -62,16 +58,11 @@ export function copyRow<T extends object>(row: T): T {
 /** An overlay entry for a key a paint deleted. */
 const GONE = Symbol('gone')
 
-/** The hidden-flag sets kept beside the task rows. */
-export type FlagName = 'hiddenSubtaskParents' | 'hiddenParentTasks'
-
 /** What changed since the last rebuild: the keys of each keyed section
-    ('all' after a paint walked it), and the lists and flag sets that
-    changed at all. */
+    ('all' after a paint walked it), and the lists that changed at all. */
 export type Dirty = {
   keys: Map<KeyedName, Set<string> | 'all'>
   lists: Set<ListedName>
-  flags: boolean
 }
 
 /** The bookkeeping the sections share. */
@@ -125,20 +116,10 @@ export class RowMap<R extends object> {
     return this.peek(key) !== undefined
   }
 
-  /** Every row shown, the server's order first and the inserts after,
-      without copying any: a paint must not change what it hands out, and
-      takes a row to change with get. */
-  *peekValues(): IterableIterator<R> {
-    for (const [key, row] of this.base) {
-      const own = this.overlay.get(key)
-      if (own !== GONE) yield own ?? row
-    }
-    for (const [key, own] of this.overlay) if (own !== GONE && !this.base.has(key)) yield own
-  }
-
   /** The keys of the rows shown that pass `test`, which must not change
-      the row it reads. Copies nothing. */
-  keysWhere(test: (row: R) => boolean): string[] {
+      the row it reads, the server's order first and the inserts after.
+      Copies nothing. */
+  private keysWhere(test: (row: R) => boolean): string[] {
     const keys: string[] = []
     for (const [key, row] of this.base) {
       const own = this.overlay.get(key)
@@ -221,12 +202,11 @@ export class RowMap<R extends object> {
 /** Creates the workspace rows over `base`. */
 export function createWorkspaceRows(base: WorkspaceBase) {
   let passes = 0
-  const dirty: Dirty = { keys: new Map(), lists: new Set(), flags: false }
+  const dirty: Dirty = { keys: new Map(), lists: new Set() }
   // since the last checkpoint: the row each changed key showed then
-  // (undefined for none), and each changed list and flag set
+  // (undefined for none), and each changed list
   const shownKeys = new Map<KeyedName, Map<string, object | undefined>>()
   const shownLists = new Map<ListedName, readonly object[]>()
-  const shownFlags = new Map<FlagName, ReadonlySet<string>>()
 
   const host: Host = {
     base,
@@ -251,15 +231,11 @@ export function createWorkspaceRows(base: WorkspaceBase) {
     orgs: new RowMap<Row<'organizations'>>('orgs', host),
     teams: new RowMap<Row<'teams'>>('teams', host),
     profiles: new RowMap<Row<'profiles'>>('profiles', host),
-    issues: new RowMap<Row<'issues'>>('issues', host),
-    links: new RowMap<Row<'issue_links'>>('links', host),
-    attachments: new RowMap<Row<'issue_attachments'>>('attachments', host),
   }
 
-  // the paints' copies of the lists and flag sets, and the lists keepList
-  // filtered, which may still hold the server's own rows
+  // the paints' copies of the lists, and the lists keepList filtered,
+  // which may still hold the server's own rows
   const listOverlay = new Map<ListedName, object[]>()
-  const flagOverlay = new Map<FlagName, Set<string>>()
   const kept = new Set<ListedName>()
 
   /** List `name` as shown: inside a pass, a copy the paint may change. */
@@ -310,26 +286,6 @@ export function createWorkspaceRows(base: WorkspaceBase) {
     // an overlay a pass made holds copies only, and its rows stay copies
     if (shown === base.list(name) || kept.has(name)) kept.add(name)
   }
-  /** Flag set `name` as shown: inside a pass, a copy the paint may change. */
-  function flags(name: FlagName): Set<string> {
-    const own = flagOverlay.get(name)
-    if (own) {
-      if (passes > 0) dirty.flags = true
-      return own
-    }
-    // outside a paint nothing may change it (store/layers.ts), as the rows
-    const server = base.flags(name) as Set<string>
-    if (passes === 0) return server
-    noteFlags(name, server)
-    const copy = new Set(server)
-    flagOverlay.set(name, copy)
-    return copy
-  }
-  function noteFlags(name: FlagName, shown: ReadonlySet<string>) {
-    dirty.flags = true
-    if (!shownFlags.has(name)) shownFlags.set(name, shown)
-  }
-
   /** Everything a repaint changes, to put back with restore (the test
       builds' layer check, store/planner.ts checkLayers). */
   function save() {
@@ -339,15 +295,12 @@ export function createWorkspaceRows(base: WorkspaceBase) {
       ),
       lists: new Map(listOverlay),
       kept: new Set(kept),
-      flags: new Map(flagOverlay),
       dirty: {
         keys: new Map([...dirty.keys].map(([k, v]) => [k, v === 'all' ? v : new Set(v)])),
         lists: new Set(dirty.lists),
-        flags: dirty.flags,
       },
       shownKeys: new Map([...shownKeys].map(([k, v]) => [k, new Map(v)])),
       shownLists: new Map(shownLists),
-      shownFlags: new Map(shownFlags),
     }
   }
   /** Puts back what `saved` holds. */
@@ -357,17 +310,12 @@ export function createWorkspaceRows(base: WorkspaceBase) {
     for (const [k, v] of saved.lists) listOverlay.set(k, v)
     kept.clear()
     for (const k of saved.kept) kept.add(k)
-    flagOverlay.clear()
-    for (const [k, v] of saved.flags) flagOverlay.set(k, v)
     dirty.keys = saved.dirty.keys
     dirty.lists = saved.dirty.lists
-    dirty.flags = saved.dirty.flags
     shownKeys.clear()
     for (const [k, v] of saved.shownKeys) shownKeys.set(k, v)
     shownLists.clear()
     for (const [k, v] of saved.shownLists) shownLists.set(k, v)
-    shownFlags.clear()
-    for (const [k, v] of saved.shownFlags) shownFlags.set(k, v)
   }
 
   return {
@@ -376,7 +324,6 @@ export function createWorkspaceRows(base: WorkspaceBase) {
     setList,
     keepList,
     peekList,
-    flags,
 
     /** Runs `paint` as a pass. */
     paint(paint: () => void) {
@@ -399,14 +346,7 @@ export function createWorkspaceRows(base: WorkspaceBase) {
       for (const [name, own] of listOverlay) noteList(name, own)
       listOverlay.clear()
       kept.clear()
-      for (const [name, own] of flagOverlay) noteFlags(name, own)
-      flagOverlay.clear()
       const lists = new Map(LISTED_SECTIONS.map((name) => [name, base.list(name)]))
-      // the Sets an apply replaces when their tasks change
-      const flagsBefore = {
-        hiddenSubtaskParents: base.flags('hiddenSubtaskParents'),
-        hiddenParentTasks: base.flags('hiddenParentTasks'),
-      }
       const changes = base.apply()
       if (!changes) return null
       for (const [name, changed] of Object.entries(changes) as [
@@ -420,17 +360,14 @@ export function createWorkspaceRows(base: WorkspaceBase) {
         }
         for (const [key, before] of changed) host.touch(name as KeyedName, key, before)
       }
-      for (const name of ['hiddenSubtaskParents', 'hiddenParentTasks'] as const)
-        if (flagsBefore[name] !== base.flags(name)) noteFlags(name, flagsBefore[name])
       return changes
     },
 
     /** What changed since the last call, which it forgets. */
     takeDirty(): Dirty {
-      const taken = { keys: new Map(dirty.keys), lists: new Set(dirty.lists), flags: dirty.flags }
+      const taken = { keys: new Map(dirty.keys), lists: new Set(dirty.lists) }
       dirty.keys.clear()
       dirty.lists.clear()
-      dirty.flags = false
       return taken
     },
 
@@ -445,7 +382,6 @@ export function createWorkspaceRows(base: WorkspaceBase) {
         }
       }
       for (const [name, shown] of shownLists) if (!sameData(shown, list(name))) return true
-      for (const [name, shown] of shownFlags) if (!sameData(shown, flags(name))) return true
       return false
     },
 
@@ -454,7 +390,6 @@ export function createWorkspaceRows(base: WorkspaceBase) {
     checkpoint() {
       shownKeys.clear()
       shownLists.clear()
-      shownFlags.clear()
     },
 
     save,
@@ -465,13 +400,10 @@ export function createWorkspaceRows(base: WorkspaceBase) {
       for (const map of Object.values(maps) as RowMap<object>[]) map.overlay = new Map()
       listOverlay.clear()
       kept.clear()
-      flagOverlay.clear()
       dirty.keys.clear()
       dirty.lists.clear()
-      dirty.flags = false
       shownKeys.clear()
       shownLists.clear()
-      shownFlags.clear()
     },
   }
 }

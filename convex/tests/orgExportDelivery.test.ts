@@ -400,7 +400,7 @@ describe('the /exports/ route', () => {
       'content-security-policy': "default-src 'none'; sandbox",
       vary: 'Origin',
       'access-control-allow-origin': APP,
-      'access-control-expose-headers': 'Content-Disposition',
+      'access-control-expose-headers': 'Content-Disposition, Retry-After',
     })
     const name = `qivo-${f.org.slug}-${job.completed_at.slice(0, 10)}.zip`
     expect(res.headers.get('Content-Disposition')).toBe(
@@ -425,6 +425,7 @@ describe('the /exports/ route', () => {
     )
     expect(foreign.status).toBe(200)
     expect(foreign.headers.get('Access-Control-Allow-Origin')).toBeNull()
+    expect(foreign.headers.get('Access-Control-Expose-Headers')).toBeNull()
     expect(foreign.headers.get('Vary')).toBe('Origin')
     await drain(t, foreign)
   })
@@ -464,7 +465,14 @@ describe('the /exports/ route', () => {
       // profile document the claim signs
       ["the admin's uuid", await mint(exportId, f.admin.id)],
     ]
-    for (const [label, path] of cases) await expectRefused(await get(t, path), label)
+    for (const [label, path] of cases) {
+      await expectRefused(await get(t, path), label)
+      // a browser that loads the link as a page, which sends no Origin,
+      // downloads nothing
+      const loaded = await t.fetch(path)
+      await expectRefused(loaded, label)
+      expect(loaded.headers.get('Content-Disposition'), label).toBe('attachment')
+    }
     // the good link still works
     expect((await get(t, good)).status).toBe(200)
     // an expired one does not
@@ -602,6 +610,27 @@ describe('the /exports/ route', () => {
     expect(status.latest).toMatchObject({ state: 'failed', error: { code: 'incomplete' } })
   })
 
+  it("keeps the echo and the exposed headers on a 404 for an app origin, and the file gateway's own answer exposes Content-Disposition alone", async () => {
+    const t = newT()
+    const { exportId } = await ready(t)
+    const stale = await get(t, `/exports/${exportId}?e=1&m=x&t=y`)
+    await expectRefused(stale, 'stale link')
+    expect(stale.headers.get('Access-Control-Allow-Origin')).toBe(APP)
+    expect(stale.headers.get('Access-Control-Expose-Headers')).toBe(
+      'Content-Disposition, Retry-After',
+    )
+    const foreign = await get(t, `/exports/${exportId}?e=1&m=x&t=y`, 'https://evil.example')
+    await expectRefused(foreign, 'foreign origin')
+    expect(foreign.headers.get('Access-Control-Allow-Origin')).toBeNull()
+    expect(foreign.headers.get('Access-Control-Expose-Headers')).toBeNull()
+    const file = await get(t, `/files/${uuid()}?e=1&m=x&t=y`)
+    await expectRefused(file, 'file gateway')
+    expect(file.headers.get('Access-Control-Allow-Origin')).toBe(APP)
+    expect(file.headers.get('Access-Control-Expose-Headers')).toBe('Content-Disposition')
+    // the file gateway's refusal stays a plain 404
+    expect(file.headers.get('Content-Disposition')).toBeNull()
+  })
+
   it('answers a preflight with GET and OPTIONS, echoing only app origins', async () => {
     const t = newT()
     const { exportId } = await ready(t)
@@ -639,19 +668,18 @@ describe('what a download records', () => {
     expect(await jobOf(t, exportId)).toMatchObject({ served_at: servedAt })
     // the backend cannot know that the client received the archive, so the
     // organization's last export stays unset
+    expect((await orgRow(t, f.org.id))?.last_export_confirmed_at).toBeUndefined()
     expect((await orgRow(t, f.org.id))?.last_export_at).toBeUndefined()
     // an admin who did not ask downloads without a request row
     expect((await requestsOf(t, exportId)).map((row) => row.profile_id)).toEqual([f.admin.id])
-    // the browser export still records its own download, and a second
-    // served download keeps both the first served_at and that last export
-    vi.advanceTimersByTime(60_000)
-    await as(t, f.admin).mutation(api.orgRemovals.recordExport, { org_id: f.org.id })
-    const browserAt = NOW_ISO()
+    // a second served download keeps the first served_at, and the last
+    // export stays unset until the app records a confirmed save
+    // (orgRemovals.test.ts, recording a saved export)
     vi.advanceTimersByTime(60_000)
     const again = await get(t, pathOf(await claim(t, f.admin, f.org.id, exportId)))
     expect((await drain(t, again)).error).toBeNull()
     expect(await jobOf(t, exportId)).toMatchObject({ served_at: servedAt })
-    expect((await orgRow(t, f.org.id))?.last_export_at).toBe(browserAt)
+    expect((await orgRow(t, f.org.id))?.last_export_confirmed_at).toBeUndefined()
     // the leases are gone
     expect((await jobOf(t, exportId))?.streams).toBeUndefined()
 
@@ -781,8 +809,19 @@ describe('what a download records', () => {
     const third = await get(t, long)
     expect(third.status).toBe(429)
     expect(third.headers.get('Retry-After')).toBe(String(DELIVERY.retrySeconds))
+    expect(third.headers.get('Content-Disposition')).toBe('attachment')
     expect(third.headers.get('X-Content-Type-Options')).toBe('nosniff')
+    // the app's page reads the wait from its fetch
+    expect(third.headers.get('Access-Control-Allow-Origin')).toBe(APP)
+    expect(third.headers.get('Access-Control-Expose-Headers')).toBe(
+      'Content-Disposition, Retry-After',
+    )
     expect(await third.text()).toBe('')
+    // a foreign origin gets the refusal with neither the echo nor the header
+    const foreign = await get(t, long, 'https://evil.example')
+    expect(foreign.status).toBe(429)
+    expect(foreign.headers.get('Access-Control-Allow-Origin')).toBeNull()
+    expect(foreign.headers.get('Access-Control-Expose-Headers')).toBeNull()
     // one download ends, so another may start
     expect((await drain(t, first)).error).toBeNull()
     const fourth = await get(t, long)

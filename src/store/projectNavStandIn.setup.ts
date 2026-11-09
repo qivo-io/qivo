@@ -670,6 +670,26 @@ export function projectNavStandIn(
   return batchOf(list, pageScope, byPosition(candidates), after, through, force)
 }
 
+/** The levels and sight of the seats of `w` by the reads' rule, for the
+    other stand-ins that judge a project the way the server's access does
+    (lib/access.ts accessOf), such as the task window's
+    (store/taskWindowStandIn.setup.ts): `level` is the seat's level on the
+    project for a reason of its own, null without one, and `visible`
+    whether the seat sees it at all, a top-level project through one of its
+    sub-projects included, live or archived. */
+export function seatSight(w: NavWorkspace) {
+  const rule = navRule(w, new Set())
+  const judged = <R>(orgId: string, projectId: string, judge: (me: Profile, p: Project) => R) => {
+    const me = rule.seatIn(orgId)
+    const p = rule.byId.get(projectId)
+    return me && p ? judge(me, p) : null
+  }
+  return {
+    level: (orgId: string, projectId: string) => judged(orgId, projectId, rule.levelOf),
+    visible: (orgId: string, projectId: string) => judged(orgId, projectId, rule.visible) === true,
+  }
+}
+
 /** Whether `name` is one of the seven reads. */
 export const isProjectNavRead = (name: string): name is ProjectNavRead =>
   (PROJECT_NAV_READS as readonly string[]).includes(name)

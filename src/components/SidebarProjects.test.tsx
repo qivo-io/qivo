@@ -179,8 +179,6 @@ function seeded(id: string) {
 /** Loads the store from `next`, with the reads answered by their stand-in. */
 async function load(next: Snapshot) {
   vi.resetModules()
-  const { TASKS } = await import('../store/liveParts')
-  TASKS.atBoot = false
   snap = next
   subs = []
   favorites = new Set()
@@ -561,7 +559,6 @@ describe('the projects figure', { timeout: 60_000 }, () => {
     await act(async () => markers.at(-1)?.(true))
     await settle()
     expect(asked('page')).toHaveLength(read)
-    expect(store.__layerProbe?.asks()).toEqual([])
     expect(open().map((s) => s.name)).toEqual([
       'workspace:whole',
       ...Array(8).fill('projectNav:page'),
@@ -697,7 +694,6 @@ describe('the expanded list', { timeout: 60_000 }, () => {
     await render('mine')
     expect(open('projectNav:children')).toEqual([])
     expect(document.querySelector('[data-sidebar-children]')).toBeNull()
-    expect(store.__layerProbe?.asks()).toEqual([])
   })
 
   it('reads on to a scoped sub-project, lights it and stops at a lowered bound', async () => {
@@ -1000,7 +996,6 @@ describe('reading', { timeout: 60_000 }, () => {
     expect(state()).toBe('ok')
     expect(reading()).toEqual(before)
     expect(childNames()).toHaveLength(3)
-    expect(store.__layerProbe?.asks()).toEqual([])
   })
 })
 

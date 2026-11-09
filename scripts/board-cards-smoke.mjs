@@ -15,7 +15,6 @@ import {
   purgeDeletedTasks,
   signInDemo,
 } from './browser-demo.mjs'
-import { readWorkspace } from './workspaceJoin.mjs'
 
 const demo = loadBrowserDemo(process.argv[2] ?? 'http://localhost:5199')
 const before = await inspectBrowserDemo(demo)
@@ -46,13 +45,44 @@ let initialLayout
 let initialFocus
 let passed = false
 
-/* Tasks load on demand: the workspace holds none until something that
-   needs every task asks for them. A step that reads the whole list
-   (PLANNER.issues or issueById) asks first, after each load of the page,
-   and waits until its store holds every task. */
-async function everyTask() {
-  await page.evaluate(() => window.PLANNER.askTasks('script'))
-  await page.waitForFunction(() => window.PLANNER.tasksHeld(), null, { timeout: 60000 })
+/* The desktop Board's slot, whose answer (tasks.board) brings the cards
+   and their parents (views/board/useBoardView.ts BOARD_SLOTS). */
+const BOARD = 'board:desktop'
+
+/* The fixture's tasks as the Board's answer brings them (P.viewTask), once
+   it brings all of them, in the fixture's order: the store holds no task
+   list, so the drive reads the view's own models. */
+async function boardTasks() {
+  const uuids = fixtures.map((task) => task.id)
+  await page.waitForFunction(
+    ({ uuids, slot }) => uuids.every((uuid) => window.PLANNER.viewTask(slot, uuid)),
+    { uuids, slot: BOARD },
+    { timeout: 30000 },
+  )
+  return page.evaluate(
+    ({ uuids, slot }) =>
+      uuids.map((uuid) => {
+        const it = window.PLANNER.viewTask(slot, uuid)
+        return { id: it.id, status: it.status, parent: it.parent, project: it.project }
+      }),
+    { uuids, slot: BOARD },
+  )
+}
+
+/* The fixture's tasks as the server stores them, read over `client`, an
+   HTTP client signed in as the drive's person, through the task window's
+   read of each by its uuid in organization `orgId` (taskWindow.task). A
+   task the read does not answer `ok` is undefined. */
+function storedTasks(client, orgId) {
+  return Promise.all(
+    fixtures.map(async ({ id }) => {
+      const answer = await client.query(makeFunctionReference('taskWindow:task'), {
+        org_id: orgId,
+        ref: id,
+      })
+      return answer?.state === 'ok' ? answer.task : undefined
+    }),
+  )
 }
 
 async function assertActualCards(ids) {
@@ -146,7 +176,8 @@ async function dragChild(id, laneId, status) {
   const target = cell(laneId, status)
   await target.scrollIntoViewIfNeeded()
   await card(id).dragTo(target, { targetPosition: { x: 12, y: 12 } })
-  await page.waitForFunction(({ id, status }) => window.PLANNER.issueById[id]?.status === status, {
+  // the dragged card's task as the Board's answer brings it, painted
+  await page.waitForFunction(({ id, status }) => window.PLANNER.anyTask(id)?.status === status, {
     id,
     status,
   })
@@ -230,19 +261,16 @@ async function cleanupFixture() {
     await cleanupPage.evaluate(
       async ({ tasks, orgSlug }) => {
         const { convex } = await import('/src/lib/convex.ts')
-        const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
-          (name, args) => convex.query(name, args),
-        )
-        const org = snapshot.orgs.find((candidate) => candidate.slug === orgSlug)
+        const org = window.PLANNER.orgs.find((candidate) => candidate.slug === orgSlug)
         if (!org) throw new Error('Cleanup organization is unavailable')
         const errors = []
         for (const task of [...tasks].reverse()) {
-          const issue = snapshot.issues.find(
-            (item) => item.id === task.id && item.org_id === org.id,
-          )
-          if (!issue) continue
+          // a task the drive made and did not delete answers the task
+          // window's read (taskWindow.task)
+          const read = await convex.query('taskWindow:task', { org_id: org.id, ref: task.id })
+          if (read?.state !== 'ok') continue
           try {
-            await convex.mutation('issues:deleteDeep', { org_id: org.id, id: issue.id })
+            await convex.mutation('issues:deleteDeep', { org_id: org.id, id: task.id })
           } catch {
             errors.push(task.id)
           }
@@ -328,19 +356,18 @@ try {
         parent_id: tasks[0].id,
         assignee_id: leo.id,
       })
-      return { electronics: electronics.id, firmware: firmware.id, nora: nora.id, leo: leo.id }
+      return {
+        org: P.org.id,
+        electronics: electronics.id,
+        firmware: firmware.id,
+        nora: nora.id,
+        leo: leo.id,
+      }
     },
     { tasks: fixtures, children: lumaProject.children },
   )
-  await everyTask()
-  await page.waitForFunction(
-    (uuids) => uuids.every((uuid) => window.PLANNER.issues.some((issue) => issue.uuid === uuid)),
-    fixtures.map((task) => task.id),
-  )
-  const ids = await page.evaluate(
-    (uuids) => uuids.map((uuid) => window.PLANNER.issues.find((issue) => issue.uuid === uuid).id),
-    fixtures.map((task) => task.id),
-  )
+  // their handles, once the Board's answer brings all four
+  const ids = (await boardTasks()).map((task) => task.id)
   const [parent, assigned, unassigned, otherLane] = ids
   const childIds = ids.slice(1)
   const search = page.getByPlaceholder('Filter tasks…')
@@ -406,18 +433,13 @@ try {
     await page.getByRole('dialog').getByRole('button', { name: layout, exact: true }).click()
     await assertDragBoundary(assigned, fixture.electronics, fixture.firmware)
     await waitForMutations()
-    const stored = await readWorkspace((name, args) =>
-      persistedClient.query(makeFunctionReference(name), args),
-    )
+    const stored = await storedTasks(persistedClient, fixture.org)
     assert.deepEqual(
-      fixtures.map(({ id }) => {
-        const task = stored.issues.find((issue) => issue.id === id)
-        return {
-          status: task?.status,
-          assignee: task?.assignee_id ?? null,
-          project: task?.project_id,
-        }
-      }),
+      stored.map((task) => ({
+        status: task?.status,
+        assignee: task?.assignee_id ?? null,
+        project: task?.project_id,
+      })),
       [
         { status: 'done', assignee: fixture.nora, project: fixture.electronics },
         { status: 'todo', assignee: fixture.nora, project: fixture.electronics },
@@ -450,11 +472,9 @@ try {
   // mutation acknowledgement, then verify through an independent HTTP client
   // before reloading. Neither proof can be satisfied by optimistic paint.
   await waitForMutations()
-  const stored = await readWorkspace((name, args) =>
-    persistedClient.query(makeFunctionReference(name), args),
-  )
+  const stored = await storedTasks(persistedClient, fixture.org)
   assert.deepEqual(
-    fixtures.map((task) => stored.issues.find((issue) => issue.id === task.id)?.status),
+    stored.map((task) => task?.status),
     ['done', 'progress', 'review', 'todo'],
     'Dragged statuses did not persist on the server',
   )
@@ -462,16 +482,12 @@ try {
   await page.locator('[data-group-menu]').waitFor({ state: 'visible' })
   await page.getByPlaceholder('Filter tasks…').fill(prefix)
   await assertActualCards(childIds)
-  // a fresh load holds no task until it asks
-  await everyTask()
-  const persisted = await page.evaluate(
-    (ids) =>
-      ids.map((id) => {
-        const issue = window.PLANNER.issueById[id]
-        return { status: issue.status, parent: issue.parent, project: issue.project }
-      }),
-    ids,
-  )
+  // the fresh load's Board answer brings the stored statuses and parents
+  const persisted = (await boardTasks()).map(({ status, parent, project }) => ({
+    status,
+    parent,
+    project,
+  }))
   assert.deepEqual(persisted, [
     { status: 'done', parent: null, project: fixture.electronics },
     { status: 'progress', parent, project: fixture.electronics },
@@ -498,8 +514,11 @@ try {
       })
     }, task.id)
     await page.waitForFunction(
-      (uuid) => !window.PLANNER.issues.find((it) => it.uuid === uuid)?.parent,
-      task.id,
+      ({ uuid, slot }) => {
+        const it = window.PLANNER.viewTask(slot, uuid)
+        return !!it && !it.parent
+      },
+      { uuid: task.id, slot: BOARD },
     )
     if (task.id !== fixtures.at(-1).id) {
       assert.equal(

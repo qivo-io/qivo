@@ -95,8 +95,6 @@ afterEach(async () => {
   // the dialog's kept draft and the preferences, which an earlier case left
   localStorage.clear()
   sessionStorage.clear()
-  const { TASKS } = await import('../store/liveParts')
-  TASKS.atBoot = true
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -168,8 +166,6 @@ async function app(snap: Snapshot, path = '/app/testbed/board/p/1') {
       : null,
   )
   network.mutation.mockResolvedValue(null)
-  const { TASKS } = await import('../store/liveParts')
-  TASKS.atBoot = false
   const store = await import('../store/planner')
   // the double outlives the store, so each load says where its reads go
   double.live?.forceProjectNav(byIdsHere ? 'client' : null)

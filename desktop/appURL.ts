@@ -1,6 +1,11 @@
 /** The page a packaged build always loads. */
 export const productionAppURL = 'https://qivo.io/app'
 
+/** The origin of the production deployment's HTTP routes, its site URL's
+ * custom domain (VITE_CONVEX_SITE_URL in production, .env.example), where
+ * the app's organization export links point. */
+export const productionExportOrigin = 'https://api.qivo.io'
+
 /** The page a run from source loads without QIVO_DESKTOP_URL: `npm run desktop:dev`'s Vite server. */
 const developmentAppURL = 'http://localhost:5199/app'
 
@@ -36,4 +41,15 @@ export function resolveAppURL(packaged: boolean, env: NodeJS.ProcessEnv): URL {
     throw new Error('QIVO_DESKTOP_URL must be a trusted Qivo HTTPS origin or localhost HTTP origin')
   }
   return appURL
+}
+
+/**
+ * The one origin a packaged build downloads organization exports from, the
+ * export route of the deployment whose page it loads, which is always
+ * production (resolveAppURL). A run from source answers null, since its
+ * page may be any deployment's, and takes the export links of a Convex
+ * site or a local backend (exportDownload.ts exportDownloadURL).
+ */
+export function resolveExportOrigin(packaged: boolean): string | null {
+  return packaged ? productionExportOrigin : null
 }

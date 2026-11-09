@@ -36,6 +36,7 @@ import {
   type T,
   uuid,
   withReadingAdmin,
+  workingSetOf,
   workspaceOf,
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
@@ -1164,7 +1165,7 @@ describe('the reserved id and its end states', () => {
     vi.setSystemTime(START + 1000)
     await as(t, f.admin).mutation(api.issues.unarchive, { org_id: f.org.id, id: archived.id })
     const shown = async () =>
-      (await workspaceOf(as(t, f.admin)))?.issues.find((i) => i.id === archived.id)
+      (await workingSetOf(as(t, f.admin)))?.issues.find((i) => i.id === archived.id)
     // back on the Board under an id the roster no longer has
     expect(await shown()).toMatchObject({ assignee_id: f.user.id })
     const later = START + 2000

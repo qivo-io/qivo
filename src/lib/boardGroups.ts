@@ -184,9 +184,9 @@ export function groupBoardCell<T extends BoardCellIssue>(
     same objects in the same order, and whose cards' headings are still the
     tasks `issueById` holds, gets the groups it got before, the same array:
     a Board renders again on every store change, and a change reaches few
-    cells. The store gives a task a new object when it, its parent or its
-    subtasks change (store/taskIndex.ts), so a task that became a parent, or
-    moved to another, is a new object here. */
+    cells. The store gives a task's model a new object when its row or its
+    own and its parent's handles change (store/viewRows.ts), so a task that
+    became a parent, or moved to another, is a new object here. */
 export function createCellGrouper<T extends BoardCellIssue>() {
   const known = new Map<string, { items: readonly T[]; groups: BoardCellGroup<T>[] }>()
   return (key: string, items: readonly T[], issueById: Readonly<Record<string, T>>) => {

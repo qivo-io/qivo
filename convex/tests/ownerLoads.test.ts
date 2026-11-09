@@ -58,8 +58,8 @@ import {
   type T,
   TODAY,
   uuid,
+  wholeOf,
   withReadingAdmin,
-  workspaceOf,
 } from './helpers.setup'
 import { plantNorthstar } from './northstar.setup'
 import { groupTest, liveTasksOf, orgLoadRows } from './orgLoad.setup'
@@ -256,11 +256,11 @@ const orgOwner = (fx: Pick<Fx, 't'>, reader: Doc<'profiles'>, ownerId: string) =
     return { spans, paused }
   })
 
-/** The app's rows of `ownerId` for workspace `snap` (helpers.setup.ts
- * appLoadRows), as spans in the wire's order, each with its task's project
- * from the workspace, and the paused tasks the app marks for them
- * (appPausedRows), in the wire's order. */
-function appOwnerOf(snap: NonNullable<Awaited<ReturnType<typeof workspaceOf>>>, ownerId: string) {
+/** The rows of `ownerId` derived from a reader's published whole
+ * (helpers.setup.ts wholeOf and appLoadRows), as spans in the wire's
+ * order, each with its task's project from the whole, and the paused
+ * tasks marked for them (appPausedRows), in the wire's order. */
+function appOwnerOf(snap: NonNullable<Awaited<ReturnType<typeof wholeOf>>>, ownerId: string) {
   const projectOf = new Map(snap.issues.map((task) => [task.id, task.project_id]))
   const spans = appLoadRows(snap)
     .filter((row) => row.owner_id === ownerId)
@@ -273,10 +273,10 @@ function appOwnerOf(snap: NonNullable<Awaited<ReturnType<typeof workspaceOf>>>, 
   return { spans, paused }
 }
 
-/** The app's spans and paused tasks of `ownerId` for `reader`, from their
- * workspace (appOwnerOf). */
+/** The spans and paused tasks of `ownerId` for `reader`, derived from
+ * their published whole (appOwnerOf). */
 async function appOwner(t: T, reader: Doc<'profiles'>, ownerId: string) {
-  const snap = await workspaceOf(as(t, reader))
+  const snap = await wholeOf(t, reader)
   if (snap === null) throw new Error(`${reader.name} has no workspace`)
   return appOwnerOf(snap, ownerId)
 }
@@ -444,7 +444,7 @@ describe('an owner’s spans are the organization’s rows of that owner', () =>
         reader,
         profiles.map((p) => p.id),
       )
-      const snap = await workspaceOf(as(t, reader))
+      const snap = await wholeOf(t, reader)
       if (snap === null) throw new Error(`${key} has no workspace`)
       let spans = 0
       let paused = 0
@@ -589,6 +589,26 @@ describe('who receives which spans', () => {
       // the admin sees both by id
       expect((await spansOf(fx, fx.admin, reader.id)).every((s) => s.issue_id !== null)).toBe(true)
     }
+  })
+
+  it('gives a guest the hidden work they review without a task id, and none of the hidden work they only assign', async () => {
+    const fx = await setup()
+    // two review hand-offs in a project the guest cannot see: the review's
+    // owner is its reviewer (convex/lib/review.ts taskOwnerId)
+    const review = { project_id: fx.sib.id, status: 'review' as const }
+    await task(fx, { ...review, assignee_id: fx.user.id, reviewer_id: fx.guest.id, ...plan(7) })
+    await task(fx, { ...review, assignee_id: fx.guest.id, reviewer_id: fx.user.id, ...plan(4) })
+    // the one they review is their load, anonymized
+    const own = await spansOf(fx, fx.guest, fx.guest.id)
+    expect(own.map((s) => [s.issue_id, s.project_id, Number(s.remaining)])).toEqual([
+      [null, null, 7],
+    ])
+    // the one they only assign is the reviewer's, of which a guest reads
+    // no hidden span
+    expect(await spansOf(fx, fx.guest, fx.user.id)).toEqual([])
+    // staff read both hand-offs by id, each in its reviewer's load
+    expect((await spansOf(fx, fx.admin, fx.guest.id)).map((s) => Number(s.remaining))).toEqual([7])
+    expect((await spansOf(fx, fx.admin, fx.user.id)).map((s) => Number(s.remaining))).toContain(4)
   })
 
   it('answers hidden spans alike in either creation order or project', async () => {

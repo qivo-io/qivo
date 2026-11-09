@@ -1,6 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { shownOf } from './personShown.setup'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 /* A refused write rolls back to the server's rows (store/workspaceBase.ts),
@@ -48,9 +49,18 @@ describe('rollback during snapshot trouble', () => {
     task,
     through: Date.parse('2026-09-14T08:00:00.000Z'),
   })
-  const task = (title: string) => P().issues.find((issue) => issue.title === title)!
-  const user = (name: string) => P().users.find((u) => u.name === name)
   const me = () => snapshot.profiles[0].id
+
+  /* Changes the person's message retention to 14 days, a write the server
+     refuses, for a case whose own write marks every Inbox item read. */
+  async function refuseRetention() {
+    const before = P().user(me())?.messageRetentionDays
+    P().setMessageRetention(14)
+    expect(P().user(me())?.messageRetentionDays).toBe(14)
+    sent.pop()!.reject(new ConvexError({ code: 'not_found', message: 'gone' }))
+    await settle()
+    expect(P().user(me())?.messageRetentionDays).toBe(before)
+  }
 
   /* Answers every pending write with `value` in the order they were sent. */
   async function accept(value: unknown = null) {
@@ -58,15 +68,16 @@ describe('rollback during snapshot trouble', () => {
     await settle()
   }
 
-  /* Follows the task named `title`, a write the server refuses. Its own
+  /* Reads the Inbox item of the task named `task`, a personal write that
+     still goes out during trouble and that the server refuses. Its own
      paint must go, and the rollback must not take anything else with it. */
-  async function refuseFollow(title = 'Order the brackets') {
-    P().setIssueSubscribed(task(title).id, true)
-    expect(task(title).subscribed).toBe(true)
+  async function refuseRead(task = 'task-z') {
+    P().readItem(row(task))
+    expect(markOf(task)?.read).toBe(true)
     const request = sent.pop()!
     request.reject(new ConvexError({ code: 'not_found', message: 'issue not found' }))
     await settle()
-    expect(task(title).subscribed).toBe(false)
+    expect(markOf(task)?.read).toBeFalsy()
   }
 
   function addTask(id: string, title: string) {
@@ -125,6 +136,7 @@ describe('rollback during snapshot trouble', () => {
     addTask('task-z', 'Order the brackets')
     addMessage('message-a', 'task-a', false)
     addMessage('message-b', 'task-b', true)
+    addMessage('message-z', 'task-z', false)
     snapshot.issueSubs.push({
       issue_id: 'task-b',
       profile_id: me(),
@@ -179,6 +191,8 @@ describe('rollback during snapshot trouble', () => {
     act: () => Promise<void>
     shown: () => void
     truth: (snap: Snapshot) => void
+    /** the refused write beside it, the read of task-z's item by default */
+    refuse?: () => Promise<void>
   }[] = [
     {
       name: 'an item read',
@@ -193,6 +207,7 @@ describe('rollback during snapshot trouble', () => {
     },
     {
       name: 'mark all as read',
+      refuse: () => refuseRetention(),
       act: async () => {
         const done = P().markAllMessagesRead()
         await settle()
@@ -206,7 +221,8 @@ describe('rollback during snapshot trouble', () => {
         expect(P().canMarkAllRead).toBe(P().inboxSummary.state !== 'ok')
       },
       truth: (snap) => {
-        snap.messages[0].read_at = '2026-09-15T08:30:00.000Z'
+        for (const message of snap.messages)
+          if (!message.read_at) message.read_at = '2026-09-15T08:30:00.000Z'
       },
     },
     {
@@ -259,64 +275,26 @@ describe('rollback during snapshot trouble', () => {
       },
     },
     {
-      name: 'a follow',
-      act: async () => {
-        P().setIssueSubscribed(task('Calibrate the sensor').id, true)
-        await accept()
-      },
-      shown: () => expect(task('Calibrate the sensor').subscribed).toBe(true),
-      truth: (snap) => {
-        snap.issueSubs.push({ issue_id: 'task-a', profile_id: me(), created_at: UNTIL })
-      },
-    },
-    {
-      name: 'an unfollow',
-      act: async () => {
-        P().setIssueSubscribed(task('Replace the gasket').id, false)
-        await accept()
-      },
-      shown: () => expect(task('Replace the gasket').subscribed).toBe(false),
-      truth: (snap) => {
-        snap.issueSubs = []
-      },
-    },
-    {
       name: 'a message retention change',
       act: async () => {
         P().setMessageRetention(30)
         await accept()
       },
-      shown: () => expect(user('Planner')?.messageRetentionDays).toBe(30),
+      shown: () => expect(P().user(me())?.messageRetentionDays).toBe(30),
       truth: (snap) => {
         snap.profiles[0].message_retention_days = 30
-      },
-    },
-    {
-      // the store holds nobody but the signed-in person, so the removal
-      // paints the person's tasks the workspace holds, which the server
-      // clears with them
-      name: 'a removed seat',
-      act: async () => {
-        P().removeUser('profile-other', { orgId: P().homeOrg })
-        await accept()
-      },
-      shown: () => expect(task('Replace the gasket').assignee).toBeFalsy(),
-      truth: (snap) => {
-        snap.profiles.splice(1, 1)
-        const gasket = snap.issues.find((t) => t.id === 'task-b')
-        if (gasket) delete gasket.assignee_id
       },
     },
   ]
 
   it.each(writes)(
     'keeps $name saved during trouble on screen after a refused write',
-    async ({ act, shown, truth }) => {
+    async ({ act, shown, truth, refuse = () => refuseRead() }) => {
       live().fail(new Error(QUERY_FAILURE))
       await act()
       expect(sent).toEqual([])
       shown()
-      await refuseFollow()
+      await refuse()
       shown()
       deliverTruth(truth)
       expect(P().snapshotTrouble()).toBeNull()
@@ -329,14 +307,14 @@ describe('rollback during snapshot trouble', () => {
     P().setMessageRetention(30)
     P().snoozeItem(row('task-b'), UNTIL)
     await accept()
-    P().setIssueSubscribed(task('Order the brackets').id, true)
+    P().readItem(row('task-z'))
     live().fail(new ConvexError({ code: 'forbidden', message: 'not signed in' }))
     expect(P().snapshotTrouble()?.kind).toBe('signed_out')
     sent.pop()!.reject(new ConvexError({ code: 'forbidden', message: 'not signed in' }))
     await settle()
     // the refused write takes back only its own paint, and says why
-    expect(task('Order the brackets').subscribed).toBe(false)
-    expect(user('Planner')?.messageRetentionDays).toBe(30)
+    expect(markOf('task-z')?.read).toBeFalsy()
+    expect(P().user(me())?.messageRetentionDays).toBe(30)
     expect(markOf('task-b')).toMatchObject({ snoozedUntil: UNTIL, settled: true })
     expect(showToast).toHaveBeenCalledWith(store.SIGNED_OUT_TEXT, 'error')
     expect(showToast).not.toHaveBeenCalledWith(
@@ -353,13 +331,8 @@ describe('rollback during snapshot trouble', () => {
           .setAppearance({ mode: 'dark', image_source: 'none' })
           .catch(() => {}),
     },
-    {
-      name: 'a follower change',
-      act: () =>
-        P().setIssueSubscriber(task('Calibrate the sensor').id, 'profile-other', true, () => {}),
-    },
-  ])('leaves the board alone when $name, which painted nothing, is refused', async ({ act }) => {
-    P().updateIssue(task('Calibrate the sensor').id, { status: 'progress' })
+  ])('leaves the rows alone when $name, which painted nothing, is refused', async ({ act }) => {
+    P().setMessageRetention(30)
     live().fail(new Error(QUERY_FAILURE))
     // saved after the last good delivery, which does not hold it
     await accept()
@@ -367,16 +340,17 @@ describe('rollback during snapshot trouble', () => {
     expect(sent).toHaveLength(1)
     sent.pop()!.reject(new ConvexError({ code: 'not_found', message: 'gone' }))
     await settle()
-    expect(task('Calibrate the sensor').status).toBe('progress')
+    expect(P().user(me())?.messageRetentionDays).toBe(30)
     // nothing was painted, so nothing is said to be reverted
     expect(showToast).toHaveBeenCalledWith("Couldn't save.", 'error')
   })
 
-  /* The generic cases below write a follow of the sensor task, a write that
-     still goes out during trouble and paints the workspace, beside the one
-     refuseFollow refuses. */
-  const sensor = () => task('Calibrate the sensor')
-  const follow = (on: boolean) => P().setIssueSubscribed(sensor().id, on)
+  /* The generic cases below write the person's message retention, a write
+     that still goes out during trouble and paints the workspace, beside the
+     one refuseRead refuses. Days 30 stands for on, and the stored 7 for
+     off. */
+  const retention = () => P().user(me())?.messageRetentionDays === 30
+  const follow = (on: boolean) => P().setMessageRetention(on ? 30 : 7)
 
   it('paints accepted writes again in the order the server took them', async () => {
     live().fail(new Error(QUERY_FAILURE))
@@ -385,31 +359,31 @@ describe('rollback during snapshot trouble', () => {
     // the unfollow came second, so it must win
     follow(false)
     await accept()
-    await refuseFollow()
-    expect(sensor().subscribed).toBe(false)
+    await refuseRead()
+    expect(retention()).toBe(false)
   })
 
   it('forgets kept writes once a good delivery holds the newer truth', async () => {
     live().fail(new Error(QUERY_FAILURE))
     follow(true)
     await accept()
-    await refuseFollow()
-    expect(sensor().subscribed).toBe(true)
+    await refuseRead()
+    expect(retention()).toBe(true)
     // the server took the follow, then another device unfollowed
     deliverTruth(() => {})
-    expect(sensor().subscribed).toBe(false)
-    await refuseFollow()
-    expect(sensor().subscribed).toBe(false)
+    expect(retention()).toBe(false)
+    await refuseRead()
+    expect(retention()).toBe(false)
   })
 
   it('keeps a pending write on screen when another write is refused first', async () => {
     live().fail(new Error(QUERY_FAILURE))
     follow(true)
     // the refusal answers first and takes away only its own paint
-    await refuseFollow()
-    expect(sensor().subscribed).toBe(true)
+    await refuseRead()
+    expect(retention()).toBe(true)
     await accept()
-    expect(sensor().subscribed).toBe(true)
+    expect(retention()).toBe(true)
   })
 
   it('paints a write kept after a held delivery once the last write settles', async () => {
@@ -418,7 +392,7 @@ describe('rollback during snapshot trouble', () => {
     deliverTruth(() => {})
     live().fail(new Error(QUERY_FAILURE))
     await accept()
-    expect(sensor().subscribed).toBe(true)
+    expect(retention()).toBe(true)
   })
 
   it('keeps no paint of a write the newest delivery already holds once the trouble ended', async () => {
@@ -426,13 +400,13 @@ describe('rollback during snapshot trouble', () => {
     deliverTruth(() => {})
     expect(P().snapshotTrouble()).toBeNull()
     follow(true)
-    expect(sensor().subscribed).toBe(true)
+    expect(retention()).toBe(true)
     // the delivery that holds the follow, which another device undid
     deliverTruth(() => {})
     await accept()
-    expect(sensor().subscribed).toBe(false)
-    await refuseFollow()
-    expect(sensor().subscribed).toBe(false)
+    expect(retention()).toBe(false)
+    await refuseRead()
+    expect(retention()).toBe(false)
   })
 
   it('keeps the paint of a write accepted after Try again replaced the subscription', async () => {
@@ -442,57 +416,62 @@ describe('rollback during snapshot trouble', () => {
     deliverTruth(() => {})
     P().retrySnapshot()
     await accept()
-    expect(sensor().subscribed).toBe(true)
+    expect(retention()).toBe(true)
   })
 
   it('reverts only the refused write outside trouble', async () => {
     follow(true)
     // Convex delivers a write's own snapshot before its promise resolves
     deliverTruth((snap) => {
-      snap.issueSubs.push({ issue_id: 'task-a', profile_id: me(), created_at: UNTIL })
+      snap.profiles[0].message_retention_days = 30
     })
     await accept()
-    await refuseFollow()
-    expect(sensor().subscribed).toBe(true)
+    await refuseRead()
+    expect(retention()).toBe(true)
     expect(P().snapshotTrouble()).toBeNull()
   })
 
+  /* Three edits of the workspace's rows, each its own field: the
+     organization's name, the person's message retention and the
+     person's plannable hours. */
+  const editThree = () => {
+    void P().setOrg({ name: 'Renamed Labs' })
+    P().setMessageRetention(30)
+    P().updateUser(me(), { plannableHours: 30 }, {}, shownOf(snapshot, me()))
+  }
+
   it('takes back only the refused edit of three waiting online, at every step', async () => {
-    P().updateIssue(task('Calibrate the sensor').id, { title: 'Calibrate sensor A' })
-    P().updateIssue(task('Replace the gasket').id, { title: 'Replace gasket B' })
-    P().updateIssue(task('Order the brackets').id, { status: 'progress' })
+    editThree()
     const [first, middle, last] = sent.splice(0)
     middle.reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
     await settle()
-    expect(task('Calibrate sensor A')).toBeDefined()
-    expect(task('Replace the gasket')).toBeDefined()
-    expect(task('Order the brackets').status).toBe('progress')
+    expect(P().org.name).toBe('Renamed Labs')
+    expect(retention()).toBe(false)
+    expect(P().user(me())?.plannableHours).toBe(30)
     first.resolve(null)
     await settle()
-    expect(task('Calibrate sensor A')).toBeDefined()
-    expect(task('Order the brackets').status).toBe('progress')
+    expect(P().org.name).toBe('Renamed Labs')
+    expect(P().user(me())?.plannableHours).toBe(30)
     last.resolve(null)
     await settle()
-    expect(task('Calibrate sensor A')).toBeDefined()
-    expect(task('Order the brackets').status).toBe('progress')
+    expect(P().org.name).toBe('Renamed Labs')
+    expect(P().user(me())?.plannableHours).toBe(30)
   })
 
   it('keeps a write a delivery holds and one still waiting when the one between is refused', async () => {
-    P().updateIssue(task('Calibrate the sensor').id, { title: 'Calibrate sensor A' })
-    P().updateIssue(task('Replace the gasket').id, { title: 'Replace gasket B' })
-    P().updateIssue(task('Order the brackets').id, { status: 'progress' })
+    editThree()
     const [a, b] = sent.splice(0, 2)
     // the delivery that holds A, then A's answer, then B's refusal
     deliverTruth((snap) => {
-      snap.issues[0].title = 'Calibrate sensor A'
+      snap.orgs[0].name = 'Renamed Labs'
     })
     a.resolve(null)
     await settle()
     b.reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
     await settle()
-    expect(task('Calibrate sensor A')).toBeDefined()
-    expect(task('Replace the gasket')).toBeDefined()
-    expect(task('Order the brackets').status).toBe('progress')
+    expect(P().org.name).toBe('Renamed Labs')
+    expect(retention()).toBe(false)
+    expect(P().user(me())?.plannableHours).toBe(30)
   })
 
   it('keeps an accepted address and portrait change during trouble after a refused write', async () => {
@@ -507,22 +486,8 @@ describe('rollback during snapshot trouble', () => {
     await expect(cleared).resolves.toBeNull()
     expect(P().orgs[0].slug).toBe('new-address')
     expect(P().user(me.id)?.avatarPath).toBeFalsy()
-    await refuseFollow()
+    await refuseRead()
     expect(P().orgs[0].slug).toBe('new-address')
     expect(P().user(me.id)?.avatarPath).toBeFalsy()
-  })
-
-  it('shows a task archived during trouble and restored elsewhere once the trouble ends', async () => {
-    const archived = P().archiveIssue(task('Replace the gasket').id)
-    live().fail(new Error(QUERY_FAILURE))
-    await accept()
-    await expect(archived).resolves.toBe(true)
-    expect(P().issues.some((issue) => issue.title === 'Replace the gasket')).toBe(false)
-    // someone restored it before the snapshot loaded again
-    deliverTruth(() => {})
-    expect(P().snapshotTrouble()).toBeNull()
-    expect(task('Replace the gasket')).toBeDefined()
-    await refuseFollow()
-    expect(task('Replace the gasket')).toBeDefined()
   })
 })

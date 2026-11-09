@@ -212,7 +212,7 @@ async function detailsWith(
       !sub.cancel_at_period_end &&
       !removal,
     checkout_due_at: checkoutDeadline(sub),
-    last_export_at: org.last_export_at ?? null,
+    last_export_confirmed_at: org.last_export_confirmed_at ?? null,
     deletion: removal ? { reason: removal.reason, delete_after: removal.delete_after } : null,
     sync_pending: !!sub?.polar_subscription_id && next !== sub.next_seats,
     sync_error: sub?.sync_error ?? null,

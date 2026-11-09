@@ -1,20 +1,16 @@
-/* The delay of a task the workspace cannot judge, a task only a view's
-   answer brings (store/viewRows.ts), which before an ask for every task is
-   every task a view shows, and a task the task window shows from its own
-   read or holds before every task is held (store/planner.ts P.windowDelay),
-   judged from the task and its owner's load from the owner-load cache
-   (store/ownerLoadCache.ts), by the rules the task index judges the
-   workspace's tasks with (store/taskIndex.ts judge). Both go through one
-   judge (judgeDelay), so a window over a Board card shows the card's
-   verdict. An organization Viewer's Team sync judges the rows its agenda
-   left unknown with it too (store/planner.ts P.syncViewerVerdicts).
+/* The delay of every task the app shows, a task a view's answer brings
+   (store/viewRows.ts) or the task window shows from its own read
+   (store/planner.ts P.windowDelay), judged from the task and its owner's
+   load from the owner-load cache (store/ownerLoadCache.ts). Both go
+   through one judge (judgeDelay), so a window over a Board card shows the
+   card's verdict. An organization Viewer's Team sync judges the rows its
+   agenda left unknown with it too (store/planner.ts P.syncViewerVerdicts).
 
-   The owner's load is the cache's spans, with the span of every task this
-   person's rows hold, in the workspace or in a view, taken from those rows
-   instead (convex/lib/loadRows.ts loadRowFor, as taskIndex.ts fileLoad
-   files a shown task), under the owner those rows name. So a pending hours
-   or owner edit moves a delay at once, the server's span of the same task
-   is never counted again, before or after the server's answer, and a task
+   The owner's load is the cache's spans, with the span of every task a
+   view's rows hold taken from those rows instead (convex/lib/loadRows.ts
+   loadRowFor), under the owner those rows name. So a pending hours or
+   owner edit moves a delay at once, the server's span of the same task is
+   never counted again, before or after the server's answer, and a task
    given to another owner leaves the first owner's load. Spans without a
    task, other people's work the person is not shown, stay. The judged
    task's own spans never count, whichever list holds them, since the
@@ -24,9 +20,9 @@
 
    Team utilization and the planning panel read a person's work by the same
    rule (ownerItemsOf): the cache's spans with each one's project and the
-   person's paused tasks, with the work of every task this person's rows
-   hold taken from those rows, so a task counts once whichever list holds
-   it. viewLoadOf's answers, which the delays read, stay as they were.
+   person's paused tasks, with the work of every task a view's rows hold
+   taken from those rows, so a task counts once whichever list holds it.
+   viewLoadOf's answers, which the delays read, stay as they were.
 
    The rows that stand in for the cache's spans are those of views whose
    rows still hear every change (ViewDelayCtx inView). A stopped read's
@@ -38,6 +34,9 @@
    the cache's spans. So its pending hours, dates, pause or owner count at
    once, until the server answers it (store/planner.ts viewDelayCtx).
 
+   A load that is waiting, unavailable, failed or capped is never a load
+   (lib/delay.ts), so a verdict that needs it says unknown, never on time.
+
    The store holds no other person, so an owner's capacity and organization
    come from the profile cache (store/planner.ts ownerFacts): known for the
    signed-in person's own seats, an agent (unbounded) and a person whose
@@ -45,11 +44,10 @@
    person known only by a picker's name. A verdict that reads an unknown
    capacity has none while the owner's face is on its way, as while a load
    is, and is unknown once it will not come (judgeDelay), never judged
-   against the default. A
-   row's span is filed for its owner unless the profile cache places the
-   owner in another organization or its current answer leaves them out
-   (ownerInOrg), so an owner whose face is on its way keeps their load,
-   whose verdicts are unknown meanwhile anyway. */
+   against the default. A row's span is filed for its owner unless the
+   profile cache places the owner in another organization or its current
+   answer leaves them out (ownerInOrg), so an owner whose face is on its
+   way keeps their load, whose verdicts are unknown meanwhile anyway. */
 
 import { delayProjector } from '../../convex/lib/delay'
 import { loadRowFor } from '../../convex/lib/loadRows'
@@ -66,19 +64,14 @@ import type { IssueVM } from './viewModels'
 export type ViewDelayCtx = {
   /** owner `owner` of organization `org`'s load from the cache */
   load: (org: string, owner: string) => OwnerLoad
-  /** whether the workspace holds task `uuid` */
-  held: (uuid: string) => boolean
   /** whether a view's rows hold task `uuid` (its row on screen), among the
       views whose rows still hear every change, so none whose read stopped
       or kept its rows past a refusal or a failure, or among every view for
       a task a write of the person's own still waits on (store/planner.ts
       viewDelayCtx) */
   inView: (uuid: string) => boolean
-  /** the spans of owner `owner`'s tasks the workspace holds, pending edits
-      included (taskIndex.ts shownSpans) */
-  heldSpans: (owner: string) => LoadSpan[]
-  /** every row those views hold that the workspace does not, painted,
-      then the other views' rows of the tasks such a write waits on */
+  /** every row those views hold, painted, then the other views' rows of
+      the tasks such a write waits on */
   viewRows: () => Iterable<ViewRow>
   /** person `id`'s plannable hours a week (lib/workload.ts plannableHoursOf),
       or undefined while the store does not know them (store/planner.ts
@@ -221,9 +214,7 @@ export function viewLoadOf(
 ): LoadSpan[] {
   const spans: LoadSpan[] = []
   for (const span of load.spans)
-    if (!span.issueUuid || (!ctx.held(span.issueUuid) && !ctx.inView(span.issueUuid)))
-      spans.push(span)
-  spans.push(...ctx.heldSpans(owner))
+    if (!span.issueUuid || !ctx.inView(span.issueUuid)) spans.push(span)
   let filed = ctx.filed
   if (!filed) {
     filed = filedSpans(ctx)
@@ -251,20 +242,13 @@ export type OwnerItem = {
 }
 
 /** What reconciling a person's work reads from the store. */
-export type OwnerItemsCtx = Pick<
-  ViewDelayCtx,
-  'held' | 'inView' | 'viewRows' | 'projectLive' | 'orgOf'
-> & {
-  /** the work of owner `owner`'s tasks the workspace holds, pending edits
-      included (taskIndex.ts shownItems) */
-  heldItems: (owner: string) => OwnerItem[]
+export type OwnerItemsCtx = Pick<ViewDelayCtx, 'inView' | 'viewRows' | 'projectLive' | 'orgOf'> & {
   /** the work the views' rows file, by organization and owner, kept
       while the rows hold still; filedItems fills it */
   filed?: Map<string, OwnerItem[]>
 }
 
-/** The work each of the views' rows that the workspace does not hold
-    files, by organization and owner, by the server's rules: a load span
+/** The work each of the views' rows files, by organization and owner, by the server's rules: a load span
     (convex/lib/loadRows.ts loadRowFor) with its project, or for a paused
     leaf with dates that is not Done, in a live project, a paused item
     (convex/planning.ts OwnerPausedSpan). Each task once. */
@@ -347,7 +331,7 @@ export function ownerItemsOf(
 ): OwnerItem[] {
   const team = load.team
   if (!team) return []
-  const shown = (uuid: string | null) => !!uuid && (ctx.held(uuid) || ctx.inView(uuid))
+  const shown = (uuid: string | null) => !!uuid && ctx.inView(uuid)
   const out: OwnerItem[] = []
   load.spans.forEach((span, i) => {
     if (shown(span.issueUuid)) return
@@ -372,7 +356,6 @@ export function ownerItemsOf(
         remainingSet: null,
         paused: true,
       })
-  out.push(...ctx.heldItems(owner))
   let filed = ctx.filed
   if (!filed) {
     filed = filedItems(ctx)
@@ -410,8 +393,8 @@ export function planItemsOf(
 export type DelayFacts = { datesKnown: boolean; loading: boolean }
 const ROW_FACTS: DelayFacts = { datesKnown: true, loading: false }
 
-/** The delay of task `issue` of organization `org`, which the workspace
-    cannot judge: exact where the verdict needs no one's other work, as for
+/** The delay of task `issue` of organization `org`: exact where the
+    verdict needs no one's other work, as for
     a group, whose dates decide it (`facts`), else against its owner's load
     and capacity. Late for a passed due date. Null while that load's first
     answer or the owner's face that brings their capacity is on its way, as
@@ -454,7 +437,7 @@ export function judgeDelay(
   return DELAY_UNKNOWN
 }
 
-/** The delay of task `row`, which only a view holds (judgeDelay). */
+/** The delay of task `row` of a view's answer (judgeDelay). */
 export const viewDelay = (
   row: ViewRow,
   ctx: ViewDelayCtx,

@@ -49,10 +49,13 @@ import {
   deleteOutcome,
   directoryGroups,
   evaluate,
+  exportItemOf,
   FIXTURE_STATUS,
   FORMERLY_BARE,
   freeMilestoneWeek,
   freePastMilestoneWeek,
+  HIDDEN_TASK_WINDOW_STEP,
+  HIDDEN_WINDOW_READS,
   hasTag,
   historyRows,
   IMAGE_ANSWER_DELAY_MS,
@@ -95,11 +98,17 @@ import {
   OLD_PATHS_CLEANUP,
   OLD_PATHS_MARKS,
   OLD_PATHS_STEP,
-  ON_DEMAND_STEP,
+  ORG_EXPORT_FILE,
+  ORG_EXPORT_MARKS,
+  ORG_EXPORT_PICKER,
+  ORG_EXPORT_PICKER_FLAG,
+  ORG_EXPORT_READY_MS,
+  ORG_EXPORT_STEP,
   OVERVIEW_EXPECTED,
   OVERVIEW_HEALTH_EXPECTED,
   OVERVIEW_MILESTONES_STEP,
   OVERVIEW_OVERDUE_DAYS,
+  OWN_READS_STEP,
   OWNER_PICKERS_NAMES,
   OWNER_PICKERS_PERSON,
   OWNER_PICKERS_STEP,
@@ -128,6 +137,7 @@ import {
   projectDeleteRoute,
   projectPagesMax,
   projectsPartProblems,
+  querySetChanges,
   RATE_BUDGET,
   REGROUP_WAIT,
   RELATION_EXPECTED,
@@ -166,7 +176,6 @@ import {
   TASK_LIST_REFUSALS,
   TASK_LISTS,
   TASK_PAGES_MAX,
-  TASK_WINDOWS_QUERY,
   TEAM_SYNC_STEP,
   TEAMS_EXPECTED,
   TEAMS_STEP,
@@ -1119,6 +1128,132 @@ describe('staging check REST contract', () => {
       expect(selectedCreatorsStarts([])).toEqual([])
     })
   })
+  it("checks the organization export on the panel's own marks, after Deleted items, with the picker's stand-in scoped to its session flag", async () => {
+    expect(ORG_EXPORT_STEP).toBe('ui/org-export')
+    const panel = readFileSync(
+      new URL('../src/panels/OrganizationExport.tsx', import.meta.url),
+      'utf8',
+    )
+    for (const mark of Object.values(ORG_EXPORT_MARKS)) expect(panel, mark).toContain(mark)
+    expect(ORG_EXPORT_READY_MS).toBe(5 * 60_000)
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    // it runs after Deleted items' step
+    const at = ['await deletedItemsCheck()', 'await orgExportCheck()'].map((call) =>
+      script.indexOf(call),
+    )
+    expect(at.every((n) => n > 0)).toBe(true)
+    expect([...at].sort((a, b) => a - b)).toEqual(at)
+    const step = script.slice(
+      script.indexOf('async function orgExportCheck()'),
+      script.indexOf('/** The Settings page Archived tasks opens'),
+    )
+    // the stand-in goes in before the navigation, the flag and the file go
+    // in its finally, and so does the run's Deleted item
+    expect(step.indexOf('context.addInitScript(ORG_EXPORT_PICKER)')).toBeLessThan(
+      step.indexOf('settings/org-general'),
+    )
+    // it waits for its own job, collecting or under a new id, before it
+    // waits for ready, so an earlier ready archive never passes for it
+    const own = step.indexOf("=== 'collecting' ||")
+    expect(own).toBeGreaterThan(step.indexOf('m.start}]`).click()'))
+    expect(step.indexOf('!== earlier')).toBeGreaterThan(own)
+    const ready = step.indexOf('const ready = await until(')
+    expect(ready).toBeGreaterThan(own)
+    // the step awaits its own job, as an expectation, before the ready wait
+    const awaited = step.indexOf('await until(own, ORG_EXPORT_READY_MS)')
+    expect(awaited).toBeGreaterThan(own)
+    expect(awaited).toBeLessThan(ready)
+    expect(step.slice(step.lastIndexOf('expect(', awaited), awaited)).toMatch(/^expect\(\s*$/)
+    expect(step.slice(ready, step.indexOf("=== 'ready'", ready))).toContain('!== earlier')
+    const after = step.slice(step.indexOf('} finally {'))
+    for (const part of [
+      'sessionStorage.removeItem(flag)',
+      'removeEntry(name)',
+      'await purgeExportItem(itemId, gone, title)',
+    ])
+      expect(after, part).toContain(part)
+    // the purge also runs without the archive's item id, finding the item
+    // by the task's key and tagged title, and says a NOTE when it is not
+    // done. It purges only the archive's item or the one the search
+    // verified, and nothing when the search verified none.
+    const purge = script.slice(
+      script.indexOf('async function purgeExportItem('),
+      script.indexOf('export function exportItemOf('),
+    )
+    expect(purge).toContain(
+      'itemId === null ? await deletedTaskItem({ key: gone.key, title }) : { id: itemId }',
+    )
+    expect(purge.indexOf('if (found.id === null) {')).toBeGreaterThan(-1)
+    expect(purge.indexOf('if (found.id === null) {')).toBeLessThan(
+      purge.indexOf('purgeDeletedItems'),
+    )
+    expect(purge).toContain('const id = found.id')
+    expect(purge.match(/say\(\s*'NOTE'/g)).toHaveLength(3)
+    expect(purge).not.toContain('.catch(() => {})')
+    // the search finds the item only once the search answered, from every
+    // row's key and title, never the first row it sees
+    const finder = script.slice(
+      script.indexOf('async function deletedTaskItem('),
+      script.indexOf('/** The Settings page Archived tasks opens'),
+    )
+    const typed = finder.indexOf('.fill(own.title)')
+    expect(typed).toBeGreaterThan(-1)
+    const settled = finder.indexOf('m.state}="ok"]`).count()) === 0) return false')
+    expect(settled).toBeGreaterThan(typed)
+    expect(finder.indexOf('const mine = exportItemOf(rows, own)')).toBeGreaterThan(settled)
+    expect(finder).toContain('[m.row, m.key, m.title]')
+    expect(finder).not.toContain('.first()')
+    expect(finder).not.toContain('getAttribute(m.row)')
+    // the stand-in answers a file only under its flag, else the browser's
+    // own picker stays
+    const stand = (flag) => {
+      const picker = () => 'native'
+      const page = {
+        sessionStorage: { getItem: (name) => (name === ORG_EXPORT_PICKER_FLAG ? flag : null) },
+        navigator: {
+          storage: {
+            getDirectory: async () => ({
+              getFileHandle: async (name, options) => ({ name, options }),
+            }),
+          },
+        },
+        window: { showSaveFilePicker: picker },
+      }
+      new Function('sessionStorage', 'navigator', 'window', ORG_EXPORT_PICKER)(
+        page.sessionStorage,
+        page.navigator,
+        page.window,
+      )
+      return page.window.showSaveFilePicker
+    }
+    expect(stand(null)()).toBe('native')
+    expect(await stand('1')()).toEqual({ name: ORG_EXPORT_FILE, options: { create: true } })
+  })
+
+  it("takes the export step's Deleted item only from an answered search, as the one row of the task's key and title", () => {
+    const own = { key: 'QN-41', title: 'stgchk-1 Exported deleted' }
+    const mine = { id: 'item-own', ...own }
+    const other = { id: 'item-other', key: 'QN-7', title: 'stgchk-1 Deleted 3' }
+    // while the search is pending the page shows its earlier rows, an
+    // unrelated deleted task first, and nothing is taken
+    expect(exportItemOf([other], own)).toBeUndefined()
+    expect(exportItemOf([other, mine], own)).toBeUndefined()
+    expect(exportItemOf([], own)).toBeUndefined()
+    // a hidden row has no title mark
+    expect(exportItemOf([{ ...mine, title: null }], own)).toBeUndefined()
+    // the answered search takes the one row of the task
+    expect(exportItemOf([mine], own)).toEqual({ id: 'item-own' })
+    // a row of the title but another key, or two of the key, take nothing
+    expect(exportItemOf([{ ...other, title: own.title }], own)).toEqual({
+      id: null,
+      why: 'Deleted items lists no row of QN-41 titled “stgchk-1 Exported deleted”',
+    })
+    expect(exportItemOf([mine, { ...mine, id: 'item-twin' }], own)).toEqual({
+      id: null,
+      why: 'Deleted items lists 2 rows of QN-41 titled “stgchk-1 Exported deleted”',
+    })
+  })
+
   it("checks Deleted items on the page's own marks, after Settings › Projects, restoring 26 tasks in two calls", () => {
     const page = readFileSync(
       new URL('../src/panels/settings/DeletedItems.tsx', import.meta.url),
@@ -1288,6 +1423,71 @@ describe('staging check REST contract', () => {
     expect(at.every((n) => n > 0)).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
   })
+  it("names the hidden task window's step and reads, and names a Remove by its Add", () => {
+    expect(HIDDEN_TASK_WINDOW_STEP).toBe('ui/hidden-task-window')
+    expect(HIDDEN_WINDOW_READS).toEqual([
+      'snapshot:threadComments',
+      'inbox:item',
+      'taskWindow:task',
+    ])
+    // the store reads them by those names, and the window marks its reads
+    const store = readFileSync(new URL('../src/store/planner.ts', import.meta.url), 'utf8')
+    for (const read of ['api.snapshot.threadComments', 'api.inbox.item', 'api.taskWindow.task'])
+      expect(store).toContain(read)
+    const window = readFileSync(new URL('../src/panels/IssueDetail.tsx', import.meta.url), 'utf8')
+    expect(window).toContain('data-task-window-reads=')
+    // it runs after the badge's step and before the Inbox list's, while t0 is active
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const order = [
+      'await inboxBadgeCheck()',
+      'await hiddenTaskWindowCheck()',
+      'await inboxListCheck()',
+    ]
+    const at = order.map((call) => script.indexOf(call))
+    expect(at.every((n) => n > 0)).toBe(true)
+    expect([...at].sort((a, b) => a - b)).toEqual(at)
+    const step = script.slice(
+      script.indexOf('async function hiddenTaskWindowCheck()'),
+      script.indexOf('export const INBOX_LIST_STEP'),
+    )
+    // it hides the page as a background tab is, waits 15 s for no read, and
+    // removes t0's notification in its cleanup
+    expect(step).toContain("document.dispatchEvent(new Event('visibilitychange'))")
+    expect(step).toContain('await sleep(15_000)')
+    expect(step.indexOf('finally')).toBeLessThan(step.indexOf('Remove notification'))
+    // a Remove carries its queryId alone, named per socket by its Add
+    const frame = (socket, modifications) => ({
+      socket,
+      text: JSON.stringify({
+        type: 'ModifyQuerySet',
+        baseVersion: 1,
+        newVersion: 2,
+        modifications,
+      }),
+    })
+    const changes = querySetChanges([
+      frame(1, [
+        { type: 'Add', queryId: 4, udfPath: 'inbox:item', args: [{}] },
+        { type: 'Add', queryId: 5, udfPath: 'taskWindow:task', args: [{}] },
+      ]),
+      { socket: 1, text: 'not json' },
+      { socket: 1, text: JSON.stringify({ type: 'Mutation', udfPath: 'messages:readItem' }) },
+      frame(1, [{ type: 'Remove', queryId: 4 }]),
+      // the same id on another connection is another query
+      frame(2, [{ type: 'Remove', queryId: 5 }]),
+      frame(2, [{ type: 'Add', queryId: 5, udfPath: 'snapshot:threadComments', args: [{}] }]),
+      frame(2, [{ type: 'Remove', queryId: 5 }]),
+    ])
+    expect(changes).toEqual([
+      { change: 'add', query: 'inbox:item' },
+      { change: 'add', query: 'taskWindow:task' },
+      { change: 'remove', query: 'inbox:item' },
+      { change: 'remove', query: null },
+      { change: 'add', query: 'snapshot:threadComments' },
+      { change: 'remove', query: 'snapshot:threadComments' },
+    ])
+  })
+
   it("names the Inbox list's step, its read and marks, and reads its frames", () => {
     expect(INBOX_LIST_STEP).toBe('ui/inbox-list')
     expect(INBOX_PAGE_QUERY).toBe('inbox:page')
@@ -1318,7 +1518,7 @@ describe('staging check REST contract', () => {
       modifications: [add(INBOX_PAGE_QUERY, { search: 'QN-1' }), add('workspace:root', {})],
     })
     expect(addedArgs(frame, INBOX_PAGE_QUERY)).toEqual([{ search: 'QN-1' }])
-    expect(addedArgs(frame, TASK_WINDOWS_QUERY)).toEqual([])
+    expect(addedArgs(frame, 'taskWindow:task')).toEqual([])
   })
   it("names the delivery step and its marks, runs it after the feed's, and puts back what it changed", () => {
     expect(NOTIFICATION_DELIVERY_STEP).toBe('ui/notification-delivery')
@@ -1425,36 +1625,46 @@ describe('staging check REST contract', () => {
     expect(notificationCall(frame('messages:readItem', {}))).toBeNull()
     expect(notificationCall('not json')).toBeNull()
   })
-  it('tells a frame that subscribes the task windows from every other frame', () => {
-    expect(ON_DEMAND_STEP).toBe('ui/tasks-on-demand')
-    expect(TASK_WINDOWS_QUERY).toBe('workspace:tasks')
+  it('names the own reads step, keeps its checks in order, and tells a frame that subscribes a query from every other frame', () => {
+    expect(OWN_READS_STEP).toBe('ui/own-reads')
     expect(ROADMAP_QUERY).toBe('tasks:roadmap')
     expect(ASSIGNEE_LOAD_QUERY).toBe('planning:assigneeLoad')
-    // the registry subscribes the workspace's task windows by that name
+    // the registry subscribes the root part alone and no task window, so
+    // no step checks for one
     const parts = readFileSync(new URL('../src/store/liveParts.ts', import.meta.url), 'utf8')
-    expect(parts).toContain('watch(api.workspace.tasks, {')
+    expect(parts).not.toContain('api.workspace.tasks')
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    expect(script).not.toContain('workspace:tasks')
+    expect(script).not.toContain('ui/tasks-on-demand')
+    // the step keeps the Board's, the task address's and the Roadmap's
+    // checks, once each, in that order
+    const step = script.slice(
+      script.indexOf('async function ownReadsCheck()'),
+      script.indexOf('/** The step that creates a task through the Board'),
+    )
+    const order = [
+      '/board/p/',
+      '/tasks/',
+      '/roadmap/p/',
+      'adds(ROADMAP_QUERY) > 0',
+      'eq(adds(ASSIGNEE_LOAD_QUERY), 0',
+    ].map((text) => step.indexOf(text))
+    expect(order.every((n) => n > 0)).toBe(true)
+    expect([...order].sort((x, y) => x - y)).toEqual(order)
     const add = (udfPath) => ({ type: 'Add', queryId: 1, udfPath, args: [{}] })
     const frame = (...modifications) =>
       JSON.stringify({ type: 'ModifyQuerySet', baseVersion: 0, newVersion: 1, modifications })
-    expect(addsQuery(frame(add('workspace:tasks')), TASK_WINDOWS_QUERY)).toBe(true)
+    expect(addsQuery(frame(add(ROADMAP_QUERY)), ROADMAP_QUERY)).toBe(true)
+    expect(addsQuery(frame(add('workspace:root'), add(ROADMAP_QUERY)), ROADMAP_QUERY)).toBe(true)
+    // another query, a removal, another message and no JSON are not one
+    expect(addsQuery(frame(add('workspace:root')), ROADMAP_QUERY)).toBe(false)
     expect(
-      addsQuery(frame(add('workspace:root'), add('workspace:tasks')), TASK_WINDOWS_QUERY),
-    ).toBe(true)
-    // the other parts, a removal, another message and no JSON are not one
-    expect(addsQuery(frame(add('workspace:inbox')), TASK_WINDOWS_QUERY)).toBe(false)
-    expect(
-      addsQuery(
-        frame({ type: 'Remove', queryId: 1, udfPath: 'workspace:tasks' }),
-        TASK_WINDOWS_QUERY,
-      ),
+      addsQuery(frame({ type: 'Remove', queryId: 1, udfPath: ROADMAP_QUERY }), ROADMAP_QUERY),
     ).toBe(false)
     expect(
-      addsQuery(
-        JSON.stringify({ type: 'Mutation', udfPath: 'workspace:tasks' }),
-        TASK_WINDOWS_QUERY,
-      ),
+      addsQuery(JSON.stringify({ type: 'Mutation', udfPath: ROADMAP_QUERY }), ROADMAP_QUERY),
     ).toBe(false)
-    expect(addsQuery('not json', TASK_WINDOWS_QUERY)).toBe(false)
+    expect(addsQuery('not json', ROADMAP_QUERY)).toBe(false)
   })
 
   it("tells a create's request, its answer and the reads of the new task that went out before it", () => {
@@ -1506,11 +1716,10 @@ describe('staging check REST contract', () => {
       read('snapshot:threadComments', { org_id: 'org', issue_id: uuid }),
       read('inbox:item', { issue_id: uuid }),
     ])
-    expect(good).toEqual({ uuid, answered: true, num: 41, early: [], taskWindows: 0 })
-    // a read of the task sent before the answer, and the task windows, are caught
-    const early = createOrder([create, windowRead, answer, read('workspace:tasks', {})])
+    expect(good).toEqual({ uuid, answered: true, num: 41, early: [] })
+    // a read of the task sent before the answer is caught
+    const early = createOrder([create, windowRead, answer])
     expect(early?.early).toEqual([windowRead.text])
-    expect(early?.taskWindows).toBe(1)
     // a read of another task, or an answer to another write, is no answer
     expect(createOrder([create, read('taskWindow:task', { ref: 'other' }), answer])?.early).toEqual(
       [],
@@ -1526,13 +1735,11 @@ describe('staging check REST contract', () => {
     expect(mutationRequest('not json', CREATE_MUTATION)).toBeNull()
     expect(answersMutation('not json', 7)).toBe(false)
     expect(addsQueryFor('not json', 'taskWindow:task', uuid)).toBe(false)
-    // the step runs after ui/tasks-on-demand and before the run archives M
+    // the step runs after ui/own-reads and before the run archives M
     const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
-    const at = [
-      'await tasksOnDemandCheck()',
-      'await createAnswerCheck()',
-      'await archiveChecks()',
-    ].map((call) => script.indexOf(call))
+    const at = ['await ownReadsCheck()', 'await createAnswerCheck()', 'await archiveChecks()'].map(
+      (call) => script.indexOf(call),
+    )
     expect(at.every((n) => n > 0)).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
     // in a sub-project of its own, with the run's tag
@@ -1809,7 +2016,7 @@ describe('staging check REST contract', () => {
     )
     const step = check.slice(
       check.indexOf('async function labelMentionPickersCheck()'),
-      check.indexOf('export const ON_DEMAND_STEP'),
+      check.indexOf('export const OWN_READS_STEP'),
     )
     expect(step).toContain('const names = [found.name, madeName]')
     // the app deletes each label as the REST row shows it, in the home

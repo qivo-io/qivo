@@ -88,6 +88,19 @@ describe('snapshot trouble', () => {
     await store.initStore()
     // the views name the projects they show; this suite names them all
     await (await import('./oracleScope.setup')).nameProjects(store.P, snapshot)
+    // the shared edits below are on task-a, which its window shows from
+    // its own answer, as the app shows every task
+    store.P.watchComments('task-a', snapshot.orgs[0].id)
+    await settle()
+    vi.advanceTimersByTime(0)
+    await settle()
+  }
+  /* task-a as its window shows it from its own answer (P.taskDetail),
+     which boot opens. */
+  const windowTask = () => {
+    const view = store.P.taskDetail('task-a', snapshot.orgs[0].id)?.view
+    if (!view) throw new Error('the window shows no task-a')
+    return view
   }
 
   beforeEach(async () => {
@@ -177,7 +190,7 @@ describe('snapshot trouble', () => {
     next.delivered_at = '2026-09-15T09:00:00.000Z'
     live().deliver(next)
     expect(P.snapshotTrouble()).toBeNull()
-    expect(P.issues[0].title).toBe('Calibrate the sensor again')
+    expect(windowTask().title).toBe('Calibrate the sensor again')
     expect(showToast).toHaveBeenCalledWith('Qivo is up to date again.', 'success')
   })
 
@@ -193,11 +206,11 @@ describe('snapshot trouble', () => {
     await boot()
     const { P } = store
     live().fail(new Error(QUERY_FAILURE))
-    const [task] = P.issues
+    const task = windowTask()
     P.updateIssue(task.id, { status: 'progress' })
     await settle()
     expect(sentNames()).not.toContain('issues:update')
-    expect(P.issueById[task.id].status).toBe('todo')
+    expect(windowTask().status).toBe('todo')
     expect(showToast).toHaveBeenCalledWith(store.PAUSED_TEXT, 'error')
     readA()
     // a star writes only the seat's own row, which the server checks
@@ -217,7 +230,7 @@ describe('snapshot trouble', () => {
     await settle()
     const read = readMark
     expect(read()).toBe(true)
-    const [task] = P.issues
+    const task = windowTask()
     const project = snapshot.projects[0].id
     const teams = P.teams.length
     P.updateIssue(task.id, { status: 'progress' })
@@ -234,7 +247,7 @@ describe('snapshot trouble', () => {
     // nothing was painted, so no rollback took the saved read mark away
     expect(read()).toBe(true)
     expect(sentNames()).toEqual(['messages:readItem'])
-    expect(P.issueById[task.id].status).toBe('todo')
+    expect(windowTask().status).toBe('todo')
     expect(P.org.name).toBe('Testbed Labs')
     expect(P.teams).toHaveLength(teams)
     expect(P.project(project)?.name).toBe('Task creation fixture')
@@ -253,7 +266,7 @@ describe('snapshot trouble', () => {
   it('pauses every write while signed out, before anything paints', async () => {
     await boot()
     const { P } = store
-    const [task] = P.issues
+    const task = windowTask()
     // saved after the last good delivery, so a rollback would take it away
     P.updateIssue(task.id, { status: 'progress' })
     live().fail(new ConvexError({ code: 'forbidden', message: 'not signed in' }))
@@ -266,7 +279,7 @@ describe('snapshot trouble', () => {
     expect(showToast).not.toHaveBeenCalled()
     expect(readA()).toBe(false)
     P.setIssueSubscribed(task.id, true)
-    expect(P.issueById[task.id].subscribed).toBe(false)
+    expect(windowTask().subscribed).toBe(false)
     P.createParent(task.id, 'Sensor work')
     P.setAppearance({ mode: 'dark', image_source: 'none' }).catch(() => {})
     await expect(
@@ -277,9 +290,9 @@ describe('snapshot trouble', () => {
     await settle()
     expect(sent).toEqual([])
     expect(read()).toBeFalsy()
-    expect(P.issueById[task.id].subscribed).toBe(false)
+    expect(windowTask().subscribed).toBe(false)
     // nothing was rolled back over the saved edit
-    expect(P.issueById[task.id].status).toBe('progress')
+    expect(windowTask().status).toBe('progress')
     expect(showToast).toHaveBeenCalledWith(store.SIGNED_OUT_TEXT, 'error')
     expect(showToast).not.toHaveBeenCalledWith(store.PAUSED_TEXT, 'error')
   })
@@ -287,17 +300,17 @@ describe('snapshot trouble', () => {
   it('keeps a saved task edit when opening a task tries to read its messages without a seat', async () => {
     await boot()
     const { P } = store
-    const [task] = P.issues
+    const task = windowTask()
     P.updateIssue(task.id, { status: 'progress' })
-    // the seat went in the same delivery that would have held the edit
+    expect(windowTask().status).toBe('progress')
+    // the seat went in the same delivery that would have held the edit, so
+    // the window's read is refused and the window shows the task no more
     live().deliver(null)
     sent[0].resolve(null)
     await settle()
-    expect(P.issueById[task.id].status).toBe('progress')
     readOnOpen()
     await settle()
     expect(sent).toHaveLength(1)
-    expect(P.issueById[task.id].status).toBe('progress')
     expect(readMark()).toBeFalsy()
     expect(showToast).not.toHaveBeenCalled()
   })
@@ -332,6 +345,11 @@ describe('snapshot trouble', () => {
     )
     await boot()
     const { P } = store
+    // the window's attachments answer holds the files
+    P.showSections({}, true)
+    await settle()
+    vi.advanceTimersByTime(0)
+    await settle()
     live().fail(new Error(QUERY_FAILURE))
     P.removeAttachment('file-a', { deferWhilePaused: true })
     P.removeAttachment('file-b', { deferWhilePaused: true })
@@ -414,7 +432,7 @@ describe('snapshot trouble', () => {
   it('keeps a paused comment out of the thread so its composer keeps the text', async () => {
     await boot()
     const { P } = store
-    P.watchComments('task-a')
+    P.watchComments('task-a', snapshot.orgs[0].id)
     live().fail(new Error(QUERY_FAILURE))
     expect(await P.addComment('task-a', 'Measured on the bench')).toBe(false)
     expect(P.comments).toHaveLength(0)
@@ -450,7 +468,7 @@ describe('snapshot trouble', () => {
     const { P } = store
     // a threadComments page
     const page = { comments: [], earlier: false }
-    P.watchComments('task-a')
+    P.watchComments('task-a', snapshot.orgs[0].id)
     await settle()
     threads[0].deliver(structuredClone(page))
     await settle()
@@ -487,7 +505,7 @@ describe('snapshot trouble', () => {
   it('ends the trouble within a task while a write still waits for its answer', async () => {
     await boot()
     const { P } = store
-    const [task] = P.issues
+    const task = windowTask()
     P.updateIssue(task.id, { status: 'progress' })
     live().fail(new Error(QUERY_FAILURE))
     const next = structuredClone(snapshot)
@@ -497,15 +515,15 @@ describe('snapshot trouble', () => {
     expect(P.snapshotTrouble()).not.toBeNull()
     vi.advanceTimersByTime(0)
     expect(P.snapshotTrouble()).toBeNull()
-    expect(P.issues[0].title).toBe('Calibrate the sensor again')
-    expect(P.issues[0].status).toBe('progress')
+    expect(windowTask().title).toBe('Calibrate the sensor again')
+    expect(windowTask().status).toBe('progress')
     expect(sentNames()).toEqual(['issues:update'])
   })
 
   it('ends the trouble when a delivery the paint gate held reaches the screen', async () => {
     await boot()
     const { P } = store
-    const [task] = P.issues
+    const task = windowTask()
     P.updateIssue(task.id, { status: 'progress' })
     expect(sentNames()).toEqual(['issues:update'])
     live().fail(new Error(QUERY_FAILURE))
@@ -514,13 +532,13 @@ describe('snapshot trouble', () => {
     next.issues[0].title = 'Calibrate the sensor again'
     live().deliver(next)
     // the stale rows are still on screen, so edits stay paused
-    expect(P.issues[0].title).toBe('Calibrate the sensor')
+    expect(windowTask().title).toBe('Calibrate the sensor')
     expect(P.editsPaused()).toBe(true)
     sent[0].resolve(null)
     await settle()
     expect(P.snapshotTrouble()).toBeNull()
-    expect(P.issues[0].title).toBe('Calibrate the sensor again')
-    expect(P.issueById[task.id].status).toBe('progress')
+    expect(windowTask().title).toBe('Calibrate the sensor again')
+    expect(windowTask().status).toBe('progress')
     expect(showToast).toHaveBeenCalledWith('Qivo is up to date again.', 'success')
   })
 
@@ -549,7 +567,7 @@ describe('snapshot trouble', () => {
   it('keeps the trouble when a null delivery replaces a held recovery', async () => {
     await boot()
     const { P } = store
-    const [task] = P.issues
+    const task = windowTask()
     P.updateIssue(task.id, { status: 'progress' })
     live().fail(new Error(QUERY_FAILURE))
     live().deliver(structuredClone(snapshot))
@@ -576,6 +594,8 @@ describe('snapshot trouble', () => {
       })
     await boot()
     const { P } = store
+    // the handle the window opened task-a by, before the seat goes
+    const task = windowTask()
     live().deliver(null)
     expect(P.snapshotTrouble()).toMatchObject({
       kind: 'no_access',
@@ -583,8 +603,8 @@ describe('snapshot trouble', () => {
       retrying: false,
       detail: '',
     })
-    expect(P.issues).toHaveLength(1)
-    const [task] = P.issues
+    // the store keeps the last view: the login's own seat
+    expect(P.users.map((user) => user.id)).toEqual(snapshot.myProfileIds)
     P.updateIssue(task.id, { status: 'progress' })
     readA()
     P.saveUI({ view: 'kanban' })
@@ -602,7 +622,6 @@ describe('snapshot trouble', () => {
     // without a seat the server refuses the rest, so only the login's
     // appearance and connected apps go out
     expect(sentNames()).toEqual(['appearance:save', 'oauthConnections:revoke'])
-    expect(P.issueById[task.id].status).toBe('todo')
     expect(readMark()).toBeFalsy()
     // the store holds the login's own seat alone, kept from the last view
     expect(P.users.map((user) => user.id)).toEqual(snapshot.myProfileIds)
@@ -616,7 +635,7 @@ describe('snapshot trouble', () => {
   it('reverts an edit the server refuses after every seat is gone', async () => {
     await boot()
     const { P } = store
-    const [task] = P.issues
+    const task = windowTask()
     P.updateIssue(task.id, { status: 'progress' })
     expect(sentNames()).toEqual(['issues:update'])
     live().deliver(null)
@@ -624,7 +643,8 @@ describe('snapshot trouble', () => {
       new ConvexError({ code: 'forbidden', message: 'no profile in this organization' }),
     )
     await settle()
-    expect(P.issueById[task.id].status).toBe('todo')
+    // the refusal takes the edit's paint away
+    expect(store.__layerProbe?.layerCount()).toBe(0)
     expect(P.snapshotTrouble()?.kind).toBe('no_access')
     // it reads like the edits paused after the seat went
     expect(showToast).toHaveBeenCalledWith(store.NO_ACCESS_TEXT, 'error')
@@ -639,12 +659,12 @@ describe('snapshot trouble', () => {
       new ConvexError({ code: 'forbidden', message: 'this organization is being deleted' })
     await boot()
     const { P } = store
-    const [task] = P.issues
+    const task = windowTask()
     // the refusal arrives while the last delivery still holds the seat
     P.updateIssue(task.id, { status: 'progress' })
     sent[0].reject(deleting())
     await settle()
-    expect(P.issueById[task.id].status).toBe('todo')
+    expect(windowTask().status).toBe('todo')
     expect(showToast).toHaveBeenLastCalledWith(store.ORG_DELETING_TEXT, 'error')
     // and once the delivery without the seat came first; past the pause
     // toast's gap, so a second toast shows
@@ -655,12 +675,13 @@ describe('snapshot trouble', () => {
     live().deliver(SEATS_DELETING)
     sent[1].reject(deleting())
     await settle()
-    expect(P.issueById[task.id].status).toBe('todo')
+    expect(store.__layerProbe?.layerCount()).toBe(0)
     expect(showToast).toHaveBeenCalledWith(store.ORG_DELETING_TEXT, 'error')
-    // an edit after that delivery pauses before it is sent, in the same words
+    // an edit after that delivery pauses before it is sent, in the same
+    // words; the window shows the task no more, so a label stands in
     vi.advanceTimersByTime(1_000)
     showToast.mockClear()
-    P.updateIssue(task.id, { status: 'done' })
+    expect(P.addLabel({ name: 'Bench' })).toBeNull()
     await settle()
     expect(sent).toHaveLength(2)
     expect(showToast).toHaveBeenCalledWith(store.ORG_DELETING_TEXT, 'error')
@@ -679,7 +700,7 @@ describe('snapshot trouble', () => {
       reason: store.ORG_DELETING_TEXT,
     })
     // the last view stays and shows nothing new
-    expect(P.issues).toHaveLength(1)
+    expect(P.users.map((user) => user.id)).toEqual(snapshot.myProfileIds)
     live().deliver(null)
     expect(P.snapshotTrouble()?.kind).toBe('no_access')
     expect(P.snapshotTrouble()?.reason).toBeUndefined()
@@ -690,7 +711,7 @@ describe('snapshot trouble', () => {
     store = await import('./planner')
     await expect(store.initStore()).resolves.toBeNull()
     expect(store.P.seatless()).toEqual({ deleting: true, create: 'after_deletion' })
-    expect(store.P.issues).toEqual([])
+    expect(store.P.users).toEqual([])
   })
 
   it('boots with no seat and says why for a member their organization deactivated', async () => {
@@ -706,7 +727,7 @@ describe('snapshot trouble', () => {
     live().deliver(DEACTIVATED)
     expect(P.snapshotTrouble()?.kind).toBe('no_access')
     expect(P.snapshotTrouble()?.reason).toBeUndefined()
-    expect(P.issues).toHaveLength(1)
+    expect(P.users.map((user) => user.id)).toEqual(snapshot.myProfileIds)
   })
 
   it("names the organization's deletion for its write while another organization remains", async () => {
@@ -717,7 +738,7 @@ describe('snapshot trouble', () => {
     snapshot.myProfileIds.push(seat.id)
     await boot()
     const { P } = store
-    const [task] = P.issues
+    const task = windowTask()
     P.updateIssue(task.id, { status: 'progress' })
     const restore = P.unarchiveProject(snapshot.projects[0].id, archivedShown())
     await settle()
@@ -897,7 +918,7 @@ describe('snapshot trouble', () => {
     demo.on = true
     await boot()
     const { P } = store
-    P.updateIssue(P.issues[0].id, { status: 'progress' })
+    P.updateIssue(windowTask().id, { status: 'progress' })
     expect(sentNames()).toEqual(['issues:update'])
     const refusal = unavailable()
     sent[0].reject(refusal)

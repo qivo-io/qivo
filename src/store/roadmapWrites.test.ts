@@ -106,8 +106,6 @@ describe("the Roadmap's writes of tasks it does not hold", { timeout: BOARD_TEST
     const r = await roadmapOf(board)
     const a = r.model('a')
     if (!a) throw new Error('no model of a')
-    expect(board.P.handleOf('a')).toBeNull()
-    board.probe?.answerMarks()
     answerNext('roadmap:change', { count: 1 })
     let saved: Promise<boolean> = Promise.resolve(false)
     await act(async () => {
@@ -129,8 +127,6 @@ describe("the Roadmap's writes of tasks it does not hold", { timeout: BOARD_TEST
         },
       },
     ])
-    // the task comes from an answer, so the guard lets it through unasked
-    expect(board.probe?.answerMarks()).toEqual(['roadmap:change'])
     expect(r.model('a')?.start).toBe(TODAY_WEEK + 2)
     expect(await saved).toBe(true)
     // accepted: the paint stays until a delivery of the Roadmap's read holds it

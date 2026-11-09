@@ -7,12 +7,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
    faked — anything it starts using will fail loudly here rather than silently.
 
    Fixture: one home organization (HOME, slug "home") with projects 1 and 7 and
-   issues QN-5 / QN-9, plus a foreign one (ACME, slug "acme") whose numbering
+   tasks QN-5 / QN-9, plus a foreign one (ACME, slug "acme") whose numbering
    collides on purpose — project 1 and QN-5 exist twice, which is the whole
    reason an address carries the organization at all (0081). The store holds
-   no project list: `project` stands for the project cache's facts, which
-   the router reads to name a scope and to keep a preferred scope, and an
-   address names a project by its uuid or asks for it by number. */
+   no project list and no task: `project` stands for the project cache's
+   facts, which the router reads to name a scope and to keep a preferred
+   scope, and an address names a project by its uuid or asks for it by
+   number. The app opens a task by a reference with its organization, its
+   number and its uuid (P.openTask), and the window's own read (P.detail)
+   names a task a handle opens. */
 const HOME = 'org-home'
 const ACME = 'org-acme'
 
@@ -37,8 +40,8 @@ type FakeIssue = {
 }
 type FakeOrg = { id: string; slug: string; name: string }
 
-/* What the window shows of a task the workspace does not hold, from its own
-   read (P.detail), and the read of a registered reference (P.reference). */
+/* What the window shows of a task from its own read (P.detail), and the
+   read of a registered reference (P.reference). */
 type FakeDetail = { task: string; view: FakeIssue | null }
 type FakeReference = {
   ref: string
@@ -48,19 +51,14 @@ type FakeReference = {
 
 const store = {} as {
   projects: FakeProject[]
-  issues: FakeIssue[]
   homeOrg: string
   orgs: FakeOrg[]
   myProfileIds: string[]
-  issueById: Record<string, FakeIssue>
   detail: FakeDetail | null
   reference: FakeReference | null
   orgBySlug: (s: string) => FakeOrg | undefined
   /** The project cache's facts of a project (P.project). */
   project: (id: string) => FakeProject | undefined
-  issueRefIn: (org: string, key: string) => string | null
-  handleNow: (uuid: string, org: string, num: number) => string
-  handleOf: (uuid: string) => string | null
 }
 
 vi.mock('../store/planner', () => ({
@@ -94,9 +92,50 @@ import { refParts, taskRef } from './taskReference'
    them, which a uuid address resolves to a reference. */
 const FAR = '6f1c2a4e-0000-4000-8000-0000000000aa'
 
+/* `assignee` matters to one rule only: My view holds a task when it is
+   MINE, so scopeForIssue narrows away from the sentinel when it isn't.
+   QN-9 is somebody else's on purpose; the ACME one is mine, because a seat
+   in another organization is still me (0081). Each is a view a window
+   shows from its own read. */
+const TASKS: Record<string, FakeIssue> = {
+  'QN-5': {
+    id: 'QN-5',
+    key: 'QN-5',
+    uuid: 'uuid-home-5',
+    org: HOME,
+    project: 'p-home-1a',
+    assignee: 'me',
+  },
+  'QN-9': {
+    id: 'QN-9',
+    key: 'QN-9',
+    uuid: 'uuid-home-9',
+    org: HOME,
+    project: 'p-home-7',
+    assignee: 'someone-else',
+  },
+  // a foreign task's HANDLE is its uuid; only its display key reads "QN-5"
+  'uuid-acme-5': {
+    id: 'uuid-acme-5',
+    key: 'QN-5',
+    uuid: 'uuid-acme-5',
+    org: ACME,
+    project: 'p-acme-1',
+    assignee: 'me',
+  },
+}
+
+/* The fixture's tasks as the app opens them (P.openTask). */
+const HOME_5 = taskRef({ org: HOME, num: 5, uuid: 'uuid-home-5' })
+const HOME_9 = taskRef({ org: HOME, num: 9, uuid: 'uuid-home-9' })
+const ACME_5 = taskRef({ org: ACME, num: 5, uuid: 'uuid-acme-5' })
+
+/* What an address by number in organization `org` opens. */
+const byNumber = (org: string, num: number) => taskRef({ org, num })
+
 /* Task `id` as the scope rules read it. */
 const scopeTask = (id: string) => {
-  const it = store.issueById[id]
+  const it = TASKS[id]
   return it && { project: it.project, owner: it.assignee }
 }
 
@@ -121,56 +160,14 @@ beforeEach(() => {
     project('p-home-7', 7, HOME),
     project('p-acme-1', 1, ACME),
   ]
-  /* `assignee` matters to one rule only: My view holds a task when it is
-     MINE, so scopeForIssue narrows away from the sentinel when it isn't.
-     QN-9 is somebody else's on purpose; the ACME one is mine, because a seat
-     in another organization is still me (0081). */
-  const issues = [
-    {
-      id: 'QN-5',
-      key: 'QN-5',
-      uuid: 'uuid-home-5',
-      org: HOME,
-      project: 'p-home-1a',
-      assignee: 'me',
-    },
-    {
-      id: 'QN-9',
-      key: 'QN-9',
-      uuid: 'uuid-home-9',
-      org: HOME,
-      project: 'p-home-7',
-      assignee: 'someone-else',
-    },
-    // a foreign issue's HANDLE is its uuid; only its display key reads "QN-5"
-    {
-      id: 'uuid-acme-5',
-      key: 'QN-5',
-      uuid: 'uuid-acme-5',
-      org: ACME,
-      project: 'p-acme-1',
-      assignee: 'me',
-    },
-  ]
   store.projects = projects
-  store.issues = issues
   store.homeOrg = HOME
   store.orgs = [
     { id: HOME, slug: 'home', name: 'Home' },
     { id: ACME, slug: 'acme', name: 'Acme' },
   ]
-  store.issueById = Object.fromEntries(issues.map((i) => [i.id, i] as const))
   store.orgBySlug = (s: string) => store.orgs.find((o) => o.slug === s)
   store.project = (id: string) => projects.find((p) => p.id === id)
-  // as the store gives a handle: its own for a task it holds, else the home
-  // organization's key or another organization's uuid
-  store.handleNow = (uuid: string, org: string, num: number) =>
-    store.issues.find((i) => i.uuid === uuid)?.id ?? (org === store.homeOrg ? `QN-${num}` : uuid)
-  store.issueRefIn = (org: string, key: string) => {
-    const it = issues.find((i) => i.org === org && i.key === key)
-    return it ? it.id : null
-  }
-  store.handleOf = (uuid: string) => store.issues.find((i) => i.uuid === uuid)?.id ?? null
   // a seat in another organization is still me (0081)
   store.myProfileIds = ['me']
   store.detail = null
@@ -236,8 +233,8 @@ describe('parsePath — the org segment', () => {
       view: 'kanban',
       unheld: { org_id: ACME, num: 1 },
     })
-    expect(parsePath('/app/home/tasks/qn-5')!.issue).toBe('QN-5')
-    expect(parsePath('/app/acme/tasks/qn-5')!.issue).toBe('uuid-acme-5')
+    expect(parsePath('/app/home/tasks/qn-5')!.issue).toBe(byNumber(HOME, 5))
+    expect(parsePath('/app/acme/tasks/qn-5')!.issue).toBe(byNumber(ACME, 5))
   })
 
   it('~ names no organization, and reads home-first', () => {
@@ -245,7 +242,7 @@ describe('parsePath — the org segment', () => {
       view: 'kanban',
       unheld: { org_id: HOME, num: 1 },
     })
-    expect(parsePath('/app/~/tasks/qn-5')!.issue).toBe('QN-5')
+    expect(parsePath('/app/~/tasks/qn-5')!.issue).toBe(byNumber(HOME, 5))
   })
 
   it('a slug this login cannot resolve resolves NOTHING, rather than falling home', () => {
@@ -260,9 +257,11 @@ describe('parsePath — the org segment', () => {
   })
 
   it('resolves an issue by uuid or bare number too', () => {
-    expect(parsePath('/app/home/tasks/5')!.issue).toBe('QN-5')
-    expect(parsePath('/app/home/tasks/uuid-acme-5')!.issue).toBe('uuid-acme-5')
-    expect(parsePath('/app/home/tasks/QN-5')!.issue).toBe('QN-5')
+    expect(parsePath('/app/home/tasks/5')!.issue).toBe(byNumber(HOME, 5))
+    expect(parsePath(`/app/home/tasks/${FAR}`)!.issue).toBe(
+      taskRef({ org: null, uuid: FAR, from: HOME }),
+    )
+    expect(parsePath('/app/home/tasks/QN-5')!.issue).toBe(byNumber(HOME, 5))
   })
 })
 
@@ -293,12 +292,12 @@ describe('parsePath — scopes and pages', () => {
     expect(parsePath('/app/home/board/mine/tasks/qn-9')).toEqual({
       view: 'kanban',
       scope: 'mine',
-      issue: 'QN-9',
+      issue: byNumber(HOME, 9),
     })
     expect(parsePath('/app/acme/board/mine/tasks/qn-5')).toEqual({
       view: 'kanban',
       scope: 'mine',
-      issue: 'uuid-acme-5',
+      issue: byNumber(ACME, 5),
     })
   })
 
@@ -339,7 +338,10 @@ describe('parsePath — scopes and pages', () => {
 
   it('reads the full-screen pages', () => {
     expect(parsePath('/app/~/inbox')).toEqual({ inbox: true })
-    expect(parsePath('/app/home/inbox/tasks/qn-9')).toEqual({ inbox: true, issue: 'QN-9' })
+    expect(parsePath('/app/home/inbox/tasks/qn-9')).toEqual({
+      inbox: true,
+      issue: byNumber(HOME, 9),
+    })
     expect(parsePath('/app/~/settings/account')).toEqual({ settings: 'account' })
     expect(parsePath('/app/~/settings/desktop')).toEqual({ settings: 'desktop' })
     expect(parsePath('/app/home/settings/org-general')).toEqual({ settings: 'org-general' })
@@ -492,10 +494,10 @@ describe('buildPath', () => {
   it('names the owning organization for content that has one', () => {
     expect(buildPath({ scope: 'p-home-7', view: 'kanban' })).toBe('/app/home/board/p/7')
     expect(buildPath({ scope: 'p-acme-1', view: 'roadmap' })).toBe('/app/acme/roadmap/p/1')
-    expect(buildPath({ scope: 'p-home-7', view: 'kanban', openIssue: 'QN-9' })).toBe(
+    expect(buildPath({ scope: 'p-home-7', view: 'kanban', openIssue: HOME_9 })).toBe(
       '/app/home/board/tasks/qn-9',
     )
-    expect(buildPath({ scope: 'p-home-7', view: 'kanban', openIssue: 'uuid-acme-5' })).toBe(
+    expect(buildPath({ scope: 'p-home-7', view: 'kanban', openIssue: ACME_5 })).toBe(
       '/app/acme/board/tasks/qn-5',
     )
   })
@@ -615,32 +617,32 @@ describe('buildPath', () => {
   })
 
   it("a task open over a sentinel names the TASK's org, keeping the mode", () => {
-    expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: 'QN-9' })).toBe(
+    expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: HOME_9 })).toBe(
       '/app/home/board/mine/tasks/qn-9',
     )
-    expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: 'uuid-acme-5' })).toBe(
+    expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: ACME_5 })).toBe(
       '/app/acme/board/mine/tasks/qn-5',
     )
-    expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: 'uuid-acme-5' })).toBe(
+    expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: ACME_5 })).toBe(
       '/app/acme/board/mine/tasks/qn-5',
     )
   })
 
-  it('keeps naming a task that left the store, in its organization, while its window shows', () => {
-    expect(buildPath({ inboxOpen: true, openIssue: 'QN-9' })).toBe('/app/home/inbox/tasks/qn-9')
-    expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: 'uuid-acme-5' })).toBe(
+  it('names a task by its reference, in its organization, whatever the window shows', () => {
+    expect(buildPath({ inboxOpen: true, openIssue: HOME_9 })).toBe('/app/home/inbox/tasks/qn-9')
+    expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: ACME_5 })).toBe(
       '/app/acme/board/mine/tasks/qn-5',
     )
-    // someone else archives or deletes them while their windows are open
-    delete store.issueById['QN-9']
-    delete store.issueById['uuid-acme-5']
-    expect(buildPath({ inboxOpen: true, openIssue: 'QN-9' })).toBe('/app/home/inbox/tasks/qn-9')
-    expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: 'uuid-acme-5' })).toBe(
+    // someone else archives or deletes them while their windows are open,
+    // and the window shows that its task is gone
+    store.detail = { task: 'uuid-home-9', view: null }
+    expect(buildPath({ inboxOpen: true, openIssue: HOME_9 })).toBe('/app/home/inbox/tasks/qn-9')
+    expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: ACME_5 })).toBe(
       '/app/acme/board/mine/tasks/qn-5',
     )
     // so the address the window had stays, without a new entry
     expect(
-      pathMatchesState('/app/home/inbox/tasks/qn-9', { inboxOpen: true, openIssue: 'QN-9' }),
+      pathMatchesState('/app/home/inbox/tasks/qn-9', { inboxOpen: true, openIssue: HOME_9 }),
     ).toBe(true)
     // a handle the address never named still names no organization
     expect(buildPath({ inboxOpen: true, openIssue: 'QN-404' })).toBe('/app/~/inbox/tasks/qn-404')
@@ -730,16 +732,8 @@ describe('buildPath', () => {
     expect(parsePath(`/app/globex/tasks/${FAR}`)?.issue).toBeUndefined()
   })
 
-  it('answers a held uuid by its handle without walking the tasks, and a ref no task can have with none', () => {
-    store.issues = new Proxy(store.issues, {
-      get(target, key) {
-        if (key === 'find' || key === 'filter' || key === Symbol.iterator)
-          throw new Error('the router walked every task')
-        return Reflect.get(target, key)
-      },
-    })
-    store.handleOf = (uuid) => (uuid === 'uuid-acme-5' ? 'uuid-acme-5' : null)
-    expect(parsePath('/app/home/tasks/UUID-ACME-5')?.issue).toBe('uuid-acme-5')
+  it('names no task by a segment that is neither a number nor a uuid', () => {
+    expect(parsePath('/app/home/tasks/UUID-ACME-5')?.issue).toBeUndefined()
     expect(parsePath('/app/home/tasks/not-a-task')?.issue).toBeUndefined()
     expect(parsePath('/app/home/tasks/qn-0')?.issue).toBeUndefined()
   })
@@ -750,89 +744,26 @@ describe('buildPath', () => {
     // Home becomes a guest seat and Acme the home organization, where an
     // active QN-43 exists
     store.homeOrg = ACME
-    const acme43 = {
-      id: 'QN-43',
-      key: 'QN-43',
-      uuid: 'uuid-acme-43',
-      org: ACME,
-      project: 'p-acme-1',
-      assignee: 'me',
-    }
-    store.issues = [...store.issues, acme43]
-    store.issueById['QN-43'] = acme43
-    store.issueRefIn = (org: string, key: string) =>
-      store.issues.find((i) => i.org === org && i.key === key)?.id ?? null
+    const acme43 = byNumber(ACME, 43)
     // Home's address still names Home's task, never Acme's QN-43
     expect(parsePath('/app/home/board/mine/tasks/qn-43')?.issue).toBe(home43)
-    expect(sameTask(home43, 'QN-43')).toBe(false)
-    // Acme's address, and `~`, now read the home organization's live QN-43
-    expect(parsePath('/app/acme/board/mine/tasks/qn-43')?.issue).toBe('QN-43')
-    expect(parsePath('/app/~/board/tasks/43')?.issue).toBe('QN-43')
+    expect(sameTask(home43, acme43)).toBe(false)
+    // Acme's address, and `~`, now read the home organization's QN-43
+    expect(parsePath('/app/acme/board/mine/tasks/qn-43')?.issue).toBe(acme43)
+    expect(parsePath('/app/~/board/tasks/43')?.issue).toBe(acme43)
     // and the window on Home's task names Home's address, by its key
     expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: home43 })).toBe(
       '/app/home/board/mine/tasks/qn-43',
     )
   })
 
-  it('names the task a handle opens now, not the one it named before the home organization changed', () => {
-    // Home's QN-19, which nothing named before, as no other test does
-    const home19 = { ...store.issueById['QN-5'], id: 'QN-19', key: 'QN-19', uuid: 'uuid-home-19' }
-    store.issues = [...store.issues, home19]
-    store.issueById['QN-19'] = home19
-    // the window on it names it by Home's address
-    expect(buildPath({ view: 'kanban', openIssue: 'QN-19' })).toBe('/app/home/board/tasks/qn-19')
-    expect(issueLink('QN-19')).toBe('/app/home/tasks/qn-19')
-    // Acme becomes the home organization: Home's QN-19 opens by its uuid,
-    // and QN-19 is the handle of Acme's QN-19, which has not loaded
-    store.homeOrg = ACME
-    store.issues = store.issues.map((i) => (i === home19 ? { ...i, id: 'uuid-home-19' } : i))
-    store.issueById = Object.fromEntries(store.issues.map((i) => [i.id, i] as const))
-    store.issueRefIn = (org: string, key: string) =>
-      store.issues.find((i) => i.org === org && i.key === key)?.id ?? null
-    // QN-19 reads in the home organization, never as Home's task
-    expect(issueLink('QN-19')).toBe('/app/~/tasks/qn-19')
-    expect(buildPath({ view: 'kanban', openIssue: 'QN-19' })).toBe('/app/~/board/tasks/qn-19')
-    // and once a window shows Acme's QN-19 from its own read, by Acme's address
-    store.detail = {
-      task: 'uuid-acme-19',
-      view: { ...home19, id: 'QN-19', uuid: 'uuid-acme-19', org: ACME, project: 'p-acme-1' },
-    }
-    expect(issueLink('QN-19')).toBe('/app/acme/tasks/qn-19')
-    expect(buildPath({ view: 'kanban', openIssue: 'QN-19' })).toBe('/app/acme/board/tasks/qn-19')
-    // Home's task keeps its own address by its new handle
-    expect(issueLink('uuid-home-19')).toBe('/app/home/tasks/qn-19')
-  })
-
-  it('names a task that left the store by its new handle after the home organization changed', () => {
-    // Home's QN-21 is open, then archived: it leaves the store, and the
-    // address goes on naming it
-    const home21 = { ...store.issueById['QN-5'], id: 'QN-21', key: 'QN-21', uuid: 'uuid-home-21' }
-    store.issues = [...store.issues, home21]
-    store.issueById['QN-21'] = home21
-    expect(buildPath({ view: 'kanban', openIssue: 'QN-21' })).toBe('/app/home/board/tasks/qn-21')
-    store.issues = store.issues.filter((i) => i !== home21)
-    delete store.issueById['QN-21']
-    expect(buildPath({ view: 'kanban', openIssue: 'QN-21' })).toBe('/app/home/board/tasks/qn-21')
-    // Acme becomes the home organization, and the window follows the task
-    // to the handle it opens by now, its uuid (P.watchHandles)
-    store.homeOrg = ACME
-    expect(buildPath({ view: 'kanban', openIssue: 'uuid-home-21' })).toBe(
-      '/app/home/board/tasks/qn-21',
-    )
-    expect(issueLink('uuid-home-21')).toBe('/app/home/tasks/qn-21')
-    // and its old handle names the home organization's QN-21, never Home's
-    expect(issueLink('QN-21')).toBe('/app/~/tasks/qn-21')
-  })
-
   it("names a task by its uuid once its organization left too, never the home organization's task of that number", () => {
-    const open = 'uuid-acme-5'
+    const open = ACME_5
     const sync = { scope: 'all', step: 'team' }
     expect(buildPath({ inboxOpen: true, openIssue: open })).toBe('/app/acme/inbox/tasks/qn-5')
     expect(buildPath({ sync, openIssue: open })).toBe('/app/home/sync/all/tasks/uuid-acme-5')
-    // the person loses their seat in Acme: its organization and tasks go
+    // the person loses their seat in Acme: its organization goes
     store.orgs = store.orgs.filter((o) => o.id !== ACME)
-    store.issues = store.issues.filter((i) => i.org !== ACME)
-    delete store.issueById[open]
     const paths = [
       buildPath({ inboxOpen: true, openIssue: open }),
       buildPath({ scope: 'mine', view: 'kanban', openIssue: open }),
@@ -846,30 +777,9 @@ describe('buildPath', () => {
       '/app/home/sync/all/tasks/uuid-acme-5',
     ])
     // so a reload or a Back to them opens no task, not the home QN-5
-    for (const path of paths) expect(parsePath(path)?.issue).not.toBe('QN-5')
-    // and each replaces the address that named the task before, in place
-    expect(
-      pathMatchesState('/app/acme/inbox/tasks/qn-5', { inboxOpen: true, openIssue: open }),
-    ).toBe(true)
-    expect(
-      pathMatchesState('/app/acme/board/mine/tasks/qn-5', {
-        scope: 'mine',
-        view: 'kanban',
-        openIssue: open,
-      }),
-    ).toBe(true)
-    // also when the organization's address changed after the task left
-    store.orgs = [...store.orgs, { id: ACME, slug: 'acme' } as (typeof store.orgs)[number]]
-    store.issueById[open] = { ...store.issues[0], id: open, uuid: open, key: 'QN-5', org: ACME }
-    expect(buildPath({ inboxOpen: true, openIssue: open })).toBe('/app/acme/inbox/tasks/qn-5')
-    delete store.issueById[open]
-    store.orgs = store.orgs.map((o) => (o.id === ACME ? { ...o, slug: 'acme2' } : o))
-    expect(buildPath({ inboxOpen: true, openIssue: open })).toBe('/app/acme2/inbox/tasks/qn-5')
-    store.orgs = store.orgs.filter((o) => o.id !== ACME)
-    expect(
-      pathMatchesState('/app/acme2/inbox/tasks/qn-5', { inboxOpen: true, openIssue: open }),
-    ).toBe(true)
-    // while another task's address, or another page's, is still a move
+    for (const path of paths)
+      expect(sameTask(parsePath(path)?.issue, byNumber(HOME, 5)), path).toBe(false)
+    // another task's address, or another page's, is a move
     expect(
       pathMatchesState('/app/acme/inbox/tasks/qn-6', { inboxOpen: true, openIssue: open }),
     ).toBe(false)
@@ -900,7 +810,8 @@ describe('buildPath', () => {
       '/app/~',
     ])
     // so a reload or a Back opens no task, not the home QN-5
-    for (const path of paths) expect(sameTask(parsePath(path)?.issue, 'QN-5'), path).toBe(false)
+    for (const path of paths)
+      expect(sameTask(parsePath(path)?.issue, byNumber(HOME, 5)), path).toBe(false)
     // a uuid still names it
     const named = taskRef({ org: ACME, num: 5, uuid: 'uuid-acme-5' })
     expect(buildPath({ view: 'kanban', openIssue: named })).toBe('/app/~/board/tasks/uuid-acme-5')
@@ -925,13 +836,13 @@ describe('buildPath', () => {
       { scope: 'mine', view: 'overview' },
       { scope: 'mine', view: 'kanban' },
       { scope: 'mine', view: 'roadmap' },
-      { scope: 'mine', view: 'kanban', openIssue: 'QN-9' },
+      { scope: 'mine', view: 'kanban', openIssue: HOME_9 },
       { scope: 'mine', view: 'overview' },
       { scope: 'mine', view: 'kanban' },
-      { scope: 'mine', view: 'kanban', openIssue: 'QN-9' },
+      { scope: 'mine', view: 'kanban', openIssue: HOME_9 },
       { scope: 'p-home-7', view: 'roadmap' },
       { scope: 'p-acme-1', view: 'kanban' },
-      { scope: 'p-home-7', view: 'kanban', openIssue: 'uuid-acme-5' },
+      { scope: 'p-home-7', view: 'kanban', openIssue: ACME_5 },
     ] as UiState[]) {
       const r = parsePath(buildPath(s))!
       // a project scope comes back as the number App asks the server about
@@ -939,7 +850,9 @@ describe('buildPath', () => {
       if (p) expect(r.unheld).toEqual({ org_id: p.org, num: p.num })
       else expect(r.scope || null).toBe(s.scope && !s.openIssue ? s.scope : r.scope || null)
       expect(r.view).toBe(s.view)
-      expect(r.issue || null).toBe(s.openIssue || null)
+      // the address names the task its reference names
+      if (s.openIssue) expect(sameTask(r.issue, s.openIssue)).toBe(true)
+      else expect(r.issue).toBeUndefined()
     }
     // a reference round-trips to the same task
     for (const open of [
@@ -954,32 +867,36 @@ describe('buildPath', () => {
 
 describe('sameTask, whether two names name one task', () => {
   it('compares by uuid, or by number in one organization, never by the strings alone', () => {
-    const home5 = taskRef({ org: HOME, num: 5 })
-    // a reference and the handle it moves to name one task
-    expect(sameTask(home5, 'QN-5')).toBe(true)
-    expect(sameTask(taskRef({ org: null, uuid: 'uuid-acme-5' }), 'uuid-acme-5')).toBe(true)
+    const home5 = byNumber(HOME, 5)
+    // a reference by number and the app's reference of that task name one task
+    expect(sameTask(home5, HOME_5)).toBe(true)
+    expect(sameTask(taskRef({ org: null, uuid: 'uuid-acme-5' }), ACME_5)).toBe(true)
     // the same number in another organization does not
-    expect(sameTask(taskRef({ org: ACME, num: 5 }), 'QN-5')).toBe(false)
-    expect(sameTask(home5, 'uuid-acme-5')).toBe(false)
+    expect(sameTask(byNumber(ACME, 5), HOME_5)).toBe(false)
+    expect(sameTask(home5, ACME_5)).toBe(false)
     // nor does a uuid the store cannot tell is that task yet
     expect(sameTask(taskRef({ org: null, uuid: FAR }), taskRef({ org: ACME, num: 8 }))).toBe(false)
-    expect(sameTask(null, 'QN-5')).toBe(false)
+    expect(sameTask(null, HOME_5)).toBe(false)
+    // a handle names the task of the window's own read, and else none
+    expect(sameTask(HOME_5, 'QN-5')).toBe(false)
+    store.detail = { task: 'uuid-home-5', view: TASKS['QN-5'] }
+    expect(sameTask(HOME_5, 'QN-5')).toBe(true)
   })
 
-  it("tells another organization's task of a held task's id apart from it", () => {
-    // ACME's held task and HOME's task of the same id, which the store does not hold
+  it("tells another organization's task of one task id apart from it", () => {
+    // ACME's task and HOME's task of the same id
     const homeCopy = taskRef({ org: HOME, num: 12, uuid: 'uuid-acme-5' })
-    expect(sameTask(homeCopy, 'uuid-acme-5')).toBe(false)
+    expect(sameTask(homeCopy, ACME_5)).toBe(false)
     expect(sameTask(homeCopy, taskRef({ org: ACME, uuid: 'uuid-acme-5' }))).toBe(false)
     // the same id in the same organization, or with none named yet, is one task
-    expect(sameTask(taskRef({ org: ACME, num: 5, uuid: 'uuid-acme-5' }), 'uuid-acme-5')).toBe(true)
+    expect(sameTask(ACME_5, taskRef({ org: ACME, uuid: 'uuid-acme-5' }))).toBe(true)
     expect(sameTask(homeCopy, taskRef({ org: null, uuid: 'uuid-acme-5' }))).toBe(true)
   })
 
   it('never reads a reference as a handle', () => {
     // a reference that looked up as a handle would open the home QN-5
     const acme5 = taskRef({ org: ACME, num: 5 })
-    store.issueById[acme5] = store.issueById['QN-5']
+    store.detail = { task: 'uuid-home-5', view: TASKS['QN-5'] }
     expect(sameTask(acme5, 'QN-5')).toBe(false)
     expect(buildPath({ view: 'kanban', openIssue: acme5 })).toBe('/app/acme/board/tasks/qn-5')
     expect(refParts('QN-5')).toBeUndefined()
@@ -990,13 +907,14 @@ describe('sameTask, whether two names name one task', () => {
 
 describe('issueLink — the shareable short form', () => {
   it("names the task's own organization", () => {
-    expect(issueLink('QN-9')).toBe('/app/home/tasks/qn-9')
-    expect(issueLink('uuid-acme-5')).toBe('/app/acme/tasks/qn-5')
+    expect(issueLink(HOME_9)).toBe('/app/home/tasks/qn-9')
+    expect(issueLink(ACME_5)).toBe('/app/acme/tasks/qn-5')
   })
 
   it('round-trips to the task it names, across the org collision', () => {
-    expect(parsePath(issueLink('QN-5'))!.issue).toBe('QN-5')
-    expect(parsePath(issueLink('uuid-acme-5'))!.issue).toBe('uuid-acme-5')
+    expect(sameTask(parsePath(issueLink(HOME_5))!.issue, HOME_5)).toBe(true)
+    expect(sameTask(parsePath(issueLink(ACME_5))!.issue, ACME_5)).toBe(true)
+    expect(sameTask(parsePath(issueLink(ACME_5))!.issue, HOME_5)).toBe(false)
   })
 
   it('names a task the store does not hold by its organization and key, never under ~', () => {
@@ -1011,7 +929,7 @@ describe('issueLink — the shareable short form', () => {
     // the window's own read names a handle the workspace does not hold
     store.detail = {
       task: 'uuid-acme-62',
-      view: { ...store.issueById['uuid-acme-5'], id: 'uuid-acme-62', uuid: 'uuid-acme-62' },
+      view: { ...TASKS['uuid-acme-5'], id: 'uuid-acme-62', uuid: 'uuid-acme-62' },
     }
     expect(issueLink('uuid-acme-62')).toBe('/app/acme/tasks/qn-5')
     // a handle nothing names still names no organization
@@ -1019,17 +937,6 @@ describe('issueLink — the shareable short form', () => {
     expect(issueLink('uuid-acme-62')).toBe('/app/~/tasks/uuid-acme-62')
     // nor does a uuid alone while its organization is not known
     expect(issueLink(taskRef({ org: null, uuid: FAR }))).toBe(`/app/~/tasks/${FAR}`)
-  })
-
-  it('names a task that left the store while its window showed it', () => {
-    // the window's address named it while the store held it
-    buildPath({ view: 'kanban', openIssue: 'uuid-acme-5' })
-    store.issues = store.issues.filter((i) => i.id !== 'uuid-acme-5')
-    store.issueById = Object.fromEntries(store.issues.map((i) => [i.id, i] as const))
-    expect(issueLink('uuid-acme-5')).toBe('/app/acme/tasks/qn-5')
-    // once its organization left too, its uuid names it
-    store.orgs = store.orgs.filter((o) => o.id !== ACME)
-    expect(issueLink('uuid-acme-5')).toBe('/app/~/tasks/uuid-acme-5')
   })
 })
 
@@ -1040,9 +947,9 @@ describe('parseHash — shared route grammar', () => {
       view: 'kanban',
       unheld: { org_id: ACME, num: 1 },
     })
-    expect(parseHash('#/tasks/qn-5')!.issue).toBe('QN-5')
-    expect(parseHash('#/tasks/5')!.issue).toBe('QN-5')
-    expect(parseHash('#/o/acme/tasks/qn-5')!.issue).toBe('uuid-acme-5')
+    expect(parseHash('#/tasks/qn-5')!.issue).toBe(byNumber(HOME, 5))
+    expect(parseHash('#/tasks/5')!.issue).toBe(byNumber(HOME, 5))
+    expect(parseHash('#/o/acme/tasks/qn-5')!.issue).toBe(byNumber(ACME, 5))
   })
 
   it('reads sentinel and page forms', () => {
@@ -1050,7 +957,7 @@ describe('parseHash — shared route grammar', () => {
     expect(parseHash('#/board/mine/tasks/qn-9')).toEqual({
       view: 'kanban',
       scope: 'mine',
-      issue: 'QN-9',
+      issue: byNumber(HOME, 9),
     })
     expect(parseHash('#/settings/org-general')).toEqual({ settings: 'org-general' })
     expect(parseHash('#/inbox')).toEqual({ inbox: true })
@@ -1117,7 +1024,7 @@ describe('pathMatchesState — replace in place vs. a new history entry', () => 
       pathMatchesState('/app/home/board/mine/tasks/qn-9', {
         scope: 'mine',
         view: 'kanban',
-        openIssue: 'QN-9',
+        openIssue: HOME_9,
       }),
     ).toBe(true)
     expect(pathMatchesState('/app/home/board/p/7', { scope: 'p-home-7', view: 'kanban' })).toBe(
@@ -1137,21 +1044,21 @@ describe('pathMatchesState — replace in place vs. a new history entry', () => 
       pathMatchesState('/app/home/board/tasks/qn-9', {
         scope: 'mine',
         view: 'kanban',
-        openIssue: 'QN-9',
+        openIssue: HOME_9,
       }),
     ).toBe(false)
     expect(
       pathMatchesState('/app/home/board/mine/tasks/qn-9', {
         scope: 'p-home-7',
         view: 'kanban',
-        openIssue: 'QN-9',
+        openIssue: HOME_9,
       }),
     ).toBe(false)
     expect(
       pathMatchesState('/app/home/board/tasks/qn-9', {
         scope: 'mine',
         view: 'kanban',
-        openIssue: 'QN-9',
+        openIssue: HOME_9,
       }),
     ).toBe(false)
   })
@@ -1163,14 +1070,14 @@ describe('pathMatchesState — replace in place vs. a new history entry', () => 
       pathMatchesState('/app/home/board/mine/tasks/qn-9', {
         scope: 'p-home-7',
         view: 'kanban',
-        openIssue: 'QN-9',
+        openIssue: HOME_9,
       }),
     ).toBe(false)
     expect(
       pathMatchesState('/app/home/board/tasks/qn-9', {
         scope: 'mine',
         view: 'kanban',
-        openIssue: 'QN-9',
+        openIssue: HOME_9,
       }),
     ).toBe(false)
     expect(pathMatchesState('/app/~/board/mine', { scope: 'p-home-7', view: 'kanban' })).toBe(false)
@@ -1185,21 +1092,21 @@ describe('pathMatchesState — replace in place vs. a new history entry', () => 
       pathMatchesState('/app/home/tasks/qn-9', {
         scope: 'mine',
         view: 'kanban',
-        openIssue: 'QN-9',
+        openIssue: HOME_9,
       }),
     ).toBe(true)
     expect(
       pathMatchesState('/app/home/tasks/qn-9', {
         scope: 'mine',
         view: 'kanban',
-        openIssue: 'QN-9',
+        openIssue: HOME_9,
       }),
     ).toBe(true)
     expect(
       pathMatchesState('/app/home/tasks/qn-9', {
         scope: 'p-home-7',
         view: 'kanban',
-        openIssue: 'QN-9',
+        openIssue: HOME_9,
       }),
     ).toBe(true)
   })
@@ -1217,7 +1124,7 @@ describe('pathMatchesState — replace in place vs. a new history entry', () => 
       pathMatchesState('/app/oldname/board/mine/tasks/qn-9', {
         scope: 'mine',
         view: 'kanban',
-        openIssue: 'QN-9',
+        openIssue: HOME_9,
       }),
     ).toBe(true)
   })
@@ -1269,10 +1176,12 @@ describe('pathMatchesState — replace in place vs. a new history entry', () => 
     expect(pathMatchesState('/app/acme/tasks/qn-404', { view: 'kanban', openIssue: ref })).toBe(
       false,
     )
-    // once the workspace holds the task, its handle names the same address
-    const home404 = { ...store.issueById['QN-5'], id: 'QN-404', key: 'QN-404', uuid: 'uuid-404' }
-    store.issues = [...store.issues, home404]
-    store.issueById['QN-404'] = home404
+    // once a window shows the task from its own read, its handle names the
+    // same address
+    store.detail = {
+      task: 'uuid-404',
+      view: { ...TASKS['QN-5'], id: 'QN-404', key: 'QN-404', uuid: 'uuid-404' },
+    }
     expect(
       pathMatchesState('/app/home/tasks/qn-404', { view: 'kanban', openIssue: 'QN-404' }),
     ).toBe(true)
@@ -1335,11 +1244,11 @@ describe('Team sync addresses', () => {
   it('reads a task window over the page', () => {
     expect(parsePath(`/app/home/sync/all/people/${PERSON}/tasks/qn-9`)).toEqual({
       sync: { scope: 'all', step: PERSON },
-      issue: 'QN-9',
+      issue: byNumber(HOME, 9),
     })
-    expect(parsePath('/app/home/sync/all/tasks/uuid-acme-5')).toEqual({
+    expect(parsePath(`/app/home/sync/all/tasks/${FAR}`)).toEqual({
       sync: { scope: 'all' },
-      issue: 'uuid-acme-5',
+      issue: taskRef({ org: null, uuid: FAR, from: HOME }),
     })
   })
 
@@ -1369,11 +1278,11 @@ describe('Team sync addresses', () => {
   })
 
   it('names a task over the page by key at home and by uuid from another org', () => {
-    expect(buildPath({ sync: { scope: 'all', step: PERSON }, openIssue: 'QN-9' })).toBe(
+    expect(buildPath({ sync: { scope: 'all', step: PERSON }, openIssue: HOME_9 })).toBe(
       `/app/home/sync/all/people/${PERSON}/tasks/qn-9`,
     )
     // "qn-5" under the home slug would open MY QN-5
-    expect(buildPath({ sync: { scope: 'all', step: 'team' }, openIssue: 'uuid-acme-5' })).toBe(
+    expect(buildPath({ sync: { scope: 'all', step: 'team' }, openIssue: ACME_5 })).toBe(
       '/app/home/sync/all/tasks/uuid-acme-5',
     )
   })
@@ -1405,19 +1314,13 @@ describe('Team sync addresses', () => {
     expect(sameTask(parsePath(named)?.issue, acme5)).toBe(true)
   })
 
-  it('names a task of another organization that left while its organization stays by its uuid, never its number under the home slug', () => {
+  it('names a task of another organization by its uuid, never its number under the home slug', () => {
     const sync = { scope: 'all', step: 'team' }
-    const open = 'uuid-acme-5'
-    expect(buildPath({ sync, openIssue: open })).toBe('/app/home/sync/all/tasks/uuid-acme-5')
-    // someone archives it, or it moves where this person cannot open it,
-    // while the person keeps their seat in Acme
-    store.issues = store.issues.filter((i) => i.id !== open)
-    delete store.issueById[open]
-    const path = buildPath({ sync, openIssue: open })
+    const path = buildPath({ sync, openIssue: ACME_5 })
     expect(path).toBe('/app/home/sync/all/tasks/uuid-acme-5')
-    expect(parsePath(path)?.issue).not.toBe('QN-5')
+    expect(sameTask(parsePath(path)?.issue, byNumber(HOME, 5))).toBe(false)
     // the other forms name it under Acme's slug, which reads Acme's number
-    expect(buildPath({ view: 'kanban', openIssue: open })).toBe('/app/acme/board/tasks/qn-5')
+    expect(buildPath({ view: 'kanban', openIssue: ACME_5 })).toBe('/app/acme/board/tasks/qn-5')
   })
 
   it('round-trips every emitted form', () => {
@@ -1433,8 +1336,15 @@ describe('Team sync addresses', () => {
       { sync: { scope: 'project:p-home-7', step: PERSON } },
       { sync: { scope: `project:${FAR}`, step: 'team' } },
       { sync: { scope: 'project:p-acme-1', step: 'team' } },
-      { sync: { scope: `team:${TEAM}`, step: PERSON }, openIssue: 'QN-9' },
-      { sync: { scope: 'all', step: 'team' }, openIssue: 'uuid-acme-5' },
+      // Team sync names a task by its uuid
+      {
+        sync: { scope: `team:${TEAM}`, step: PERSON },
+        openIssue: taskRef({ org: HOME, uuid: FAR }),
+      },
+      {
+        sync: { scope: 'all', step: 'team' },
+        openIssue: taskRef({ org: ACME, num: 5, uuid: FAR }),
+      },
       { sync: { scope: 'unresolved:99', step: 'team' } },
       { sync: { scope: `unresolved:99@${ACME}`, step: 'team' } },
       // a typed segment holding what an address reads as its own parts
@@ -1444,7 +1354,8 @@ describe('Team sync addresses', () => {
       const r = parsePath(buildPath(s))!
       expect(r.sync?.scope).toBe(back[s.sync!.scope] ?? s.sync!.scope)
       expect(r.sync?.step || 'team').toBe(s.sync!.step)
-      expect(r.issue || null).toBe(s.openIssue || null)
+      if (s.openIssue) expect(sameTask(r.issue, s.openIssue)).toBe(true)
+      else expect(r.issue).toBeUndefined()
     }
   })
 
@@ -1476,7 +1387,7 @@ describe('Team sync addresses', () => {
     expect(pathMatchesState('/app/~/inbox', { sync })).toBe(false)
     expect(pathMatchesState('/app/home/sync/all', { inboxOpen: true })).toBe(false)
     expect(pathMatchesState('/app/home/sync/all', { settingsPage: 'account', sync })).toBe(false)
-    expect(pathMatchesState('/app/home/sync/all', { sync, openIssue: 'QN-9' })).toBe(false)
+    expect(pathMatchesState('/app/home/sync/all', { sync, openIssue: HOME_9 })).toBe(false)
     expect(pathMatchesState('/app/home/sync/all/tasks/qn-9', { sync })).toBe(false)
   })
 

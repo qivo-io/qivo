@@ -181,8 +181,6 @@ async function app(snap: Snapshot, path: string) {
       : null,
   )
   network.mutation.mockResolvedValue(null)
-  const { TASKS } = await import('./store/liveParts')
-  TASKS.atBoot = false
   const store = await import('./store/planner')
   await store.initStore()
   const { syncStatus } = await import('./lib/syncStatus')

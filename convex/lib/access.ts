@@ -376,16 +376,17 @@ export const isRoomSpent = (e: unknown): boolean => e instanceof RoomSpent
  *   person's teams by itself. Past `teams` teams it refuses after the
  *   memberships (4,001): at most 9 ranges and 6,353 documents.
  *
- * A caller keeps room for those past its last look at its reads. A
- * workspace part's batch of 64 questions (lib/workspaceParts.ts PAGE.batch)
+ * A caller keeps room for those past its last look at its reads. A batch
+ * of 64 questions, as the workspace's tasks part asked them before it went,
  * takes at most 384 ranges and 8,576 documents of questions, and with every
  * shared and instance read in the same batch at most 843 ranges and 15,995
- * documents, inside the 896 and 16,000 Convex leaves past PAGE.hard. One case
- * passes them: on the legacy path, for a person in 129 to 256 teams of an
- * organization whose teams are past the organization-teams read's bounds
- * (more than 16 for each of those teams, or 512 KiB as JSON), the 256 reads
- * of their teams make 1,098 ranges, which a batch reaches only when that
- * read comes after PAGE.hard's last look. The person of the review's
+ * documents, inside the 896 and 16,000 Convex leaves past a hard budget of
+ * 3,200 ranges and 16,000 documents. One case passes them: on the legacy
+ * path, for a person in 129 to 256 teams of an organization whose teams are
+ * past the organization-teams read's bounds (more than 16 for each of those
+ * teams, or 512 KiB as JSON), the 256 reads of their teams make 1,098
+ * ranges, which a batch reaches only when that read comes after the
+ * budget's last look. The person of the review's
  * finding (20 teams of 1,600 shares) reads 24 ranges and 362 documents in
  * `shared`. lib/mainSearch.ts searchReads lowers these for main Search,
  * whose one check and its shared reads stay inside SEARCH_RESERVE. */

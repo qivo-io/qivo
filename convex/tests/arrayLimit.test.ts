@@ -1,13 +1,22 @@
-/* Long result lists in parts (lib/arrayLimit.ts): no array past the limit,
- * and the parts join back to the lists, in order. */
+/* Long result lists in parts (lib/arrayLimit.ts), which the perf server
+ * sends a baseline build's snapshot with. No array passes the limit, and
+ * the parts hold the rest of each list, in order. */
 import { afterEach, describe, expect, it } from 'vitest'
-import { ARRAY_LIMIT, chunkLists, joinLists } from '../lib/arrayLimit'
+import { ARRAY_LIMIT, chunkLists } from '../lib/arrayLimit'
 
 afterEach(() => {
   ARRAY_LIMIT.max = 8192
 })
 
 const range = (n: number) => Array.from({ length: n }, (_, i) => i)
+
+/** List `name` of chunkLists' `out`, its first values `head` with its
+    parts after them, in order. */
+const whole = (
+  out: { more?: Record<string, unknown[][] | undefined> },
+  name: string,
+  head: unknown[],
+) => [...head, ...(out.more?.[name] ?? []).flat()]
 
 describe('chunkLists', () => {
   it('leaves lists within the limit as they are, without `more`', () => {
@@ -23,7 +32,7 @@ describe('chunkLists', () => {
     expect(out.labels).toEqual(['a'])
     expect(out.more?.issues?.map((part) => part.length)).toEqual([8192, 20_000 - 2 * 8192])
     expect(out.more?.labels).toBeUndefined()
-    expect(joinLists(out)).toEqual({ issues: range(20_000), labels: ['a'] })
+    expect(whole(out, 'issues', out.issues)).toEqual(range(20_000))
   })
 
   it('splits at a lowered limit too, and joins back in order', () => {
@@ -35,11 +44,8 @@ describe('chunkLists', () => {
       labels: [0, 1, 2],
       more: { issues: [[3, 4, 5], [6]], labels: [[3]] },
     })
-    expect(joinLists({ auth_user_id: 'me', ...out })).toEqual({
-      auth_user_id: 'me',
-      issues: range(7),
-      links: range(3),
-      labels: range(4),
-    })
+    expect(whole(out, 'issues', out.issues)).toEqual(range(7))
+    expect(whole(out, 'links', out.links)).toEqual(range(3))
+    expect(whole(out, 'labels', out.labels)).toEqual(range(4))
   })
 })

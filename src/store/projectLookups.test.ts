@@ -279,25 +279,18 @@ describe('the project lookups', () => {
     if (!sub) throw new Error('no Held sub')
     sub.track_delay = false
     sub.lead_id = 'someone-else'
-    // a task the workspace holds in Edits, which the views would show in
-    // Held sub as a card of its answer
-    w.snap.issues.push({
-      id: 'seeded-task',
-      org_id: w.org,
-      project_id: w.edits.id,
-      num: 77,
-      title: 'Seeded task',
-      description: '',
-      status: 'todo',
-      priority: 'low',
-      paused: false,
-      created_at: NOW,
-      updated_at: NOW,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
-    })
+    // a task a Board's answer brings in Edits, which the views would show
+    // in Held sub as a card of its answer
+    const board: BoardAnswer = {
+      state: 'ok',
+      rows: [viewRow(w.snap, 'seeded-task', w.edits.id)],
+      parents: [],
+      held_projects: [],
+    }
     const force: ForcedProjectNav = {}
-    const { P, rerun } = await start(w.snap, force)
+    const { P, rerun } = await start(w.snap, force, { board })
+    P.watchBoard('board:desktop', '{"board":1}', 0, 0, false)
+    await vi.waitFor(() => expect(P.viewTask('board:desktop', 'seeded-task')).toBeDefined())
     // Held program, which the caller leads, answers first
     P.nameProjects('parent', [w.held.id])
     await vi.waitFor(() => expect(P.leadOf(w.held.id)).toBe(w.snap.profiles[0].id))
@@ -316,8 +309,8 @@ describe('the project lookups', () => {
     expect(P.project(w.heldSub.id)?.name).toBe('Held sub')
     expect(P.projectState(w.heldSub.id)).toBe('loading')
     const task = () => {
-      const found = P.issues.find((it) => it.uuid === 'seeded-task')
-      if (!found) throw new Error('the workspace holds no task')
+      const found = P.viewTask('board:desktop', 'seeded-task')
+      if (!found) throw new Error("the Board's answer brings no task")
       return { ...found, project: w.heldSub.id }
     }
     // must fail for lookups that read the seed's placeholders as real, the

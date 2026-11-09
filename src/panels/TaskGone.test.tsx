@@ -12,19 +12,17 @@ import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFix
    window's own read of the task (taskWindow:task) answers what `snap` and
    `archive` hold, as the server would, rerun with each delivery in the
    same transition, as Convex reruns it, unless a test holds its answers or
-   fails them (`reads`). A test can hold back a task window of the
-   workspace, so it still loads (holdWindow). */
+   fails them (`reads`). */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
   live: null as null | {
-    holdWindow(from: string | null): void
     batch(step: () => void): void
   },
 }))
 vi.mock('../lib/convex', async () => {
   const { liveOver } = await import('../store/guard/liveDouble.setup')
-  double.live = liveOver(network)
+  double.live = liveOver(network, { taskWindow: 'client' })
   return { convex: network, live: double.live }
 })
 vi.mock('../lib/auth', () => ({
@@ -179,8 +177,13 @@ async function open(
   const store = await import('../store/planner')
   await store.initStore()
   const { IssueDetail } = await import('./IssueDetail')
-  const task = store.P.issues.find((it) => it.uuid === 'task-a')
-  if (!task) throw new Error('missing the task')
+  // the store holds no task, so the window opens by a reference and shows
+  // the task from its own read
+  const task = {
+    id: store.P.openTask('task-a', snap.orgs[0].id, 27),
+    uuid: 'task-a',
+    key: 'QN-27',
+  }
   onClose = vi.fn<() => void>()
   const { Inbox } = await import('./Inbox')
   const { usePlannerVersion } = await import('../store/usePlannerVersion')
@@ -222,6 +225,11 @@ async function open(
       </TooltipProvider>,
     ),
   )
+  // the window shows the task once its own read answers, a moment later
+  if (!held)
+    await act(async () =>
+      vi.waitFor(() => expect(store.P.taskDetail('task-a', snap.orgs[0].id)?.state).toBe('ok')),
+    )
   return task
 }
 
@@ -324,7 +332,6 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => root.unmount())
-  double.live?.holdWindow(null)
   container.remove()
   document.body.innerHTML = ''
   localStorage.clear()
@@ -406,35 +413,6 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
     expect(onClose).toHaveBeenCalledOnce()
   })
 
-  it('says it could not check the archive, and finds the task on Retry', async () => {
-    // the read its details column asked for has not answered yet
-    const task = await open('admin', undefined, 'window', true)
-    readMode = 'fail'
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    await dropTask({ archived: true })
-    expect(note()?.textContent).toBe(
-      `${task.key} is no longer on the board. Couldn't check the archive.`,
-    )
-    // neither a deleted task's sentence nor a Restore it cannot back up
-    expect(button('Restore')).toBeUndefined()
-    readMode = 'answer'
-    await click(button('Retry'))
-    await act(async () => {
-      await vi.waitFor(() => {
-        if (!note()?.textContent?.includes('was archived')) throw new Error('still checking')
-      })
-    })
-    expect(note()?.textContent).toBe(
-      `${task.key} was archived. Restore it to bring it back to the board.`,
-    )
-    expect(button('Retry')).toBeUndefined()
-    expect(button('Restore')).toBeDefined()
-    expect(document.activeElement).toBe(note())
-    // Retry reads the task afresh
-    const read = { org_id: snap.orgs[0].id, ref: 'task-a' }
-    expect(subscribed()).toEqual([read, read])
-  })
-
   it('keeps the task as it last loaded when its read fails as it leaves, and finds it archived on Retry', async () => {
     const task = await open()
     // the read its details column asked for answered while the board held it
@@ -446,7 +424,6 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
     expect(stale()?.textContent).toContain(
       `Couldn't check ${task.key} for changes, so it shows as it was last loaded.`,
     )
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(dialog()?.textContent).toContain('Run the soak test')
     expect(document.querySelector('[data-task-gone]')).toBeNull()
     readMode = 'answer'
@@ -488,19 +465,16 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
   })
 
   it('moves focus from the task to the note, never to a button', async () => {
-    // the server answers the window's read once the test says so
-    await open('admin', undefined, 'window', true)
+    await open()
     const actions = document.querySelector<HTMLElement>('[aria-label="Task actions"]')
     act(() => actions?.focus())
     expect(document.activeElement).toBe(actions)
-    // while the archive is asked, Close is the one button a key could press
-    await leave({ archived: true })
-    expect(button('Close')).toBeDefined()
-    expect(document.activeElement).toBe(note())
-    await release()
+    // the window's read answers that the task is gone, so its note takes
+    // the task's place; an archived task stays in the window, read-only
+    await leave({ archived: false })
     await act(async () => {
       await vi.waitFor(() => {
-        if (!button('Restore')) throw new Error('still checking')
+        if (!note()?.textContent?.includes('no longer here')) throw new Error('still checking')
       })
     })
     expect(document.activeElement).toBe(note())
@@ -856,7 +830,7 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
     const task = await open('admin', undefined, 'inbox')
     await dropTask({ archived: true })
     // the pop-out names the task only by its handle, which the workspace
-    // no longer holds: it names the task the pane watches (P.unheldTask)
+    // no longer holds: it names the task the pane watches (P.watchedTask)
     await click(document.querySelector<HTMLElement>('[data-task-popout]'))
     const windows = () => [...document.querySelectorAll<HTMLElement>('[aria-label="Task"]')]
     await act(async () => {
@@ -908,8 +882,9 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
     snap.profiles = snap.profiles.map((p) => (p.id === me.id ? { ...p, org_role: 'guest' } : p))
     await act(async () => deliver(snap))
     const { P } = await import('../store/planner')
-    expect(P.issueById['QN-27']?.title).toBe('Beta task 27')
-    expect(paneHandle).toBe('task-a')
+    expect(P.homeOrg).not.toBe(snap.orgs[0].id)
+    // the pane keeps the reference that names the task's own organization
+    expect(paneHandle).toBe(P.openTask('task-a', snap.orgs[0].id, 27))
     await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
     expect(windows().map((w) => [w.dataset.issueLayout, w.dataset.taskArchived])).toEqual([
       ['embedded', ''],
@@ -974,21 +949,18 @@ const FOUND = {
    hold, by the reference Palette.tsx openTaskResult opens it by, as `role` with
    `level` on its project when the role is not admin. The server holds it
    archived, active (`active`), or not at all, and answers the window's read
-   when the test calls the function this answers. With `loading`, the
-   workspace still loads its last task window. */
+   when the test calls the function this answers. */
 async function openFound({
   role = 'admin',
   level,
   active = false,
   inArchive = true,
-  loading = false,
   archivedAt = '2026-09-14T09:00:00.000Z',
 }: {
   role?: 'admin' | 'user'
   level?: 'viewer' | 'user'
   active?: boolean
   inArchive?: boolean
-  loading?: boolean
   archivedAt?: string
 } = {}) {
   vi.resetModules()
@@ -998,8 +970,6 @@ async function openFound({
   snap.profiles[0].org_role = role
   if (level)
     snap.access.push({ project_id: snap.projects[0].id, profile_id: snap.profiles[0].id, level })
-  // 12,800 task numbers make 64 task windows; the last starts at fc000000
-  if (loading) snap.orgs[0].next_issue_num = 64 * 200
   const row: Task = {
     id: 'task-a',
     org_id: snap.orgs[0].id,
@@ -1033,7 +1003,6 @@ async function openFound({
     getFunctionName(ref) === 'issues:unarchive' ? {} : null,
   )
   const store = await import('../store/planner')
-  if (loading) double.live?.holdWindow('fc000000')
   // the workspace without the task
   const server = snap
   snap = workspace
@@ -1051,7 +1020,6 @@ async function openFound({
   await store.initStore()
   // the server's reads see the task where the server holds it
   snap = server
-  expect(store.P.stillLoading() !== null).toBe(loading)
   const { taskRef } = await import('../lib/taskReference')
   const ref = taskRef({ org: workspace.orgs[0].id, num: 27, uuid: FOUND.uuid })
   const { IssueDetail } = await import('./IssueDetail')
@@ -1085,7 +1053,6 @@ describe('the task window on a task Search found that the workspace does not hol
     )
     // the archived task, read-only, under its note
     expect(dialog()?.dataset.taskArchived).toBe('')
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Run the soak test')
     expect(dialog()?.textContent).toContain('Measure the drift.')
     expect(document.querySelector('[data-task-gone-place]')?.textContent).toBe(
@@ -1107,7 +1074,6 @@ describe('the task window on a task Search found that the workspace does not hol
     snap.issues.push(row)
     await act(async () => deliver(snap))
     expect(document.querySelector('[data-task-gone]')).toBeNull()
-    expect(dialog()?.dataset.taskSource).toBe('workspace')
     expect(dialog()?.textContent).toContain('Run the soak test')
     expect(dialog()?.textContent).toContain('Measure the drift.')
   })
@@ -1144,12 +1110,11 @@ describe('the task window on a task Search found that the workspace does not hol
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Run the soak test')
   })
 
-  it('opens an active result from its own read, editable from it, and shows the workspace’s view once it arrives', async () => {
+  it('opens an active result from its own read, editable from it', async () => {
     const { answer, row } = await openFound({ active: true })
     expect(note()?.textContent).toBe('Loading QN-27…')
     await answer()
     expect(document.querySelector('[data-task-gone]')).toBeNull()
-    expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(dialog()?.textContent).toContain('Measure the drift.')
     // its fields take edits from the answer (src/panels/TaskDetail.test.tsx
     // says how)
@@ -1157,12 +1122,7 @@ describe('the task window on a task Search found that the workspace does not hol
       document.querySelector<HTMLButtonElement>('[data-fieldselect][aria-label="Priority"]')
         ?.disabled,
     ).toBe(false)
-    // the workspace brings it in, as once a held part arrives
-    const workspace = structuredClone(snap)
-    await act(async () => deliver(workspace))
-    expect(dialog()?.dataset.taskSource).toBe('workspace')
-    expect(dialog()?.textContent).toContain('Run the soak test')
-    expect(row.title).toBe('Run the soak test')
+    expect(dialog()?.textContent).toContain(row.title)
   })
 
   it("says a result the server answers unavailable can't be opened, the same for every reason", async () => {
@@ -1174,26 +1134,5 @@ describe('the task window on a task Search found that the workspace does not hol
     expect(button('Restore')).toBeUndefined()
     await click(button('Close'))
     expect(onClose).toHaveBeenCalledOnce()
-  })
-
-  it('opens an archived and an active result at once while tasks still load', async () => {
-    const archived = await openFound({ loading: true })
-    // its own loading line, not the wait for a task still to arrive
-    expect(note()?.textContent).toBe('Loading QN-27…')
-    expect(dialog()?.textContent).not.toContain('Loading this task')
-    await archived.answer()
-    expect(note()?.textContent).toBe(
-      'QN-27 was archived. Restore it to bring it back to the board.',
-    )
-    await act(async () => root.unmount())
-    root = createRoot(container)
-    double.live?.holdWindow(null)
-    const active = await openFound({ loading: true, active: true })
-    // an active result may be among the tasks still to arrive: it shows
-    // from its own read meanwhile
-    expect(note()?.textContent).toBe('Loading QN-27…')
-    await active.answer()
-    expect(dialog()?.dataset.taskSource).toBe('answer')
-    expect(document.querySelector('[data-task-gone]')).toBeNull()
   })
 })

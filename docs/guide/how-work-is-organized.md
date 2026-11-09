@@ -345,5 +345,6 @@ Files in Deleted items count toward the organization's storage until they
 are deleted for good. That includes the storage measured at the start of a
 paid period, which its storage charge uses
 ([Billing and free access](./administration-guard-rails-and-the-demo.md#billing-and-free-access)).
-The organization export leaves Deleted items out
+The organization export includes the Deleted items Qivo still keeps, in a
+folder of their own
 ([Export data](./organization-and-team-settings.md#export-data)).

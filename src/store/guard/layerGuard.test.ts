@@ -1,13 +1,11 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { readdirSync, statSync } from 'node:fs'
 import { posix } from 'node:path'
-import { parseSync } from 'oxc-parser'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture } from '../plannerFixture.setup'
 import {
   type AstNode,
   apiNames,
   enclosing,
-  functionName,
   ownerName,
   parseFile,
   textOf,
@@ -35,22 +33,6 @@ vi.mock('../../lib/auth', () => ({
 const STORE = 'src/store/planner.ts'
 const { source, program } = parseFile(STORE)
 
-/* The whole-list walks of the workspace's tasks and of their rows, the
-   store's sums over every task among them, which only tests and scripts
-   call now (store/planner.ts remainingByGroups, issuesInGroups). */
-const WALKS = [
-  /\bP\.issues\b/,
-  /\bPLANNER\.issues\b/,
-  /\bscopedIssues\b/,
-  /\brows\.issues\.(?!get\(|has\()/,
-  /\brows\.issueLabels\b/,
-  /\brows\.attachments\.values\(/,
-  /\brows\.issueSubs\b/,
-  /peekList\('issue(Subs|Labels)'\)/,
-  /\bremainingByGroups\b/,
-  /\bissuesInGroups\b/,
-]
-
 type Call = { node: AstNode; ancestors: AstNode[] }
 const calls: Call[] = []
 walk(program, (node, ancestors) => {
@@ -67,16 +49,10 @@ const firstArgument = (call: Call) => {
 const PAINT_HELPERS = new Set([
   'buildThreadRows',
   'disposeDemoStore',
-  'purgeIssueRows',
   'dropProjectRows',
-  'dropDeletedTasks',
-  'patchIssueRow',
-  'clearParentHours',
-  'paintDescriptionImages',
   // the probes below break the rule on purpose
   'writeOutside',
   'writeServerRow',
-  'corruptTask',
 ])
 /** Whether call `node` is a Convex write: `.mutation(` or `.action(` on an
     object whose text names `convex`, however it is written (convex?.mutation,
@@ -201,212 +177,6 @@ describe('every write has a recipe', () => {
   })
 })
 
-describe('the writes from the task window’s own answer', () => {
-  /* The store functions that serve a task the window shows from its own
-     answer, which the workspace does not hold (planner.ts answerTaskOf),
-     and the readers they and the window ask. Once tasks load on demand,
-     the workspace holds a few tasks, so none of them may walk its task
-     lists; one row looked up by its uuid or handle is allowed. The paints
-     they give the workspace (labelRowsPaint, followRowsPaint,
-     moveRowsPaint) skip until the workspace holds the task in its
-     organization, and walk then what the held path walks. So do the
-     reads of a task a window opens by a reference (planner.ts refRead),
-     which resolve a number or a uuid on the server, and the window's
-     delay of such a task (P.windowDelay). */
-  const ANSWER_PATH = [
-    'answerTaskOf',
-    'updateAnswerTask',
-    'toggleAnswerLabel',
-    'followAnswerTask',
-    'answerUploadTarget',
-    'removeUnheldAttachment',
-    'moveAnswerTask',
-    'deleteAnswerTask',
-    'answerParent',
-    'answerFamilyOf',
-    'familyOf',
-    'taskShown',
-    'shownHandleOf',
-    'editsFromAnswer',
-    'answerSaveWaits',
-    'refSeats',
-    'nextRefArgs',
-    'runRefRead',
-    'takeRefNews',
-    'referenceNews',
-    'syncRefRead',
-    'refHandle',
-    'refMoves',
-    'watchTaskRef',
-    'openTask',
-    'openTarget',
-    'unheldWatched',
-    'unheldTask',
-    'windowDelay',
-    'windowDelayIssue',
-    'syncWindowLoad',
-    // the relation pickers' read and writes, which take a task or its other
-    // end from a server answer (t3/limits-relation-pickers)
-    'parentUuidOf',
-    'subtaskListPaint',
-    'setSubtaskParent',
-    'linkTasks',
-    'unlinkTasks',
-    'relationCandidates',
-    'shownParent',
-    'subtaskPickRow',
-    'editsSomeProject',
-    'createParent',
-    'createLinked',
-    'addIssue',
-    // a create of the person's own, which paints the views' rows and its
-    // window from what it sends, never the workspace's task lists
-    // (t3/limits-create-answer)
-    'pendingCreate',
-    'pendingRow',
-    'answeredRow',
-    'creatingAnswerOf',
-    'creatingShown',
-    'createOnItsWay',
-    'tookCreate',
-    'newTaskParts',
-    'newTaskSlots',
-    'slotsBehind',
-    'newViewRow',
-    'newTaskViewPaint',
-    'newTaskCounterPaint',
-    'newParentShort',
-    'newChildShort',
-    'refusedBehind',
-    'keyOfOpen',
-    'createText',
-  ]
-  const bodies = new Map<string, string>()
-  walk(program, (node, ancestors) => {
-    if (
-      !['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)
-    )
-      return
-    const name = functionName(node, ancestors)
-    if (ANSWER_PATH.includes(name)) bodies.set(name, textOf(source, node))
-  })
-
-  it('finds every function it checks', () => {
-    expect([...bodies.keys()].sort()).toEqual([...ANSWER_PATH].sort())
-  })
-
-  it('walks none of the workspace’s task lists', () => {
-    const found = [...bodies].flatMap(([name, text]) =>
-      WALKS.filter((walk) => walk.test(text)).map((walk) => `${name}: ${walk}`),
-    )
-    expect(found).toEqual([])
-  })
-
-  it('catches a walk in its pattern list', () => {
-    // each pattern finds what it stands for, so the scan cannot pass empty
-    const samples = [
-      'P.issues.find((i) => i.uuid === id)',
-      'PLANNER.issues.filter(Boolean)',
-      'PLANNER.scopedIssues(info)',
-      'rows.issues.forEach((c) => c)',
-      'rows.issueLabels.some(Boolean)',
-      '[...rows.attachments.values()]',
-      'rows.issueSubs.push(row)',
-      "workspaceRows.peekList('issueSubs')",
-      'PLANNER.remainingByGroups(groups, only)',
-      'for (const it of PLANNER.issuesInGroups(groups)) {}',
-    ]
-    expect(samples.map((text) => WALKS.some((walk) => walk.test(text)))).toEqual(
-      samples.map(() => true),
-    )
-    expect(WALKS.some((walk) => walk.test('rows.issues.get(uuid) ?? rows.issues.has(t)'))).toBe(
-      false,
-    )
-  })
-})
-
-describe('the readers of every task', () => {
-  /* Tasks load on demand: the workspace holds none until a reader that
-     needs every task asks (store/planner.ts P.askTasks) and waits for them
-     (P.tasksHeld). So every read of the whole task list outside the store
-     belongs to such a reader, named here with its reason, and a new one
-     fails this scan even where no test mounts it. The store's own reads go
-     through its task index. */
-  const READS = [...WALKS.slice(0, 3), /\bissuesInGroups\b/, /\bremainingByGroups\b/]
-  const ALLOWED: Record<string, { reason: string; reads: string[] }> = {
-    'src/store/planner.ts': {
-      reason:
-        'the field itself: rebuild assigns it, its test-build accessor keeps it, and the sums its tests and scripts call walk it behind their own check (wholeListRead)',
-      reads: ['rebuild: P.issues', 'remainingByGroups: issuesInGroups', '(module): PLANNER.issues'],
-    },
-  }
-  const FUNCTION_TYPES = new Set([
-    'FunctionDeclaration',
-    'FunctionExpression',
-    'ArrowFunctionExpression',
-  ])
-
-  /** Each read of the whole task list in `source`, outside its comments,
-      string literals and the names of object properties (a method's own
-      definition), as `function: read`, with the innermost named function
-      around it, or `(module)` outside any. */
-  function wholeListReads(path: string, text: string): string[] {
-    const { program: root, comments } = parseSync(path, text)
-    const skipped: { start: number; end: number }[] = [...comments]
-    const fns: { start: number; end: number; name: string }[] = []
-    walk(root as unknown as AstNode, (node, ancestors) => {
-      if (FUNCTION_TYPES.has(node.type))
-        fns.push({ start: node.start, end: node.end, name: functionName(node, ancestors) })
-      if (node.type === 'Literal' && typeof node.value === 'string') skipped.push(node)
-      if (node.type === 'TemplateElement') skipped.push(node)
-      if (node.type === 'Property' && !node.computed) skipped.push(node.key as AstNode)
-    })
-    let code = text
-    for (const s of skipped)
-      code = code.slice(0, s.start) + ' '.repeat(s.end - s.start) + code.slice(s.end)
-    const found: string[] = []
-    for (const read of READS)
-      for (const m of code.matchAll(new RegExp(read.source, 'g'))) {
-        const at = m.index ?? 0
-        const around = fns
-          .filter((fn) => fn.start <= at && at < fn.end && fn.name)
-          .sort((a, b) => a.end - a.start - (b.end - b.start))[0]
-        found.push(`${around?.name || '(module)'}: ${m[0]}`)
-      }
-    return found
-  }
-  const sources = (dir: string): string[] =>
-    readdirSync(dir).flatMap((name) => {
-      const path = posix.join(dir, name)
-      if (statSync(path).isDirectory()) return sources(path)
-      return /\.tsx?$/.test(name) && !/\.(test|setup)\.tsx?$/.test(name) ? [path] : []
-    })
-
-  it('finds only the readers that wait for every task', () => {
-    const found: Record<string, string[]> = {}
-    for (const path of sources('src')) {
-      const reads = wholeListReads(path, readFileSync(path, 'utf8'))
-      if (reads.length > 0) found[path] = [...new Set(reads)].sort()
-    }
-    expect(Object.keys(found).sort()).toEqual(Object.keys(ALLOWED).sort())
-    for (const [path, { reads }] of Object.entries(ALLOWED))
-      expect(found[path], path).toEqual([...reads].sort())
-  })
-
-  it('catches a planted reader, and not a comment that names the list', () => {
-    const planted = [
-      'export function Planted() {',
-      '  // P.issues is the whole list',
-      '  return P.issues.filter((it) => it.status === "todo").length',
-      '}',
-    ].join('\n')
-    expect(wholeListReads('src/views/Planted.tsx', planted)).toEqual(['Planted: P.issues'])
-    expect(wholeListReads('src/views/Quiet.tsx', '/* P.scopedIssues(info) */ export {}')).toEqual(
-      [],
-    )
-  })
-})
-
 describe('Convex writes outside the store', () => {
   /* Each one, with the reason it does not go through the store. The admin
      console (src/admin/) has its own client flows and no store at all. */
@@ -418,7 +188,11 @@ describe('Convex writes outside the store', () => {
     // these act on their own live queries, not on the snapshot (planner.ts
     // snapshot health), so they do not pause or paint
     'src/panels/OrganizationDeletion.tsx': ['orgRemovals:keep', 'orgRemovals:request'],
-    'src/panels/OrganizationExport.tsx': ['orgRemovals:recordExport'],
+    // the export acts on its own live query and the server's export job,
+    // not on the snapshot: the panel starts, joins and cancels the job, and
+    // the delivery module claims a download and records a confirmed save
+    'src/panels/OrganizationExport.tsx': ['orgExport:cancel', 'orgExport:request'],
+    'src/lib/orgExport.ts': ['orgExport:claimDownload', 'orgRemovals:recordExport'],
     // the desktop alerts' bookkeeping on the caller's own session, which
     // paints nothing and must not wait for a save pause the workspace's
     // trouble set (store/planner.ts startAlerts): the alert client's claims
@@ -504,11 +278,6 @@ describe('the store catches a paint that breaks the rules', () => {
   it('throws when a row changes outside a layer', async () => {
     const probe = await boot()
     expect(() => probe.writeOutside()).toThrow('rows changed outside a layer')
-  })
-
-  it('throws when the tasks kept up to date differ from a full rebuild', async () => {
-    const probe = await boot()
-    expect(() => probe.corruptTask()).toThrow('differ from a full rebuild')
   })
 
   it("throws when code writes into the server's rows outside a paint", async () => {

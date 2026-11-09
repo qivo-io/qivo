@@ -164,6 +164,10 @@ async function load({
   P = store.P
   caps = (await import('../lib/pickerCaps')).PICKER_CAPS
   await store.initStore()
+  // the task as its window shows it from its own answer, as the app shows
+  // every task
+  P.watchComments('task-a', snap.orgs[0].id)
+  await vi.waitFor(() => expect(P.taskDetail('task-a', snap.orgs[0].id)?.view).toBeTruthy())
 }
 
 /* Renders `ui` in the test's root. */
@@ -175,7 +179,7 @@ async function render(ui: React.ReactNode) {
 
 /** The task as the store shows it. */
 function task() {
-  const found = P.issues.find((i) => i.uuid === 'task-a')
+  const found = P.taskDetail('task-a', snap.orgs[0].id)?.view
   if (!found) throw new Error('missing the task')
   return found
 }

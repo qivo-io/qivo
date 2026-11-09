@@ -166,39 +166,32 @@ export function projectPageRef(page: string | null | undefined): ProjectPageRef 
   const num = projectNumberOf(rest.slice(at + 1))
   return num === null ? null : { org_id: rest.slice(0, at), num }
 }
-/* The task an address's task segment `s` names: its handle when the
-   workspace holds it, else a reference (lib/taskReference.ts), which the
-   task window reads from the server, so Back or Forward to the address of
-   any task opens it again, also after a reload. A number reads only in
-   the organization the address pins (`org`), or, unpinned (`~` and a
-   legacy hash without one), in the home organization, never another
-   organization's task with that number; a login without a home
-   organization resolves none. A uuid names one task anywhere: one the
-   workspace does not hold reads first in the organization the address
-   names it under (`from`), since an address can name another
-   organization's task by its uuid (syncPath), then in the login's other
-   seats (store/planner.ts refSeats). A segment that is neither names no
-   task, unless it is the handle of one the workspace holds. */
+/* The task an address's task segment `s` names: a reference
+   (lib/taskReference.ts), which the task window reads from the server, so
+   Back or Forward to the address of any task opens it again, also after a
+   reload. A number reads only in the organization the address pins
+   (`org`), or, unpinned (`~` and a legacy hash without one), in the home
+   organization, never another organization's task with that number; a
+   login without a home organization resolves none. A uuid names one task
+   anywhere: it reads first in the organization the address names it under
+   (`from`), since an address can name another organization's task by its
+   uuid (syncPath), then in the login's other seats (store/planner.ts
+   refSeats). A segment that is neither names no task. */
 const findIssueKey = (s: string | undefined, org?: string) => {
   if (!s) return undefined
   const named = parseIssueRef(s)
   if (named && 'num' in named) {
-    const key = `${ISSUE_PREFIX}-${named.num}`
-    if (org) return P.issueRefIn(org, key) ?? taskRef({ org, num: named.num })
-    // unpinned: the home organization's handle IS the key
-    if (P.issueById[key]) return key
+    if (org) return taskRef({ org, num: named.num })
     return P.homeOrg ? taskRef({ org: P.homeOrg, num: named.num }) : undefined
   }
   const uuid = named && 'uuid' in named ? named.uuid : null
-  const held = P.handleOf(uuid ?? s.toLowerCase())
-  if (held) return held
   return uuid ? taskRef({ org: null, uuid, from: org }) : undefined
 }
 
 /** What the store knows of the task `open` names, a handle or a reference
-    (lib/taskReference.ts), from its live sources only: the workspace, the
-    view of the task a window shows from its own read (P.detail), and the
-    read of the registered reference (P.reference). A reference takes that
+    (lib/taskReference.ts), from its live sources only: the view of the
+    task a window shows from its own read (P.detail), and the read of the
+    registered reference (P.reference). A reference takes that
     view only while it is of the organization the reference or its read
     names, as two organizations can hold one task id. Undefined when none
     names it. */
@@ -208,8 +201,6 @@ export function taskFacts(open: string | null | undefined): TaskFacts | undefine
   const ref = refParts(open)
   const detail = P.detail
   if (!ref) {
-    const it = P.issueById[open]
-    if (it) return factsOfView(it)
     const view = detail?.view
     return view && view.id === open ? factsOfView(view) : undefined
   }
@@ -539,61 +530,20 @@ function addressSegments(pathname: string, hash: string): { slug?: string; task?
   return { slug, task: at === -1 ? undefined : seg[at + 1] }
 }
 
-/* The organization, its address segment, the key and uuid each task handle
-   was last named by. A task that leaves the store while its window is open
-   (IssueDetail TaskGone) keeps that name, so the address goes on naming the
-   task the window still speaks of, in its own organization, instead of a
-   `~` that names none. Once its organization has left the store too, the
-   address names it by its uuid, because `~` would read its key in the home
-   organization; that new address replaces the old one in place
-   (namedBefore). */
-type NamedTask = Pick<IssueVM, 'org' | 'key' | 'uuid'> & { num: number; seg: string }
-const named = new Map<string, NamedTask>()
+/* How many project pages the router remembers the address of
+   (unheldPages, namedProjects), the oldest forgotten first. */
 const NAMED_MAX = 64
-
-/* What `named` keeps of the task handle `open` opens now (P.handleNow).
-   After the home organization changed, the handle an entry was kept by
-   can open another task, whose address it must not name, and the task the
-   entry names opens by another handle, which the window follows
-   (P.watchHandles): the newest entry whose task opens by `open` answers. */
-function namedNow(open: string) {
-  const handleOf = (was: NamedTask) => P.handleNow(was.uuid, was.org, was.num)
-  const was = named.get(open)
-  if (was && handleOf(was) === open) return was
-  let found: NamedTask | undefined
-  for (const entry of named.values()) if (handleOf(entry) === open) found = entry
-  return found
-}
 
 /** How an address names the task `open` names, a handle or a reference:
     its organization and the ref under it, the task's key, or its uuid
     where the organization cannot be named, since `~` would read the key in
     the home organization, with the task's uuid once known, which names it
-    under another organization's slug (syncPath). A task the workspace
-    holds is named by the workspace and remembered (`named`), one that left
-    while its window showed it by what `named` kept, and any other from the
+    under another organization's slug (syncPath). It is named from the
     store's live sources (taskFacts): the reference itself, its read's
     answer and the window's own read. Undefined when nothing names it, as
     for a reference by number alone whose organization has left the store,
     which `~` would read in the home organization (unnamedRef). */
 function taskNamed(open: string): NamedRef | undefined {
-  const it = refParts(open) ? undefined : P.issueById[open]
-  if (it) {
-    named.delete(open)
-    // the display key is QN-n, the task's number in its organization
-    const num = Number(it.key.slice(ISSUE_PREFIX.length + 1))
-    named.set(open, { org: it.org, key: it.key, uuid: it.uuid, num, seg: orgSegment(it.org) })
-    if (named.size > NAMED_MAX) named.delete(named.keys().next().value ?? open)
-    return { org: it.org, ref: it.key, uuid: it.uuid }
-  }
-  const was = refParts(open) ? undefined : namedNow(open)
-  if (was) {
-    const seg = orgSegment(was.org)
-    if (seg === ORG_NONE) return { org: was.org, ref: was.uuid, uuid: was.uuid }
-    // its organization's address may change after the task left
-    was.seg = seg
-    return { org: was.org, ref: was.key, uuid: was.uuid }
-  }
   const facts = taskFacts(open)
   if (!facts) return undefined
   const { org, num, uuid } = facts
@@ -704,18 +654,6 @@ export function namesProjectPage(path: string, page: string | null | undefined) 
     orgSegmentOf(path) === was.seg &&
     seg.at(-2) === 'project' &&
     seg.at(-1) === String(was.num)
-  )
-}
-
-/** Whether `path` names the task handle `open` by the organization and key
-    it was last named by, as the address did before that organization left
-    the store. */
-function namedBefore(path: string, open: string | null | undefined) {
-  const was = open && !refParts(open) ? namedNow(open) : undefined
-  return (
-    !!was &&
-    orgSegmentOf(path) === was.seg &&
-    taskSegmentOf(path, '')?.toLowerCase() === was.key.toLowerCase()
   )
 }
 
@@ -981,8 +919,7 @@ export function pathMatchesState(path: string, s: UiState): boolean {
   const r = parsePath(path)
   if (!r) return true // the front door or a foreign path: overwrite in place
   // the task the address names, the open one when they name the same task
-  const issue =
-    sameTask(r.issue, s.openIssue) || namedBefore(path, s.openIssue) ? s.openIssue : r.issue || null
+  const issue = sameTask(r.issue, s.openIssue) ? s.openIssue : r.issue || null
   // a login with no home organization has no Team sync: the address it
   // followed shows the page underneath, so it is rewritten, not stacked
   if (r.sync && !P.homeOrg) return true

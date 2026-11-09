@@ -4,14 +4,18 @@ import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { IssueVM } from '../store/planner'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 import type { ProjectFacts } from '../store/viewModels'
 
-/* The Board's cards and the Roadmap's rows on the real store skip a task
-   whose view model kept its identity (store/repaint.test.ts). The owner's
-   portrait renders once per task row, so the test counts its renders per
-   task: a delivery that renames one task renders that task's row again and
-   no other, and a change every row reads (a person's name) renders them
+/* The Board's cards, the Roadmap's rows, Team sync's cards and the Needs
+   an owner rows on the real store skip a task whose view model kept its
+   identity. The store holds no task: the rows here are the view models the
+   Board's answer brings (tasks.board, store/viewRows.ts), which keep their
+   object while their row holds, and the server here answers the Board
+   again on each delivery, from the published whole. The owner's portrait
+   renders once per task row, so the test counts its renders per task: a
+   delivery that renames one task renders that task's row again and no
+   other, and a change every row reads (a person's name) renders them
    all. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -47,6 +51,16 @@ vi.mock('@/components/rowElements', async (importOriginal) => ({
 const AT = '2026-09-14T08:00:00.000Z'
 const TASKS = ['one', 'two', 'three']
 const noop = () => {}
+/* The Board's slot whose answer brings the rows. */
+const SLOT = 'board:desktop'
+
+/** The view models of the Board's answer, in the published order. */
+function models(P: typeof import('../store/planner')['P']): IssueVM[] {
+  return snapshot.issues.flatMap((row) => {
+    const it = P.viewTask(SLOT, row.id)
+    return it ? [it] : []
+  })
+}
 
 let snapshot: Snapshot
 let deliver: (snap: Snapshot) => void
@@ -96,11 +110,37 @@ async function load(prepare: (snap: Snapshot) => void = noop) {
       has_hidden_parent: false,
     })
   prepare(snapshot)
+  // the project under a top-level project, as every writer stores one that
+  // holds tasks
+  if (snapshot.projects[0].parent_id === undefined) underProgram(snapshot)
   network.query.mockResolvedValue(null)
+  // the Board's read, which the server answers again on each delivery
+  let board: ((snap: Snapshot) => void) | null = null
   network.onUpdate.mockImplementation((ref, _args, next) => {
-    if (getFunctionName(ref) === 'workspace:whole') {
-      deliver = (snap) => next(structuredClone(snap))
+    const name = getFunctionName(ref)
+    if (name === 'workspace:whole') {
+      deliver = (snap) => {
+        next(structuredClone(snap))
+        board?.(snap)
+      }
       deliver(snapshot)
+    } else if (name === 'tasks:board') {
+      board = (snap) =>
+        next(
+          structuredClone({
+            state: 'ok',
+            rows: snap.issues.map(({ description: _text, ...row }) => ({
+              ...row,
+              has_subtasks: false,
+            })),
+            parents: [],
+            held_projects: [snap.projects[0].id],
+          }),
+        )
+      board(snapshot)
+      return () => {
+        board = null
+      }
     }
     return () => {}
   })
@@ -109,9 +149,15 @@ async function load(prepare: (snap: Snapshot) => void = noop) {
   )
   const store = await import('../store/planner')
   await store.initStore()
-  // the store names the held tasks' projects with the project cache, whose
-  // answer moves P.contextVersion once; it lands before a case counts
-  // renders
+  // the rows are the Board's answer's models, and the scope's project is
+  // named with the project cache, whose answer moves P.contextVersion once;
+  // both land before a case counts renders
+  store.P.nameProjects(
+    'memo rows',
+    snapshot.projects.map((p) => p.id),
+  )
+  store.P.watchBoard(SLOT, '{"board":"memo rows"}')
+  await vi.waitFor(() => expect(models(store.P)).toHaveLength(snapshot.issues.length))
   await vi.waitFor(() =>
     expect(snapshot.projects.every((p) => store.P.projectState(p.id) !== 'loading')).toBe(true),
   )
@@ -139,6 +185,9 @@ async function mount(view: (loaded: Loaded) => ReactNode, prepare?: (snap: Snaps
   const { usePlannerVersion, TooltipProvider } = loaded
   Screen = function Screen() {
     usePlannerVersion()
+    // the Board's answer and the rows it brings repaint on their own
+    // channel, as the views hear it
+    usePlannerVersion('views')
     return <TooltipProvider>{view(loaded)}</TooltipProvider>
   }
   await act(async () => root.render(<Screen />))
@@ -197,7 +246,7 @@ afterEach(async () => {
 
 /* The Board's cards as Kanban renders them. */
 const board = ({ P, BoardCard, groupBoardCell }: Loaded) =>
-  groupBoardCell(P.issues, P.issueById).map((group) => (
+  groupBoardCell(models(P), P.boardTasksById()).map((group) => (
     <BoardCard
       key={group.key}
       group={group}
@@ -249,8 +298,8 @@ describe('memoized task rows', () => {
       dispose: noop,
     }
     await mount(({ P, TimelineRow }) => {
-      const proj = projectFacts(P.issues[0]?.project ?? 'p', P.homeOrg)
-      return P.issues.map((issue, n) => (
+      const proj = projectFacts(models(P)[0]?.project ?? 'p', P.homeOrg)
+      return models(P).map((issue, n) => (
         <TimelineRow
           key={issue.uuid}
           row={{ kind: 'task', pid: proj.id, proj, issue }}
@@ -295,7 +344,7 @@ describe('memoized task rows', () => {
     const drawn: string[] = []
     const observer = { setRoot: noop, observe: () => noop, dispose: noop }
     await mount(({ P, TimelineRow }) => {
-      const proj = projectFacts(P.issues[0]?.project ?? 'p', P.homeOrg)
+      const proj = projectFacts(models(P)[0]?.project ?? 'p', P.homeOrg)
       return (
         <TimelineRow
           row={{ kind: 'track', pid: proj.id, proj }}
@@ -381,7 +430,7 @@ describe('memoized task rows', () => {
         frozen: page.frozen,
         editable: () => true,
       }
-      return P.issues.map((it) => (
+      return models(P).map((it) => (
         <SyncCard
           key={it.uuid}
           it={it}
@@ -395,7 +444,7 @@ describe('memoized task rows', () => {
       ))
     })
     const { P } = await import('../store/planner')
-    const handle = (id: string) => P.issues.find((it) => it.uuid === id)!.id
+    const handle = (id: string) => models(P).find((it) => it.uuid === id)!.id
     // nothing changed: no card renders
     expect(await rerenderedBy(noop)).toEqual([])
     // a tick, and the reviewer prompt opening and closing, render that card
@@ -440,10 +489,10 @@ describe('memoized task rows', () => {
       const now = Date.now()
       return (
         <TeamOpening
-          rows={P.issues}
-          tasks={P.issues}
+          rows={models(P)}
+          tasks={models(P)}
           humans={[]}
-          subIds={new Set(P.issues.map((it) => it.project))}
+          subIds={new Set(models(P).map((it) => it.project))}
           metaIds={new Set()}
           day={syncDay(now)}
           now={now}

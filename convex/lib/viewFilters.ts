@@ -184,8 +184,8 @@ const ASSIGNMENTS_PER_STEP = 256
 /** -1, 0 or 1 as `a` sorts before, with or after `b` in code unit order. */
 export const order = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
 
-/** Tasks by number, then organization and id, as src/store/taskIndex.ts
- * orders the store's tasks. */
+/** Tasks by number, then organization and id, the order the Board's and
+ * the Roadmap's answers send their rows in (lib/board.ts, lib/roadmap.ts). */
 export const byNumber = (a: Doc<'issues'>, b: Doc<'issues'>) =>
   a.num - b.num || order(a.org_id, b.org_id) || order(a.id, b.id)
 

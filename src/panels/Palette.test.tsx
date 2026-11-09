@@ -911,47 +911,6 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     expect(onClose).toHaveBeenCalled()
   })
 
-  it('opens a result by the handle the store gives it when it opens, after a role change, else by a reference', async () => {
-    await open()
-    await type('firm')
-    await last().answer([task(14), task(15)])
-    expect(values()).toEqual(['issue-QN-14', 'issue-QN-15'])
-    // the person becomes a guest of the organization, with a grant on Luma
-    // Sensor, and the workspace now holds QN-15, both by uuid
-    const next = structuredClone(snap)
-    next.profiles[0].org_role = 'guest'
-    next.access.push({ project_id: META, profile_id: next.profiles[0].id, level: 'user' })
-    next.issues.push({
-      id: 'task-15',
-      org_id: ORG,
-      project_id: FW,
-      num: 15,
-      title: 'Flash the firmware 15',
-      description: '',
-      status: 'todo',
-      priority: 'medium',
-      paused: false,
-      created_at: '2026-09-14T08:00:00.000Z',
-      updated_at: '2026-09-14T08:00:00.000Z',
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
-    })
-    next.delivered_at = '2026-09-15T09:00:00.000Z'
-    await act(async () => publish(next))
-    await settle()
-    const store = await import('../store/planner')
-    expect(store.P.homeOrg).toBe('')
-    expect(store.P.handleOf('task-15')).toBe('task-15')
-    const rows = () => [...document.querySelectorAll<HTMLElement>('[cmdk-item]')]
-    // one the workspace does not hold opens by a reference that names its
-    // organization, number and uuid, never a handle
-    await click(rows()[0])
-    expect(ctx.openIssue).toHaveBeenLastCalledWith(refTo(ORG, 14))
-    // one it holds by the handle it has now
-    await click(rows()[1])
-    expect(ctx.openIssue).toHaveBeenLastCalledWith('task-15')
-  })
-
   it('opens a task the workspace does not hold by a reference, and a project the workspace holds as the scope', async () => {
     await open({ partner: true })
     await type('firm')

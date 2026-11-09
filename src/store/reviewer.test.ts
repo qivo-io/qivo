@@ -1,5 +1,6 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { refParts } from '../lib/taskReference'
 import type { Whole } from './guard/liveDouble.setup'
 
 type Snapshot = Whole
@@ -165,8 +166,12 @@ describe('the Reviewer rule in the client store', () => {
     f = fixture()
     sent = []
     network.query.mockResolvedValue(null)
-    network.onUpdate.mockImplementation((_ref, _args, next) => {
-      next(structuredClone(f.snap))
+    network.onUpdate.mockImplementation((ref, _args, next) => {
+      const name = getFunctionName(ref)
+      // a task window's thread and history start empty
+      if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+      else if (name === 'snapshot:threadHistory') next({ events: [], earlier: false, next: null })
+      else if (name === 'workspace:whole') next(structuredClone(f.snap))
       return () => {}
     })
     // writes stay pending, so each assertion reads the optimistic paint
@@ -188,20 +193,32 @@ describe('the Reviewer rule in the client store', () => {
     vi.unstubAllGlobals()
   })
 
-  const task = (title: string) => P.issues.find((issue) => issue.title === title)!
+  /* The task titled `title` as its window shows it from its own answer, as
+     the app shows every task: the window opens on it and its answer
+     arrives. */
+  const task = async (title: string) => {
+    const row = f.snap.issues.find((issue) => issue.title === title)
+    if (!row) throw new Error(`no task ${title}`)
+    P.watchComments(row.id, row.org_id)
+    await vi.waitFor(() => expect(P.taskDetail(row.id, row.org_id)?.view).toBeTruthy())
+    return P.taskDetail(row.id, row.org_id)?.view as NonNullable<
+      ReturnType<typeof P.taskDetail>
+    >['view'] &
+      object
+  }
   const lastPatch = (name: string) => sent.filter((w) => w.name === name).at(-1)?.args
 
-  it('hands ownership to the reviewer only while a leaf task waits In Review', () => {
-    expect([task('A').owner, task('A').ownerField]).toEqual([f.me, 'reviewer'])
-    expect([task('B').owner, task('B').ownerField]).toEqual([f.me, 'assignee'])
-    expect([task('G').owner, task('G').ownerField]).toEqual([f.me, 'assignee'])
-    expect(task('G').reviewer).toBe(f.other)
+  it('hands ownership to the reviewer only while a leaf task waits In Review', async () => {
+    expect([(await task('A')).owner, (await task('A')).ownerField]).toEqual([f.me, 'reviewer'])
+    expect([(await task('B')).owner, (await task('B')).ownerField]).toEqual([f.me, 'assignee'])
+    expect([(await task('G')).owner, (await task('G')).ownerField]).toEqual([f.me, 'assignee'])
+    expect((await task('G')).reviewer).toBe(f.other)
   })
 
-  it('counts what I own as mine, and my task another person reviews as theirs', () => {
-    expect(P.isMine(task('A'))).toBe(true)
-    expect(P.isMine(task('B'))).toBe(true)
-    expect(P.isMine(task('C'))).toBe(false)
+  it('counts what I own as mine, and my task another person reviews as theirs', async () => {
+    expect(P.isMine(await task('A'))).toBe(true)
+    expect(P.isMine(await task('B'))).toBe(true)
+    expect(P.isMine(await task('C'))).toBe(false)
     const filters = {
       mine: false,
       assignees: [f.other],
@@ -210,63 +227,61 @@ describe('the Reviewer rule in the client store', () => {
       focus: false,
       search: '',
     }
-    expect(P.passesFilters(task('C'), filters)).toBe(true)
-    expect(P.passesFilters(task('B'), filters)).toBe(false)
+    expect(P.passesFilters(await task('C'), filters)).toBe(true)
+    expect(P.passesFilters(await task('B'), filters)).toBe(false)
   })
 
-  it('resolves the review time from the sub-project, its project, then the default', () => {
+  it('resolves the review time from the sub-project, its project, then the default', async () => {
     expect(P.reviewHoursFor(f.sub)).toBe(4)
     expect(P.reviewHoursFor(f.sub2)).toBe(1)
     expect(P.reviewHoursFor(f.meta2)).toBe(2)
   })
 
-  it('paints the review time on entering Review without sending it', () => {
-    P.updateIssue(task('B').id, { status: 'review' })
-    expect(task('B').remaining).toBe(4)
-    expect(task('B').remainingSet).toBe(P.TODAY_WEEK)
-    expect(task('B').owner).toBe(f.other)
+  it('paints the review time on entering Review without sending it', async () => {
+    P.updateIssue((await task('B')).id, { status: 'review' })
+    expect((await task('B')).remaining).toBe(4)
+    expect((await task('B')).remainingSet).toBe(P.TODAY_WEEK)
+    expect((await task('B')).owner).toBe(f.other)
     expect(lastPatch('issues:update')?.patch).toStrictEqual({ status: 'review' })
 
-    P.updateIssue(task('D').id, { status: 'review' })
-    expect(task('D').remaining).toBe(1)
+    P.updateIssue((await task('D')).id, { status: 'review' })
+    expect((await task('D')).remaining).toBe(1)
   })
 
-  it('lets stated hours win and keeps the remaining time on leaving Review', () => {
-    P.updateIssue(task('B').id, { status: 'review', remaining: 5 })
-    expect(task('B').remaining).toBe(5)
+  it('lets stated hours win and keeps the remaining time on leaving Review', async () => {
+    P.updateIssue((await task('B')).id, { status: 'review', remaining: 5 })
+    expect((await task('B')).remaining).toBe(5)
     expect(lastPatch('issues:update')?.patch).toStrictEqual({
       status: 'review',
       remaining_hours: 5,
     })
 
-    P.updateIssue(task('A').id, { status: 'progress' })
-    expect(task('A').remaining).toBe(3)
-    expect(task('A').remainingSet).toBe(P.TODAY_WEEK - 3)
-    expect(task('A').owner).toBe(f.other)
+    P.updateIssue((await task('A')).id, { status: 'progress' })
+    expect((await task('A')).remaining).toBe(3)
+    expect((await task('A')).remainingSet).toBe(P.TODAY_WEEK - 3)
+    expect((await task('A')).owner).toBe(f.other)
   })
 
-  it('paints the review time on a task created In Review while the wire states no hours', () => {
+  it('paints the review time on a task created In Review while the wire states no hours', async () => {
     const key = P.addIssue({ project: f.sub, title: 'Born in review', status: 'review' })!
-    expect(P.issueById[key].remaining).toBe(4)
+    // the person's own new task, from its creating answer once a window
+    // watches it
+    const created = refParts(key)?.uuid ?? ''
+    P.watchComments(created, f.snap.orgs[0].id)
+    expect(P.taskDetail(created, f.snap.orgs[0].id)?.view?.remaining).toBe(4)
     expect(lastPatch('issues:create')).toMatchObject({ remaining_hours: null, reviewer_id: null })
   })
 
-  it('sends reviewer changes as reviewer_id and mirrors a cleared one as absent', () => {
-    P.updateIssue(task('B').id, { reviewer: f.me })
+  it('sends reviewer changes as reviewer_id and mirrors a cleared one as absent', async () => {
+    P.updateIssue((await task('B')).id, { reviewer: f.me })
     expect(lastPatch('issues:update')?.patch).toStrictEqual({ reviewer_id: f.me })
-    P.updateIssue(task('C').id, { reviewer: null })
+    P.updateIssue((await task('C')).id, { reviewer: null })
     expect(lastPatch('issues:update')?.patch).toStrictEqual({ reviewer_id: null })
-    expect(task('C').reviewer).toBeUndefined()
-    expect(task('C').owner).toBe(f.me)
+    expect((await task('C')).reviewer).toBeUndefined()
+    expect((await task('C')).owner).toBe(f.me)
   })
 
-  it('clears a removed person from the tasks they review', () => {
-    P.removeUser(f.other, { orgId: P.homeOrg })
-    expect(task('C').reviewer).toBeUndefined()
-    expect(task('C').owner).toBe(f.me)
-  })
-
-  it('sends a cleared project review time as null', () => {
+  it('sends a cleared project review time as null', async () => {
     // as the project's settings page sends it, in the organization it showed
     P.updateProject(f.sub2, { reviewHours: null }, {}, { orgId: f.snap.orgs[0].id })
     expect(lastPatch('projects:update')?.patch).toStrictEqual({ review_hours: null })

@@ -17,11 +17,11 @@ import { COMPLETION_RESERVE, taskOut } from '../lib/core'
 import { byId } from '../lib/db'
 import { countsAsSubtask } from '../lib/liveTasks'
 import { callRoom, loadRowsOf, OWNER_LOADS, ownerLoadReader } from '../lib/ownerLoads'
-import { readTasks } from '../lib/workspaceParts'
 import { getProject } from '../machine/rest'
 import { MOVE_SUBTREE_HOLDER_RULE, REVIEWER_RULE } from '../model/issues'
 import { assigneeLoad, LOAD_UNAVAILABLE, workloadPage } from '../planning'
 import { finishedBefore, positionAfter, RESTORE_REGROUP, restoredStep } from '../regroup'
+import { boardFor, NO_FILTERS, projectScope } from './board.setup'
 import {
   as,
   expectRefusal,
@@ -38,7 +38,6 @@ import {
   TODAY,
   uuid,
   withReadingAdmin,
-  workspaceOf,
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
 import { countOrg } from './overviewCounts.setup'
@@ -172,8 +171,13 @@ describe('the group rule', () => {
     // a status filter keeps it, as it keeps every task without subtasks
     const todo = await restTasks(fx.t, { callerId: fx.agent.id, access: 'read', status: 'todo' })
     expect(todo.map((r) => r.id)).toContain(parent.id)
-    const snap = await workspaceOf(as(fx.t, fx.admin))
-    expect(snap?.issues.find((i) => i.id === parent.id)?.has_hidden_subtasks).toBe(false)
+    // the task window, the app's read of one task, shows no group either
+    const window = await as(fx.t, fx.admin).query(api.taskWindow.task, {
+      org_id: fx.org.id,
+      ref: parent.id,
+    })
+    if (window.state !== 'ok') throw new Error(window.state)
+    expect(window.task).toMatchObject({ has_subtasks: false, has_hidden_subtasks: false })
     // and it takes a status, dates and hours of its own
     await restPatch(fx, parent.id, {
       status: 'progress',
@@ -222,35 +226,26 @@ describe('the group rule', () => {
 })
 
 describe('reading only live tasks', () => {
-  it("the app's task and load parts never send the tasks of an archived project", async () => {
+  it('the Board never sends the tasks of an archived sub-project, and its answer stays as they grow', async () => {
     const fx = await setup()
     const parent = await task(fx, { title: 'Parent' })
     await task(fx, { parent_id: parent.id })
-    await task(fx, { project_id: fx.sub2.id, start_week: '2026-09-07', end_week: '2026-09-07' })
-    const read = (who: Doc<'profiles'>) =>
-      as(fx.t, who).query(async (ctx) => {
-        const me = (await byId(ctx, 'profiles', who.id)) as Doc<'profiles'>
-        const whole = { from: '', to: null }
-        const tasks = await readTasks(ctx, me, whole)
-
-        const { documentsRead } = await ctx.meta.getTransactionMetrics()
-        if (tasks.state !== 'ok') throw new Error('a part did not answer')
-        return {
-          snapshot: { issues: tasks.issues, orgLoad: tasks.orgLoad },
-          documents: documentsRead.used,
-        }
-      })
-    const before = { admin: await read(fx.admin), guest: await read(fx.guest) }
-    await plantMany(fx, 400, { project_id: fx.shelf.id })
-    for (const who of [fx.admin, fx.guest]) {
-      const now = await read(who)
-      const was = who === fx.admin ? before.admin : before.guest
-      expect(now.snapshot?.issues).toEqual(was.snapshot?.issues)
-      expect(now.snapshot?.orgLoad).toEqual(was.snapshot?.orgLoad)
-      // a window reads every active task of its ids, so its reads follow
-      // the tasks the organization made, not only the live ones
-      expect(now.documents - was.documents, who.name).toBeLessThan(450)
+    const shelved = await task(fx, { project_id: fx.shelf.id, title: 'On the shelf' })
+    // the Board of the top-level project that holds the archived sub-project
+    const read = async (who: Doc<'profiles'>) => {
+      const answer = await boardFor(fx.t, who, projectScope(who, fx.meta.id), NO_FILTERS)
+      if (answer.state !== 'ok') throw new Error(`${who.name}: ${answer.state}`)
+      return answer
     }
+    const before = { admin: await read(fx.admin), user: await read(fx.user) }
+    for (const answer of Object.values(before)) {
+      expect(answer.rows.map((r) => r.id)).toContain(parent.id)
+      expect(JSON.stringify(answer)).not.toContain(shelved.id)
+      expect(answer.held_projects).not.toContain(fx.shelf.id)
+    }
+    await plantMany(fx, 400, { project_id: fx.shelf.id })
+    expect(await read(fx.admin)).toEqual(before.admin)
+    expect(await read(fx.user)).toEqual(before.user)
   })
 
   it("a person's load reads their own tasks, and counts a task whose subtasks are archived away", async () => {

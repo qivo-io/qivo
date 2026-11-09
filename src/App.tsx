@@ -32,7 +32,6 @@ import { ProjectDirectory } from './components/ProjectDirectory'
 import { navMoved, onNavMove, openedName, openResolved } from './components/projectNavRows'
 import { Icon, MenuItem, Popover, Seg } from './components/qivo'
 import { type FocusRow, SidebarProjects } from './components/SidebarProjects'
-import { TasksLoadingBar } from './components/TasksLoading'
 import { ViewBoundary } from './components/ViewBoundary'
 import { ViewFilters } from './components/viewFilters'
 import {
@@ -117,7 +116,6 @@ import {
   type ProjectCreated,
   type ProjectShown,
   type ScopeInfo,
-  TASKS_FAILED_TEXT,
 } from './store/planner'
 import { usePlannerVersion } from './store/usePlannerVersion'
 import { BOARD_SLOTS } from './views/board/useBoardView'
@@ -817,30 +815,6 @@ function checkedOn(opening: Opening, page: string): string | null {
   return opening.check.address?.page === page ? JSON.stringify(opening.check.ask) : null
 }
 
-/** Says politely, through the page's announcer (lib/announce), which modal
-    layers leave audible, when every task starts loading for a page or
-    action that needs them, when every task has loaded, and when the load
-    stopped. The caller renders on every store change (usePlannerVersion). */
-function useTasksLoadingNews() {
-  const load = P.taskLoad()
-  const state = load.state
-  const reason = load.state === 'failed' ? load.reason : ''
-  // whether the start was said, so the end is said only after it
-  const said = useRef(false)
-  useEffect(() => {
-    if (state === 'arriving') {
-      said.current = true
-      announce('Loading every task. What asked for them continues once they are in.')
-    } else if (state === 'failed') {
-      said.current = true
-      announce(`${TASKS_FAILED_TEXT} ${reason}`)
-    } else if (said.current) {
-      said.current = false
-      announce('Every task has loaded.')
-    }
-  }, [state, reason])
-}
-
 /* ---------- root ---------- */
 /** A task address's scope to settle once the project cache names the
     task's project (App's scopeToSettle). `preferred` is the scope it
@@ -1041,7 +1015,7 @@ function App() {
      finished saving (projectTarget), when it is nowhere or in a page that
      move hides, such as the Projects page with its New project or a row's
      menu button. A kept view hidden behind another page takes no focus. */
-  const focusAfterMove = useRef<(() => HTMLElement | null) | null>(null)
+  const focusAfterMove = useRef<(() => HTMLElement | null | 'waits') | null>(null)
   /* The sidebar's request to focus a project's row once its tree shows it
      (components/SidebarProjects.tsx), which the server's list brings only
      after the save, with the scope it was made in. App holds it, not the
@@ -1059,11 +1033,19 @@ function App() {
   const doneFocusRow = (n: number) => setFocusRow((was) => (was?.n === n ? null : was))
   useLayoutEffect(() => {
     const target = focusAfterMove.current
-    focusAfterMove.current = null
     if (!target) return
     const active = document.activeElement
     const nowhere = !active || active === document.body || !active.isConnected
-    if (nowhere || active.closest(OUT_OF_USE)) restoreFocus(target())
+    if (!nowhere && !active.closest(OUT_OF_USE)) {
+      focusAfterMove.current = null
+      return
+    }
+    // a target that waits for the project cache (projectTarget) is asked
+    // again in a later commit, as App renders again once the cache answers
+    const element = target()
+    if (element === 'waits') return
+    focusAfterMove.current = null
+    restoreFocus(element)
   })
   const [settingsPage, setSettingsPage] = useState(r0?.settings || null) // null | "account" | "org-*" | "team:<id>" | "project:<id>" | "project:<org>/<num>"
   // the tree's focus request while the desktop's rail shows the scope it
@@ -1392,9 +1374,6 @@ function App() {
   // workspace does not hold once its read answers (lib/router.ts
   // noteProjectPage), which the address follows in place.
   const pagesRev = useSyncExternalStore(subscribeProjectPages, projectPagesRev)
-  // The Roadmap and Team sync read their tasks from the server, so no page
-  // waits for every task
-  useTasksLoadingNews()
 
   // date rendering follows the organization's format setting; set during
   // render so everything below formats consistently on this pass
@@ -1446,7 +1425,6 @@ function App() {
           editor: P.users.some(
             (u) => P.myProfileIds.includes(u.id) && u.active && u.orgRole !== 'viewer',
           ),
-          admin: P.isAdmin(),
         }),
       ),
     [],
@@ -1630,7 +1608,13 @@ function App() {
     }
     pendingTask.current = null
     const here = { scope, view, settingsPage, inboxOpen, projectsOpen, sync }
-    if (pending.page !== pageKey(here) || sync) {
+    // a project scope the project cache answers gone has left the page,
+    // also before App renders that news (store/planner.ts projectFrame
+    // repaints a frame later), which can then land with the task's answer.
+    // The access guard drops it after this effect, so the answer moves
+    // nothing, as when the guard ran first
+    const lost = !!scope && !P.isMineScope(scope) && P.scopeInfo(scope).state === 'gone'
+    if (pending.page !== pageKey(here) || sync || lost) {
       if (waiting) openStartup()
       return
     }
@@ -2176,20 +2160,33 @@ function App() {
      saved, while the views and the Projects page go behind it. A row out of
      use, such as the sidebar's while Settings hides it, never counts. The
      sidebar shows a new project once the server's list holds it, which its
-     focus request (focusRow) waits for. */
-  const projectTarget = (id: string) =>
-    [
+     focus request (focusRow) waits for. The phone header shows New task
+     once the project cache answers for the project (P.canWrite), so for a
+     new sub-project the creator may add tasks to (`tasks`), while the
+     cache is still loading it, projectTarget answers 'waits', and the focus
+     after a move asks again in a later commit. */
+  const projectTarget = (id: string, tasks = false): HTMLElement | null | 'waits' => {
+    const row = [
       ...document.querySelectorAll<HTMLElement>(
         `[data-project-row="${id}"] button, [data-subproject-row="${id}"] button`,
       ),
-    ].find((control) => !control.closest(OUT_OF_USE)) ??
-    document.querySelector<HTMLElement>('[data-mobile-new-task]') ??
-    document.querySelector<HTMLElement>('[data-mobile-project-actions]')
+    ].find((control) => !control.closest(OUT_OF_USE))
+    if (row) return row
+    const newTask = document.querySelector<HTMLElement>('[data-mobile-new-task]')
+    if (newTask) return newTask
+    const actions = document.querySelector<HTMLElement>('[data-mobile-project-actions]')
+    if (actions && tasks && P.projectState(id) === 'loading') return 'waits'
+    return actions
+  }
   /* Where focus goes as New sub-project closes after a create, for an
      opener that names nothing else. The empty states and Add sub-project
      buttons that open the dialog leave once the sub-project shows. */
-  const afterNewSubProject = () =>
-    createdProject.current ? projectTarget(createdProject.current) : null
+  const afterNewSubProject = () => {
+    const target = createdProject.current ? projectTarget(createdProject.current, true) : null
+    // the dialog's own close takes the opener while the target waits, and
+    // the focus after the move gives New task its focus once it shows
+    return target === 'waits' ? null : target
+  }
 
   // Jump from the issue window to the roadmap to plan an issue in context.
   // Switches to the issue's project/roadmap and closes the window so the
@@ -2559,7 +2556,7 @@ function App() {
     if (P.refusePausedEdit()) return false
     // what opening the new task passes on, which addIssue returns: a
     // reference to its organization, preview number and uuid, as the
-    // workspace holds no task (a handle where it holds every task). The
+    // workspace holds no task. The
     // preview can be invalidated by ANY concurrent create in the org
     // (0050's shared counter): the open window follows its task to the
     // server's number (P.watchHandles above), so it doesn't blank or show
@@ -2676,7 +2673,7 @@ function App() {
           setScope(id)
           setProjectsOpen(false)
           setSync(null)
-          focusAfterMove.current = () => projectTarget(id)
+          focusAfterMove.current = () => projectTarget(id, p.type !== 'meta' && writes)
           // the tree's row may come a commit later than the move
           askFocusRow(id, id)
         }
@@ -3183,7 +3180,6 @@ function App() {
               onExport={() => actions.openSettings('org-general')}
             />
           )}
-          {!settingsPage && <TasksLoadingBar />}
           {/* Every main page the person opened stays loaded, hidden, while
              another one shows (lib/keptPages.ts, ViewKeeper): coming back
              shows it as it was, without mounting it again. A new scope

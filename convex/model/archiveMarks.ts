@@ -1,11 +1,9 @@
 /* Marks on the relation rows of archived tasks (schema.ts `task_archived`,
- * and `relations_marked` on the task). Two readers leave marked rows out by
- * index, so their cost follows the active tasks instead of everything the
- * organization ever archived, and read a task with the flag through its own
- * rows: the filter row's search of the Board and the Roadmap
- * (lib/viewFilters.ts filterSearch) where it reads a label's assignments
- * (issue_labels by_label), and the app's windows (lib/workspaceParts.ts
- * readTasks), which read the unmarked rows of a range of window keys. The
+ * and `relations_marked` on the task). The filter row's search of the Board
+ * and the Roadmap (lib/viewFilters.ts filterSearch) leaves marked rows out
+ * by index where it reads a label's assignments (issue_labels by_label), so
+ * its cost follows the active tasks instead of everything the organization
+ * ever archived, and reads a task with the flag through its own rows. The
  * archive steps below read one task's marked or unmarked rows. Every other
  * reader sees marked rows like any other: the label search of REST and MCP
  * reads each task's own assignments (lib/activeTaskPage.ts searchRule), and

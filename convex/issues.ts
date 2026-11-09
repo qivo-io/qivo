@@ -88,7 +88,8 @@ type MeCtx = QueryCtx & { me: Doc<'profiles'> }
 
 /* System fields stay internal; optional columns come back ABSENT, like the
  * workspace's rows. relations_marked (the archive steps' bookkeeping) and
- * window_key (where the app's windows place the task) stay internal too.
+ * window_key (where the app's former windows placed the task) stay
+ * internal too.
  * The text stays out: the app reads only the number, the parent's number
  * and the archive answer from a write, and the text is the task's
  * description row (model/descriptions.ts). */

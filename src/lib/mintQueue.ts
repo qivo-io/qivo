@@ -1,6 +1,5 @@
 /* The one queue every file URL mint of the store goes through
-   (files.mintUrls); the browser export (lib/orgExport.ts) mints its one
-   file a call itself. It bounds the calls: at most MINT_QUEUE.batch ids a
+   (files.mintUrls). It bounds the calls: at most MINT_QUEUE.batch ids a
    call, at most MINT_QUEUE.inFlight calls at once, attachments and
    pictures never in one call, and attachment calls before picture calls,
    so an image someone is looking at overtakes the roster's pictures. The

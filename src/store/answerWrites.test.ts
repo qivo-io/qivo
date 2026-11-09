@@ -25,7 +25,7 @@ const double = vi.hoisted(() => ({
 }))
 vi.mock('../lib/convex', async () => {
   const { liveOver } = await import('./guard/liveDouble.setup')
-  double.live = liveOver(network)
+  double.live = liveOver(network, { taskWindow: 'client' })
   return { convex: network, live: double.live }
 })
 vi.mock('../lib/auth', () => ({
@@ -604,7 +604,7 @@ describe('a write from the window’s own answer fails closed', { timeout: 30_00
     expect(P.familyOf(shown())).toBeNull()
     expect(P.moveIssue(H, 'manuals')).toBeNull()
     await expect(P.archiveIssue(H, 'Gone')).resolves.toBe(false)
-    await expect(P.deleteIssue(H, [], true)).resolves.toBe(false)
+    await expect(P.deleteIssue(H, [])).resolves.toBe(false)
     expect(sent('issues:move')).toEqual([])
   })
 
@@ -753,11 +753,8 @@ describe('labels, the eye and Subscribers from the window’s answer', { timeout
     P.setIssueSubscribed(H, false)
     expect(last('issues:unsubscribe').args).toEqual({ org_id: ORG, issue_id: FAR })
     expect(shown().subscribed).toBe(false)
-    // the roster and a lead's add read the task's organization and uuid
-    // from the window's model
-    const roster = vi.fn()
-    P.watchIssueSubscribers(shown(), roster, vi.fn())
-    expect(one('issues:subscribers').args).toEqual({ org_id: ORG, issue_id: FAR })
+    // a lead's add reads the task's organization and uuid from the window's
+    // model, as the popover's roster does (components/IssueSubscribers.test.tsx)
     P.setIssueSubscriber(shown(), 'leo', true, vi.fn())
     expect(last('issues:setSubscriber').args).toEqual({
       org_id: ORG,
@@ -917,7 +914,6 @@ describe('files from the window’s own answer', { timeout: 30_000 }, () => {
     publishWorkspace()
     await turn()
     expect(P.homeOrg).toBe(BETA)
-    expect(P.issueById[H]?.uuid).toBe('beta-40')
     release()
     await turn()
     expect(sent('files:uploadUrl').map((w) => w.args)).toEqual([
@@ -964,11 +960,11 @@ describe('files from the window’s own answer', { timeout: 30_000 }, () => {
     expect(sent('files:uploadUrl')).toEqual([])
   })
 
-  it('removes a file only the attachments answer holds with no paint, until that answer drops it', async () => {
+  it('removes a file the attachments answer holds with no paint, until that answer drops it', async () => {
     await load()
     await openFar()
     await showFiles([attachment('att-f')])
-    expect(P.sections?.attachments.rows.map((r) => [r.id, r.held])).toEqual([['att-f', false]])
+    expect(P.sections?.attachments.rows.map((r) => r.id)).toEqual(['att-f'])
     const removed = P.removeAttachment('att-f')
     expect(last('files:removeAttachment').args).toEqual({ org_id: ORG, id: 'att-f' })
     expect(P.sections?.attachments.rows.map((r) => r.id)).toEqual(['att-f'])
@@ -1062,11 +1058,11 @@ describe('Move, Archive and delete from the window’s own answer', { timeout: 3
       }),
     )
     const tasks = P.familyOf(shown())
-    expect(tasks && P.deletePlan(H, tasks).rows.map((r) => [r.task.key, r.deletable])).toEqual([
+    expect(tasks && P.deletePlan(tasks).rows.map((r) => [r.task.key, r.deletable])).toEqual([
       ['QN-42', true],
       ['QN-43', false],
     ])
-    const deleted = P.deleteIssue(H, ['QN-42', 'QN-43'], true, 'Done with it')
+    const deleted = P.deleteIssue(H, ['QN-42', 'QN-43'], 'Done with it')
     expect(last('issues:deleteDeep').args).toEqual({
       org_id: ORG,
       id: FAR,

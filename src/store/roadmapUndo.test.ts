@@ -2,8 +2,17 @@ import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { milestoneWeekTaken } from '../../convex/lib/limits'
-import { answerMilestones, isMilestoneRead } from './milestoneStandIn.setup'
+import { roadmapRequest } from '../views/roadmap/roadmapArgs'
+import { viewReadsOver } from './guard/viewReads.setup'
+import { openScope } from './oracleScope.setup'
+import type { IssueFilters } from './planner'
 import type { Snapshot } from './plannerFixture.setup'
+
+/* The Roadmap's undo history through the client store, over the tasks of
+   the Roadmap's own answer (tasks.roadmap, answered by the views' stand-in
+   from the published test workspace): which writes join the visit's
+   journal, which end it, and how a refusal, an earlier visit's late answer
+   or a failing workspace leaves the history and the rows on screen. */
 
 type Planner = typeof import('./planner')['P']
 
@@ -22,9 +31,22 @@ vi.mock('../lib/auth', () => ({
 
 const NOW = '2026-09-14T08:00:00.000Z'
 
+/** The Roadmap's filter row with nothing set. */
+const ROW: IssueFilters = {
+  mine: false,
+  assignees: [],
+  priority: null,
+  stale: false,
+  focus: false,
+  search: '',
+}
+
+/** One admin's organization with a program the admin leads, its project
+    and two tasks there with eight hours each over the weeks of NOW. */
 function fixture(): Snapshot {
   const org = crypto.randomUUID()
   const profile = crypto.randomUUID()
+  const program = crypto.randomUUID()
   const project = crypto.randomUUID()
   return {
     auth_user_id: 'test-account',
@@ -61,12 +83,26 @@ function fixture(): Snapshot {
         id: project,
         org_id: org,
         type: 'project',
+        parent_id: program,
         key: 'PLAN',
         num: 1,
         name: 'Planning fixture',
         description: '',
         sort_order: 0,
         track_delay: false,
+        created_at: NOW,
+      },
+      {
+        id: program,
+        org_id: org,
+        type: 'meta',
+        key: 'PROG',
+        num: 9,
+        name: 'Planning program',
+        description: '',
+        sort_order: 1,
+        track_delay: false,
+        lead_id: profile,
         created_at: NOW,
       },
     ],
@@ -112,6 +148,48 @@ type Pending = {
   reject: (error: unknown) => void
 }
 
+/** Answers `network`'s reads over `snap`: the workspace's root part with
+    `snap` itself, and every view read through the views' stand-ins, which
+    answer again whenever the root delivers. Hands `root` the root's
+    delivery and failure. */
+function serve(
+  snap: Snapshot,
+  root: (deliver: (value: Snapshot) => void, failed: (error: Error) => void) => void,
+) {
+  const views = viewReadsOver(snap, () => ({ sees: () => true, writes: () => true }))
+  network.query.mockImplementation(async (ref, args) => views.query(getFunctionName(ref), args))
+  network.onUpdate.mockImplementation((ref, args, next, failed) => {
+    const name = getFunctionName(ref)
+    if (name !== 'workspace:whole') return views.watch(name, args, next, failed) ?? (() => {})
+    root((value) => {
+      next(value)
+      views.answerAll()
+    }, failed)
+    next(structuredClone(snap))
+    return () => {}
+  })
+}
+
+/** Opens store `P`'s Roadmap read on `snap`'s project over the weeks from
+    August to the end of 2026, as the Roadmap asks for it. */
+function openRoadmap(P: Planner, snap: Snapshot) {
+  const id = snap.projects[0].id
+  openScope(P, snap, id)
+  const info = P.scopeInfo(id)
+  if (!info) throw new Error('no scope')
+  const win = { w0: P.isoToWeek('2026-08-31'), w1: P.isoToWeek('2026-12-28') }
+  const request = roadmapRequest(info, ROW, win, null)
+  if (request.kind !== 'ask') throw new Error('asks nothing')
+  P.watchRoadmap(request.key, 0, 1)
+}
+
+/** Store `P`'s model of the task stored as `uuid` on the Roadmap. */
+function shaped(P: Planner, uuid: string) {
+  const it = P.viewTask('roadmap', uuid)
+  if (!it) throw new Error(`no model of ${uuid}`)
+  return it
+}
+
 describe('roadmap undo through the client store', () => {
   let P: Planner
   // the Roadmap's two slots of its range reads (ROADMAP_MILESTONE_SLOTS)
@@ -130,19 +208,9 @@ describe('roadmap undo through the client store', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     snap = fixture()
     requests = []
-    network.query.mockResolvedValue(null)
-    network.onUpdate.mockImplementation((ref, args, next, failed) => {
-      // the milestone reads answer from the server's milestones, which no
-      // workspace part sends
-      const name = getFunctionName(ref)
-      if (isMilestoneRead(name)) {
-        answerMilestones(snap, name, args, next, failed)
-        return () => {}
-      }
-      publish = next
+    serve(snap, (deliver, failed) => {
+      publish = deliver
       fail = failed
-      next(structuredClone(snap))
-      return () => {}
     })
     network.mutation.mockImplementation((ref, args) => {
       const name = getFunctionName(ref)
@@ -154,6 +222,8 @@ describe('roadmap undo through the client store', () => {
     roadmapSlots = store.ROADMAP_MILESTONE_SLOTS
     await store.initStore()
     P.roadmapContext(true, false)
+    openRoadmap(P, snap)
+    await vi.waitFor(() => expect(P.roadmapRead().value?.state).toBe('ok'))
   })
 
   afterEach(() => {
@@ -163,7 +233,7 @@ describe('roadmap undo through the client store', () => {
   })
 
   const settled = () => vi.waitFor(() => expect(P.roadmapUndo.busy).toBe(false))
-  const task = () => P.issues.find((item) => item.title === 'Planning task 1')!
+  const task = () => shaped(P, snap.issues[0].id)
   const latest = () => requests.at(-1)!
   const iso = (week: number) => P.isoFromDate(P.weekToDate(week))
   /** The dates `by` weeks after the ones `it` holds. */
@@ -224,21 +294,10 @@ describe('roadmap undo through the client store', () => {
 
   it('takes back a Roadmap milestone move refused over an occupied week, and keeps the history', async () => {
     await savePlan()
-    // milestones sit on a top-level project, here one the planner leads
-    // above the fixture's project, which the Roadmap names with the project
-    // cache, so a flag's move finds its organization
-    const program = {
-      ...snap.projects[0],
-      id: crypto.randomUUID(),
-      type: 'meta' as const,
-      key: 'PROG',
-      num: 9,
-      name: 'Planning program',
-      lead_id: snap.profiles[0].id,
-    }
-    snap.projects[0].parent_id = program.id
-    snap.projects.push(program)
-    publish(structuredClone(snap))
+    // milestones sit on a top-level project, here the program the planner
+    // leads above the fixture's project, which the Roadmap names with the
+    // project cache, so a flag's move finds its organization
+    const program = snap.projects[1]
     P.nameProjects('the roadmap', [program.id])
     await vi.waitFor(() => expect(P.projectState(program.id)).toBe('ok'))
     const id = crypto.randomUUID()
@@ -391,7 +450,7 @@ describe('roadmap undo through the client store', () => {
   it('does not let an ordinary task write from an earlier visit disable the new visit', async () => {
     await savePlan()
     P.roadmapContext(true, true)
-    P.updateIssue(task().id, { title: 'Saved task detail' })
+    P.updateIssue(task().id, { status: 'progress' })
     const detail = latest()
     expect(detail.name).toBe('issues:update')
     P.roadmapContext(false, false)
@@ -433,8 +492,8 @@ describe('roadmap undo through the client store', () => {
     P.updateIssue(task().id, moved(planned, 1))
     const change = latest()
     expect(change.name).toBe('roadmap:change')
-    const other = P.issues.find((item) => item.title === 'Planning task 2')!
-    P.updateIssue(other.id, { title: 'Order the gaskets' })
+    const other = shaped(P, snap.issues[1].id)
+    P.updateIssue(other.id, { status: 'progress' })
     const rename = latest()
     expect(rename.name).toBe('issues:update')
     fail(new Error('[CONVEX Q(workspace:whole)] Server Error'))
@@ -442,12 +501,12 @@ describe('roadmap undo through the client store', () => {
     rename.resolve(null)
     change.resolve({ count: 0 })
     await settled()
-    expect(P.issues.some((item) => item.title === 'Order the gaskets')).toBe(true)
+    expect(shaped(P, other.uuid).status).toBe('progress')
     // the server changed nothing, so the dates last delivered are right
     expect(task()).toMatchObject(planned)
   })
 
-  it('rolls back a refused roadmap change and the group span that followed it without another snapshot', async () => {
+  it('rolls back a refused roadmap change of a subtask without another snapshot', async () => {
     // the group's own stored dates are far away and stay dormant
     const parent = {
       ...snap.issues[1],
@@ -462,11 +521,12 @@ describe('roadmap undo through the client store', () => {
     snap.issues[0].parent_id = parent.id
     snap.issues.push(parent)
     publish(structuredClone(snap))
+    await vi.waitFor(() => expect(P.viewTask('roadmap', parent.id)?.isGroup).toBe(true))
     const child = task()
-    const parentKey = P.issues.find((item) => item.uuid === parent.id)!.id
+    const group = () => shaped(P, parent.id)
     const original = { start: child.start, end: child.end }
-    const proposed = { start: child.start - 1, end: child.end + 1 }
-    expect(P.issueById[parentKey]).toMatchObject(original)
+    const proposed = { start: (child.start ?? 0) - 1, end: (child.end ?? 0) + 1 }
+    expect(group()).toMatchObject(original)
 
     P.updateIssue(child.id, proposed)
     expect(requests).toHaveLength(1)
@@ -475,8 +535,7 @@ describe('roadmap undo through the client store', () => {
       args: { operations: [{ kind: 'task', id: child.uuid }] },
     })
     expect(latest().args.operations).toHaveLength(1)
-    expect(P.issueById[child.id]).toMatchObject(proposed)
-    expect(P.issueById[parentKey]).toMatchObject(proposed)
+    expect(task()).toMatchObject(proposed)
     expect(showToast).not.toHaveBeenCalled()
     latest().reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
     await settled()
@@ -486,13 +545,13 @@ describe('roadmap undo through the client store', () => {
       'error',
     )
     expect(requests).toHaveLength(1)
-    expect(P.issueById[child.id]).toMatchObject(original)
-    expect(P.issueById[parentKey]).toMatchObject(original)
+    expect(task()).toMatchObject(original)
+    expect(group()).toMatchObject(original)
     expect(P.roadmapUndo).toEqual({ count: 0, busy: false, disabled: false })
   })
 
   it("answers a recorded date change, alone or in a batch, with the server's answer", async () => {
-    const [first, second] = P.issues
+    const [first, second] = [task(), shaped(P, snap.issues[1].id)]
     let alone: boolean | undefined
     void P.updateIssue(first.id, { start: first.start + 1, end: first.end + 1 }).then((saved) => {
       alone = saved
@@ -516,7 +575,7 @@ describe('roadmap undo through the client store', () => {
   })
 
   it('groups a planning action into one step and waits for all saves before undo or revert all', async () => {
-    const [first, second] = P.issues
+    const [first, second] = [task(), shaped(P, snap.issues[1].id)]
     const plan = (it: typeof first, by: number) => ({
       start_week: iso(moved(it, by).start),
       end_week: iso(moved(it, by).end),
@@ -564,8 +623,8 @@ describe('roadmap undo through the client store', () => {
     publish(structuredClone(snap))
     latest().resolve({ count: 1 })
     await settled()
-    expect(P.issueById[first.id]).toMatchObject(moved(first, 1))
-    expect(P.issueById[second.id]).toMatchObject(moved(second, 2))
+    expect(shaped(P, first.uuid)).toMatchObject(moved(first, 1))
+    expect(shaped(P, second.uuid)).toMatchObject(moved(second, 2))
     expect(P.roadmapUndo.count).toBe(1)
 
     P.undoRoadmap(true)
@@ -578,8 +637,8 @@ describe('roadmap undo through the client store', () => {
     publish(structuredClone(snap))
     latest().resolve({ count: 0 })
     await settled()
-    expect(P.issueById[first.id]).toMatchObject(moved(first, 0))
-    expect(P.issueById[second.id]).toMatchObject(moved(second, 0))
+    expect(shaped(P, first.uuid)).toMatchObject(moved(first, 0))
+    expect(shaped(P, second.uuid)).toMatchObject(moved(second, 0))
     expect(P.roadmapUndo).toEqual({ count: 0, busy: false, disabled: false })
   })
 })
@@ -605,12 +664,15 @@ describe('private demo store disposal', () => {
     const snap = fixture()
     let publish: (snapshot: Snapshot) => void
     let rejectWrite: (error: unknown) => void
+    serve(snap, (deliver) => {
+      publish = deliver
+    })
+    // the root part's subscription, which disposal stops
     const unsubscribe = vi.fn()
-    network.query.mockResolvedValue(null)
-    network.onUpdate.mockImplementation((_ref, _args, next) => {
-      publish = next
-      next(structuredClone(snap))
-      return unsubscribe
+    const served = network.onUpdate.getMockImplementation()
+    network.onUpdate.mockImplementation((ref, args, next, failed) => {
+      const stop = served?.(ref, args, next, failed)
+      return getFunctionName(ref) === 'workspace:whole' ? unsubscribe : stop
     })
     network.mutation.mockImplementation(
       () =>
@@ -624,14 +686,16 @@ describe('private demo store disposal', () => {
     const prefKey = `planner.ui.v1:${P.CURRENT_USER}`
     stored.set(prefKey, JSON.stringify({ draft: 'private data' }))
     stored.set('unrelated-app', 'keep')
-    P.updateIssue(P.issues[0].id, { remaining: 20 })
-    expect(P.issues[0].remaining).toBe(20)
+    openRoadmap(P, snap)
+    const uuid = snap.issues[0].id
+    await vi.waitFor(() => expect(P.viewTask('roadmap', uuid)).toBeDefined())
+    P.updateIssue(shaped(P, uuid).id, { remaining: 20 })
+    expect(shaped(P, uuid).remaining).toBe(20)
     disposeDemoStore()
     expect(unsubscribe).toHaveBeenCalledOnce()
     expect(P.loaded).toBe(false)
-    // the disposed store holds no task and has asked for none
-    expect(P.issueById).toEqual({})
-    expect(P.taskLoad()).toEqual({ state: 'not_asked' })
+    // the disposed store shows no task and no person
+    expect(P.viewTask('roadmap', uuid)).toBeUndefined()
     expect(P.users).toEqual([])
     expect(P.projectTags.size).toBe(0)
     expect(stored.has(prefKey)).toBe(false)
@@ -639,7 +703,7 @@ describe('private demo store disposal', () => {
     publish!(structuredClone(snap))
     rejectWrite!(new ConvexError({ code: 'forbidden', message: 'Expired demo' }))
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(P.issueById).toEqual({})
+    expect(P.viewTask('roadmap', uuid)).toBeUndefined()
     expect(P.users).toEqual([])
     expect(P.roadmapUndo.busy).toBe(false)
   })

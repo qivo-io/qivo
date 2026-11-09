@@ -1354,7 +1354,7 @@ const readArchivedProjectRef = makeFunctionReference<
  * Schedules the background steps that follow an archive. They mark every
  * message about the archived `issues`, and about the active tasks of the
  * archived `projects`, read. For the `issues` alone they also mark the
- * relation rows the Board's search and the app's windows then skip
+ * relation rows the Board's search then skips
  * (model/archiveMarks.ts). A project archive stamps no task, so its tasks
  * keep theirs. The archive paths call it in the transaction that archives.
  */

@@ -115,7 +115,6 @@ import type * as lib_enums from "../lib/enums.js";
 import type * as lib_fieldPrints from "../lib/fieldPrints.js";
 import type * as lib_fileTokens from "../lib/fileTokens.js";
 import type * as lib_functions from "../lib/functions.js";
-import type * as lib_idWindows from "../lib/idWindows.js";
 import type * as lib_imageRefs from "../lib/imageRefs.js";
 import type * as lib_inbox from "../lib/inbox.js";
 import type * as lib_limitRules from "../lib/limitRules.js";
@@ -408,7 +407,6 @@ declare const fullApi: ApiFromModules<{
   "lib/fieldPrints": typeof lib_fieldPrints;
   "lib/fileTokens": typeof lib_fileTokens;
   "lib/functions": typeof lib_functions;
-  "lib/idWindows": typeof lib_idWindows;
   "lib/imageRefs": typeof lib_imageRefs;
   "lib/inbox": typeof lib_inbox;
   "lib/limitRules": typeof lib_limitRules;

@@ -828,3 +828,64 @@ describe('pages without their saved values', () => {
     expect(button('Sign out')).toBeDefined()
   })
 })
+
+describe('the account and organization pages while the root part is not current', () => {
+  const both = () => (
+    <>
+      <pages.account.AccountPage narrow section="profile" setPage={vi.fn()} />
+      <pages.general.OrgGeneralPage setPage={vi.fn()} />
+    </>
+  )
+  type Double = ReturnType<typeof import('../../store/guard/liveDouble.setup').liveOver>
+  const double = async () => (await import('../../lib/convex')).live as unknown as Double
+  const card = () => find<HTMLElement>('[data-account-profile]')
+  const page = () => find<HTMLElement>('[data-org-state]')
+
+  it('say they are stale after a reconnect until the root part arrives again, the fields still editable', async () => {
+    await open(both)
+    expect(card().getAttribute('data-account-profile')).toBe('current')
+    expect(page().getAttribute('data-org-state')).toBe('current')
+    expect(page().getAttribute('aria-busy')).toBeNull()
+    // the new socket's first transition brings the summary and not the root
+    await act(async () => (await double()).reconnect(['inbox:summary']))
+    expect(card().getAttribute('data-account-profile')).toBe('stale')
+    expect(card().getAttribute('aria-busy')).toBe('true')
+    expect(page().getAttribute('data-org-state')).toBe('stale')
+    expect(page().getAttribute('aria-busy')).toBe('true')
+    expect(find('[data-org-name]').disabled).toBe(false)
+    expect(find('[data-account-name]').disabled).toBe(false)
+    // the root arrives again with a change made meanwhile
+    await elsewhere((s) => {
+      s.orgs[0].name = 'Testbed Labs AB'
+    })
+    expect(page().getAttribute('data-org-state')).toBe('current')
+    expect(card().getAttribute('data-account-profile')).toBe('current')
+  })
+
+  it('say they are stale at once when the socket drops, before any transition', async () => {
+    const { syncStatus } = await import('../../lib/syncStatus')
+    await open(both)
+    await act(async () => syncStatus.setSocket({ connected: true, everConnected: true }))
+    expect(page().getAttribute('data-org-state')).toBe('current')
+    await act(async () => syncStatus.setSocket({ connected: false, everConnected: true }))
+    expect(page().getAttribute('data-org-state')).toBe('stale')
+    expect(card().getAttribute('data-account-profile')).toBe('stale')
+    await act(async () => syncStatus.setSocket({ connected: true, everConnected: true }))
+    expect(page().getAttribute('data-org-state')).toBe('current')
+  })
+
+  it('keep a name typed before a reconnect against its base when the fresh value differs', async () => {
+    await open(both)
+    const field = find('[data-org-name]')
+    await type(field, 'Testbed Robotics')
+    await act(async () => (await double()).reconnect(['inbox:summary']))
+    expect(page().getAttribute('data-org-state')).toBe('stale')
+    await elsewhere((s) => {
+      s.orgs[0].name = 'Testbed Labs AB'
+    })
+    expect(field.value).toBe('Testbed Robotics')
+    expect(conflict()?.textContent).toContain('Changed elsewhere to “Testbed Labs AB”.')
+    await blur(field)
+    expect(sent()).toEqual([])
+  })
+})

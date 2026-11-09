@@ -1,25 +1,20 @@
 /* One-time migration: give every task and project stored before window
  * keys existed a window key (schema.ts `window_key`, lib/db.ts
- * newWindowKey), so the app's task windows spread the tasks
- * (lib/workspaceParts.ts), and each task's relation rows (label
- * assignments, attachments, follows and the links from it) the same key as
- * `task_key`, in the transaction that gives the task its key. A relation
- * row whose key differs from its task's gets the task's, too, so a run also
- * repairs those. Since the workspace's projects part went, the app holds no
- * project and nothing reads a project's key, which the run still gives, as
- * every new project gets one.
+ * newWindowKey), and each task's relation rows (label assignments,
+ * attachments, follows and the links from it) the same key as `task_key`,
+ * in the transaction that gives the task its key. A relation row whose key
+ * differs from its task's gets the task's, too, so a run also repairs
+ * those.
  *
- * Until it runs, a task without a key sorts first and loads in the first
- * task window, its relation rows with it, so the app still shows it, but an
- * organization with more such tasks than one window holds cannot load. New
- * rows get a key when they are inserted. Deleted items keep their
- * stored copies as they were, and a restore gives a copy stored before keys
- * a key as it writes it back, its relation rows with it
- * (model/deletedItems.ts storedTaskKey, cleanProject). Earlier releases
- * brought such a task back without a key, with its rows, so a deployment
- * that ran the backfill before it served the release that keys restores
- * checks `remaining` again once it does, and runs the backfill again if a
- * page reports rows.
+ * Until the release after v0.1.161 the keys spread the tasks over the
+ * app's task windows, and a task without one loaded in the first window.
+ * From that release the app subscribes no task window and holds no task or
+ * project, so a key places nothing in the app and no read uses one. A run
+ * on a deployment that serves that release or later changes nothing anyone
+ * sees, and the deployment needs none (docs/deployment.md). It stays so a
+ * deployment can still be brought in line with the rows every new task,
+ * project and restore from Deleted items gets (model/deletedItems.ts
+ * storedTaskKey, cleanProject).
  *
  * Check a deployment before changing it. `remaining` is a query, so it
  * cannot write, and a key that may only run internal queries can run it. It
@@ -47,7 +42,7 @@
  * 'window_keys_backfill', actor 'system') with its counts. The results hold
  * counts only. Running it again is safe, and a clean deployment reports
  * zeros. It writes no activity, sends no task event and changes nothing a
- * person sees, except which task window of the app holds a task. */
+ * person sees. */
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import type { MutationCtx, QueryCtx } from '../_generated/server'

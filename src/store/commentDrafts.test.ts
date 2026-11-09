@@ -1,7 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 import type { Row } from './rows'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -68,7 +68,7 @@ describe('comment drafts and a failed thread in the store', () => {
     toast = vi.fn()
     vi.stubGlobal('window', { showToast: toast })
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    const snap: Snapshot = plannerFixture()
+    const snap: Snapshot = underProgram(plannerFixture())
     author = snap.profiles[0].id
     org = snap.orgs[0].id
     for (const [id, num, title] of [
@@ -121,7 +121,7 @@ describe('comment drafts and a failed thread in the store', () => {
     })
     store = await import('./planner')
     await store.initStore()
-    store.P.watchComments('task-a')
+    store.P.watchComments('task-a', org)
     await later()
   })
 
@@ -225,14 +225,14 @@ describe('comment drafts and a failed thread in the store', () => {
       live().deliver({ comments: range(1, 3), earlier: false })
       const saved = P.addComment('task-a', 'Waiting on A')
       expect(bodies()).toContain('Waiting on A')
-      P.watchComments('task-b')
+      P.watchComments('task-b', org)
       live().deliver({ comments: [], earlier: false })
       expect(bodies()).toEqual([])
       writes[0].answer.resolve(null)
       expect(await saved).toBe(true)
       expect(bodies()).toEqual([])
       // back on A, the thread shows what the server holds
-      P.watchComments('task-a')
+      P.watchComments('task-a', org)
       live().deliver({
         comments: [...range(1, 3), { ...comment(3), id: 'posted', body: 'Waiting on A' }],
         earlier: false,
@@ -246,12 +246,12 @@ describe('comment drafts and a failed thread in the store', () => {
       const { P } = store
       live().deliver({ comments: range(1, 3), earlier: false })
       const saved = P.addComment('task-a', 'Refused on A')
-      P.watchComments('task-b')
+      P.watchComments('task-b', org)
       live().deliver({ comments: range(5, 7), earlier: false })
       writes[0].answer.reject(new ConvexError({ code: 'rule', message: RULE }))
       expect(await saved).toBe(false)
       expect(bodies()).toEqual(['#5', '#6'])
-      P.watchComments('task-a')
+      P.watchComments('task-a', org)
       live().deliver({ comments: range(1, 3), earlier: false })
       expect(bodies()).toEqual(['#1', '#2'])
       expect(store.__layerProbe?.layerCount()).toBe(0)
@@ -379,7 +379,7 @@ describe('comment drafts and a failed thread in the store', () => {
       live().fail(new Error('Server Error'))
       P.watchComments(null)
       expect(P.commentsFailure).toBe('none')
-      P.watchComments('task-a')
+      P.watchComments('task-a', org)
       expect(P.commentsFailure).toBe('none')
       // opened again at once, the task waits for the server, not the old run
       await later()

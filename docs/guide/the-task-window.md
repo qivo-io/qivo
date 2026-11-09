@@ -209,8 +209,8 @@ that no label of that name exists, in any case. A label whose name you
 type exactly shows first, and Enter picks it. Otherwise Enter picks the
 only label shown, or creates one when none matches, once the whole list
 has loaded. After 200 labels the picker asks you to search to find more. A
-label on a task that has not loaded yet shows **Loading label…** in the
-Labels section until it does, and one that could not load shows **Couldn't
+label Qivo is still reading shows **Loading label…** in the Labels section
+until it arrives, and one that could not load shows **Couldn't
 load this label** with **Try again**, and can still be taken off. If the
 names cannot load again later, the section keeps the names it showed and
 offers **Try again**. A label deleted since the picker listed it says

@@ -205,7 +205,6 @@ describe('removing access through the server preview', () => {
     vi.unstubAllGlobals()
   })
 
-  const vm = (uuid: string) => P.issues.find((it) => it.uuid === uuid)!
   const shownName = (id: string) => `${id[0].toUpperCase()}${id.slice(1)} Person`
   const user = (userId: string) =>
     ({ kind: 'userGrant', projectId: work, userId, label: shownName(userId) }) as const
@@ -515,7 +514,6 @@ describe('removing access through the server preview', () => {
         ),
       )
       // the store holds no one else's level; the requests say what changed
-      expect(vm('t1').assignee).toBe('leo')
       expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
         ['projects:removeAccess', 'leave'],
       ])
@@ -540,7 +538,6 @@ describe('removing access through the server preview', () => {
       await load()
       expect(await P.removeAccess(user('leo'), { keep: true }, leoAnswer())).toBe(true)
       // the store holds no one else's level; the requests say what changed
-      expect(vm('t1').assignee).toBe('leo')
       expect(requests).toEqual([
         {
           name: 'projects:removeAccess',
@@ -553,17 +550,13 @@ describe('removing access through the server preview', () => {
       await load()
       const removed = P.removeAccess(user('leo'), { to: 'dan' }, leoAnswer())
       // painted at once; a refusal re-adopts the server's rows
-      expect(vm('t1').assignee).toBe('dan')
-      expect(vm('t2').reviewer).toBe('dan')
       // the store holds no one else's level; the requests say what changed
       expect(await removed).toBe(true)
-      expect(vm('t3').assignee).toBe('leo') // Done stays
       expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
         ['projects:removeAccess', { reassign_to: 'dan' }],
       ])
       // Unassigned clears them instead
       expect(await P.removeAccess(crewGrant(), { to: null }, annAnswer())).toBe(true)
-      expect(vm('t4').assignee).toBeFalsy()
       expect(requests.at(-1)?.args).toMatchObject({
         team_id: 'crew',
         on_held_tasks: { reassign_to: null },
@@ -581,7 +574,6 @@ describe('removing access through the server preview', () => {
           }),
       )
       const removed = P.removeAccess(user('leo'), { to: 'dan' }, leoAnswer())
-      expect(vm('t1').assignee).toBe('dan')
       // another admin gives t1 to Ann before the server settles Leo's tasks
       deliver((snap) => {
         const t1 = snap.issues.find((task) => task.id === 't1')!
@@ -589,8 +581,6 @@ describe('removing access through the server preview', () => {
       })
       await settle()
       // the server settles only what Leo still holds at commit
-      expect(vm('t1').assignee).toBe('ann')
-      expect(vm('t2').reviewer).toBe('dan')
       answered(null)
       expect(await removed).toBe(true)
     })
@@ -599,7 +589,6 @@ describe('removing access through the server preview', () => {
       await load()
       expect(await P.removeAccess(user('leo'), { keep: true })).toBe(true)
       // the store holds no one else's level; the requests say what changed
-      expect(vm('t1').assignee).toBe('leo')
       expect(await P.removeAccess(user('dan'), { to: 'ann' }, answer())).toBe(true)
       expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
         ['projects:removeAccess', 'leave'],
@@ -612,7 +601,6 @@ describe('removing access through the server preview', () => {
       refused.add(work)
       expect(await P.removeAccess(user('leo'), { to: 'dan' }, leoAnswer())).toBe(false)
       // the store holds no one else's level; the requests say what changed
-      expect(vm('t1').assignee).toBe('leo')
       expect(requests.map((r) => r.name)).toEqual(['projects:removeAccess'])
       expect(window.showToast).toHaveBeenCalledWith(
         'Leo Person keeps access, because not every task could be reassigned.',
@@ -650,7 +638,6 @@ describe('removing access through the server preview', () => {
         'error',
       )
       // the store holds no one else's level; the requests say what changed
-      expect(vm('t1').assignee).toBe('leo')
     })
 
     it("paints a team's grant kept as Viewers on its project, and takes it away on a refusal", async () => {
@@ -679,7 +666,6 @@ describe('removing access through the server preview', () => {
           }),
       )
       const removed = P.removeAccess(leaving('ann'), { keep: true }, annAnswer())
-      expect(vm('t4').assignee).toBe('ann')
       deliver((snap) => {
         snap.teamMembers = snap.teamMembers.filter((m) => m.profile_id !== 'ann')
         snap.access.push({ project_id: work, profile_id: 'ann', level: 'viewer' })
@@ -706,7 +692,6 @@ describe('removing access through the server preview', () => {
       expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
         ['teams:removeMember', { reassign_to: 'dan' }],
       ])
-      expect(vm('t4').assignee).toBe('dan')
     })
 
     it('keeps the member in the team and every task when the server refuses', async () => {
@@ -714,13 +699,11 @@ describe('removing access through the server preview', () => {
       refused.add('ann')
       expect(await P.removeAccess(leaving('ann'), { keep: true }, annAnswer())).toBe(false)
       expect(requests.map((r) => r.name)).toEqual(['teams:removeMember'])
-      expect(vm('t4').assignee).toBe('ann')
       expect(window.showToast).toHaveBeenCalledWith(
         'Ann Person stays in the Crew team, because not every Viewer grant could be saved.',
         'error',
       )
       expect(await P.removeAccess(leaving('ann'), { to: 'dan' }, annAnswer())).toBe(false)
-      expect(vm('t4').assignee).toBe('ann')
       expect(window.showToast).toHaveBeenCalledWith(
         'Ann Person stays in the Crew team, because not every task could be reassigned.',
         'error',
@@ -752,7 +735,6 @@ describe('removing access through the server preview', () => {
       await load(inCrew)
       const deleted = P.removeAccess(deleteCrew(), { to: 'dan' }, annAnswer())
       // painted at once
-      expect(vm('t4').assignee).toBe('dan')
       expect(P.teams.map((t) => t.id)).not.toContain('crew')
       expect(await deleted).toBe(true)
       expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
@@ -781,7 +763,6 @@ describe('removing access through the server preview', () => {
       })
       expect(await P.removeAccess(deleteCrew(), { to: 'dan' }, annAnswer())).toBe(false)
       expect(requests.map((r) => r.name)).toEqual(['teams:deleteDeep'])
-      expect(vm('t4').assignee).toBe('ann')
       expect(window.showToast).toHaveBeenLastCalledWith(
         'An organization needs at least one team; create another team before deleting this one. Change reverted.',
         'error',

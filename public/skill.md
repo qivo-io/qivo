@@ -696,10 +696,13 @@ organizations, and `/app/~/archive` opens Settings → Projects → Archived tas
 Archived task links open normally after restoration.
 
 For a complete organization export, an organization admin uses **Settings →
-Organization → General → Export data** in the browser. Export format 2 uses
-`data/tasks.json`, `data/task_links.json`, `data/task_labels.json` and
-`data/task_attachments.json`; related records use `task_id`. Read the export
-manifest for its version, counts and file mapping.
+Organization → General → Export data** in the app, which Qivo prepares on its
+server. Export format 4 holds `README.txt`, `manifest.json` and each table in
+numbered files such as `data/tasks/0001.json`, `data/task_links/0001.json`,
+`data/task_labels/0001.json` and `data/task_attachments/0001.json`, with the
+retained Deleted items under `deleted/`; related records use `task_id`. It
+holds no file contents. Read the export manifest for its version, counts and
+file mapping.
 
 For browser details, consult
 [navigation](https://qivo.io/docs/finding-your-way-around/),

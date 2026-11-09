@@ -39,7 +39,7 @@ const failure = (cause: unknown, fallback: string) => {
  * closed question left goes to the deletion's date, and once Keep
  * organization is gone, to Delete organization when it is back. */
 export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgName: string }) {
-  const state = useOrgRemovalState(orgId)
+  const { state, refreshing } = useOrgRemovalState(orgId)
   const [open, setOpen] = useState(false)
   const [confirm, setConfirm] = useState('')
   const [busy, setBusy] = useState(false)
@@ -96,6 +96,8 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
       title="Delete organization"
       description="The organization becomes read-only for 30 days so admins can export its data. Then everything in it is deleted."
       data-org-deletion=""
+      // the state held from before a pause, until its new answer arrives
+      aria-busy={refreshing || undefined}
     >
       <AlertDialog
         open={open}
@@ -159,9 +161,9 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
               Any paid subscription ends now, and nothing is refunded. The organization becomes
               read-only for 30 days so admins can export its data, and is then deleted with all of
               its projects, tasks, comments and files.{' '}
-              {state.last_export_at
-                ? `The last export was made on ${billingDate(state.last_export_at)}.`
-                : 'No export has been made yet.'}
+              {state.last_export_confirmed_at
+                ? `The last saved export was confirmed on ${billingDate(state.last_export_confirmed_at)}.`
+                : 'No saved export has been confirmed yet.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="grid gap-1.5">

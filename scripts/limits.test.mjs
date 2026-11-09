@@ -5,9 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { nodeProblem } from './limits.mjs'
 
 /* Scripts load the TypeScript limits registry only through scripts/limits.mjs,
- * which names the Node to use instead of failing on an unknown extension, and
- * the workspace reader through scripts/workspaceJoin.mjs, which checks the
- * Node through it. */
+ * which names the Node to use instead of failing on an unknown extension. */
 describe('the limits registry for Node scripts', () => {
   it('accepts Node 24 or later that loads TypeScript', () => {
     expect(nodeProblem('x.mjs', 'v24.21.0', 'strip')).toBeNull()
@@ -44,13 +42,12 @@ describe('the limits registry for Node scripts', () => {
     )
     const found = scripts.filter((file) => importsTs.test(readFileSync(file, 'utf8')))
     // each loads after limits.mjs checked the Node, for the scripts that
-    // need the app's code, the Inbox badge's rule for the staging check,
-    // the live parts and the workspace's join
+    // need the app's code, the Inbox badge's rule for the staging check and
+    // the live parts
     expect([...found].sort()).toEqual([
       'scripts/inboxBadge.mjs',
       'scripts/limits.mjs',
       'scripts/liveParts.mjs',
-      'scripts/workspaceJoin.mjs',
     ])
   })
 })

@@ -1,35 +1,26 @@
-/* The Board's server read (convex/tasks.ts board) against the app's own
- * rules. Each case boots the real store, with every task, from the
- * caller's real workspace, as projectTags.test.ts does, and compares what
- * tasks.board answers for the same caller with the rules the Board still
- * runs on screen over the answer (src/views/board/useBoardView.ts passes:
- * P.passesFilters, with the text matched by the server's words and the
- * fixture's names, store/textMatch.setup.ts matchesText, as the store
- * holds nobody but the caller and no label) and the Roadmap still runs
- * over the workspace's tasks
- * (P.isGroup, groupSpan, groupBoardCell): the phone set (scopedIssues with
- * passesFilters), the desktop cards (its leaves), each card's shown parent chain
- * (groupBoardCell), the group facts (isGroup, isDone, the calculated span
- * and its partial flag, the hidden flags) and, without a filter Clear
- * clears, the lanes holdsScoped keeps. The clock is frozen so isStale's
- * cutoff equals stale_before. Northstar runs as Nora (admin), Leo and Ben
- * over every selection; the small fixture runs every access shape for a
- * user, a guest and a viewer, and the admin, over plants that hide parents,
- * subtasks and projects. Two cases must fail if the Reviewer rule drifts.
- * Every case also compares the stand-in the jsdom tests and the browser
- * benchmark answer with (store/boardStandIn.setup.ts), given the caller's
- * workspace and the store's canSee, the models shaped from the answer's
- * rows, and the delays the owner-load cache's rules (store/viewDelay.ts)
- * give the answer's cards, and every row of it judged as a task the
- * workspace does not hold, with the workspace's own, and the task window's
- * verdict of the same task shown from its own read (store/planner.ts
- * P.windowDelay), which goes through the same judge; one case makes an
- * owner's tasks compete for a week's hours, so a span counted twice or
- * missing changes a verdict. */
+/* The Board's server read (convex/tasks.ts board) against the rules the
+ * Board still runs on screen over its answer (src/views/board/useBoardView.ts
+ * passes). Each case boots the real store, as the app does, holding no task,
+ * from the caller's real workspace, and checks that every row tasks.board
+ * answers for the same caller passes the app's own narrowing for the same
+ * arguments (P.passesFilters on the model the store shapes from the row,
+ * the selection and My view's P.isMine), so the narrowing never drops a row
+ * the server keeps. Every case also compares the stand-in the jsdom tests
+ * and the browser benchmark answer with (store/boardStandIn.setup.ts),
+ * given the caller's working set and the server's sight rule, and the
+ * owner loads' stand-in with planning.ownerLoads, and checks that the task
+ * window over a card judges its delay through the same judge as the card
+ * (store/viewDelay.ts, store/planner.ts P.windowDelay). The clock is frozen
+ * so a Stale cutoff equals stale_before. Northstar runs as Nora (admin),
+ * Leo and Ben over every selection; the small fixture runs every access
+ * shape for a user, a guest and a viewer, and the admin, over plants that
+ * hide parents, subtasks and projects. One case makes an owner's tasks
+ * compete for a week's hours. Two cases must fail if the Reviewer rule
+ * drifts. */
 
 import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api } from '../../convex/_generated/api'
+import { api, internal } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
 import type { BoardAnswer, BoardFilters, BoardScope } from '../../convex/lib/board'
 import { taskOwnerId } from '../../convex/lib/review'
@@ -53,18 +44,15 @@ import {
 } from '../../convex/tests/helpers.setup'
 import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
-import { groupBoardCell } from '../lib/boardGroups'
 import { DELAY_UNKNOWN } from '../lib/delay'
-import { groupSpan } from '../lib/issueGroups'
 import { DEFAULT_PLANNABLE_HOURS, plannableHoursOf } from '../lib/workload'
 import { boardStandIn } from './boardStandIn.setup'
 import type { Whole as Snapshot } from './guard/liveDouble.setup'
-import { oracleScope, oracleStore } from './oracleScope.setup'
+import { oracleLevels, oracleScope, oracleStore } from './oracleScope.setup'
 import type { OwnerLoad } from './ownerLoadCache'
 import { ownerLoadsStandIn } from './ownerLoadsStandIn.setup'
 import { peopleSettingsStandIn } from './peopleSettingsStandIn.setup'
 import { nameEveryone } from './personShown.setup'
-import { matchesText, textNames } from './textMatch.setup'
 import type { ViewDelayCtx } from './viewDelay'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -126,7 +114,6 @@ async function start(snap: Snapshot) {
 }
 
 type Store = Awaited<ReturnType<typeof start>>
-type Issue = Store['issues'][number]
 
 /** The store booted for `profile` from their workspace, with the clock at
  * `now`, so isStale's cutoff is STALE_DAYS before it. */
@@ -142,9 +129,13 @@ async function storeOf(t: T, profile: Doc<'profiles'>, now?: number): Promise<St
 
 const sorted = (ids: Iterable<string>) => [...ids].sort()
 
-/** Compares `answer`, tasks.board's for `scope` and `filters`, with what
- * store `P` derives for the store scope `scopeId`. */
-function expectParity(
+/** Checks that every row of `answer`, tasks.board's for `scope` and
+ * `filters`, passes the narrowing the Board runs on screen over its models
+ * for the store scope `scopeId` (src/views/board/useBoardView.ts passes):
+ * the answer's selection, My view's P.isMine and P.passesFilters with the
+ * text and a group's Stale left to the answer. A selection the server's
+ * rule does not show answers unavailable. */
+function expectNarrowing(
   P: Store,
   answer: BoardAnswer,
   scopeId: string,
@@ -152,7 +143,7 @@ function expectParity(
   label: string,
 ) {
   const info = oracleScope(P.snapshot, scopeId)
-  // a selection the store does not hold is one the server does not either
+  // a selection the caller cannot see is one the server does not answer
   if (info === null) {
     expect(answer, `${label}: unavailable`).toEqual({ state: 'unavailable' })
     return
@@ -160,107 +151,27 @@ function expectParity(
   if (answer.state !== 'ok') throw new Error(`${label}: ${JSON.stringify(answer)}`)
   const mine = P.isMineScope(scopeId)
   // the filter row as App's effFilters hands it to the Board
-  // the app trims the search before it filters and before it sends it, as
-  // the Board client is to (lib/board.ts BoardFilters search)
-  const search = filters.search.trim()
   const desk = {
     mine: mine || filters.mine,
     assignees: mine ? [] : filters.owners,
     priority: filters.priority,
     stale: filters.stale_before !== null,
     focus: filters.focus,
-    search,
+    search: '',
   }
-  // Under Focus no surface shows a group whose stored status is Backlog or
-  // Done: the phone hides those sections and the desktop draws a group only
-  // as a heading, among the parents (lib/board.ts)
-  const shows = (it: Issue) =>
-    !(filters.focus && P.isGroup(it) && (it.status === 'backlog' || it.status === 'done'))
-  const scoped = P.scopedIssues(info)
-  const names = textNames(P.snapshot)
-  const passing = scoped.filter(
-    (it) => P.passesFilters(it, desk) && matchesText(names, it, search) && shows(it),
-  )
-  const byUuid = new Map(Object.values(P.issueById).map((it) => [it.uuid, it]))
-  const rowIds = new Set(answer.rows.map((row) => row.id))
-  const parentIds = new Set(answer.parents.map((row) => row.id))
-
-  // the phone list's set, which keeps groups, and the desktop's cards
-  expect(sorted(rowIds), `${label}: rows`).toEqual(sorted(passing.map((it) => it.uuid)))
-  expect(
-    sorted(answer.rows.filter((row) => !row.has_subtasks).map((row) => row.id)),
-    `${label}: cards`,
-  ).toEqual(sorted(passing.filter((it) => !P.isGroup(it)).map((it) => it.uuid)))
-  if (search === '') {
-    const phone = { ...desk, search: '' }
-    expect(sorted(rowIds), `${label}: phone`).toEqual(
-      sorted(scoped.filter((it) => P.passesFilters(it, phone) && shows(it)).map((it) => it.uuid)),
-    )
+  const selection = answer.projects ? new Set(answer.projects) : null
+  const models = shapedModels(P, answer.rows)
+  for (const row of answer.rows) {
+    const it = models.get(row.id)
+    if (!it) throw new Error(`${label}: no model of ${row.id}`)
+    const local = { ...desk, stale: desk.stale && !it.isGroup }
+    expect(
+      (selection === null || selection.has(it.project)) &&
+        (!mine || P.isMine(it)) &&
+        P.passesFilters(it, local),
+      `${label}: ${it.key} passes`,
+    ).toBe(true)
   }
-
-  // every shown ancestor of a row that is not a row, and each card's
-  // headings among rows and parents
-  const ancestors = new Set<string>()
-  const parentOf = (it: Issue) => (it.parent ? P.issueById[it.parent] : undefined)
-  for (const it of passing) {
-    const seen = new Set([it.uuid])
-    for (let p = parentOf(it); p !== undefined && !seen.has(p.uuid); p = parentOf(p)) {
-      seen.add(p.uuid)
-      if (!rowIds.has(p.uuid)) ancestors.add(p.uuid)
-    }
-  }
-  expect(sorted(parentIds), `${label}: parents`).toEqual(sorted(ancestors))
-  for (const card of passing.filter((it) => !P.isGroup(it)))
-    for (const cell of groupBoardCell([card], P.issueById))
-      for (const heading of [cell.parent, ...cell.ancestors])
-        if (heading !== null)
-          expect(
-            rowIds.has(heading.uuid) || parentIds.has(heading.uuid),
-            `${label}: heading ${heading.key}`,
-          ).toBe(true)
-
-  // each row's facts
-  for (const row of [...answer.rows, ...answer.parents]) {
-    const it = byUuid.get(row.id)
-    if (it === undefined) throw new Error(`${label}: the store does not show ${row.id}`)
-    const what = `${label}: ${it.key}`
-    expect(row.has_subtasks, `${what} group`).toBe(P.isGroup(it))
-    expect(row.has_hidden_subtasks, `${what} hidden subtasks`).toBe(it.hasHiddenSubtasks)
-    expect(row.has_hidden_parent, `${what} hidden parent`).toBe(it.hasHiddenParent)
-    expect(row.parent_id ?? null, `${what} parent`).toBe(parentOf(it)?.uuid ?? null)
-    expect(row, `${what} text`).not.toHaveProperty('description')
-    if (!row.has_subtasks) continue
-    expect(row.group_done, `${what} done`).toBe(P.isDone(it))
-    const span = row.span
-    expect(span?.start_week === undefined ? null : P.weekOf(span.start_week), `${what} start`).toBe(
-      it.start,
-    )
-    expect(span?.end_week === undefined ? null : P.weekOf(span.end_week), `${what} end`).toBe(
-      it.end,
-    )
-    expect(span?.partial, `${what} partial`).toBe(P.progressOf(it).unknown)
-  }
-
-  // the lanes a group keeps: those holding a scoped task, and with a filter
-  // Clear clears, only those holding a card
-  const clearable =
-    (!mine && filters.mine) ||
-    filters.owners.length > 0 ||
-    filters.priority !== null ||
-    filters.stale_before !== null ||
-    search !== ''
-  const scopedProjects = new Set(scoped.map((it) => it.project))
-  const cards = passing.filter((it) => !P.isGroup(it))
-  const held = info.groups
-    .filter(
-      (g) =>
-        g.subIds.some((id) => scopedProjects.has(id)) &&
-        !(clearable && !cards.some((it) => g.subIds.includes(it.project))),
-    )
-    .map((g) => g.proj.id)
-  expect(sorted(answer.held_projects), `${label}: lanes`).toEqual(sorted(held))
-  if (!mine)
-    expect(sorted(answer.projects ?? []), `${label}: projects`).toEqual(sorted(info.subIds))
 }
 
 /** Compares the stand-in's answer for `scope` and `filters`, from the
@@ -273,7 +184,8 @@ function expectStandIn(
   filters: BoardFilters,
   label: string,
 ) {
-  const stood = boardStandIn(P.snapshot, { scope, filters }, { sees: (id) => P.canSee(id) })
+  const levels = oracleLevels(P.snapshot)
+  const stood = boardStandIn(P.snapshot, { scope, filters }, { sees: (id) => levels.has(id) })
   expect(stood.state, `${label}: stand-in state`).toBe(answer.state)
   if (answer.state !== 'ok' || stood.state !== 'ok') return
   const ids = (rows: { id: string }[]) => rows.map((row) => row.id)
@@ -297,82 +209,33 @@ function expectStandIn(
   )
 }
 
-/** The fields a Board reads of task `it`, with its Done from `done` and
-    whether its span is partial from `partial`. */
-const boardFields = (P: Store, it: Issue, done: boolean, partial: boolean) => ({
-  id: it.id,
-  key: it.key,
-  org: it.org,
-  title: it.title,
-  status: it.status,
-  priority: it.priority,
-  owner: it.owner,
-  ownerField: it.ownerField,
-  assignee: it.assignee,
-  reviewer: it.reviewer,
-  project: it.project,
-  parent: it.parent,
-  due: it.due,
-  start: it.start,
-  end: it.end,
-  remaining: it.remaining,
-  remainingSet: it.remainingSet,
-  paused: it.paused,
-  group: P.isGroup(it),
-  done,
-  partial,
-  hiddenSubtasks: it.hasHiddenSubtasks,
-  hiddenParent: it.hasHiddenParent,
-  updatedAt: it.updatedAt,
-})
-
-/** The models the store would shape from `rows` (store/viewRows.ts), for
-    tasks the workspace does not hold, with their facts' Done, by uuid. */
-function shapedFrom(P: Store, rows: readonly ViewRow[]) {
+/** The models the store shapes from `rows` (store/viewRows.ts), by uuid,
+    with the store's own week grid and handles. */
+function shapedModels(P: Store, rows: readonly ViewRow[]) {
   const views = P.__views.createViewRows(P.weekOf)
   views.take('parity', rows)
   views.beginPaint()
-  views.reshape(() => false, { handleNow: P.handleNow })
+  views.reshape({ handleNow: P.handleNow })
   return new Map(
     rows.map((row) => {
       const it = views.model('parity', row.id)
       if (!it) throw new Error(`no model of ${row.id}`)
-      const facts = views.factsOf(it)
-      return [row.id, boardFields(P, it, facts?.done ?? false, facts?.partial ?? false)]
+      return [row.id, Object.assign(it, { facts: views.factsOf(it) })]
     }),
   )
 }
 
-/** The fields a Board reads of the workspace's own view model `it`, its
-    partial flag from its subtasks (lib/issueGroups.ts groupSpan). */
-const heldFields = (P: Store, it: Issue) =>
-  boardFields(P, it, P.isDone(it), groupSpan(it, P.issueById)?.partial ?? false)
+/* How many verdicts expectDelays compared, and how many of them were
+   groups' or not on track, so a case can tell the comparison ran. */
+const compared = { rows: 0, groups: 0, flagged: 0 }
 
-/** Compares the models shaped from `answer`'s rows with the workspace's
-    own view models of the same tasks, in every field a Board reads. */
-function expectShaped(P: Store, answer: BoardAnswer, label: string) {
-  if (answer.state !== 'ok') return
-  const shaped = shapedFrom(P, [...answer.rows, ...answer.parents])
-  for (const [uuid, fields] of shaped) {
-    const it = P.issueById[P.handleOf(uuid) ?? '']
-    if (!it) throw new Error(`${label}: the store does not hold ${uuid}`)
-    expect(fields, `${label}: ${it.key} shaped`).toEqual(heldFields(P, it))
-  }
-}
-
-/* How many verdicts expectDelays compared as tasks only the answer brings,
-   and how many of them were groups' or not on track, so a case can tell
-   the comparison ran. */
-const comparedUnheld = { rows: 0, groups: 0, flagged: 0 }
-
-/** Compares the delay of each card of `answer` as the owner-load cache
-    judges a task only a view holds (store/viewDelay.ts), from
-    planning.ownerLoads for `profile`, with the workspace's own (P.delayOf),
-    except where the owner's load is unavailable: once with the workspace
-    holding every other task, and once with every row of the answer, its
-    groups and parents too, judged as a task the workspace does not hold, as
-    before every task is held, so the answer's own rows stand in for their
-    spans. */
+/** Judges the delay of each row of `answer` as the owner-load cache judges
+    a view's task (store/viewDelay.ts), from planning.ownerLoads for
+    `profile`, whose owner-load stand-in must answer the same, and checks
+    that the task window over the card, which shows the task from its own
+    read, judges it through the same judge to the same verdict, except
+    where the owner's load is unavailable. The answer's own rows stand in
+    for their spans. */
 async function expectDelays(
   t: T,
   P: Store,
@@ -380,8 +243,9 @@ async function expectDelays(
   answer: BoardAnswer,
   label: string,
 ) {
-  if (answer.state !== 'ok' || !P.__probe) return
-  const probe = P.__probe
+  // each row's verdict as a card shows it, by uuid
+  const verdicts = new Map<string, string | null>()
+  if (answer.state !== 'ok') return verdicts
   const { delayIssueOfTask, judgeDelay, needsLoad, ownerLoadOf, viewDelay } = P.__views
   // each owner's face, which the test named (nameEveryone), else the
   // signed-in person's own profile
@@ -389,7 +253,6 @@ async function expectDelays(
     const person = P.person(id)
     return (person?.state === 'ok' && plannableHoursOf(person)) || DEFAULT_PLANNABLE_HOURS
   }
-  const cards = answer.rows.filter((row) => !row.has_subtasks)
   const answerRows = [...answer.rows, ...answer.parents]
   const owners = [
     ...new Set(
@@ -416,67 +279,49 @@ async function expectDelays(
     }
     ask = [...notRead, ...ask.slice(batch.length)]
   }
-  const ctx: ViewDelayCtx = {
+  // the answer's rows stand in for the spans of their tasks
+  const answerIds = new Set(answerRows.map((row) => row.id))
+  // the projects as the caller's navigation reads answer them, which the
+  // store names only for the views on screen
+  const seen = oracleStore(P.snapshot)
+  const judge: ViewDelayCtx = {
     load: (_org, owner) => loads.get(owner.toLowerCase()) ?? { state: 'waiting' },
-    held: (uuid) => P.handleOf(uuid) !== null,
-    inView: () => false,
-    heldSpans: (owner) => probe.shownSpans(owner),
-    viewRows: () => [],
+    inView: (uuid) => answerIds.has(uuid),
+    viewRows: () => answerRows,
     capacity,
     capacityWaits: () => false,
-    projectLive: (id) => !!P.project(id),
+    projectLive: (id) => !!seen.project(id),
     orgOf: (id) => {
       const person = P.person(id)
       return person?.state === 'ok' ? person.org : undefined
     },
-  }
-  // the answer's rows as tasks only the view holds: theirs are the spans of
-  // their tasks, and the workspace's only those of the others
-  const answerIds = new Set(answerRows.map((row) => row.id))
-  const unheld: ViewDelayCtx = {
-    ...ctx,
-    held: (uuid) => P.handleOf(uuid) !== null && !answerIds.has(uuid),
-    inView: (uuid) => answerIds.has(uuid),
-    heldSpans: (owner) =>
-      probe.shownSpans(owner).filter((span) => !span.issueUuid || !answerIds.has(span.issueUuid)),
-    viewRows: () => answerRows,
     memo: new Map(),
   }
-  const compare = (judge: ViewDelayCtx, rows: readonly ViewRow[], how: string) => {
-    for (const row of rows) {
-      const it = P.issueById[P.handleOf(row.id) ?? '']
-      if (!it || !P.tracksDelay(it)) continue
-      const owner = taskOwnerId(row, row.has_subtasks)
-      if (owner && loads.get(owner.toLowerCase())?.state === 'unavailable') continue
-      // the status a card shows; the projected week shows where a load was read
-      const judged = viewDelay(row, judge)
-      const expected = P.delayOf(it)
-      expect(
-        judged === DELAY_UNKNOWN ? 'unknown' : (judged?.status ?? null),
-        `${label}: ${it.key} delay${how}`,
-      ).toBe(expected?.status ?? null)
-      if (judged !== null && judged !== DELAY_UNKNOWN && judged.fin !== null)
-        expect(judged.fin, `${label}: ${it.key} projected week${how}`).toBe(expected?.fin)
-      if (judge !== unheld) continue
-      // the task window over the card, which shows the task from its own
-      // read, judges it from its view model through the same judge
-      const group = P.isGroup(it)
-      const shown = delayIssueOfTask(
-        it,
-        { isGroup: group, isDone: P.isDone(it), partial: !!groupSpan(it, P.issueById)?.partial },
-        capacity,
-      )
-      expect(
-        judgeDelay(shown, it.org, judge),
-        `${label}: ${it.key} the window's delay${how}`,
-      ).toEqual(judged)
-      comparedUnheld.rows++
-      if (row.has_subtasks) comparedUnheld.groups++
-      if (expected && expected.status !== 'ok') comparedUnheld.flagged++
-    }
+  const models = shapedModels(P, answerRows)
+  for (const row of answerRows) {
+    const it = models.get(row.id)
+    const project = it && seen.project(it.project)
+    if (!it || !project || project.trackDelay === false) continue
+    const owner = taskOwnerId(row, row.has_subtasks)
+    if (owner && loads.get(owner.toLowerCase())?.state === 'unavailable') continue
+    // the status a card shows
+    const judged = viewDelay(row, judge)
+    verdicts.set(row.id, judged === DELAY_UNKNOWN ? 'unknown' : (judged?.status ?? null))
+    // the task window over the card, which shows the task from its own
+    // read, judges it from its view model through the same judge
+    const shown = delayIssueOfTask(
+      it,
+      { isGroup: it.isGroup, isDone: !!it.facts?.done, partial: !!it.facts?.partial },
+      capacity,
+    )
+    expect(judgeDelay(shown, it.org, judge), `${label}: ${it.key} the window's delay`).toEqual(
+      judged,
+    )
+    compared.rows++
+    if (row.has_subtasks) compared.groups++
+    if (judged !== null && judged !== DELAY_UNKNOWN && judged.status !== 'ok') compared.flagged++
   }
-  compare(ctx, cards, '')
-  compare(unheld, answerRows, ' as unheld')
+  return verdicts
 }
 
 /** A filter row named for a case's label. */
@@ -504,14 +349,10 @@ async function compareAll(
       }
       const answer = await boardFor(t, profile, scope, filters)
       const label = `${profile.name}, ${scopeLabel}, ${filterLabel}`
-      expectParity(P, answer, storeScope, filters, label)
+      expectNarrowing(P, answer, storeScope, filters, label)
       expectStandIn(P, answer, scope, filters, label)
-      // the rows as the store shapes them for tasks it does not hold, and
-      // their delays as the owner-load cache judges them
-      if (filterLabel === 'no filter') {
-        expectShaped(P, answer, label)
-        await expectDelays(t, P, profile, answer, label)
-      }
+      // the cards' delays as the owner-load cache judges them
+      if (filterLabel === 'no filter') await expectDelays(t, P, profile, answer, label)
       if (answer.state === 'ok')
         found.set(filterLabel, (found.get(filterLabel) ?? 0) + answer.rows.length)
     }
@@ -522,10 +363,11 @@ async function compareAll(
  * shows, each of their sub-projects and My view. */
 function selectionsOf(P: Store, profile: Doc<'profiles'>) {
   const out: [string, BoardScope, string][] = []
-  for (const meta of oracleStore(P.snapshot).visibleProjects()) {
+  const seen = oracleStore(P.snapshot)
+  for (const meta of seen.visibleProjects()) {
     out.push([meta.name, projectScope(profile, meta.id), meta.id])
     for (const id of meta.children ?? [])
-      if (P.canSee(id)) out.push([P.project(id)?.name ?? id, projectScope(profile, id), id])
+      if (seen.canSee(id)) out.push([seen.project(id)?.name ?? id, projectScope(profile, id), id])
   }
   out.push(['My view', { kind: 'mine' }, P.MINE_SCOPE])
   return out
@@ -630,30 +472,11 @@ describe('Northstar', () => {
       // every filter row matches some task of Nora's, so none compares
       // empty answers only; Stale splits the selection
       if (profile === nora) {
-        // a drifted group fact shows in the shaped model
-        for (const [, scope] of selectionsOf(P, nora)) {
-          const answer = await boardFor(t, nora, scope)
-          const group = answer.state === 'ok' ? answer.rows.find((r) => r.has_subtasks) : undefined
-          if (answer.state !== 'ok' || !group) continue
-          const it = P.issueById[P.handleOf(group.id) ?? '']
-          if (!it) throw new Error('no group')
-          const drifted = answer.rows.map((r) =>
-            r === group ? { ...r, group_done: !r.group_done } : r,
-          )
-          expect(shapedFrom(P, drifted).get(group.id)).not.toEqual(heldFields(P, it))
-          // and so does a drifted partial flag
-          const partial = answer.rows.map((r) =>
-            r === group ? { ...r, span: { ...r.span, partial: !(r.span?.partial ?? false) } } : r,
-          )
-          expect(shapedFrom(P, partial).get(group.id)).not.toEqual(heldFields(P, it))
-          break
-        }
         console.log('rows each filter found for Nora:', Object.fromEntries(found))
-        // the verdicts of tasks only the answer brings compared groups and
-        // tasks that are not on track too
-        console.log('verdicts compared as unheld:', comparedUnheld)
-        expect(comparedUnheld.groups).toBeGreaterThan(0)
-        expect(comparedUnheld.flagged).toBeGreaterThan(0)
+        // the verdicts compared groups and tasks that are not on track too
+        console.log('verdicts compared:', compared)
+        expect(compared.groups).toBeGreaterThan(0)
+        expect(compared.flagged).toBeGreaterThan(0)
         for (const [label] of rows)
           if (label !== 'urgent') expect(found.get(label), label).toBeGreaterThan(0)
         expect(found.get('Stale')).toBeLessThan(found.get('no filter') ?? 0)
@@ -854,7 +677,7 @@ describe('access shapes', () => {
 })
 
 describe("delays where tasks compete for their owner's hours", () => {
-  it('judges the tasks only the answer brings as the workspace does', async () => {
+  it("judges each card against its owner's other cards, counted once", async () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     await t.run(async (ctx) => {
@@ -888,13 +711,78 @@ describe("delays where tasks compete for their owner's hours", () => {
     const P = await storeOf(t, f.admin)
     const answer = await boardFor(t, f.admin, projectScope(f.admin, f.sub.id))
     if (answer.state !== 'ok') throw new Error(answer.state)
-    const before = { ...comparedUnheld }
-    await expectDelays(t, P, f.admin, answer, 'contention')
-    expect(comparedUnheld.rows - before.rows).toBe(4)
-    const statuses = answer.rows
-      .map((row) => P.delayOf(P.handleOf(row.id) ?? '')?.status ?? null)
-      .sort()
+    const before = { ...compared }
+    const verdicts = await expectDelays(t, P, f.admin, answer, 'contention')
+    expect(compared.rows - before.rows).toBe(4)
+    const statuses = answer.rows.map((row) => verdicts.get(row.id) ?? null).sort()
     expect(statuses).toEqual(['late', 'late', 'ok', 'ok'])
+  })
+
+  it('judges each card as the REST and MCP task read does, for staff and for a guest, on a pinned clock', async () => {
+    // the server judges by UTC day (convex/lib/machineDelay.ts), so the
+    // store reads the time in UTC too, at a Wednesday noon away from a
+    // midnight and a week's end
+    const zone = process.env.TZ
+    process.env.TZ = 'UTC'
+    try {
+      const now = Date.parse('2026-09-09T12:00:00.000Z')
+      const today = '2026-09-09'
+      const t = newT()
+      const f = await withReadingAdmin(t)
+      await t.run(async (ctx) => {
+        const sub = await ctx.db.get(f.sub._id)
+        if (sub) await ctx.db.patch(sub._id, { track_delay: true })
+      })
+      // the week of 21 September, due that Friday; the admin's and the
+      // guest's fit their weeks, the user's 50 hours do not
+      const planned = (owner: Doc<'profiles'>, hours: number) =>
+        plantIssue(t, {
+          org_id: f.org.id,
+          project_id: f.sub.id,
+          status: 'progress',
+          assignee_id: owner.id,
+          remaining_hours: hours,
+          start_week: '2026-09-21',
+          end_week: '2026-09-21',
+          due_date: '2026-09-25',
+        })
+      for (const [owner, hours] of [
+        [f.admin, 20],
+        [f.admin, 20],
+        [f.user, 30],
+        [f.user, 20],
+        [f.guest, 10],
+      ] as const)
+        await planned(owner, hours)
+      const seen = new Set<string>()
+      for (const reader of [f.admin, f.guest]) {
+        const P = await storeOf(t, reader, now)
+        const answer = await boardFor(t, reader, projectScope(reader, f.sub.id))
+        if (answer.state !== 'ok') throw new Error(answer.state)
+        const verdicts = await expectDelays(t, P, reader, answer, `${reader.name}, machine`)
+        for (const row of answer.rows) {
+          const machine = await t.query(internal.machine.rest.getIssue, {
+            callerId: reader.id,
+            access: 'read',
+            today,
+            ref: row.id,
+          })
+          const card = verdicts.get(row.id)
+          expect(card, `${reader.name}: ${row.id} judged`).toBeDefined()
+          expect(machine.delay?.status ?? null, `${reader.name}: ${row.id}`).toBe(
+            card === 'unknown' ? 'unavailable' : (card ?? null),
+          )
+          seen.add(`${reader.name} ${card}`)
+        }
+        vi.useRealTimers()
+      }
+      // both readers met a card on track and one that is not
+      for (const reader of [f.admin, f.guest])
+        for (const status of ['ok', 'late'])
+          expect(seen.has(`${reader.name} ${status}`), `${reader.name} ${status}`).toBe(true)
+    } finally {
+      process.env.TZ = zone
+    }
   })
 })
 
