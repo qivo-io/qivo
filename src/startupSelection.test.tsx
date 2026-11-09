@@ -1016,6 +1016,22 @@ describe('the access guard and Settings', { timeout: 60_000 }, () => {
     // must fail for an address sync that stops on every page while the
     // scope has no facts
     await until(() => location.pathname === '/app/~/inbox', "the Inbox's address")
+    // a view pill closes the Inbox over the scope, whose address cannot
+    // name it yet, so the address leaves the Inbox for the front door, in
+    // an entry of its own
+    const opened = history.length
+    await click(
+      [...document.querySelectorAll('[data-view-switch] button')].find(
+        (b) => b.textContent?.trim() === 'Overview',
+      ),
+    )
+    // must fail for an address sync that keeps the Inbox's address once
+    // the Inbox closed over a scope with no facts
+    await until(() => location.pathname === '/app/testbed', 'the front door')
+    expect(history.length).toBe(opened + 1)
+    await chooser('retry')
+    await click(q('[data-view-switch] [aria-label^="Inbox"]'))
+    await until(() => location.pathname === '/app/~/inbox', "the Inbox's address again")
     const entries = history.length
     await click(q('[data-settings-nav]'))
     await until(() => q('[data-settings-stand-in]'), 'Settings')

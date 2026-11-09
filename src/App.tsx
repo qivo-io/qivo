@@ -75,6 +75,7 @@ import {
   isFrontDoor,
   isScopeAddress,
   namesProjectPage,
+  namesScopeById,
   ORG_NONE,
   orgSegmentOf,
   parseHash,
@@ -1533,11 +1534,20 @@ function App() {
       held.page === pageKey(state)
     )
       return
-    // and so does the address that opened a project scope while the project
-    // cache knows none of its facts, as the path names the project by its
-    // number, which only the cache's answer gives; any other page's address
-    // names no scope, so it follows at once
-    if (pathNamesScope(state) && !P.project(scope)) return
+    // and so does the address on screen that belongs to a project scope
+    // the project cache knows none of the facts of, as the path names the
+    // project by its number, which only the cache's answer gives. That is
+    // the scope's own address by its uuid, which opened it, or the front
+    // door, which opened the remembered project. Any other page's address
+    // follows at once, also one the scope's view leaves as a page over it
+    // closes, which gives way to the front door (buildPath) until the
+    // cache names the scope
+    if (
+      pathNamesScope(state) &&
+      !P.project(scope) &&
+      (isFrontDoor(location.pathname) || namesScopeById(location.pathname, scope))
+    )
+      return
     const p = buildPath(state)
     /* A person jump's chooser marks its entry, the front door, with the
        person and the view it shows on, which the front door does not name,

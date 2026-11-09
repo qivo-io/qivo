@@ -845,6 +845,14 @@ export function isScopeAddress(path: string): boolean {
   )
 }
 
+/** Whether address `path` is a view's address of project scope `scope`
+    by its uuid, with no page, task or Team sync (isScopeAddress), as the
+    address that opens a scope the project cache knows no facts of reads
+    (App's url sync). */
+export function namesScopeById(path: string, scope: string | undefined): boolean {
+  return !!scope && isScopeAddress(path) && parsePath(path)?.scope === scope
+}
+
 /** The path this state is addressed by. Always `/app/<org>/…`. A
     reference no address can name leaves the task out (unnamedRef). */
 export function buildPath(state: UiState): string {
