@@ -1202,6 +1202,25 @@ describe('the benchmark server', () => {
         }))
       ).answer.error,
     ).toContain('fails')
+    // the roster alone fails or never answers, and the Add list answers
+    const failed = await read('subscribers=error', 'issues:subscribers', (snap) => ({
+      issue_id: task(snap),
+    }))
+    expect(failed.answer.error).toContain('subscribers=error')
+    expect(
+      (
+        await read('subscribers=error', 'pickers:taskFollowers', (snap) => ({
+          issue_id: task(snap),
+        }))
+      ).answer.state,
+    ).toBe('ready')
+    expect(
+      (
+        await read('subscribers=loading', 'issues:subscribers', (snap) => ({
+          issue_id: task(snap),
+        }))
+      ).answer,
+    ).toBe('none')
   }, 60_000)
 
   it("answers Settings › Users, the agents' keys and the creators line from the workspace, with the states the page asks for", async () => {

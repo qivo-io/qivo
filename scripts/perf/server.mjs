@@ -245,6 +245,13 @@
 //                        batches of five), error (both reads fail) and
 //                        viewer (the caller may not manage the followers);
 //                        several joined by commas
+//   subscribers          a state the subscriber popover's roster
+//                        (issues:subscribers) answers, for screenshots of
+//                        states a seeded backend reaches only by timing:
+//                        loading (the read never answers, so the popover
+//                        says it is loading) or error (the read fails, so
+//                        it says it could not load); the Add list answers
+//                        as the followers say
 //   userspage            a state Settings › Users' pages answer whatever the
 //                        people say (people:settingsPage and people:get,
 //                        src/store/peopleSettingsStandIn.setup.ts), for
@@ -921,6 +928,8 @@ const forcedTeamPicker = (() => {
    the follower stand-in's options take them, beside whether the caller
    manages the followers. */
 const forcedFollowers = new Set((parameters.get('followers') ?? '').split(',').filter(Boolean))
+/* The subscriber roster's forced state (the `subscribers` parameter). */
+const forcedSubscribers = parameters.get('subscribers') ?? undefined
 /* The navigation reads' forced states (the `projectnav` parameter), as the
    stand-in's `force` takes them; `favorites` names its programs once they
    exist (projectNavForce). */
@@ -2496,6 +2505,9 @@ const read = (name, args = {}) => {
     // leads, unless followers=viewer
     case 'issues:subscribers':
     case 'pickers:taskFollowers': {
+      if (name === 'issues:subscribers' && forcedSubscribers === 'loading') return NO_ANSWER
+      if (name === 'issues:subscribers' && forcedSubscribers === 'error')
+        throw new Error("the subscriber roster's read fails, as subscribers=error asks")
       const options = {
         canManage: !forcedFollowers.has('viewer'),
         batch: forcedFollowers.has('small') ? 5 : undefined,
