@@ -415,7 +415,8 @@ describe('the benchmark server', () => {
       reason: 'access_unchecked',
     })
     expect((await roadmap('tasks=100&roadmap=error')).answer.error).toContain('roadmap=error')
-    // the owner loads answer every owner unavailable, or not at all
+    // the owner loads answer every owner unavailable, fail, or answer not
+    // at all
     const loads = async (params) => {
       const { posted, send } = await server(`latency=0&mbps=100000&tasks=100&${params}`)
       await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
@@ -423,9 +424,11 @@ describe('the benchmark server', () => {
       const args = { org_id: snap.orgs[0].id, owner_ids: [snap.profiles[0].id] }
       await send({ type: 'query', id: 'loads', name: 'planning:ownerLoads', args })
       const answer = posted.find((m) => m.to === 'loads')
-      return answer ? JSON.parse(answer.text) : null
+      if (!answer) return null
+      return answer.error ? { error: answer.error } : JSON.parse(answer.text)
     }
     expect((await loads('loads=unavailable')).owners[0].state).toBe('unavailable')
+    expect((await loads('loads=failed')).error).toContain('loads=failed')
     expect(await loads('loads=loading')).toBeNull()
     expect((await loads('')).owners[0].state).toBe('ok')
     // an organization Viewer may edit no project of a part
@@ -2338,23 +2341,13 @@ describe('the benchmark server', () => {
     expect(order).toEqual(['result', 'first', 'result', 'second'])
   }, 60_000)
 
-  it('leaves the unheld tasks out of forMe, and answers them in Search and in the task window', async () => {
-    // forMe, which a baseline build reads, leaves them out too; each server
-    // this file loads takes the worker's place, so this one goes first
-    const { snapshot } = await snapshotOf('tasks=40&unheld=3')
-    expect(snapshot.issues).toHaveLength(37)
-    const { posted, send } = await server('tasks=40&latency=0&mbps=100000&unheld=3')
-    const held = new Set(snapshot.issues.map((row) => row.id))
-    // every task is visible here; the three highest-numbered loose ones are
-    // not in forMe, nor any row hung on them, nor a parent link to them
-    expect(held.size).toBe(37)
-    const missing = [...Array(40).keys()].map((n) => id('4', n)).filter((uuid) => !held.has(uuid))
-    expect(missing).toHaveLength(3)
-    for (const row of snapshot.issueLabels ?? []) expect(missing).not.toContain(row.issue_id)
-    for (const row of snapshot.issues) expect(missing).not.toContain(row.parent_id)
-    // the window's read answers one of them, and a write changes it and sends
-    // its read again
-    await send({ type: 'watch', id: 'window', name: 'taskWindow:task', args: { ref: missing[0] } })
+  it('answers a task in the task window, sends its read again after a write, and finds it in Search', async () => {
+    const { posted, send } = await server('tasks=40&latency=0&mbps=100000')
+    // the highest-numbered task, which the window opens by its uuid
+    const opened = [id('4', 39)]
+    // the window's read answers it, and a write changes it and sends its
+    // read again
+    await send({ type: 'watch', id: 'window', name: 'taskWindow:task', args: { ref: opened[0] } })
     await vi.waitFor(() =>
       expect(
         posted.some((m) => m.type === 'transition' && m.results.some((r) => r.to === 'window')),
@@ -2365,18 +2358,18 @@ describe('the benchmark server', () => {
         .filter((m) => m.type === 'transition')
         .flatMap((m) => m.results.filter((r) => r.to === 'window'))
         .map((r) => JSON.parse(r.text))
-    expect(answers().at(-1)).toMatchObject({ state: 'ok', task: { id: missing[0] } })
+    expect(answers().at(-1)).toMatchObject({ state: 'ok', task: { id: opened[0] } })
     await send({
       type: 'mutation',
       id: 'label',
       name: 'labels:toggle',
-      args: { issue_id: missing[0], label_id: id('8', 0), on: true },
+      args: { issue_id: opened[0], label_id: id('8', 0), on: true },
     })
     await send({
       type: 'mutation',
       id: 'follow',
       name: 'issues:subscribe',
-      args: { issue_id: missing[0] },
+      args: { issue_id: opened[0] },
     })
     await vi.waitFor(() => expect(answers().at(-1)?.follow).not.toBeNull())
     expect(
@@ -2388,7 +2381,7 @@ describe('the benchmark server', () => {
       type: 'mutation',
       id: 'unfollow',
       name: 'issues:unsubscribe',
-      args: { issue_id: missing[0] },
+      args: { issue_id: opened[0] },
     })
     await vi.waitFor(() => expect(answers().at(-1)?.follow).toBeNull())
     // Search still finds it
@@ -2399,7 +2392,7 @@ describe('the benchmark server', () => {
       args: { text: answers().at(-1).task.title, include_archived: false },
     })
     const found = JSON.parse(posted.find((m) => m.to === 'search').text).rows
-    expect(found.map((row) => row.id)).toContain(missing[0])
+    expect(found.map((row) => row.id)).toContain(opened[0])
   })
 
   it("fails the task window's read after its first answer, or answers its subtask list cut short, as the page asks", async () => {

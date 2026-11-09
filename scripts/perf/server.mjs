@@ -73,9 +73,10 @@
 //                        scripts/perf/entry.tsx), so past it a picture
 //                        waits as the person's initials with few people
 //   hidden (4)           projects the signed-in person cannot see, as full
-//                        of tasks as the visible ones; they reach the
-//                        workspace only as anonymized load rows and the
-//                        has_hidden_subtasks and has_hidden_parent flags
+//                        of tasks as the visible ones; they reach the app
+//                        only as owner load spans that name no task
+//                        (planning:ownerLoads) and as the hidden flags of
+//                        the rows the views and the task window answer
 //   programs (1)         visible top-level projects, the visible tasks
 //                        spread over all their sub-projects, so the first,
 //                        which the app opens as the project the person
@@ -176,8 +177,16 @@
 //   loads                a state the owner loads (planning:ownerLoads)
 //                        answer for screenshots of Team utilization, the
 //                        planning panel and the delays: unavailable (every
-//                        owner past the reader's bounds) or loading (no
-//                        answer)
+//                        owner past the reader's bounds), failed (every
+//                        call fails) or loading (no answer). The first two
+//                        show Delay unknown on the cards and bars and
+//                        unknown cells in Team utilization. A guest's or
+//                        Viewer's capped calls need no state: such a
+//                        person reads one owner a call and a view at most
+//                        GUEST_CALLS (50) of them
+//                        (src/store/ownerLoadCache.ts), so role=viewer with
+//                        people=60 leaves ten owners of the Board's cards
+//                        and the Roadmap's bars capped, Delay unknown
 //   labelpage            a state Settings › Labels' batches answer whatever
 //                        the labels say, for screenshots of states a seeded
 //                        backend cannot reach: counting (every count being
@@ -266,9 +275,10 @@
 //                        looked at), error (every read fails) and small
 //                        (batches of five); several joined by commas.
 //                        tokens=30&apps=30 reaches Load more and the search
-//   shownload=1          also send the load rows of the tasks the person is
-//                        shown, as the server did before the app derived
-//                        them from the task rows (an older baseline)
+//   shownload=1          also send, in snapshot:forMe, the load rows of the
+//                        tasks the person is shown, as the server did
+//                        before the app derived them from the task rows
+//                        (an older baseline)
 //   done                 the share of the default shape's tasks in Done, from
 //                        0 to 1, spread over the numbers; by default a sixth
 //   titles               the length of the default shape's task titles in
@@ -289,14 +299,6 @@
 //                        person's own grants reach, as anyone's, and
 //                        Settings' project lists and project pages reach
 //                        the hidden program by management
-//   unheld (0)           leaves the N highest-numbered visible tasks without
-//                        a parent or subtasks out of the workspace's parts
-//                        and snapshot:forMe, with their labels, files,
-//                        follows and links, while tasks:board, search:page
-//                        and the task window's queries still answer them
-//                        and writes still change them, so a Board card or
-//                        a Search result of one opens its task window from
-//                        the window's own answer
 //   window               a state the task window's own read of a task
 //                        answers, for screenshots of states a seeded
 //                        backend reaches only by timing: failed (the read
@@ -957,7 +959,6 @@ const shownLoad = parameters.get('shownload') === '1'
 const appearance = parameters.get('appearance') === 'light' ? 'light' : 'dark'
 const viewer = parameters.get('role') === 'viewer'
 const admin = parameters.get('role') === 'admin'
-const unheldCount = option('unheld', 0)
 const forcedWindow = parameters.get('window') ?? undefined
 /* The inbox reads' forced state (the `inbox` parameter), as the stand-in's
    `force` takes it. */
@@ -1785,40 +1786,11 @@ function settleTasks() {
 }
 settleTasks()
 
-/* The visible tasks the workspace's parts and forMe leave out (`unheld`):
-   the highest-numbered ones without a parent or subtasks, so no task the
-   workspace holds names one as its parent or child. */
-const unheld = new Set(
-  tasks
-    .filter((row) => !row.parent_id && !parents.has(row.id))
-    .sort((a, b) => b.num - a.num)
-    .slice(0, unheldCount)
-    .map((row) => row.id),
-)
-/** The workspace as its task parts and forMe send it: without the unheld
-    tasks and the rows hung on them. Its people, teams and labels are every
-    one the server holds; the root part sends the signed-in person's own
-    alone, and no part sends a project, which the app reads through the
-    navigation reads and projectNav.byIds. */
-function partsWorkspace() {
-  if (unheld.size === 0) return snapshot
-  const held = (row) => !unheld.has(row.issue_id)
-  return {
-    ...snapshot,
-    issues: snapshot.issues.filter((row) => !unheld.has(row.id)),
-    issueLabels: snapshot.issueLabels.filter(held),
-    attachments: snapshot.attachments.filter(held),
-    issueSubs: snapshot.issueSubs.filter(held),
-    links: snapshot.links.filter(
-      (link) => !unheld.has(link.source_id) && !unheld.has(link.target_id),
-    ),
-  }
-}
-
-/** The snapshot as forMe sends it: its long lists past 8,192 values in
-    parts (convex/lib/arrayLimit.ts). */
+/** The snapshot as forMe sends it, the whole the server holds, for a
+    baseline build: its long lists past 8,192 values in parts
+    (convex/lib/arrayLimit.ts). */
 function wireSnapshot() {
-  const { auth_user_id, myProfileIds, orgs, messages, ...rest } = partsWorkspace()
+  const { auth_user_id, myProfileIds, orgs, messages, ...rest } = snapshot
   const { delivered_at, ...lists } = rest
   return { auth_user_id, myProfileIds, orgs, ...chunkLists(lists), messages, delivered_at }
 }
@@ -2105,7 +2077,7 @@ const roadmapCounts = new Map()
 function readPart(name, _args) {
   // the signed-in person's own profiles, memberships and teams
   // (convex/lib/workspaceParts.ts readRoot)
-  if (name === 'workspace:root') return rootOf(partsWorkspace())
+  if (name === 'workspace:root') return rootOf(snapshot)
   throw new Error(
     `${name} is no workspace part this perf server serves (workspace:root only); a build from before the workspace's tasks and projects parts went cannot load here, so measure it with its own checkout's benchmark (scripts/benchmark-browser.mjs)`,
   )
@@ -2168,8 +2140,8 @@ const refusalOf = (error) =>
     shared stand-in (src/store/taskWindowStandIn.setup.ts), the shapes of
     convex/lib/taskWindow.ts: the open task with its parent and its
     subtasks as short rows, its links with their other ends, or its
-    attachment rows. The signed-in person is shown every visible task, the
-    unheld ones too, so every list is complete unless window=incomplete
+    attachment rows. The signed-in person is shown every visible task, so
+    every list is complete unless window=incomplete
     says otherwise for the task's subtasks, and a task it does not hold
     answers unavailable. With window=failed, each read of the task, by its
     arguments, fails after its first answer, which a transition soon after
@@ -2510,8 +2482,9 @@ const read = (name, args = {}) => {
     // the owner loads the delays of tasks only the Board's answer brings
     // read (src/store/ownerLoadsStandIn.setup.ts)
     case 'planning:ownerLoads':
-      // loads=loading never answers
+      // loads=loading never answers, and loads=failed fails every call
       if (forcedLoads === 'loading') return NO_ANSWER
+      if (forcedLoads === 'failed') throw new Error('the owner loads fail, as loads=failed asks')
       return ownerLoadsStandIn(snapshot, args, {
         unavailable: forcedLoads === 'unavailable' ? args.owner_ids : [],
       })
