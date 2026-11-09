@@ -8,7 +8,17 @@
    the client took in every result the transition brought and before any
    write it holds resolves (lib/convexOrdering.test.ts pins that), and names
    the queries whose results changed. A value is read only for a query a
-   transition names, so a held result is never taken for a new one. */
+   transition names, so a held result is never taken for a new one.
+
+   One path per query. Convex's base client keeps one subscription per query
+   and arguments and counts its subscribers, and ConvexClient.onUpdate
+   subscribes through the same base client. A live watch that comes second
+   to an onUpdate listener of the same query is not `joined`, since no live
+   watch heard its answer, and hears nothing until the answer changes; Try
+   again (`fresh`) does not end that wait, a reconnect does. So a query a
+   view reads here is never also held through convex.onUpdate
+   (store/guard/liveRoutes.test.ts holds the app to it, and
+   lib/convexOrdering.test.ts pins the client's behavior). */
 
 import type { BaseConvexClient } from 'convex/browser'
 import {
