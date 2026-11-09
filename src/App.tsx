@@ -1673,8 +1673,6 @@ function App() {
       if (scope === settle.over) return
       return done()
     }
-    // from now on a return to the scope it was marked over is a move
-    if (settle.over !== scope) scopeToSettle.current = { ...settle, over: scope }
     P.nameProjects(SETTLE_OWNER, [settle.task.project])
     if (P.scopeInfo(settle.preferred).state === 'gone') return
     if (!P.project(settle.task.project)) {
