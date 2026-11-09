@@ -187,10 +187,22 @@ export function taskWindowStandIn(
     const incomplete = force === 'incomplete'
     const parent = task.parent_id ? shown.get(task.parent_id) : undefined
     const me = new Set(whole.myProfileIds)
+    // the parent's id goes out only when the caller is shown the parent
+    // (convex/lib/workingSet.ts parentLink); a fixture's row may carry the
+    // id of one the caller is not shown, and a server-made whole's row of
+    // such a task holds no id and says the parent is hidden
+    const { parent_id: parentId, has_hidden_parent: hiddenParent, ...own } = task
+    const parentLink =
+      parentId === undefined
+        ? { has_hidden_parent: hiddenParent === true }
+        : shown.has(parentId)
+          ? { parent_id: parentId, has_hidden_parent: false }
+          : { has_hidden_parent: true }
     return {
       state: 'ok',
       task: {
-        ...task,
+        ...own,
+        ...parentLink,
         has_subtasks: task.has_subtasks === true || counting.length > 0,
         has_hidden_subtasks:
           task.has_hidden_subtasks === true ||

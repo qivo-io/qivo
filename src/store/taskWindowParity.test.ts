@@ -257,7 +257,8 @@ describe('the task window stand-in', () => {
     // the group links to, and every link of the organization
     const hiddenParent = tasks.find((task) => task.title === 'Hidden parent')
     const group = tasks.find((task) => task.title === 'Bring up the board')
-    if (!hiddenParent || !group) throw new Error('no hidden parent or group')
+    const orphan = tasks.find((task) => task.title === 'Orphan in FW')
+    if (!hiddenParent || !group || !orphan) throw new Error('no hidden parent, group or orphan')
     const links = await t.run((ctx) =>
       ctx.db
         .query('issue_links')
@@ -276,9 +277,15 @@ describe('the task window stand-in', () => {
       projects: projects.map(({ _id, _creationTime, ...row }) => row),
       // the group's row as a fixture writes it, with no hidden fact, so
       // the stand-in must find the hidden subtask itself
+      // and the orphan's with its hidden parent's id, so the stand-in must
+      // leave that id out itself
       issues: [
         ...whole.issues.map((row) =>
-          row.id === group.id ? { ...row, has_hidden_subtasks: false } : row,
+          row.id === group.id
+            ? { ...row, has_hidden_subtasks: false }
+            : row.id === orphan.id
+              ? { ...row, parent_id: hiddenParent.id, has_hidden_parent: false }
+              : row,
         ),
         hiddenRow(secret),
         hiddenRow(hiddenParent),
@@ -293,6 +300,8 @@ describe('the task window stand-in', () => {
     for (const [name, args] of [
       ['taskWindow:task', { org_id: f.org.id, ref: group.id }],
       ['taskWindow:links', { org_id: f.org.id, issue_id: group.id }],
+      // a child of the hidden parent, which names no parent
+      ['taskWindow:task', { org_id: f.org.id, ref: orphan.id }],
     ] as const) {
       const server =
         name === 'taskWindow:task'
