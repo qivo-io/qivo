@@ -10078,6 +10078,10 @@ export const DELETED_ITEMS_MARKS = {
   showAll: 'data-show-all',
   end: 'data-deleted-page-end',
   state: 'data-deleted-state',
+  // a row's task key and title, by which the export step's cleanup tells
+  // its own item (exportItemOf)
+  key: 'data-deleted-key',
+  title: 'data-deleted-title',
 }
 
 /** The class of the app's visible toasts (src/App.tsx ToastHost). */
@@ -10313,10 +10317,11 @@ export const ORG_EXPORT_READY_MS = 5 * 60_000
  *  show today's date as the page formats it. Its finally deletes the file,
  *  turns the stand-in off and deletes the run's Deleted item for good, on
  *  a failure too. It finds the item by its id in the archive, or, when the
- *  step failed before it read the archive, by the task's tagged title in
- *  Settings › Projects › Deleted items. A purge that is refused, fails or
- *  finds no item is a NOTE, since the item then stays 30 days
- *  (purgeExportItem). It
+ *  step failed before it read the archive, in Settings › Projects ›
+ *  Deleted items searched by the task's tagged title, once the search
+ *  answered and only as the one row of the task's key and title. A purge
+ *  that is refused, fails or finds no such row is a NOTE, since the item
+ *  then stays 30 days (purgeExportItem). It
  *  writes on t0's organization what an admin's export writes: a job with
  *  its parts for four hours and its rows for 30 days, the end of an
  *  earlier ready archive, and the organization's last saved export
@@ -10450,23 +10455,25 @@ async function orgExportCheck() {
 }
 
 /** Deletes the export step's own Deleted item of task `gone` for good:
- *  `itemId` from the archive, or, without one, the item Settings ›
- *  Projects › Deleted items lists for the task's tagged `title` under the
- *  run's project M. Says a NOTE when it finds no item, or when Delete now
- *  is refused or fails, since the item then stays 30 days, and never fails
- *  the step itself. */
+ *  `itemId`, the archive's item whose target is the task, or, without one,
+ *  the one row Settings › Projects › Deleted items lists with the task's
+ *  key and tagged `title` under the run's project M (deletedTaskItem). It
+ *  purges no other id. Says a NOTE when it finds no such item, or when
+ *  Delete now is refused or fails, since the item then stays 30 days, and
+ *  never fails the step itself. */
 async function purgeExportItem(itemId, gone, title) {
   const label = `${ORG_EXPORT_STEP}/deleted-item`
   try {
-    const id = itemId ?? (await deletedTaskItem(title))
-    if (id === null) {
+    const found = itemId === null ? await deletedTaskItem({ key: gone.key, title }) : { id: itemId }
+    if (found.id === null) {
       say(
         'NOTE',
         label,
-        `found no Deleted item of ${gone.key}; it stays in Deleted items for 30 days`,
+        `deleted nothing, as ${found.why}; ${gone.key}'s Deleted item stays in Deleted items for 30 days`,
       )
       return
     }
+    const id = found.id
     const outcome = await evaluate(
       app,
       (id) => window.PLANNER.purgeDeletedItems([{ id, org_id: window.PLANNER.homeOrg }]),
@@ -10488,11 +10495,30 @@ async function purgeExportItem(itemId, gone, title) {
   }
 }
 
-/** The id of the run's Deleted item of a task titled `title`, deleted
- *  from a sub-project of the run's project M, as Settings › Projects ›
- *  Deleted items lists it for that scope, kind Tasks and the title as its
- *  search, or null when it lists none within a minute. */
-async function deletedTaskItem(title) {
+/** Which Deleted items row on screen is the item of task `own`, from
+ *  `rows` as the page lists them ({ id, key, title }, null for a missing
+ *  mark). It answers undefined while the search for `own.title` has not
+ *  answered, as the page keeps its earlier rows until it does, which shows
+ *  as no row or a row of another title. Then it answers `{ id }` of the one
+ *  row of `own.key` and `own.title`, or `{ id: null, why }` when no row or
+ *  more than one has that key. */
+export function exportItemOf(rows, own) {
+  if (rows.length === 0 || rows.some((row) => row.title !== own.title)) return undefined
+  const mine = rows.filter((row) => row.key === own.key && row.id)
+  if (mine.length === 1) return { id: mine[0].id }
+  return {
+    id: null,
+    why: `Deleted items lists ${mine.length === 0 ? 'no row' : `${mine.length} rows`} of ${own.key} titled “${own.title}”`,
+  }
+}
+
+/** The run's Deleted item of task `own` ({ key, title }), deleted from a
+ *  sub-project of the run's project M, as Settings › Projects › Deleted
+ *  items lists it for that scope, kind Tasks and the title as its search.
+ *  It answers `{ id }` once the search answered with the one row of the
+ *  task (exportItemOf), else `{ id: null, why }`, also when the search
+ *  lists nothing or has not answered within a minute. */
+async function deletedTaskItem(own) {
   const m = DELETED_ITEMS_MARKS
   const { M } = run.projects
   await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/projects-deleted`, {
@@ -10501,10 +10527,31 @@ async function deletedTaskItem(title) {
   await app.locator(`[${m.page}]`).waitFor({ timeout: 60_000 })
   await pickProject(app.locator(`[${m.scope}]`), M.name, M.id)
   await app.getByRole('radio', { name: 'Tasks', exact: true }).click()
-  await app.locator(`[${m.search}]`).fill(title)
-  const row = app.locator(`[${m.row}]`).first()
-  if (!(await until(async () => (await row.count()) > 0, 60_000))) return null
-  return await row.getAttribute(m.row)
+  await app.locator(`[${m.search}]`).fill(own.title)
+  const none = DELETED_ITEMS_EXPECTED.none(own.title)
+  let found = { id: null, why: `the search for “${own.title}” did not answer within a minute` }
+  await until(async () => {
+    if ((await app.locator(`[${m.state}="ok"]`).count()) === 0) return false
+    const ends = await app.locator(`[${m.end}]`).allTextContents()
+    if (ends.some((line) => line.trim() === none)) {
+      found = { id: null, why: `Deleted items lists nothing for “${own.title}”` }
+      return true
+    }
+    const rows = await app.locator(`[${m.row}]`).evaluateAll(
+      (els, [row, key, title]) =>
+        els.map((el) => ({
+          id: el.getAttribute(row),
+          key: el.querySelector(`[${key}]`)?.textContent?.trim() ?? null,
+          title: el.querySelector(`[${title}]`)?.textContent?.trim() ?? null,
+        })),
+      [m.row, m.key, m.title],
+    )
+    const mine = exportItemOf(rows, own)
+    if (mine === undefined) return false
+    found = mine
+    return true
+  }, 60_000)
+  return found
 }
 
 /** The Settings page Archived tasks opens with its search as the first

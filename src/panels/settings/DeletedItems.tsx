@@ -616,12 +616,17 @@ export function DeletedItemsPage() {
         </span>
         <div className="deleted-row-title flex min-w-0 items-baseline gap-2">
           {(hit || item.kind === 'task') && (
-            <span className="shrink-0 font-mono text-xs text-text-2">{name}</span>
+            <span data-deleted-key className="shrink-0 font-mono text-xs text-text-2">
+              {name}
+            </span>
           )}
           {hidden ? (
             <span className="min-w-0 text-base italic text-text-2">Title not shown</span>
           ) : (
-            <span className="line-clamp-2 min-w-0 break-words text-base font-medium leading-[1.4] text-text-1">
+            <span
+              data-deleted-title
+              className="line-clamp-2 min-w-0 break-words text-base font-medium leading-[1.4] text-text-1"
+            >
               {hit ? hit.title : item.title}
             </span>
           )}

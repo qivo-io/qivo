@@ -49,6 +49,7 @@ import {
   deleteOutcome,
   directoryGroups,
   evaluate,
+  exportItemOf,
   FIXTURE_STATUS,
   FORMERLY_BARE,
   freeMilestoneWeek,
@@ -1172,15 +1173,37 @@ describe('staging check REST contract', () => {
     ])
       expect(after, part).toContain(part)
     // the purge also runs without the archive's item id, finding the item
-    // by the task's tagged title, and says a NOTE when it is not done
+    // by the task's key and tagged title, and says a NOTE when it is not
+    // done. It purges only the archive's item or the one the search
+    // verified, and nothing when the search verified none.
     const purge = script.slice(
       script.indexOf('async function purgeExportItem('),
-      script.indexOf('async function deletedTaskItem('),
+      script.indexOf('export function exportItemOf('),
     )
-    expect(purge).toContain('itemId ?? (await deletedTaskItem(title))')
-    expect(purge).toContain('purgeDeletedItems')
+    expect(purge).toContain(
+      'itemId === null ? await deletedTaskItem({ key: gone.key, title }) : { id: itemId }',
+    )
+    expect(purge.indexOf('if (found.id === null) {')).toBeGreaterThan(-1)
+    expect(purge.indexOf('if (found.id === null) {')).toBeLessThan(
+      purge.indexOf('purgeDeletedItems'),
+    )
+    expect(purge).toContain('const id = found.id')
     expect(purge.match(/say\(\s*'NOTE'/g)).toHaveLength(3)
     expect(purge).not.toContain('.catch(() => {})')
+    // the search finds the item only once the search answered, from every
+    // row's key and title, never the first row it sees
+    const finder = script.slice(
+      script.indexOf('async function deletedTaskItem('),
+      script.indexOf('/** The Settings page Archived tasks opens'),
+    )
+    const typed = finder.indexOf('.fill(own.title)')
+    expect(typed).toBeGreaterThan(-1)
+    const settled = finder.indexOf('m.state}="ok"]`).count()) === 0) return false')
+    expect(settled).toBeGreaterThan(typed)
+    expect(finder.indexOf('const mine = exportItemOf(rows, own)')).toBeGreaterThan(settled)
+    expect(finder).toContain('[m.row, m.key, m.title]')
+    expect(finder).not.toContain('.first()')
+    expect(finder).not.toContain('getAttribute(m.row)')
     // the stand-in answers a file only under its flag, else the browser's
     // own picker stays
     const stand = (flag) => {
@@ -1205,6 +1228,30 @@ describe('staging check REST contract', () => {
     }
     expect(stand(null)()).toBe('native')
     expect(await stand('1')()).toEqual({ name: ORG_EXPORT_FILE, options: { create: true } })
+  })
+
+  it("takes the export step's Deleted item only from an answered search, as the one row of the task's key and title", () => {
+    const own = { key: 'QN-41', title: 'stgchk-1 Exported deleted' }
+    const mine = { id: 'item-own', ...own }
+    const other = { id: 'item-other', key: 'QN-7', title: 'stgchk-1 Deleted 3' }
+    // while the search is pending the page shows its earlier rows, an
+    // unrelated deleted task first, and nothing is taken
+    expect(exportItemOf([other], own)).toBeUndefined()
+    expect(exportItemOf([other, mine], own)).toBeUndefined()
+    expect(exportItemOf([], own)).toBeUndefined()
+    // a hidden row has no title mark
+    expect(exportItemOf([{ ...mine, title: null }], own)).toBeUndefined()
+    // the answered search takes the one row of the task
+    expect(exportItemOf([mine], own)).toEqual({ id: 'item-own' })
+    // a row of the title but another key, or two of the key, take nothing
+    expect(exportItemOf([{ ...other, title: own.title }], own)).toEqual({
+      id: null,
+      why: 'Deleted items lists no row of QN-41 titled “stgchk-1 Exported deleted”',
+    })
+    expect(exportItemOf([mine, { ...mine, id: 'item-twin' }], own)).toEqual({
+      id: null,
+      why: 'Deleted items lists 2 rows of QN-41 titled “stgchk-1 Exported deleted”',
+    })
   })
 
   it("checks Deleted items on the page's own marks, after Settings › Projects, restoring 26 tasks in two calls", () => {
