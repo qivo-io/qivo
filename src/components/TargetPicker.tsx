@@ -50,8 +50,8 @@ const parentOfTarget = (row: NavTargetRow) => ({
  * seeds the row's facts. `current` is marked and cannot be chosen (the
  * Move window's own sub-project). `pinned` is a row the caller chose for
  * it, as the New task dialog's default, shown chosen in a group of its own
- * at the top while the list's batches have not reached it, so the person
- * sees its name. `words` words its end.
+ * at the top while the person browses and the list's batches have not
+ * reached it, so the person sees its name. `words` words its end.
  */
 export function TargetPicker({
   org,
@@ -103,8 +103,11 @@ export function TargetPicker({
     onChoose(row)
   }
   // the caller's chosen row the batches have not reached, shown first
+  // while the person browses, never beside a search's rows
   const extra =
-    pinned && pinned.id === value && !list.rows.some((row) => row.id === pinned.id) ? pinned : null
+    query === '' && pinned && pinned.id === value && !list.rows.some((row) => row.id === pinned.id)
+      ? pinned
+      : null
   const shown = extra ? [extra, ...list.rows] : list.rows
   // equal names told apart among the rows shown and their parents, by
   // organization, parent and number

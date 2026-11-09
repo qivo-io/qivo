@@ -111,7 +111,7 @@ The **Sub-project** picker lists the sub-projects you can add tasks to,
 under their project's name, 25 at a time with **Load more** and a search
 of either name. The dialog starts in the sub-project you opened it from,
 or in a project on its first sub-project you can add tasks to, shown at the
-top of the list until the list reaches it. **Create**
+top of the list until the list reaches it or you search. **Create**
 turns on once Qivo has checked the sub-project you choose. Under the picker
 the dialog says it is opening that sub-project while it checks it, and if
 the check fails or cannot finish it says so with **Retry**, keeping the

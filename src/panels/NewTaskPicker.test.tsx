@@ -281,6 +281,31 @@ describe("the New task dialog's Sub-project picker", { timeout: 30_000 }, () => 
     ).toBe('Plan')
     expect(groups[0].querySelector('[data-target]')?.textContent).toBe('Alpha')
     await waitFor(() => buttonNamed('Create')?.disabled === false || null, 'Create turned on')
+    // a search that matches neither Plan nor Alpha shows no pinned row
+    // beside the end that says nothing matches
+    const search = (text: string) => {
+      const box = document.querySelector<HTMLInputElement>('[data-target-search]')
+      if (!box) throw new Error('no search box')
+      return act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(box, text)
+        box.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+    }
+    await search('Zulu')
+    await waitFor(
+      () => picker()?.textContent?.includes('No matching sub-project you can add tasks to.'),
+      'the end of the search',
+    )
+    // must fail for a pinned row drawn during a search it does not match
+    expect(document.querySelector('[data-target-group]')).toBeNull()
+    // and it comes back once the search clears
+    await search('')
+    await waitFor(
+      () =>
+        document.querySelector<HTMLElement>('[data-target-group]')?.dataset.targetGroup === 'plan',
+      'the pinned row again',
+    )
+    expect(chosen()).toBe('alpha')
   })
 
   it('tells two sub-projects of one name apart by their numbers, which the project cache does not hold', async () => {
