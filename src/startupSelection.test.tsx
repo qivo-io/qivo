@@ -924,6 +924,51 @@ describe('the access guard and Settings', { timeout: 60_000 }, () => {
     }
   })
 
+  it("writes the address of each page opened over a scope the project cache cannot name, and replaces only the lost scope's own address", async () => {
+    const snap = world()
+    await app(snap, '/app/testbed', remembering(LUMA), () => cache({ fail: true }))
+    await chooser('retry')
+    expect(location.pathname).toBe('/app/testbed')
+    // the Inbox and Settings over the scope whose read failed write their
+    // own addresses, each in an entry of its own
+    await click(q('[data-view-switch] [aria-label^="Inbox"]'))
+    // must fail for an address sync that stops on every page while the
+    // scope has no facts
+    await until(() => location.pathname === '/app/~/inbox', "the Inbox's address")
+    const entries = history.length
+    await click(q('[data-settings-nav]'))
+    await until(() => q('[data-settings-stand-in]'), 'Settings')
+    await until(() => location.pathname === '/app/~/settings/account', "Settings' address")
+    expect(history.length).toBe(entries + 1)
+    // the scope turns gone while Settings shows: Settings keeps its entry
+    publish({
+      ...server,
+      access: server.access.filter((a) => a.project_id !== LUMA),
+      delivered_at: '2026-09-15T09:00:00.000Z',
+    })
+    await act(async () => cache(null))
+    await until(() => store.P.projectState(LUMA) === 'gone', 'the loss')
+    await settle()
+    expect(location.pathname).toBe('/app/~/settings/account')
+    expect(history.length).toBe(entries + 1)
+    await act(async () => history.back())
+    await settle()
+    await until(() => location.pathname === '/app/~/inbox', 'the Inbox again')
+    await leave()
+    // a scope lost on its own address gives that address way in place
+    await app(structuredClone(world()), '/app/testbed/board/p/10')
+    await until(() => shown() === 'kanban', 'the Board')
+    const before = history.length
+    publish({
+      ...server,
+      access: server.access.filter((a) => a.project_id !== LUMA),
+      delivered_at: '2026-09-15T09:00:00.000Z',
+    })
+    await chooser('lost')
+    expect(location.pathname).toBe('/app/testbed')
+    expect(history.length).toBe(before)
+  })
+
   it("moves to the gone project's parent from Settings, else to the chooser without a note, and leaves the scope for another project's archive", async () => {
     const snap = world()
     await app(snap, '/app/testbed/board/p/11')

@@ -73,12 +73,14 @@ import {
   ARCHIVED_TASKS_PAGE,
   buildPath,
   isFrontDoor,
+  isScopeAddress,
   namesProjectPage,
   ORG_NONE,
   orgSegmentOf,
   parseHash,
   parsePath,
   pathMatchesState,
+  pathNamesScope,
   projectPagesRev,
   type Route,
   sameTask,
@@ -1485,8 +1487,9 @@ function App() {
       return
     // and so does the address that opened a project scope while the project
     // cache knows none of its facts, as the path names the project by its
-    // number, which only the cache's answer gives
-    if (scope && !P.isMineScope(scope) && !P.project(scope)) return
+    // number, which only the cache's answer gives; any other page's address
+    // names no scope, so it follows at once
+    if (pathNamesScope(state) && !P.project(scope)) return
     const p = buildPath(state)
     /* A person jump's chooser marks its entry, the front door, with the
        person and the view it shows on, which the front door does not name,
@@ -1820,9 +1823,12 @@ function App() {
     const was = scopePlace.current?.id === scope ? scopePlace.current : null
     const note = lostNote(scope, scopeOpened.current, was?.name ?? null)
     scopeOpened.current = null
-    // the address, by uuid or by number, gives way to the front door's in
-    // place, as it is no page the person can open
-    replaceNextHistory.current = true
+    // the scope's own address, by uuid or by number, gives way to the front
+    // door's in place, as it is no page the person can open; the address
+    // of a page shown over the scope stays its entry
+    const shownState = { scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync }
+    if (pathNamesScope(shownState) && isScopeAddress(location.pathname))
+      replaceNextHistory.current = true
     setScope(undefined)
     showOpening((n) => ({
       kind: 'choose',

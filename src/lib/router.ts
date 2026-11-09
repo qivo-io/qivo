@@ -803,6 +803,38 @@ function syncPath(sync: { scope: string; step: string }, openIssue?: string | nu
   return `${APP_PREFIX}/${orgSegment(org)}${rest}`
 }
 
+/** Whether the path of `state` names its project scope (buildPath): a
+    project scope's view with no page, no Team sync and no task over it,
+    the one address that needs the scope's facts. */
+export function pathNamesScope(state: UiState): boolean {
+  const open = unnamedRef(state.openIssue) ? null : state.openIssue
+  return (
+    !!state.scope &&
+    !sentinelOf(state.scope) &&
+    !state.settingsPage &&
+    !state.projectsOpen &&
+    !state.inboxOpen &&
+    !state.sync &&
+    !open
+  )
+}
+
+/** Whether address `path` is a view's address of a project scope, by its
+    uuid or its number, with no page, task or Team sync, as the address of
+    a scope that is lost reads (App's access guard). */
+export function isScopeAddress(path: string): boolean {
+  const r = parsePath(path)
+  return (
+    !!r &&
+    !r.issue &&
+    !r.settings &&
+    !r.inbox &&
+    !r.projects &&
+    !r.sync &&
+    (r.unheld !== undefined || (!!r.scope && !sentinelOf(r.scope)))
+  )
+}
+
 /** The path this state is addressed by. Always `/app/<org>/…`. A
     reference no address can name leaves the task out (unnamedRef). */
 export function buildPath(state: UiState): string {
