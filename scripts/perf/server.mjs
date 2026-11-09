@@ -329,6 +329,23 @@
 //                        window cannot see), and rows-N (N tasks a batch,
 //                        for Load more and the held rows); several joined
 //                        by commas
+//   orgexport            states of Settings › Organization › General ›
+//                        Export data that a seeded backend reaches slowly or
+//                        not at all, from the stand-in the panel's tests use
+//                        (src/store/orgExportStandIn.setup.ts), several
+//                        joined by commas: collecting (reading tasks),
+//                        deleted (reading deleted/comments), others (another
+//                        admin's job, not joined), joined, ready, claimed
+//                        (the automatic download already taken), older (a
+//                        collecting job beside an older ready archive),
+//                        failed (deleted_changing), too-large, cancelled,
+//                        expired, skipped (a ready archive that left tasks
+//                        out), served, record-error (recordExport fails)
+//                        and error (status fails); with the parameter at
+//                        all, orgexport=open for none. Its claim answers a
+//                        link to a small ZIP the page serves
+//                        (scripts/perf/exportZip.mjs). Open it with
+//                        role=admin on Settings › Organization › General.
 //   removal              a state the removal window's reads answer
 //                        whatever the workspace says, for screenshots of
 //                        states a seeded backend cannot reach inside the
@@ -717,6 +734,7 @@ import {
 import { mentionStandIn } from '../../src/store/mentionStandIn.setup'
 import { milestoneStandIn } from '../../src/store/milestoneStandIn.setup'
 import { createNotificationsStandIn } from '../../src/store/notificationsStandIn.setup'
+import { orgExportStandIn } from '../../src/store/orgExportStandIn.setup'
 import { overviewStandIn } from '../../src/store/overviewStandIn.setup'
 import { ownerLoadsStandIn } from '../../src/store/ownerLoadsStandIn.setup'
 import { OWNER_CHECK_SLOW_MS, ownerPickersStandIn } from '../../src/store/ownerPickersStandIn.setup'
@@ -741,6 +759,7 @@ import { dependenciesStandIn, roadmapStandIn } from '../../src/store/roadmapStan
 import { TASK_WINDOW_NO_ANSWER, taskWindowStandIn } from '../../src/store/taskWindowStandIn.setup'
 import { isTeamSettingsRead, teamSettingsStandIn } from '../../src/store/teamSettingsStandIn.setup'
 import { teamSyncStandIn } from '../../src/store/teamSyncStandIn.setup'
+import { EXPORT_ZIP } from './exportZip.mjs'
 
 // the page passes its parameters as the worker's name (scripts/perf/transport.mjs)
 /* The most rows one bulk inbox batch changes, convex/model/messages.ts
@@ -1145,6 +1164,16 @@ const forcedDeleted = (() => {
 const deletedCount = option('deleted', 0)
 /* The removal window's forced states (the `removal` parameter). */
 const forcedRemoval = new Set((parameters.get('removal') ?? '').split(',').filter(Boolean))
+// orgexport: the export section's job, from the panel's stand-in, or null
+// without the parameter, when the server serves no export read
+const orgExport = parameters.has('orgexport')
+  ? orgExportStandIn({
+      now: () => Date.now(),
+      states: (parameters.get('orgexport') ?? '').split(',').filter(Boolean),
+      link: 'https://perf.invalid/exports/perf-export?e=1&m=perf&t=perf',
+      bytes: EXPORT_ZIP.length,
+    })
+  : null
 /* The owner lists' and the Mention window's forced states (the `owners`
    parameter), as the stand-in's `force` takes them. */
 const forcedOwners = new Set((parameters.get('owners') ?? '').split(',').filter(Boolean))
@@ -2373,6 +2402,10 @@ const read = (name, args = {}) => {
     const answer = notifications.settings(forcedNotifications)
     return answer === 'loading' ? NO_ANSWER : answer
   }
+  // the export section's job and the removal state's record line, from the
+  // stand-in under orgexport
+  if (orgExport && (name === 'orgExport:status' || name === 'orgRemovals:state'))
+    return orgExport.query(name)
   // the feed the desktop alert client watches, which answers nothing under
   // inboxfeed=loading
   if (name === 'inbox:feed') {
@@ -2746,6 +2779,15 @@ async function mutate(name, args) {
     const answer = write(deletedWorld(), args, forcedDeleted)
     writes++
     await Promise.all(DELETED_READS.map((read) => emit(read)))
+    return answer
+  }
+  // the export's writes under orgexport, then the reads they changed
+  if (orgExport && (name.startsWith('orgExport:') || name === 'orgRemovals:recordExport')) {
+    const answer = orgExport.mutation(name, args)
+    // a claim's link is served whole, as the route records
+    if (name === 'orgExport:claimDownload' && answer?.url) orgExport.serve(args.export_id)
+    writes++
+    await transition()
     return answer
   }
   // a change of Notification delivery, then the settings watches it
@@ -3257,7 +3299,9 @@ async function write(data, turn) {
       data.name.startsWith('deletedItems:') ||
       data.name === 'projectNav:setFavorite' ||
       data.name === 'issues:create' ||
-      data.name === 'notifications:setDelivery'
+      data.name === 'notifications:setDelivery' ||
+      data.name.startsWith('orgExport:') ||
+      data.name === 'orgRemovals:recordExport'
         ? refusalOf(error).data
         : undefined
     post(

@@ -2822,6 +2822,83 @@ describe('the benchmark server', () => {
     expect(limited.watched).toEqual([{ delivery: 'recent' }])
   })
 
+  it("answers the export section's job from the panel's stand-in for each orgexport state, its claim a ZIP the page serves", async () => {
+    const { ORG_EXPORT_STATES } = await import('../../src/store/orgExportStandIn.setup')
+    const { EXPORT_ZIP } = await import('./exportZip.mjs')
+    const { bytesFor, servesFiles } = await import('./files.mjs')
+    const status = async (params) => {
+      const { posted, send } = await server(`tasks=20&latency=0&mbps=100000&role=admin&${params}`)
+      await send({ type: 'query', id: 'status', name: 'orgExport:status', args: { org_id: 'o' } })
+      const answer = posted.find((m) => m.to === 'status')
+      return {
+        answer: answer.error || answer.failure ? { failed: true } : JSON.parse(answer.text),
+        posted,
+        send,
+      }
+    }
+    // without the parameter the read is one the server does not serve
+    expect((await status('')).answer).toEqual({ failed: true })
+    const latest = async (state) => (await status(`orgexport=${state}`)).answer.latest
+    expect(await latest('collecting')).toMatchObject({
+      state: 'collecting',
+      progress: { section: 'tasks' },
+    })
+    expect(await latest('deleted')).toMatchObject({ progress: { section: 'deleted/comments' } })
+    expect(await latest('others')).toMatchObject({ requested: false, requested_by: 'Ola Berg' })
+    expect(await latest('joined')).toMatchObject({ requested: true, requested_by: 'Ola Berg' })
+    expect(await latest('ready')).toMatchObject({
+      state: 'ready',
+      archive_bytes: EXPORT_ZIP.length,
+    })
+    expect((await latest('claimed')).auto_download_at).toEqual(expect.any(String))
+    expect(await latest('failed')).toMatchObject({ error: { code: 'deleted_changing' } })
+    expect(await latest('too-large')).toMatchObject({ error: { code: 'too_large' } })
+    expect(await latest('cancelled')).toMatchObject({
+      state: 'cancelled',
+      cancelled_by: 'Ola Berg',
+    })
+    expect(await latest('expired')).toMatchObject({ state: 'expired' })
+    expect((await latest('skipped')).skipped_tasks).toBe(3)
+    expect((await latest('served')).served_at).toEqual(expect.any(String))
+    const older = (await status('orgexport=older')).answer
+    expect(older.latest.state).toBe('collecting')
+    expect(older.ready).toMatchObject({ state: 'ready' })
+    expect((await status('orgexport=error')).answer).toEqual({ failed: true })
+    expect(ORG_EXPORT_STATES).toHaveLength(15)
+    // a claim answers the page's own ZIP, served whole, and the record fails
+    // under record-error
+    const ready = await status('orgexport=ready')
+    const id = ready.answer.latest.id
+    await ready.send({
+      type: 'mutation',
+      id: 'claim',
+      name: 'orgExport:claimDownload',
+      args: { org_id: 'o', export_id: id, automatic: true },
+    })
+    await vi.waitFor(() => expect(ready.posted.some((m) => m.id === 'claim')).toBe(true))
+    const claim = ready.posted.find((m) => m.id === 'claim').value
+    expect(claim.url).toMatch(/^https:\/\/perf\.invalid\/exports\//)
+    expect(Buffer.from(bytesFor(claim.url))).toEqual(Buffer.from(EXPORT_ZIP))
+    expect(servesFiles('orgexport=ready')).toBe(true)
+    await ready.send({
+      type: 'mutation',
+      id: 'record',
+      name: 'orgRemovals:recordExport',
+      args: { org_id: 'o', export_id: id },
+    })
+    await vi.waitFor(() => expect(ready.posted.some((m) => m.id === 'record')).toBe(true))
+    expect(ready.posted.find((m) => m.id === 'record')).toMatchObject({ value: null })
+    const failing = await status('orgexport=ready,record-error')
+    await failing.send({
+      type: 'mutation',
+      id: 'record',
+      name: 'orgRemovals:recordExport',
+      args: { org_id: 'o', export_id: failing.answer.latest.id },
+    })
+    await vi.waitFor(() => expect(failing.posted.some((m) => m.id === 'record')).toBe(true))
+    expect(failing.posted.find((m) => m.id === 'record').value).toBeUndefined()
+  })
+
   it('serves the workspace as its root part alone, which a remote rename does not send again', async () => {
     const { posted, send } = await server('tasks=500&latency=0&mbps=100000')
     send({ type: 'watch', id: 'root', name: 'workspace:root', args: {} })
