@@ -1,4 +1,11 @@
-/* Account appearance is applied live by the app's AppearanceProvider. */
+/* Account appearance is applied live by the app's AppearanceProvider, which
+   reads it for the whole app and hands it to this page (lib/appearanceContext.ts
+   useAppearance), so the page holds no read of its own. While the
+   provider's value is not current, as after a reconnect or while the
+   socket is down, the page says so in its state attribute and keeps the
+   theme and image choices disabled, since appearance.save takes both with
+   no base to check, and a change made from a stale copy could put back
+   another device's earlier choice. */
 import { ConvexError } from 'convex/values'
 import { ImageIcon } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
@@ -24,9 +31,9 @@ import { type AppearancePreferences, P } from '../store/planner'
    usePreview): the small copy Qivo made of the week's image, read from the
    shared background cache, or where the week's image has none the image
    the canvas already shows. Settings never fetches the original for it.
-   Settings and the renderer subscribe to the preference independently, so
-   the thumbnail and the credit under it appear once the local selection
-   and the painted background agree. While the provider has no selection
+   Settings shows the provider's preference, the one the renderer paints
+   from, and the thumbnail and the credit under it appear once the
+   provider's preview names the same selection. While the provider has no selection
    yet, as before the week's image answers, it says the preview loads. */
 function WeeklyPreview({ preferences }: { preferences: AppearancePreferences }) {
   const { dailyImage } = useAppearance()
@@ -190,8 +197,12 @@ function PrivatePreview({ image }: { image: NonNullable<AppearancePreferences['c
 
 export function AppearanceSettings() {
   const id = useId()
-  const [preferences, setPreferences] = useState<AppearancePreferences | null>(null)
-  const [loadError, setLoadError] = useState('')
+  const appearance = useAppearance()
+  const failed = appearance.preferencesState === 'failed'
+  const preferences = failed ? null : appearance.preferences
+  const loadError = failed ? errorText(appearance.preferencesError) : ''
+  // a value held from before a reconnect or an outage, until it arrives again
+  const stale = preferences !== null && !appearance.preferencesCurrent
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
@@ -199,7 +210,6 @@ export function AppearanceSettings() {
   useUpdateBlocker(busy || uploading)
   // an image on its way to the server is lost if the page closes
   useUnsaved(uploading, 'background image')
-  const [attempt, setAttempt] = useState(0)
   const alive = useRef(false)
   const uploadController = useRef<AbortController | null>(null)
   useEffect(() => {
@@ -209,31 +219,8 @@ export function AppearanceSettings() {
       uploadController.current?.abort()
     }
   }, [])
-  useEffect(() => {
-    let active = true
-    setLoadError('')
-    let unsubscribe: (() => void) | undefined
-    try {
-      unsubscribe = P.watchAppearance(
-        (value) => {
-          if (!active) return
-          setPreferences(value)
-          setLoadError('')
-        },
-        (failure) => {
-          if (active) setLoadError(errorText(failure))
-        },
-      )
-    } catch (failure) {
-      setLoadError(errorText(failure))
-    }
-    return () => {
-      active = false
-      unsubscribe?.()
-    }
-  }, [attempt])
   const update = async (changes: Partial<Pick<AppearancePreferences, 'mode' | 'image_source'>>) => {
-    if (!preferences || busy || loadError) return
+    if (!preferences || busy || loadError || stale) return
     setBusy(true)
     setError('')
     setNotice('')
@@ -254,7 +241,7 @@ export function AppearanceSettings() {
     }
   }
   const upload = async (file?: File) => {
-    if (!file || busy || loadError || preferences?.image_source !== 'custom') return
+    if (!file || busy || loadError || stale || preferences?.image_source !== 'custom') return
     setBusy(true)
     setUploading(true)
     setError('')
@@ -278,7 +265,7 @@ export function AppearanceSettings() {
     }
   }
   const remove = async () => {
-    if (!preferences?.custom_image || busy || loadError) return
+    if (!preferences?.custom_image || busy || loadError || stale) return
     setBusy(true)
     setError('')
     setNotice('')
@@ -293,11 +280,17 @@ export function AppearanceSettings() {
     }
   }
   return (
-    <div data-appearance-settings>
+    <div
+      data-appearance-settings
+      data-appearance-state={
+        failed ? 'failed' : !preferences ? 'loading' : stale ? 'stale' : 'current'
+      }
+      aria-busy={stale || undefined}
+    >
       {loadError ? (
         <div role="alert" data-appearance-error className="space-y-2 text-sm text-danger">
           <p>{loadError}</p>
-          <Button type="button" onClick={() => setAttempt((value) => value + 1)}>
+          <Button type="button" onClick={appearance.retryPreferences}>
             Try again
           </Button>
         </div>
@@ -309,10 +302,10 @@ export function AppearanceSettings() {
         <>
           <ThemeSelector
             value={preferences.mode}
-            disabled={busy}
+            disabled={busy || stale}
             onChange={(mode) => void update({ mode })}
           />
-          <SettingsGroup legend="Canvas" data-appearance-image-controls="" disabled={busy}>
+          <SettingsGroup legend="Canvas" data-appearance-image-controls="" disabled={busy || stale}>
             {/* The controls stack is spaced inside its own wrapper: `space-y` on the
                 fieldset would also pad below the legend, opening a gap above the
                 first control. */}

@@ -152,7 +152,8 @@ import { INPUTS } from '../lib/inputIdle'
 import { groupSpan, isIssueDone, isIssueGroup } from '../lib/issueGroups'
 import { avatarColorFor, labelColorFor } from '../lib/labelColors'
 import { hasUnsaved, holdUnsaved, leaveDeliberately } from '../lib/leaveGuard'
-import { watchLive } from '../lib/liveView'
+import type { WatchSharing } from '../lib/liveQueries'
+import { type LiveResult, watchLive } from '../lib/liveView'
 import { loadFailureText } from '../lib/loadFailure'
 import { watchLocalDay } from '../lib/localDay'
 import { createMintQueue, type MintOutcome } from '../lib/mintQueue'
@@ -15107,11 +15108,18 @@ export const PLANNER = {
   },
 
   /* Account appearance stays separate from the navigation prefs blob and the
-     planner snapshot. The app provider applies it across every planner view. */
+     planner snapshot. The app provider (AppearanceProvider.tsx) is its one
+     caller. It applies it across every planner view and hands it to
+     Settings › Appearance, which reads no copy of its own. It watches on
+     the live transport (lib/liveView.ts watchLive), outside the visibility
+     gate, since the theme and background paint also a page shown again,
+     with `seen` for the connection each answer came on and `sharing` for
+     Try again. */
   watchAppearance: (
-    receive: (preferences: AppearancePreferences) => void,
-    fail: (error: Error) => void,
-  ) => convex.onUpdate(api.appearance.get, {}, receive, fail),
+    take: (result: LiveResult<AppearancePreferences>, connection: number | null) => void,
+    seen?: (connection: number) => void,
+    sharing?: WatchSharing,
+  ) => watchLive<AppearancePreferences>(api.appearance.get, {}, take, seen, sharing),
   setAppearance: (preferences: Pick<AppearancePreferences, 'mode' | 'image_source'>) =>
     sendAwaited(api.appearance.save, preferences, 'none', {
       onError: (e) => toastWriteError(e, false),

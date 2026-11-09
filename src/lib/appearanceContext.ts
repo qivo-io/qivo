@@ -1,6 +1,8 @@
 /* The Canvas appearance AppearanceProvider resolves (theme mode and
-   background image), for the views that paint it, and the small preview
-   of the selected background that Settings › Appearance shows. */
+   background image), for the views that paint it, the account's
+   appearance as the provider reads it, which Settings › Appearance shows
+   and edits without a read of its own, and the small preview of the
+   selected background that the page shows. */
 import type { FunctionReturnType } from 'convex/server'
 import { createContext, useContext, useEffect } from 'react'
 import type { api } from '../../convex/_generated/api'
@@ -21,6 +23,19 @@ export type BackgroundPreview = {
 }
 
 type AppearanceState = {
+  /** The account's appearance as the provider reads it (appearance.get),
+      null before its first answer. */
+  preferences: AppearancePreferences | null
+  /** `loading` before the first answer, `failed` once the read failed,
+      with its error, else `ok`. */
+  preferencesState: 'loading' | 'ok' | 'failed'
+  preferencesError?: unknown
+  /** Whether `preferences` is current, which it is once it arrived on the
+      socket's newest connection while the socket is up. */
+  preferencesCurrent: boolean
+  /** Runs the provider's read again, as Try again does after a failure,
+      so the server answers afresh. */
+  retryPreferences: () => void
   mode: AppearancePreferences['mode']
   /** 'none' when the account chose No image as its Canvas background. */
   backgroundStatus: 'loading' | 'ready' | 'unavailable' | 'none'
@@ -43,6 +58,10 @@ export const NO_PREVIEW: BackgroundPreview = {
 }
 
 export const AppearanceContext = createContext<AppearanceState>({
+  preferences: null,
+  preferencesState: 'loading',
+  preferencesCurrent: false,
+  retryPreferences: () => {},
   mode: 'dark',
   backgroundStatus: 'loading',
   backgroundQuality: null,

@@ -6,6 +6,16 @@ import { TooltipProvider } from './components/ui/tooltip'
 import type { DailyImage } from './lib/appearanceContext'
 import type { AppearancePreferences } from './store/planner'
 
+/* One live watch of the account's appearance, as P.watchAppearance takes
+   it (lib/liveView.ts watchLive). */
+type AppearanceWatch = {
+  take: (
+    result: { value: AppearancePreferences } | { error: unknown },
+    connection: number | null,
+  ) => void
+  seen?: (connection: number) => void
+}
+
 /* The provider's background and Settings' preview over stand-ins: the
    store's appearance read and custom lease answered by hand, the weekly
    image's subscription recorded, and every download held until the test
@@ -13,22 +23,45 @@ import type { AppearancePreferences } from './store/planner'
    bytes in memory, as a blocked storage does. */
 
 const store = vi.hoisted(() => {
-  // the provider and Settings each subscribe to the preference
-  const watchers = new Set<(value: AppearancePreferences) => void>()
+  // the provider's live watches of the preference, each with the
+  // transitions it hears (lib/liveView.ts watchLive), and how many asked
+  // the server afresh (Try again)
+  const watchers = new Set<AppearanceWatch>()
+  const state = { connection: 1, fresh: 0, opened: 0 }
   return {
     watchers,
+    state,
     deliver: (value: AppearancePreferences) => {
-      for (const next of watchers) next(value)
+      for (const w of watchers) {
+        w.seen?.(state.connection)
+        w.take({ value }, state.connection)
+      }
+    },
+    fail: (error: unknown) => {
+      for (const w of watchers) w.take({ error }, state.connection)
+    },
+    /** A transition on a new connection that has not brought the
+        preference again yet, as right after a reconnect. */
+    reconnect: () => {
+      state.connection++
+      for (const w of watchers) w.seen?.(state.connection)
     },
     mint: vi.fn(),
   }
 })
 vi.mock('./store/planner', () => ({
   P: {
-    watchAppearance: (next: (value: AppearancePreferences) => void) => {
-      store.watchers.add(next)
+    watchAppearance: (
+      take: AppearanceWatch['take'],
+      seen?: AppearanceWatch['seen'],
+      sharing?: { fresh?: boolean },
+    ) => {
+      const w: AppearanceWatch = { take, seen }
+      store.watchers.add(w)
+      store.state.opened++
+      if (sharing?.fresh) store.state.fresh++
       return () => {
-        store.watchers.delete(next)
+        store.watchers.delete(w)
       }
     },
     mintAppearanceImageUrl: store.mint,
@@ -180,6 +213,7 @@ beforeEach(() => {
   demo.polls = 0
   demo.stops = 0
   store.mint.mockReset()
+  Object.assign(store.state, { connection: 1, fresh: 0, opened: 0 })
   page = 'visible'
   Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => page })
   vi.stubGlobal(
@@ -629,5 +663,76 @@ describe('the Canvas background and its preview', () => {
     expect(demo.stops).toBe(1)
     await turn('visible')
     expect(demo.polls).toBe(2)
+  })
+})
+
+describe("the account's appearance the provider reads", () => {
+  const page = () => container.querySelector('[data-appearance-settings]')
+  async function renderSettings() {
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <AppearanceProvider accountId="account-1">
+            <AppearanceSettings />
+          </AppearanceProvider>
+        </TooltipProvider>,
+      ),
+    )
+    await settle()
+  }
+
+  it('is the one watch, and Settings › Appearance shows it without a read of its own', async () => {
+    await renderSettings()
+    expect(store.watchers.size).toBe(1)
+    expect(page()?.getAttribute('data-appearance-state')).toBe('loading')
+    await act(async () => store.deliver(preferences('none')))
+    expect(page()?.getAttribute('data-appearance-state')).toBe('current')
+    expect(
+      container.querySelector<HTMLInputElement>('[data-appearance-source="none"]')?.checked,
+    ).toBe(true)
+    expect(store.watchers.size).toBe(1)
+    expect(store.state.opened).toBe(1)
+  })
+
+  it('keeps reading while the page is hidden', async () => {
+    await render(false)
+    await act(async () => store.deliver(preferences('none')))
+    await turn('hidden')
+    expect(store.watchers.size).toBe(1)
+    await act(async () => store.deliver({ ...preferences('none'), mode: 'dark' }))
+    expect(document.documentElement.dataset.appearance).toBe('dark')
+  })
+
+  it("shows the provider's failure in Settings, and Try again has the server run the read afresh", async () => {
+    await renderSettings()
+    await act(async () => store.fail(new Error('Appearance could not load.')))
+    expect(page()?.getAttribute('data-appearance-state')).toBe('failed')
+    expect(container.querySelector('[data-appearance-error]')?.textContent).toContain(
+      'Appearance could not load.',
+    )
+    const again = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Try again',
+    )
+    await act(async () => again?.click())
+    await settle()
+    expect(store.state.fresh).toBe(1)
+    expect(store.watchers.size).toBe(1)
+    await act(async () => store.deliver(preferences('none')))
+    expect(page()?.getAttribute('data-appearance-state')).toBe('current')
+  })
+
+  it('marks Settings stale with the choices disabled after a reconnect until the value arrives again', async () => {
+    await renderSettings()
+    await act(async () => store.deliver(preferences('none')))
+    const theme = () =>
+      container.querySelector<HTMLFieldSetElement>('[data-appearance-image-controls]')
+    expect(theme()?.disabled).toBe(false)
+    await act(async () => store.reconnect())
+    expect(page()?.getAttribute('data-appearance-state')).toBe('stale')
+    expect(page()?.getAttribute('aria-busy')).toBe('true')
+    expect(theme()?.disabled).toBe(true)
+    await act(async () => store.deliver(preferences('none')))
+    expect(page()?.getAttribute('data-appearance-state')).toBe('current')
+    expect(theme()?.disabled).toBe(false)
   })
 })
