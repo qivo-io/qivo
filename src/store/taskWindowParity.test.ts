@@ -253,21 +253,63 @@ describe('the task window stand-in', () => {
         .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
         .collect(),
     )
+    // with the secret under the group the guest sees, the hidden parent
+    // the group links to, and every link of the organization
+    const hiddenParent = tasks.find((task) => task.title === 'Hidden parent')
+    const group = tasks.find((task) => task.title === 'Bring up the board')
+    if (!hiddenParent || !group) throw new Error('no hidden parent or group')
+    const links = await t.run((ctx) =>
+      ctx.db
+        .query('issue_links')
+        .withIndex('by_source', (q) => q.eq('source_id', group.id))
+        .collect(),
+    )
+    const hiddenRow = (task: Doc<'issues'>) => ({
+      ...taskFields(task),
+      ...(task.parent_id ? { parent_id: task.parent_id } : {}),
+      description: '',
+      has_hidden_parent: false,
+      has_hidden_subtasks: false,
+    })
     const leaky = {
       ...whole,
       projects: projects.map(({ _id, _creationTime, ...row }) => row),
+      // the group's row as a fixture writes it, with no hidden fact, so
+      // the stand-in must find the hidden subtask itself
       issues: [
-        ...whole.issues,
-        {
-          ...taskFields(secret),
-          description: '',
-          has_hidden_parent: false,
-          has_hidden_subtasks: false,
-        },
+        ...whole.issues.map((row) =>
+          row.id === group.id ? { ...row, has_hidden_subtasks: false } : row,
+        ),
+        hiddenRow(secret),
+        hiddenRow(hiddenParent),
       ],
+      links: links.map(relationRow),
     } as Whole
     expect(
       taskWindowStandIn(leaky, 'taskWindow:task', { org_id: f.org.id, ref: secret.id }),
     ).toEqual({ state: 'unavailable' })
+    // the group's own answers name neither hidden task, and say a subtask
+    // is hidden, as the server's do
+    for (const [name, args] of [
+      ['taskWindow:task', { org_id: f.org.id, ref: group.id }],
+      ['taskWindow:links', { org_id: f.org.id, issue_id: group.id }],
+    ] as const) {
+      const server =
+        name === 'taskWindow:task'
+          ? await as(t, f.guest).query(api.taskWindow.task, args as { org_id: string; ref: string })
+          : await as(t, f.guest).query(
+              api.taskWindow.links,
+              args as { org_id: string; issue_id: string },
+            )
+      expect(server).toMatchObject({ state: 'ok' })
+      const standIn = taskWindowStandIn(leaky, name, args)
+      expect(standIn, name).toEqual(server)
+      const text = JSON.stringify(standIn)
+      expect(text).not.toContain(secret.id)
+      expect(text).not.toContain(hiddenParent.id)
+    }
+    expect(
+      taskWindowStandIn(leaky, 'taskWindow:task', { org_id: f.org.id, ref: group.id }),
+    ).toMatchObject({ task: { has_subtasks: true, has_hidden_subtasks: true } })
   })
 })

@@ -15,9 +15,10 @@
      task id that is no uuid as that task's. An active task
      whose project the caller reaches answers `ok` with its row, the
      caller's level on its project, its label rows, the caller's follow,
-     its parent as a short row when the whole holds the parent, and its
-     subtasks the whole holds as short rows by number and then id, the
-     list complete. An archived task whose project the caller sees answers
+     its parent as a short row when the caller is shown the parent, and
+     its subtasks the caller is shown as short rows by number and then id,
+     the list complete; a subtask the caller is not shown sends no row and
+     sets has_hidden_subtasks, as the server's does. An archived task whose project the caller sees answers
      `archived` with the Archived tasks page's row, its text, labels, level
      and whether its project is archived. Everything else answers
      `unavailable`, alike.
@@ -179,7 +180,10 @@ export function taskWindowStandIn(
       }
     }
     if (opened(task.id) === undefined) return UNAVAILABLE
-    const kids = active.filter((row) => row.parent_id === task.id).sort(byNumber)
+    // every active subtask counts toward the group, and only the ones the
+    // caller is shown go out; a hidden one sets has_hidden_subtasks
+    const counting = active.filter((row) => row.parent_id === task.id)
+    const kids = counting.filter((row) => shown.has(row.id)).sort(byNumber)
     const incomplete = force === 'incomplete'
     const parent = task.parent_id ? shown.get(task.parent_id) : undefined
     const me = new Set(whole.myProfileIds)
@@ -187,8 +191,11 @@ export function taskWindowStandIn(
       state: 'ok',
       task: {
         ...task,
-        has_subtasks: task.has_subtasks === true || kids.length > 0,
-        ...(incomplete ? { has_hidden_subtasks: true } : {}),
+        has_subtasks: task.has_subtasks === true || counting.length > 0,
+        has_hidden_subtasks:
+          task.has_hidden_subtasks === true ||
+          incomplete ||
+          counting.some((row) => !shown.has(row.id)),
       },
       level: level(task.project_id),
       labels,

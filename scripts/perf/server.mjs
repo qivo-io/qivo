@@ -1562,6 +1562,9 @@ const wireTask = (row) => {
   const out = parent && shown.has(parent) ? { ...rest, parent_id: parent } : rest
   out.has_hidden_parent = !!parent && !shown.has(parent)
   out.has_hidden_subtasks = hiddenSubtaskParents.has(row.id)
+  // the server's group fact counts every active subtask, hidden ones
+  // included, so the window's stand-in reads it from the row
+  out.has_subtasks = parents.has(row.id)
   return out
 }
 /** The load row the snapshot sends for task `row`, or null:

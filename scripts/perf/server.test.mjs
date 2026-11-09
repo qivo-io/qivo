@@ -2451,6 +2451,21 @@ describe('the benchmark server', () => {
     expect(answer.subtasks.rows.length).toBeLessThan(2)
   })
 
+  it("answers a task whose only subtasks are in hidden projects as a group, as the server's read does", async () => {
+    // in the varied fixture, task 15 has no visible subtask and one in a
+    // hidden project (the server's hidden tasks part their parents among
+    // tasks 5, 15, 25 and 35)
+    const { posted, send } = await server('tasks=40&latency=0&mbps=100000&shape=varied')
+    await send({ type: 'query', id: 'group', name: 'taskWindow:task', args: { ref: id('4', 15) } })
+    const answer = JSON.parse(posted.find((m) => m.to === 'group').text)
+    expect(answer).toMatchObject({ state: 'ok', subtasks: { rows: [], complete: true } })
+    expect(answer.task).toMatchObject({ has_subtasks: true, has_hidden_subtasks: true })
+    // a task with no subtask at all is no group
+    await send({ type: 'query', id: 'leaf', name: 'taskWindow:task', args: { ref: id('4', 16) } })
+    const leaf = JSON.parse(posted.find((m) => m.to === 'leaf').text)
+    expect(leaf.task).toMatchObject({ has_subtasks: false, has_hidden_subtasks: false })
+  })
+
   it("answers the Inbox's unread summary and the open task's item, and reads the item to its through", async () => {
     const ORG = '00000000-0000-4000-8000-000000000001'
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000&unread=12')
