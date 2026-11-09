@@ -5264,8 +5264,8 @@ function milestoneAnswer(slot: ViewSlot): MilestoneAnswer | null {
 const milestoneOnScreen = (id: string): MilestoneRow | undefined => milestoneRows.row(id)
 
 /** The organization of milestone `row`: the one a `get` answer named for
-    it, else its project's in the store (orgOfProject, from the projects
-    part else the project cache), else none (''). */
+    it, else its project's from the project cache (orgOfProject), else none
+    (''). */
 const milestoneOrg = (row: MilestoneRow): string =>
   milestoneRows.orgOf(row.id) ?? orgOfProject(row.project_id)
 
@@ -9662,11 +9662,13 @@ const removalKey = (change: AccessRemoval): string =>
    paints the outcome at once; a refusal takes the paint away again. The
    server works out at commit which tasks leave their holders' sight
    (convex/model/projectAccess.ts findLost), so `shown`, the preview the
-   window showed, only paints: the reassigned holdings the workspace holds
-   with the same holder, and for a person's or a team's grant kept as
-   Viewers a Viewer grant on its project for each of its people without a
-   grant there. A team change paints no Viewer grant; the delivery brings
-   them. While the write is on its way, P.removingAccess answers true for
+   window showed, only paints the reassigned holdings the workspace holds
+   with the same holder, and a member who leaves or a team deleted from the
+   team rows the workspace holds. The workspace holds no grant, so no Viewer
+   grant that
+   keeping people as Viewers gives is painted; the project cache's next
+   answer and the pages' own reads follow the access. While the write is
+   on its way, P.removingAccess answers true for
    it, so a page that lists the access from the server's answer, which the
    paint does not reach, hides the row and shows it again on a refusal.
    Resolves whether the server accepted it. */
@@ -12186,11 +12188,11 @@ export const PLANNER = {
   canSee: (pid: string) => PLANNER.levelOn(pid) !== null,
   /* Would I see a top-level project created in the
      home organization with this lead and access? The New project dialog asks
-     before saving. The draft goes through the same level rules P.canSee
-     applies once addProject has painted the project, so the dialog's warning
-     and the outcome agree: the lead, an individual grant at any level or a
-     share with one of the user's teams can see it, for an org admin as for
-     anyone. */
+     before saving. addProject paints nothing, so the draft goes through the
+     same level rules the server applies to the saved project, whose level
+     the project cache then answers, so the dialog's warning and the outcome
+     agree: the lead, an individual grant at any level or a share with one
+     of the user's teams can see it, for an org admin as for anyone. */
   seesNewProject: (draft: Pick<NewProjectInput, 'lead' | 'access' | 'teamAccess'>): boolean => {
     // addProject makes the creator the lead when none is named, and the
     // server may give the creator a grant by itself
