@@ -1,9 +1,4 @@
-/* Admin-only organization export, in two forms.
- *
- * `page` is the paging query the browser export (src/lib/orgExport.ts)
- * reads, one bounded read per call, each rechecking that the caller is an
- * admin. It stays until the export panel moves to the job and the release
- * after that one.
+/* Admin-only organization export, as a server job.
  *
  * The export job collects the archive on the server, so preparation goes on
  * when the page that asked for it closes. `request` starts the
@@ -109,15 +104,7 @@ import { byId } from './lib/db'
 import { demoForOrg, isDemoDeployment, uncountedWriter } from './lib/demo'
 import type { OrgExportState } from './lib/enums'
 import { exportFileUrl, mintFileToken } from './lib/fileTokens'
-import {
-  authedMutation,
-  badRequest,
-  forbidden,
-  notFound,
-  orgQuery,
-  require,
-  rule,
-} from './lib/functions'
+import { authedMutation, forbidden, notFound, orgQuery, require, rule } from './lib/functions'
 import {
   archiveFileName,
   archiveRow,
@@ -129,8 +116,6 @@ import {
   JOB_README,
   jobManifest,
   ORG_EXPORT_FORMAT,
-  ORG_EXPORT_SECTIONS,
-  type OrgExportPage,
   partEntry,
   vExportCursor,
   ZIP_END_BYTES,
@@ -141,13 +126,7 @@ import { eraseFile } from './model/fileHolds'
 import {
   type BatchJob,
   type ExportBatch,
-  exportDocs,
-  hasItemInFlight,
-  liveChecks,
-  organizationRow,
-  pageSizeOf,
   readBatch as readExportBatch,
-  readPage,
 } from './model/orgExportRead'
 import {
   ARCHIVE_TTL_MS,
@@ -174,72 +153,6 @@ import {
 import { newUuid } from './model/orgs'
 
 const ADMINS_ONLY = 'only organization admins can export organization data'
-
-/* Explicit literals keep both the wire surface and its manifest reviewable. */
-const sectionValidator = v.union(
-  v.literal('organizations'),
-  v.literal('teams'),
-  v.literal('profiles'),
-  v.literal('projects'),
-  v.literal('issues'),
-  v.literal('labels'),
-  v.literal('activity_events'),
-  v.literal('team_members'),
-  v.literal('project_access'),
-  v.literal('project_team_access'),
-  v.literal('milestones'),
-  v.literal('issue_links'),
-  v.literal('issue_labels'),
-  v.literal('issue_attachments'),
-  v.literal('comments'),
-  v.literal('agent_keys'),
-)
-
-/** One page of one section, for the browser export. The client traverses
- * each child section through the parent ids it exported; the parent must be
- * the organization's, and a task's parent must be under a live project. */
-export const page = orgQuery({
-  args: {
-    section: sectionValidator,
-    parent_id: v.optional(v.string()),
-    cursor: v.union(v.string(), v.null()),
-  },
-  handler: async (ctx, { section, parent_id, cursor }): Promise<OrgExportPage> => {
-    const isAdmin = ctx.me.org_role === 'admin'
-    if (!isAdmin) throw forbidden(ADMINS_ONLY)
-    const orgId = ctx.me.org_id
-    const parentTable = ORG_EXPORT_SECTIONS[section]
-    const live = liveChecks(ctx)
-    let scope = orgId
-    if (parentTable !== null) {
-      if (parent_id === undefined) throw badRequest('this export section requires a parent')
-      const parent = await byId(ctx, parentTable, parent_id)
-      if (parent === null || parent.org_id !== orgId) throw notFound('export parent not found')
-      if ('project_id' in parent && !(await live.project(parent.project_id)))
-        throw notFound('export parent not found')
-      scope = parent.id
-      // The client traverses the whole roster; people have no agent keys.
-      if (section === 'agent_keys' && (!('kind' in parent) || parent.kind !== 'agent')) {
-        return { rows: [], continueCursor: '', isDone: true }
-      }
-    } else if (parent_id !== undefined) {
-      throw badRequest('this export section does not take a parent')
-    }
-
-    if (section === 'organizations') {
-      if (cursor !== null) throw badRequest('the organization has a single export page')
-      const row = await organizationRow(ctx, orgId)
-      if (row === null) throw notFound('organization not found')
-      return { rows: [row], continueCursor: '', isDone: true }
-    }
-
-    const inFlight =
-      (section === 'issues' || section === 'issue_links') && (await hasItemInFlight(ctx, orgId))
-    const result = await readPage(ctx, section, scope, cursor, pageSizeOf(section, inFlight))
-    const { rows } = await exportDocs(ctx, orgId, section, result.page, inFlight, live)
-    return { rows, continueCursor: result.continueCursor, isDone: result.isDone }
-  },
-})
 
 /* ------------------------------------------------------------- the job */
 
@@ -431,7 +344,8 @@ export type DownloadClaim =
   | { url: null; reason: 'claimed' | 'not_requested' }
 
 /** A link of DELIVERY.tokenSeconds to the ready archive `export_id` of
- * `org_id`, for the export page to send the browser to at once. Any active
+ * `org_id`, which the export page uses at once to start its download
+ * (src/lib/orgExport.ts) and keeps nowhere. Any active
  * admin of the organization may download, whether or not they asked for
  * the job, and the /exports/ route checks that again on every request.
  *

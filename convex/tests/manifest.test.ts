@@ -618,7 +618,6 @@ orgExport:failDelivery mutation internal {"type":"object","value":{"export_id":{
 orgExport:finishInfo query internal {"type":"object","value":{"export_id":{"fieldType":{"type":"string"},"optional":false}}}
 orgExport:leaseDelivery mutation internal {"type":"object","value":{"export_id":{"fieldType":{"type":"string"},"optional":false},"minter":{"fieldType":{"type":"string"},"optional":false},"exp":{"fieldType":{"type":"number"},"optional":false}}}
 orgExport:noteLeftOut mutation internal {"type":"object","value":{"export_id":{"fieldType":{"type":"string"},"optional":false},"n":{"fieldType":{"type":"number"},"optional":false},"items":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
-orgExport:page query public {"type":"object","value":{"section":{"fieldType":{"type":"union","value":[{"type":"literal","value":"organizations"},{"type":"literal","value":"teams"},{"type":"literal","value":"profiles"},{"type":"literal","value":"projects"},{"type":"literal","value":"issues"},{"type":"literal","value":"labels"},{"type":"literal","value":"activity_events"},{"type":"literal","value":"team_members"},{"type":"literal","value":"project_access"},{"type":"literal","value":"project_team_access"},{"type":"literal","value":"milestones"},{"type":"literal","value":"issue_links"},{"type":"literal","value":"issue_labels"},{"type":"literal","value":"issue_attachments"},{"type":"literal","value":"comments"},{"type":"literal","value":"agent_keys"}]},"optional":false},"parent_id":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 orgExport:readBatch query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"at":{"fieldType":{"type":"object","value":{"section":{"fieldType":{"type":"number"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"parents":{"fieldType":{"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"at":{"fieldType":{"type":"number"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"done":{"fieldType":{"type":"boolean"},"optional":false}}},"optional":true}}},"optional":false},"wide":{"fieldType":{"type":"boolean"},"optional":true},"job":{"fieldType":{"type":"object","value":{"started_at":{"fieldType":{"type":"string"},"optional":false},"ended":{"fieldType":{"type":"record","keys":{"type":"string"},"values":{"fieldType":{"type":"string"},"optional":false}},"optional":false},"in_flight":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"unsettled":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}},"optional":true}}}
 orgExport:recordDelivery mutation internal {"type":"object","value":{"export_id":{"fieldType":{"type":"string"},"optional":false},"stream":{"fieldType":{"type":"string"},"optional":false}}}
 orgExport:recover mutation internal {"type":"object","value":{}}
@@ -1133,23 +1132,22 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // organization, and an unknown or invisible project or milestone reads as
   // absent, never refused.
   milestones: { between: 'authedQuery', get: 'authedQuery', section: 'authedQuery' },
-  // Organization export for org admins. page is the browser export's
-  // paginated read; orgQuery authenticates the active seat and the handler
-  // positively requires admin on every page. status reads the export job;
-  // request, cancel and claimDownload check the admin seat themselves,
+  // Organization export for org admins. status reads the export job, its
+  // handler requiring an admin; request, cancel and claimDownload check the
+  // admin seat themselves,
   // because the read-only gate on orgMutation would refuse them while the
   // organization is read-only before deletion, when exports matter most.
   // claimDownload answers a two-minute link to a ready archive, which the
   // /exports/ route checks again on every request.
   orgExport: {
-    page: 'orgQuery',
     status: 'orgQuery',
     request: 'authedMutation',
     cancel: 'authedMutation',
     claimDownload: 'authedMutation',
   },
   // Admins delete the organization after its read-only period, stop a
-  // deletion they asked for and record finished exports. keep and
+  // deletion they asked for and record exports their app confirmed as
+  // saved, of an archive the export route served. keep and
   // recordExport check the admin seat themselves, because the read-only
   // gate on orgMutation would refuse them exactly when they matter.
   orgRemovals: {
@@ -1376,7 +1374,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 251
+const PUBLIC_COUNT = 250
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')
