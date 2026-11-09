@@ -10311,7 +10311,12 @@ export const ORG_EXPORT_READY_MS = 5 * 60_000
  *  deleted/items hold the deleted task, that no file contents are in it,
  *  and that its size is the panel's archive_bytes. The record line must
  *  show today's date as the page formats it. Its finally deletes the file,
- *  turns the stand-in off and deletes the run's Deleted item for good. It
+ *  turns the stand-in off and deletes the run's Deleted item for good, on
+ *  a failure too: by the item's id from the archive, or, when the step
+ *  failed before it read the archive, the item it finds by the task's
+ *  tagged title in Settings › Projects › Deleted items. A purge that is
+ *  refused, fails or finds no item is a NOTE, since the item then stays
+ *  30 days (purgeExportItem). It
  *  writes on t0's organization what an admin's export writes: a job with
  *  its parts for four hours and its rows for 30 days, the end of an
  *  earlier ready archive, and the organization's last saved export
@@ -10323,10 +10328,8 @@ async function orgExportCheck() {
   const m = ORG_EXPORT_MARKS
   const { A } = run.projects
   await check(ORG_EXPORT_STEP, async () => {
-    const gone = await restOk(w, 'POST', '/tasks', {
-      project: A.id,
-      title: `${run.tag} Exported deleted`,
-    })
+    const title = `${run.tag} Exported deleted`
+    const gone = await restOk(w, 'POST', '/tasks', { project: A.id, title })
     run.created.push(gone)
     const r = await rest(w, 'DELETE', `/tasks/${gone.id}`)
     expect(r.status === 200, `DELETE ${gone.key} answered HTTP ${r.status}`)
@@ -10441,15 +10444,67 @@ async function orgExportCheck() {
         },
         [ORG_EXPORT_PICKER_FLAG, ORG_EXPORT_FILE],
       ).catch(() => {})
-      if (itemId !== null)
-        await evaluate(
-          app,
-          (id) => window.PLANNER.purgeDeletedItems([{ id, org_id: window.PLANNER.homeOrg }]),
-          itemId,
-          60_000,
-        ).catch(() => {})
+      await purgeExportItem(itemId, gone, title)
     }
   })
+}
+
+/** Deletes the export step's own Deleted item of task `gone` for good:
+ *  `itemId` from the archive, or, without one, the item Settings ›
+ *  Projects › Deleted items lists for the task's tagged `title` under the
+ *  run's project M. Says a NOTE when it finds no item, or when Delete now
+ *  is refused or fails, since the item then stays 30 days, and never fails
+ *  the step itself. */
+async function purgeExportItem(itemId, gone, title) {
+  const label = `${ORG_EXPORT_STEP}/deleted-item`
+  try {
+    const id = itemId ?? (await deletedTaskItem(title))
+    if (id === null) {
+      say(
+        'NOTE',
+        label,
+        `found no Deleted item of ${gone.key}; it stays in Deleted items for 30 days`,
+      )
+      return
+    }
+    const outcome = await evaluate(
+      app,
+      (id) => window.PLANNER.purgeDeletedItems([{ id, org_id: window.PLANNER.homeOrg }]),
+      id,
+      60_000,
+    )
+    if (!outcome?.done?.includes(id) && !outcome?.stepping?.includes(id))
+      say(
+        'NOTE',
+        label,
+        `Delete now of ${gone.key}'s Deleted item was not done (${short(JSON.stringify(outcome))}); an admin can delete it in Deleted items`,
+      )
+  } catch (error) {
+    say(
+      'NOTE',
+      label,
+      `could not delete ${gone.key}'s Deleted item for good: ${short(String(error?.message ?? error))}`,
+    )
+  }
+}
+
+/** The id of the run's Deleted item of a task titled `title`, deleted
+ *  from a sub-project of the run's project M, as Settings › Projects ›
+ *  Deleted items lists it for that scope, kind Tasks and the title as its
+ *  search, or null when it lists none within a minute. */
+async function deletedTaskItem(title) {
+  const m = DELETED_ITEMS_MARKS
+  const { M } = run.projects
+  await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/projects-deleted`, {
+    waitUntil: 'domcontentloaded',
+  })
+  await app.locator(`[${m.page}]`).waitFor({ timeout: 60_000 })
+  await pickProject(app.locator(`[${m.scope}]`), M.name, M.id)
+  await app.getByRole('radio', { name: 'Tasks', exact: true }).click()
+  await app.locator(`[${m.search}]`).fill(title)
+  const row = app.locator(`[${m.row}]`).first()
+  if (!(await until(async () => (await row.count()) > 0, 60_000))) return null
+  return await row.getAttribute(m.row)
 }
 
 /** The Settings page Archived tasks opens with its search as the first

@@ -1163,9 +1163,19 @@ describe('staging check REST contract', () => {
     for (const part of [
       'sessionStorage.removeItem(flag)',
       'removeEntry(name)',
-      'purgeDeletedItems',
+      'await purgeExportItem(itemId, gone, title)',
     ])
       expect(after, part).toContain(part)
+    // the purge also runs without the archive's item id, finding the item
+    // by the task's tagged title, and says a NOTE when it is not done
+    const purge = script.slice(
+      script.indexOf('async function purgeExportItem('),
+      script.indexOf('async function deletedTaskItem('),
+    )
+    expect(purge).toContain('itemId ?? (await deletedTaskItem(title))')
+    expect(purge).toContain('purgeDeletedItems')
+    expect(purge.match(/say\(\s*'NOTE'/g)).toHaveLength(3)
+    expect(purge).not.toContain('.catch(() => {})')
     // the stand-in answers a file only under its flag, else the browser's
     // own picker stays
     const stand = (flag) => {
