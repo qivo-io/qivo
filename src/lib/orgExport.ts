@@ -298,9 +298,34 @@ export type DeliverArgs = {
  * the server answered its claim, also a refusal, never when the page
  * refused it itself, and none is made for an export this page already
  * claimed a link for, whose download may still hold one of the route's
- * leases. The link is used at once and kept nowhere.
+ * leases. An automatic attempt that the route answered busy with its wait
+ * tries once more after it (retryWhenBusy). The link is used at once and
+ * kept nowhere.
  */
 export async function deliverExport(args: DeliverArgs): Promise<boolean> {
+  const answered = await deliverOnce(args)
+  if (args.automatic) retryWhenBusy(args)
+  return answered
+}
+
+/* After an automatic attempt the route answered busy with a wait
+   (Retry-After, such as its 429 while two downloads of the archive run),
+   tries once more with a new claim by hand once the wait is over, unless
+   another delivery came meanwhile or the page is hidden then, so the
+   person never has to ask again for a download that only met a busy
+   moment. */
+function retryWhenBusy(args: DeliverArgs): void {
+  const busy = delivery
+  if (busy?.exportId !== args.exportId || busy.state !== 'busy') return
+  if (busy.by !== 'server' || busy.retryAfter === null) return
+  window.setTimeout(() => {
+    if (delivery !== busy || running !== null || document.visibilityState === 'hidden') return
+    void deliverOnce({ ...args, automatic: false })
+  }, busy.retryAfter * 1000)
+}
+
+/* One delivery of deliverExport, without its retry. */
+async function deliverOnce(args: DeliverArgs): Promise<boolean> {
   const { orgId, exportId, archiveBytes, automatic } = args
   const how = args.via ?? exportWay()
   if (running !== null) return false

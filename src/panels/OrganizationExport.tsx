@@ -525,7 +525,7 @@ function DeliveryLine({ delivery }: { delivery: DeliveryState }) {
             ? 'The desktop app is already downloading an export. Try again once it has finished.'
             : delivery.retryAfter === null
               ? 'Qivo is busy sending this export. Try again in a few seconds.'
-              : `This export is already being downloaded twice. Try again in ${delivery.retryAfter} seconds.`}
+              : `Qivo is busy sending this export. Try again in ${delivery.retryAfter} ${delivery.retryAfter === 1 ? 'second' : 'seconds'}.`}
         </p>
       )
     case 'stopped':

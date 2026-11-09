@@ -342,6 +342,68 @@ describe('the file way', () => {
     })
   })
 
+  it('tries an automatic save once more with a new claim after the wait of a busy answer', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
+    try {
+      const file = fakeFile()
+      picker(async () => file.file)
+      const answers = [
+        () => new Response(null, { status: 429, headers: { 'Retry-After': '30' } }),
+        () => new Response(null, { status: 429, headers: { 'Retry-After': '30' } }),
+        () => zipResponse(streamOf(bytes(5)), 5),
+      ]
+      const fetcher = vi.fn(async () => (answers.shift() ?? answers[0])())
+      vi.stubGlobal('fetch', fetcher)
+      await m.deliverExport({
+        orgId: ORG,
+        exportId: EXPORT,
+        archiveBytes: 5,
+        automatic: true,
+        file: file.file,
+      })
+      expect(m.deliveryNow()).toMatchObject({ state: 'busy', by: 'server', retryAfter: 30 })
+      await vi.advanceTimersByTimeAsync(29_000)
+      expect(fetcher).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1_000)
+      await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2))
+      // the retry claims by hand, since the automatic claim was spent
+      expect(sent().filter(([name]) => name === 'orgExport:claimDownload')).toEqual([
+        ['orgExport:claimDownload', { org_id: ORG, export_id: EXPORT, automatic: true }],
+        ['orgExport:claimDownload', { org_id: ORG, export_id: EXPORT, automatic: false }],
+      ])
+      // busy again: no third try
+      await vi.waitFor(() => expect(m.deliveryNow()).toMatchObject({ state: 'busy' }))
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(fetcher).toHaveBeenCalledTimes(2)
+      expect(records()).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('tries no save again after a busy answer to a save by hand', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
+    try {
+      const fetcher = vi.fn(
+        async () => new Response(null, { status: 429, headers: { 'Retry-After': '1' } }),
+      )
+      const file = fakeFile()
+      picker(async () => file.file)
+      vi.stubGlobal('fetch', fetcher)
+      await m.deliverExport({
+        orgId: ORG,
+        exportId: EXPORT,
+        archiveBytes: 5,
+        automatic: false,
+        file: file.file,
+      })
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(fetcher).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('stops a save on Stop, discarding what it wrote', async () => {
     let release: () => void = () => {}
     const body = new ReadableStream<Uint8Array>({

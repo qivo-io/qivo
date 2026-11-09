@@ -604,6 +604,30 @@ describe('starting, joining, downloading and cancelling', () => {
     expect(text()).toContain('Saving is paused.')
   })
 
+  it("names the route's wait in seconds when Qivo is busy sending the export", async () => {
+    const file = { name: 'x.zip', createWritable: vi.fn(), getFile: vi.fn() }
+    ;(window as { showSaveFilePicker?: unknown }).showSaveFilePicker = vi.fn(async () => file)
+    vi.stubGlobal('isSecureContext', true)
+    const waits = ['1', '30']
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(null, { status: 429, headers: { 'Retry-After': waits.shift() ?? '' } }),
+      ),
+    )
+    serve(['claimed'])
+    await mount()
+    await press('[data-export-download="latest"]')
+    expect(container.querySelector('[data-export-busy="server"]')?.textContent).toBe(
+      'Qivo is busy sending this export. Try again in 1 second.',
+    )
+    await press('[data-export-download="latest"]')
+    expect(container.querySelector('[data-export-busy="server"]')?.textContent).toBe(
+      'Qivo is busy sending this export. Try again in 30 seconds.',
+    )
+  })
+
   it('says Qivo is busy when the route answered the desktop app no archive', async () => {
     desktop({ state: 'declined' })
     serve(['claimed'])
