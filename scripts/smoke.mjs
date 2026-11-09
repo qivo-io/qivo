@@ -2823,15 +2823,19 @@ try {
   )
   // The bare address opens the scope the user last picked on the team
   // opening, naming it in place, or asks to choose one when none is saved,
-  // never All projects by default, with the sidebar row lit either way.
+  // never All projects by default, with the sidebar row lit either way. A
+  // saved scope that names a team or project gone since, as after another
+  // drive's cleanup on the same backend, says it is not available.
   await pageA.goto(`${BASE}/app/${demo.orgSlug}/sync`, { waitUntil: 'domcontentloaded' })
   await pageA
-    .locator('[data-sync-page]:is([data-sync-state="ok"], [data-sync-state="choose"])')
+    .locator(
+      '[data-sync-page]:is([data-sync-state="ok"], [data-sync-state="choose"], [data-sync-state="unavailable"])',
+    )
     .waitFor({ timeout: 30000 })
   await pageA.waitForURL(new RegExp(`/app/${demo.orgSlug}/sync(/(all|p/\\d+|team/[0-9a-f-]+))?$`))
   if (!(await pageA.locator('[data-sync-nav][aria-current="page"]').count()))
     await fail('The sidebar Team sync row is not lit on the page')
-  log('A: Team sync opened on its saved scope, or asked to choose one')
+  log('A: Team sync opened on its saved scope, asked to choose one, or said the saved one is gone')
   // All projects holds the task whatever scope is saved; opening it by
   // address saves nothing, so the user's saved scope stays as it was. The
   // page reads its meeting from the server, so the task is the agenda's
