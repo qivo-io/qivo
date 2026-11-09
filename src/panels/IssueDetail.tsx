@@ -1990,17 +1990,33 @@ function IssueDetail({
   // Frozen with it: whether the unread messages include a change, which the
   // tail note under Comments points at All for, since Comments loads no
   // history to look for it in.
-  const frozen = useRefID<{ key: string | null | undefined; unread: UnreadStart | null }>({
+  // A return to a hidden tab or window (P.windowReturns) freezes again, once,
+  // from the item's first current answer after it, when news arrived while
+  // nobody looked: that answer holds unread messages, no snooze, no unread
+  // choice of the person's own (P.unreadChoiceHeld), and an unread start
+  // later than the frozen one, or none was frozen. So what arrived while
+  // hidden sits under New, and the read on open, an effect, reads it after
+  // this render. A plain return keeps the visit's mark, and so does the
+  // Inbox's pop-out, which keeps the start it was given. A window opened
+  // while hidden has no freeze until its first current answer, which comes
+  // after the page shows.
+  const frozen = useRefID<{
+    key: string | null | undefined
+    unread: UnreadStart | null
+    returns: number
+  }>({
     key: undefined,
     unread: { ts: null, change: false },
+    returns: 0,
   })
   const freezeKey = watchUuid ? `${watchOrg}:${watchUuid}` : watchUuid
   const shownItem =
     watchUuid && P.inboxItem?.task === watchUuid && P.inboxItem.org === watchOrg
       ? P.inboxItem
       : null
+  const answered = shownItem?.state === 'ok' && shownItem.current ? shownItem : null
+  const returns = P.windowReturns()
   if (frozen.current.key !== freezeKey || frozen.current.unread === null) {
-    const answered = shownItem?.state === 'ok' && shownItem.current ? shownItem : null
     frozen.current = {
       key: freezeKey,
       unread:
@@ -2011,7 +2027,19 @@ function IssueDetail({
             : answered
               ? itemUnreadStart(answered.item)
               : null,
+      returns,
     }
+  } else if (frozen.current.returns !== returns && unreadIn === undefined && answered) {
+    const was = frozen.current.unread
+    const next = itemUnreadStart(answered.item)
+    const news =
+      next.ts !== null &&
+      answered.item !== null &&
+      answered.item.unread_count > 0 &&
+      answered.item.snoozed_until === null &&
+      !P.unreadChoiceHeld() &&
+      (was.ts === null || next.ts > was.ts)
+    frozen.current = { key: freezeKey, unread: news ? next : was, returns }
   }
   const unreadTs = frozen.current.unread?.ts ?? null
   const unreadPending = frozen.current.unread === null

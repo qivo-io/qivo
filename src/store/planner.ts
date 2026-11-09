@@ -10980,6 +10980,15 @@ export const PLANNER = {
       window marks itself refreshing while it holds, with no visible
       mark. */
   windowRefreshing: (): boolean => windowRefreshingNow(),
+  /** How many times the page showed again after it was hidden, so a
+      window can tell the first current inbox item answer after a return
+      (IssueDetail's New mark). */
+  windowReturns: (): number => windowReturns,
+  /** Whether the person's own unread choice for the open task holds off
+      the read on open, a Mark as unread, a snooze or its end that waits
+      or that the server accepted this visit (heldBack), so a return
+      draws no New mark at an unread start that is their choice. */
+  unreadChoiceHeld: (): boolean => heldBack(itemHold),
   // the bulk action running or last run, with its progress (store/inboxBulk.ts)
   inboxBulk: null as InboxBulk | null,
   // the marks of the person's own Inbox writes by inboxMarkKey, which the

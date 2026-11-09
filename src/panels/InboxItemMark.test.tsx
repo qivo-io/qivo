@@ -831,3 +831,145 @@ describe('the Inbox pane and its pop-out', { timeout: 20_000 }, () => {
     expect(itemReads()).toHaveLength(1)
   })
 })
+
+describe('a return to a hidden page', { timeout: 20_000 }, () => {
+  afterEach(() => {
+    Reflect.deleteProperty(document, 'visibilityState')
+  })
+  /** Sets the page's visibility, as the browser does when a tab hides. */
+  const setVisibility = (value: 'visible' | 'hidden') =>
+    act(async () => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => value })
+      document.dispatchEvent(new Event('visibilitychange'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+  const reads = () => document.querySelector('[aria-label="Task"]')
+  const state = () => reads()?.getAttribute('data-task-window-reads')
+
+  it('marks the window refreshing from the hide until its reads answer again, for assistive technology only', async () => {
+    await load([message('task-a', 5)])
+    await openTask()
+    await comments(range(1, 6))
+    expect(state()).toBe('current')
+    expect(reads()?.getAttribute('aria-busy')).toBeNull()
+    await setVisibility('hidden')
+    expect(state()).toBe('refreshing')
+    expect(reads()?.getAttribute('aria-busy')).toBe('true')
+    // the held thread stays on screen
+    expect(thread()).toContain('Check 5')
+    await setVisibility('visible')
+    // the item and the task answered again; the thread has not yet
+    expect(state()).toBe('refreshing')
+    await comments(range(1, 6))
+    expect(state()).toBe('current')
+    expect(reads()?.getAttribute('aria-busy')).toBeNull()
+  })
+
+  it('leaves news that arrived while hidden unread, then shows it under New and reads it once', async () => {
+    await load()
+    await openTask()
+    await comments(range(1, 5))
+    expect(thread()).not.toContain('New')
+    await setVisibility('hidden')
+    beyond = [message('task-a', 6)]
+    await act(async () => publish())
+    await settle()
+    // the badge counts it, and nothing reads it
+    expect(P.inboxSummary.answer?.unread_count).toBe(1)
+    expect(itemReads()).toEqual([])
+    await setVisibility('visible')
+    await comments(range(1, 7))
+    expect(thread()).toEqual([
+      'Check 1',
+      'Check 2',
+      'Check 3',
+      'Check 4',
+      'Check 5',
+      'New',
+      'Check 6',
+    ])
+    expect(itemReads()).toEqual([
+      { org_id: snap.orgs[0].id, issue_id: 'task-a', through: Date.parse(at(6)) },
+    ])
+  })
+
+  it("keeps the visit's mark on a return with no news", async () => {
+    await load([message('task-a', 5)])
+    await openTask()
+    await comments(range(1, 8))
+    expect(thread().indexOf('New')).toBe(4)
+    expect(itemReads()).toHaveLength(1)
+    // the server read it, and confirmed the read
+    beyond = beyond.map((m) => ({ ...m, read_at: at(6) }))
+    await act(async () => publish())
+    await act(async () => writes[0].answer())
+    await settle()
+    await setVisibility('hidden')
+    await setVisibility('visible')
+    await comments(range(1, 8))
+    expect(thread().indexOf('New')).toBe(4)
+    expect(itemReads()).toHaveLength(1)
+  })
+
+  it("draws no new mark for the person's own Mark as unread on a return", async () => {
+    await load([], [message('task-a', 5, { kind: 'comment', read_at: at(6) })])
+    await openTask()
+    await comments(range(1, 8))
+    expect(thread()).not.toContain('New')
+    await act(async () =>
+      P.unreadItem({ org: snap.orgs[0].id, task: 'task-a', through: Date.parse(at(5)) }),
+    )
+    const unread = writes.find((w) => w.name === 'messages:unreadItem')
+    if (!unread) throw new Error('no unread write went out')
+    snap.messages = snap.messages.map(({ read_at: _, ...m }) => m)
+    await act(async () => publish())
+    await act(async () => unread.answer())
+    await settle()
+    await setVisibility('hidden')
+    await setVisibility('visible')
+    await comments(range(1, 8))
+    expect(P.inboxItem?.item).toMatchObject({ unread_count: 1 })
+    expect(thread()).not.toContain('New')
+    expect(itemReads()).toEqual([])
+  })
+
+  it('freezes a window opened while hidden on its first answer after the page shows', async () => {
+    await load([message('task-a', 5)])
+    await setVisibility('hidden')
+    await openTask()
+    expect(itemReads()).toEqual([])
+    expect(threads.filter((t) => !t.closed)).toEqual([])
+    await setVisibility('visible')
+    await comments(range(1, 8))
+    expect(thread().indexOf('New')).toBe(4)
+    expect(itemReads()).toHaveLength(1)
+  })
+
+  it('keeps the start of nothing it was given on a return with news', async () => {
+    await load()
+    const { IssueDetail } = await import('./IssueDetail')
+    const row = snap.issues.find((it) => it.id === 'task-a')
+    if (!row) throw new Error('missing task-a')
+    const task = { id: P.openTask(row.id, row.org_id, row.num) }
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <IssueDetail
+            issueId={task.id}
+            onClose={vi.fn()}
+            onOpen={vi.fn()}
+            unread={{ ts: null, change: false }}
+          />
+        </TooltipProvider>,
+      ),
+    )
+    await settle()
+    await comments(range(1, 5))
+    await setVisibility('hidden')
+    beyond = [message('task-a', 6)]
+    await act(async () => publish())
+    await setVisibility('visible')
+    await comments(range(1, 7))
+    expect(thread()).not.toContain('New')
+  })
+})
