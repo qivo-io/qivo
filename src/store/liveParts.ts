@@ -61,7 +61,20 @@
    again, as the task side does when it reads the task a reference read
    named. No side takes another's: the store never starts a reference read
    with the arguments the task side reads with (store/planner.ts
-   runRefRead). */
+   runRefRead).
+
+   The open task's reads pause while the page is hidden (VIEW_SIDES). The
+   store tells the registry so (pauseViews), from the one visibility watch
+   of store/planner.ts (watchWindowVisibility), and a registry created
+   while the page is hidden starts paused (createLiveParts `paused`), the
+   boot's address read included. A paused view side holds no
+   subscription and keeps its registration, its query and arguments, so
+   sideArgs still answers them and the store's checks of what runs hold.
+   Watching a view side while paused registers the new arguments, and
+   stopping it drops them. On return every registered view side
+   subscribes afresh at once, so its first news is a new run, never an
+   answer held from before the pause. The summary and the feed never
+   pause. */
 
 import { type FunctionReference, getFunctionName } from 'convex/server'
 import { ConvexError, type Value } from 'convex/values'
@@ -104,6 +117,22 @@ export const SIDE_NAMES = [
   'feed',
 ] as const
 export type SideName = (typeof SIDE_NAMES)[number]
+
+/** The side queries a hidden page pauses (pauseViews): the open task
+    window's reads, its thread, history, task, links, attachments, the
+    reference read and the inbox item. `summary` and `feed` never pause,
+    by the owner's rule that the unread count and notifications keep
+    running while nobody looks. */
+export const VIEW_SIDES: readonly SideName[] = [
+  'thread',
+  'history',
+  'task',
+  'links',
+  'attachments',
+  'reference',
+  'item',
+]
+const isViewSide = (name: SideName) => VIEW_SIDES.includes(name)
 
 /** What one transition brought a side query: its answer or its failure. */
 export type SideNews = { value: unknown } | { error: unknown }
@@ -157,8 +186,16 @@ type Slot = {
     `QN-12` or a lowercase uuid. */
 export type AddressedTask = { slug: string; ref: string }
 
-/* Whether side slot `slot` watches query `ref` with `args`. */
-const sameQuery = (slot: Slot, ref: FunctionReference<'query'>, args: Record<string, Value>) =>
+/* A side's query and arguments, which a paused view side keeps without
+   a subscription. */
+type Registration = { ref: FunctionReference<'query'>; args: Record<string, Value> }
+
+/* Whether side `slot` watches, or will watch, query `ref` with `args`. */
+const sameQuery = (
+  slot: Registration,
+  ref: FunctionReference<'query'>,
+  args: Record<string, Value>,
+) =>
   getFunctionName(slot.ref) === getFunctionName(ref) &&
   JSON.stringify(slot.args) === JSON.stringify(args)
 
@@ -167,12 +204,14 @@ const sameQuery = (slot: Slot, ref: FunctionReference<'query'>, args: Record<str
     is down or saves pause offline. With `address`, it subscribes the
     `reference` side to the task the boot's address names, taskWindow.task
     in the organization its slug names, once the root part names that
-    organization. A slug the root part does not name subscribes nothing. */
+    organization. A slug the root part does not name subscribes nothing.
+    With `paused`, as for a page hidden when the registry starts, the view
+    sides start paused (pauseViews). */
 export function createLiveParts(
   live: LiveQueries,
   report: (news: PartsReport) => void,
   online: () => boolean,
-  opts?: { address?: AddressedTask },
+  opts?: { address?: AddressedTask; paused?: boolean },
 ) {
   let stopped = false
   let connection: number | null = null
@@ -180,6 +219,11 @@ export function createLiveParts(
   // whether the root part changed since the last complete report
   let dirty = true
   const sides = new Map<SideName, Slot>()
+  // whether the view sides pause, and the registrations of those that
+  // wait for the page to show, apart from the slots, since none holds a
+  // subscription or a token
+  let viewsPaused = opts?.paused === true
+  const waiting = new Map<SideName, Registration>()
   let lastAt = 0
   let stallTimer: ReturnType<typeof setTimeout> | null = null
   // whether the root part's first answer was read for the boot's address
@@ -304,12 +348,22 @@ export function createLiveParts(
       instead, and the news it answers is that subscription's current
       answer, when one arrived on the newest connection, else undefined.
       Only the reference side's is handed over: a read that another side
-      needs goes on, and the caller never watches its arguments again. */
+      needs goes on, and the caller never watches its arguments again.
+      While the view sides pause, a view side only registers its query and
+      arguments, a reference registration of the same query moving over
+      to it, and answers no news. */
   function watchSide(
     name: SideName,
     ref: FunctionReference<'query'>,
     args: Record<string, Value>,
   ): SideNews | undefined {
+    if (viewsPaused && isViewSide(name)) {
+      const reference = waiting.get('reference')
+      if (name !== 'reference' && reference && sameQuery(reference, ref, args))
+        waiting.delete('reference')
+      waiting.set(name, { ref, args })
+      return undefined
+    }
     const before = sides.get(name)
     for (const [other, slot] of sides) {
       if (other !== 'reference' || other === name || !sameQuery(slot, ref, args)) continue
@@ -401,21 +455,49 @@ export function createLiveParts(
     watchSide,
     /** The arguments side `name` watches with, or undefined while it does
         not run. */
-    sideArgs: (name: SideName): Record<string, Value> | undefined => sides.get(name)?.args,
+    sideArgs: (name: SideName): Record<string, Value> | undefined =>
+      sides.get(name)?.args ?? waiting.get(name)?.args,
     /** Runs side `name` again from a fresh subscription when its latest
         result is a failure, as Convex never keeps a failed run. Answers
-        whether it did. */
+        whether it did, and false for a paused view side, which has no
+        result. */
     rerunSide(name: SideName): boolean {
       const slot = sides.get(name)
       if (!slot || slot.error === undefined) return false
       rerun(slot)
       return true
     },
-    /** Stops the side query `name`, and keeps the others. */
+    /** Stops the side query `name`, and keeps the others. A paused view
+        side loses its registration. */
     stopSide(name: SideName) {
       const slot = sides.get(name)
       if (slot) drop(slot)
       sides.delete(name)
+      waiting.delete(name)
+    },
+    /** Pauses the view sides (VIEW_SIDES) or ends the pause. A pause stops
+        each view side's subscription and keeps its registration; its end
+        subscribes every registered view side afresh, so their news are
+        new runs and reach the report as any side's do. The summary and
+        the feed keep running throughout. */
+    pauseViews(paused: boolean) {
+      if (stopped || paused === viewsPaused) return
+      viewsPaused = paused
+      if (paused) {
+        for (const [name, slot] of sides) {
+          if (!isViewSide(name)) continue
+          drop(slot)
+          sides.delete(name)
+          waiting.set(name, { ref: slot.ref, args: slot.args })
+        }
+        return
+      }
+      for (const [name, { ref, args }] of waiting) {
+        const slot = watch(ref, args)
+        slot.side = name
+        sides.set(name, slot)
+      }
+      waiting.clear()
     },
     /** Stops every subscription, the side queries included. */
     stop() {
@@ -425,6 +507,7 @@ export function createLiveParts(
       // a Map lets its loop delete the entry it is on
       for (const slot of slots.values()) drop(slot)
       sides.clear()
+      waiting.clear()
     },
   }
 }

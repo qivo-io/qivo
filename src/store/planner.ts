@@ -206,6 +206,7 @@ import {
   SIDE_NAMES,
   type SideName,
   type SideNews,
+  VIEW_SIDES,
 } from './liveParts'
 import {
   createMilestoneRows,
@@ -447,7 +448,10 @@ export type InboxSummaryVM =
     items are not complete, `failed` after a failure or a refusal, which
     the store runs once more a visit by itself (itemNews), else `ok` with
     the item, null for no item. `current` as for the summary
-    (InboxSummaryVM). */
+    (InboxSummaryVM). The item pauses with the task window's other reads
+    while the page is hidden (watchWindowVisibility), so it is not current
+    then, and the read on open sends nothing until the first answer after
+    the page shows. */
 export type InboxItemVM = {
   task: string
   org: string
@@ -10969,6 +10973,13 @@ export const PLANNER = {
   // the open task's inbox item, which its window takes the New divider and
   // the read on open from, else null (subscribeItem)
   inboxItem: null as InboxItemVM | null,
+  /** Whether the task window's reads are paused or refreshing: true from
+      the moment the page hides while a view side is registered, until
+      every view side registered when it showed again has answered or
+      failed on its fresh subscription (watchWindowVisibility). The
+      window marks itself refreshing while it holds, with no visible
+      mark. */
+  windowRefreshing: (): boolean => windowRefreshingNow(),
   // the bulk action running or last run, with its progress (store/inboxBulk.ts)
   inboxBulk: null as InboxBulk | null,
   // the marks of the person's own Inbox writes by inboxMarkKey, which the
@@ -14867,7 +14878,12 @@ export const PLANNER = {
       read before the read's promise resolves, so the answer that came
       with it may hold such a message, and no later answer may come. A
       paused read is refused quietly and goes out once the pause ends, and
-      a refusal by the server is not sent again for its `through`. Answers
+      a refusal by the server is not sent again for its `through`. While
+      the page is hidden the item is not current (watchWindowVisibility),
+      so news that arrives then stays unread, counted on every device,
+      and the confirmation's and the hold's runs again send nothing
+      either; the item's first answer after the page shows sends the read.
+      This ended the read in a hidden tab that row 434 had kept. Answers
       whether it sent one. */
   readOnOpen: (task: string): boolean => {
     const shown = PLANNER.inboxItem
@@ -16839,6 +16855,88 @@ syncStatus.subscribe((ended) => {
   setTimeout(() => preferences.retry(), 0)
 })
 
+/* Whether the page is hidden, which pauses the task window's reads, the
+   view sides of the live parts (watchWindowVisibility). */
+let windowHidden = false
+let windowVisibility: (() => void) | null = null
+/* The view sides registered when the page showed again that have not
+   answered or failed on their fresh subscriptions, null while none
+   waits (P.windowRefreshing). */
+let refreshingSides: Set<SideName> | null = null
+/* How many times the page showed again after it was hidden
+   (P.windowReturns). */
+let windowReturns = 0
+
+/** Pauses the task window's reads while the page is hidden
+    (lib/viewVisibility.ts, by visibility and not focus): the thread, the
+    history, the task with its links and attachments, the reference read
+    and the inbox item, the view sides of the live parts (VIEW_SIDES).
+    Everything they loaded stays, the thread's runs and gap, the held
+    comments, places and press keeps, the history, the sections' answers
+    and failures, the item's answer and the reference read's, and none
+    counts as current: no delivery from before holds a write accepted
+    since, and the read on open sends nothing. On return each registered
+    view side subscribes afresh, and their news goes through the usual
+    receive rules (threadNews, historyNews, sectionNews, itemNews,
+    referenceNews), the thread budget's among them. The summary and the
+    feed keep running. Started with the first registry, it lasts as long
+    as the page, and every registry started while the page is hidden
+    starts paused (startParts). */
+function watchWindowVisibility() {
+  if (windowVisibility) return
+  windowVisibility = watchVisibility(({ visible }) => {
+    if (visible !== windowHidden) return
+    windowHidden = !visible
+    if (windowHidden) pauseWindow()
+    else resumeWindow()
+  })
+}
+
+/* The pause of watchWindowVisibility. */
+function pauseWindow() {
+  parts?.pauseViews(true)
+  refreshingSides = null
+  threadCurrent = false
+  detailFresh = false
+  // the item's part of staleInboxReads, never the summary's
+  itemFresh = false
+  const item = PLANNER.inboxItem
+  if (item?.current) PLANNER.inboxItem = { ...item, current: false }
+  emit('comments')
+}
+
+/* The return of watchWindowVisibility. */
+function resumeWindow() {
+  windowReturns++
+  if (parts) {
+    const registered = VIEW_SIDES.filter((side) => parts?.sideArgs(side) !== undefined)
+    refreshingSides = registered.length > 0 ? new Set(registered) : null
+    parts.pauseViews(false)
+  }
+  emit('comments')
+}
+
+/* P.windowRefreshing, forgetting a side that stopped since the return. */
+function windowRefreshingNow(): boolean {
+  if (!parts) return false
+  if (windowHidden) return VIEW_SIDES.some((side) => parts?.sideArgs(side) !== undefined)
+  if (!refreshingSides) return false
+  for (const side of refreshingSides) if (!parts.sideArgs(side)) refreshingSides.delete(side)
+  if (refreshingSides.size === 0) refreshingSides = null
+  return refreshingSides !== null
+}
+
+/* Takes the view sides that answered or failed in one report out of those
+   the window waits for since its return, and tells the window once none
+   waits, also when their answers changed nothing on screen. */
+function settleRefreshing(sides: PartsReport['sides']) {
+  if (!refreshingSides || !sides) return
+  for (const name of SIDE_NAMES) if (sides[name]) refreshingSides.delete(name)
+  if (refreshingSides.size > 0) return
+  refreshingSides = null
+  emit('comments')
+}
+
 /* The side queries' news that came with the boot's transitions, before the
    first workspace settled the boot, the latest of each side, with the
    socket connection its transition arrived on. initStore hands it on once
@@ -16866,6 +16964,9 @@ function startParts(
   let bootFailed = false
   // saves pause offline, and a stalled part is no fault while they do
   const online = () => savePause()?.kind !== 'offline'
+  // a registry started while the page is hidden starts with its view
+  // sides paused
+  watchWindowVisibility()
   return createLiveParts(
     live,
     (news) => {
@@ -16880,6 +16981,7 @@ function startParts(
           const side = news.sides?.[name]
           if (side) bootSideNews.set(name, { news: side, connection: news.connection })
         }
+        settleRefreshing(news.sides)
         if (ws.state === 'held') return
         settled = true
         if (ws.state === 'failed') {
@@ -16910,10 +17012,11 @@ function startParts(
           bootSideNews.delete(name)
           SIDE_NEWS[name](side, news.connection)
         }
+        settleRefreshing(news.sides)
       })
     },
     online,
-    first?.address ? { address: first.address } : undefined,
+    { ...(first?.address ? { address: first.address } : {}), paused: windowHidden },
   )
 }
 
@@ -17010,6 +17113,7 @@ function stopParts() {
   bootSideNews.clear()
   // the reference read runs again on the next registry (syncRefRead)
   refLast = null
+  refreshingSides = null
 }
 
 /** Destroy demo memory before rendering the expired/session-loss screen.

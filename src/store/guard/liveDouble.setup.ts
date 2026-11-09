@@ -280,6 +280,14 @@ export function liveOver(
   forceProjectNav(force: ForcedProjectNav | 'client' | null): void
   forceTaskWindow(force: ForcedTaskWindow | 'client' | null, only?: TaskWindowRead): void
   byIdsReads(): string[][]
+  /** The subscriptions open now, each query's name with its arguments, so
+      a test can tell what a page holds, as while it is hidden
+      (src/hiddenReads.test.tsx). A store an earlier test left running
+      holds its own, so `since` leaves out those watched last before the
+      store generation it names (generation()). */
+  opened(since?: number): { name: string; args: Record<string, unknown> }[]
+  /** The newest store generation, which each registry's start moves on. */
+  generation(): number
   /** the bounds of the stand-in this double answers the inbox reads with
       (store/inboxStandIn.setup.ts INBOX_STAND_IN), which a test lowers
       here, since vi.resetModules keeps this double and the module it
@@ -624,6 +632,11 @@ export function liveOver(
     },
     /** The ids of every projectNav.byIds read a store opened, in order. */
     byIdsReads: () => byIdsOpened.map((ids) => [...ids]),
+    opened: (since = 0) =>
+      [...watched.values()]
+        .filter((w) => w.count > 0 && w.gen > since)
+        .map((w) => ({ name: w.name, args: structuredClone(w.args) })),
+    generation: () => generation,
     inboxStandIn: INBOX_STAND_IN,
     batch(step) {
       batching = new Set()

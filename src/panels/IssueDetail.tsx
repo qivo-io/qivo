@@ -1497,6 +1497,7 @@ function IssueDetail({
   // store's health, and the start and end of a save pause a workspace emit,
   // which reaches health too
   usePlannerVersion('health')
+  const windowRefreshing = P.windowRefreshing()
   const mobile = useMobile()
   const [mobileTab, setMobileTab] = useStateID('activity')
   const [mobileViewport, setMobileViewport] = useStateID(() => ({
@@ -3412,6 +3413,11 @@ function IssueDetail({
           role={embedded && !mobile ? 'region' : 'dialog'}
           data-floating-surface={embedded && !mobile ? undefined : ''}
           aria-hidden={!open ? true : undefined}
+          // the reads paused while the page was hidden, or not all answered
+          // again since it showed (P.windowRefreshing): what shows is held,
+          // marked for assistive technology only, with no visible mark
+          data-task-window-reads={windowRefreshing ? 'refreshing' : 'current'}
+          aria-busy={windowRefreshing ? true : undefined}
           aria-label="Task"
           data-issue-design="alignment"
           data-issue-layout={

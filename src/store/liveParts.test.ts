@@ -2,7 +2,7 @@ import { type FunctionReference, getFunctionName, makeFunctionReference } from '
 import { ConvexError, type Value } from 'convex/values'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LiveQueries, LiveTransition } from '../lib/liveQueries'
-import { createLiveParts, type PartsReport, STALL } from './liveParts'
+import { createLiveParts, type PartsReport, STALL, VIEW_SIDES } from './liveParts'
 
 /* The root part's arguments, none (convex/workspace.ts root). */
 const ROOT_ARGS = {}
@@ -598,5 +598,131 @@ describe("the Inbox's unread summary side", () => {
     expect(parts.rerunSide('summary')).toBe(false)
     expect(parts.rerunSide('thread')).toBe(false)
     expect(s.log).toEqual([])
+  })
+})
+
+describe('the view sides while the page is hidden', () => {
+  const ITEM = makeFunctionReference<'query'>('inbox:item')
+  const FEED = makeFunctionReference<'query'>('inbox:feed')
+  const REFERENCE_ARGS = { org_id: ORG, ref: 'QN-1' }
+  // every view side of one open task, with its query and arguments
+  const VIEWS = [
+    ['thread', THREAD, 'snapshot:threadComments', { org_id: ORG, issue_id: 't' }],
+    ['history', HISTORY, 'snapshot:threadHistory', { org_id: ORG, issue_id: 't' }],
+    ['task', TASK, 'taskWindow:task', { org_id: ORG, ref: 't' }],
+    ['links', LINKS, 'taskWindow:links', { org_id: ORG, issue_id: 't' }],
+    ['attachments', ATTACHMENTS, 'taskWindow:attachments', { org_id: ORG, issue_id: 't' }],
+    ['reference', TASK, 'taskWindow:task', REFERENCE_ARGS],
+    ['item', ITEM, 'inbox:item', { org_id: ORG, issue_id: 't' }],
+  ] as const
+  const viewKeys = (s: ReturnType<typeof scripted>) =>
+    VIEWS.map(([, , name, args]) => s.keyOf(name, args))
+  const watchViews = (parts: ReturnType<typeof createLiveParts>) => {
+    for (const [side, ref, , args] of VIEWS) parts.watchSide(side, ref, args)
+  }
+
+  it('names every task window side and neither the summary nor the feed', () => {
+    expect([...VIEW_SIDES].sort()).toEqual(VIEWS.map(([side]) => side).sort())
+    expect(VIEW_SIDES).not.toContain('summary')
+    expect(VIEW_SIDES).not.toContain('feed')
+  })
+
+  it('stops exactly the view sides, keeps their arguments, and subscribes each afresh on return', async () => {
+    const { s, parts, reports } = await started()
+    watchViews(parts)
+    parts.watchSide('feed', FEED, { after: 5 })
+    const feed = s.keyOf('inbox:feed', { after: 5 })
+    const summary = s.keyOf('inbox:summary', {})
+    s.log.length = 0
+    parts.pauseViews(true)
+    for (const key of viewKeys(s)) expect(s.watched.has(key)).toBe(false)
+    expect(s.watched.has(summary)).toBe(true)
+    expect(s.watched.has(feed)).toBe(true)
+    expect(s.watched.has(s.keyOf('workspace:root', ROOT_ARGS))).toBe(true)
+    for (const [side, , , args] of VIEWS) expect(parts.sideArgs(side)).toEqual(args)
+    // a paused side has no failed run to run again
+    expect(parts.rerunSide('item')).toBe(false)
+    // the summary and the feed keep their news while the views pause
+    s.set('inbox:summary', {}, { value: { unread_count: 2 } })
+    s.set('inbox:feed', { after: 5 }, { value: { events: [] } })
+    s.send([summary, feed])
+    expect(reports.at(-1)?.sides).toEqual({
+      summary: { value: { unread_count: 2 } },
+      feed: { value: { events: [] } },
+    })
+    s.log.length = 0
+    parts.pauseViews(false)
+    expect(s.log).toEqual(viewKeys(s).map((key) => `watch ${key}`))
+    // their news reaches the report as before
+    s.set('snapshot:threadComments', VIEWS[0][3], { value: { comments: [] } })
+    s.send([viewKeys(s)[0]])
+    expect(reports.at(-1)?.sides).toEqual({ thread: { value: { comments: [] } } })
+  })
+
+  it('registers a watch while paused without subscribing, and a stop drops the registration', async () => {
+    const { s, parts } = await started()
+    parts.pauseViews(true)
+    s.log.length = 0
+    expect(parts.watchSide('thread', THREAD, VIEWS[0][3])).toBeUndefined()
+    expect(parts.sideArgs('thread')).toEqual(VIEWS[0][3])
+    parts.watchSide('history', HISTORY, VIEWS[1][3])
+    parts.stopSide('history')
+    expect(parts.sideArgs('history')).toBeUndefined()
+    // the summary is no view side and subscribes while the views pause
+    parts.stopSide('summary')
+    parts.watchSide('summary', makeFunctionReference<'query'>('inbox:summary'), {})
+    expect(s.log).toEqual([
+      `stop ${s.keyOf('inbox:summary', {})}`,
+      `watch ${s.keyOf('inbox:summary', {})}`,
+    ])
+    s.log.length = 0
+    parts.pauseViews(false)
+    expect(s.log).toEqual([`watch ${viewKeys(s)[0]}`])
+  })
+
+  it('moves a paused reference registration to the side that reads its arguments', async () => {
+    const { s, parts } = await started()
+    parts.pauseViews(true)
+    parts.watchSide('reference', TASK, REFERENCE_ARGS)
+    parts.watchSide('task', TASK, REFERENCE_ARGS)
+    expect(parts.sideArgs('reference')).toBeUndefined()
+    s.log.length = 0
+    parts.pauseViews(false)
+    // one subscription, the task side's
+    expect(s.log).toEqual([`watch ${s.keyOf('taskWindow:task', REFERENCE_ARGS)}`])
+    expect(parts.sideArgs('task')).toEqual(REFERENCE_ARGS)
+  })
+
+  it('subscribes no view side of a registry created paused, the address read included, until the return', async () => {
+    const s = scripted()
+    serve(s)
+    const reports: PartsReport[] = []
+    const parts = createLiveParts(
+      s.live,
+      (r) => reports.push(r),
+      () => true,
+      { address: { slug: 'org', ref: 'QN-1' }, paused: true },
+    )
+    s.set('workspace:root', ROOT_ARGS, {
+      value: { ...ROOT, orgs: [{ ...ROOT.orgs[0], slug: 'org' }] },
+    })
+    s.send()
+    await tick()
+    watchViews(parts)
+    expect(reports.at(-1)?.workspace.state).toBe('complete')
+    for (const key of viewKeys(s)) expect(s.watched.has(key)).toBe(false)
+    expect(parts.sideArgs('reference')).toEqual(REFERENCE_ARGS)
+    expect(s.watched.has(s.keyOf('inbox:summary', {}))).toBe(true)
+    parts.pauseViews(false)
+    for (const key of viewKeys(s)) expect(s.watched.has(key)).toBe(true)
+  })
+
+  it('drops the registrations with the registry', async () => {
+    const { s, parts } = await started()
+    watchViews(parts)
+    parts.pauseViews(true)
+    parts.stop()
+    parts.pauseViews(false)
+    expect([...s.watched.keys()]).toEqual([])
   })
 })
