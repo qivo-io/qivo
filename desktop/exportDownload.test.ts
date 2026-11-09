@@ -15,7 +15,7 @@ import {
 
 const SITE = 'https://brave-otter-123.convex.site'
 const LINK = `${SITE}/exports/7a1d?e=1767225600&m=k57abc&t=mac123`
-// a packaged build's link: production's export route
+// a packaged build's link, to production's export route
 const PRODUCTION = 'https://api.qivo.io/exports/7a1d?e=1767225600&m=k57abc&t=mac123'
 const PACKAGED = resolveExportOrigin(true)
 const DIR = path.join(path.sep, 'home', 'nora', 'Downloads')

@@ -235,9 +235,9 @@ export async function discardExportFile(exportId: string): Promise<boolean> {
 }
 
 /** Lets go of `file`, a file the picker answered that the page holds for no
- * export, such as when starting the export failed: deletes it while it is
- * still empty, never once it holds anything. Answers whether it deleted
- * it. */
+ * export, such as when starting the export failed. It deletes the file
+ * while it is still empty, never once it holds anything, and answers
+ * whether it deleted it. */
 export const discardChosenFile = (file: ExportFile): Promise<boolean> => removeIfEmpty(file)
 
 async function removeIfEmpty(file: ExportFile): Promise<boolean> {
@@ -385,10 +385,9 @@ async function deliverOnce(args: DeliverArgs): Promise<boolean> {
   }
 }
 
-/* Downloads `url` in a hidden frame, so the page itself never navigates: a
-   refusal, which the route answers as an attachment with no body, shows at
-   most a failed download and never replaces the app, and the page's
-   beforeunload never fires. The frame goes after a minute, by when the
+/* Downloads `url` in a hidden frame, so the page itself never navigates. A
+   refusal, which the route answers as an attachment with no body, never
+   replaces the app, and the page's beforeunload never fires. The frame goes after a minute, by when the
    browser has taken the download over; not on its load event, which some
    browsers fire for the frame's first blank page. */
 function openLink(url: string): void {
@@ -425,7 +424,7 @@ async function viaDesktop(
     }
     if (answer.state === 'refused') {
       // the shell refused the link before it downloaded anything, such as
-      // a build whose export origin is not this deployment's: the link
+      // a build whose export origin is not this deployment's, so the link
       // way downloads it instead, which records nothing
       openLink(url)
       set({ orgId, exportId, state: 'sent', way: 'desktop' })
@@ -492,8 +491,8 @@ async function intoFile(
       writable = await file.createWritable()
     } catch {
       // the chosen place is gone or cannot be written, such as a folder
-      // removed since: the page lets go of it, so the next Save export asks
-      // for another, and drops the answer no writer takes
+      // removed since, so the page lets go of it, and the next Save export
+      // asks for another; the answer no writer takes is dropped
       void response.body.cancel().catch(() => {})
       if (files.get(exportId) === file) files.delete(exportId)
       set({ orgId, exportId, state: 'unwritable' })

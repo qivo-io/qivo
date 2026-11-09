@@ -10312,11 +10312,11 @@ export const ORG_EXPORT_READY_MS = 5 * 60_000
  *  and that its size is the panel's archive_bytes. The record line must
  *  show today's date as the page formats it. Its finally deletes the file,
  *  turns the stand-in off and deletes the run's Deleted item for good, on
- *  a failure too: by the item's id from the archive, or, when the step
- *  failed before it read the archive, the item it finds by the task's
- *  tagged title in Settings › Projects › Deleted items. A purge that is
- *  refused, fails or finds no item is a NOTE, since the item then stays
- *  30 days (purgeExportItem). It
+ *  a failure too. It finds the item by its id in the archive, or, when the
+ *  step failed before it read the archive, by the task's tagged title in
+ *  Settings › Projects › Deleted items. A purge that is refused, fails or
+ *  finds no item is a NOTE, since the item then stays 30 days
+ *  (purgeExportItem). It
  *  writes on t0's organization what an admin's export writes: a job with
  *  its parts for four hours and its rows for 30 days, the end of an
  *  earlier ready archive, and the organization's last saved export

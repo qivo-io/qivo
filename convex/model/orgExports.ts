@@ -323,10 +323,10 @@ export const notRecordable = (): string =>
  * before `now`. So a save that finished just after the archive ended still
  * counts, while a failed or cancelled job, an archive nobody fetched and an
  * old one never do. The window starts at the archive's end, not at the
- * download's start: a download that starts shortly before the end, which
- * a two-minute link still allows, must finish within DELIVERY.streamMs of
- * the end to count, so a large archive on a slow link may not, and the
- * reminder then goes out as for any save Qivo did not record
+ * download's start, so a download that starts shortly before the end,
+ * which a two-minute link still allows, must finish within
+ * DELIVERY.streamMs of the end to count. A large archive on a slow link may
+ * not, and the reminder then goes out as for any save Qivo did not record
  * (notRecordable says so). */
 export function recordable(job: Doc<'org_exports'>, now: number): boolean {
   if (job.completed_at === undefined || job.served_at === undefined) return false

@@ -548,11 +548,10 @@ and that the record line shows today's date (`ui/org-export`). It writes on
 t0's organization what an admin's export writes: a job with its parts for
 four hours and its rows for 30 days, the end of an earlier ready archive and
 the organization's last saved export. Afterwards it deletes the file and its
-Deleted item for good, also after a failure: by the item's id from the
-archive, or, when it failed before it read the archive, the item that
-**Deleted items** lists for the task's tagged title. A purge that is refused
-or fails, or that finds no item, is a NOTE, and the item then stays 30
-days. Against a backend before the release after v0.1.161, whose record
+Deleted item for good, also after a failure. It finds the item by its id
+in the archive, or, when it failed before it read the archive, by the
+task's tagged title in **Deleted items**. A purge that is refused or fails,
+or that finds no item, is a NOTE, and the item then stays 30 days. Against a backend before the release after v0.1.161, whose record
 takes no export id, that step fails.
 It makes a sub-project of its own under the run project, led by Leo
 Martins, with a task in it, picks the task's assignee (the run's Standard

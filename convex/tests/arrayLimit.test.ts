@@ -1,6 +1,6 @@
 /* Long result lists in parts (lib/arrayLimit.ts), which the perf server
- * sends a baseline build's snapshot with: no array past the limit, and the
- * parts hold the rest of each list, in order. */
+ * sends a baseline build's snapshot with. No array passes the limit, and
+ * the parts hold the rest of each list, in order. */
 import { afterEach, describe, expect, it } from 'vitest'
 import { ARRAY_LIMIT, chunkLists } from '../lib/arrayLimit'
 

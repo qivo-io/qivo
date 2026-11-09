@@ -195,7 +195,7 @@ export function createExportDownloads(options: Options) {
     clearTimeout(current.timer)
     const total = item.getTotalBytes()
     if (item.getMimeType() !== 'application/zip' || !(total > 0) || total > maxBytes) {
-      // the route's 429 and 404 have no body and no ZIP type: no archive
+      // the route's 429 and 404 have no body and no ZIP type, so no archive
       // came, which the page tells apart from a broken transfer
       item.cancel()
       end({ state: 'declined' })
@@ -242,8 +242,9 @@ export function createExportDownloads(options: Options) {
       try {
         options.remove(file)
       } catch {
-        // a file another program holds open, or a folder whose permission
-        // changed: the person deletes it, since it holds part of an archive
+        // a file another program holds open, or one in a folder whose
+        // permission changed, stays for the person to delete, since it
+        // holds part of an archive
         answer = { state: 'failed', leftover: path.basename(file) }
       } finally {
         end(answer)

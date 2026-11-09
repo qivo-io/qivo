@@ -2005,7 +2005,7 @@ function IssueDetail({
   // later than the frozen one, or none was frozen. So what arrived while
   // hidden sits under New, and the read on open, an effect, reads it after
   // this render. A plain return keeps the visit's mark, and so does the
-  // Inbox's pop-out, which takes the start it is given: a start of nothing,
+  // Inbox's pop-out, which takes the start it is given, a start of nothing
   // and after a return the one the pane behind it froze again, which the
   // pane tells it (onReturnUnread). A window opened while hidden has no
   // freeze until its first current answer, which comes after the page
@@ -2066,7 +2066,8 @@ function IssueDetail({
   }
   const unreadTs = frozen.current.unread?.ts ?? null
   const unreadPending = frozen.current.unread === null
-  // a return froze the start again: the pop-out over this window takes it
+  // a return froze the start again, which the pop-out over this window
+  // takes
   const returned = frozen.current.returned
   useEffectID(() => {
     if (returned !== null) onReturnUnread?.(returned)

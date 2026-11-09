@@ -371,7 +371,7 @@ describe('the file way', () => {
         ['orgExport:claimDownload', { org_id: ORG, export_id: EXPORT, automatic: true }],
         ['orgExport:claimDownload', { org_id: ORG, export_id: EXPORT, automatic: false }],
       ])
-      // busy again: no third try
+      // busy again, and no third try
       await vi.waitFor(() => expect(m.deliveryNow()).toMatchObject({ state: 'busy' }))
       await vi.advanceTimersByTimeAsync(60_000)
       expect(fetcher).toHaveBeenCalledTimes(2)

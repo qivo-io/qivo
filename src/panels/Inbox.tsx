@@ -626,10 +626,10 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   // A move with no task here ends it too, such as leaving the Inbox, which
   // stays loaded (components/KeptView): the next task opens in the pane.
   if (poppedOut && !openIssue) setPoppedOut(false)
-  // Where the pop-out's unread part starts: nowhere, since the pane behind
-  // it showed this visit's New mark already, until a return to a hidden
-  // page freezes the pane's mark again while the pop-out is open, which
-  // the pop-out then shows too.
+  // Where the pop-out's unread part starts. It starts nowhere, since the
+  // pane behind it showed this visit's New mark already, until a return to
+  // a hidden page freezes the pane's mark again while the pop-out is open,
+  // which the pop-out then shows too.
   const [popUnread, setPopUnread] = useState<UnreadStart>(NO_UNREAD)
   const paneReturned = useCallback(
     (start: UnreadStart) => {

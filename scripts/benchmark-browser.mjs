@@ -102,7 +102,7 @@
 // newest of them shows with no thread page loading and, in a build that
 // marks it, the window's reads current (data-task-window-reads), with the
 // longest animation frame from the show on. threadReturnArrivedHidden says
-// whether their delivery reached the page while it was hidden: the
+// whether their delivery reached the page while it was hidden. The
 // window's reads pause while the page is hidden, so it does not (0), and
 // the comments arrive on the return, which then reads the thread again.
 // The perf server keeps them for the thread the page read last. --phone

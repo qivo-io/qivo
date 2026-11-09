@@ -44,7 +44,7 @@ export function resolveAppURL(packaged: boolean, env: NodeJS.ProcessEnv): URL {
 }
 
 /**
- * The one origin a packaged build downloads organization exports from: the
+ * The one origin a packaged build downloads organization exports from, the
  * export route of the deployment whose page it loads, which is always
  * production (resolveAppURL). A run from source answers null, since its
  * page may be any deployment's, and takes the export links of a Convex
