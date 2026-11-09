@@ -321,7 +321,7 @@ for (const path of isDemoDeployment()
  *   GET /backgrounds/<image uuid>?e=<exp>&m=<owner auth-user id>&t=<mac>
  *
  * The organization export's /exports/ route below shares these headers,
- * this 404 and the preflight.
+ * this 404 and the preflight, and also exposes Retry-After.
  *
  * The MAC (lib/fileTokens: HMAC-SHA256 over kind/uuid/minter/exp, key derived
  * from BETTER_AUTH_SECRET) admits the request; the MINTER's access is then
@@ -339,7 +339,8 @@ for (const path of isDemoDeployment()
 
 const INLINE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/avif']
 
-/* <img> tags are no-cors, but imgActions' fetch(url) (copy/download) and the
+/* <img> tags are no-cors, but imgActions' fetch(url) (copy/download), the
+ * export page's save into a chosen file (src/lib/orgExport.ts) and the
  * smoke's byte asserts are cross-origin reads from the app origin. Origin-echo
  * against the configured exact app origins — never `*` — keeps any future
  * cookie-authenticated fallback from requiring a CORS redesign. */
@@ -491,8 +492,12 @@ http.route({ pathPrefix: '/background-previews/', method: 'OPTIONS', handler: pr
  * whether an export exists. Every answer carries the gateway's headers:
  * nosniff, the sandbox CSP and the app-origin echo, never `*` and with no
  * credentials, so the archive never runs as content on this origin, which
- * carries the sign-in cookies. The archive holds no file contents and the
- * route grants nothing else. */
+ * carries the sign-in cookies. To an echoed app origin it also exposes
+ * Retry-After beside Content-Disposition, because the export page reads the
+ * route with fetch from the app's origin when it saves into a file the
+ * person chose (src/lib/orgExport.ts), and says how long to wait after a
+ * 429. The archive holds no file contents and the route grants nothing
+ * else. */
 
 /* What deliveryOf answers for an archive the route may serve. */
 type Delivery = {
@@ -628,6 +633,8 @@ const EXPORTS = '/exports/'
 const serveExport = answerAfterBody(async (ctx, request) => {
   const url = new URL(request.url)
   const headers = gatewayHeaders(request.headers.get('Origin'))
+  if (headers.get('Access-Control-Allow-Origin') !== null)
+    headers.set('Access-Control-Expose-Headers', 'Content-Disposition, Retry-After')
   const refuse = (status = 404): Response => {
     headers.set('Cache-Control', 'no-store')
     return new Response(null, { status, headers })
