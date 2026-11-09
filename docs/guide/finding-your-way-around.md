@@ -192,8 +192,9 @@ and shows nothing of it before that check. Otherwise Qivo asks you to choose
 a project from a list of your projects, your favorites first, and when you
 can no longer open the project you opened last, it says that the project
 is no longer available to you. It never opens another project, **My view**
-or all projects by itself. If you switch views or go elsewhere before the
-check answers, Qivo does not open the project you opened last. Opening **My
+or all projects by itself. If you switch views before the check answers,
+the project opens on the view you chose; if you open another project or My
+view, that one opens instead. Opening **My
 view**, **All projects** or Team sync does not change the project Qivo
 remembers, and neither does reading a task in the Inbox or opening one by
 its link. A jump from Team sync or the Inbox to a project's Board or
