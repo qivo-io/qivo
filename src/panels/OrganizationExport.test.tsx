@@ -442,6 +442,39 @@ describe('starting, joining, downloading and cancelling', () => {
     expect(claims()).toEqual([{ org_id: 'org-1', export_id: 'export-1', automatic: false }])
   })
 
+  it('says when the chosen file cannot be written, and asks for another place on the next Save export', async () => {
+    const unwritable = {
+      name: 'x.zip',
+      createWritable: vi.fn(async () => {
+        throw new DOMException('the folder is gone', 'NotFoundError')
+      }),
+      getFile: vi.fn(),
+    }
+    const picker = vi.fn(async () => unwritable)
+    ;(window as { showSaveFilePicker?: unknown }).showSaveFilePicker = picker
+    vi.stubGlobal('isSecureContext', true)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(new Uint8Array(2048), {
+            status: 200,
+            headers: { 'Content-Type': 'application/zip', 'Content-Length': '2048' },
+          }),
+      ),
+    )
+    serve(['claimed'])
+    await mount()
+    await press('[data-export-download="latest"]')
+    expect(container.querySelector('[data-export-unwritable]')?.textContent).toContain(
+      "Qivo couldn't write to the file you chose, so no export was saved.",
+    )
+    expect(button('[data-export-download="latest"]')?.textContent).toBe('Save export…')
+    expect(button('[data-export-download="latest"]')?.disabled).toBe(false)
+    await press('[data-export-download="latest"]')
+    expect(picker).toHaveBeenCalledTimes(2)
+  })
+
   it('asks before it cancels, then cancels', async () => {
     serve(['collecting'])
     await mount()

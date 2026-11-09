@@ -287,6 +287,39 @@ describe('the file way', () => {
     expect(m.deliveryNow()).toEqual({ exportId: EXPORT, state: 'unconfirmed' })
   })
 
+  it('lets go of a chosen file it cannot write to, so the next save asks for another', async () => {
+    let cancelled = false
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(bytes(5))
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+    const file = fakeFile()
+    file.file.createWritable = async () => {
+      throw new DOMException('the folder is gone', 'NotFoundError')
+    }
+    m.holdExportFile(EXPORT, file.file)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => zipResponse(body, 5)),
+    )
+    await m.deliverExport({
+      orgId: ORG,
+      exportId: EXPORT,
+      archiveBytes: 5,
+      automatic: false,
+      file: file.file,
+    })
+    expect(m.deliveryNow()).toEqual({ exportId: EXPORT, state: 'unwritable' })
+    expect(m.heldExportFile(EXPORT)).toBeNull()
+    expect(cancelled).toBe(true)
+    expect(records()).toEqual([])
+    expect(m.deliveryRunning()).toBe(false)
+  })
+
   it('answers busy with the seconds of a 429', async () => {
     const { state } = await save(
       new Response(null, { status: 429, headers: { 'Retry-After': '30' } }),

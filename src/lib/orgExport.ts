@@ -116,6 +116,7 @@ export type DeliveryState = { exportId: string } & (
   | { state: 'sent' }
   | { state: 'busy'; retryAfter: number | null }
   | { state: 'stopped'; removed: boolean }
+  | { state: 'unwritable' }
   | { state: 'unconfirmed'; leftover?: string }
   | { state: 'claimed' }
   | { state: 'refused'; message: string }
@@ -427,7 +428,18 @@ async function intoFile(
       set({ exportId, state: 'unconfirmed' })
       return true
     }
-    const writable = await file.createWritable()
+    let writable: Awaited<ReturnType<ExportFile['createWritable']>>
+    try {
+      writable = await file.createWritable()
+    } catch {
+      // the chosen place is gone or cannot be written, such as a folder
+      // removed since: the page lets go of it, so the next Save export asks
+      // for another, and drops the answer no writer takes
+      void response.body.cancel().catch(() => {})
+      if (files.get(exportId) === file) files.delete(exportId)
+      set({ exportId, state: 'unwritable' })
+      return true
+    }
     opened = true
     let written = 0
     let shown = 0

@@ -507,6 +507,13 @@ function DeliveryLine({ delivery }: { delivery: DeliveryState }) {
           {delivery.removed ? ' Qivo deleted the empty file.' : ''}
         </p>
       )
+    case 'unwritable':
+      return (
+        <p role="alert" className="text-danger" data-export-unwritable="">
+          Qivo couldn't write to the file you chose, so no export was saved. Press Save export… to
+          choose another place.
+        </p>
+      )
     case 'unconfirmed':
       return (
         <p role="alert" className="text-danger" data-export-unconfirmed="">
