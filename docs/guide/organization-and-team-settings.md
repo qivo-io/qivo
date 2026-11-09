@@ -133,16 +133,20 @@ ready on their open page, and any admin can use **Download** or **Save
 export…** while it is available. How the file is saved depends on where you
 run Qivo:
 
+- **The desktop app** (in its
+  [test builds](./qivo-in-one-minute.md#desktop-app)) saves exports in your
+  Downloads folder without asking where, and tells Qivo when one is saved.
 - **Chrome and Edge on a computer** ask where to save when you start or join
   the export, or when you choose **Save export…**, and save the file there.
   The file stays empty until the export is saved.
 - **Other browsers** download the file as their downloads do.
 
-Only a save the app saw finish counts as a saved export. Chrome and Edge on a
-computer tell Qivo when the file is saved; other browsers cannot, so their
-downloads do not count. A save counts only when it finishes within 30 minutes
-after the export stops being available, so start a large download well before
-then. The page shows the date of the last confirmed save.
+Only a save the app saw finish counts as a saved export. The desktop app and
+Chrome and Edge on a computer tell Qivo when the file is saved; other
+browsers cannot, so their downloads do not count. A save counts only when it
+finishes within 30 minutes after the export stops being available, so start
+a large download well before then. The page shows the date of the last
+confirmed save.
 
 ## Deleting an organization
 
