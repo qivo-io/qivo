@@ -150,11 +150,11 @@ export function TargetPicker({
         className="mt-2 max-h-56 overflow-auto rounded-md border border-border"
       >
         {groups.map((g) => (
-          <div
+          <fieldset
             key={g.parent}
-            role="group"
             aria-labelledby={`${group}-${g.parent}`}
             data-target-group={g.parent}
+            className="m-0 min-w-0 border-0 p-0"
           >
             <div id={`${group}-${g.parent}`} className="px-2 pt-2 pb-1 text-xs text-text-3">
               {g.name}
@@ -185,7 +185,7 @@ export function TargetPicker({
                 </Label>
               )
             })}
-          </div>
+          </fieldset>
         ))}
         <ChoiceEnd end={end} tooLong={search.tooLong} list={list} words={words} menu={false} />
       </div>

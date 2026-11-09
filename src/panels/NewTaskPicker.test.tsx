@@ -245,7 +245,7 @@ describe("the New task dialog's Sub-project picker", { timeout: 30_000 }, () => 
     expect(label('beta')).toBe('Beta')
     // each group is announced by its project's name
     const group = document.querySelector<HTMLElement>('[data-target-group="plan"]')
-    expect(group?.getAttribute('role')).toBe('group')
+    expect(group?.tagName).toBe('FIELDSET')
     const heading = document.getElementById(group?.getAttribute('aria-labelledby') ?? '')
     expect(heading?.textContent).toBe('Plan')
   })
