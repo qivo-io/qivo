@@ -539,7 +539,10 @@ type Delivery = {
  * browser confirmed it (orgRemovals.ts recordExport).
  * The per-part checks and the lease cover that read too, not the client's
  * transfer. Convex documents at most 30 minutes for an action; whether a
- * slow client's transfer counts toward it was not measured.
+ * slow client's transfer counts toward it was not measured. The app's
+ * record of a saved download counts only within DELIVERY.streamMs after
+ * the archive ends (model/orgExports.ts recordable), so a download that
+ * starts shortly before the end must finish within that window to count.
  */
 function archiveStream(
   ctx: ActionCtx,

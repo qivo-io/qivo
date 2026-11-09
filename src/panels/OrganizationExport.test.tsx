@@ -624,7 +624,7 @@ describe('starting, joining, downloading and cancelling', () => {
     await settle()
     const refused = await shown('[data-export-recorded="refused"]')
     expect(refused?.textContent).toBe(
-      "The export was saved, but Qivo couldn't record it. This export can no longer be recorded. Prepare a new export.",
+      "The export was saved, but Qivo couldn't record it. This export can no longer be recorded. A saved export counts only when its download finishes within 30 minutes after the export ends. Prepare a new export.",
     )
     expect(refused?.querySelector('button')).toBeNull()
     expect(container.querySelector('[data-export-recorded="false"]')).toBeNull()

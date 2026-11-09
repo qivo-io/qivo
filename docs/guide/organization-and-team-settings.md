@@ -140,7 +140,9 @@ run Qivo:
 
 Only a save the app saw finish counts as a saved export. Chrome and Edge on a
 computer tell Qivo when the file is saved; other browsers cannot, so their
-downloads do not count. The page shows the date of the last confirmed save.
+downloads do not count. A save counts only when it finishes within 30 minutes
+after the export stops being available, so start a large download well before
+then. The page shows the date of the last confirmed save.
 
 ## Deleting an organization
 

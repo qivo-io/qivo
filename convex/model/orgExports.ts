@@ -310,6 +310,11 @@ export async function noteDelivered(ctx: MutationCtx, job: Doc<'org_exports'>): 
     await ctx.db.patch(job._id, { served_at: new Date().toISOString() })
 }
 
+/** The record's refusal of an archive recordable rejects, which the export
+ * page shows. It names the window, DELIVERY.streamMs, in minutes. */
+export const notRecordable = (): string =>
+  `This export can no longer be recorded. A saved export counts only when its download finishes within ${Math.round(DELIVERY.streamMs / 60_000)} minutes after the export ends. Prepare a new export.`
+
 /** Whether `job` is an archive whose saved download orgRemovals.ts
  * recordExport may record at `now` (epoch ms): one that reached ready, that
  * the /exports/ route served whole (served_at), and that is still ready or
@@ -317,7 +322,12 @@ export async function noteDelivered(ctx: MutationCtx, job: Doc<'org_exports'>): 
  * else expires_at) less than DELIVERY.streamMs, an action's longest run,
  * before `now`. So a save that finished just after the archive ended still
  * counts, while a failed or cancelled job, an archive nobody fetched and an
- * old one never do. */
+ * old one never do. The window starts at the archive's end, not at the
+ * download's start: a download that starts shortly before the end, which
+ * a two-minute link still allows, must finish within DELIVERY.streamMs of
+ * the end to count, so a large archive on a slow link may not, and the
+ * reminder then goes out as for any save Qivo did not record
+ * (notRecordable says so). */
 export function recordable(job: Doc<'org_exports'>, now: number): boolean {
   if (job.completed_at === undefined || job.served_at === undefined) return false
   if (job.state !== 'ready' && job.state !== 'expired') return false

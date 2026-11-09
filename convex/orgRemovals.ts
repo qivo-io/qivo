@@ -78,7 +78,7 @@ import { sendDeletionNotice } from './mail'
 import { audit } from './model/admin'
 import { hasPendingCheckout } from './model/billing'
 import { deleteOrgStep } from './model/orgDeletion'
-import { exportOf, recordable } from './model/orgExports'
+import { exportOf, notRecordable, recordable } from './model/orgExports'
 import {
   accessReturned,
   DELETION_NOTICE,
@@ -643,8 +643,7 @@ export const recordExport = authedMutation({
     require(org, notFound('organization not found'))
     const job = await exportOf(ctx, export_id)
     if (job === null || job.org_id !== org_id) throw notFound('export not found')
-    if (!recordable(job, Date.now()))
-      throw rule('This export can no longer be recorded. Prepare a new export.')
+    if (!recordable(job, Date.now())) throw rule(notRecordable())
     const at = isoNow()
     await ctx.db.patch(org._id, { last_export_confirmed_at: at, last_export_at: at })
     return null

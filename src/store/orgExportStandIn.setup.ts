@@ -291,7 +291,9 @@ export function orgExportStandIn(opts: {
       (found.state !== 'ready' && found.state !== 'expired') ||
       !(end + 30 * 60_000 > opts.now())
     )
-      throw refuse('This export can no longer be recorded. Prepare a new export.')
+      throw refuse(
+        'This export can no longer be recorded. A saved export counts only when its download finishes within 30 minutes after the export ends. Prepare a new export.',
+      )
     lastExportAt = iso(opts.now())
     publish()
     return null
