@@ -260,6 +260,39 @@ function loneAnswer() {
   }
 }
 
+/* QN-42 in FE, a subtask of QN-41 in FE, as the window's own answer
+   sends it. */
+function subtaskAnswer() {
+  const row = (id: string, num: number) => ({
+    id,
+    org_id: orgId,
+    project_id: ids.fe,
+    num,
+    title: `Task ${num}`,
+    status: 'todo',
+    priority: 'low',
+    paused: false,
+    created_at: NOW,
+    updated_at: NOW,
+  })
+  return {
+    state: 'ok',
+    task: {
+      ...row('feature', 42),
+      parent_id: 'epic',
+      description: '',
+      has_subtasks: false,
+      has_hidden_subtasks: false,
+      has_hidden_parent: false,
+    },
+    level: 'lead',
+    labels: [],
+    follow: null,
+    parent: { ...row('epic', 41), has_subtasks: true, level: 'lead' },
+    subtasks: { rows: [], complete: true },
+  }
+}
+
 /* Opens the window's read of the task `answer` names with it, and the
    Move window over the task it shows. */
 async function openFromAnswer(answer: { task: { id: string } }) {
@@ -332,6 +365,49 @@ describe('the Move window over a task the window shows from its own answer', () 
     expect(shown()?.project).toBe(before)
   })
 
+  it("sends no move while the project cache has no facts of the task's sub-project, and no detach once it has them for a move within the project", async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    carries = false
+    byIdsHere = true
+    await load()
+    // the project cache reads one project a read, so BE's read leaves FE's
+    // alone, and FE's first read fails: the cache has no facts of the
+    // task's and its parent's sub-project
+    ;(await import('../store/projectCache')).PROJECT_CACHE.chunk = 1
+    failByIds.add(ids.fe)
+    network.mutation.mockClear()
+    await openFromAnswer(subtaskAnswer())
+    await vi.waitFor(() => expect(P.projectState(ids.fe)).toBe('failed'))
+    await chooseTarget(ids.be)
+    await showMove('feature')
+    const move = () =>
+      [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+        (b) => b.textContent === 'Move',
+      )
+    const moves = () =>
+      network.mutation.mock.calls
+        .filter(([ref]) => getFunctionName(ref) === 'issues:move')
+        .map(([, args]) => args)
+    // FE has no facts, so its top-level project is unknown, never another
+    expect(P.project(ids.fe)).toBeUndefined()
+    expect(notes()).toEqual(["Couldn't check where this task is, so it cannot move yet."])
+    expect(move()?.disabled).toBe(true)
+    // must fail for a move that reads an unknown project as another
+    // top-level project and detaches the subtask from its parent
+    const shown = () => P.taskDetail('feature')?.view
+    expect(P.moveIssue(shown()?.id ?? '', ids.be)).toBeNull()
+    expect(moves()).toEqual([])
+    // FE answers on Retry, and the move within WEB keeps the parent
+    await act(async () => document.querySelector<HTMLElement>('[data-move-retry]')?.click())
+    await vi.waitFor(() => expect(P.projectState(ids.fe)).toBe('ok'))
+    await showMove('feature')
+    expect(notes()).toEqual([])
+    expect(move()?.disabled).toBe(false)
+    expect(P.moveIssue(shown()?.id ?? '', ids.be)).not.toBeNull()
+    expect(moves()).toEqual([expect.not.objectContaining({ detach_parent: true })])
+    expect(moves()[0]).toMatchObject({ id: 'feature', project_id: ids.be })
+  })
+
   it('says it cannot read every subtask while the answer’s list is not whole, and moves nothing', async () => {
     carries = false
     await load()
@@ -396,9 +472,7 @@ describe('Move window', () => {
       be.name = 'Design'
       snap.projects.push({ ...be, id: 'design-6', key: 'DS6', num: 6, parent_id: web })
     })
-    const lone = P.issues.find((it) => it.uuid === 'lone')
-    if (!lone) throw new Error('no task')
-    await openFor(lone.id)
+    await openFromAnswer(loneAnswer())
     const label = (id: string) =>
       document.querySelector(`[data-target="${id}"]`)?.textContent?.replace(/\s+/g, ' ').trim()
     await vi.waitFor(() => expect(label('design-6')).toBeDefined())
@@ -412,9 +486,7 @@ describe('Move window', () => {
     carries = false
     byIdsHere = true
     await load()
-    const lone = P.issues.find((it) => it.uuid === 'lone')
-    if (!lone) throw new Error('no task')
-    await openFor(lone.id)
+    await openFromAnswer(loneAnswer())
     const row = () =>
       document.querySelector<HTMLInputElement>(`[data-target="${ids.be}"] input:not(:disabled)`)
     await vi.waitFor(() => expect(row()).not.toBeNull())
@@ -424,7 +496,7 @@ describe('Move window', () => {
     const note = () => document.querySelector<HTMLElement>('[data-target-note]')
     // the window draws again as the task window does on each change
     await vi.waitFor(() => expect(P.projectState(ids.be)).toBe('failed'))
-    await openFor(lone.id)
+    await showMove('lone')
     expect(note()?.dataset.targetNote).toBe('failed')
     expect(note()?.textContent).toContain("Couldn't open BE.")
     const move = () =>
@@ -435,7 +507,7 @@ describe('Move window', () => {
     // must fail for a note whose Retry reads nothing again
     await act(async () => note()?.querySelector<HTMLElement>('[data-target-retry]')?.click())
     await vi.waitFor(() => expect(P.projectState(ids.be)).toBe('ok'))
-    await openFor(lone.id)
+    await showMove('lone')
     expect(move()?.disabled).toBe(false)
     expect(note()).toBeNull()
   })
@@ -444,11 +516,9 @@ describe('Move window', () => {
     carries = false
     byIdsHere = true
     await load()
-    const lone = P.issues.find((it) => it.uuid === 'lone')
-    if (!lone) throw new Error('no task')
-    await openFor(lone.id)
+    await openFromAnswer(loneAnswer())
     await chooseTarget(ids.be)
-    await openFor(lone.id)
+    await showMove('lone')
     const move = () =>
       [...document.querySelectorAll<HTMLButtonElement>('button')].find(
         (b) => b.textContent === 'Move',
@@ -462,7 +532,7 @@ describe('Move window', () => {
     for (const answer of byIdsOpen) answer()
     await vi.waitFor(() => expect(P.levelOn(ids.be)).toBe('viewer'))
     expect(P.projectState(ids.be)).toBe('ok')
-    await openFor(lone.id)
+    await showMove('lone')
     // must fail for a Move that checks only the cache's state
     expect(move()?.disabled).toBe(true)
     expect(document.querySelector('[data-target-note]')?.textContent).toBe(
@@ -470,7 +540,7 @@ describe('Move window', () => {
     )
     // and the store sends no move there
     network.mutation.mockClear()
-    expect(P.moveIssue(lone.id, ids.be)).toBeNull()
+    expect(P.moveIssue(P.taskDetail('lone')?.view?.id ?? '', ids.be)).toBeNull()
     expect(
       network.mutation.mock.calls.filter(([ref]) => getFunctionName(ref) === 'issues:move'),
     ).toEqual([])
@@ -487,9 +557,7 @@ describe('Move window', () => {
     }
     // FE, the task's own sub-project, alone
     await load(editing(() => [ids.fe]))
-    const lone = P.issues.find((it) => it.uuid === 'lone')
-    if (!lone) throw new Error('no task')
-    await openFor(lone.id)
+    await openFromAnswer(loneAnswer())
     const picker = () => document.querySelector<HTMLElement>('[data-target-picker]')
     await vi.waitFor(() => expect(picker()?.dataset.pickerState).toBe('ready'))
     expect(
@@ -501,9 +569,7 @@ describe('Move window', () => {
     root = createRoot(container)
     // with BE as well, one other sub-project to move to, the end says nothing
     await load(editing(() => [ids.fe, ids.be]))
-    const again = P.issues.find((it) => it.uuid === 'lone')
-    if (!again) throw new Error('no task')
-    await openFor(again.id)
+    await openFromAnswer(loneAnswer())
     await vi.waitFor(() => expect(picker()?.dataset.pickerState).toBe('ready'))
     expect(
       [...document.querySelectorAll<HTMLElement>('[data-target]')].map((r) => r.dataset.target),

@@ -17,7 +17,6 @@ import {
   queryProjectNav,
 } from './store/projectNavStandIn.setup'
 import { answerRoadmap } from './store/roadmapStandIn.setup'
-import { taskRow } from './views/boardFixture.setup'
 
 /* Startup selection on the real store and App (App.tsx opening,
    components/ProjectChooser.tsx). The workspace comes through the live
@@ -525,82 +524,6 @@ describe('opening the remembered project', { timeout: 60_000 }, () => {
     expect(shown()).toBeUndefined()
     expect(viewReads()).toEqual([])
     expect(asks).toEqual([])
-  })
-
-  it('keeps the remembered project for a task address while the project cache has not named the task’s project, and settles the scope once it does', async () => {
-    const snap = world()
-    // QN-7 in Firmware, which the workspace holds from its boot
-    snap.orgs[0].next_issue_num = 8
-    snap.issues.push({
-      ...taskRow(snap, '01000000-0000-4000-8000-000000000007', 'todo', 7),
-      project_id: FW,
-    })
-    const crumb = () => q('[data-scope-crumb] h1')?.textContent
-    for (const [id, org, name] of [
-      [LUMA, ORG, 'Luma Sensor'],
-      [PORTAL, PARTNER, 'Firmware'],
-    ] as const) {
-      // the cache answers nothing yet, so the first render cannot name
-      // Firmware's parent
-      holdAtBoot = true
-      await app(structuredClone(snap), '/app/testbed/board/tasks/qn-7', remembering(id, org))
-      // the boot opens the remembered project and checks it, with the task
-      // over it
-      await chooser('checking')
-      await act(async () => cache(null))
-      // must fail for a boot that took the task's own sub-project while the
-      // cache had not named it, and for one that never settles once it does
-      await until(() => crumb() === name, `${name}'s Board`)
-      await until(() => store.P.projectState(FW) === 'ok', "Firmware's answer")
-      await settle()
-      expect(crumb()).toBe(name)
-      expect(shown()).toBe('kanban')
-      expect(asks).toEqual([])
-      expect(sentProjects()).toEqual([])
-      await leave()
-    }
-  })
-
-  it('lands a task address on the task’s sub-project where the project cache answers the remembered project gone', async () => {
-    const snap = world()
-    // QN-7 in Firmware, which the workspace holds from its boot
-    snap.orgs[0].next_issue_num = 8
-    snap.issues.push({
-      ...taskRow(snap, '01000000-0000-4000-8000-000000000007', 'todo', 7),
-      project_id: FW,
-    })
-    const archived = meta(snap, 'Old programme')
-    const project = snap.projects.find((p) => p.id === archived)
-    if (project) project.archived_at = NOW
-    const lost = meta(snap, 'Taken away', ORG, false)
-    const crumb = () => q('[data-scope-crumb] h1')?.textContent
-    for (const [id, held] of [
-      [archived, true],
-      [lost, true],
-      [lost, false],
-    ] as const) {
-      // held, the cache answers nothing until both projects can come in
-      // one answer
-      holdAtBoot = held
-      await app(structuredClone(snap), '/app/testbed/board/tasks/qn-7', remembering(id))
-      if (held) {
-        await chooser('checking')
-        await act(async () => cache(null))
-      }
-      // must fail for a guard that loses the scope the settle moved to
-      // Firmware, which shows the chooser with "That project is not
-      // available to you."
-      await until(() => crumb() === 'Firmware', "Firmware's Board")
-      await settle()
-      expect(crumb()).toBe('Firmware')
-      expect(shown()).toBe('kanban')
-      expect(chooserState()).toBeUndefined()
-      expect(location.pathname).toBe('/app/testbed/board/tasks/qn-7')
-      expect(asks).toEqual([])
-      // a task's address chose the scope, so nothing is remembered
-      expect(sentProjects()).toEqual([])
-      await leave()
-    }
   })
 
   it('never restores a saved All projects or My view, and lets an address that names a scope win', async () => {
@@ -1200,13 +1123,12 @@ describe('a task address the workspace does not hold', { timeout: 60_000 }, () =
     expect(sentProjects()).toEqual([])
   })
 
-  // KNOWN DEFECT: App keeps a remembered project for a task address only
-  // where the project cache already names the task's project's parent
-  // (lib/router.ts scopeForIssue), and on the app's path the task's answer
-  // arrives before the cache has read Firmware, so App opens Firmware
-  // instead of the remembered Luma Sensor (App.tsx, the pendingTask
-  // effect). It held only through the held arm, whose tasks named their
-  // projects with the cache at boot.
+  // KNOWN DEFECT: scopeForIssue (lib/router.ts) keeps a preferred project
+  // for a task in it, and while the project cache reads the task's project,
+  // but on the app's path the task's answer reaches App's pendingTask
+  // effect with no preferred project (`preferred` is null), so App opens
+  // Firmware instead of the remembered Luma Sensor. It held only through
+  // the held arm, whose tasks named their projects with the cache at boot.
   it.fails('keeps the remembered project for a task address of a task in it, else opens the task’s sub-project, checking nothing', async () => {
     // QN-7 in Firmware, under Luma Sensor, which its window's answer names
     for (const [id, org, name] of [
@@ -1231,6 +1153,71 @@ describe('a task address the workspace does not hold', { timeout: 60_000 }, () =
     await until(() => q(`aside [data-subproject-row="${FW}"] > button`), "Firmware's row")
     await click(q(`aside [data-subproject-row="${FW}"] > button`))
     await until(() => lastSent() === FW, 'Firmware remembered')
+  })
+
+  // KNOWN DEFECT: the one above, with the cache's first answers held back
+  it.fails('keeps the remembered project for a task address while the project cache has not named the task’s project, and settles the scope once it does', async () => {
+    const crumb = () => q('[data-scope-crumb] h1')?.textContent
+    for (const [id, org, name] of [
+      [LUMA, ORG, 'Luma Sensor'],
+      [PORTAL, PARTNER, 'Firmware'],
+    ] as const) {
+      // the cache answers nothing yet, so the task's answer cannot name
+      // Firmware's parent
+      holdAtBoot = true
+      await app(world(), '/app/testbed/board/tasks/qn-7', remembering(id, org))
+      await until(() => windowReads.length > 0, "the window's read")
+      await act(async () => {
+        for (const read of windowReads) read(taskAnswer())
+      })
+      await act(async () => cache(null))
+      // must fail for a scope that took the task's own sub-project while the
+      // cache had not named it, and for one that never settles once it does
+      await until(() => crumb() === name, `${name}'s Board`)
+      await until(() => store.P.projectState(FW) === 'ok', "Firmware's answer")
+      await settle()
+      expect(crumb()).toBe(name)
+      expect(shown()).toBe('kanban')
+      expect(asks).toEqual([])
+      expect(sentProjects()).toEqual([])
+      await leave()
+    }
+  })
+
+  it('lands a task address on the task’s sub-project where the project cache answers the remembered project gone', async () => {
+    const snap = world()
+    const archived = meta(snap, 'Old programme')
+    const project = snap.projects.find((p) => p.id === archived)
+    if (project) project.archived_at = NOW
+    const lost = meta(snap, 'Taken away', ORG, false)
+    const crumb = () => q('[data-scope-crumb] h1')?.textContent
+    for (const [id, held] of [
+      [archived, true],
+      [lost, true],
+      [lost, false],
+    ] as const) {
+      // held, the cache answers nothing until the task's answer is in
+      holdAtBoot = held
+      await app(structuredClone(snap), '/app/testbed/board/tasks/qn-7', remembering(id))
+      await until(() => windowReads.length > 0, "the window's read")
+      await act(async () => {
+        for (const read of windowReads) read(taskAnswer())
+      })
+      if (held) await act(async () => cache(null))
+      // must fail for a guard that loses the scope the settle moved to
+      // Firmware, which shows the chooser with "That project is not
+      // available to you."
+      await until(() => crumb() === 'Firmware', "Firmware's Board")
+      await settle()
+      expect(crumb()).toBe('Firmware')
+      expect(shown()).toBe('kanban')
+      expect(chooserState()).toBeUndefined()
+      expect(location.pathname).toBe('/app/testbed/board/tasks/qn-7')
+      expect(asks).toEqual([])
+      // a task's address chose the scope, so nothing is remembered
+      expect(sentProjects()).toEqual([])
+      await leave()
+    }
   })
 
   it('is written by Plan on roadmap from an Inbox task address, whose scope reading the task left alone', async () => {

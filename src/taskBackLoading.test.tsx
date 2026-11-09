@@ -471,13 +471,7 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     expect(location.pathname).toBe(`/app/${org}/board/tasks/qn-2`)
   })
 
-  // KNOWN DEFECT (to confirm): on the app's path the project cache drops
-  // the deleted scope before the task's answer arrives, and App then moves
-  // the page to the task's own project, Second project at board/p/2,
-  // where this case and the file's header expect the chooser with its
-  // note (App.tsx, the pendingTask effect). The held arm showed the loss
-  // and the task in one delivery.
-  it.fails('keeps its address while the project in scope goes, then shows the chooser with a note, never the project left', async () => {
+  it('keeps its address while the project in scope goes, then shows the chooser with a note, never the project left', async () => {
     const { org, change } = await bootLoading(true, undefined, secondProject)
     await back(`/app/${org}/board/p/1`)
     const address = `/app/${org}/board/tasks/qn-2`
