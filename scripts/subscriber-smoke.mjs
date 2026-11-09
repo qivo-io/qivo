@@ -183,18 +183,23 @@ try {
     },
   )
   orgId = setup.orgId
-  // tasks load on demand: the page's store holds the new task once it
-  // asked for every task
-  await manager.evaluate(() => window.PLANNER.askTasks('script'))
-  await manager.waitForFunction(
-    (id) => window.PLANNER.tasksHeld() && window.PLANNER.issues.some((issue) => issue.uuid === id),
-    fixture.id,
+  // the new task's number, from the task window's read of it by its uuid
+  // (taskWindow.task), as the store holds no task
+  const taskNum = await manager.evaluate(
+    async ({ id, org }) => {
+      const { convex } = await import('/src/lib/convex.ts')
+      const deadline = Date.now() + 15000
+      for (;;) {
+        const read = await convex.query('taskWindow:task', { org_id: org, ref: id })
+        if (read?.state === 'ok') return read.task.num
+        if (Date.now() > deadline) return null
+        await new Promise((resolve) => setTimeout(resolve, 250))
+      }
+    },
+    { id: fixture.id, org: orgId },
   )
-  const taskKey = await manager.evaluate(
-    (id) => window.PLANNER.issues.find((issue) => issue.uuid === id).id,
-    fixture.id,
-  )
-  taskURL = `${demo.base}/app/${demo.orgSlug}/board/tasks/${taskKey.toLowerCase()}`
+  assert.ok(taskNum, "The task window's read never answered the temporary task")
+  taskURL = `${demo.base}/app/${demo.orgSlug}/board/tasks/qn-${taskNum}`
   await manager.goto(taskURL, { waitUntil: 'domcontentloaded' })
   await eye(manager).waitFor({ timeout: 30000 })
   taskURL = manager.url()

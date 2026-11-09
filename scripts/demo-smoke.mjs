@@ -618,9 +618,11 @@ export async function runDemoSmoke(env = process.env) {
     const isolation = await pageB.evaluate(
       async ({ orgId, taskId, title }) => {
         const { convex } = await import('/src/lib/convex.ts')
-        const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
-          (name, args) => convex.query(name, args),
-        )
+        // B's own profile from the root part (workspace.root), and whether
+        // B's search finds A's task by its title (search.page), as the
+        // store holds no task
+        const root = await convex.query('workspace:root', {})
+        const found = await window.PLANNER.fetchSearchPage(title, { includeArchived: true })
         let refusal = null
         try {
           await convex.mutation('issues:update', {
@@ -631,9 +633,14 @@ export async function runDemoSmoke(env = process.env) {
         } catch (error) {
           refusal = error.data
         }
-        const me = snapshot.profiles.find((profile) => snapshot.myProfileIds.includes(profile.id))
+        const me = root.profiles.find((profile) => root.myProfileIds.includes(profile.id))
         return {
-          containsTask: snapshot.issues.some((task) => task.title === title),
+          // a search that fails or could not cover everything counts as
+          // finding it
+          containsTask:
+            found.state !== 'ok' ||
+            !found.coverage.complete ||
+            found.rows.some((row) => row.kind === 'task' && row.title === title),
           name: me.name,
           retention: me.message_retention_days,
           refusal,
@@ -712,16 +719,18 @@ export async function runDemoSmoke(env = process.env) {
     const replacement = await ready(pageA)
     assert.notEqual(replacement.authUserId, ownerA.authUserId)
     assert.notEqual(replacement.orgId, ownerA.orgId)
-    // tasks load on demand, so the fresh store holds none until it asks:
-    // ask for every task of the replacement workspace before checking that
-    // visitor A's task is not among them
-    await pageA.evaluate(() => window.PLANNER.askTasks('script'))
-    await pageA.waitForFunction(() => window.PLANNER.tasksHeld(), null, { timeout: 60000 })
+    // the replacement workspace's search (search.page) finds no task with
+    // visitor A's title, archived ones included; a search that fails or
+    // could not cover everything counts as finding it
     assert.equal(
-      await pageA.evaluate(
-        (title) => window.PLANNER.issues.some((task) => task.title === title),
-        title,
-      ),
+      await pageA.evaluate(async (title) => {
+        const found = await window.PLANNER.fetchSearchPage(title, { includeArchived: true })
+        return (
+          found.state !== 'ok' ||
+          !found.coverage.complete ||
+          found.rows.some((row) => row.kind === 'task' && row.title === title)
+        )
+      }, title),
       false,
     )
     assert.equal(errors.length, 0, `No browser errors or escaped requests:\n${errors.join('\n')}`)
