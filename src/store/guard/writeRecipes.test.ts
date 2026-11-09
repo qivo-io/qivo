@@ -41,7 +41,10 @@ vi.mock('../../lib/convex', async () => {
   const { createConvexDouble } = await import('./convexOrder.setup')
   const { liveOver } = await import('./liveDouble.setup')
   double.current = createConvexDouble()
-  return { convex: double.current.client, live: liveOver(double.current.client) }
+  return {
+    convex: double.current.client,
+    live: liveOver(double.current.client, { taskWindow: 'client' }),
+  }
 })
 vi.mock('../../lib/auth', () => ({
   armConvexAuth: async () => true,

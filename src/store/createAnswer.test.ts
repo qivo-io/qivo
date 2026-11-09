@@ -27,7 +27,7 @@ type Double = ReturnType<typeof import('./guard/liveDouble.setup').liveOver>
 const double = vi.hoisted(() => ({ live: null as Double | null }))
 vi.mock('../lib/convex', async () => {
   const { liveOver } = await import('./guard/liveDouble.setup')
-  double.live = liveOver(network)
+  double.live = liveOver(network, { taskWindow: 'client' })
   return { convex: network, live: double.live }
 })
 vi.mock('../lib/auth', () => ({

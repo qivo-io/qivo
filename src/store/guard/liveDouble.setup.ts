@@ -24,6 +24,13 @@ import {
   type ProjectNavRead,
 } from '../projectNavStandIn.setup'
 import type { Row } from '../rows'
+import {
+  type ForcedTaskWindow,
+  isTaskWindowRead,
+  TASK_WINDOW_NO_ANSWER,
+  type TaskWindowRead,
+  taskWindowStandIn,
+} from '../taskWindowStandIn.setup'
 
 /* The live transport (lib/liveQueries.ts) for store tests, over a Convex
    client double with onUpdate. A test publishes the server's data as one
@@ -86,6 +93,17 @@ import type { Row } from '../rows'
    one; these run in every store. jsdom has no Notification, so a store
    test that does not stub one runs no beat, feed or claim; one that does
    answers the session functions through store/notificationsStandIn.setup.ts.
+
+   The task window's three reads (convex/taskWindow.ts task, links and
+   attachments) are answered from the published whole too, through their
+   stand-in (store/taskWindowStandIn.setup.ts), on the parts' path, so a
+   window shows the whole's task from its own answer, each publish answers
+   it again, and no test wires them unless it forces a state
+   (forceTaskWindow: a read that never answers, fails, answers
+   unavailable or an incomplete list) or answers them by hand: a double
+   made with `{ taskWindow: 'client' }`, or after forceTaskWindow('client'),
+   leaves them to the client's own onUpdate, sharing one token per store
+   between watches of the same arguments (SHARED).
 
    Each store test file mocks lib/convex with `{ convex: network, live:
    liveOver(network) }`. */
@@ -247,10 +265,28 @@ function answerOf(whole: Published, name: string, args: Record<string, unknown>)
   return { state: 'ok', ...rows }
 }
 
+/** What the task window's read `name` with `args` answers while the
+    server holds `whole`, or TASK_WINDOW_NO_ANSWER for none; throws a
+    failure. A login with no seat may open no task. */
+function taskWindowAnswerOf(
+  whole: Published,
+  name: TaskWindowRead,
+  args: Record<string, unknown>,
+  force: ForcedTaskWindow | undefined,
+): unknown {
+  if (whole === null || seatless(whole)) return { state: 'unavailable' }
+  return taskWindowStandIn(whole, name, args, force)
+}
+
 /** The live transport over `client`. `batch(step)` sends everything
     `step` delivers as one transition, as Convex sends the results one
-    server state changed. */
-export function liveOver(client: Client): LiveQueries & {
+    server state changed. With `taskWindow: 'client'` the task window's
+    reads go to the client's own onUpdate, for a test that answers them by
+    hand (forceTaskWindow). */
+export function liveOver(
+  client: Client,
+  options: { taskWindow?: 'whole' | 'client' } = {},
+): LiveQueries & {
   batch(step: () => void): void
   hold(orgId: string | null): void
   holdWindow(from: string | null): void
@@ -258,6 +294,7 @@ export function liveOver(client: Client): LiveQueries & {
   reconnect(only?: readonly string[]): void
   forceInbox(force: ForcedInbox | null, only?: InboxRead): void
   forceProjectNav(force: ForcedProjectNav | 'client' | null): void
+  forceTaskWindow(force: ForcedTaskWindow | 'client' | null, only?: TaskWindowRead): void
   byIdsReads(): string[][]
   /** the bounds of the stand-in this double answers the inbox reads with
       (store/inboxStandIn.setup.ts INBOX_STAND_IN), which a test lowers
@@ -297,11 +334,18 @@ export function liveOver(client: Client): LiveQueries & {
   let navForce: ForcedProjectNav | 'client' | null = null
   // the ids of every byIds read a store opened, in order
   const byIdsOpened: string[][] = []
+  // what the task window's reads answer whatever the whole says, which of
+  // them, or 'client' to leave them to the client's own onUpdate
+  let windowForce: { force: ForcedTaskWindow | 'client'; only?: TaskWindowRead } | null =
+    options.taskWindow === 'client' ? { force: 'client' } : null
+  const windowToClient = (name: string) =>
+    windowForce?.force === 'client' && (!windowForce.only || windowForce.only === name)
   const isPart = (name: string) =>
     name === 'workspace:root' ||
     name in PARTS ||
     INBOX_READS.has(name) ||
-    (name === BY_IDS && navForce !== 'client')
+    (name === BY_IDS && navForce !== 'client') ||
+    (isTaskWindowRead(name) && !windowToClient(name))
   // the state the inbox reads answer whatever the whole says, and which of
   // them, until forceInbox(null)
   let inboxForce: { force: ForcedInbox; only?: string } | null = null
@@ -382,6 +426,24 @@ export function liveOver(client: Client): LiveQueries & {
           continue
         }
         if (value === NO_ANSWER) continue
+      } else if (isTaskWindowRead(w.name)) {
+        const force =
+          windowForce &&
+          windowForce.force !== 'client' &&
+          (!windowForce.only || windowForce.only === w.name)
+            ? windowForce.force
+            : undefined
+        try {
+          value = taskWindowAnswerOf(whole.value, w.name, w.args, force)
+        } catch (error) {
+          if (w.error !== undefined && w.json === `error:${String(error)}`) continue
+          w.error = error
+          w.json = `error:${String(error)}`
+          changed.add(token)
+          continue
+        }
+        // a read that never answers holds what it had
+        if (value === TASK_WINDOW_NO_ANSWER) continue
       } else value = answerOf(whole.value, w.name, w.args)
       const json = JSON.stringify(value)
       if (json === w.json && w.error === undefined) continue
@@ -599,6 +661,17 @@ export function liveOver(client: Client): LiveQueries & {
         client's own onUpdate, and with null answers from the whole again. */
     forceProjectNav(force) {
       navForce = force
+      fire(refresh())
+    },
+    /** Makes the task window's reads, or the one `only` names, answer
+        `force` whatever the whole says (store/taskWindowStandIn.setup.ts:
+        `loading` never answers, `failed` fails, `unavailable` and
+        `incomplete`), from now on and at once for the reads watched, or,
+        with 'client', leaves the reads watched from now on to the
+        client's own onUpdate, and with null answers from the whole
+        again. */
+    forceTaskWindow(force, only) {
+      windowForce = force === null ? null : { force, ...(only ? { only } : {}) }
       fire(refresh())
     },
     /** The ids of every projectNav.byIds read a store opened, in order. */

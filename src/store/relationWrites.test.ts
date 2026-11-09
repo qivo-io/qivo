@@ -20,7 +20,7 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => {
   const { liveOver } = await import('./guard/liveDouble.setup')
-  return { convex: network, live: liveOver(network) }
+  return { convex: network, live: liveOver(network, { taskWindow: 'client' }) }
 })
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,

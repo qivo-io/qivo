@@ -25,7 +25,9 @@ const booted = async () => ({
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
   convex: network,
-  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
+  live: (await import('../store/guard/liveDouble.setup')).liveOver(network, {
+    taskWindow: 'client',
+  }),
 }))
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,

@@ -53,7 +53,9 @@ const double = vi.hoisted(() => ({
   },
 }))
 vi.mock('./lib/convex', async () => {
-  const live = (await import('./store/guard/liveDouble.setup')).liveOver(network)
+  const live = (await import('./store/guard/liveDouble.setup')).liveOver(network, {
+    taskWindow: 'client',
+  })
   double.live = live
   return { convex: network, live }
 })

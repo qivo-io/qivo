@@ -20,7 +20,9 @@ const double = vi.hoisted(() => ({
   live: null as null | { forceProjectNav(force: 'client' | null): void },
 }))
 vi.mock('../lib/convex', async () => {
-  double.live = (await import('../store/guard/liveDouble.setup')).liveOver(network)
+  double.live = (await import('../store/guard/liveDouble.setup')).liveOver(network, {
+    taskWindow: 'client',
+  })
   return { convex: network, live: double.live }
 })
 vi.mock('../lib/auth', () => ({

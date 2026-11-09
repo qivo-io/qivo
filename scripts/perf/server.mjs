@@ -27,8 +27,9 @@
 // server does not serve answers an error that says so (readPart). Measure
 // such a build in a checkout of its own. It answers the task
 // window's own queries (taskWindow:task, links and attachments) from the
-// workspace it holds, which a write sends
-// again with the parts it changed. The task window's relation pickers' read
+// workspace it holds through the stand-in the store tests share
+// (src/store/taskWindowStandIn.setup.ts), which a write sends again with
+// the parts it changed. The task window's relation pickers' read
 // (taskWindow:relationCandidates), which the app reads once a batch, comes
 // from a stand-in (src/store/relationPickerStandIn.setup.ts) before the
 // task window's other reads.
@@ -674,7 +675,6 @@ import { chunkLists } from '../../convex/lib/arrayLimit'
 import { idWindows, startWindows } from '../../convex/lib/idWindows'
 import { creatorGrant } from '../../convex/lib/projectGrants'
 import { matchesTerms, scoreOf, searchTerms } from '../../convex/lib/searchTerms'
-import { parseIssueRef } from '../../convex/lib/taskRefs'
 import { nextSyncStamp } from '../../convex/lib/teamSync'
 import { rootOf, splitWorkspace } from '../../convex/lib/workspaceJoin'
 import { boardStandIn } from '../../src/store/boardStandIn.setup'
@@ -727,6 +727,7 @@ import { projectSettingsStandIn } from '../../src/store/projectSettingsStandIn.s
 import { relationPickerStandIn } from '../../src/store/relationPickerStandIn.setup'
 import { reassignChoicesStandIn, removalPreviewStandIn } from '../../src/store/removalStandIn.setup'
 import { dependenciesStandIn, roadmapStandIn } from '../../src/store/roadmapStandIn.setup'
+import { TASK_WINDOW_NO_ANSWER, taskWindowStandIn } from '../../src/store/taskWindowStandIn.setup'
 import { isTeamSettingsRead, teamSettingsStandIn } from '../../src/store/teamSettingsStandIn.setup'
 import { teamSyncStandIn } from '../../src/store/teamSyncStandIn.setup'
 
@@ -2140,8 +2141,6 @@ function readPart(name, args) {
   const at = windowsOf(part.org_id)[kind].findIndex((w) => w.from === args.from)
   return { state: 'ok', ...chunkLists(part[kind][at]) }
 }
-/* -1, 0 or 1 as `a` sorts before, with or after `b` in code unit order. */
-const order = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
 /* The reads of a task, by their organization and ref, that answered
    once, for window=failed, which fails every later answer of that read.
    Keyed by the read, not the task, so a task opened by its number reads
@@ -2196,102 +2195,39 @@ const refusalOf = (error) =>
   error && typeof error === 'object' && error.data && typeof error.data === 'object'
     ? { data: error.data }
     : {}
-/** The task `ref` names in organization `orgId` as convex/lib/taskWindow.ts
-    taskByRef reads it: a uuid in any case, or a number bare or as QN-12 in
-    that organization only. */
-function taskByRef(byId, orgId, ref) {
-  const named = typeof ref === 'string' ? parseIssueRef(ref) : null
-  if (!named) return undefined
-  if ('uuid' in named) {
-    const task = byId.get(named.uuid)
-    return task?.org_id === orgId ? task : undefined
-  }
-  return snapshot.issues.find((row) => row.org_id === orgId && row.num === named.num)
-}
-/** What the task window's query `name` answers for `args`, in the shapes
-    of convex/lib/taskWindow.ts: the open task with its parent and its
+/** What the task window's query `name` answers for `args`, through the
+    shared stand-in (src/store/taskWindowStandIn.setup.ts), the shapes of
+    convex/lib/taskWindow.ts: the open task with its parent and its
     subtasks as short rows, its links with their other ends, or its
     attachment rows. The signed-in person is shown every visible task, the
     unheld ones too, so every list is complete unless window=incomplete
-    says otherwise, and a task it does not hold answers unavailable. With
-    window=failed, each read of the task, by its arguments, fails after its
-    first answer, which a transition soon after brings; with window=error
-    it fails from the first, and with window=loading it never answers. */
+    says otherwise for the task's subtasks, and a task it does not hold
+    answers unavailable. With window=failed, each read of the task, by its
+    arguments, fails after its first answer, which a transition soon after
+    brings; with window=error it fails from the first, and with
+    window=loading it never answers. */
 function readTaskWindow(name, args) {
-  const byId = new Map(snapshot.issues.map((row) => [row.id, row]))
-  if (name === 'taskWindow:task' && forcedWindow === 'loading') return NO_ANSWER
   if (name === 'taskWindow:task' && forcedWindow === 'error')
     throw new Error("the task window's read fails, as window=error asks")
-  const task =
-    name === 'taskWindow:task'
-      ? taskByRef(byId, args.org_id ?? org, args.ref)
-      : byId.get(args.issue_id)
-  if (!task) return { state: 'unavailable' }
-  if (name === 'taskWindow:task' && forcedWindow === 'failed') {
-    const read = JSON.stringify([args.org_id ?? org, args.ref])
+  const asked = { ...args, org_id: args.org_id ?? org }
+  const force =
+    name !== 'taskWindow:task'
+      ? undefined
+      : forcedWindow === 'loading'
+        ? 'loading'
+        : forcedWindow === 'incomplete'
+          ? 'incomplete'
+          : undefined
+  const answer = taskWindowStandIn(snapshot, name, asked, force)
+  if (answer === TASK_WINDOW_NO_ANSWER) return NO_ANSWER
+  if (name === 'taskWindow:task' && forcedWindow === 'failed' && answer.state === 'ok') {
+    const read = JSON.stringify([asked.org_id, args.ref])
     if (windowAnswered.has(read))
       throw new Error("the task window's read fails, as window=failed asks")
     windowAnswered.add(read)
     setTimeout(() => void transition(), 2 * latency + 500)
   }
-  // the person's grant on the visible program
-  const level = access[0].level
-  const short = (row) => {
-    const {
-      description: _text,
-      parent_id: _parent,
-      has_hidden_parent: _hiddenParent,
-      has_hidden_subtasks: _hidden,
-      ...rest
-    } = row
-    return { ...rest, has_subtasks: parents.has(row.id), level }
-  }
-  const byCreation = (a, b) => order(a.created_at, b.created_at) || order(a.id, b.id)
-  if (name === 'taskWindow:task') {
-    const kids = snapshot.issues
-      .filter((row) => row.parent_id === task.id)
-      .sort((a, b) => a.num - b.num || order(a.id, b.id))
-    const parent = task.parent_id ? byId.get(task.parent_id) : undefined
-    // a list that is not whole says it holds hidden subtasks, as the
-    // server's does (convex/lib/taskWindow.ts windowTask)
-    const incomplete = forcedWindow === 'incomplete'
-    return {
-      state: 'ok',
-      task: {
-        ...task,
-        has_subtasks: parents.has(task.id),
-        ...(incomplete ? { has_hidden_subtasks: true } : {}),
-      },
-      level,
-      labels: snapshot.issueLabels.filter((row) => row.issue_id === task.id),
-      follow:
-        snapshot.issueSubs.find((row) => row.issue_id === task.id && row.profile_id === me.id) ??
-        null,
-      parent: parent ? short(parent) : null,
-      subtasks: {
-        rows: (incomplete ? kids.slice(0, Math.floor(kids.length / 2)) : kids).map(short),
-        complete: !incomplete,
-      },
-    }
-  }
-  if (name === 'taskWindow:links') {
-    const other = (link) => (link.source_id === task.id ? link.target_id : link.source_id)
-    const links = snapshot.links
-      .filter(
-        (link) =>
-          (link.source_id === task.id || link.target_id === task.id) && byId.has(other(link)),
-      )
-      .sort(byCreation)
-    const ends = [...new Set(links.map(other))]
-    return { state: 'ok', links, tasks: ends.map((id) => short(byId.get(id))), complete: true }
-  }
-  const rows = snapshot.attachments.filter((row) => row.issue_id === task.id).sort(byCreation)
-  return {
-    state: 'ok',
-    rows,
-    count: rows.filter((row) => row.dropped_at === undefined).length,
-    complete: true,
-  }
+  return answer
 }
 /* The rows of a page of main Search. */
 const SEARCH_ROWS = 25
