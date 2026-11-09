@@ -7132,7 +7132,15 @@ const knownName = (id: string | null | undefined): string | undefined => {
    screen, and who wrote it. */
 const fieldLookup = {
   record(change: FieldChange, seenName?: string): string {
-    const task = (id: string | undefined) => (id && uuidToKey.get(id)) || 'a task'
+    // a task by its key as the screen shows it: the window's answer, else
+    // the number a view's answer brought, else 'a task'
+    const task = (id: string | undefined) => {
+      if (!id) return 'a task'
+      const shown = PLANNER.taskShown(id)?.key
+      if (shown) return shown
+      const num = viewRows.numberOf(id)
+      return num === undefined ? (uuidToKey.get(id) ?? 'a task') : `${ISSUE_PREFIX}-${num}`
+    }
     const named = (name: string | undefined, fallback: string) => seenName ?? name ?? fallback
     switch (change.record) {
       case 'task':

@@ -165,7 +165,7 @@ describe('the field check in the store', () => {
     new ConvexError({
       code: 'conflict',
       reason: 'field_changed',
-      message: 'status of a task changed since you read it',
+      message: 'status of QN-1 changed since you read it',
       changes: changes.map((c) => ({
         record: 'task',
         id: 'task-1',
@@ -249,7 +249,7 @@ describe('the field check in the store', () => {
     latest().reject(changed([{ field: 'description' }]))
     await settle()
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
-      'Not saved. Emil Berg changed the description of a task. Your change was discarded.',
+      'Not saved. Emil Berg changed the description of QN-1. Your change was discarded.',
     )
   })
 
@@ -276,7 +276,7 @@ describe('the field check in the store', () => {
     latest().reject(changed([{}]))
     await settle()
     expect(showToast).toHaveBeenCalledWith(
-      'Not saved. Emil Berg changed the status of a task. Your change was discarded.',
+      'Not saved. Emil Berg changed the status of QN-1. Your change was discarded.',
       'error',
       expect.objectContaining({ sticky: true, key: 'field-changed-1' }),
     )
@@ -291,7 +291,7 @@ describe('the field check in the store', () => {
     latest().reject(changed([{ by: 'p-unnamed' }]))
     await settle()
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
-      'Not saved. The status of a task was changed elsewhere. Your change was discarded.',
+      'Not saved. The status of QN-1 was changed elsewhere. Your change was discarded.',
     )
   })
 
@@ -323,7 +323,7 @@ describe('the field check in the store', () => {
     latest().reject(changed([{ by: me }]))
     await settle()
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
-      'Not saved. You changed the status of a task elsewhere. This change was discarded.',
+      'Not saved. You changed the status of QN-1 elsewhere. This change was discarded.',
     )
   })
 
@@ -337,7 +337,7 @@ describe('the field check in the store', () => {
     second.reject(changed([{}]))
     await settle()
     expect(showToast.mock.calls.at(-1)).toEqual([
-      'Not saved. Emil Berg changed the status of a task. Your 2 changes were discarded.',
+      'Not saved. Emil Berg changed the status of QN-1. Your 2 changes were discarded.',
       'error',
       expect.objectContaining({ sticky: true, key: 'field-changed-1' }),
     ])
@@ -353,8 +353,8 @@ describe('the field check in the store', () => {
     second.reject(changed([{ field: 'title' }]))
     await settle()
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
-      'Not saved. Emil Berg changed the title of a task. Your change was discarded.\n' +
-        'Not saved. Emil Berg changed the title of a task. Your text is still in the editor. Save again to replace their version.',
+      'Not saved. Emil Berg changed the title of QN-1. Your change was discarded.\n' +
+        'Not saved. Emil Berg changed the title of QN-1. Your text is still in the editor. Save again to replace their version.',
     )
   })
 
@@ -370,7 +370,7 @@ describe('the field check in the store', () => {
     latest().reject(changed([{ at: '2026-10-20T09:01:00.000Z' }]))
     await settle()
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
-      'Not saved. Emil Berg changed the status of a task while you were offline. Your change was discarded.',
+      'Not saved. Emil Berg changed the status of QN-1 while you were offline. Your change was discarded.',
     )
   })
 
@@ -390,7 +390,7 @@ describe('the field check in the store', () => {
     latest().reject(changed([{ at: '2026-10-20T09:02:00.000Z' }]))
     await settle()
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
-      'Not saved. Emil Berg changed the status of a task while you were offline. Your change was discarded.',
+      'Not saved. Emil Berg changed the status of QN-1 while you were offline. Your change was discarded.',
     )
   })
 
@@ -406,7 +406,7 @@ describe('the field check in the store', () => {
     latest().reject(changed([{ at: '2026-10-20T09:01:00.000Z' }]))
     await settle()
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
-      'Not saved. Emil Berg changed the status of a task. Your change was discarded.',
+      'Not saved. Emil Berg changed the status of QN-1. Your change was discarded.',
     )
   })
 
@@ -426,7 +426,7 @@ describe('the field check in the store', () => {
     await settle()
     expect(kept).toEqual(['The old text', 'The old text'])
     expect(showToast.mock.calls.at(-1)?.[0]).toBe(
-      'Not saved. Emil Berg changed the description of a task. Your text is still in the editor. Save again to replace their version.',
+      'Not saved. Emil Berg changed the description of QN-1. Your text is still in the editor. Save again to replace their version.',
     )
   })
 
