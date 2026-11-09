@@ -1548,6 +1548,11 @@ function App() {
       (isFrontDoor(location.pathname) || namesScopeById(location.pathname, scope))
     )
       return
+    // and so does the address of a project scope the project cache
+    // answered gone, by its number or its uuid, which the access guard then
+    // replaces with the front door in place. A write here first would push
+    // the front door over the lost entry and drop every Forward entry
+    if (scope && pathNamesScope(state) && P.scopeInfo(scope).state === 'gone') return
     const p = buildPath(state)
     /* A person jump's chooser marks its entry, the front door, with the
        person and the view it shows on, which the front door does not name,
@@ -1941,7 +1946,8 @@ function App() {
     const was = scopePlace.current?.id === scope ? scopePlace.current : null
     const note = lostNote(scope, scopeOpened.current, was?.name ?? null)
     scopeOpened.current = null
-    // the scope's own address, by uuid or by number, gives way to the front
+    // the scope's own address, by uuid or by number, which the url sync
+    // leaves on screen while the scope is gone, gives way to the front
     // door's in place, as it is no page the person can open; the address
     // of a page shown over the scope stays its entry
     const shownState = { scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync }

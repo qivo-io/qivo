@@ -218,6 +218,51 @@ const chooserState = () => q('[data-project-chooser]')?.getAttribute('data-proje
 const line = () => q('[data-project-chooser-line]')?.textContent
 const note = () => q('[data-project-chooser-note]')?.textContent
 const shown = () => q('[data-workspace-view]')?.getAttribute('data-workspace-view')
+/** Presses the top bar's view switch `label`. */
+async function switchView(label: string) {
+  const find = () =>
+    [...document.querySelectorAll<HTMLElement>('[data-view-switch] button')].find(
+      (b) => b.textContent?.trim() === label,
+    )
+  await until(find, `the ${label} switch`)
+  await act(async () => find()?.click())
+  await settle()
+}
+/** A record of the page's session history beside jsdom's, from the entry
+    the page is on: every entry's address and the current entry's place, as
+    the page's pushState and replaceState and the browser's Back and
+    Forward (go) change them. */
+function recordHistory() {
+  const entries = [location.pathname]
+  let at = 0
+  const push = history.pushState.bind(history)
+  const replace = history.replaceState.bind(history)
+  vi.spyOn(history, 'pushState').mockImplementation((state, unused, url) => {
+    push(state, unused, url)
+    entries.splice(at + 1, entries.length, location.pathname)
+    at += 1
+  })
+  vi.spyOn(history, 'replaceState').mockImplementation((state, unused, url) => {
+    replace(state, unused, url)
+    entries[at] = location.pathname
+  })
+  return {
+    entries: () => [...entries],
+    at: () => at,
+    /** Moves `step` entries as the browser's Back or Forward does, and lets App follow. */
+    async go(step: number) {
+      const moved = new Promise((resolve) =>
+        window.addEventListener('popstate', resolve, { once: true }),
+      )
+      await act(async () => {
+        history.go(step)
+        await moved
+      })
+      at += step
+      await settle()
+    },
+  }
+}
 /** Sets whether the tab shows, as the browser tells the page. */
 const setVisibility = (state: 'visible' | 'hidden') =>
   act(async () => {
@@ -283,6 +328,33 @@ describe('opening a project scope from the project cache', { timeout: 30_000 }, 
     // ends empty beneath the note
     await until(() => note() === 'Alpha is no longer available to you.', "the chooser's note")
     expect(shown()).toBeUndefined()
+    expect(location.pathname).toBe('/app/testbed')
+  })
+
+  it("replaces a numbered scope's own entry with the front door once the cache answers it gone, keeping the place and the Forward entry", async () => {
+    await app(world(), `/app/testbed/board/p/${ALPHA}`)
+    await until(
+      () => shown() === 'kanban' && location.pathname === '/app/testbed/board/p/2',
+      "Alpha's Board by its number",
+    )
+    const record = recordHistory()
+    // the Overview's entry, which Back leaves as the Forward entry
+    await switchView('Overview')
+    await until(() => shown() === 'overview', "Alpha's Overview")
+    expect(record.entries()).toEqual(['/app/testbed/board/p/2', '/app/testbed/overview/p/2'])
+    await record.go(-1)
+    await until(() => shown() === 'kanban', "Alpha's Board again")
+    expect(record.at()).toBe(0)
+    // the person loses Plan's grant, which carried Alpha
+    server = { ...server, access: [] }
+    await rerun()
+    await until(() => note() === 'Alpha is no longer available to you.', "the chooser's note")
+    await settle()
+    // must fail for an address sync that pushes the front door over the
+    // lost entry before the access guard replaces it, dropping the Forward
+    // entry
+    expect(record.entries()).toEqual(['/app/testbed', '/app/testbed/overview/p/2'])
+    expect(record.at()).toBe(0)
     expect(location.pathname).toBe('/app/testbed')
   })
 
