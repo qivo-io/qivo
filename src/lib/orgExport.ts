@@ -544,7 +544,7 @@ async function intoFile(
    refusal of the server, such as an archive past its record window, keeps
    its sentence and offers no Try again, which the same refusal would
    answer; a failure to reach the server leaves the record to Try again.
-   A rule refusal gets one more try after RECORD_RETRY.ms first: the route
+   A rule refusal gets one more try after RECORD_RETRY.ms first. The route
    records that it served the archive (served_at, which the record needs)
    once the backend read its last byte, and for a small archive the page's
    confirmed save can reach the server before that record commits. */
