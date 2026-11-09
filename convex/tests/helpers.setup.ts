@@ -43,6 +43,7 @@ import { shownAvatarColor } from '../model/people'
 import { memberCount } from '../model/teamCounts'
 import schema from '../schema'
 import { type OracleProjects, projectsOracle } from './projectsOracle.setup'
+import { type TaskSections, tasksOracleOf } from './tasksOracle.setup'
 import { teamJson } from './teamMembers.setup'
 
 export type T = TestConvex<typeof schema>
@@ -1306,12 +1307,26 @@ function appRow<R extends { _id: unknown; _creationTime: number; name_key?: stri
  * (workspaceOf), which holds only the login's own profiles, memberships and
  * teams, with every profile of each of its organizations and that
  * profile's Team sync stamp, every team, membership and label beside it, as
- * the stand-ins of the reads by id, the pickers and the agenda answer them.
+ * the stand-ins of the reads by id, the pickers and the agenda answer them,
+ * and each seat's tasks with their relation rows and the anonymized load of
+ * the tasks it is not shown, from the test oracle (tasksOracle.setup.ts),
+ * which the stand-ins of the task window and the views answer from.
  * Null without a seat.
  */
 export async function wholeOf(t: T, profile: Doc<'profiles'>) {
   const snap = await workspaceOf(as(t, profile))
   if (snap === null) return null
+  const tasks: TaskSections = await t.run(async (ctx) => {
+    const seats: Doc<'profiles'>[] = []
+    for (const id of snap.myProfileIds) {
+      const seat = await ctx.db
+        .query('profiles')
+        .withIndex('by_uuid', (q) => q.eq('id', id))
+        .unique()
+      if (seat !== null) seats.push(seat)
+    }
+    return await tasksOracleOf(ctx, seats)
+  })
   const orgIds = snap.orgs.map((org) => org.id)
   const projectIds = snap.projects.map((project) => project.id)
   const rows = await t.run(async (ctx) => {
@@ -1372,7 +1387,7 @@ export async function wholeOf(t: T, profile: Doc<'profiles'>) {
     }
     return { profiles, teams, teamMembers, labels, access }
   })
-  return { ...snap, ...rows }
+  return { ...snap, ...rows, ...tasks }
 }
 
 /** The load rows the app works with for workspace `snap`: a row for each
