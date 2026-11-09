@@ -139,7 +139,7 @@ const setVisibility = async (value: 'visible' | 'hidden') => {
   await settle()
 }
 const claims = () => sent('orgExport:claimDownload') as { automatic: boolean; export_id: string }[]
-const desktop = (answer = { state: 'completed', file: 'a.zip', bytes: 2048 }) => {
+const desktop = (answer: object = { state: 'completed', file: 'a.zip', bytes: 2048 }) => {
   const download = vi.fn(async () => answer)
   ;(window as { qivoDesktop?: unknown }).qivoDesktop = { orgExport: { download } }
   return download
@@ -463,6 +463,17 @@ describe('starting, joining, downloading and cancelling', () => {
     await press('[data-export-cancel-confirm]')
     expect(network.mutation).not.toHaveBeenCalled()
     expect(text()).toContain('Saving is paused.')
+  })
+
+  it('names the unfinished file the desktop app could not delete', async () => {
+    desktop({ state: 'failed', leftover: 'qivo-northstar-2026-11-09.zip' })
+    serve(['claimed'])
+    await mount()
+    await press('[data-export-download="latest"]')
+    expect(container.querySelector('[data-export-unconfirmed]')?.textContent).toBe(
+      "The download didn't finish, so no export was saved. Try again. The desktop app couldn't delete the unfinished file qivo-northstar-2026-11-09.zip in your Downloads folder, so delete it yourself.",
+    )
+    expect(sent('orgRemovals:recordExport')).toEqual([])
   })
 
   it('offers Try again after a saved export whose record failed', async () => {

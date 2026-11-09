@@ -509,8 +509,11 @@ function DeliveryLine({ delivery }: { delivery: DeliveryState }) {
       )
     case 'unconfirmed':
       return (
-        <p role="alert" className="text-danger">
+        <p role="alert" className="text-danger" data-export-unconfirmed="">
           The download didn't finish, so no export was saved. Try again.
+          {delivery.leftover
+            ? ` The desktop app couldn't delete the unfinished file ${delivery.leftover} in your Downloads folder, so delete it yourself.`
+            : ''}
         </p>
       )
     case 'claimed':

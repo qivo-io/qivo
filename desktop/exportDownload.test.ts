@@ -63,7 +63,7 @@ function fakeItem(url: string, opts: { total?: number; mime?: string; name?: str
   return Object.assign(item, { typed })
 }
 
-function setup(files: string[] = []) {
+function setup(files: string[] = [], remove?: (file: string) => void) {
   const existing = new Set(files)
   const removed: string[] = []
   const contents = { downloadURL: vi.fn() }
@@ -71,6 +71,7 @@ function setup(files: string[] = []) {
     downloadsDir: () => DIR,
     exists: (file) => existing.has(file),
     remove: (file) => {
+      remove?.(file)
       removed.push(file)
       existing.delete(file)
     },
@@ -215,6 +216,27 @@ describe("the shell's export downloads", () => {
     item.finish(end)
     await expect(answer).resolves.toEqual({ state })
     expect(removed).toEqual([item.savePath])
+  })
+
+  it('answers failed, naming the file, when it cannot remove a partial one, and takes the next download', async () => {
+    const { downloads, contents } = setup([], () => {
+      throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    })
+    const answer = downloads.start(contents, LINK)
+    const item = fakeItem(LINK)
+    downloads.willDownload({}, item.typed, contents)
+    item.progress(300)
+    item.interrupt()
+    await expect(answer).resolves.toEqual({
+      state: 'failed',
+      leftover: 'qivo-acme-2026-11-07.zip',
+    })
+    // the shell runs nothing any more, so the next export is not busy
+    const next = downloads.start(contents, LINK)
+    const again = fakeItem(LINK)
+    downloads.willDownload({}, again.typed, contents)
+    again.finish('completed', 1000)
+    await expect(next).resolves.toMatchObject({ state: 'completed' })
   })
 
   it('answers interrupted for a completed item short of its total, and removes the file', async () => {

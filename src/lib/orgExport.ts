@@ -116,7 +116,7 @@ export type DeliveryState = { exportId: string } & (
   | { state: 'sent' }
   | { state: 'busy'; retryAfter: number | null }
   | { state: 'stopped'; removed: boolean }
-  | { state: 'unconfirmed' }
+  | { state: 'unconfirmed'; leftover?: string }
   | { state: 'claimed' }
   | { state: 'refused'; message: string }
 )
@@ -378,7 +378,9 @@ async function viaDesktop(
     set(
       answer.state === 'busy'
         ? { exportId, state: 'busy', retryAfter: null }
-        : { exportId, state: 'unconfirmed' },
+        : 'leftover' in answer
+          ? { exportId, state: 'unconfirmed', leftover: answer.leftover }
+          : { exportId, state: 'unconfirmed' },
     )
     return true
   } catch {

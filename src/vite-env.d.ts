@@ -75,9 +75,12 @@ type QivoDesktopBridge = {
 }
 
 /** What the desktop app's export download answers: the saved file's name
-    and bytes when it completed whole, else how it ended. */
+    and bytes when it completed whole, else how it ended, with `leftover`
+    naming a partial file in the Downloads folder the shell could not
+    remove. */
 type QivoDesktopExportDownload =
   | { state: 'completed'; file: string; bytes: number }
+  | { state: 'failed'; leftover: string }
   | { state: 'cancelled' | 'interrupted' | 'failed' | 'busy' | 'refused' }
 
 interface Window {

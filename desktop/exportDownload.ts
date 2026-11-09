@@ -29,9 +29,13 @@ export const EXPORT_MAX_BYTES = 95 * 1024 * 1024
 export const FALLBACK_NAME = 'qivo-export.zip'
 
 /** What the page's download call answers: the saved file's base name and
- * its bytes when the download completed whole, else how it ended. */
+ * its bytes when the download completed whole, else how it ended. A
+ * download that did not complete and whose partial file the shell could not
+ * remove answers `failed` with that file's base name in `leftover`, so the
+ * page can ask the person to delete it. */
 export type ExportDownloadAnswer =
   | { state: 'completed'; file: string; bytes: number }
+  | { state: 'failed'; leftover: string }
   | { state: 'cancelled' | 'interrupted' | 'failed' | 'busy' | 'refused' }
 
 /** The parts of Electron's DownloadItem this module uses. */
@@ -113,7 +117,8 @@ type Options = {
   /** The Downloads folder, read when a download starts. */
   downloadsDir: () => string
   exists: (file: string) => boolean
-  /** Removes a file, if any, ignoring a missing one. */
+  /** Removes a file, if any, ignoring a missing one. It may throw, for a
+   * file another program holds open or a folder whose permission changed. */
   remove: (file: string) => void
   /** How long the shell waits for Chromium to start the item. */
   timeoutMs?: number
@@ -133,7 +138,9 @@ type Options = {
  * name. It refuses an item that is not a ZIP file of a positive size up to
  * `maxBytes`. An interrupted item is cancelled, since Chromium would keep
  * it waiting to resume, and so is one without progress for `stallMs`; a
- * download that did not complete whole leaves no file.
+ * download that did not complete whole leaves no file, or answers the file
+ * it could not remove. Every download answers, whatever its cleanup does, so
+ * the next one is never refused as busy.
  */
 export function createExportDownloads(options: Options) {
   const timeoutMs = options.timeoutMs ?? 30_000
@@ -191,8 +198,16 @@ export function createExportDownloads(options: Options) {
       end({ state: 'failed' })
       return
     }
-    const file = savePathIn(options.downloadsDir(), item.getFilename(), options.exists)
-    item.setSavePath(file)
+    let file: string
+    try {
+      file = savePathIn(options.downloadsDir(), item.getFilename(), options.exists)
+      item.setSavePath(file)
+    } catch {
+      // the Downloads folder could not be read; nothing was written yet
+      item.cancel()
+      end({ state: 'failed' })
+      return
+    }
     let stopped: 'interrupted' | null = null
     const stall = () => {
       clearTimeout(current.timer)
@@ -218,8 +233,18 @@ export function createExportDownloads(options: Options) {
         end({ state: 'completed', file: path.basename(file), bytes })
         return
       }
-      options.remove(file)
-      end({ state: stopped ?? (state === 'completed' ? 'interrupted' : state) })
+      let answer: ExportDownloadAnswer = {
+        state: stopped ?? (state === 'completed' ? 'interrupted' : state),
+      }
+      try {
+        options.remove(file)
+      } catch {
+        // a file another program holds open, or a folder whose permission
+        // changed: the person deletes it, since it holds part of an archive
+        answer = { state: 'failed', leftover: path.basename(file) }
+      } finally {
+        end(answer)
+      }
     })
   }
 

@@ -94,6 +94,7 @@ const power = {
 
 type ExportDownloadAnswer =
   | { state: 'completed'; file: string; bytes: number }
+  | { state: 'failed'; leftover: string }
   | { state: 'cancelled' | 'interrupted' | 'failed' | 'busy' | 'refused' }
 
 // An organization export's download into the Downloads folder, answered

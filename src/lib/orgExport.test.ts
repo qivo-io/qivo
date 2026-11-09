@@ -422,6 +422,17 @@ describe('the desktop way', () => {
     expect(m.deliveryNow()?.state).not.toBe('saved')
   })
 
+  it('names a partial file the desktop app could not delete', async () => {
+    bridge(async () => ({ state: 'failed', leftover: 'qivo-acme.zip' }))
+    await m.deliverExport({ orgId: ORG, exportId: EXPORT, archiveBytes: 2500, automatic: false })
+    expect(records()).toEqual([])
+    expect(m.deliveryNow()).toEqual({
+      exportId: EXPORT,
+      state: 'unconfirmed',
+      leftover: 'qivo-acme.zip',
+    })
+  })
+
   it('holds the unsaved lease and the update block until the bridge answers', async () => {
     let answer: (value: unknown) => void = () => {}
     bridge(() => new Promise((resolve) => (answer = resolve)))
