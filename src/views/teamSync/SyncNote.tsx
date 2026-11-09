@@ -157,16 +157,13 @@ function useNarrower(scopeKey: string, meeting: SyncMeeting, active: boolean): N
     // each project the cache names is a choice; one it leaves out is gone
     // and offered no more; one it could not read says so with Retry, and
     // only one it still reads keeps the loading line
-    let loading = false
-    let failed = false
     const named = ids.flatMap((id) => {
       const p = P.project(id)
-      if (p) return [projectChoice(p)]
-      const state = P.projectState(id)
-      if (state === 'loading') loading = true
-      else if (state === 'failed' || state === 'unchecked') failed = true
-      return []
+      return p ? [projectChoice(p)] : []
     })
+    const unnamed = ids.filter((id) => !P.project(id)).map((id) => P.projectState(id))
+    const loading = unnamed.includes('loading')
+    const failed = unnamed.some((state) => state === 'failed' || state === 'unchecked')
     return {
       choices: [...own, ...named],
       line: failed ? NAMES_FAILED : loading ? CHOICES_LOADING : null,
