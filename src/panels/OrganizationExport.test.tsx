@@ -592,6 +592,35 @@ describe('starting, joining, downloading and cancelling', () => {
     expect(stateShown()).toBe('cancelled')
   })
 
+  it('asks again for a later job, and waits for a current answer to cancel', async () => {
+    serve(['collecting'])
+    await mount()
+    await press('[data-export-cancel]')
+    expect(button('[data-export-cancel-confirm]')?.disabled).toBe(false)
+    // while the answer is not current, the question waits
+    await setVisibility('hidden')
+    holding = []
+    await setVisibility('visible')
+    expect(section()?.getAttribute('aria-busy')).toBe('true')
+    expect(button('[data-export-cancel-confirm]')?.disabled).toBe(true)
+    const waiting = holding
+    holding = null
+    await act(async () => {
+      for (const answer of waiting) answer()
+    })
+    await settle()
+    // another admin cancels it, and a new export starts elsewhere
+    await act(async () => {
+      server.update({ state: 'cancelled', ended_at: new Date(NOW).toISOString() })
+      server.mutation('orgExport:request', {})
+    })
+    await settle()
+    expect(stateShown()).toBe('collecting')
+    expect(container.querySelector('[data-export-cancel-ask]')).toBeNull()
+    expect(button('[data-export-cancel]')).not.toBeNull()
+    expect(sent('orgExport:cancel')).toEqual([])
+  })
+
   it('refuses every write while the page cannot save', async () => {
     desktop()
     serve(['others'])

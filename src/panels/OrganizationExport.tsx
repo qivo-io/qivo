@@ -78,7 +78,9 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
   const { delivery, running } = useExportDelivery()
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
-  const [confirmCancel, setConfirmCancel] = useState(false)
+  // the job whose Cancel export question is open, so it never carries over
+  // to a later job
+  const [confirmCancel, setConfirmCancel] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   // the time the page judges expiry by, moved on each minute
   const [now, setNow] = useState(() => Date.now())
@@ -167,7 +169,7 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
     setError('')
     try {
       await convex.mutation(api.orgExport.cancel, { org_id: orgId, export_id: exportId })
-      setConfirmCancel(false)
+      setConfirmCancel(null)
     } catch (cause) {
       setError(refusal(cause, "Couldn't cancel the export. Try again."))
     } finally {
@@ -291,11 +293,11 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
             {way === 'file' ? 'Join export…' : 'Join export'}
           </Button>
         )}
-        {latest !== null && latestState === 'collecting' && !confirmCancel && (
+        {latest !== null && latestState === 'collecting' && confirmCancel !== latest.id && (
           <Button
             type="button"
             variant="outline"
-            onClick={() => setConfirmCancel(true)}
+            onClick={() => setConfirmCancel(latest.id)}
             disabled={!canAct}
             data-export-cancel
           >
@@ -303,7 +305,7 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
           </Button>
         )}
       </div>
-      {latest !== null && latestState === 'collecting' && confirmCancel && (
+      {latest !== null && latestState === 'collecting' && confirmCancel === latest.id && (
         <div className="mt-2 flex flex-wrap items-center gap-2 text-sm" data-export-cancel-ask="">
           This stops the export for every admin who joined it.
           <Button
@@ -311,12 +313,12 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
             variant="destructive"
             size="xs"
             onClick={() => void cancel(latest.id)}
-            disabled={busy}
+            disabled={!canAct}
             data-export-cancel-confirm
           >
             Cancel export
           </Button>
-          <Button type="button" variant="outline" size="xs" onClick={() => setConfirmCancel(false)}>
+          <Button type="button" variant="outline" size="xs" onClick={() => setConfirmCancel(null)}>
             Keep exporting
           </Button>
         </div>
