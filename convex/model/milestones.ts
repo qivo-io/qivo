@@ -686,8 +686,9 @@ export async function removeMilestoneCore(
  * share (MILESTONE_SCOPE). Each project's first day past the start, and
  * whether one holds a past milestone, are read whatever the ceiling, within
  * the request's own limits, so that every call moves on. The share is the
- * one a workspace part reads before it asks to be cut (lib/workspaceParts.ts
- * PAGE.soft), because these reads are subscriptions too and rerun whenever
+ * one the workspace's tasks part read before it asked to be cut, before it
+ * went (lib/namedPages.ts), because these reads are subscriptions too and
+ * rerun whenever
  * a row they read changes. A section read with `mine` names no projects:
  * the server finds them (mineMilestoneProjects) and refuses more than
  * `projects` of them with MILESTONE_TOO_MANY and LIMITS.milestoneProjects'

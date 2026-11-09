@@ -1,7 +1,7 @@
 /* One-time migration: give every task and project stored before window
  * keys existed a window key (schema.ts `window_key`, lib/db.ts
- * newWindowKey), so the app's task windows spread the tasks
- * (lib/workspaceParts.ts), and each task's relation rows (label
+ * newWindowKey), which spread the tasks over the app's task windows
+ * before the workspace's tasks part went, and each task's relation rows (label
  * assignments, attachments, follows and the links from it) the same key as
  * `task_key`, in the transaction that gives the task its key. A relation
  * row whose key differs from its task's gets the task's, too, so a run also

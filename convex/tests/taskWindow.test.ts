@@ -41,8 +41,6 @@ afterEach(() => {
   Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
 })
 
-const whole = { from: '', to: null }
-
 /* The largest description the server accepts, of three-byte characters:
  * about 60 KB stored. */
 const LARGEST = '€'.repeat(20_000)
@@ -54,7 +52,7 @@ const byCreation = (a: { created_at: string; id: string }, b: { created_at: stri
 const byNumber = (a: { num: number; id: string }, b: { num: number; id: string }) =>
   a.num - b.num || order(a.id, b.id)
 
-/* The tasks part's row of a task cut to the short row the window sends. */
+/* The oracle's row of a task cut to the short row the window sends. */
 function cut(row: TaskRow, level: string | null | undefined) {
   const {
     description: _text,
@@ -64,16 +62,6 @@ function cut(row: TaskRow, level: string | null | undefined) {
     ...rest
   } = row
   return { ...rest, has_subtasks: rest.has_subtasks ?? false, level }
-}
-
-/* A caller as as() gives one. */
-type Caller = ReturnType<typeof as>
-
-/** The tasks part of `caller` over the whole window. */
-async function tasksPart(caller: Caller, orgId: string) {
-  const part = await caller.query(api.workspace.tasks, { org_id: orgId, ...whole })
-  if (part.state !== 'ok') throw new Error(`the tasks part answered ${part.state}`)
-  return part
 }
 
 /** The tasks oracle's sections for seat `person`, the reference the
@@ -381,52 +369,6 @@ async function plantWorld(t: T, f: OrgFixture) {
     links,
   }
 }
-
-/* Each section of `a` and `b` as sorted JSON, so two answers that list the
- * same rows in another order compare equal. */
-const sections = (a: object) =>
-  Object.fromEntries(
-    Object.entries(a).flatMap(([name, rows]) =>
-      Array.isArray(rows) ? [[name, rows.map((row) => JSON.stringify(row)).sort()]] : [],
-    ),
-  )
-
-describe('the tasks oracle', () => {
-  it('answers what the tasks part sends, for guest, viewer, member, admin and FW-only seats and every Northstar person', async () => {
-    const t = newT()
-    const f = await withReadingAdmin(t)
-    await plantWorld(t, f)
-    const fwOnly = await plantSeat(t, {
-      org_id: f.org.id,
-      auth_user_id: `seat_${uuid()}`,
-      email: `${uuid()}@testbed.test`,
-    })
-    await t.run((ctx) =>
-      ctx.db.insert('project_access', {
-        project_id: f.sub.id,
-        profile_id: fwOnly.id,
-        level: 'user',
-      }),
-    )
-    const people: [Doc<'profiles'>, string][] = [f.guest, f.viewer, f.user, f.admin, fwOnly].map(
-      (p) => [p, f.org.id],
-    )
-    const north = newT()
-    const { org, profiles } = await plantNorthstar(north)
-    let compared = 0
-    for (const [person, orgId] of people) {
-      const { state: _state, ...part } = await tasksPart(as(t, person), orgId)
-      expect(sections(await oracleOf(t, person)), person.name).toEqual(sections(part))
-      compared += part.issues.length
-    }
-    for (const person of profiles.filter((p) => p.auth_user_id !== undefined)) {
-      const { state: _state, ...part } = await tasksPart(as(north, person), org.id)
-      expect(sections(await oracleOf(north, person)), person.name).toEqual(sections(part))
-      compared += part.issues.length
-    }
-    expect(compared).toBeGreaterThan(100)
-  })
-})
 
 describe('parity with the tasks oracle', () => {
   it('answers what the tasks oracle says of every task, for guest, viewer, member, admin and FW-only seats', async () => {

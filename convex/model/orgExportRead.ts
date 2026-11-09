@@ -307,7 +307,8 @@ export function exportRow(
   delete row.gravatar_avatars
   // a task's archive-mark flag is the archive steps' bookkeeping
   delete row.relations_marked
-  // a task's or project's window key only places it in the app's windows
+  // a task's or project's window key only placed it in the app's former
+  // windows
   delete row.window_key
   // a name key, or its copy on a membership, grant or team share, only
   // serves name-ordered index reads, and so does a project's archive state

@@ -25,11 +25,9 @@ import { ACTIVE_PAGE, listActiveIssuesCore, TASK_LIST_UNREADABLE } from '../lib/
 import { accessFlags, asMachineCaller, loadCatalogue, TEXT_TASK_READS } from '../lib/core'
 import { newWindowKey } from '../lib/db'
 import { descriptionForm, printOf } from '../lib/fieldPrints'
-import { type IdWindow, piecesAfter } from '../lib/idWindows'
 import { MIB } from '../lib/limits'
 import type { OrgExportPage, OrgExportRow, OrgExportSection } from '../lib/orgExport'
 import type { EventOwner } from '../lib/taskEvents'
-import { PAGE, readTasks } from '../lib/workspaceParts'
 import { cleanDescription } from '../model/issues'
 import { NO_FILTERS } from './board.setup'
 import {
@@ -53,7 +51,6 @@ import {
 import { northstarId, plantNorthstar } from './northstar.setup'
 import { lowered, restPage, restPages } from './taskPages.setup'
 
-const whole: IdWindow = { from: '', to: null }
 const DEFAULT_TEXT_READS = TEXT_TASK_READS.reads
 
 const exportPage = makeFunctionReference<
@@ -164,8 +161,6 @@ async function readers(t: T, f: OrgFixture, pair: Pair, words: [string, string])
   const pick = (rows: Row[], task: Doc<'issues'>) =>
     rows.find((row) => row.id === task.id)?.description ?? null
 
-  const window = await as(t, f.admin).query(api.workspace.tasks, { org_id: f.org.id, ...whole })
-  if (window.state !== 'ok') throw new Error(window.state)
   const restGet = (task: Doc<'issues'>) =>
     t.query(internal.machine.rest.getIssue, { ...agent, today: TODAY, ref: task.id })
   const mcpGet = async (task: Doc<'issues'>) =>
@@ -213,7 +208,6 @@ async function readers(t: T, f: OrgFixture, pair: Pair, words: [string, string])
   }
 
   return {
-    workspace: pick(window.issues as Row[], pair.active),
     restGetActive: (await restGet(pair.active)).description,
     restGetArchived: (await restGet(pair.archived)).description,
     restList: pick(await restTasks(t, agent), pair.active),
@@ -253,7 +247,6 @@ async function readers(t: T, f: OrgFixture, pair: Pair, words: [string, string])
 /** What every reader answers when it shows `active` and `archived` as the
  * texts of the pair. */
 const everywhere = (active: string, archived: string) => ({
-  workspace: active,
   restGetActive: active,
   restGetArchived: archived,
   restList: active,
@@ -689,7 +682,7 @@ describe('the writers compare the text of the description row', () => {
 })
 
 describe('Northstar', () => {
-  it("the workspace part's rows and the REST and MCP task JSON answer each task's row text, which is the seed's", async () => {
+  it("the task window and the REST and MCP task JSON answer each task's row text, which is the seed's", async () => {
     const t = newT()
     const { org, profiles } = await plantNorthstar(t)
     const texts = new Map(
@@ -738,12 +731,24 @@ describe('Northstar', () => {
     expect([...texts.values()].filter(({ row }) => row !== '').length).toBeGreaterThan(50)
     const admin = profiles.find((p) => p.org_role === 'admin' && p.kind === 'person')
     if (admin?.auth_user_id === undefined) throw new Error('Northstar has no admin')
-    const answer = await t
-      .withIdentity({ subject: admin.auth_user_id })
-      .query(api.workspace.tasks, { org_id: org.id, ...whole })
-    if (answer.state !== 'ok') throw new Error(answer.state)
-    expect(answer.issues.length).toBeGreaterThan(50)
-    for (const row of answer.issues) expect(row.description).toBe(texts.get(row.id)?.row)
+    // the task window, the app's only read of a task's text, for every
+    // active task the admin opens
+    const active = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query('issues')
+          .withIndex('by_org_archived', (q) => q.eq('org_id', org.id).eq('archived_at', undefined))
+          .collect()
+      ).map((task) => task.id),
+    )
+    let opened = 0
+    for (const id of active) {
+      const answer = await as(t, admin).query(api.taskWindow.task, { org_id: org.id, ref: id })
+      if (answer.state !== 'ok') continue
+      expect(answer.task.description).toBe(texts.get(id)?.row)
+      opened++
+    }
+    expect(opened).toBeGreaterThan(50)
     const agent = profiles.find((p) => p.kind === 'agent')
     if (agent === undefined) throw new Error('Northstar has no agent')
     const rows = await restTasks(t, { callerId: agent.id, access: 'read', limit: '200' })
@@ -866,131 +871,6 @@ const smallPage = (documents: number) => ({
 const ORDINARY_TEXT = 'Check the bracket fit and the cable route before the next build. '.repeat(6)
 
 describe('real limits', () => {
-  it('a window of 200 tasks whose rows are near 900 KB overflows, and the cut that fits answers, past PAGE.hard by one row at most', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withReadingAdmin(t)
-    const text = 'n'.repeat(900 * 1024)
-    await plantMany(
-      t,
-      f,
-      200,
-      () => text,
-      () => undefined,
-      12,
-    )
-    const read = (w: IdWindow) =>
-      t.run(async (ctx) => {
-        const answer = await readTasks(ctx, f.admin, w)
-        return { answer, metrics: await used(ctx) }
-      })
-    const first = await read(whole)
-    expect(first.answer.state).toBe('overflow')
-    // past PAGE.hard by one row at most
-    expect(first.metrics.mib).toBeLessThanOrEqual(PAGE.hard.bytes / MIB + 1)
-    // the app cuts the window, and goes on into the piece that holds the
-    // first task, until it answers
-    let w = whole
-    let answer = first.answer
-    let metrics = first.metrics
-    for (let depth = 0; answer.state === 'overflow' && depth < 12; depth++) {
-      const pieces = piecesAfter(w, answer) ?? []
-      w = pieces.find((piece) => piece.from === w.from) ?? pieces[0]
-      ;({ answer, metrics } = await read(w))
-    }
-    if (answer.state !== 'ok') throw new Error(answer.state)
-    expect(answer.issues.length).toBeGreaterThan(0)
-    for (const row of answer.issues) expect(row.description).toBe(text)
-    expect(metrics.mib).toBeLessThanOrEqual(PAGE.hard.bytes / MIB + 1)
-  })
-
-  it('the narrowest window answers a parent whose subtasks are legacy rows near 1 MiB, its text one row past PAGE.hard at most', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withReadingAdmin(t)
-    // the narrowest window of the grid, which cannot be cut
-    const narrowest: IdWindow = { from: 'fff00000', to: null }
-    const parent = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      description: 'Bring up the board',
-      window_key: 'fff00000',
-    })
-    // eight subtasks in other windows, stored before the caps with texts of
-    // 850 KB in their task rows; the window reads each, and the first again,
-    // to tell the parent is a group, about 7.3 MiB
-    const legacy = 'l'.repeat(850 * 1024)
-    for (let from = 0; from < 8; from += 4)
-      await t.run(async (ctx) => {
-        for (let i = from; i < from + 4; i++)
-          await ctx.db.insert(
-            'issues',
-            taskDoc(f, 20_000 + i, legacy, { parent_id: parent.id, window_key: '00000000' }),
-          )
-      })
-    const { answer, metrics } = await t.run(async (ctx) => ({
-      answer: await readTasks(ctx, f.admin, narrowest),
-      metrics: await used(ctx),
-    }))
-    if (answer.state !== 'ok') throw new Error(answer.state)
-    expect(answer.issues.map((row) => [row.id, row.description, row.has_subtasks])).toEqual([
-      [parent.id, 'Bring up the board', true],
-    ])
-    expect(metrics.mib).toBeGreaterThan(7)
-    expect(metrics.mib).toBeLessThan(16)
-  })
-
-  it('a window of 200 tasks with both copies answers or splits within a lowered PAGE.hard', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withReadingAdmin(t)
-    // both copies of an ordinary text, about 240 KB in all, under parts'
-    // bytes lowered to 32 and 64 KiB, as 200 at the cap in a three-byte
-    // script, 24 MB, passed the real 4 and 8 MiB
-    const text = ORDINARY_TEXT
-    await plantMany(
-      t,
-      f,
-      200,
-      () => text,
-      () => text,
-      200,
-    )
-    const budgets = structuredClone({ soft: PAGE.soft, hard: PAGE.hard })
-    Object.assign(PAGE.soft, { bytes: 32 * 1024 })
-    Object.assign(PAGE.hard, { bytes: 64 * 1024 })
-    try {
-      const queue: IdWindow[] = [whole]
-      const shown = new Set<string>()
-      const states: string[] = []
-      let most = 0
-      while (queue.length > 0) {
-        const w = queue.shift() as IdWindow
-        const { answer, bytes } = await t.run(async (ctx) => ({
-          answer: await readTasks(ctx, f.admin, w),
-          bytes: (await ctx.meta.getTransactionMetrics()).bytesRead.used,
-        }))
-        states.push(answer.state)
-        most = Math.max(most, bytes)
-        if (answer.state === 'ok') {
-          for (const row of answer.issues) {
-            expect(row.description).toBe(text)
-            shown.add(row.id)
-          }
-          if (answer.split === true) states.push('split')
-          continue
-        }
-        expect(answer.state).toBe('overflow')
-        queue.push(...(piecesAfter(w, answer) ?? []))
-      }
-      console.info('a window of 200 ordinary tasks under lowered parts', { states, most })
-      expect(shown.size).toBe(200)
-      expect(states).toContain('ok')
-      expect(states).toContain('overflow')
-      expect(most).toBeLessThanOrEqual(PAGE.hard.bytes)
-    } finally {
-      Object.assign(PAGE.soft, budgets.soft)
-      Object.assign(PAGE.hard, budgets.hard)
-    }
-  })
-
   it('a REST page of 200 tasks with both copies ends early with a cursor under a lowered page budget, pages on to every task, and holds more once the copies are cleared', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)

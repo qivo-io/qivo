@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
+import type { Doc } from '../_generated/dataModel'
 import type { McpIssueOut } from '../lib/core'
 import {
   appLoadRows,
@@ -14,7 +15,7 @@ import {
   uuid,
   wholeOf,
   withReadingAdmin,
-  workspaceOf,
+  workingSetOf,
 } from './helpers.setup'
 
 describe('parent task status', () => {
@@ -135,7 +136,7 @@ describe('parent task status', () => {
       'rule',
       /status cannot be set/,
     )
-    const snapshot = await workspaceOf(as(t, f.admin))
+    const snapshot = await workingSetOf(as(t, f.admin))
     expect(snapshot?.issues.map((i) => i.id).sort()).toEqual([root.id, middle.id, leaf.id].sort())
   })
 
@@ -158,10 +159,19 @@ describe('parent task status', () => {
       project_id: f.sub.id,
       parent_id: parent.id,
     })
-    const snapshot = await workspaceOf(as(t, f.guest))
-    expect(snapshot?.issues.find((i) => i.id === parent.id)?.has_hidden_subtasks).toBe(true)
-    expect(snapshot?.issues.map((i) => i.id)).toContain(visibleChild.id)
-    expect(snapshot?.issues.map((i) => i.id)).not.toContain(hiddenChild.id)
+    // the task window's answer, the app's read of one task
+    const windowOf = async (who: Doc<'profiles'>) => {
+      const answer = await as(t, who).query(api.taskWindow.task, {
+        org_id: f.org.id,
+        ref: parent.id,
+      })
+      if (answer.state !== 'ok') throw new Error(answer.state)
+      return answer
+    }
+    const guestWindow = await windowOf(f.guest)
+    expect(guestWindow.task.has_hidden_subtasks).toBe(true)
+    expect(guestWindow.subtasks.rows.map((row) => row.id)).toEqual([visibleChild.id])
+    expect(JSON.stringify(guestWindow)).not.toContain(hiddenChild.id)
     expect(
       await t.query(internal.machine.rest.getIssue, {
         today: TODAY,
@@ -180,9 +190,7 @@ describe('parent task status', () => {
       /status cannot be set/,
     )
     // An administrator sees the child, so nothing is hidden from them
-    const adminFlag = async () =>
-      (await workspaceOf(as(t, f.admin)))?.issues.find((i) => i.id === parent.id)
-        ?.has_hidden_subtasks
+    const adminFlag = async () => (await windowOf(f.admin)).task.has_hidden_subtasks
     expect(await adminFlag()).toBe(false)
     // A subtask in an archived project makes a task in an active one no
     // group, so its project's archive hides nothing and leaves the parent a
@@ -191,9 +199,7 @@ describe('parent task status', () => {
       await ctx.db.patch(hiddenProject._id, { archived_at: NOW })
     })
     expect(await adminFlag()).toBe(false)
-    const guestFlag = async () =>
-      (await workspaceOf(as(t, f.guest)))?.issues.find((i) => i.id === parent.id)
-        ?.has_hidden_subtasks
+    const guestFlag = async () => (await windowOf(f.guest)).task.has_hidden_subtasks
     expect(await guestFlag()).toBe(false)
     // once the visible subtask is archived too, the parent is a task again
     await as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: visibleChild.id })

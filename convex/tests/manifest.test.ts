@@ -829,7 +829,6 @@ webhooks:removeOrganization mutation internal {"type":"object","value":{"owner":
 webhooks:save mutation internal {"type":"object","value":{"owner":{"fieldType":{"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"credential_table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"agent_keys"},{"type":"literal","value":"mcp_tokens"},{"type":"literal","value":"oauth_connections"}]},"optional":false},"credential_id":{"fieldType":{"type":"string"},"optional":false},"credential_row_id":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"union","value":[{"type":"literal","value":"task.created"},{"type":"literal","value":"task.updated"},{"type":"literal","value":"task.deleted"},{"type":"literal","value":"task.restored"},{"type":"literal","value":"comment.created"}]},"optional":false},"filters":{"fieldType":{"type":"object","value":{"task_id":{"fieldType":{"type":"string"},"optional":true},"project_id":{"fieldType":{"type":"string"},"optional":true}}},"optional":false},"url":{"fieldType":{"type":"string"},"optional":false},"encrypted_secret":{"fieldType":{"type":"string"},"optional":false},"secret_hash":{"fieldType":{"type":"string"},"optional":true},"legacy_secret_hash":{"fieldType":{"type":"string"},"optional":true},"expires_at":{"fieldType":{"type":"number"},"optional":true}}}
 webhooks:sweep mutation internal {"type":"object","value":{}}
 workspace:root query public {"type":"object","value":{}}
-workspace:tasks query public {"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 `
   .trim()
   .split('\n')
@@ -850,8 +849,7 @@ describe('the function-surface manifest', () => {
 /* ------------------------------------------------------- the public subset */
 
 /* Auth posture per public door, hand-grouped. `org*`/`adminMutation`/
- * `accessRemovalMutation`/`seatQuery` consume a wrapper-injected org_id
- * wire arg (`seatQuery` answers without a seat instead of refusing);
+ * `accessRemovalMutation` consume a wrapper-injected org_id wire arg;
  * `accessRemovalMutation` lets an org admin past the billing gate for writes
  * that only take access away. `authed*` gate on a login only; `session*`
  * on a login whose session in the token is live, reading no seat;
@@ -867,7 +865,6 @@ type Wrapper =
   | 'authedMutation'
   | 'sessionQuery'
   | 'sessionMutation'
-  | 'seatQuery'
   | 'platformQuery'
   | 'platformMutation'
   | 'platformAction'
@@ -1370,18 +1367,16 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     revokeMcpToken: 'authedMutation',
     deleteMcpToken: 'authedMutation',
   },
-  // The workspace in live parts. The root reads every seat of the login,
-  // with the caller's own profiles, memberships and teams; the tasks part
-  // takes one organization and answers gone, without throwing, where the
-  // caller holds no seat. No part sends a project or a message.
+  // The workspace's one live part. The root reads every seat of the
+  // login, with the caller's own profiles, memberships and teams. No part
+  // sends a task, a project or a message.
   workspace: {
     root: 'authedQuery',
-    tasks: 'seatQuery',
   },
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 252
+const PUBLIC_COUNT = 251
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')
@@ -1485,7 +1480,6 @@ describe('the wrapper rule', () => {
     'adminMutation',
     'accessRemovalMutation',
     'orgAction',
-    'seatQuery',
   ])
   const NON_ORG_ALLOWLIST = new Set(
     Object.entries(PUBLIC).flatMap(([m, fns]) =>
@@ -1507,7 +1501,6 @@ describe('the wrapper rule', () => {
     authedMutation: 'mutation',
     sessionQuery: 'query',
     sessionMutation: 'mutation',
-    seatQuery: 'query',
     platformQuery: 'query',
     platformMutation: 'mutation',
     platformAction: 'action',

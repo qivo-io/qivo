@@ -1,6 +1,8 @@
-/* The workspace parts (workspace.ts) joined as the app joins them
- * (helpers.setup.ts workspaceOf), the read-path gate, and the task history
- * that snapshot.threadHistory answers beside a task's comments.
+/* The workspace's one part (workspace.ts root) as the app keeps it
+ * (helpers.setup.ts workspaceOf), what the task window's reads
+ * (taskWindow.ts) send each seat of the tasks the workspace no longer
+ * holds, the read-path gate, and the task history that
+ * snapshot.threadHistory answers beside a task's comments.
  *
  * Extra scenery beside withOrg's mini-Testbed:
  * - the admin holds User grants on TBED and Skunkworks, so they see every
@@ -9,8 +11,8 @@
  * - hiddenSub: a sub under f.hidden (lead: user) — invisible to guest/viewer,
  *   visible to admin (by their grant) and user (lead)
  * - hidden2 / hidden2Sub: a second hidden family led by ADMIN — the project
- *   plain staff `user` cannot see, which is what the staff-anonymization
- *   assertions need (the admin sees everything, so f.hidden can't test it)
+ *   plain staff `user` cannot see, where the hidden task cases plant their
+ *   hidden tasks (the admin sees everything, so f.hidden can't test it)
  * - issueVis: scheduled+estimated work in f.sub, the identified control row */
 
 /// <reference types="vite/client" />
@@ -24,7 +26,6 @@ import { byId } from '../lib/db'
 import { insertActivity } from '../model/activity'
 import { startPurge } from '../model/deletedItems'
 import {
-  appLoadRows,
   as,
   expectRefusal,
   NOW,
@@ -86,6 +87,11 @@ const snapFor = async (profile: Doc<'profiles'>) => {
   return snap
 }
 
+/* The task window's answer for `ref` as `profile` reads it, the app's read
+ * of one task (taskWindow.task). */
+const windowOf = (profile: Doc<'profiles'>, ref: string) =>
+  as(t, profile).query(api.taskWindow.task, { org_id: f.org.id, ref })
+
 const plantLabel = (name: string) =>
   t.run(async (ctx) => {
     const _id = await ctx.db.insert('labels', {
@@ -120,12 +126,14 @@ describe('workspace scoping', () => {
     const projectIds = snap.projects.map((p) => p.id)
     expect(projectIds.sort()).toEqual([f.meta.id, f.sub.id, f.sub2.id].sort())
     expect(snap.access.every((a) => a.project_id === f.meta.id)).toBe(true)
-    // the projects part sends every grant on TBED, the viewer's and the
+    // the projects oracle reads every grant on TBED, the viewer's and the
     // admin's too, and the workspace keeps the guest's own alone
-    // (lib/workspaceJoin.ts joinParts)
+    // (helpers.setup.ts workspaceOf)
     expect(snap.access.map((a) => a.profile_id)).toEqual([f.guest.id])
-    expect(snap.issues.map((i) => i.id)).toContain(issueVis.id)
-    expect(snap.issues.map((i) => i.id)).not.toContain(issueHid.id)
+    // the task window, the app's read of one task, opens the granted task
+    // and answers the hidden one unavailable
+    expect((await windowOf(f.guest, issueVis.id)).state).toBe('ok')
+    expect(await windowOf(f.guest, issueHid.id)).toEqual({ state: 'unavailable' })
     expect(snap.auth_user_id).toBe(f.guest.auth_user_id)
     expect(snap.myProfileIds).toEqual([f.guest.id])
   })
@@ -186,7 +194,7 @@ describe('workspace scoping', () => {
   it('viewer reaches the family via the grant only — dropping the grant drops everything', async () => {
     const snap = await snapFor(f.viewer)
     expect(snap.projects.map((p) => p.id).sort()).toEqual([f.meta.id, f.sub.id, f.sub2.id].sort())
-    expect(snap.issues.map((i) => i.id)).toContain(issueVis.id)
+    expect((await windowOf(f.viewer, issueVis.id)).state).toBe('ok')
 
     await t.run(async (ctx) => {
       const grant = await ctx.db
@@ -199,8 +207,8 @@ describe('workspace scoping', () => {
     })
     const bare = await snapFor(f.viewer)
     expect(bare.projects).toEqual([])
-    expect(bare.issues).toEqual([])
     expect(bare.access).toEqual([])
+    expect(await windowOf(f.viewer, issueVis.id)).toEqual({ state: 'unavailable' })
   })
 
   it('cross-org fence: the second org is absent in both directions', async () => {
@@ -209,13 +217,25 @@ describe('workspace scoping', () => {
     expect(mine.orgs.map((o) => o.id)).toEqual([f.org.id])
     expect(mine.projects.map((p) => p.id)).not.toContain(f.otherProject.id)
     expect(mine.profiles.map((p) => p.id)).not.toContain(f.otherAdmin.id)
-    expect(mine.issues.map((i) => i.id)).not.toContain(otherIssue.id)
+    // the task window of the other organization's task, by its id in the
+    // admin's own organization, is unavailable, and the other organization
+    // takes no call from the admin
+    expect(await windowOf(f.admin, otherIssue.id)).toEqual({ state: 'unavailable' })
+    await expectRefusal(
+      as(t, f.admin).query(api.taskWindow.task, { org_id: f.otherOrg.id, ref: otherIssue.id }),
+      'forbidden',
+    )
 
     const theirs = await snapFor(f.otherAdmin)
     expect(theirs.orgs.map((o) => o.id)).toEqual([f.otherOrg.id])
     expect(theirs.projects.map((p) => p.id)).toEqual([f.otherProject.id])
-    expect(theirs.issues.map((i) => i.id)).toEqual([otherIssue.id])
     expect(theirs.profiles.map((p) => p.id)).toEqual([f.otherAdmin.id])
+    const opened = await as(t, f.otherAdmin).query(api.taskWindow.task, {
+      org_id: f.otherOrg.id,
+      ref: otherIssue.id,
+    })
+    expect(opened.state).toBe('ok')
+    await expectRefusal(windowOf(f.otherAdmin, issueVis.id), 'forbidden')
   })
 
   it('a second seat blends its org into the one snapshot', async () => {
@@ -237,22 +257,11 @@ describe('workspace scoping', () => {
       await t.withIdentity({ subject: 'auth_nobody' }).query(api.workspace.root, {}),
     ).toBeNull()
     await expectRefusal(t.query(api.workspace.root, {}), 'forbidden')
-    await expectRefusal(
-      t.query(api.workspace.tasks, { org_id: f.org.id, from: '', to: null }),
-      'forbidden',
-    )
   })
 
   it('rows are pure snake_case app rows — no Convex system fields anywhere', async () => {
     const snap = await snapFor(f.admin)
-    const sections = [
-      snap.orgs,
-      snap.teams,
-      snap.profiles,
-      snap.projects,
-      snap.issues,
-      snap.orgLoad,
-    ]
+    const sections = [snap.orgs, snap.teams, snap.profiles, snap.projects]
     for (const section of sections) {
       for (const row of section) {
         expect(Object.keys(row)).not.toContain('_id')
@@ -270,12 +279,17 @@ describe('billing redaction', () => {
     const user = await snapFor(f.user)
     expect(user.orgs[0]?.billing).toBeUndefined()
     expect(user.orgs[0]?.next_issue_num).toBe(1)
-    // the root sends no project number or count, which no app reads
-    expect(user.orgs[0]).not.toHaveProperty('next_project_num')
-    expect(user.orgs[0]).not.toHaveProperty('live_projects')
+    // the root sends no project number and no count of tasks or projects,
+    // which no app reads
+    for (const org of [admin.orgs[0], user.orgs[0]]) {
+      expect(org).not.toHaveProperty('next_project_num')
+      expect(org).not.toHaveProperty('live_projects')
+      expect(org).not.toHaveProperty('active_tasks')
+    }
 
     const guest = await snapFor(f.guest)
     expect(guest.orgs[0]?.billing).toBeUndefined()
+    expect(guest.orgs[0]).not.toHaveProperty('active_tasks')
   })
 
   it('leaves out the retired Gravatar setting, whatever an older row stored', async () => {
@@ -287,7 +301,7 @@ describe('billing redaction', () => {
 })
 
 describe('archived split', () => {
-  it('projects stay visible for archive navigation while archived task rows stay out of the snapshot', async () => {
+  it('projects stay visible for archive navigation, and the workspace holds no task, archived or not', async () => {
     await t.run(async (ctx) => {
       const sub2 = await ctx.db
         .query('projects')
@@ -300,39 +314,7 @@ describe('archived split', () => {
       project_id: f.sub.id,
       archived_at: NOW,
     })
-    const issueInArchived = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
-    const label = await plantLabel('Old')
-    const storageId = await t.run(async (ctx) => await ctx.storage.store(new Blob(['x']) as never))
     await t.run(async (ctx) => {
-      await ctx.db.insert('issue_labels', {
-        org_id: archivedIssue.org_id,
-        issue_id: archivedIssue.id,
-        label_id: label.id,
-      })
-      await ctx.db.insert('issue_links', {
-        org_id: archivedIssue.org_id,
-        id: uuid(),
-        source_id: archivedIssue.id,
-        target_id: issueVis.id,
-        type: 'relates',
-        pair_key: [archivedIssue.id, issueVis.id].sort().join(':'),
-        created_at: NOW,
-      })
-      await ctx.db.insert('issue_attachments', {
-        org_id: archivedIssue.org_id,
-        id: uuid(),
-        issue_id: archivedIssue.id,
-        name: 'x.txt',
-        size_bytes: 1,
-        storage_id: storageId,
-        inline: false,
-        created_at: NOW,
-      })
-      await ctx.db.insert('issue_subscriptions', {
-        issue_id: archivedIssue.id,
-        profile_id: f.admin.id,
-        created_at: NOW,
-      })
       await ctx.db.insert('milestones', {
         id: uuid(),
         project_id: f.meta.id,
@@ -340,253 +322,20 @@ describe('archived split', () => {
         week: '2026-03-02',
         created_at: NOW,
       })
-      await ctx.db.insert('milestones', {
-        id: uuid(),
-        project_id: f.sub2.id,
-        name: 'Dead',
-        week: '2026-03-02',
-        created_at: NOW,
-      })
     })
-
     const snap = await snapFor(f.admin)
     expect(snap.projects.map((p) => p.id)).toContain(f.sub2.id)
-    expect(snap.issues.map((i) => i.id)).toContain(issueVis.id)
-    expect(snap.issues.map((i) => i.id)).not.toContain(archivedIssue.id)
-    expect(snap.issues.map((i) => i.id)).not.toContain(issueInArchived.id)
-    // The archive list is an on-demand read. Its labels, attachments and
-    // links must not make the initial working snapshot (or its storage
-    // metadata) grow with archived work.
-    expect(snap.issueLabels.some((r) => r.issue_id === archivedIssue.id)).toBe(false)
-    expect(snap.attachments.some((a) => a.issue_id === archivedIssue.id)).toBe(false)
-    expect(
-      snap.links.some((l) => l.source_id === archivedIssue.id || l.target_id === archivedIssue.id),
-    ).toBe(false)
-    expect(snap.issueSubs.some((row) => row.issue_id === archivedIssue.id)).toBe(false)
-    // no part sends a milestone of a live or an archived project; the
-    // milestone reads keep the archived fence (milestoneReads.test.ts)
+    // no part sends a task, its relation rows or a milestone: the app reads
+    // them from its views' and its window's own answers and the milestone
+    // reads, which keep the archived fence (milestoneReads.test.ts)
+    for (const section of ['issues', 'issueLabels', 'attachments', 'links', 'issueSubs', 'orgLoad'])
+      expect(snap).not.toHaveProperty(section)
     expect(snap).not.toHaveProperty('milestones')
+    expect(JSON.stringify(snap)).not.toContain(issueVis.id)
+    expect(JSON.stringify(snap)).not.toContain(archivedIssue.id)
   })
 })
 
-describe('org_load', () => {
-  it('staff who cannot see a project get its rows as anonymized busy time; those who can get the id', async () => {
-    const hid2Issue = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: hidden2Sub.id,
-      assignee_id: f.admin.id,
-      start_week: '2026-01-05',
-      end_week: '2026-01-19',
-      remaining_hours: 3,
-      remaining_set_at: NOW,
-    })
-    const staff = await snapFor(f.user) // staff, no standing on hidden2
-    expect(staff.orgLoad.find((r) => r.owner_id === f.admin.id)).toEqual({
-      issue_id: null,
-      owner_id: f.admin.id,
-      start_week: '2026-01-05',
-      end_week: '2026-01-19',
-      remaining: 3,
-      remaining_set_at: NOW,
-    })
-    const admin = await snapFor(f.admin)
-    expect(appLoadRows(admin).find((r) => r.owner_id === f.admin.id)?.issue_id).toBe(hid2Issue.id)
-    // the snapshot sends only the rows of tasks its reader is not shown; the
-    // app derives the others from the task rows
-    expect(staff.orgLoad.length).toBeGreaterThan(0)
-    expect(staff.orgLoad.every((r) => r.issue_id === null)).toBe(true)
-    expect(admin.orgLoad.some((r) => r.issue_id === hid2Issue.id)).toBe(false)
-  })
-
-  it("guest: other people's hidden rows are excluded entirely; own hidden rows arrive anonymized", async () => {
-    await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: hiddenSub.id,
-      assignee_id: f.user.id,
-      start_week: '2026-01-05',
-      end_week: '2026-01-12',
-      remaining_hours: 4,
-    })
-    await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: hiddenSub.id,
-      assignee_id: f.guest.id,
-      start_week: '2026-01-05',
-      end_week: '2026-01-12',
-      remaining_hours: 7,
-    })
-    const snap = await snapFor(f.guest)
-    // user's only surviving row is the visible one, identified — the hidden
-    // 4h row does not arrive even anonymously
-    expect(
-      appLoadRows(snap)
-        .filter((r) => r.owner_id === f.user.id)
-        .map((r) => r.issue_id),
-    ).toEqual([issueVis.id])
-    expect(snap.orgLoad.find((r) => r.owner_id === f.guest.id)).toEqual({
-      issue_id: null,
-      owner_id: f.guest.id,
-      start_week: '2026-01-05',
-      end_week: '2026-01-12',
-      remaining: 7,
-      remaining_set_at: null,
-    })
-  })
-
-  it("viewer: others' hidden work never arrives; granted work is identified", async () => {
-    await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: hiddenSub.id,
-      assignee_id: f.user.id,
-      start_week: '2026-01-05',
-      end_week: '2026-01-12',
-      remaining_hours: 4,
-    })
-    const snap = await snapFor(f.viewer)
-    expect(appLoadRows(snap)).toEqual([
-      {
-        issue_id: issueVis.id,
-        owner_id: f.user.id,
-        start_week: '2026-01-05',
-        end_week: '2026-01-12',
-        remaining: 5,
-        remaining_set_at: NOW,
-      },
-    ])
-  })
-
-  it('filters: remaining>0, not done, not paused, scheduled, active issue+project — but inactive, agent and any-org-profile assignees count', async () => {
-    const scheduled = { start_week: '2026-02-02', end_week: '2026-02-09' }
-    const inSub = { org_id: f.org.id, project_id: f.sub.id }
-    await plantIssue(t, { ...inSub, ...scheduled, assignee_id: f.user.id, remaining_hours: 0 })
-    await plantIssue(t, { ...inSub, ...scheduled, assignee_id: f.user.id }) // unestimated
-    await plantIssue(t, {
-      ...inSub,
-      ...scheduled,
-      assignee_id: f.user.id,
-      remaining_hours: 2,
-      status: 'done',
-    })
-    await plantIssue(t, { ...inSub, assignee_id: f.user.id, remaining_hours: 2 }) // unscheduled
-    // paused: the assignee is free for other work until it resumes
-    await plantIssue(t, {
-      ...inSub,
-      ...scheduled,
-      assignee_id: f.user.id,
-      remaining_hours: 2,
-      paused: true,
-    })
-    await plantIssue(t, {
-      ...inSub,
-      ...scheduled,
-      assignee_id: f.user.id,
-      remaining_hours: 2,
-      archived_at: NOW,
-    })
-    const dangling = uuid()
-    await plantIssue(t, { ...inSub, ...scheduled, assignee_id: dangling, remaining_hours: 9 }) // dangling assignee
-    await t.run(async (ctx) => {
-      const sub2 = await ctx.db
-        .query('projects')
-        .withIndex('by_uuid', (q) => q.eq('id', f.sub2.id))
-        .unique()
-      await ctx.db.patch(sub2!._id, { archived_at: NOW })
-    })
-    await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub2.id,
-      ...scheduled,
-      assignee_id: f.user.id,
-      remaining_hours: 2,
-    })
-    // no active/kind fence on the assignee side
-    await plantIssue(t, { ...inSub, ...scheduled, assignee_id: f.agent.id, remaining_hours: 6 })
-    const inactive = await plantSeat(t, {
-      org_id: f.org.id,
-      active: false,
-      auth_user_id: 'auth_inactive',
-      email: 'inactive@testbed.test',
-    })
-    await plantIssue(t, { ...inSub, ...scheduled, assignee_id: inactive.id, remaining_hours: 8 })
-
-    const snap = await snapFor(f.admin)
-    expect(
-      appLoadRows(snap)
-        .filter((r) => r.owner_id === f.user.id)
-        .map((r) => r.issue_id),
-    ).toEqual([issueVis.id])
-    expect(appLoadRows(snap).some((r) => r.owner_id === f.agent.id && r.remaining === 6)).toBe(true)
-    expect(appLoadRows(snap).some((r) => r.owner_id === inactive.id && r.remaining === 8)).toBe(
-      true,
-    )
-    // the app files no row for an owner people.byIds says is not there
-    expect(appLoadRows(snap, new Set([dangling])).some((r) => r.remaining === 9)).toBe(false)
-  })
-
-  it('the owner carries the load: the reviewer while In Review with one set, else the assignee', async () => {
-    const work = {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      start_week: '2026-03-02',
-      end_week: '2026-03-09',
-      remaining_hours: 2,
-    }
-    const pair = { assignee_id: f.user.id, reviewer_id: f.admin.id }
-    const reviewing = await plantIssue(t, { ...work, ...pair, status: 'review' })
-    const building = await plantIssue(t, { ...work, ...pair, status: 'progress' })
-    const noReviewer = await plantIssue(t, { ...work, assignee_id: f.user.id, status: 'review' })
-    const noAssignee = await plantIssue(t, { ...work, reviewer_id: f.admin.id, status: 'review' })
-    const paused = await plantIssue(t, { ...work, ...pair, status: 'review', paused: true })
-
-    const snap = await snapFor(f.admin)
-    const ownersOf = (id: string) =>
-      appLoadRows(snap)
-        .filter((r) => r.issue_id === id)
-        .map((r) => r.owner_id)
-    expect(ownersOf(reviewing.id)).toEqual([f.admin.id])
-    expect(ownersOf(building.id)).toEqual([f.user.id])
-    expect(ownersOf(noReviewer.id)).toEqual([f.user.id])
-    expect(ownersOf(noAssignee.id)).toEqual([f.admin.id])
-    expect(ownersOf(paused.id)).toEqual([])
-  })
-
-  it('guest disclosure follows the owner: hidden work they review arrives anonymized, hidden work they only assign does not', async () => {
-    const hiddenReview = {
-      org_id: f.org.id,
-      project_id: hiddenSub.id,
-      status: 'review',
-      start_week: '2026-01-05',
-      end_week: '2026-01-12',
-    } as const
-    await plantIssue(t, {
-      ...hiddenReview,
-      assignee_id: f.user.id,
-      reviewer_id: f.guest.id,
-      remaining_hours: 7,
-    })
-    await plantIssue(t, {
-      ...hiddenReview,
-      assignee_id: f.guest.id,
-      reviewer_id: f.user.id,
-      remaining_hours: 4,
-    })
-    const snap = await snapFor(f.guest)
-    expect(snap.orgLoad.filter((r) => r.issue_id === null)).toEqual([
-      {
-        issue_id: null,
-        owner_id: f.guest.id,
-        start_week: '2026-01-05',
-        end_week: '2026-01-12',
-        remaining: 7,
-        remaining_set_at: null,
-      },
-    ])
-  })
-})
-
-/* No workspace part sends a message. The app's Inbox reads inbox.page and
- * its alerts inbox.feed, and REST and MCP page the stored items through
- * model/inboxPage.ts inboxWalk (machineInbox.test.ts). */
 describe('messages', () => {
   const msg = (
     recipient_id: string,
@@ -629,8 +378,7 @@ describe('task history visibility', () => {
   /* The rows about `taskId` that `p` receives in the task window: its
    * thread's history when `p` is shown the task, else none. */
   const historyOf = async (p: Doc<'profiles'>, taskId: string) => {
-    const snap = await snapFor(p)
-    if (!snap.issues.some((i) => i.id === taskId)) return []
+    if ((await windowOf(p, taskId)).state !== 'ok') return []
     const page = await as(t, p).query(api.snapshot.threadHistory, {
       org_id: f.org.id,
       issue_id: taskId,
@@ -849,7 +597,7 @@ describe('task history visibility', () => {
   })
 })
 
-describe('issueSubs', () => {
+describe("the task window's follow", () => {
   it('own rows only, across seats', async () => {
     await t.run(async (ctx) => {
       await ctx.db.insert('issue_subscriptions', {
@@ -863,10 +611,17 @@ describe('issueSubs', () => {
         created_at: NOW,
       })
     })
-    const snap = await snapFor(f.guest)
-    expect(snap.issueSubs).toEqual([
-      { issue_id: issueVis.id, profile_id: f.guest.id, created_at: NOW },
-    ])
+    const window = await windowOf(f.guest, issueVis.id)
+    if (window.state !== 'ok') throw new Error(window.state)
+    expect(window.follow).toEqual({
+      issue_id: issueVis.id,
+      profile_id: f.guest.id,
+      created_at: NOW,
+    })
+    // the admin follows nothing, whoever else does
+    const admin = await windowOf(f.admin, issueVis.id)
+    if (admin.state !== 'ok') throw new Error(admin.state)
+    expect(admin.follow).toBeNull()
   })
 
   it('a subscription to a task the person cannot access stays out, whatever its state', async () => {
@@ -880,13 +635,22 @@ describe('issueSubs', () => {
         })
       }
     })
-    const subs = async () => (await snapFor(f.guest)).issueSubs.map((s) => s.issue_id)
-    expect(await subs()).toEqual([issueVis.id])
+    // what the guest's windows answer of both tasks
+    const subs = async () => [
+      await windowOf(f.guest, issueVis.id),
+      await windowOf(f.guest, hiddenTask.id),
+    ]
+    const followed = async () => {
+      const [shown, hidden] = await subs()
+      expect(hidden).toEqual({ state: 'unavailable' })
+      return shown.state === 'ok' ? shown.follow?.issue_id : shown.state
+    }
+    expect(await followed()).toBe(issueVis.id)
     // archiving or restoring the hidden task changes nothing the guest sees
     await t.run((ctx) => ctx.db.patch(hiddenTask._id, { archived_at: NOW }))
-    expect(await subs()).toEqual([issueVis.id])
+    expect(await followed()).toBe(issueVis.id)
     await t.run((ctx) => ctx.db.patch(hiddenTask._id, { archived_at: undefined }))
-    expect(await subs()).toEqual([issueVis.id])
+    expect(await followed()).toBe(issueVis.id)
   })
 })
 
@@ -913,7 +677,15 @@ describe('links', () => {
       for (const row of Object.values(rows)) await ctx.db.insert('issue_links', row)
       return Object.fromEntries(Object.entries(rows).map(([key, row]) => [key, row.id]))
     })
-    const links = async (p: Doc<'profiles'>) => (await snapFor(p)).links.map((l) => l.id).sort()
+    // the task window's links of the shown task, the app's read of them
+    const links = async (p: Doc<'profiles'>) => {
+      const answer = await as(t, p).query(api.taskWindow.links, {
+        org_id: f.org.id,
+        issue_id: issueVis.id,
+      })
+      if (answer.state !== 'ok') throw new Error(answer.state)
+      return answer.links.map((l) => l.id).sort()
+    }
     expect(await links(f.admin)).toEqual([ids.hidden, ids.sibling].sort())
     for (const p of [f.guest, f.viewer]) expect(await links(p)).toEqual([ids.sibling])
   })
@@ -989,7 +761,7 @@ describe('navigation-only parents', () => {
     })
 
     const snap = await snapFor(subOnly)
-    expect(snap.issues.some((i) => i.id === sibling.id)).toBe(false)
+    expect(await windowOf(subOnly, sibling.id)).toEqual({ state: 'unavailable' })
     expect(snap).not.toHaveProperty('milestones')
     // the read the app takes its projects from answers the sub-project and
     // its parent, never the sibling, once the reach rows are complete
@@ -1027,7 +799,7 @@ describe('navigation-only parents', () => {
 })
 
 describe('hidden parents', () => {
-  it('a task row names its parent only when the parent is in the working set', async () => {
+  it("the task window's row names its parent only when the parent is in the working set", async () => {
     const hiddenParent = await plantIssue(t, { org_id: f.org.id, project_id: hidden2Sub.id })
     const child = await plantIssue(t, {
       org_id: f.org.id,
@@ -1039,18 +811,23 @@ describe('hidden parents', () => {
       project_id: f.sub.id,
       parent_id: issueVis.id,
     })
-    const row = async (p: Doc<'profiles'>, id: string) =>
-      (await snapFor(p)).issues.find((i) => i.id === id)
+    // the window's task row and the parent it shows
+    const row = async (p: Doc<'profiles'>, id: string) => {
+      const answer = await windowOf(p, id)
+      if (answer.state !== 'ok') throw new Error(answer.state)
+      return { task: answer.task, parent: answer.parent?.id ?? null }
+    }
     const guestChild = await row(f.guest, child.id)
-    expect(guestChild && 'parent_id' in guestChild).toBe(false)
-    expect(guestChild?.has_hidden_parent).toBe(true)
+    expect('parent_id' in guestChild.task).toBe(false)
+    expect(guestChild.parent).toBeNull()
+    expect(JSON.stringify(await windowOf(f.guest, child.id))).not.toContain(hiddenParent.id)
     expect(await row(f.admin, child.id)).toMatchObject({
-      parent_id: hiddenParent.id,
-      has_hidden_parent: false,
+      task: { parent_id: hiddenParent.id },
+      parent: hiddenParent.id,
     })
     expect(await row(f.guest, near.id)).toMatchObject({
-      parent_id: issueVis.id,
-      has_hidden_parent: false,
+      task: { parent_id: issueVis.id },
+      parent: issueVis.id,
     })
     // a parent in an archived project is outside everyone's working set
     await t.run(async (ctx) => {
@@ -1065,7 +842,9 @@ describe('hidden parents', () => {
       parent_id: inSub2.id,
     })
     for (const p of [f.guest, f.admin]) {
-      expect(await row(p, underArchived.id)).toMatchObject({ has_hidden_parent: true })
+      const under = await row(p, underArchived.id)
+      expect('parent_id' in under.task).toBe(false)
+      expect(under.parent).toBeNull()
     }
   })
 
@@ -1097,7 +876,7 @@ describe('hidden parents', () => {
     expect(JSON.stringify(window)).not.toContain(hiddenParent.id)
   })
 
-  it("no task id outside a person's working set leaves the snapshot", async () => {
+  it("no task id outside a person's working set leaves the task window's reads", async () => {
     const hiddenTask = await plantIssue(t, { org_id: f.org.id, project_id: hidden2Sub.id })
     const child = await plantIssue(t, {
       org_id: f.org.id,
@@ -1130,17 +909,21 @@ describe('hidden parents', () => {
         created_at: NOW,
       })
     })
-    const snap = await snapFor(f.guest)
-    const known = new Set(snap.issues.map((i) => i.id))
-    const referenced = [
-      ...snap.issues.flatMap((i) => (i.parent_id ? [i.parent_id] : [])),
-      ...snap.links.flatMap((l) => [l.source_id, l.target_id]),
-      ...snap.issueSubs.map((s) => s.issue_id),
-      ...snap.issueLabels.map((l) => l.issue_id),
-      ...snap.attachments.map((a) => a.issue_id),
+    // the guest's window of the child, its links and attachments, as the
+    // app reads them, and the hidden task's own window
+    const reads = [
+      await windowOf(f.guest, child.id),
+      await as(t, f.guest).query(api.taskWindow.links, { org_id: f.org.id, issue_id: child.id }),
+      await as(t, f.guest).query(api.taskWindow.attachments, {
+        org_id: f.org.id,
+        issue_id: child.id,
+      }),
     ]
-    expect(referenced.filter((id) => !known.has(id))).toEqual([])
-    expect(JSON.stringify(snap)).not.toContain(hiddenTask.id)
+    expect(reads.map((answer) => answer.state)).toEqual(['ok', 'ok', 'ok'])
+    for (const answer of reads) expect(JSON.stringify(answer)).not.toContain(hiddenTask.id)
+    expect(await windowOf(f.guest, hiddenTask.id)).toEqual({ state: 'unavailable' })
+    // the workspace's one part holds no task at all
+    expect(JSON.stringify(await snapFor(f.guest))).not.toContain(hiddenTask.id)
   })
 })
 
@@ -1260,7 +1043,9 @@ describe('threadHistory events', () => {
     const everyRow = new Set<string>()
     for (const task of tasks) for (const id of await events(f.admin, task)) everyRow.add(id)
     for (const seat of seats) {
-      const shown = new Set((await snapFor(seat)).issues.map((i) => i.id))
+      // the tasks the seat opens in the task window
+      const shown = new Set<string>()
+      for (const task of tasks) if ((await windowOf(seat, task)).state === 'ok') shown.add(task)
       const received: string[] = []
       for (const task of tasks.filter((id) => shown.has(id))) {
         const got = await events(seat, task)
@@ -1876,11 +1661,13 @@ describe('the task window history near the read limits', () => {
   })
 })
 
-describe('the status stamp in the snapshot', () => {
+describe("the status stamp in the task window's row", () => {
   const update = (id: string, patch: Record<string, unknown>) =>
     as(t, f.user).mutation(api.issues.update, { org_id: f.org.id, id, patch })
-  const rowOf = async (p: Doc<'profiles'>, id: string) =>
-    (await snapFor(p)).issues.find((i) => i.id === id)
+  const rowOf = async (p: Doc<'profiles'>, id: string) => {
+    const answer = await windowOf(p, id)
+    return answer.state === 'ok' ? answer.task : undefined
+  }
 
   it('reaches every seat shown the task, and a title edit leaves it', async () => {
     const changed = await update(issueVis.id, { status: 'todo' })

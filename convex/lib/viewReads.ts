@@ -41,8 +41,8 @@
  * What still follows hidden data is how many documents and ranges those
  * reads take, which can move a view's answer at its budget's margin only:
  *
- * - how many subtasks a shown group has, hidden ones included, as the tasks
- *   part's kidsOf (lib/workspaceParts.ts) reads them;
+ * - how many subtasks a shown group has, hidden ones included, as the
+ *   caller's working set counts them (lib/workingSet.ts);
  * - how many of a person's own tasks are in projects they cannot see
  *   (ownTasks), and how many count rows they hold there (mineCounts);
  * - how many of a selected top-level project's sub-projects the reader
@@ -1078,9 +1078,8 @@ export const isGroupIn = (known: Subtasks, id: string): boolean | undefined => {
 /**
  * Reads into `known` whether each of `tasks`, active tasks in live projects,
  * is a group: its active subtasks (issues by_parent_archived) in live
- * projects (lib/liveTasks.ts countsAsSubtask), each task read once. As
- * lib/workspaceParts.ts kidsOf reads, it takes each task's first subtask, a
- * step of CHECKS tasks at a time, one range and no document for a task
+ * projects (lib/liveTasks.ts countsAsSubtask), each task read once. It
+ * takes each task's first subtask, a step of CHECKS tasks at a time, one range and no document for a task
  * without one, and then the rest of those that have one in steps
  * (inSteps), so it sees every row it reads. A task known to be a group
  * (Subtasks parents) skips the first look and reads its subtasks in steps
@@ -1505,7 +1504,7 @@ export function ownerRange(
 
 // --- rows -------------------------------------------------------------------------
 
-/** A task as a view sends it: the row the tasks part sends (TaskRow)
+/** A task as a view sends it: the task's app row (TaskRow)
  * without its text and relation rows (labels, attachments, links,
  * follows), its parent's id only when the reader is shown the parent
  * (lib/workingSet.ts parentLink), and on a group its facts (GroupFacts). */

@@ -1,5 +1,5 @@
 /* The tasks of a caller's working set as the tests' reference data, which
- * the tests keep once the tasks part (workspace.tasks) goes.
+ * the tests kept when the workspace's tasks part (workspace.tasks) went.
  *
  * tasksOracle answers, for one seat, what the tasks part answered for every
  * one of its windows together: the active tasks of the seat's organization

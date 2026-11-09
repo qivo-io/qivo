@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { idWindows, startWindows } from '../../convex/lib/idWindows'
 
 /* The browser benchmark's stand-in server (scripts/perf/server.mjs), loaded
    as its worker would be, with the page's parameters as the worker's name. */
@@ -1427,7 +1426,7 @@ describe('the benchmark server', () => {
     expect(new Set(snap.milestones.map((m) => m.id)).size).toBe(8)
   }, 60_000)
 
-  it('sends no milestone in its workspace parts, while the milestone reads answer the planted ones', async () => {
+  it('sends no milestone and no task in its root part, serves no tasks part, while the milestone reads answer the planted ones', async () => {
     const { posted, send } = await server(
       'tasks=20&latency=0&mbps=100000&programs=3&milestoneweeks=3&milestoneprograms=2',
     )
@@ -1441,16 +1440,15 @@ describe('the benchmark server', () => {
     const snap = await read('snapshot:forMe', {})
     expect(snap.milestones).toHaveLength(12)
     const root = await read('workspace:root', {})
-    const org = root.orgs[0]
-    const parts = []
-    for (const w of idWindows(startWindows(org).tasks))
-      parts.push(await read('workspace:tasks', { org_id: org.id, ...w }))
-    expect(parts.length).toBeGreaterThan(0)
-    for (const part of parts) {
-      expect(part.state).toBe('ok')
-      expect(part).not.toHaveProperty('milestones')
-      expect(part.more ?? {}).not.toHaveProperty('milestones')
-    }
+    for (const section of ['milestones', 'issues', 'links', 'issueLabels', 'orgLoad'])
+      expect(root).not.toHaveProperty(section)
+    // no organization row counts its tasks, as the server's root sends none
+    for (const org of root.orgs) expect(org).not.toHaveProperty('active_tasks')
+    // the tasks part a build from before its removal subscribes is refused
+    // with a sentence that names it
+    const id = `q${posted.length}`
+    await send({ type: 'query', id, name: 'workspace:tasks', args: { from: '', to: null } })
+    expect(posted.find((m) => m.to === id)?.error).toMatch(/workspace:tasks is no workspace part/)
     // the milestone reads answer them, upcoming and past
     const hosts = [...new Set(snap.milestones.map((m) => m.project_id))]
     const from = snap.milestones[0].week
@@ -2340,31 +2338,20 @@ describe('the benchmark server', () => {
     expect(order).toEqual(['result', 'first', 'result', 'second'])
   }, 60_000)
 
-  it('leaves the unheld tasks out of the workspace, and answers them in Search and in the task window', async () => {
+  it('leaves the unheld tasks out of forMe, and answers them in Search and in the task window', async () => {
     // forMe, which a baseline build reads, leaves them out too; each server
     // this file loads takes the worker's place, so this one goes first
     const { snapshot } = await snapshotOf('tasks=40&unheld=3')
     expect(snapshot.issues).toHaveLength(37)
     const { posted, send } = await server('tasks=40&latency=0&mbps=100000&unheld=3')
-    await send({ type: 'query', id: 'root', name: 'workspace:root', args: {} })
-    const [org] = JSON.parse(posted.find((m) => m.to === 'root').text).orgs
-    const windows = idWindows(startWindows(org).tasks)
-    for (const [i, w] of windows.entries())
-      send({ type: 'watch', id: `w${i}`, name: 'workspace:tasks', args: { org_id: org.id, ...w } })
-    await vi.waitFor(() => expect(posted.some((m) => m.type === 'transition')).toBe(true))
-    const parts = posted
-      .filter((m) => m.type === 'transition')
-      .flatMap((m) => m.results.map((r) => JSON.parse(r.text)))
-    const held = new Set(parts.flatMap((part) => part.issues.map((row) => row.id)))
+    const held = new Set(snapshot.issues.map((row) => row.id))
     // every task is visible here; the three highest-numbered loose ones are
-    // not held, nor any row hung on them, nor a parent link to them
+    // not in forMe, nor any row hung on them, nor a parent link to them
     expect(held.size).toBe(37)
     const missing = [...Array(40).keys()].map((n) => id('4', n)).filter((uuid) => !held.has(uuid))
     expect(missing).toHaveLength(3)
-    for (const part of parts) {
-      for (const row of part.issueLabels ?? []) expect(missing).not.toContain(row.issue_id)
-      for (const row of part.issues) expect(missing).not.toContain(row.parent_id)
-    }
+    for (const row of snapshot.issueLabels ?? []) expect(missing).not.toContain(row.issue_id)
+    for (const row of snapshot.issues) expect(missing).not.toContain(row.parent_id)
     // the window's read answers one of them, and a write changes it and sends
     // its read again
     await send({ type: 'watch', id: 'window', name: 'taskWindow:task', args: { ref: missing[0] } })
@@ -2796,26 +2783,27 @@ describe('the benchmark server', () => {
     expect(limited.watched).toEqual([{ delivery: 'recent' }])
   })
 
-  it('serves the workspace in parts and re-sends only the window a remote rename changed, in one transition', async () => {
+  it('serves the workspace as its root part alone, which a remote rename does not send again', async () => {
     const { posted, send } = await server('tasks=500&latency=0&mbps=100000')
-    await send({ type: 'query', id: 'root', name: 'workspace:root', args: {} })
-    const [org] = JSON.parse(posted.find((m) => m.to === 'root').text).orgs
-    const windows = idWindows(startWindows(org).tasks)
-    expect(windows.length).toBeGreaterThan(2)
-    for (const [i, w] of windows.entries())
-      send({ type: 'watch', id: `w${i}`, name: 'workspace:tasks', args: { org_id: org.id, ...w } })
+    send({ type: 'watch', id: 'root', name: 'workspace:root', args: {} })
     await vi.waitFor(() => expect(posted.some((m) => m.type === 'transition')).toBe(true))
-    const first = posted.filter((m) => m.type === 'transition')
-    expect(first).toHaveLength(1)
-    expect(first[0].results).toHaveLength(windows.length)
-    const issues = first[0].results.flatMap((r) => JSON.parse(r.text).issues)
-    expect(issues.length).toBeGreaterThan(400)
-    expect(issues).toHaveLength(new Set(issues.map((i) => i.id)).size)
+    const [first] = posted.filter((m) => m.type === 'transition')
+    expect(first.results.map((r) => r.to)).toEqual(['root'])
+    expect(JSON.parse(first.results[0].text)).not.toHaveProperty('issues')
+    // the renamed task's own window read, which a rename sends again
+    const renamed = id('4', 250)
+    send({ type: 'watch', id: 'window', name: 'taskWindow:task', args: { ref: renamed } })
+    await vi.waitFor(() =>
+      expect(
+        posted.some((m) => m.type === 'transition' && m.results.some((r) => r.to === 'window')),
+      ).toBe(true),
+    )
     posted.length = 0
     await send({ type: 'scenario', id: 'rename', name: 'deliverRemote', args: [250] })
     await vi.waitFor(() => expect(posted.some((m) => m.type === 'transition')).toBe(true))
-    const [change] = posted.filter((m) => m.type === 'transition')
-    expect(change.results).toHaveLength(1)
+    // one transition with the window's answer, and nothing of the root
+    const changes = posted.filter((m) => m.type === 'transition')
+    expect(changes.flatMap((m) => m.results.map((r) => r.to))).toEqual(['window'])
   })
 })
 

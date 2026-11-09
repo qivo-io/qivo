@@ -22,9 +22,9 @@
  * `unavailable` where it is the task's or its parent's, and ends a list as
  * incomplete where it is a subtask's or a link end's.
  *
- * They say of a task what the tasks part says of it
- * (lib/workspaceParts.ts readTasks), under the same rules
- * (lib/workingSet.ts): a task outside the caller's working set answers
+ * They say of a task what the caller's working set holds of it
+ * (lib/workingSet.ts), as the tests' oracle reads it
+ * (convex/tests/tasksOracle.setup.ts): a task outside the caller's working set answers
  * `unavailable` alike for every reason, and a parent, subtask or link end
  * goes out only when the caller is shown it. A hidden subtask only sets
  * has_hidden_subtasks, and a link to a task the caller is not shown is left
@@ -108,8 +108,8 @@ export const TASK_WINDOW = {
   attachments: 300,
 }
 
-/** A task in one of the window's lists: the row the tasks part sends
- * (TaskRow) without its text, parent and hidden facts, with whether it is a
+/** A task in one of the window's lists: the task's app row (TaskRow,
+ * lib/workspaceParts.ts taskFields) without its text, parent and hidden facts, with whether it is a
  * group (an active subtask in a live project makes it one,
  * lib/liveTasks.ts countsAsSubtask) and the caller's level on its project.
  * Status, owners, dates, remaining hours and pause stay, because the window
@@ -555,8 +555,8 @@ async function shownParent(
  * organization (taskByRef) with what the window shows beside it.
  *
  * - `{ state: 'ok', task, level, labels, follow, parent, subtasks }` for a
- *   task in the caller's working set. `task` is the row the tasks part
- *   sends for it (TaskRow): its text from its description row
+ *   task in the caller's working set. `task` is its app row (TaskRow,
+ *   lib/workspaceParts.ts taskFields): its text from its description row
  *   (model/descriptions.ts descriptionOf, as every reader takes it since
  *   the second release of the move), its parent's id only when the caller
  *   is shown the parent, has_subtasks and has_hidden_subtasks. `level` is

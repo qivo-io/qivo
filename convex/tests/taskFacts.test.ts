@@ -35,7 +35,7 @@ import {
   TODAY,
   uuid,
   withReadingAdmin,
-  workspaceOf,
+  workingSetOf,
 } from './helpers.setup'
 import { countOrg } from './overviewCounts.setup'
 import { lowered, mcpPages, restPage, restPages } from './taskPages.setup'
@@ -109,11 +109,11 @@ async function tree(fx: Fx) {
   return { g1, g2, g3, g4, g5, g6, g7, ga, l1, l2, l3, l4, l13 }
 }
 
-/* What the app shows `person`: the snapshot's rows of the fixture
- * organization as the planner shapes them for src/lib/issueGroups.ts, and
- * its projects. */
+/* What `person` is shown: the rows of their working set in the fixture
+ * organization (helpers.setup.ts workingSetOf, the tests' oracle) as the
+ * planner shapes them for src/lib/issueGroups.ts, and its projects. */
 async function appView(fx: Fx, person: Doc<'profiles'>) {
-  const snap = await workspaceOf(as(fx.t, person))
+  const snap = await workingSetOf(as(fx.t, person))
   if (snap === null) throw new Error(`${person.name} has no snapshot`)
   const rows = snap.issues.filter((i) => i.org_id === fx.org.id)
   const byId: Record<string, GroupIssue> = {}

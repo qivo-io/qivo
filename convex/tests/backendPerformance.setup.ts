@@ -1,6 +1,5 @@
 import type { QueryCtx } from '../_generated/server'
 import * as inbox from '../inbox'
-import { idWindows, startWindows, type WindowCounts } from '../lib/idWindows'
 import { logActivity } from '../model/activity'
 import * as workspace from '../workspace'
 import { NOW, newT, patchCounters, withOrg } from './helpers.setup'
@@ -17,8 +16,8 @@ type Baseline = {
 } & ({ currentOnly: true } | { currentOnly?: false; activity: typeof logActivity })
 
 /** The id of benchmark task `i`: a UUID whose first part is a hash, spread
-    over the id space as the server's random window keys are
-    (lib/idWindows.ts), and which is also its window key (keyOf). */
+    over the id space as random ids are, and which is also the window key
+    every task row still carries (keyOf). */
 function taskId(i: number): string {
   let hash = 0x811c9dc5
   for (const ch of `task:${i}`) hash = Math.imul(hash ^ ch.charCodeAt(0), 0x01000193) >>> 0
@@ -39,13 +38,13 @@ const run = (fn: unknown, ctx: QueryCtx, args: Record<string, unknown>) =>
     args,
   )
 
-/** Every part of the caller's workspace in `orgId`, and the Inbox feed
-    the leader tab of a session that can show desktop alerts watches, each
-    read in its own transaction as the app subscribes to them, the feed over
-    every stored event: per part its answer as JSON,
-    milliseconds, index ranges, documents and bytes read, in the windows
-    the app would choose. */
-async function readParts(identity: Identity, orgId: string) {
+/** The workspace's root part and the Inbox feed the leader tab of a
+    session that can show desktop alerts watches, each read in its own
+    transaction as the app subscribes to them, the feed over every stored
+    event: per part its answer as JSON, milliseconds, index ranges,
+    documents and bytes read. No part sends a task, so the size of the
+    organization's task list changes neither. */
+async function readParts(identity: Identity) {
   const measured = async (name: string, fn: unknown, args: Record<string, unknown>) => {
     const started = performance.now()
     const out = await identity.query(async (ctx) => {
@@ -63,30 +62,14 @@ async function readParts(identity: Identity, orgId: string) {
     })
     return { name, ...out, ms: performance.now() - started }
   }
-  /* The windows of `kind`, as the app chooses them from the counts. */
-  const windowsOf = async (_kind: string) => {
-    const root = (await identity.query(async (ctx) => await run(workspace.root, ctx, {}))) as {
-      orgs: (WindowCounts & { id: string })[]
-    }
-    const org = root.orgs.find((o) => o.id === orgId)
-    const start = org === undefined ? { tasks: 1 } : startWindows(org)
-    return idWindows(start.tasks)
-  }
   // the root carries the caller's own profiles, memberships and teams, so
-  // there is no people or catalog part to measure
-  const parts = [
+  // there is no people or catalog part to measure, and no part sends a
+  // task or a project: the app reads them from its views' and its window's
+  // own answers and by id (projectNav.byIds)
+  return [
     await measured('root', workspace.root, {}),
     await measured('feed', inbox.feed, { after: 0 }),
   ]
-  // no part sends a project: the app reads them by id (projectNav.byIds)
-  const windowed = {
-    tasks: workspace.tasks,
-  }
-  for (const [kind, fn] of Object.entries(windowed)) {
-    for (const [i, w] of (await windowsOf(kind)).entries())
-      parts.push(await measured(`${kind} ${i}`, fn, { org_id: orgId, ...w }))
-  }
-  return parts
 }
 
 /** The busiest window of each kind, and how many windows it has. */
@@ -168,7 +151,7 @@ export async function benchmarkBackend(baseline: Baseline) {
     const authed = t.withIdentity({ subject: f.user.auth_user_id! })
     /* One row per kind of part: how many parts it has and its busiest. */
     const compare = async (operation: string, identity: Identity = authed) => {
-      for (const [kind, { windows, busiest }] of summary(await readParts(identity, f.org.id))) {
+      for (const [kind, { windows, busiest }] of summary(await readParts(identity))) {
         const row = {
           operation,
           tasks: count,
@@ -185,7 +168,7 @@ export async function benchmarkBackend(baseline: Baseline) {
     if (!baseline.guardsOnly) {
       await compare('workspace')
       // what one task rename re-sends: the parts whose answer changed
-      const before = await readParts(authed, f.org.id)
+      const before = await readParts(authed)
       await t.run(async (ctx) => {
         const task = await ctx.db
           .query('issues')
@@ -193,7 +176,7 @@ export async function benchmarkBackend(baseline: Baseline) {
           .unique()
         if (task) await ctx.db.patch(task._id, { title: 'Renamed by someone else' })
       })
-      const after = await readParts(authed, f.org.id)
+      const after = await readParts(authed)
       const changed = after.filter((part, i) => part.answer !== before[i]?.answer)
       const row = {
         operation: 'rename re-sends',

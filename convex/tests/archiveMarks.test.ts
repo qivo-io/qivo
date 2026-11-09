@@ -3,8 +3,9 @@
  * and flags the task relations_marked (model/archiveMarks.ts). The steps
  * check the task when they run, and a project archive marks nothing. A
  * restore writes no relation row: it schedules steps that clear the marks,
- * and until they finish the app's tasks part sends the flagged task's marked
- * follow (lib/workspaceParts.ts readTasks).
+ * and until they finish the caller's working set holds the flagged task's
+ * marked rows, as the tests' oracle reads it (tasksOracle.setup.ts, which
+ * keeps the rules of the tasks part that went).
  * The steps run when the test fires the fake timers, so each case can look
  * before and after them. */
 /// <reference types="vite/client" />
@@ -24,7 +25,7 @@ import {
   type T,
   uuid,
   withReadingAdmin,
-  workspaceOf,
+  workingSetOf,
 } from './helpers.setup'
 
 const DEFAULT_MARKS = { ...ARCHIVE_MARKS }
@@ -135,9 +136,10 @@ const each = (mark: boolean, links = 1) => ({
   flagged: mark,
 })
 
-/* How many of the task's relation rows the admin's snapshot sends, by table. */
+/* How many of the task's relation rows the admin's working set holds, by
+ * table (helpers.setup.ts workingSetOf). */
 async function shown(t: T, f: OrgFixture, issueId: string) {
-  const snap = (await workspaceOf(as(t, f.admin)))!
+  const snap = (await workingSetOf(as(t, f.admin)))!
   return {
     labels: snap.issueLabels.filter((row) => row.issue_id === issueId).length,
     attachments: snap.attachments.filter((row) => row.issue_id === issueId).length,

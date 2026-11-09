@@ -377,8 +377,8 @@ export function besideHeld<Row extends { id: string }, Held>(
 
 /** What one call of a name-ordered list may read, counted from the call's
  * start with Convex's own transaction metrics: 2,000 index ranges, 8,000
- * documents and 4 MiB. It is the share a workspace part reads before it asks
- * to be cut (lib/workspaceParts.ts PAGE.soft), because these lists are
+ * documents and 4 MiB. It is the share the workspace's tasks part read
+ * before it asked to be cut, before it went, because these lists are
  * subscription queries too and run again on every change of what they read.
  * Tests lower it. */
 export const NAMED_READ: ReadCeiling = { ranges: 2000, documents: 8000, bytes: 4 * 1024 * 1024 }

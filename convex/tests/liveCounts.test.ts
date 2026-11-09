@@ -1,16 +1,16 @@
 /* The live counts of an organization (schema.ts org_counters active_tasks
- * and live_projects): every write of a task or project keeps them equal to
- * the rows the app's windows read (model/orgs.ts tallyRows), the backfill
+ * and live_projects), which Qivo Admin's usage reads: every write of a task
+ * or project keeps them equal to the organization's active tasks and live
+ * projects (model/orgs.ts tallyRows), the backfill
  * (internal/liveCountsBackfill.ts) counts an organization exactly while
- * writes go on between its steps, and the root part sends them only once
- * they are counted. */
+ * writes go on between its steps, and the root part sends neither count to
+ * anyone. */
 
 import { getFunctionName, makeFunctionReference } from 'convex/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { ActionCtx } from '../_generated/server'
 import { COUNT_PAGE, dryCount, RUN } from '../internal/liveCountsBackfill'
-import { startWindows, type WindowCounts } from '../lib/idWindows'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
 import {
   as,
@@ -50,7 +50,7 @@ const backfill = (t: T, args: { dry_run: boolean; recount?: boolean; cursor?: st
  * given) reads it. */
 const rootRow = async (t: T, f: OrgFixture, who: OrgFixture['user'] = f.user) => {
   const root = await as(t, who).query(makeFunctionReference<'query'>('workspace:root'), {})
-  return (root as { orgs: (WindowCounts & { id: string })[] }).orgs.find((o) => o.id === f.org.id)
+  return (root as { orgs: { id: string }[] }).orgs.find((o) => o.id === f.org.id)
 }
 
 const create = (t: T, f: OrgFixture, extra: { parent_id?: string } = {}) =>
@@ -152,23 +152,20 @@ describe('live counts', () => {
     expect(await expectLiveCounts(t, org_id)).toEqual({ active_tasks: 0, live_projects: 4 })
   }, 60_000)
 
-  it('sends the exact count only to staff, and guests and Viewers the same windows', async () => {
+  it('sends no count of tasks or projects in the root part, to an admin, a user, a guest or a Viewer', async () => {
     const t = newT()
     const f = await withOrg(t)
     for (let i = 0; i < 3; i++) await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await backfill(t, { dry_run: false })
-    const { active_tasks } = await expectLiveCounts(t, f.org.id)
-    for (const staff of [f.admin, f.user]) {
-      const row = await rootRow(t, f, staff)
-      expect(row).toMatchObject({ active_tasks })
-      // the root sends no project count since no part sends a project
-      expect(row).not.toHaveProperty('live_projects')
-    }
-    for (const reader of [f.guest, f.viewer]) {
-      const row = await rootRow(t, f, reader)
-      expect(row).toMatchObject({ active_tasks: 200 })
-      expect(row).not.toHaveProperty('live_projects')
-      expect(startWindows(row as WindowCounts)).toEqual({ tasks: 1 })
+    const counted = await expectLiveCounts(t, f.org.id)
+    expect(counted.active_tasks).toBeGreaterThan(0)
+    for (const who of [f.admin, f.user, f.guest, f.viewer]) {
+      const row = await rootRow(t, f, who)
+      // the task number the creates preview the next number from, and no
+      // count of the organization's work
+      expect(row, who.name).toHaveProperty('next_issue_num')
+      expect(row, who.name).not.toHaveProperty('active_tasks')
+      expect(row, who.name).not.toHaveProperty('live_projects')
     }
   })
 
@@ -192,8 +189,6 @@ describe('live counts', () => {
     // the first step counts the first two tasks and two projects
     expect(await step()).toBeNull()
     expect((await countersOf(t, org_id))?.counted?.tasks).toBe(planted[1].num)
-    // the app does not see counts while they are counted
-    expect(await rootRow(t, f)).not.toHaveProperty('active_tasks')
 
     // archives below and past where it counted, a delete below, a create
     // past every number, and a new project
@@ -217,7 +212,6 @@ describe('live counts', () => {
     for (let n = 0; done === null && n < 20; n++) done = await step()
     expect(done).toEqual(await expectLiveCounts(t, org_id))
     if (done === null || done === 'skipped') throw new Error(`the count did not finish: ${done}`)
-    expect(await rootRow(t, f)).toMatchObject({ active_tasks: done.active_tasks })
   })
 
   it('a step ends a page early once it has read its bytes', async () => {

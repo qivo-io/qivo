@@ -6,14 +6,15 @@
 // runs on the worker's thread, so the page's script time holds only what a
 // real client does: decode the text and update the app.
 //
-// It serves the workspace in live parts (convex/workspace.ts), its tasks
-// in the id windows the app asks for, cut from the whole workspace it holds
-// (convex/lib/workspaceJoin.ts splitWorkspace), and the root part with the
-// signed-in person's own profiles, memberships and teams alone (rootOf),
-// so the app holds nobody else and no label, and names every other person,
-// team and label through the reads by id and the pickers, which answer
-// from the whole. After a write it sends every
-// part whose JSON changed, and only those, in one transition, as Convex does.
+// It serves the workspace's one live part (convex/workspace.ts), the root
+// part with the signed-in person's own profiles, memberships and teams
+// alone (convex/lib/workspaceJoin.ts rootOf), so the app holds nobody else,
+// no label and no task, and names every other person, team and label
+// through the reads by id and the pickers, which answer from the whole it
+// holds. The whole keeps its tasks as the server's rows, which the views'
+// reads and the task window's answer from. After a write it sends every
+// read whose JSON changed, and only those, in one transition, as Convex
+// does.
 // The whole it holds keeps the planted milestones and projects as the
 // server's rows, which no part sends; the milestone reads and the
 // navigation reads answer from them (src/store/milestoneStandIn.setup.ts,
@@ -672,11 +673,10 @@
 // gateway's CORS answer (scripts/perf/files.mjs routePerfFiles). A data:
 // URL cannot carry `v`.
 import { chunkLists } from '../../convex/lib/arrayLimit'
-import { idWindows, startWindows } from '../../convex/lib/idWindows'
 import { creatorGrant } from '../../convex/lib/projectGrants'
 import { matchesTerms, scoreOf, searchTerms } from '../../convex/lib/searchTerms'
 import { nextSyncStamp } from '../../convex/lib/teamSync'
-import { rootOf, splitWorkspace } from '../../convex/lib/workspaceJoin'
+import { rootOf } from '../../convex/lib/workspaceJoin'
 import { boardStandIn } from '../../src/store/boardStandIn.setup'
 import {
   credentialListsStandIn,
@@ -1155,7 +1155,7 @@ const random = () => {
 }
 const org = '00000000-0000-4000-8000-000000000001'
 /* A row id of kind `kind`, the `n`th: a UUID whose first part is a hash,
-   spread like the random ids the app makes (convex/lib/idWindows.ts). */
+   spread like the random ids the app makes. */
 export const id = (kind, n) => {
   let hash = 0x811c9dc5
   for (const ch of `${kind}:${n}`) hash = Math.imul(hash ^ ch.charCodeAt(0), 0x01000193) >>> 0
@@ -1555,8 +1555,9 @@ const hiddenSubtaskParents = new Set(hiddenTasks.map((row) => row.parent_id).fil
     countsAsSubtask; every project here is active). */
 const parentsOf = () => new Set(allTasks.filter((row) => row.parent_id).map((row) => row.parent_id))
 let parents = parentsOf()
-/** Task `row` as the workspace sends it (convex/lib/workspaceParts.ts
-    readTasks), and as forMe sent it to baseline builds. */
+/** Task `row` as the server's working set holds it (lib/workingSet.ts,
+    convex/tests/tasksOracle.setup.ts), which the stand-ins answer from, and
+    as forMe sent it to baseline builds. */
 const wireTask = (row) => {
   const { parent_id: parent, ...rest } = row
   const out = parent && shown.has(parent) ? { ...rest, parent_id: parent } : rest
@@ -1671,9 +1672,9 @@ const snapshot = {
       slug: 'testbed',
       created_at: now,
       next_issue_num: count + hiddenTasks.length + 1,
-      // every task is active; the root sends no project number or count,
-      // which the server keeps in org_counters (nextProjectNum below)
-      active_tasks: count + hiddenTasks.length,
+      // the root sends no project number and no count of tasks or
+      // projects, which the server keeps in org_counters (nextProjectNum
+      // below)
       date_format: 'iso',
       week_start: 1,
       week_one_rule: 'first4day',
@@ -1727,7 +1728,6 @@ if (deletedStates.has('two-orgs')) {
       name: 'Partner Co',
       slug: 'partner',
       next_issue_num: 1,
-      active_tasks: 0,
     },
   ]
   snapshot.myProfileIds = [...snapshot.myProfileIds, seat]
@@ -2098,51 +2098,17 @@ let messageCount = 0
   }
 }
 const roadmapCounts = new Map()
-/* The windows of each organization's parts, as the app chooses them from
-   its counts (src/store/liveParts.ts), kept from the first read, so a
-   window keeps its bounds while rows come and go. */
-const windowsByOrg = new Map()
-/** The windows of organization `orgId`'s parts. */
-function windowsOf(orgId) {
-  let windows = windowsByOrg.get(orgId)
-  if (windows === undefined) {
-    const start = startWindows(snapshot.orgs.find((row) => row.id === orgId) ?? snapshot.orgs[0])
-    windows = {
-      tasks: idWindows(start.tasks),
-    }
-    windowsByOrg.set(orgId, windows)
-  }
-  return windows
-}
-/* The parts cut from the workspace as it is now, one set an organization,
-   until the next change. */
-let partsCache = null
-/** The parts of the workspace as convex/workspace.ts answers them. */
-function partsNow() {
-  partsCache ??= splitWorkspace(partsWorkspace(), (orgId) => windowsOf(orgId).tasks)
-  return partsCache
-}
-const PART_KINDS = {
-  'workspace:tasks': 'tasks',
-}
-/** What workspace part `name` answers for `args`. A part this server does
-    not serve, such as the projects part a build from before its removal
-    subscribes, throws an error that names it and says how to measure such
-    a build. */
-function readPart(name, args) {
-  const parts = partsNow()
-  // the organization's parts the read names, the first one's by default
-  const part = parts.find((p) => p.org_id === args.org_id) ?? parts[0]
+/** What workspace part `name` answers for `args`: the root part, the one
+    the server has. Any other, such as the tasks or projects part a build
+    from before their removal subscribes, throws an error that names it
+    and says how to measure such a build. */
+function readPart(name, _args) {
   // the signed-in person's own profiles, memberships and teams
   // (convex/lib/workspaceParts.ts readRoot)
   if (name === 'workspace:root') return rootOf(partsWorkspace())
-  const kind = PART_KINDS[name]
-  if (kind === undefined)
-    throw new Error(
-      `${name} is no workspace part this perf server serves (workspace:root and ${Object.keys(PART_KINDS).join(', ')} only); a build from before the workspace's projects part went cannot load here, so measure it with its own checkout's benchmark (scripts/benchmark-browser.mjs)`,
-    )
-  const at = windowsOf(part.org_id)[kind].findIndex((w) => w.from === args.from)
-  return { state: 'ok', ...chunkLists(part[kind][at]) }
+  throw new Error(
+    `${name} is no workspace part this perf server serves (workspace:root only); a build from before the workspace's tasks and projects parts went cannot load here, so measure it with its own checkout's benchmark (scripts/benchmark-browser.mjs)`,
+  )
 }
 /* The reads of a task, by their organization and ref, that answered
    once, for window=failed, which fails every later answer of that read.
@@ -2685,7 +2651,6 @@ function transition() {
 /** Sends the workspace's changes: to an app before the parts its one
     query, else the parts that changed. */
 function emitWorkspace() {
-  partsCache = null
   return Promise.all([emit('snapshot:forMe'), watchedParts.size ? transition() : null])
 }
 /* The server's prune of one inbox item after a read (convex/model/messages.ts
@@ -3135,10 +3100,7 @@ function createTask(args) {
   shown.add(row.id)
   wireRows.set(row.id, wireTask(row))
   loadRows.set(row.id, loadRow(row))
-  snapshot.orgs = [
-    { ...orgRow, next_issue_num: row.num, active_tasks: orgRow.active_tasks + 1 },
-    ...snapshot.orgs.slice(1),
-  ]
+  snapshot.orgs = [{ ...orgRow, next_issue_num: row.num }, ...snapshot.orgs.slice(1)]
   settleTasks()
   const { description: _text, ...answer } = row
   return answer
@@ -3195,10 +3157,7 @@ const scenarios = {
     wireRows.set(row.id, wireTask(row))
     loadRows.set(row.id, loadRow(row))
     const [org] = snapshot.orgs
-    snapshot.orgs = [
-      { ...org, next_issue_num: org.next_issue_num + 1, active_tasks: org.active_tasks + 1 },
-      ...snapshot.orgs.slice(1),
-    ]
+    snapshot.orgs = [{ ...org, next_issue_num: org.next_issue_num + 1 }, ...snapshot.orgs.slice(1)]
     settleTasks()
     return emitWorkspace()
   },
@@ -3221,8 +3180,6 @@ const scenarios = {
     shown.delete(gone)
     wireRows.delete(gone)
     loadRows.delete(gone)
-    const [org] = snapshot.orgs
-    snapshot.orgs = [{ ...org, active_tasks: org.active_tasks - 1 }, ...snapshot.orgs.slice(1)]
     settleTasks()
     return emitWorkspace()
   },

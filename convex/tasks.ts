@@ -11,7 +11,7 @@
  *   visible live sub-projects, one sub-project, or My view across every
  *   seat of the login, with the shown parents above them, the lanes that
  *   stay without cards and the selection's sub-projects. A row is the task
- *   as the tasks part sends it without its text and relation rows, with
+ *   as its app row (TaskRow) without its text and relation rows, with
  *   its group facts. It reads the caller's seats, for a project the project
  *   by id, its sub-projects (projects by_parent) and the caller's access to
  *   each, and their active tasks (issues by_project_archived, or under

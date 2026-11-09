@@ -27,7 +27,7 @@ import {
   TODAY,
   uuid,
   withReadingAdmin,
-  workspaceOf,
+  workingSetOf,
 } from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
@@ -162,7 +162,7 @@ describe('a label on more tasks than one delete removes', () => {
 
     // The app names a task's labels through labels.byIds, which leaves the
     // deleted label out, so its chip hides (src/panels/taskLabels.ts).
-    const snap = (await workspaceOf(as(t, f.admin)))!
+    const snap = (await workingSetOf(as(t, f.admin)))!
     const { rows } = await as(t, f.admin).query(api.labels.byIds, {
       org_id: f.org.id,
       ids: [...new Set(snap.issueLabels.map((row) => row.label_id))],

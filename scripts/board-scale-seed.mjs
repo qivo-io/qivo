@@ -257,7 +257,6 @@ import { makeFunctionReference } from 'convex/server'
 import { LIMITS } from './limits.mjs'
 import { DemoCliError, isLoopbackOrigin, resolveTarget } from './marketing-demo.mjs'
 import { pngOf } from './perf/files.mjs'
-import { readWorkspace } from './workspaceJoin.mjs'
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const ACTOR = 'nora@demo.qivo.io'
@@ -1076,14 +1075,19 @@ async function mintCredential(scheme) {
   return { id: crypto.randomUUID(), secret, hash: hex(new Uint8Array(digest)) }
 }
 
-/** What the seed reads of the workspace `client` reads as Nora: its parts,
-    which send no project since the app reads them by id, with the live
-    projects of her organizations, neither archived nor under an archived
-    parent, from the tables (tableRows) through a client of the local admin
-    key itself, since a system table answers no person the admin acts as. */
+/** What the seed reads as Nora through `client`: the workspace's root
+    part, her seats and organizations, and from the tables (tableRows),
+    through a client of the local admin key itself since a system table
+    answers no person the admin acts as, her organizations' live projects,
+    neither archived nor under an archived parent, their active tasks, the
+    unmarked label rows of those tasks and the unmarked links between them.
+    No part sends a task, so the tables are where a seed run finds what an
+    earlier run made. */
 async function seedSnapshot(client, target) {
-  const snapshot = await readWorkspace((name, args) => client.query(ref(name), args))
-  const orgs = new Set(snapshot.orgs.map((o) => o.id))
+  const root = await client.query(ref('workspace:root'), {})
+  if (root === null || 'deleting' in root)
+    throw new DemoCliError('Nora holds no seat this backend opens.')
+  const orgs = new Set(root.orgs.map((o) => o.id))
   const admin = new ConvexHttpClient(target.url, { logger: false })
   admin.setAdminAuth(target.key)
   const rows = (await tableRows(admin, 'projects')).filter((p) => orgs.has(p.org_id))
@@ -1091,7 +1095,17 @@ async function seedSnapshot(client, target) {
   const projects = rows.filter(
     (p) => !p.archived_at && !(p.parent_id && byId.get(p.parent_id)?.archived_at),
   )
-  return { ...snapshot, projects }
+  const issues = (await tableRows(admin, 'issues')).filter(
+    (task) => orgs.has(task.org_id) && !task.archived_at,
+  )
+  const active = new Set(issues.map((task) => task.id))
+  const issueLabels = (await tableRows(admin, 'issue_labels')).filter(
+    (row) => active.has(row.issue_id) && !row.task_archived,
+  )
+  const links = (await tableRows(admin, 'issue_links')).filter(
+    (link) => active.has(link.source_id) && active.has(link.target_id) && !link.task_archived,
+  )
+  return { ...root, projects, issues, issueLabels, links }
 }
 
 /** Every row of `table` as the local admin reads it, page by page. */

@@ -32,7 +32,7 @@ import type { OrgRole } from '../lib/enums'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { loadRowFor, type OrgLoadRow } from '../lib/loadRows'
 import { taskOwnerId } from '../lib/review'
-import { type JoinedWorkspace, readWorkspace } from '../lib/workspaceJoin'
+import { type RootAnswer, rootWorkspace, type Workspace } from '../lib/workspaceJoin'
 import { type ActivityEntry, insertActivity } from '../model/activity'
 import { insertTask, type TaskWithText, withText } from '../model/descriptions'
 import { ERASE_TIMERS, noteRestore } from '../model/fileHolds'
@@ -1264,36 +1264,59 @@ export async function restArchivedPage(
 /* A caller as as() gives one. */
 type Caller = ReturnType<typeof as>
 
-/** The workspace the app holds for `caller`, read through the workspace
- * parts that still run, with the projects the caller sees beside it: the
- * root and every organization's tasks once every part answered
- * (lib/workspaceJoin.ts readWorkspace), its delivery time blank so two
- * reads of the same data compare equal, and the caller's projects with
- * their team grants and the caller's own grants on them from the test
- * oracle (projectsOracle.setup.ts), which no part sends since the app
- * reads its projects by id and a batch at a time. wholeOf adds everyone's
- * grants. Null without a seat. */
-export async function workspaceOf(
-  caller: Caller,
-): Promise<(JoinedWorkspace & OracleProjects) | null> {
-  const snap = await readWorkspace((name, args) =>
-    caller.query(makeFunctionReference<'query'>(name), args),
+/** The workspace the app holds for `caller`, the root part as the app
+ * keeps it (lib/workspaceJoin.ts rootWorkspace), its delivery time blank
+ * so two reads of the same data compare equal, with the projects the
+ * caller sees beside it: their team grants and the caller's own grants on
+ * them from the test oracle (projectsOracle.setup.ts), which no part sends
+ * since the app reads its projects by id and a batch at a time. It holds
+ * no task: workingSetOf adds the caller's tasks from the tests' oracle,
+ * and wholeOf everyone's grants and rows. Null without a seat. */
+export async function workspaceOf(caller: Caller): Promise<(Workspace & OracleProjects) | null> {
+  const root = (await caller.query(
+    makeFunctionReference<'query'>('workspace:root'),
+    {},
+  )) as RootAnswer
+  if (root === null || 'deleting' in root) return null
+  const snap = rootWorkspace(root, '')
+  const projects = await caller.run(
+    async (ctx) => await projectsOracle(ctx, await seatsOf(ctx, snap)),
   )
-  if (snap === null) return null
-  const projects = await caller.run(async (ctx) => {
-    const seats: Doc<'profiles'>[] = []
-    for (const id of snap.myProfileIds) {
-      const seat = await ctx.db
-        .query('profiles')
-        .withIndex('by_uuid', (q) => q.eq('id', id))
-        .unique()
-      if (seat !== null) seats.push(seat)
-    }
-    return await projectsOracle(ctx, seats)
-  })
   const own = new Set(snap.myProfileIds)
   const access = projects.access.filter((g) => own.has(g.profile_id))
-  return { ...snap, ...projects, access, delivered_at: '' }
+  return { ...snap, ...projects, access }
+}
+
+/* The stored profiles of the seats `snap` names, in its order. */
+async function seatsOf(
+  ctx: Parameters<Parameters<Caller['run']>[0]>[0],
+  snap: Pick<Workspace, 'myProfileIds'>,
+) {
+  const seats: Doc<'profiles'>[] = []
+  for (const id of snap.myProfileIds) {
+    const seat = await ctx.db
+      .query('profiles')
+      .withIndex('by_uuid', (q) => q.eq('id', id))
+      .unique()
+    if (seat !== null) seats.push(seat)
+  }
+  return seats
+}
+
+/** The caller's workspace (workspaceOf) with the task sections of every
+ * seat from the tests' oracle beside it (tasksOracle.setup.ts): the tasks
+ * the caller is shown with their relation rows and the anonymized load of
+ * the tasks they are not shown, which the workspace's tasks part sent
+ * before it went. Reference data for the tests that compare a read with
+ * the caller's working set; an access rule is pinned on the read the app
+ * uses. Null without a seat. */
+export async function workingSetOf(
+  caller: Caller,
+): Promise<(Workspace & OracleProjects & TaskSections) | null> {
+  const snap = await workspaceOf(caller)
+  if (snap === null) return null
+  const tasks = await caller.run(async (ctx) => await tasksOracleOf(ctx, await seatsOf(ctx, snap)))
+  return { ...snap, ...tasks }
 }
 
 /* A stored row as the app would receive it, without Convex's system fields
@@ -1316,19 +1339,8 @@ function appRow<R extends { _id: unknown; _creationTime: number; name_key?: stri
  * Null without a seat.
  */
 export async function wholeOf(t: T, profile: Doc<'profiles'>) {
-  const snap = await workspaceOf(as(t, profile))
+  const snap = await workingSetOf(as(t, profile))
   if (snap === null) return null
-  const tasks: TaskSections = await t.run(async (ctx) => {
-    const seats: Doc<'profiles'>[] = []
-    for (const id of snap.myProfileIds) {
-      const seat = await ctx.db
-        .query('profiles')
-        .withIndex('by_uuid', (q) => q.eq('id', id))
-        .unique()
-      if (seat !== null) seats.push(seat)
-    }
-    return await tasksOracleOf(ctx, seats)
-  })
   const orgIds = snap.orgs.map((org) => org.id)
   const projectIds = snap.projects.map((project) => project.id)
   const rows = await t.run(async (ctx) => {
@@ -1389,7 +1401,7 @@ export async function wholeOf(t: T, profile: Doc<'profiles'>) {
     }
     return { profiles, teams, teamMembers, labels, access }
   })
-  return { ...snap, ...rows, ...tasks }
+  return { ...snap, ...rows }
 }
 
 /** The tasks of a published test whole (wholeOf) and the projects beside

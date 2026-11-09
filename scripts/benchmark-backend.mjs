@@ -1,12 +1,13 @@
-// Hermetic Convex measurement of the workspace parts (convex/workspace.ts)
-// and activity writes, the activity write compared with a committed revision.
+// Hermetic Convex measurement of the workspace's root part
+// (convex/workspace.ts), the Inbox feed and activity writes, the activity
+// write compared with a committed revision.
 //
 //   node scripts/benchmark-backend.mjs [revision] [--guards-only] [--current-only]
 //
-// Each workspace part is read in its own transaction at 100, 1,000 and
-// 10,000 tasks: one row per kind of part with its number of windows and its
-// busiest window's ranges, documents and milliseconds, and the parts a task
-// rename changes with the bytes they re-send. `revision` is the commit the
+// The root part and the feed are each read in their own transaction in an
+// organization of 100, 1,000 and 10,000 tasks: one row per part with its
+// ranges, documents and milliseconds, and the parts a task rename changes
+// with the bytes they re-send, none since no part sends a task. `revision` is the commit the
 // working tree's logActivity is compared with. It defaults to the merge
 // base of HEAD and origin/main, so a branch is measured against the commit
 // it started from, and to HEAD in a checkout without origin/main.
