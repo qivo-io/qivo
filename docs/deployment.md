@@ -2285,7 +2285,9 @@ Settings › Appearance's own watch of `appearance.get` is removed, not paused,
 since the page shows the value the app already reads. This changes no server
 function and reads no new query, so it sets no new floor. Its staging check
 step `ui/hidden-task-window` mentions Nora on t0 while the page is hidden
-and removes that notification again. The release needs no backfill and no
+and removes that notification again. The desktop shell now reports a window
+started hidden at login as hidden until it is first shown, which reaches
+people only with a new desktop build. The release needs no backfill and no
 release step.
 
 ## Node.js version
