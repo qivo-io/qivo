@@ -329,7 +329,6 @@ describe('the picker', () => {
     'says it is opening a numbered project while the resolve has not answered, and a failure with Retry, which opens the meeting once the resolve answers',
     async () => {
       vi.spyOn(console, 'error').mockImplementation(() => {})
-      let failing = true
       let answer: (() => void) | null = null
       const seen: number[] = []
       const { board, calls } = await open(
@@ -338,17 +337,15 @@ describe('the picker', () => {
         {},
         (b) => {
           const base = network.query.getMockImplementation()
-          // the first resolve waits for the case, the rest go through
+          // each resolve waits for the case, the first fails and the next
+          // goes through
           network.query.mockImplementation(async (ref, args) => {
             if (getFunctionName(ref) !== 'projectNav:resolve') return base?.(ref, args)
             seen.push(1)
-            if (seen.length === 1) {
-              await new Promise<void>((resolve) => {
-                answer = resolve
-              })
-              throw new Error('the resolve failed')
-            }
-            if (failing) throw new Error('the resolve failed')
+            await new Promise<void>((resolve) => {
+              answer = resolve
+            })
+            if (seen.length === 1) throw new Error('the resolve failed')
             return queryProjectNav(b.snapshot, 'projectNav:resolve', args)
           })
         },
@@ -365,10 +362,17 @@ describe('the picker', () => {
           (b) => b.textContent === 'Retry',
         )
       expect(retry()).toBeDefined()
-      failing = false
       await click(retry())
       await settle()
       expect(seen).toHaveLength(2)
+      // the Retry's resolve is on its way, so the page says it is opening
+      // the project again, with no Retry; must fail for a resolve state
+      // kept by the address alone, which still shows the failure
+      expect(document.querySelector('[data-sync-note="resolving"]')).not.toBeNull()
+      expect(title()).toBe('Opening the project…')
+      expect(retry()).toBeUndefined()
+      await act(async () => (answer as (() => void) | null)?.())
+      await settle()
       // the resolve named the fixture's sub-project, whose meeting opens
       expect(calls.places).toEqual([])
       expect(asked(board)).toEqual([{ kind: 'project', project_id: sub(board.snapshot) }])

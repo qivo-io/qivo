@@ -485,13 +485,15 @@ export function TeamSync({
   const asked = scope.kind === 'unresolved' ? syncProjectNumber(scope.segment) : null
   const askedNum = asked?.num ?? null
   const askedOrg = asked ? (asked.org_id ?? P.homeOrg) : ''
-  const askedKey = askedNum === null || !askedOrg ? null : `${askedOrg}\n${askedNum}`
   const [tries, setTries] = useState(0)
+  // the address and the try a resolve answers for, so a Retry reads
+  // loading until its own answer
+  const askedKey = askedNum === null || !askedOrg ? null : `${askedOrg}\n${askedNum}\n${tries}`
   const [resolved, setResolved] = useState<{ key: string; opening: NavOpening } | null>(null)
   useEffect(() => {
     if (askedNum === null || !askedOrg) return
     let live = true
-    const key = `${askedOrg}\n${askedNum}`
+    const key = `${askedOrg}\n${askedNum}\n${tries}`
     const stop = openResolved({ org_id: askedOrg, num: askedNum }, (opening) => {
       if (!live) return
       setResolved({ key, opening })
