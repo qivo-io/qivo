@@ -18,7 +18,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import { PAGE, RUN } from '../internal/descriptionsBackfill'
 import { ARCHIVE_LIMITS } from '../jobs'
-import { newWindowKey } from '../lib/db'
+import { byId, newWindowKey } from '../lib/db'
 import { LIMITS } from '../lib/limits'
 import { deleteOrgDeep } from '../model/cascade'
 import { clearOrgTrash, startPurge, TRASH_BUDGET } from '../model/deletedItems'
@@ -952,7 +952,11 @@ describe('teardowns', () => {
     const t = newT()
     const f = await withReadingAdmin(t)
     await plantWork(t, f)
-    await as(t, f.admin).mutation(api.orgRemovals.recordExport, { org_id: f.org.id })
+    // a recent saved export, so no deletion email is queued
+    await t.run(async (ctx) => {
+      const org = await byId(ctx, 'organizations', f.org.id)
+      if (org) await ctx.db.patch(org._id, { last_export_at: new Date().toISOString() })
+    })
     const { delete_after } = await as(t, f.admin).action(api.orgRemovals.request, {
       org_id: f.org.id,
       confirm: f.org.slug,

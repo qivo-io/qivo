@@ -23,12 +23,13 @@
  *
  * Admins act through `request` (delete the organization, ending any paid
  * subscription at once without a refund), `keep` (stop a deletion they asked
- * for) and `recordExport`, which the browser export calls once its download
- * starts. An organization export job's archive does not count, neither one
- * that was only prepared nor one its /exports/ route served (orgExport.ts
- * recordDelivery), because the backend cannot know that the client
- * received it, so the deletion reminder still goes out. A later app stage
- * records that download once the browser confirms it finished.
+ * for) and `recordExport`, which the app calls only after the desktop app or
+ * a browser confirmed that it saved exactly the bytes of the organization's
+ * archive (src/lib/orgExport.ts). A prepared archive does not count, nor one
+ * the /exports/ route served (orgExport.ts recordDelivery), because the
+ * backend cannot know that the client received it, so the deletion reminder
+ * still goes out unless an admin's app confirmed a save. The server cannot
+ * check that confirmation; it checks only that the archive was there.
  * Cancelling in Billing (billingActions.cancelSubscription) only stops
  * renewal, so its period starts when Polar ends the subscription. */
 
@@ -77,6 +78,7 @@ import { sendDeletionNotice } from './mail'
 import { audit } from './model/admin'
 import { hasPendingCheckout } from './model/billing'
 import { deleteOrgStep } from './model/orgDeletion'
+import { exportOf, recordable } from './model/orgExports'
 import {
   accessReturned,
   DELETION_NOTICE,
@@ -618,20 +620,29 @@ export const state = orgQuery({
   },
 })
 
-/** Records that an admin's browser export started its download, in
- * organizations.last_export_at. It is that field's only writer, since the
- * /exports/ route records an archive it served on the job alone
- * (model/orgExports.ts noteDelivered). The browser export calls it until
- * the export panel moves to the job. Allowed while the organization is
- * read-only, because that is when exports matter most. */
+/** Records in organizations.last_export_at that an admin saved export
+ * `export_id` of `org_id`. The app calls it only after the desktop app or a
+ * browser confirmed a saved file of exactly the archive's bytes
+ * (src/lib/orgExport.ts); the server cannot check that confirmation. It is
+ * that field's only writer, since the /exports/ route records an archive it
+ * served on the job alone (model/orgExports.ts noteDelivered). The export
+ * must be the organization's (an unknown and a foreign id are refused
+ * alike) and an archive the route served that is ready or ended less than
+ * DELIVERY.streamMs before (model/orgExports.ts recordable), else the rule
+ * refuses and nothing changes. Allowed while the organization is read-only,
+ * because that is when exports matter most. */
 export const recordExport = authedMutation({
-  args: { org_id: v.string() },
-  handler: async (ctx, { org_id }): Promise<null> => {
+  args: { org_id: v.string(), export_id: v.string() },
+  handler: async (ctx, { org_id, export_id }): Promise<null> => {
     const me = ctx.myProfiles.get(org_id)
     if (me?.org_role !== 'admin') throw forbidden('admin only')
     await assertOrgAvailable(ctx, org_id)
     const org = await byId(ctx, 'organizations', org_id)
     require(org, notFound('organization not found'))
+    const job = await exportOf(ctx, export_id)
+    if (job === null || job.org_id !== org_id) throw notFound('export not found')
+    if (!recordable(job, Date.now()))
+      throw rule('This export can no longer be recorded. Prepare a new export.')
     await ctx.db.patch(org._id, { last_export_at: isoNow() })
     return null
   },

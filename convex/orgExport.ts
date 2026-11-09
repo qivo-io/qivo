@@ -71,8 +71,11 @@
  * download the client abandons can still set it. The route never writes
  * the organization's last_export_at, which the deletion reminder reads, so
  * neither a prepared archive (completed_at) nor a served one counts as a
- * backup until a later app stage records the download once the browser
- * confirms it finished. A ready archive whose file is gone fails as
+ * backup. Only orgRemovals.ts recordExport sets it, which the app calls
+ * once the desktop app or a browser confirmed a saved file of exactly the
+ * archive's bytes, and which records only a served archive of the
+ * organization that is ready or ended less than DELIVERY.streamMs before.
+ * A ready archive whose file is gone fails as
  * incomplete (failDelivery). Neither the claim nor the route touches the
  * four hours.
  *
@@ -665,7 +668,9 @@ export const releaseDelivery = internalMutation({
  * (model/orgExports.ts noteDelivered) and ends download `stream`'s lease.
  * It leaves organizations.last_export_at alone, since the backend cannot
  * know that the client received the archive, so a served archive does not
- * count as an export for the deletion reminder. It needs no authority,
+ * count as an export for the deletion reminder until the app confirms the
+ * saved file (orgRemovals.ts recordExport, which requires served_at). It
+ * needs no authority,
  * since the route checked the admin before every part it read, and writes
  * no request row, so an admin who did not ask downloads as one who did. */
 export const recordDelivery = internalMutation({

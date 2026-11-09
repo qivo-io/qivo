@@ -5,13 +5,15 @@ import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import type { BillingPlan } from '../lib/billingTypes'
 import { asMachineCaller } from '../lib/core'
+import { ORG_EXPORT_FORMAT } from '../lib/orgExport'
 import type { EventOwner } from '../lib/taskEvents'
 import { sha256hex, touchCredential } from '../machine/auth'
 import { enrollOrganization } from '../model/billing'
 import { recordApiCall } from '../model/billingUsage'
 import { REMOVAL_BUDGET } from '../model/cascade'
 import { postMessage } from '../model/messages'
-import { noCheckoutDue, retentionDue, serviceEndedAt } from '../model/orgRetention'
+import { ARCHIVE_TTL_MS, DELIVERY } from '../model/orgExports'
+import { noCheckoutDue, retentionDue, scheduleRemoval, serviceEndedAt } from '../model/orgRetention'
 import { STALLED_MS, SWEEP_PAGES } from '../orgRemovals'
 import {
   as,
@@ -211,10 +213,59 @@ const createTask = (t: T, profile: Doc<'profiles'>, orgId: string, projectId: st
     title: 'After the end',
   })
 const runSteps = (t: T) => t.finishAllScheduledFunctions(() => vi.runAllTimers())
-/* A recent export suppresses the deletion email, so deletion tests do not
- * leave hourly mail retries behind. */
+/* A recent saved export suppresses the deletion email, so deletion tests
+ * do not leave hourly mail retries behind. They set the field as the
+ * record would, since what they test is the deletion, not the record. */
 const exportNow = (t: T, f: Awaited<ReturnType<typeof withOrg>>) =>
-  as(t, f.admin).mutation(api.orgRemovals.recordExport, { org_id: f.org.id })
+  t.run(async (ctx) => {
+    const org = await ctx.db
+      .query('organizations')
+      .withIndex('by_uuid', (q) => q.eq('id', f.org.id))
+      .unique()
+    if (org) await ctx.db.patch(org._id, { last_export_at: new Date().toISOString() })
+  })
+
+/* An export job of `orgId` planted as the job leaves a ready archive that
+ * the /exports/ route served, prepared a minute ago, with `fields` over
+ * it. Answers its id. */
+const plantArchive = (t: T, orgId: string, fields: Partial<Doc<'org_exports'>> = {}) =>
+  t.run(async (ctx) => {
+    const now = Date.now()
+    const iso = (ms: number) => new Date(ms).toISOString()
+    const id = uuid()
+    await ctx.db.insert('org_exports', {
+      id,
+      org_id: orgId,
+      state: 'ready',
+      requested_by: uuid(),
+      started_at: iso(now - 120_000),
+      progress_at: iso(now - 60_000),
+      completed_at: iso(now - 60_000),
+      expires_at: iso(now - 60_000 + ARCHIVE_TTL_MS),
+      served_at: iso(now - 30_000),
+      progress: { section: '', records: 12, sections_done: 26, sections_total: 26 },
+      step: { n: 30, section: 26, cursor: null, part: 1, seq: 30, bytes: 4096, counts: {} },
+      attempts: 0,
+      archive: { bytes: 4096, parts: 30 },
+      format_version: ORG_EXPORT_FORMAT,
+      ...fields,
+    })
+    return id
+  })
+
+/* The admin's record of a saved export of planted archive `exportId`. */
+const record = (t: T, profile: Doc<'profiles'>, orgId: string, exportId: string) =>
+  as(t, profile).mutation(api.orgRemovals.recordExport, { org_id: orgId, export_id: exportId })
+
+/* `orgId`'s last_export_at, or null. */
+const lastExport = (t: T, orgId: string) =>
+  t.run(async (ctx) => {
+    const org = await ctx.db
+      .query('organizations')
+      .withIndex('by_uuid', (q) => q.eq('id', orgId))
+      .unique()
+    return org?.last_export_at ?? null
+  })
 
 const subscription = (overrides: Partial<Doc<'billing_subscriptions'>>) =>
   ({
@@ -348,8 +399,9 @@ describe('cancelling a subscription', () => {
     })
     const refusal = await expectRefusal(createTask(t, f.admin, f.org.id, f.sub.id), 'forbidden')
     expect(refusal.data).toMatchObject({ reason: 'deletion_scheduled' })
-    // the export still works while the organization waits
-    await exportNow(t, f)
+    // the record of a saved export still works while the organization waits
+    await record(t, f.admin, f.org.id, await plantArchive(t, f.org.id))
+    expect(await lastExport(t, f.org.id)).toBe(new Date().toISOString())
   })
 
   it.each([
@@ -528,7 +580,9 @@ describe('cancelling a subscription', () => {
     const until = (await as(t, f.admin).query(api.billing.details, { org_id: f.org.id }))
       .complimentary_until!
     vi.setSystemTime(Date.parse(until) + 60_000)
-    await exportNow(t, f)
+    // read-only once complimentary access ended, and the record still works
+    await record(t, f.admin, f.org.id, await plantArchive(t, f.org.id))
+    expect(await lastExport(t, f.org.id)).toBe(new Date().toISOString())
     await t.mutation(internal.orgRemovals.sweep, {})
     await runSteps(t)
     expect(await removalOf(t, f.org.id)).toMatchObject({ reason: 'service_ended', ended_at: until })
@@ -1645,5 +1699,140 @@ describe('an organization that never completes checkout', () => {
     await t.mutation(internal.orgRemovals.sweep, {})
     await runSteps(t)
     expect(await removalOf(t, f.org.id)).toBeNull()
+  })
+})
+
+describe('recording a saved export', () => {
+  const DEFAULT_DELIVERY = { ...DELIVERY }
+  afterEach(() => {
+    Object.assign(DELIVERY, DEFAULT_DELIVERY)
+  })
+
+  it("records an admin's saved export of the organization's served archive, whoever asked for it", async () => {
+    const { t, f } = await unbilled()
+    // the planted job was started by someone else; any admin may record
+    const exportId = await plantArchive(t, f.org.id)
+    expect(await lastExport(t, f.org.id)).toBeNull()
+    vi.advanceTimersByTime(5000)
+    expect(await record(t, f.admin, f.org.id, exportId)).toBeNull()
+    expect(await lastExport(t, f.org.id)).toBe(new Date().toISOString())
+  })
+
+  it('records a saved archive that expired or that a newer one ended, within DELIVERY.streamMs of its end', async () => {
+    const { t, f } = await unbilled()
+    const exportId = await plantArchive(t, f.org.id)
+    const job = await t.run((ctx) =>
+      ctx.db
+        .query('org_exports')
+        .withIndex('by_uuid', (q) => q.eq('id', exportId))
+        .unique(),
+    )
+    const expiresAt = Date.parse(job?.expires_at ?? '')
+    // past its four hours while its expiry has not run yet
+    vi.setSystemTime(expiresAt + 60_000)
+    await record(t, f.admin, f.org.id, exportId)
+    expect(await lastExport(t, f.org.id)).toBe(new Date().toISOString())
+    // its expiry ran: ended now
+    await t.mutation(internal.orgExport.expire, { export_id: exportId })
+    vi.advanceTimersByTime(DELIVERY.streamMs - 1000)
+    await record(t, f.admin, f.org.id, exportId)
+    expect(await lastExport(t, f.org.id)).toBe(new Date().toISOString())
+    // ended by a newer archive a little before the window closed
+    const ended = await plantArchive(t, f.org.id, {
+      state: 'expired',
+      ended_at: new Date(Date.now() - DELIVERY.streamMs + 1000).toISOString(),
+    })
+    await record(t, f.admin, f.org.id, ended)
+    expect(await lastExport(t, f.org.id)).toBe(new Date().toISOString())
+  })
+
+  it('refuses members, guests, inactive admins, other organizations and every admin once the deletion has begun', async () => {
+    const { t, f } = await unbilled()
+    const exportId = await plantArchive(t, f.org.id)
+    for (const profile of [f.user, f.viewer, f.guest, f.otherAdmin])
+      await expectRefusal(record(t, profile, f.org.id, exportId), 'forbidden', /admin only/)
+    await t.run((ctx) => ctx.db.patch(f.admin._id, { active: false }))
+    await expectRefusal(record(t, f.admin, f.org.id, exportId), 'forbidden')
+    await t.run((ctx) => ctx.db.patch(f.admin._id, { active: true }))
+    const removal = await t.run((ctx) =>
+      ctx.db.insert('org_removals', {
+        org_id: f.org.id,
+        reason: 'requested',
+        ended_at: NOW,
+        delete_after: NOW,
+        created_at: NOW,
+        phase: 'profiles',
+      }),
+    )
+    await expectRefusal(record(t, f.admin, f.org.id, exportId), 'forbidden', /admin only/)
+    await t.run((ctx) => ctx.db.delete(removal))
+    expect(await lastExport(t, f.org.id)).toBeNull()
+  })
+
+  it("refuses an unknown export and another organization's alike", async () => {
+    const { t, f } = await unbilled()
+    const theirs = await plantArchive(t, f.otherOrg.id)
+    await expectRefusal(record(t, f.admin, f.org.id, uuid()), 'not_found', /export not found/)
+    await expectRefusal(record(t, f.admin, f.org.id, theirs), 'not_found', /export not found/)
+    expect(await lastExport(t, f.org.id)).toBeNull()
+    expect(await lastExport(t, f.otherOrg.id)).toBeNull()
+  })
+
+  it.each([
+    ['a collecting job', { state: 'collecting', completed_at: undefined, served_at: undefined }],
+    [
+      'a failed job',
+      { state: 'failed', ended_at: NOW, error: { code: 'too_large', message: 'too large' } },
+    ],
+    [
+      'a ready archive whose file was gone at its download',
+      { state: 'failed', ended_at: NOW, error: { code: 'incomplete', message: 'missing' } },
+    ],
+    ['a cancelled job', { state: 'cancelled', ended_at: NOW, cancelled_by: uuid() }],
+    ['a ready archive the route never served', { served_at: undefined }],
+    [
+      'an archive that ended more than DELIVERY.streamMs before',
+      {
+        state: 'expired',
+        ended_at: new Date(Date.parse(NOW) - DELIVERY.streamMs - 1000).toISOString(),
+      },
+    ],
+  ] as const)('refuses %s and changes nothing', async (_, fields) => {
+    const { t, f } = await unbilled()
+    const exportId = await plantArchive(t, f.org.id, fields)
+    await expectRefusal(record(t, f.admin, f.org.id, exportId), 'rule', /can no longer be recorded/)
+    expect(await lastExport(t, f.org.id)).toBeNull()
+  })
+
+  it('refuses a ready archive past its four hours by more than DELIVERY.streamMs, with the window lowered', async () => {
+    const { t, f } = await unbilled()
+    DELIVERY.streamMs = 60_000
+    const exportId = await plantArchive(t, f.org.id, {
+      expires_at: new Date(Date.parse(NOW) - 61_000).toISOString(),
+    })
+    await expectRefusal(record(t, f.admin, f.org.id, exportId), 'rule', /can no longer be recorded/)
+    DELIVERY.streamMs = 120_000
+    await record(t, f.admin, f.org.id, exportId)
+    expect(await lastExport(t, f.org.id)).toBe(NOW)
+  })
+
+  it('holds back the deletion reminder after a recorded save, and not after an archive only served', async () => {
+    const remove = (t: T, orgId: string) =>
+      t.run((ctx) => scheduleRemoval(ctx, { orgId, reason: 'requested', endedAt: NOW }))
+    const served = await unbilled()
+    await plantArchive(served.t, served.f.org.id)
+    await remove(served.t, served.f.org.id)
+    const notices = (await deletionNotices(served.t)).length
+    expect(notices).toBeGreaterThan(0)
+
+    const saved = await unbilled()
+    await record(
+      saved.t,
+      saved.f.admin,
+      saved.f.org.id,
+      await plantArchive(saved.t, saved.f.org.id),
+    )
+    await remove(saved.t, saved.f.org.id)
+    expect(await deletionNotices(saved.t)).toEqual([])
   })
 })

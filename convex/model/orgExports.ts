@@ -84,11 +84,11 @@ export const EXPORT_LIMITS = {
 /** The delivery's own budgets (orgExport.ts claimDownload and the
  * /exports/ route in http.ts), a mutable object so tests can lower them:
  * - tokenSeconds: how long a download link may start a download. The
- *   export page sends the browser to the link at once, and two minutes
- *   cover a slow claim and the desktop app's hand-off of the link to the
- *   system browser. The route checks the admin again on every request,
- *   whatever the link's age, so the lifetime only bounds when a forwarded
- *   link may start one.
+ *   export page asks for the file first and claims the link just before it
+ *   starts the request (src/lib/orgExport.ts), and two minutes cover a slow
+ *   claim and the desktop app's start of its own download. The route checks
+ *   the admin again on every request, whatever the link's age, so the
+ *   lifetime only bounds when a forwarded link may start one.
  * - streams: the downloads of one archive that may run at once, counted by
  *   a lease on the job row (orgExport.ts leaseDelivery). A download holds
  *   an HTTP action for as long as its body is read, and Convex runs a
@@ -106,6 +106,8 @@ export const EXPORT_LIMITS = {
  *   their own; a quarter of the smallest plan's actions.
  * - streamMs: how long a lease holds when its download never releases it,
  *   an action's longest run. A download that outlives it no longer counts.
+ *   orgRemovals.ts recordExport also records a confirmed save up to this
+ *   long after its archive ended (recordable).
  * - retrySeconds: the Retry-After of a download refused past either count.
  * - slice: the most bytes the route hands its reader, the runtime, at a
  *   time, so the record of a download served whole waits until the runtime
@@ -297,11 +299,27 @@ export const jobsOf = (ctx: QueryCtx, orgId: string) =>
  * does not wait for the client (http.ts archiveStream). It leaves
  * organizations.last_export_at alone, because the backend cannot know that
  * the client received the archive, so a served archive never stops the
- * deletion reminder (model/orgRetention.ts); a later app stage records the
- * download once the browser confirms it finished. */
+ * deletion reminder (model/orgRetention.ts). The app records a download
+ * only once the desktop app or the browser confirmed the saved file
+ * (orgRemovals.ts recordExport). */
 export async function noteDelivered(ctx: MutationCtx, job: Doc<'org_exports'>): Promise<void> {
   if (job.served_at === undefined)
     await ctx.db.patch(job._id, { served_at: new Date().toISOString() })
+}
+
+/** Whether `job` is an archive whose saved download orgRemovals.ts
+ * recordExport may record at `now` (epoch ms): one that reached ready, that
+ * the /exports/ route served whole (served_at), and that is still ready or
+ * expired, which includes one a newer archive ended, with its end (ended_at,
+ * else expires_at) less than DELIVERY.streamMs, an action's longest run,
+ * before `now`. So a save that finished just after the archive ended still
+ * counts, while a failed or cancelled job, an archive nobody fetched and an
+ * old one never do. */
+export function recordable(job: Doc<'org_exports'>, now: number): boolean {
+  if (job.completed_at === undefined || job.served_at === undefined) return false
+  if (job.state !== 'ready' && job.state !== 'expired') return false
+  const end = job.ended_at ?? job.expires_at
+  return end !== undefined && Date.parse(end) + DELIVERY.streamMs > now
 }
 
 /** The leases of job `job`'s downloads that have not run out at `now`

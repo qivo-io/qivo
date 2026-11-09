@@ -526,6 +526,8 @@ type Delivery = {
  * it. So the record says that the backend read the whole archive into the
  * response, not that the client received it, and it leaves
  * organizations.last_export_at, which the deletion reminder reads, alone.
+ * The app records a saved download itself once the desktop app or the
+ * browser confirmed it (orgRemovals.ts recordExport).
  * The per-part checks and the lease cover that read too, not the client's
  * transfer. Convex documents at most 30 minutes for an action; whether a
  * slow client's transfer counts toward it was not measured.

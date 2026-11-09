@@ -642,16 +642,14 @@ describe('what a download records', () => {
     expect((await orgRow(t, f.org.id))?.last_export_at).toBeUndefined()
     // an admin who did not ask downloads without a request row
     expect((await requestsOf(t, exportId)).map((row) => row.profile_id)).toEqual([f.admin.id])
-    // the browser export still records its own download, and a second
-    // served download keeps both the first served_at and that last export
-    vi.advanceTimersByTime(60_000)
-    await as(t, f.admin).mutation(api.orgRemovals.recordExport, { org_id: f.org.id })
-    const browserAt = NOW_ISO()
+    // a second served download keeps the first served_at, and the last
+    // export stays unset until the app records a confirmed save
+    // (orgRemovals.test.ts, recording a saved export)
     vi.advanceTimersByTime(60_000)
     const again = await get(t, pathOf(await claim(t, f.admin, f.org.id, exportId)))
     expect((await drain(t, again)).error).toBeNull()
     expect(await jobOf(t, exportId)).toMatchObject({ served_at: servedAt })
-    expect((await orgRow(t, f.org.id))?.last_export_at).toBe(browserAt)
+    expect((await orgRow(t, f.org.id))?.last_export_at).toBeUndefined()
     // the leases are gone
     expect((await jobOf(t, exportId))?.streams).toBeUndefined()
 
