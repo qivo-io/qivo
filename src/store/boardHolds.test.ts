@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TODAY_WEEK, weekToISO } from '../lib/dates'
@@ -12,10 +12,13 @@ import type { Snapshot } from './plannerFixture.setup'
 /* What the Board holds, as store/viewRows.ts states it: one answer per
    slot and nothing of the other variant's, the answer a narrowing keeps
    only until the new answer arrives, a kept page's own slot, and the
-   owner-load cache's answers for the owners the cards need now. The
+   owner-load cache's answers for the owners the cards need now, through a
+   layout change, a filter, typing, a Roadmap visit and My view. The
    store's test probe counts them (P.__layerProbe holders). At everyday
    values: one sub-project of 30 open tasks of three owners. One case
-   raises a project's open tasks to the design size. */
+   raises a project's open tasks to the design size and logs, as
+   information, the rows and owners held, the answer's size in JSON and
+   the heap. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -147,7 +150,7 @@ function boardKey(board: Board) {
 }
 
 describe("the Board's holders", { timeout: BOARD_TEST_TIMEOUT }, () => {
-  it('holds one answer per slot through a layout change, a filter, typing and a Roadmap visit, and only the owners its cards need', async () => {
+  it('holds one answer per slot through a layout change, a filter, typing, a Roadmap visit and My view, and only the owners its cards need', async () => {
     const board = await loadBoard(network, everyday)
     const { P } = board
     // the phone's list held the Board's tasks before the layout crossed
@@ -200,6 +203,24 @@ describe("the Board's holders", { timeout: BOARD_TEST_TIMEOUT }, () => {
     // the Roadmap's page goes: its slot goes with it
     await act(async () => P.releaseView('roadmap'))
     expect(holders(board).rows).toEqual({ 'board:desktop': 11 })
+    // My view in the desktop Board's place: the slot holds My view's
+    // answer alone, the signed-in person's tasks, and the cache only their
+    // owner
+    const { Kanban } = await import('../views/Kanban')
+    const me = board.snapshot.profiles[0].id
+    await board.renderView(root, () =>
+      createElement(Kanban, {
+        info: P.scopeInfo(P.MINE_SCOPE),
+        filters: NO_FILTERS,
+        tweaks: { metaViz: 'swimlanes' },
+        actions: { openIssue: vi.fn() },
+      }),
+    )
+    await board.answer()
+    await vi.waitFor(() => expect(answered(board).size).toBe(10))
+    await vi.waitFor(() => expect(holders(board).owners).toEqual([me]))
+    expect(holders(board)).toEqual({ rows: { 'board:desktop': 10 }, owners: [me] })
+    expect(ownersOf(board, answered(board))).toEqual([me])
   })
 
   it('holds a design-size project’s answer, its rows and parents, and only its cards’ owners', async () => {
@@ -217,9 +238,21 @@ describe("the Board's holders", { timeout: BOARD_TEST_TIMEOUT }, () => {
     const ids = answered(board)
     expect(ids.size).toBeGreaterThan(799)
     await vi.waitFor(() => expect(holders(board).owners).toHaveLength(1))
-    expect(holders(board)).toEqual({
+    const held = holders(board)
+    expect(held).toEqual({
       rows: { 'board:desktop': ids.size },
       owners: ownersOf(board, ids),
     })
+    // as information for the closing review's measurement, not a bound
+    const value = board.P.boardRead('board:desktop').value
+    console.log(
+      "The Board's holders at a project's design size:",
+      JSON.stringify({
+        rows: held.rows['board:desktop'],
+        owners: held.owners.length,
+        answerBytes: JSON.stringify(value).length,
+        heapMB: Math.round(process.memoryUsage().heapUsed / 2 ** 20),
+      }),
+    )
   })
 })
