@@ -1594,8 +1594,7 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   const org = snapshot.orgs.find((o) => o.id === actor.org_id)?.id
   if (!org) throw new DemoCliError('Nora cannot see Northstar; seed it again.')
   // Northstar's own rows: the snapshot holds every organization Nora is in
-  const joined = (name) =>
-    [...snapshot[name], ...(snapshot.more?.[name] ?? []).flat()].filter((row) => row.org_id === org)
+  const joined = (name) => snapshot[name].filter((row) => row.org_id === org)
   const issues = joined('issues')
   // --files plans before anything is seeded, so a count that does not fit
   // refuses with nothing made
@@ -1807,8 +1806,7 @@ const RATE_REFUSAL = /^too many comments on this task.*Try again in (\d+) second
    it and it is missing, and the label toggled. */
 async function seedThread(count, { client, target, people, actor, org, log }) {
   const snapshot = await seedSnapshot(client, target)
-  const joined = (name) =>
-    [...snapshot[name], ...(snapshot.more?.[name] ?? []).flat()].filter((row) => row.org_id === org)
+  const joined = (name) => snapshot[name].filter((row) => row.org_id === org)
   const active = joined('issues')
   const live = new Set(active.map((task) => task.id))
   const fromSeed = [...seededTasks(active).entries()]
@@ -1848,7 +1846,7 @@ async function seedThread(count, { client, target, people, actor, org, log }) {
         (p.id === actor.id || owners.has(p.id)),
     )
     .sort((a, b) => (a.id < b.id ? -1 : 1))
-  const labels = [...snapshot.issueLabels, ...(snapshot.more?.issueLabels ?? []).flat()]
+  const labels = snapshot.issueLabels
     .filter((row) => row.issue_id === task.id)
     .map((row) => row.label_id)
   const plan = planThread(count, { task, present, posters, history, labels })
@@ -1994,8 +1992,7 @@ async function seedDeleted(
     tasks, by number, where the run holds none. */
 async function seedLabels(count, { client, org, seeded, target, log }) {
   const snapshot = await seedSnapshot(client, target)
-  const joined = (name) =>
-    [...snapshot[name], ...(snapshot.more?.[name] ?? []).flat()].filter((row) => row.org_id === org)
+  const joined = (name) => snapshot[name].filter((row) => row.org_id === org)
   const active = joined('issues')
   const live = new Set(active.map((task) => task.id))
   const fromSeed = [...seeded.keys()]
@@ -2006,10 +2003,7 @@ async function seedLabels(count, { client, org, seeded, target, log }) {
     ? fromSeed
     : [...active].sort((a, b) => a.num - b.num).map((task) => task.id)
   const on = new Map()
-  for (const { issue_id, label_id } of [
-    ...snapshot.issueLabels,
-    ...(snapshot.more?.issueLabels ?? []).flat(),
-  ]) {
+  for (const { issue_id, label_id } of snapshot.issueLabels) {
     if (!live.has(issue_id)) continue
     on.set(issue_id, [...(on.get(issue_id) ?? []), label_id])
   }
@@ -2301,12 +2295,9 @@ async function seedRelations({
     present: {
       projects: new Set(projects.map((project) => project.id)),
       tasks: new Set([...joined('issues').map((task) => task.id), ...archivedIds]),
-      // a link row in the workspace carries no organization; Nora sees only
-      // her own links
-      links: new Set([
-        ...[...snapshot.links, ...(snapshot.more?.links ?? []).flat()].map((l) => l.id),
-        ...storedLinks,
-      ]),
+      // the stored links between active tasks of Nora's organizations
+      // (seedSnapshot)
+      links: new Set([...snapshot.links.map((l) => l.id), ...storedLinks]),
     },
   })
   // what archiving took out of the task's lists, which stays out
@@ -2387,8 +2378,7 @@ async function seedArchive(ids, { client, org, target, log }) {
    now, which `client` reads as Nora, each comment as its poster's login. */
 async function seedInbox(count, { client, target, people, actor, org, log }) {
   const snapshot = await seedSnapshot(client, target)
-  const joined = (name) =>
-    [...snapshot[name], ...(snapshot.more?.[name] ?? []).flat()].filter((row) => row.org_id === org)
+  const joined = (name) => snapshot[name].filter((row) => row.org_id === org)
   const live = new Set(
     joined('projects')
       .filter((project) => project.type === 'project' && !project.archived_at)
