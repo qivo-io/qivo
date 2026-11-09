@@ -206,9 +206,7 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
 
   const canAct = current && !busy && !running
   const shownDelivery =
-    delivery !== null && (delivery.exportId === latestId || delivery.exportId === older?.id)
-      ? delivery
-      : null
+    delivery !== null && shows(delivery, orgId, running, [latestId, older?.id]) ? delivery : null
 
   return (
     <SettingsSection
@@ -340,6 +338,23 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
       )}
     </SettingsSection>
   )
+}
+
+/** Whether the panel of organization `orgId` shows `delivery`: never one
+ * of another organization; one of an export the status answers; and one
+ * whose export left the answer, such as an older archive a newer one
+ * ended, while it runs, while its saved file's record is pending or
+ * failed, or while it says to wait. */
+function shows(
+  delivery: DeliveryState,
+  orgId: string,
+  running: boolean,
+  answered: readonly (string | null | undefined)[],
+): boolean {
+  if (delivery.orgId !== orgId) return false
+  if (answered.includes(delivery.exportId) || running) return true
+  if (delivery.state === 'saved') return delivery.record !== 'recorded'
+  return delivery.state === 'busy'
 }
 
 /** What the server's refusal says, or `fallback`. */

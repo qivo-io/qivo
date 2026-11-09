@@ -509,6 +509,71 @@ describe('starting, joining, downloading and cancelling', () => {
     expect(picker).toHaveBeenCalledTimes(2)
   })
 
+  it('keeps the save of an older archive in view once a newer archive ends it', async () => {
+    const file = {
+      name: 'older.zip',
+      createWritable: async () => Object.assign(new WritableStream<Uint8Array>(), {}),
+      getFile: async () => ({ size: 0 }),
+    }
+    ;(window as { showSaveFilePicker?: unknown }).showSaveFilePicker = vi.fn(async () => file)
+    vi.stubGlobal('isSecureContext', true)
+    let release = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(1024))
+      },
+      async pull(controller) {
+        await gate
+        controller.enqueue(new Uint8Array(1024))
+        controller.close()
+      },
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: { 'Content-Type': 'application/zip', 'Content-Length': '2048' },
+          }),
+      ),
+    )
+    serve(['older'])
+    await mount()
+    await press('[data-export-download="older"]')
+    expect(container.querySelector('[data-export-saving]')).not.toBeNull()
+    // the newer archive is ready, which ends the older one
+    await act(async () => server.finish())
+    await settle()
+    expect(container.querySelector('[data-export-older]')).toBeNull()
+    const saving = container.querySelector('[data-export-saving]')
+    expect(saving?.textContent).toContain('Saving…')
+    expect(saving?.querySelector('button')?.textContent).toBe('Stop')
+    await act(async () => release())
+    await settle()
+    // the stand-in refuses to record an archive the route never served
+    expect(container.querySelector('[data-export-recorded="false"]')?.textContent).toContain(
+      "The export was saved, but Qivo couldn't record it.",
+    )
+  })
+
+  it('never shows a delivery of another organization', async () => {
+    desktop()
+    serve(['claimed'])
+    const { deliverExport } = await import('../lib/orgExport')
+    await deliverExport({
+      orgId: 'org-2',
+      exportId: 'export-1',
+      archiveBytes: 2048,
+      automatic: false,
+    })
+    await mount()
+    expect(container.querySelector('[data-export-saved]')).toBeNull()
+  })
+
   it('asks before it cancels, then cancels', async () => {
     serve(['collecting'])
     await mount()

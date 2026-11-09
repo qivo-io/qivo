@@ -234,6 +234,7 @@ describe('the file way', () => {
       signal: expect.any(AbortSignal),
     })
     expect(m.deliveryNow()).toEqual({
+      orgId: ORG,
       exportId: EXPORT,
       state: 'saved',
       file: 'qivo-acme-2026-11-09.zip',
@@ -264,7 +265,12 @@ describe('the file way', () => {
     expect(records()).toEqual([])
     // the empty file the picker made goes again
     expect(state.removed).toBe(true)
-    expect(m.deliveryNow()).toEqual({ exportId: EXPORT, state: 'stopped', removed: true })
+    expect(m.deliveryNow()).toEqual({
+      orgId: ORG,
+      exportId: EXPORT,
+      state: 'stopped',
+      removed: true,
+    })
   })
 
   it.each([
@@ -283,7 +289,7 @@ describe('the file way', () => {
     const { state } = await save(response, archiveBytes)
     expect(state.opened).toBe(0)
     expect(records()).toEqual([])
-    expect(m.deliveryNow()).toEqual({ exportId: EXPORT, state: 'unconfirmed' })
+    expect(m.deliveryNow()).toEqual({ orgId: ORG, exportId: EXPORT, state: 'unconfirmed' })
   })
 
   it('lets go of a chosen file it cannot write to, so the next save asks for another', async () => {
@@ -313,7 +319,7 @@ describe('the file way', () => {
       automatic: false,
       file: file.file,
     })
-    expect(m.deliveryNow()).toEqual({ exportId: EXPORT, state: 'unwritable' })
+    expect(m.deliveryNow()).toEqual({ orgId: ORG, exportId: EXPORT, state: 'unwritable' })
     expect(m.heldExportFile(EXPORT)).toBeNull()
     expect(cancelled).toBe(true)
     expect(records()).toEqual([])
@@ -326,7 +332,7 @@ describe('the file way', () => {
       20,
     )
     expect(state.opened).toBe(0)
-    expect(m.deliveryNow()).toEqual({ exportId: EXPORT, state: 'busy', retryAfter: 30 })
+    expect(m.deliveryNow()).toEqual({ orgId: ORG, exportId: EXPORT, state: 'busy', retryAfter: 30 })
   })
 
   it('stops a save on Stop, discarding what it wrote', async () => {
@@ -459,7 +465,7 @@ describe('the desktop way', () => {
     await m.deliverExport({ orgId: ORG, exportId: EXPORT, archiveBytes: 2500, automatic: false })
     expect([...document.querySelectorAll('iframe')].map((frame) => frame.src)).toEqual([LINK])
     expect(records()).toEqual([])
-    expect(m.deliveryNow()).toEqual({ exportId: EXPORT, state: 'sent', way: 'desktop' })
+    expect(m.deliveryNow()).toEqual({ orgId: ORG, exportId: EXPORT, state: 'sent', way: 'desktop' })
   })
 
   it('names a partial file the desktop app could not delete', async () => {
@@ -467,6 +473,7 @@ describe('the desktop way', () => {
     await m.deliverExport({ orgId: ORG, exportId: EXPORT, archiveBytes: 2500, automatic: false })
     expect(records()).toEqual([])
     expect(m.deliveryNow()).toEqual({
+      orgId: ORG,
       exportId: EXPORT,
       state: 'unconfirmed',
       leftover: 'qivo-acme.zip',
@@ -510,7 +517,7 @@ describe('the link way', () => {
     expect(window.location.href).toBe(page)
     expect(fetcher).not.toHaveBeenCalled()
     expect(records()).toEqual([])
-    expect(m.deliveryNow()).toEqual({ exportId: EXPORT, state: 'sent', way: 'link' })
+    expect(m.deliveryNow()).toEqual({ orgId: ORG, exportId: EXPORT, state: 'sent', way: 'link' })
   })
 
   it('removes its frame after a minute', async () => {
@@ -570,6 +577,7 @@ describe('the runner', () => {
     expect(sent()).toEqual([])
     expect(m.autoAttempted(EXPORT)).toBe(false)
     expect(m.deliveryNow()).toEqual({
+      orgId: ORG,
       exportId: EXPORT,
       state: 'refused',
       message: 'You are offline.',
@@ -587,6 +595,7 @@ describe('the runner', () => {
     await m.deliverExport({ orgId: ORG, exportId: EXPORT, archiveBytes: 1, automatic: true })
     expect(m.autoAttempted(EXPORT)).toBe(true)
     expect(m.deliveryNow()).toEqual({
+      orgId: ORG,
       exportId: EXPORT,
       state: 'refused',
       message: 'This export is no longer available. Prepare a new export.',
@@ -594,7 +603,7 @@ describe('the runner', () => {
     serve({ url: null, reason: 'claimed' })
     await m.deliverExport({ orgId: ORG, exportId: 'export-2', archiveBytes: 1, automatic: true })
     expect(m.autoAttempted('export-2')).toBe(true)
-    expect(m.deliveryNow()).toEqual({ exportId: 'export-2', state: 'claimed' })
+    expect(m.deliveryNow()).toEqual({ orgId: ORG, exportId: 'export-2', state: 'claimed' })
   })
 
   it('goes on and records after the panel that started it is gone, keeping no link', async () => {

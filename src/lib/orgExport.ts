@@ -108,9 +108,10 @@ export function exportWay(): ExportWay {
   return way
 }
 
-/** What a delivery shows, for the export it saves. `sent` names the page's
- * own way, which a download by the link may stand in for. */
-export type DeliveryState = { exportId: string } & (
+/** What a delivery shows, for the export of the organization it saves.
+ * `sent` names the page's own way, which a download by the link may stand
+ * in for. */
+export type DeliveryState = { orgId: string; exportId: string } & (
   | { state: 'claiming' }
   | { state: 'saving'; written: number; total: number }
   | { state: 'downloading' }
@@ -297,12 +298,12 @@ export async function deliverExport(args: DeliverArgs): Promise<boolean> {
   if (how === 'file' && !args.file) return false
   const paused = P.cannotSaveText()
   if (paused) {
-    set({ exportId, state: 'refused', message: paused })
+    set({ orgId, exportId, state: 'refused', message: paused })
     return false
   }
   const controller = new AbortController()
   running = controller
-  set({ exportId, state: 'claiming' })
+  set({ orgId, exportId, state: 'claiming' })
   try {
     let claim: { url: string; expires_at: string } | { url: null; reason: string }
     try {
@@ -314,6 +315,7 @@ export async function deliverExport(args: DeliverArgs): Promise<boolean> {
     } catch (error) {
       if (automatic) attempted.add(exportId)
       set({
+        orgId,
         exportId,
         state: 'refused',
         message: refusalOf(error) ?? "Couldn't start the download. Try again.",
@@ -322,14 +324,14 @@ export async function deliverExport(args: DeliverArgs): Promise<boolean> {
     }
     if (automatic) attempted.add(exportId)
     if ('reason' in claim) {
-      set(claim.reason === 'claimed' ? { exportId, state: 'claimed' } : null)
+      set(claim.reason === 'claimed' ? { orgId, exportId, state: 'claimed' } : null)
       return true
     }
     const url = claim.url
     delivered.add(exportId)
     if (how === 'link') {
       openLink(url)
-      set({ exportId, state: 'sent', way: exportWay() })
+      set({ orgId, exportId, state: 'sent', way: exportWay() })
       return true
     }
     if (how === 'desktop') return await viaDesktop(orgId, exportId, archiveBytes, url)
@@ -368,12 +370,12 @@ async function viaDesktop(
 ): Promise<boolean> {
   const bridge = window.qivoDesktop?.orgExport
   if (!bridge) {
-    set({ exportId, state: 'unconfirmed' })
+    set({ orgId, exportId, state: 'unconfirmed' })
     return true
   }
   const release = holdUnsaved('export')
   const unblock = beginUpdateBlock()
-  set({ exportId, state: 'downloading' })
+  set({ orgId, exportId, state: 'downloading' })
   try {
     const answer = await bridge.download(url)
     if (answer.state === 'completed' && answer.bytes === archiveBytes) {
@@ -385,19 +387,19 @@ async function viaDesktop(
       // a build whose export origin is not this deployment's: the link
       // way downloads it instead, which records nothing
       openLink(url)
-      set({ exportId, state: 'sent', way: 'desktop' })
+      set({ orgId, exportId, state: 'sent', way: 'desktop' })
       return true
     }
     set(
       answer.state === 'busy'
-        ? { exportId, state: 'busy', retryAfter: null }
+        ? { orgId, exportId, state: 'busy', retryAfter: null }
         : 'leftover' in answer
-          ? { exportId, state: 'unconfirmed', leftover: answer.leftover }
-          : { exportId, state: 'unconfirmed' },
+          ? { orgId, exportId, state: 'unconfirmed', leftover: answer.leftover }
+          : { orgId, exportId, state: 'unconfirmed' },
     )
     return true
   } catch {
-    set({ exportId, state: 'unconfirmed' })
+    set({ orgId, exportId, state: 'unconfirmed' })
     return true
   } finally {
     unblock()
@@ -426,7 +428,7 @@ async function intoFile(
     })
     if (response.status === 429) {
       void response.body?.cancel()
-      set({ exportId, state: 'busy', retryAfter: retryAfterOf(response) })
+      set({ orgId, exportId, state: 'busy', retryAfter: retryAfterOf(response) })
       return true
     }
     const length = response.headers.get('Content-Length')
@@ -437,7 +439,7 @@ async function intoFile(
       (length !== null && Number(length) !== archiveBytes)
     ) {
       void response.body?.cancel()
-      set({ exportId, state: 'unconfirmed' })
+      set({ orgId, exportId, state: 'unconfirmed' })
       return true
     }
     let writable: Awaited<ReturnType<ExportFile['createWritable']>>
@@ -449,13 +451,13 @@ async function intoFile(
       // for another, and drops the answer no writer takes
       void response.body.cancel().catch(() => {})
       if (files.get(exportId) === file) files.delete(exportId)
-      set({ exportId, state: 'unwritable' })
+      set({ orgId, exportId, state: 'unwritable' })
       return true
     }
     opened = true
     let written = 0
     let shown = 0
-    set({ exportId, state: 'saving', written, total: archiveBytes })
+    set({ orgId, exportId, state: 'saving', written, total: archiveBytes })
     const count = new TransformStream<Uint8Array, Uint8Array>({
       transform(chunk, out) {
         written += chunk.byteLength
@@ -464,7 +466,7 @@ async function intoFile(
         // a line a MiB is enough to show the save moving
         if (written - shown >= 1024 * 1024 || written === archiveBytes) {
           shown = written
-          set({ exportId, state: 'saving', written, total: archiveBytes })
+          set({ orgId, exportId, state: 'saving', written, total: archiveBytes })
         }
       },
       flush() {
@@ -482,7 +484,7 @@ async function intoFile(
     // nothing was saved; the chosen file is as the picker left it
     const removed = opened ? await removeIfEmpty(file) : false
     if (removed) files.delete(exportId)
-    set({ exportId, state: 'stopped', removed })
+    set({ orgId, exportId, state: 'stopped', removed })
     return true
   } finally {
     unblock()
@@ -492,14 +494,14 @@ async function intoFile(
 
 /* Records the confirmed save of export `exportId` (saved as `file`). */
 async function record(orgId: string, exportId: string, file: string | null): Promise<void> {
-  set({ exportId, state: 'saved', file, record: 'pending' })
+  set({ orgId, exportId, state: 'saved', file, record: 'pending' })
   try {
     await convex.mutation(api.orgRemovals.recordExport, { org_id: orgId, export_id: exportId })
     unrecorded = null
-    set({ exportId, state: 'saved', file, record: 'recorded' })
+    set({ orgId, exportId, state: 'saved', file, record: 'recorded' })
   } catch {
     unrecorded = { orgId, exportId }
-    set({ exportId, state: 'saved', file, record: 'failed' })
+    set({ orgId, exportId, state: 'saved', file, record: 'failed' })
   }
 }
 
