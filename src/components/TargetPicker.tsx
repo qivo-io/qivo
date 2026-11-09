@@ -7,8 +7,11 @@
    cuts each batch of 25. Rows come grouped under their top-level project's
    name, in the server's order, with a search of either name, Load more and
    the shared batch notes: not ready, stopped, failed, the refusal, and only
-   at a confirmed end "No sub-project you can add tasks to." It reads only
-   while it is mounted and the page shows (lib/pagedList.ts usePagedList).
+   at a confirmed end "No sub-project you can add tasks to." Equal names
+   under one parent carry their number, told apart among the rows the list
+   shows and their parents (components/projectNavRows.tsx navTags), never
+   by what the project cache holds. It reads only while it is mounted and
+   the page shows (lib/pagedList.ts usePagedList).
    A chosen row seeds its facts and its parent's into the project cache
    (components/projectNavRows.tsx seedNavRow), so a create or a move into it
    reads its organization and parent at once. */
@@ -19,10 +22,9 @@ import { LIMITS } from '../../convex/lib/limits'
 import type { NavTargetRow, NavTargets } from '../../convex/model/projectNavReads'
 import { listEnd, usePagedList, useSettledSearch } from '../lib/pagedList'
 import { cn } from '../lib/utils'
-import { P } from '../store/planner'
 import { ChoiceEnd, PickerSearch } from './pickerParts'
 import { type ChoiceWords, TARGET_WORDS } from './pickerWords'
-import { navCursors, seedNavRow } from './projectNavRows'
+import { navCursors, navTags, seedNavRow } from './projectNavRows'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
 
@@ -36,6 +38,14 @@ const TARGET_SEARCH = 'data-target-search'
 /** The first rows a picker opens on: the rows of its list once a batch
     holds one, for a caller that opens on a default. */
 export type TargetRows = readonly NavTargetRow[]
+
+/** The top-level project a target row is listed under, for its tags. */
+const parentOfTarget = (row: NavTargetRow) => ({
+  id: row.parent_id,
+  org_id: row.org_id,
+  name: row.parent_name,
+  num: row.parent_num,
+})
 
 /**
  * The sub-projects the person may add tasks to, in organization `org` or
@@ -106,6 +116,13 @@ export function TargetPicker({
   useEffect(() => {
     heard.current?.(list.rows)
   }, [list.rows])
+  // equal names told apart among the rows shown and their parents, by
+  // organization, parent and number
+  const tags = navTags(list.rows, parentOfTarget)
+  const labelOf = (id: string, name: string) => {
+    const tag = tags.get(id)
+    return tag ? `${name} ${tag}` : name
+  }
   // the rows under their top-level project, in the server's order
   const groups: { parent: string; name: string; rows: NavTargetRow[] }[] = []
   for (const row of list.rows) {
@@ -114,7 +131,7 @@ export function TargetPicker({
     else
       groups.push({
         parent: row.parent_id,
-        name: P.projectLabel({ id: row.parent_id, name: row.parent_name }),
+        name: labelOf(row.parent_id, row.parent_name),
         rows: [row],
       })
   }
@@ -133,8 +150,15 @@ export function TargetPicker({
         className="mt-2 max-h-56 overflow-auto rounded-md border border-border"
       >
         {groups.map((g) => (
-          <div key={g.parent} data-target-group={g.parent}>
-            <div className="px-2 pt-2 pb-1 text-xs text-text-3">{g.name}</div>
+          <div
+            key={g.parent}
+            role="group"
+            aria-labelledby={`${group}-${g.parent}`}
+            data-target-group={g.parent}
+          >
+            <div id={`${group}-${g.parent}`} className="px-2 pt-2 pb-1 text-xs text-text-3">
+              {g.name}
+            </div>
             {g.rows.map((row) => {
               const isCurrent = row.id === current
               const on = row.id === value
@@ -156,9 +180,7 @@ export function TargetPicker({
                     disabled={isCurrent || !answered}
                     onChange={() => choose(row)}
                   />
-                  <span className="min-w-0 flex-1 truncate">
-                    {P.projectLabel({ id: row.id, name: row.name })}
-                  </span>
+                  <span className="min-w-0 flex-1 truncate">{labelOf(row.id, row.name)}</span>
                   {isCurrent && <span className="text-xs text-text-3">Current</span>}
                 </Label>
               )

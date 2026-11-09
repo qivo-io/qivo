@@ -19,7 +19,9 @@
    batch can hold fewer rows than it read. Both are read only while the
    menu is open and the page shows, with Load more and the list's end
    lines. A sub-project scope, as a /sync/p/<n> link opens, is offered as
-   itself, named through the project cache.
+   itself, named through the project cache. Equal names carry their number,
+   told apart among the rows the menu shows (components/projectNavRows.tsx
+   navTags), never by what the project cache holds.
 
    The closed trigger names a team scope among the person's own teams from
    the store at once, and any other from teams.get while the page shows
@@ -31,7 +33,7 @@
    page's sentence, also after the trigger named it. */
 
 import { type ReactNode, useEffect, useRef, useState } from 'react'
-import { navCursors, seedNavRow } from '@/components/projectNavRows'
+import { navCursors, navTags, seedNavRow } from '@/components/projectNavRows'
 import { Icon, Popover } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
 import { Command, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
@@ -297,6 +299,23 @@ function ScopeList({ scope, onPick }: { scope: SyncPlaceScope; onPick: (key: str
       name: ownProject.name,
       num: ownProject.num,
     })
+  // equal names told apart among the rows shown, the sub-project scope
+  // under its own parent
+  const ownParent = ownProject?.parent ? P.project(ownProject.parent) : undefined
+  const tags = navTags(shownProjects, (row) =>
+    ownProject?.parent && row.id === ownProject.id
+      ? {
+          id: ownProject.parent,
+          org_id: ownProject.org,
+          name: ownParent?.name ?? '',
+          num: ownParent?.num ?? 0,
+        }
+      : null,
+  )
+  const labelOf = (p: MenuProject) => {
+    const tag = tags.get(p.id)
+    return tag ? `${p.name} ${tag}` : p.name
+  }
   const current = syncScopeKey(scope)
   const [value, setValue] = useState(current || ALL)
 
@@ -376,7 +395,7 @@ function ScopeList({ scope, onPick }: { scope: SyncPlaceScope; onPick: (key: str
               }}
               className={rowClass}
             >
-              <span className="min-w-0 flex-1 truncate">{P.projectLabel(p)}</span>
+              <span className="min-w-0 flex-1 truncate">{labelOf(p)}</span>
               {check(key)}
             </CommandItem>
           )

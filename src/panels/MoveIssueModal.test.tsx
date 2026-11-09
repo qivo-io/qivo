@@ -46,7 +46,9 @@ let windowFail: ((error: unknown) => void) | null
 let carries: boolean
 let asked: Record<string, unknown>[]
 
-async function load() {
+/** Loads the store on the world above, which `prepare` may change, given
+    WEB's id. */
+async function load(prepare: (snap: Snapshot, web: string) => void = () => {}) {
   vi.resetModules()
   const snap: Snapshot = plannerFixture()
   const org = snap.orgs[0].id
@@ -66,6 +68,7 @@ async function load() {
   const fw = project('FW', 5, { parent_id: hw.id })
   snap.projects = [web, hw, fe, be, fw]
   ids = { be: be.id, fw: fw.id, fe: fe.id }
+  prepare(snap, web.id)
   orgId = org
   windowRead = null
   windowFail = null
@@ -331,5 +334,25 @@ describe('Move window', () => {
     await chooseTarget(ids.be)
     expect(notes()).toEqual([])
     expect(asked.map((a) => a.project_id)).toEqual([ids.fw])
+  })
+
+  it('tells two sub-projects of one name apart by their numbers, which the project cache does not hold', async () => {
+    carries = false
+    // BE and a second sub-project of WEB share a name
+    await load((snap, web) => {
+      const be = snap.projects.find((p) => p.id === ids.be)
+      if (!be) throw new Error('no BE')
+      be.name = 'Design'
+      snap.projects.push({ ...be, id: 'design-6', key: 'DS6', num: 6, parent_id: web })
+    })
+    const lone = P.issues.find((it) => it.uuid === 'lone')
+    if (!lone) throw new Error('no task')
+    await openFor(lone.id)
+    const label = (id: string) =>
+      document.querySelector(`[data-target="${id}"]`)?.textContent?.replace(/\s+/g, ' ').trim()
+    await vi.waitFor(() => expect(label('design-6')).toBeDefined())
+    // must fail for labels that take their tags from the project cache
+    expect(label(ids.be)).toBe('Design #4')
+    expect(label('design-6')).toBe('Design #6')
   })
 })

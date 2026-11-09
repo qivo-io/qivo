@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../../components/ui/tooltip'
 import type { SyncPlaceScope } from '../../lib/teamSync'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
+import { answerProjectNav, isProjectNavRead } from '../../store/projectNavStandIn.setup'
 import {
   type ForcedTeamSettings,
   isTeamSettingsRead,
@@ -86,6 +87,11 @@ async function load() {
       return () => {}
     }
     if (isTeamSettingsRead(name)) return reads.watch(name, args, next, fail)
+    // the menu's projects, as the server lists them
+    if (isProjectNavRead(name)) {
+      answerProjectNav(snap, name, args, next, fail)
+      return () => {}
+    }
     next(structuredClone(snap))
     return () => {}
   })
@@ -274,5 +280,35 @@ describe("Team sync's scope menu", () => {
     await settle()
     expect(trigger()?.dataset.syncScopeTrigger).toBe('Team not available')
     expect(document.querySelector('[data-sync-scope-retry]')).toBeNull()
+  })
+
+  it('tells two projects of one name apart by their numbers, which the project cache does not hold', async () => {
+    const base = snap.projects.find((p) => p.parent_id === undefined) ?? snap.projects[0]
+    const me = snap.profiles[0].id
+    for (const num of [2, 3]) {
+      const id = `design-${num}`
+      snap.projects.push({
+        ...base,
+        id,
+        type: 'meta',
+        key: `DS${num}`,
+        num,
+        name: 'Design',
+        parent_id: undefined,
+        lead_id: undefined,
+      })
+      snap.access.push({ project_id: id, profile_id: me, level: 'viewer' })
+    }
+    await render({ kind: 'all' })
+    await open()
+    const label = (id: string) =>
+      document
+        .querySelector(`[data-sync-scope-choice="project:${id}"]`)
+        ?.textContent?.replace(/\s+/g, ' ')
+        .trim()
+    await vi.waitFor(() => expect(label('design-2')).toBeDefined())
+    // must fail for labels that take their tags from the project cache
+    expect(label('design-2')).toBe('Design #2')
+    expect(label('design-3')).toBe('Design #3')
   })
 })

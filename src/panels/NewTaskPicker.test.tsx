@@ -229,6 +229,27 @@ describe("the New task dialog's Sub-project picker", { timeout: 30_000 }, () => 
     await waitFor(() => buttonNamed('Create')?.disabled === false || null, 'Create turned on')
   })
 
+  it('tells two sub-projects of one name apart by their numbers, which the project cache does not hold', async () => {
+    const snap = world()
+    // Gamma (2) and Alpha (3) share a name under Plan
+    for (const p of snap.projects) if (p.id === 'gamma' || p.id === 'alpha') p.name = 'Design'
+    // from My view, which names neither, so the cache holds no namesake
+    await app(snap, '/app/~/board/mine')
+    await openDialog()
+    await waitFor(() => document.querySelector('[data-target="gamma"]'), "Gamma's row")
+    const label = (id: string) =>
+      document.querySelector(`[data-target="${id}"]`)?.textContent?.replace(/\s+/g, ' ').trim()
+    // must fail for labels that take their tags from the project cache
+    expect(label('gamma')).toBe('Design #2')
+    expect(label('alpha')).toBe('Design #3')
+    expect(label('beta')).toBe('Beta')
+    // each group is announced by its project's name
+    const group = document.querySelector<HTMLElement>('[data-target-group="plan"]')
+    expect(group?.getAttribute('role')).toBe('group')
+    const heading = document.getElementById(group?.getAttribute('aria-labelledby') ?? '')
+    expect(heading?.textContent).toBe('Plan')
+  })
+
   it('says at a confirmed empty end that no sub-project takes tasks, and keeps Create off', async () => {
     // from My view, which names no project, for a person who views Plan only
     await app(world(false), '/app/~/board/mine')
