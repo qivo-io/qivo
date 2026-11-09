@@ -12,7 +12,9 @@ import {
   deliverExport,
   deliveryNow,
   deliveryRunning,
+  discardChosenFile,
   discardExportFile,
+  type ExportFile,
   type ExportWay,
   exportWay,
   heldExportFile,
@@ -147,12 +149,15 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
     setBusy(true)
     setError('')
     setNote('')
+    let file: ExportFile | null = null
     try {
-      const file = chosen ? (await chosen).file : null
+      file = chosen ? (await chosen).file : null
       const asked = await convex.mutation(api.orgExport.request, { org_id: orgId })
       if (file) holdExportFile(asked.export_id, file)
       if (asked.joined) setNote('An export was already being prepared, so you joined it.')
     } catch (cause) {
+      // no export holds the file the picker made, so it goes while empty
+      if (file) void discardChosenFile(file)
       setError(refusal(cause, "Couldn't start the export. Try again."))
     } finally {
       setBusy(false)

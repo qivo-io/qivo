@@ -234,6 +234,12 @@ export async function discardExportFile(exportId: string): Promise<boolean> {
   return await removeIfEmpty(file)
 }
 
+/** Lets go of `file`, a file the picker answered that the page holds for no
+ * export, such as when starting the export failed: deletes it while it is
+ * still empty, never once it holds anything. Answers whether it deleted
+ * it. */
+export const discardChosenFile = (file: ExportFile): Promise<boolean> => removeIfEmpty(file)
+
 async function removeIfEmpty(file: ExportFile): Promise<boolean> {
   if (typeof file.remove !== 'function') return false
   try {

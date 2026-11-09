@@ -455,6 +455,27 @@ describe('starting, joining, downloading and cancelling', () => {
     expect(stateShown()).toBe('collecting')
   })
 
+  it('deletes the empty file the picker made when the export cannot start', async () => {
+    const file = {
+      name: 'x.zip',
+      createWritable: vi.fn(),
+      getFile: vi.fn(async () => ({ size: 0 })),
+      remove: vi.fn(async () => {}),
+    }
+    ;(window as { showSaveFilePicker?: unknown }).showSaveFilePicker = vi.fn(async () => file)
+    vi.stubGlobal('isSecureContext', true)
+    serve()
+    await mount()
+    network.mutation.mockImplementationOnce(async () => {
+      throw new ConvexError({ code: 'rule', message: 'Exports are paused right now.' })
+    })
+    await press('[data-export-start]')
+    expect(text()).toContain('Exports are paused right now.')
+    expect(file.remove).toHaveBeenCalledTimes(1)
+    const { heldExportFile } = await import('../lib/orgExport')
+    expect(heldExportFile('export-1')).toBeNull()
+  })
+
   it('joins an export another admin started, which gives this admin an attempt of their own', async () => {
     desktop()
     serve(['others'])
