@@ -520,10 +520,12 @@ function DeliveryLine({ delivery }: { delivery: DeliveryState }) {
       )
     case 'busy':
       return (
-        <p role="alert" className="text-danger">
-          {delivery.retryAfter === null
+        <p role="alert" className="text-danger" data-export-busy={delivery.by}>
+          {delivery.by === 'desktop'
             ? 'The desktop app is already downloading an export. Try again once it has finished.'
-            : `This export is already being downloaded twice. Try again in ${delivery.retryAfter} seconds.`}
+            : delivery.retryAfter === null
+              ? 'Qivo is busy sending this export. Try again in a few seconds.'
+              : `This export is already being downloaded twice. Try again in ${delivery.retryAfter} seconds.`}
         </p>
       )
     case 'stopped':

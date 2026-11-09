@@ -25,11 +25,14 @@ export const FALLBACK_NAME = 'qivo-export.zip'
  * its bytes when the download completed whole, else how it ended. A
  * download that did not complete and whose partial file the shell could not
  * remove answers `failed` with that file's base name in `leftover`, so the
- * page can ask the person to delete it. */
+ * page can ask the person to delete it. `declined` is an answer of the
+ * route that is no archive, such as its 429 while other downloads of the
+ * archive run or its 404, apart from a transfer that broke off, and
+ * `refused` a link the shell would not download at all. */
 export type ExportDownloadAnswer =
   | { state: 'completed'; file: string; bytes: number }
   | { state: 'failed'; leftover: string }
-  | { state: 'cancelled' | 'interrupted' | 'failed' | 'busy' | 'refused' }
+  | { state: 'cancelled' | 'interrupted' | 'failed' | 'busy' | 'refused' | 'declined' }
 
 /** The parts of Electron's DownloadItem this module uses. */
 export type DownloadItemLike = {
@@ -133,8 +136,8 @@ type Options = {
  * will-download listener: it takes only the item whose URL `start` asked
  * for in the same contents, leaving every other download to Electron's
  * default, and saves it at once into the Downloads folder under a unique
- * name. It refuses an item that is not a ZIP file of a positive size up to
- * `maxBytes`. An interrupted item is cancelled, since Chromium would keep
+ * name. It declines an item that is not a ZIP file of a positive size up
+ * to `maxBytes`, which is how the route's refusals arrive. An interrupted item is cancelled, since Chromium would keep
  * it waiting to resume, and so is one without progress for `stallMs`; a
  * download that did not complete whole leaves no file, or answers the file
  * it could not remove. Every download answers, whatever its cleanup does, so
@@ -192,8 +195,10 @@ export function createExportDownloads(options: Options) {
     clearTimeout(current.timer)
     const total = item.getTotalBytes()
     if (item.getMimeType() !== 'application/zip' || !(total > 0) || total > maxBytes) {
+      // the route's 429 and 404 have no body and no ZIP type: no archive
+      // came, which the page tells apart from a broken transfer
       item.cancel()
-      end({ state: 'failed' })
+      end({ state: 'declined' })
       return
     }
     let file: string

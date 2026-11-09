@@ -290,17 +290,19 @@ describe("the shell's export downloads", () => {
   })
 
   it.each([
+    ["the route's 429, with no body and no type", { mime: '', total: 0 }],
     ['another type', { mime: 'text/html' }],
     ['no size', { total: 0 }],
     ['more than the cap', { total: EXPORT_MAX_BYTES + 1 }],
-  ])('refuses an item of %s without saving it', async (_, opts) => {
-    const { downloads, contents } = setup()
+  ])('declines an item of %s without saving it, apart from a broken transfer', async (_, opts) => {
+    const { downloads, contents, removed } = setup()
     const answer = downloads.start(contents, LINK)
     const item = fakeItem(LINK, opts)
     downloads.willDownload({}, item.typed, contents)
     expect(item.savePath).toBeNull()
     expect(item.cancelled).toBe(1)
-    await expect(answer).resolves.toEqual({ state: 'failed' })
+    await expect(answer).resolves.toEqual({ state: 'declined' })
+    expect(removed).toEqual([])
   })
 
   it('answers failed when no item comes within its time, and cancels a late one', async () => {

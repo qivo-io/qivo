@@ -95,7 +95,7 @@ const power = {
 type ExportDownloadAnswer =
   | { state: 'completed'; file: string; bytes: number }
   | { state: 'failed'; leftover: string }
-  | { state: 'cancelled' | 'interrupted' | 'failed' | 'busy' | 'refused' }
+  | { state: 'cancelled' | 'interrupted' | 'failed' | 'busy' | 'refused' | 'declined' }
 
 // An organization export's download into the Downloads folder, answered
 // when it finished (main.ts, exportDownload.ts). The shell takes only the

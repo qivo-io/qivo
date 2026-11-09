@@ -333,7 +333,13 @@ describe('the file way', () => {
       20,
     )
     expect(state.opened).toBe(0)
-    expect(m.deliveryNow()).toEqual({ orgId: ORG, exportId: EXPORT, state: 'busy', retryAfter: 30 })
+    expect(m.deliveryNow()).toEqual({
+      orgId: ORG,
+      exportId: EXPORT,
+      state: 'busy',
+      by: 'server',
+      retryAfter: 30,
+    })
   })
 
   it('stops a save on Stop, discarding what it wrote', async () => {
@@ -511,6 +517,7 @@ describe('the desktop way', () => {
     ['cancelled', { state: 'cancelled' }],
     ['failed', { state: 'failed' }],
     ['busy', { state: 'busy' }],
+    ['declined', { state: 'declined' }],
   ])('records nothing for an answer %s', async (_, answer) => {
     bridge(async () => answer)
     await m.deliverExport({ orgId: ORG, exportId: EXPORT, archiveBytes: 2500, automatic: false })
@@ -524,6 +531,18 @@ describe('the desktop way', () => {
     expect([...document.querySelectorAll('iframe')].map((frame) => frame.src)).toEqual([LINK])
     expect(records()).toEqual([])
     expect(m.deliveryNow()).toEqual({ orgId: ORG, exportId: EXPORT, state: 'sent', way: 'desktop' })
+  })
+
+  it('says to wait when the route answered the desktop app no archive, such as its 429', async () => {
+    bridge(async () => ({ state: 'declined' }))
+    await m.deliverExport({ orgId: ORG, exportId: EXPORT, archiveBytes: 2500, automatic: false })
+    expect(m.deliveryNow()).toEqual({
+      orgId: ORG,
+      exportId: EXPORT,
+      state: 'busy',
+      by: 'server',
+      retryAfter: null,
+    })
   })
 
   it('names a partial file the desktop app could not delete', async () => {

@@ -604,6 +604,17 @@ describe('starting, joining, downloading and cancelling', () => {
     expect(text()).toContain('Saving is paused.')
   })
 
+  it('says Qivo is busy when the route answered the desktop app no archive', async () => {
+    desktop({ state: 'declined' })
+    serve(['claimed'])
+    await mount()
+    await press('[data-export-download="latest"]')
+    expect(container.querySelector('[data-export-busy="server"]')?.textContent).toBe(
+      'Qivo is busy sending this export. Try again in a few seconds.',
+    )
+    expect(container.querySelector('[data-export-unconfirmed]')).toBeNull()
+  })
+
   it('names the unfinished file the desktop app could not delete', async () => {
     desktop({ state: 'failed', leftover: 'qivo-northstar-2026-11-09.zip' })
     serve(['claimed'])

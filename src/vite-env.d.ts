@@ -77,11 +77,12 @@ type QivoDesktopBridge = {
 /** What the desktop app's export download answers: the saved file's name
     and bytes when it completed whole, else how it ended, with `leftover`
     naming a partial file in the Downloads folder the shell could not
-    remove. */
+    remove. `declined` is an answer of the route that held no archive, such
+    as its 429, and `refused` a link the shell would not download. */
 type QivoDesktopExportDownload =
   | { state: 'completed'; file: string; bytes: number }
   | { state: 'failed'; leftover: string }
-  | { state: 'cancelled' | 'interrupted' | 'failed' | 'busy' | 'refused' }
+  | { state: 'cancelled' | 'interrupted' | 'failed' | 'busy' | 'refused' | 'declined' }
 
 interface Window {
   qivoDesktop?: QivoDesktopBridge

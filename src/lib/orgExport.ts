@@ -118,7 +118,7 @@ export type DeliveryState = { orgId: string; exportId: string } & (
   | { state: 'saved'; file: string | null; record: 'pending' | 'recorded' | 'failed' }
   | { state: 'saved'; file: string | null; record: 'refused'; message: string }
   | { state: 'sent'; way: ExportWay }
-  | { state: 'busy'; retryAfter: number | null }
+  | { state: 'busy'; by: 'desktop' | 'server'; retryAfter: number | null }
   | { state: 'stopped'; removed: boolean }
   | { state: 'unwritable' }
   | { state: 'unconfirmed'; leftover?: string }
@@ -402,10 +402,14 @@ async function viaDesktop(
     }
     set(
       answer.state === 'busy'
-        ? { orgId, exportId, state: 'busy', retryAfter: null }
-        : 'leftover' in answer
-          ? { orgId, exportId, state: 'unconfirmed', leftover: answer.leftover }
-          : { orgId, exportId, state: 'unconfirmed' },
+        ? { orgId, exportId, state: 'busy', by: 'desktop', retryAfter: null }
+        : answer.state === 'declined'
+          ? // the route answered no archive, such as its 429 while other
+            // downloads of the archive run; the shell cannot read its wait
+            { orgId, exportId, state: 'busy', by: 'server', retryAfter: null }
+          : 'leftover' in answer
+            ? { orgId, exportId, state: 'unconfirmed', leftover: answer.leftover }
+            : { orgId, exportId, state: 'unconfirmed' },
     )
     return true
   } catch {
@@ -438,7 +442,7 @@ async function intoFile(
     })
     if (response.status === 429) {
       void response.body?.cancel()
-      set({ orgId, exportId, state: 'busy', retryAfter: retryAfterOf(response) })
+      set({ orgId, exportId, state: 'busy', by: 'server', retryAfter: retryAfterOf(response) })
       return true
     }
     const length = response.headers.get('Content-Length')
