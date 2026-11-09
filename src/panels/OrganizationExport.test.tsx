@@ -1,13 +1,24 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs'
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { JOB_ORDER, LIVE_READ_WARNING } from '../../convex/lib/orgExport'
-import { STOP_MESSAGES } from '../../convex/model/orgExports'
+import {
+  ARCHIVE_TTL_MS,
+  DELIVERY,
+  notRecordable,
+  STOP_MESSAGES,
+} from '../../convex/model/orgExports'
+import { NO_LONGER_AVAILABLE, STILL_COLLECTING } from '../../convex/orgExport'
 import { TooltipProvider } from '../components/ui/tooltip'
-import { orgExportStandIn, STOP_MESSAGES_TEXT } from '../store/orgExportStandIn.setup'
+import {
+  orgExportStandIn,
+  STAND_IN_EXPORT,
+  STOP_MESSAGES_TEXT,
+} from '../store/orgExportStandIn.setup'
 
 /* Settings › Organization › General's export on the server job: what it
    says before any export, every state of the job with its sentence and
@@ -183,6 +194,19 @@ describe('before any export', () => {
   it("shows the server's own failure sentences", () => {
     expect(STOP_MESSAGES_TEXT.deleted_changing).toBe(STOP_MESSAGES.deleted_changing)
     expect(STOP_MESSAGES_TEXT.too_large).toBe(STOP_MESSAGES.too_large)
+  })
+
+  it("follows the server's times and refusals in the stand-in", () => {
+    expect(STAND_IN_EXPORT.lifeMs).toBe(ARCHIVE_TTL_MS)
+    expect(STAND_IN_EXPORT.recordMs).toBe(DELIVERY.streamMs)
+    expect(STAND_IN_EXPORT.collecting).toBe(STILL_COLLECTING)
+    expect(STAND_IN_EXPORT.gone).toBe(NO_LONGER_AVAILABLE)
+    expect(STAND_IN_EXPORT.unrecordable).toBe(notRecordable())
+    // the claim and the record refuse an unknown export in these words
+    for (const source of ['../../convex/orgExport.ts', '../../convex/orgRemovals.ts'])
+      expect(readFileSync(new URL(source, import.meta.url), 'utf8')).toContain(
+        `notFound('${STAND_IN_EXPORT.notFound}')`,
+      )
   })
 })
 

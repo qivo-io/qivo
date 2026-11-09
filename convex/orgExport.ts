@@ -333,9 +333,11 @@ export const cancel = authedMutation({
 
 /* ------------------------------------------------------------ delivery */
 
-/* The refusals of a claim for a job that has no archive to download. */
-const STILL_COLLECTING = 'This export is still being prepared. Download it once it is ready.'
-const NO_LONGER_AVAILABLE = 'This export is no longer available. Prepare a new export.'
+/** The refusals of a claim for a job that has no archive to download,
+ * which the export stand-in's are pinned to
+ * (src/store/orgExportStandIn.setup.ts). */
+export const STILL_COLLECTING = 'This export is still being prepared. Download it once it is ready.'
+export const NO_LONGER_AVAILABLE = 'This export is no longer available. Prepare a new export.'
 
 /** What claimDownload answers: a link and when it stops starting a
  * download, or why an automatic attempt gets none. */

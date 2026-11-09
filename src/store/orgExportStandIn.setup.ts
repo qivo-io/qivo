@@ -12,8 +12,28 @@
    answers a link to a ready, unexpired archive, and with `automatic` only
    for a caller who asked, once (`claimed` after), else `not_requested`;
    recordExport records a served archive that is ready or ended less than
-   30 minutes before. It reads no organization and checks no seat. It
-   imports nothing the benchmark's worker cannot load. */
+   STAND_IN_EXPORT.recordMs before. It reads no organization and checks
+   no seat. It imports nothing the benchmark's worker cannot load, so it
+   carries the server's times and sentences in STAND_IN_EXPORT, which the
+   panel's test pins to the server's. */
+
+/** The server's times and refusals the stand-in follows, which the worker
+    cannot import from the server code; the panel's test pins each to its
+    source: `lifeMs` to convex/model/orgExports.ts ARCHIVE_TTL_MS
+    (lib/limits.ts LIMITS.exportHours), `recordMs` to DELIVERY.streamMs,
+    `collecting` and `gone` to convex/orgExport.ts STILL_COLLECTING and
+    NO_LONGER_AVAILABLE, `unrecordable` to model/orgExports.ts notRecordable
+    and `notFound` to the claim's and the record's refusal of an unknown
+    export. */
+export const STAND_IN_EXPORT = {
+  lifeMs: 4 * 60 * 60_000,
+  recordMs: 30 * 60_000,
+  collecting: 'This export is still being prepared. Download it once it is ready.',
+  gone: 'This export is no longer available. Prepare a new export.',
+  unrecordable:
+    'This export can no longer be recorded. A saved export counts only when its download finishes within 30 minutes after the export ends. Prepare a new export.',
+  notFound: 'export not found',
+}
 
 /** The sentences of the two failures the states show, which the worker
     cannot import from the model code (convex/model/orgExports.ts
@@ -75,6 +95,7 @@ export const ORG_EXPORT_STATES = [
 export type OrgExportStandInState = (typeof ORG_EXPORT_STATES)[number]
 
 const HOUR = 3_600_000
+const LIFE = STAND_IN_EXPORT.lifeMs
 const SECTIONS = 26
 /* the job's section keys by place (convex/lib/orgExport.ts JOB_ORDER) for
    the two the states read */
@@ -138,7 +159,7 @@ export function orgExportStandIn(opts: {
     return job({
       state: 'ready',
       completed_at: iso(now - 60_000),
-      expires_at: iso(now - 60_000 + 4 * HOUR),
+      expires_at: iso(now - 60_000 + LIFE),
       progress: { section: '', records: 5320, sections_done: SECTIONS, sections_total: SECTIONS },
       archive_bytes: bytes,
       ...fields,
@@ -150,7 +171,7 @@ export function orgExportStandIn(opts: {
   if (states.has('expired'))
     job({
       state: 'expired',
-      completed_at: iso(opts.now() - 5 * HOUR),
+      completed_at: iso(opts.now() - HOUR - LIFE),
       expires_at: iso(opts.now() - HOUR),
       ended_at: iso(opts.now() - HOUR),
       archive_bytes: bytes,
@@ -244,7 +265,7 @@ export function orgExportStandIn(opts: {
 
   const cancel = (exportId: string) => {
     const found = byId(exportId)
-    if (!found) throw refuse('export not found', 'not_found')
+    if (!found) throw refuse(STAND_IN_EXPORT.notFound, 'not_found')
     if (found.state !== 'collecting') return { state: found.state }
     Object.assign(found, { state: 'cancelled', ended_at: iso(opts.now()), cancelled_by: me })
     publish()
@@ -253,11 +274,10 @@ export function orgExportStandIn(opts: {
 
   const claim = (exportId: string, automatic: boolean) => {
     const found = byId(exportId)
-    if (!found) throw refuse('export not found', 'not_found')
-    if (found.state === 'collecting')
-      throw refuse('This export is still being prepared. Download it once it is ready.')
+    if (!found) throw refuse(STAND_IN_EXPORT.notFound, 'not_found')
+    if (found.state === 'collecting') throw refuse(STAND_IN_EXPORT.collecting)
     if (found.state !== 'ready' || Date.parse(found.expires_at ?? '') <= opts.now())
-      throw refuse('This export is no longer available. Prepare a new export.')
+      throw refuse(STAND_IN_EXPORT.gone)
     if (automatic) {
       if (!found.requested) return { url: null, reason: 'not_requested' }
       if (found.auto_download_at !== null) return { url: null, reason: 'claimed' }
@@ -283,17 +303,15 @@ export function orgExportStandIn(opts: {
   const record = (exportId: string) => {
     if (states.has('record-error')) throw new Error('the record failed')
     const found = byId(exportId)
-    if (!found) throw refuse('export not found', 'not_found')
+    if (!found) throw refuse(STAND_IN_EXPORT.notFound, 'not_found')
     const end = Date.parse(found.ended_at ?? found.expires_at ?? '')
     if (
       found.completed_at === null ||
       found.served_at === null ||
       (found.state !== 'ready' && found.state !== 'expired') ||
-      !(end + 30 * 60_000 > opts.now())
+      !(end + STAND_IN_EXPORT.recordMs > opts.now())
     )
-      throw refuse(
-        'This export can no longer be recorded. A saved export counts only when its download finishes within 30 minutes after the export ends. Prepare a new export.',
-      )
+      throw refuse(STAND_IN_EXPORT.unrecordable)
     lastExportAt = iso(opts.now())
     publish()
     return null
@@ -346,7 +364,7 @@ export function orgExportStandIn(opts: {
       Object.assign(found, {
         state: 'ready',
         completed_at: iso(now),
-        expires_at: iso(now + 4 * HOUR),
+        expires_at: iso(now + LIFE),
         progress: { section: '', records: 5320, sections_done: SECTIONS, sections_total: SECTIONS },
         archive_bytes: bytes,
       })
