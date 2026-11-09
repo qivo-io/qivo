@@ -1,9 +1,11 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { api } from '../../convex/_generated/api'
 import type { BoardAnswer } from '../../convex/lib/board'
 import { MIB } from '../../convex/lib/limits'
 import type { RoadmapAnswer } from '../../convex/lib/roadmap'
 import type { ViewRow } from '../../convex/lib/viewReads'
+import type { LiveQueries } from '../lib/liveQueries'
 import type { Whole } from './guard/liveDouble.setup'
 import { plannerFixture } from './plannerFixture.setup'
 import {
@@ -107,6 +109,8 @@ async function start(
   vi.stubGlobal('window', { showToast: vi.fn() })
   const byIds: string[][] = []
   const open = new Set<() => void>()
+  // the navigation reads open now, by name
+  const navOpen = new Map<string, number>()
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     const count = (views.reads?.get(name) ?? 0) + 1
@@ -123,8 +127,14 @@ async function start(
         byIds.push([...(args as { ids: string[] }).ids])
         open.add(answer)
       }
+      navOpen.set(name, (navOpen.get(name) ?? 0) + 1)
       answer()
-      return () => open.delete(answer)
+      let stopped = false
+      return () => {
+        if (!stopped) navOpen.set(name, (navOpen.get(name) ?? 0) - 1)
+        stopped = true
+        open.delete(answer)
+      }
     }
     return () => {}
   })
@@ -141,7 +151,7 @@ async function start(
   const rerun = () => {
     for (const answer of open) answer()
   }
-  return { P: store.P, byIds, PROJECT_CACHE, rerun }
+  return { P: store.P, byIds, PROJECT_CACHE, rerun, navOpen }
 }
 
 /** Task `id` of project `project` as a view's answer sends it. */
@@ -437,6 +447,51 @@ describe('the project lookups', () => {
     // the name stays, the right goes with the current answer
     expect(P.projectState(w.edits.id)).toBe('loading')
     expect(P.canWrite(w.edits.id)).toBe(false)
+  })
+
+  it("shares one Link task offer read among an organization's task windows, its answer kept until the last lets go", async () => {
+    const w = world()
+    const { P, navOpen } = await start(w.snap)
+    const targets = () => navOpen.get('projectNav:targets') ?? 0
+    // the Inbox's pane shows a task the person only views
+    const pane = P.watchEditsSomeProject(w.org)
+    expect(P.editsSomeProject(w.org)).toBeNull()
+    await vi.waitFor(() => expect(P.editsSomeProject(w.org)).toBe(true))
+    // its pop-out joins the answered read and takes its answer at once
+    const popOut = P.watchEditsSomeProject(w.org)
+    expect(P.editsSomeProject(w.org)).toBe(true)
+    expect(targets()).toBe(1)
+    // closing the pop-out leaves the pane its answer
+    popOut()
+    popOut()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(P.editsSomeProject(w.org)).toBe(true)
+    expect(targets()).toBe(1)
+    // the last window lets go, and the read with it
+    pane()
+    expect(P.editsSomeProject(w.org)).toBeNull()
+    expect(targets()).toBe(0)
+  })
+
+  it("takes the Link task offer's answer at once from a targets subscription another reader holds", async () => {
+    const w = world()
+    const { P } = await start(w.snap)
+    const transport = double.live as unknown as LiveQueries
+    // another reader, such as a Move window's first batch, holds the read
+    const other = transport.watch(api.projectNav.targets, { org_id: w.org })
+    await vi.waitFor(() => expect(transport.read(other.token)).toBeDefined())
+    // the store's watch joins that answered subscription, as Convex shares
+    // one subscription by query and arguments, and hears no transition
+    vi.spyOn(transport, 'watch').mockImplementationOnce(() => ({
+      token: other.token,
+      joined: true,
+      stop: () => {},
+    }))
+    const stop = P.watchEditsSomeProject(w.org)
+    // must fail for a watch that waits for a transition of a joined read
+    expect(P.editsSomeProject(w.org)).toBe(true)
+    stop()
+    other.stop()
   })
 
   it('reads the 199 unheld of 200 top-level projects in two chunks and keeps them while named, past a lowered bound', async () => {

@@ -3326,10 +3326,18 @@ function detailAttachment(attId: string): { org: string } | null {
 /* The server time of the workspace delivery the store took last, which
    snapshot trouble says what it shows as of (beginTrouble). */
 let lastDeliveryAt: string | null = null
-/* The first projectNav.targets batch of each organization the task window
-   asks about for Link task's offer (P.watchEditsSomeProject): whether it
-   holds a row, or 'asked' while it has no answer that says. */
-const editsSome = new Map<string, boolean | 'asked'>()
+/* The one projectNav.targets read of each organization's first batch the
+   task windows ask about for Link task's offer (P.watchEditsSomeProject),
+   shared by every window that shows a task of that organization: how many
+   windows hold it, its subscription while the page shows, and whether that
+   batch holds a row, or 'asked' while it has no answer that says. */
+type EditsSomeRead = {
+  owners: number
+  answer: boolean | 'asked'
+  read: { token: string; stop: () => void } | null
+  stop: () => void
+}
+const editsSome = new Map<string, EditsSomeRead>()
 
 /** Notes a live delivery the store took, at server time `at`. */
 function tookDelivery(at: string) {
@@ -15180,32 +15188,34 @@ export const PLANNER = {
       offer waits. The task window asks it while it shows a task the person
       only views (P.watchEditsSomeProject). */
   editsSomeProject: (org: string): boolean | null => {
-    const answer = editsSome.get(org)
-    if (!answer || answer === 'asked') return null
+    const answer = editsSome.get(org)?.answer
+    if (answer === undefined || answer === 'asked') return null
     return answer
   },
   /** Keeps one projectNav.targets read of organization `org`'s first batch
-      while the task window shows a task the person only views and the page
-      shows, for P.editsSomeProject, and answers its release. While the
-      page is hidden the read stops and the answer reads unknown. */
+      while some task window shows a task the person only views there and
+      the page shows, for P.editsSomeProject, and answers its release. Every
+      window of one organization shares the read: one that joins it takes
+      its answer at once, and the read stops and its answer goes only once
+      the last of them lets go. While the page is hidden the read stops and
+      the answer reads unknown. */
   watchEditsSomeProject: (org: string): (() => void) => {
-    // the read follows the hidden-tab gate (lib/viewVisibility.ts), as the
-    // project cache and the targets pickers do: it stops while the page is
-    // hidden, keeping the answer it had, which counts as unknown until the
-    // read runs again on show
-    let read: { token: string; stop: () => void } | null = null
-    editsSome.set(org, 'asked')
-    const off = live.onTransition(
-      (transition) => {
-        if (!read || !transition.tokens.has(read.token)) return
+    let entry = editsSome.get(org)
+    if (entry) entry.owners++
+    else {
+      const read: EditsSomeRead = { owners: 1, answer: 'asked', read: null, stop: () => {} }
+      editsSome.set(org, read)
+      entry = read
+      /** Takes in the read's batch, telling the store when the answer moved. */
+      const take = () => {
+        if (!read.read) return
         let value: unknown
         try {
-          value = live.read(read.token)
+          value = live.read(read.read.token)
         } catch {
           value = undefined
         }
         const batch = value as { state?: string; rows?: unknown[]; next?: unknown } | undefined
-        const was = editsSome.get(org)
         const now =
           batch?.state === 'ok' && Array.isArray(batch.rows)
             ? batch.rows.length > 0
@@ -15214,31 +15224,53 @@ export const PLANNER = {
                 ? false
                 : 'asked'
             : 'asked'
-        if (was === now) return
-        editsSome.set(org, now)
+        if (read.answer === now) return
+        read.answer = now
         emit()
-      },
-      { view: true },
-    )
-    const stopGate = watchVisibility(({ visible }) => {
-      if (visible && !read) {
-        read = live.watch(api.projectNav.targets, { org_id: org })
-        return
       }
-      if (!visible && read) {
-        read.stop()
-        read = null
-        if (editsSome.get(org) !== 'asked') {
-          editsSome.set(org, 'asked')
-          emit()
+      const off = live.onTransition(
+        (transition) => {
+          if (read.read && transition.tokens.has(read.read.token)) take()
+        },
+        { view: true },
+      )
+      // the read follows the hidden-tab gate (lib/viewVisibility.ts), as the
+      // project cache and the targets pickers do: it stops while the page is
+      // hidden, keeping the answer it had, which counts as unknown until the
+      // read runs again on show. A watch that joins a subscription another
+      // reader holds, such as an open Move window's first batch, hears no
+      // transition for the answer that subscription has, so it reads it now.
+      const stopGate = watchVisibility(({ visible }) => {
+        if (visible && !read.read) {
+          const watched = live.watch(api.projectNav.targets, { org_id: org })
+          read.read = watched
+          if (watched.joined) take()
+          return
         }
+        if (!visible && read.read) {
+          read.read.stop()
+          read.read = null
+          if (read.answer !== 'asked') {
+            read.answer = 'asked'
+            emit()
+          }
+        }
+      })
+      read.stop = () => {
+        stopGate()
+        off()
+        read.read?.stop()
+        read.read = null
       }
-    })
+    }
+    const held = entry
+    let released = false
     return () => {
-      stopGate()
-      off()
-      read?.stop()
-      read = null
+      if (released) return
+      released = true
+      held.owners--
+      if (held.owners > 0 || editsSome.get(org) !== held) return
+      held.stop()
       editsSome.delete(org)
       emit()
     }
