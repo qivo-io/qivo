@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgendaAnswer } from '../../convex/lib/teamSyncAgenda'
 import type { UnsentScope } from '../lib/leaveGuard'
 import { ownerLoadsStandIn } from '../store/ownerLoadsStandIn.setup'
-import type { Snapshot } from '../store/plannerFixture.setup'
+import { type Snapshot, underProgram } from '../store/plannerFixture.setup'
 import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
 import type { SyncPlace } from './TeamSync'
 
@@ -23,10 +23,16 @@ import type { SyncPlace } from './TeamSync'
    the owner-load cache; and the design size's single figures. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', async () => ({
-  convex: network,
-  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
+// the live double of the store that loaded last, whose socket a case can
+// reconnect
+const double = vi.hoisted(() => ({
+  live: null as null | { reconnect(only?: readonly string[]): void },
 }))
+vi.mock('../lib/convex', async () => {
+  const live = (await import('../store/guard/liveDouble.setup')).liveOver(network)
+  double.live = live
+  return { convex: network, live }
+})
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -141,6 +147,13 @@ async function open(
 /** A few turns for the store's paint timer and React. */
 async function settle() {
   for (let i = 0; i < 4; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
+}
+
+/** The store's next frame, in which it paints what the project cache
+    answered, and the turns after it. */
+async function frame() {
+  await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+  await settle()
 }
 
 const page = () => document.querySelector<HTMLElement>('[data-sync-page]')
@@ -880,6 +893,50 @@ describe('the reviewer prompt', () => {
 })
 
 describe('a meeting that stops fitting', () => {
+  it(
+    'drops a task whose project the project cache answers gone, and keeps one whose project loads',
+    async () => {
+      // QN-1 in the fixture's sub-project and QN-2 in Second, another
+      // sub-project of the same top-level project
+      const { board, P } = await open(
+        (snap) => {
+          underProgram(snap)
+          const fixture = snap.projects[0]
+          snap.projects.push({ ...fixture, id: 'second', key: 'SEC', num: 70, name: 'Second' })
+          people({}, { project_id: 'second' })(snap)
+        },
+        (snap) => ({ scope: `project:${meta(snap)}`, step: me(snap) }),
+      )
+      const first = P.syncTask('t1')?.id ?? ''
+      const second = P.syncTask('t2')?.id ?? ''
+      expect(card(first)).not.toBeNull()
+      expect(card(second)).not.toBeNull()
+      board.server.sync.force = { state: 'over_ceiling' }
+      await board.answer()
+      await settle()
+      expect(state()).toBe('stale')
+      // the socket connects again and no project answer has arrived again,
+      // so every project loads: must fail for a loading one dropped
+      await act(async () => double.live?.reconnect(['no:query']))
+      await frame()
+      expect(P.projectState('second')).toBe('loading')
+      expect(card(first)).not.toBeNull()
+      expect(card(second)).not.toBeNull()
+      // Second is deleted, and every result arrives again: its task goes at
+      // once, as the stale answer no longer follows access, and the other
+      // stays
+      board.snapshot.projects = board.snapshot.projects.filter((p) => p.id !== 'second')
+      await board.deliver()
+      await act(async () => double.live?.reconnect())
+      await vi.waitFor(() => expect(P.projectState('second')).toBe('gone'))
+      await frame()
+      expect(state()).toBe('stale')
+      expect(card(second)).toBeNull()
+      expect(card(first)).not.toBeNull()
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
   it(
     'keeps the last meeting under the note, its cards’ unsent note and read-only controls, and ends with the next ok answer',
     async () => {
