@@ -486,7 +486,13 @@ function DeliveryLine({ delivery }: { delivery: DeliveryState }) {
         </div>
       )
     case 'sent':
-      return (
+      return delivery.way === 'desktop' ? (
+        <p data-export-sent="">
+          The desktop app couldn't save this export itself, so it's downloading it as a browser
+          does. Qivo can't tell when that download finishes, so it doesn't count toward deletion
+          reminders.
+        </p>
+      ) : (
         <p data-export-sent="">
           Your browser is downloading the export. This browser can't tell Qivo when a download
           finishes, so it doesn't count toward deletion reminders.

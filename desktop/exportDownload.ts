@@ -13,13 +13,6 @@ import path from 'node:path'
  * This module has no Electron import, so its tests run with fakes of the
  * download item and the page's contents, as updatePrompt.ts does. */
 
-/** The origin of the deployment's export route that a release build of the
- * shell downloads from, such as `https://example-123.convex.site`, set at
- * build time. While it is null the shell accepts only an HTTPS host ending
- * in `.convex.site`, the form every Convex site URL has
- * (docs/deployment.md), and never an origin the page supplies. */
-export const EXPORT_ORIGIN: string | null = null
-
 /** The most bytes an export download may hold: convex/lib/limits.ts
  * LIMITS.exportSize, 95 MiB, the server's archive cap. */
 export const EXPORT_MAX_BYTES = 95 * 1024 * 1024
@@ -66,15 +59,18 @@ const SITE_SUFFIX = '.convex.site'
 /**
  * `raw` as a URL the shell may download an export from, else null: the
  * route's shape, `/exports/<one segment>` with exactly the query `e`, `m`
- * and `t`, once each, no user name, password or fragment, from `origin`
- * when the build set it, else over HTTPS from a host ending in
- * `.convex.site`. A run from source (not `packaged`) also takes HTTP on a
- * loopback host, a local backend's site.
+ * and `t`, once each, no user name, password or fragment. A `packaged`
+ * build takes it only from `origin`, its deployment's export origin
+ * (appURL.ts resolveExportOrigin), compared whole, port included, and
+ * refuses every link without one. A run from source takes HTTPS from a
+ * host ending in `.convex.site`, the form every Convex site URL has
+ * (docs/deployment.md), and HTTP on a loopback host, a local backend's
+ * site. The origin never comes from the page.
  */
 export function exportDownloadURL(
   raw: string,
   packaged: boolean,
-  origin: string | null = EXPORT_ORIGIN,
+  origin: string | null,
 ): URL | null {
   let url: URL
   try {
@@ -83,10 +79,12 @@ export function exportDownloadURL(
     return null
   }
   if (url.username || url.password || url.hash || raw.includes('#')) return null
-  const local = !packaged && url.protocol === 'http:' && LOOPBACK.has(url.hostname)
-  if (!local) {
-    if (url.protocol !== 'https:') return null
-    if (origin !== null ? url.origin !== origin : !isConvexSite(url.hostname)) return null
+  if (packaged) {
+    if (origin === null || url.origin !== origin) return null
+  } else {
+    const local = url.protocol === 'http:' && LOOPBACK.has(url.hostname)
+    const site = url.protocol === 'https:' && isConvexSite(url.hostname)
+    if (!local && !site) return null
   }
   if (!/^\/exports\/[^/]+$/.test(url.pathname)) return null
   const names = [...url.searchParams.keys()]
@@ -255,18 +253,21 @@ export function createExportDownloads(options: Options) {
  * The answer of the shell's `qivo:org-export:download` handler (main.ts):
  * `refused` unless the call came from the app's own top-level page
  * (`authorized`, main.ts isAuthorizedRenderer), the value is a URL
- * exportDownloadURL accepts and the main window's contents exist; else the
- * download's own answer. The page never chooses where the file goes.
+ * exportDownloadURL accepts from the build's export `origin` and the main
+ * window's contents exist; else the download's own answer. The page never
+ * chooses where the file goes, and on `refused` takes the link way instead
+ * (src/lib/orgExport.ts).
  */
 export async function answerExportDownload(call: {
   authorized: boolean
   raw: unknown
   packaged: boolean
+  origin: string | null
   contents: () => DownloadContents | null
   downloads: Pick<ReturnType<typeof createExportDownloads>, 'start'>
 }): Promise<ExportDownloadAnswer> {
   if (!call.authorized || typeof call.raw !== 'string') return { state: 'refused' }
-  const url = exportDownloadURL(call.raw, call.packaged)
+  const url = exportDownloadURL(call.raw, call.packaged, call.origin)
   const contents = call.contents()
   if (url === null || contents === null) return { state: 'refused' }
   return await call.downloads.start(contents, url.href)

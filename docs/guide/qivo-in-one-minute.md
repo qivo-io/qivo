@@ -176,7 +176,9 @@ and **Show notifications** start enabled. **Minimize to tray** starts disabled:
 The desktop test builds save an
 [organization export](./organization-and-team-settings.md#export-data) into
 the Downloads folder without asking where, and tell Qivo when it is saved. The
-download runs in the app and cannot be stopped from the page.
+download runs in the app and cannot be stopped from the page. If the app
+can't save an export itself, it downloads it as a browser does, and that
+download doesn't count as a saved export.
 
 These settings apply to this computer. The desktop window has no application
 menu row. Linux requires a desktop environment with tray support to show the

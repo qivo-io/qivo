@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LIMITS } from '../convex/lib/limits.js'
+import { productionExportOrigin, resolveExportOrigin } from './appURL.js'
 import {
   answerExportDownload,
   createExportDownloads,
@@ -14,6 +15,9 @@ import {
 
 const SITE = 'https://brave-otter-123.convex.site'
 const LINK = `${SITE}/exports/7a1d?e=1767225600&m=k57abc&t=mac123`
+// a packaged build's link: production's export route
+const PRODUCTION = 'https://api.qivo.io/exports/7a1d?e=1767225600&m=k57abc&t=mac123'
+const PACKAGED = resolveExportOrigin(true)
 const DIR = path.join(path.sep, 'home', 'nora', 'Downloads')
 
 /** A fake download item of `url`, `total` bytes and `mime`, whose events
@@ -89,25 +93,34 @@ afterEach(() => {
 })
 
 describe('the export link the shell accepts', () => {
-  it("accepts the route's shape on a Convex site, and loopback HTTP only from source", () => {
-    expect(exportDownloadURL(LINK, true)?.href).toBe(LINK)
-    expect(exportDownloadURL(LINK, false)?.href).toBe(LINK)
+  it("accepts in a packaged build only production's export origin, whole", () => {
+    expect(PACKAGED).toBe(productionExportOrigin)
+    expect(exportDownloadURL(PRODUCTION, true, PACKAGED)?.href).toBe(PRODUCTION)
+    // another host, a Convex site included, another port and HTTP
+    expect(exportDownloadURL(LINK, true, PACKAGED)).toBeNull()
+    expect(
+      exportDownloadURL('https://api.qivo.io:8443/exports/7a1d?e=1&m=k&t=x', true, PACKAGED),
+    ).toBeNull()
+    expect(
+      exportDownloadURL('http://api.qivo.io/exports/7a1d?e=1&m=k&t=x', true, PACKAGED),
+    ).toBeNull()
+    expect(exportDownloadURL('https://qivo.io/exports/7a1d?e=1&m=k&t=x', true, PACKAGED)).toBeNull()
+    // never over HTTP on loopback, and nothing without an origin
+    expect(
+      exportDownloadURL('http://127.0.0.1:3237/exports/7a1d?e=1&m=k&t=x', true, PACKAGED),
+    ).toBeNull()
+    expect(exportDownloadURL(PRODUCTION, true, null)).toBeNull()
+  })
+
+  it("accepts from source the route's shape on a Convex site and loopback HTTP", () => {
+    expect(resolveExportOrigin(false)).toBeNull()
+    expect(exportDownloadURL(LINK, false, null)?.href).toBe(LINK)
     const local = 'http://127.0.0.1:3237/exports/7a1d?e=1&m=k&t=x'
-    expect(exportDownloadURL(local, false)?.href).toBe(local)
+    expect(exportDownloadURL(local, false, null)?.href).toBe(local)
     expect(
-      exportDownloadURL('http://localhost:3211/exports/7a1d?t=x&e=1&m=k', false),
+      exportDownloadURL('http://localhost:3211/exports/7a1d?t=x&e=1&m=k', false, null),
     ).not.toBeNull()
-    // a packaged build never downloads over HTTP, loopback included
-    expect(exportDownloadURL(local, true)).toBeNull()
-    // the build's own origin, when it sets one, is the only origin
-    expect(exportDownloadURL(LINK, true, 'https://other-9.convex.site')).toBeNull()
-    expect(
-      exportDownloadURL(
-        'https://other-9.convex.site/exports/7a1d?e=1&m=k&t=x',
-        true,
-        'https://other-9.convex.site',
-      ),
-    ).not.toBeNull()
+    expect(exportDownloadURL(PRODUCTION, false, null)).toBeNull()
   })
 
   it.each([
@@ -128,8 +141,11 @@ describe('the export link the shell accepts', () => {
     ['a fragment', `${LINK}#here`],
     ['no URL at all', 'not a url'],
   ])('refuses %s', (_, raw) => {
-    expect(exportDownloadURL(raw, true)).toBeNull()
-    expect(exportDownloadURL(raw, false)).toBeNull()
+    expect(exportDownloadURL(raw, true, PACKAGED)).toBeNull()
+    expect(exportDownloadURL(raw, false, null)).toBeNull()
+    // on production's origin too
+    const there = raw.replace('https://brave-otter-123.convex.site', 'https://api.qivo.io')
+    expect(exportDownloadURL(there, true, PACKAGED)).toBeNull()
   })
 })
 
@@ -314,8 +330,9 @@ describe("the shell's download handler", () => {
   const call = (over: Partial<Parameters<typeof answerExportDownload>[0]> = {}) =>
     answerExportDownload({
       authorized: true,
-      raw: LINK,
+      raw: PRODUCTION,
       packaged: true,
+      origin: PACKAGED,
       contents: () => ({ downloadURL: vi.fn() }),
       downloads: { start },
       ...over,
@@ -329,6 +346,8 @@ describe("the shell's download handler", () => {
       { authorized: false },
       { raw: 42 },
       { raw: 'https://qivo.io/exports/7a1d?e=1&m=k&t=x' },
+      { raw: LINK },
+      { origin: null },
       { contents: () => null },
     ])
       await expect(call(over), JSON.stringify(over)).resolves.toEqual({ state: 'refused' })
@@ -338,8 +357,9 @@ describe("the shell's download handler", () => {
   it("is registered in main.ts behind the app page's check, and listens for downloads on the session", () => {
     const main = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
     expect(main).toMatch(
-      /ipcMain\.handle\('qivo:org-export:download', \(event, raw: unknown\) =>\s*answerExportDownload\(\{\s*authorized: isAuthorizedRenderer\(event\),/,
+      /ipcMain\.handle\('qivo:org-export:download', \(event, raw: unknown\) =>\s*answerExportDownload\(\{\s*authorized: isAuthorizedRenderer\(event\),\s*raw,\s*packaged: app\.isPackaged,\s*origin: exportOrigin,/,
     )
+    expect(main).toMatch(/const exportOrigin = resolveExportOrigin\(app\.isPackaged\)/)
     expect(main).toMatch(
       /session\.defaultSession\.on\('will-download', exportDownloads\.willDownload\)/,
     )

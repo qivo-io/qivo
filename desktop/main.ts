@@ -16,7 +16,7 @@ import {
   Tray,
 } from 'electron'
 import electronUpdater from 'electron-updater'
-import { resolveAppURL } from './appURL.js'
+import { resolveAppURL, resolveExportOrigin } from './appURL.js'
 import { answerExportDownload, createExportDownloads } from './exportDownload.js'
 import { createLeavePrompt } from './leavePrompt.js'
 import { guardWindow, isOAuthProviderURL } from './navigation.js'
@@ -38,6 +38,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 if (process.platform === 'linux') app.setDesktopName('io.qivo.desktop')
 if (process.platform === 'win32') app.setAppUserModelId('io.qivo.desktop')
 const appURL = resolveAppURL(app.isPackaged, process.env)
+// the only origin a packaged build downloads organization exports from
+const exportOrigin = resolveExportOrigin(app.isPackaged)
 
 let mainWindow: BrowserWindow | null = null
 let appTray: Tray | null = null
@@ -464,6 +466,7 @@ function installIPC(): void {
       authorized: isAuthorizedRenderer(event),
       raw,
       packaged: app.isPackaged,
+      origin: exportOrigin,
       contents: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null),
       downloads: exportDownloads,
     }),

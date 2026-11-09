@@ -448,12 +448,25 @@ describe('the desktop way', () => {
     ['cancelled', { state: 'cancelled' }],
     ['failed', { state: 'failed' }],
     ['busy', { state: 'busy' }],
-    ['refused', { state: 'refused' }],
   ])('records nothing for an answer %s', async (_, answer) => {
     bridge(async () => answer)
     await m.deliverExport({ orgId: ORG, exportId: EXPORT, archiveBytes: 2500, automatic: false })
     expect(records()).toEqual([])
     expect(m.deliveryNow()?.state).not.toBe('saved')
+  })
+
+  it('downloads by the link when the desktop app refuses the link, recording nothing', async () => {
+    const clicked: string[] = []
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked.push(this.href)
+    })
+    bridge(async () => ({ state: 'refused' }))
+    await m.deliverExport({ orgId: ORG, exportId: EXPORT, archiveBytes: 2500, automatic: false })
+    expect(clicked).toEqual([LINK])
+    expect(records()).toEqual([])
+    expect(m.deliveryNow()).toEqual({ exportId: EXPORT, state: 'sent', way: 'desktop' })
   })
 
   it('names a partial file the desktop app could not delete', async () => {
@@ -503,7 +516,7 @@ describe('the link way', () => {
     expect(clicked[0].isConnected).toBe(false)
     expect(fetcher).not.toHaveBeenCalled()
     expect(records()).toEqual([])
-    expect(m.deliveryNow()).toEqual({ exportId: EXPORT, state: 'sent' })
+    expect(m.deliveryNow()).toEqual({ exportId: EXPORT, state: 'sent', way: 'link' })
   })
 
   it('waits for no write in flight before it claims and navigates', async () => {

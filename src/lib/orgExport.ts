@@ -107,13 +107,14 @@ export function exportWay(): ExportWay {
   return way
 }
 
-/** What a delivery shows, for the export it saves. */
+/** What a delivery shows, for the export it saves. `sent` names the page's
+ * own way, which a download by the link may stand in for. */
 export type DeliveryState = { exportId: string } & (
   | { state: 'claiming' }
   | { state: 'saving'; written: number; total: number }
   | { state: 'downloading' }
   | { state: 'saved'; file: string | null; record: 'pending' | 'recorded' | 'failed' }
-  | { state: 'sent' }
+  | { state: 'sent'; way: ExportWay }
   | { state: 'busy'; retryAfter: number | null }
   | { state: 'stopped'; removed: boolean }
   | { state: 'unwritable' }
@@ -332,7 +333,7 @@ export async function deliverExport(args: DeliverArgs): Promise<boolean> {
     const url = claim.url
     if (how === 'link') {
       openLink(url)
-      set({ exportId, state: 'sent' })
+      set({ exportId, state: 'sent', way: exportWay() })
       return true
     }
     if (how === 'desktop') return await viaDesktop(orgId, exportId, archiveBytes, url)
@@ -374,6 +375,14 @@ async function viaDesktop(
     const answer = await bridge.download(url)
     if (answer.state === 'completed' && answer.bytes === archiveBytes) {
       await record(orgId, exportId, answer.file)
+      return true
+    }
+    if (answer.state === 'refused') {
+      // the shell refused the link before it downloaded anything, such as
+      // a build whose export origin is not this deployment's: the link
+      // way downloads it instead, which records nothing
+      openLink(url)
+      set({ exportId, state: 'sent', way: 'desktop' })
       return true
     }
     set(
