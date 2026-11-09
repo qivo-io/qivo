@@ -55,6 +55,10 @@ let asked: Record<string, unknown>[]
    read fails, once each. */
 let byIdsHere = false
 let failByIds = new Set<string>()
+/* The byIds reads open now, each answering again from the world as it
+   stands, as the server reruns them after an access change. */
+let byIdsOpen = new Set<() => void>()
+let world: Snapshot
 
 /** Loads the store on the world above, which `prepare` may change, given
     WEB's id. */
@@ -79,6 +83,7 @@ async function load(prepare: (snap: Snapshot, web: string) => void = () => {}) {
   snap.projects = [web, hw, fe, be, fw]
   ids = { be: be.id, fw: fw.id, fe: fe.id }
   prepare(snap, web.id)
+  world = snap
   orgId = org
   windowRead = null
   windowFail = null
@@ -118,7 +123,12 @@ async function load(prepare: (snap: Snapshot, web: string) => void = () => {}) {
       if (asked.some((id) => failByIds.has(id))) {
         for (const id of asked) failByIds.delete(id)
         fail?.(new Error('the byIds read failed'))
-      } else next(projectNavStandIn(snap, name, args))
+        return () => {}
+      }
+      const answer = () => next(projectNavStandIn(snap, name, args))
+      byIdsOpen.add(answer)
+      answer()
+      return () => byIdsOpen.delete(answer)
     }
     if (getFunctionName(ref) === 'taskWindow:task') {
       windowRead = next
@@ -145,6 +155,7 @@ async function load(prepare: (snap: Snapshot, web: string) => void = () => {}) {
 beforeEach(() => {
   byIdsHere = false
   failByIds = new Set()
+  byIdsOpen = new Set()
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal(
     'matchMedia',
@@ -407,5 +418,41 @@ describe('Move window', () => {
     await openFor(lone.id)
     expect(move()?.disabled).toBe(false)
     expect(note()).toBeNull()
+  })
+
+  it('turns Move off and says so once the chosen sub-project answers without Edit, and the store moves nothing there', async () => {
+    carries = false
+    byIdsHere = true
+    await load()
+    const lone = P.issues.find((it) => it.uuid === 'lone')
+    if (!lone) throw new Error('no task')
+    await openFor(lone.id)
+    await chooseTarget(ids.be)
+    await openFor(lone.id)
+    const move = () =>
+      [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+        (b) => b.textContent === 'Move',
+      )
+    expect(move()?.disabled).toBe(false)
+    // someone lowers the person's access to BE to View while the window is
+    // open: BE and WEB lose the lead they gave, and a Viewer grant stays
+    for (const p of world.projects)
+      if (p.id === ids.be || p.parent_id === undefined) p.lead_id = undefined
+    world.access.push({ project_id: ids.be, profile_id: world.profiles[0].id, level: 'viewer' })
+    for (const answer of byIdsOpen) answer()
+    await vi.waitFor(() => expect(P.levelOn(ids.be)).toBe('viewer'))
+    expect(P.projectState(ids.be)).toBe('ok')
+    await openFor(lone.id)
+    // must fail for a Move that checks only the cache's state
+    expect(move()?.disabled).toBe(true)
+    expect(document.querySelector('[data-target-note]')?.textContent).toBe(
+      'You can no longer move this task into BE.',
+    )
+    // and the store sends no move there
+    network.mutation.mockClear()
+    expect(P.moveIssue(lone.id, ids.be)).toBeNull()
+    expect(
+      network.mutation.mock.calls.filter(([ref]) => getFunctionName(ref) === 'issues:move'),
+    ).toEqual([])
   })
 })

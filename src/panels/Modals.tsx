@@ -1210,9 +1210,12 @@ function MoveIssueModal({
   if (!it) return null
   // Move waits for the project cache's answer of the chosen row, one round
   // trip after the pick, as the store moves only into a target it answered
-  // (P.moveIssue); one it answers gone, as a concurrently deleted one,
-  // never enables Move
-  const targetValid = !!target && P.projectState(target) === 'ok' && !!P.project(target)
+  // writable (P.moveIssue); one it answers gone, as a concurrently deleted
+  // one, or with a level without Edit, as after the person's access there
+  // was lowered while the window was open, never enables Move, and the note
+  // under the list says why
+  const targetValid =
+    !!target && P.projectState(target) === 'ok' && !!P.project(target) && P.canWrite(target)
   const moving = targetValid && target !== it.project
   // whoever works on the task or its subtasks must keep access after the
   // move: the server checks every one at full scope and refuses the move

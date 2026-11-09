@@ -366,7 +366,9 @@ marked **Current**, and says "No other sub-project you can move it to." when
 there is none. **Move** turns on once Qivo has checked the one you choose.
 Under the list the window says it is opening that sub-project while it
 checks it, and if the check fails or cannot finish it says so with
-**Retry**.
+**Retry**. If your access there drops below Edit while the window is open,
+**Move** turns off and the window says you can no longer move the task
+there.
 The task keeps its ID, comments, attachments, labels,
 activity, links and subtasks. Its review hand-off and the time it became Done
 start again at the move, for the task and each subtask that moves with it.

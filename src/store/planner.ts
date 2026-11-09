@@ -10360,11 +10360,16 @@ function moveAnswerTask(
   onSaved?: (saved: boolean) => void,
 ): string | null {
   // the target from the project cache's current answer, a sub-project the
-  // Move window named from its targets row, never one it only seeded or
-  // has not answered yet
+  // Move window named from its targets row and the caller may write in,
+  // never one it only seeded, has not answered yet or answers without Edit
   const target = PLANNER.project(projectId)
   const row = a.answer.task
-  if (target?.type !== 'project' || PLANNER.projectState(projectId) !== 'ok') return null
+  if (
+    target?.type !== 'project' ||
+    PLANNER.projectState(projectId) !== 'ok' ||
+    !PLANNER.canWrite(projectId)
+  )
+    return null
   if (row.project_id === projectId) return null
   const family = PLANNER.familyOf(a.model)
   if (!family || refusePausedEdit()) return null
@@ -14509,8 +14514,10 @@ export const PLANNER = {
       REVIEWER_RULE) is toasted with its sentence and the move taken back,
       and `onSaved` hears whether the server took it, so a caller says the
       task moved only then. The target must be a sub-project the project
-      cache answers `ok`: a seeded or loading one sends nothing, so the
-      Move window keeps Move off until the cache answers its chosen row. */
+      cache answers `ok` with Edit or Lead: a seeded or loading one, and
+      one whose level lacks Edit, as after the caller's access there was
+      lowered, sends nothing, so the Move window keeps Move off until the
+      cache answers its chosen row writable. */
   moveIssue: (id: string, projectId: string, onSaved?: (saved: boolean) => void) => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
@@ -14530,6 +14537,7 @@ export const PLANNER = {
       !target ||
       target.type !== 'project' ||
       PLANNER.projectState(projectId) !== 'ok' ||
+      !PLANNER.canWrite(projectId) ||
       row.project_id === projectId ||
       refusePausedEdit()
     )
