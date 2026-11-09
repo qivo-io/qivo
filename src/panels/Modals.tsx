@@ -15,18 +15,21 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { hasTooltip } from '@/lib/passEscapeOn'
 import { cn } from '@/lib/utils'
-import { grouped, LIMITS } from '../../convex/lib/limits'
+import { api } from '../../convex/_generated/api'
+import { grouped, LIMITS, LIST_BATCH } from '../../convex/lib/limits'
 import { projectKeyBase, projectKeyCandidate } from '../../convex/lib/projectKeys'
 import { issueKey } from '../../convex/lib/taskRefs'
+import type { NavTargetRow, NavTargets } from '../../convex/model/projectNavReads'
 import { LimitedInput, LimitedTextarea } from '../components/LimitedField'
 import { MilestoneSectionPart } from '../components/MilestoneSectionPart'
 import { LeadPicker } from '../components/ProjectAccessEditor'
 import { ProjectAccessSelect } from '../components/ProjectAccessSelect'
 import { ChoiceEnd, PickerSearch } from '../components/pickerParts'
 import { type ChoiceWords, escapeClearsFirst, TARGET_WORDS } from '../components/pickerWords'
+import { navCursors, seedTargetRow } from '../components/projectNavRows'
 import { Avatar, DateSelect, Icon, MenuItem, Popover } from '../components/qivo'
 import { WAITS_FOR_SAVE } from '../components/rowElements'
-import { TargetPicker, type TargetRows } from '../components/TargetPicker'
+import { TargetPicker } from '../components/TargetPicker'
 import { useOrgPeople, usePeople } from '../components/usePeople'
 import { useProjects } from '../components/useProjects'
 import { ACCESS_CAPS } from '../lib/accessCaps'
@@ -400,8 +403,10 @@ function NewIssueModal({
      sub-project offers nothing. The dialog opens on the project it was
      opened in, a default, not a fence: on that sub-project when the project
      cache answers it writable, and in a top-level project on its first
-     writable sub-project once a batch holds it; else on no choice, with
-     Create off until one is chosen. (Moving an EXISTING task between
+     writable sub-project, which one targets read narrowed to that project
+     (parent_id) answers wherever the browse list's batches would put it,
+     shown chosen at the top of the list until those batches reach it; else
+     on no choice, with Create off until one is chosen. (Moving an EXISTING task between
      projects is still a move, not a re-create: the task window's Move
      window, which is also the only one that can keep the number.) The
      phone's My tasks action opens with no project context and the same
@@ -416,6 +421,9 @@ function NewIssueModal({
   )
   // the name of the row the person chose, for the note under the picker
   const [chosenName, setChosenName] = useStateM<string | null>(null)
+  // the default a top-level context opened on, which the picker shows
+  // chosen until its batches reach it
+  const [pinned, setPinned] = useStateM<NavTargetRow | null>(null)
   // whether the person chose, after which no default moves the choice
   const chose = useRefM(contextWritable)
   // a context sub-project the cache answers writable once the dialog shows
@@ -425,16 +433,34 @@ function NewIssueModal({
       setProjId(init.project)
     }
   }, [contextWritable])
-  // a top-level context opens on its first writable sub-project once a
-  // batch of the picker holds one
-  const openOnFirst = (rows: TargetRows) => {
-    if (chose.current || !context || context.type !== 'meta') return
-    const first = rows.find((row) => row.parent_id === context.id)
-    if (!first) return
+  // a context the cache does not answer as a sub-project may be a
+  // top-level project: the first batch of the targets under it, while
+  // nothing is chosen, gives its first writable sub-project; a sub-project
+  // or a project with none answers an empty batch
+  const defaults = usePagedList<NavTargets, NavTargetRow>({
+    key:
+      init.project && context?.type !== 'project' && projId === null
+        ? JSON.stringify(['targets-default', init.project])
+        : null,
+    source: {
+      kind: 'live',
+      query: api.projectNav.targets,
+      args: (at) => ({ parent_id: init.project ?? '', ...navCursors(at) }),
+    },
+    batch: (answer) => (answer.state === 'ok' ? answer : null),
+    id: (row) => row.id,
+    // its first batch alone, as nothing asks for more
+    most: LIST_BATCH,
+  })
+  const first = defaults.rows[0]
+  useEffectM(() => {
+    if (chose.current || !first) return
     chose.current = true
+    seedTargetRow(first)
     setProjId(first.id)
     setChosenName(first.name)
-  }
+    setPinned(first)
+  }, [first])
   // the chosen sub-project and the context, named while the dialog shows,
   // so the project cache reads them; Create waits for the chosen one's
   // answer, which the create reads (P.addIssue), and the note under the
@@ -486,7 +512,7 @@ function NewIssueModal({
               setProjId(row.id)
               setChosenName(row.name)
             }}
-            onRows={openOnFirst}
+            pinned={pinned}
           />
           <TargetNote
             id={projId}

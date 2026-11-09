@@ -16,7 +16,7 @@
    (components/projectNavRows.tsx seedNavRow), so a create or a move into it
    reads its organization and parent at once. */
 
-import { useEffect, useId, useRef, useState } from 'react'
+import { useId, useState } from 'react'
 import { api } from '../../convex/_generated/api'
 import { LIMITS } from '../../convex/lib/limits'
 import type { NavTargetRow, NavTargets } from '../../convex/model/projectNavReads'
@@ -24,7 +24,7 @@ import { listEnd, usePagedList, useSettledSearch } from '../lib/pagedList'
 import { cn } from '../lib/utils'
 import { ChoiceEnd, PickerSearch } from './pickerParts'
 import { type ChoiceWords, TARGET_WORDS } from './pickerWords'
-import { navCursors, navTags, seedNavRow } from './projectNavRows'
+import { navCursors, navTags, seedTargetRow } from './projectNavRows'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
 
@@ -34,10 +34,6 @@ export const TARGETS_MOST = 500
 
 /** The data attribute that marks the picker's search box. */
 const TARGET_SEARCH = 'data-target-search'
-
-/** The first rows a picker opens on: the rows of its list once a batch
-    holds one, for a caller that opens on a default. */
-export type TargetRows = readonly NavTargetRow[]
 
 /** The top-level project a target row is listed under, for its tags. */
 const parentOfTarget = (row: NavTargetRow) => ({
@@ -52,16 +48,17 @@ const parentOfTarget = (row: NavTargetRow) => ({
  * across every seat, as a list of radio rows grouped under their top-level
  * project; `value` the chosen sub-project's id, `onChoose` a pick, which
  * seeds the row's facts. `current` is marked and cannot be chosen (the
- * Move window's own sub-project). `onRows` hears the rows the list holds,
- * so a caller can open on a default once a batch holds it. `words` words
- * its end.
+ * Move window's own sub-project). `pinned` is a row the caller chose for
+ * it, as the New task dialog's default, shown chosen in a group of its own
+ * at the top while the list's batches have not reached it, so the person
+ * sees its name. `words` words its end.
  */
 export function TargetPicker({
   org,
   value,
   onChoose,
   current,
-  onRows,
+  pinned,
   words = TARGET_WORDS,
   label,
 }: {
@@ -69,7 +66,7 @@ export function TargetPicker({
   value: string | null
   onChoose: (row: NavTargetRow) => void
   current?: string
-  onRows?: (rows: TargetRows) => void
+  pinned?: NavTargetRow | null
   words?: ChoiceWords
   label: string
 }) {
@@ -102,39 +99,36 @@ export function TargetPicker({
   const group = useId()
   /** Seeds `row`'s facts and its parent's, then hands it on. */
   const choose = (row: NavTargetRow) => {
-    seedNavRow({
-      id: row.id,
-      org_id: row.org_id,
-      name: row.name,
-      num: row.num,
-      parent: {
-        id: row.parent_id,
-        org_id: row.org_id,
-        name: row.parent_name,
-        num: row.parent_num,
-      },
-    })
+    seedTargetRow(row)
     onChoose(row)
   }
-  const heard = useRef(onRows)
-  heard.current = onRows
-  useEffect(() => {
-    heard.current?.(list.rows)
-  }, [list.rows])
+  // the caller's chosen row the batches have not reached, shown first
+  const extra =
+    pinned && pinned.id === value && !list.rows.some((row) => row.id === pinned.id) ? pinned : null
+  const shown = extra ? [extra, ...list.rows] : list.rows
   // equal names told apart among the rows shown and their parents, by
   // organization, parent and number
-  const tags = navTags(list.rows, parentOfTarget)
+  const tags = navTags(shown, parentOfTarget)
   const labelOf = (id: string, name: string) => {
     const tag = tags.get(id)
     return tag ? `${name} ${tag}` : name
   }
-  // the rows under their top-level project, in the server's order
-  const groups: { parent: string; name: string; rows: NavTargetRow[] }[] = []
+  // the rows under their top-level project, in the server's order, after
+  // the pinned row's own group
+  const groups: { key: string; parent: string; name: string; rows: NavTargetRow[] }[] = []
+  if (extra)
+    groups.push({
+      key: `pinned:${extra.id}`,
+      parent: extra.parent_id,
+      name: labelOf(extra.parent_id, extra.parent_name),
+      rows: [extra],
+    })
   for (const row of list.rows) {
     const last = groups.at(-1)
-    if (last && last.parent === row.parent_id) last.rows.push(row)
+    if (last && last.parent === row.parent_id && last.key === last.parent) last.rows.push(row)
     else
       groups.push({
+        key: row.parent_id,
         parent: row.parent_id,
         name: labelOf(row.parent_id, row.parent_name),
         rows: [row],
@@ -156,12 +150,12 @@ export function TargetPicker({
       >
         {groups.map((g) => (
           <fieldset
-            key={g.parent}
-            aria-labelledby={`${group}-${g.parent}`}
+            key={g.key}
+            aria-labelledby={`${group}-${g.key}`}
             data-target-group={g.parent}
             className="m-0 min-w-0 border-0 p-0"
           >
-            <div id={`${group}-${g.parent}`} className="px-2 pt-2 pb-1 text-xs text-text-3">
+            <div id={`${group}-${g.key}`} className="px-2 pt-2 pb-1 text-xs text-text-3">
               {g.name}
             </div>
             {g.rows.map((row) => {

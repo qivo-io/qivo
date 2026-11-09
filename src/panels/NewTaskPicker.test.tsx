@@ -247,6 +247,41 @@ describe("the New task dialog's Sub-project picker", { timeout: 30_000 }, () => 
     await waitFor(() => buttonNamed('Create')?.disabled === false || null, 'Create turned on')
   })
 
+  it("opens in a top-level project on its first writable sub-project where the browse list's first batch does not reach it", async () => {
+    const snap = world()
+    const me = snap.profiles[0].id
+    const base = snap.projects[0]
+    // Atlas sorts before Plan, and a batch of two holds only its sub-projects
+    snap.projects.push(
+      { ...base, id: 'atlas', type: 'meta', key: 'ATL', num: 10, name: 'Atlas', lead_id: me },
+      ...['One', 'Two'].map((name, i) => ({
+        ...base,
+        id: `atlas-${i}`,
+        type: 'project' as const,
+        key: `AT${i}`,
+        num: 11 + i,
+        name,
+        parent_id: 'atlas',
+        lead_id: undefined,
+      })),
+    )
+    targets = { batch: 2 }
+    await app(snap)
+    await openDialog()
+    await waitFor(() => document.querySelector('[data-target="atlas-0"]'), "Atlas One's row")
+    // must fail for a default taken only from the browse list's batches
+    await waitFor(() => chosen() === 'alpha' || null, 'the default')
+    // the default shows at the top, under its project's name, as the
+    // browse list has not reached it
+    const groups = [...document.querySelectorAll<HTMLElement>('[data-target-group]')]
+    expect(groups.map((g) => g.dataset.targetGroup)).toEqual(['plan', 'atlas'])
+    expect(
+      document.getElementById(groups[0].getAttribute('aria-labelledby') ?? '')?.textContent,
+    ).toBe('Plan')
+    expect(groups[0].querySelector('[data-target]')?.textContent).toBe('Alpha')
+    await waitFor(() => buttonNamed('Create')?.disabled === false || null, 'Create turned on')
+  })
+
   it('tells two sub-projects of one name apart by their numbers, which the project cache does not hold', async () => {
     const snap = world()
     // Gamma (2) and Alpha (3) share a name under Plan

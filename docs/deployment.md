@@ -2245,7 +2245,8 @@ From the release after v0.1.161, the app reads `projectNav.byIds`, new in
 that release, for the projects its views name that the workspace's projects
 part does not hold, so that release is the backend's floor for its app:
 from it on, never return the backend to a commit before it, roll forward
-instead. The same release adds `projectNav.targets` and `projectNav.holds`,
+instead. The same release adds `projectNav.targets`, with `parent_id` for
+the sub-projects under one top-level project, and `projectNav.holds`,
 lets `projectNav.page` take `org_id` and `team_id`, adds `lead_id` and
 `review_hours` to `projectNav.byIds` rows and `project_archived` to
 `taskWindow.task`'s archived answer, none of which an app before it reads.

@@ -19,6 +19,7 @@ import type {
   NavPage,
   NavProject,
   NavSearch,
+  NavTargetRow,
 } from '../../convex/model/projectNavReads'
 import { noProjectsHint } from '../lib/noProjects'
 import type { BatchAt } from '../lib/pagedList'
@@ -238,6 +239,19 @@ export function seedNavRow(row: NavOpenRow) {
         ]
       : []),
   ])
+}
+
+/** Seeds target row `row`'s facts and its parent's (projectNav.targets,
+    components/TargetPicker.tsx), so a create or a move into it reads its
+    organization and parent at once. */
+export function seedTargetRow(row: NavTargetRow) {
+  seedNavRow({
+    id: row.id,
+    org_id: row.org_id,
+    name: row.name,
+    num: row.num,
+    parent: { id: row.parent_id, org_id: row.org_id, name: row.parent_name, num: row.parent_num },
+  })
 }
 
 /* Who hears the person's navigations (navMoved): each open that waits

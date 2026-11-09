@@ -10,8 +10,9 @@
  *   and sub-projects together, meant for Team sync's notes.
  * - targets: one batch of the live sub-projects the caller may add tasks to
  *   (Edit or Lead), across every seat or in one organization, grouped under
- *   their top-level projects, with a search, meant for the New task dialog,
- *   the Move window and the task window's Link task offer.
+ *   their top-level projects, with a search, or under one top-level project
+ *   with `parent_id`, meant for the New task dialog, the Move window and the
+ *   task window's Link task offer.
  * - holds: whether the caller sees any top-level project and any
  *   sub-project, meant for every "no project" and "no sub-project" note.
  * - children: one batch of a top-level project's live sub-projects the
@@ -132,10 +133,18 @@ export const resolve = authedQuery({
  * parent's id, the sub-project's name and its id, 25 a batch, rows `{ id,
  * org_id, name, num, parent_id, parent_name, parent_num }`. `search` keeps
  * a row whose own or whose parent's name holds every word. An organization
- * Viewer lists none. `not_ready`, `stopped` and the access_unchecked
+ * Viewer lists none. `parent_id` lists only the sub-projects under that
+ * top-level project, which the New task dialog reads for its default, and
+ * answers an empty last batch for any id that names no top-level project
+ * the caller lists under. `not_ready`, `stopped` and the access_unchecked
  * refusal answer as the other lists do. */
 export const targets = authedQuery({
-  args: { org_id: v.optional(v.string()), search: v.optional(v.string()), ...vNavCursors },
+  args: {
+    org_id: v.optional(v.string()),
+    search: v.optional(v.string()),
+    parent_id: v.optional(v.string()),
+    ...vNavCursors,
+  },
   handler: (ctx, a): Promise<NavTargets> => navTargetsOf(ctx, ctx.authUserId, ctx.myProfiles, a),
 })
 

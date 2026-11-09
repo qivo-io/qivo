@@ -54,7 +54,13 @@ const LOGIN = 'auth_targets'
 const targets = (
   t: T,
   seats: Seats,
-  a: { org_id?: string; search?: string; after?: string; through?: string } = {},
+  a: {
+    org_id?: string
+    search?: string
+    parent_id?: string
+    after?: string
+    through?: string
+  } = {},
 ) => t.run((ctx) => navTargetsOf(ctx, seats[0]?.auth_user_id ?? LOGIN, mapOf(seats), a))
 
 const holds = (t: T, seats: Seats, a: { org_id?: string } = {}) =>
@@ -64,7 +70,7 @@ const holds = (t: T, seats: Seats, a: { org_id?: string } = {}) =>
 async function walkTargets(
   t: T,
   seats: Seats,
-  a: { org_id?: string; search?: string } = {},
+  a: { org_id?: string; search?: string; parent_id?: string } = {},
 ): Promise<{ rows: NavTargetRow[]; batches: NavTargets[] }> {
   const rows: NavTargetRow[] = []
   const batches: NavTargets[] = []
@@ -227,6 +233,59 @@ describe('projectNav.targets', () => {
     )
     const other = await person(t, f.org.id, 'Other')
     expect(await badRequest(targets(t, [other], { after: cursor }))).toContain('projectNav.targets')
+  })
+
+  it('lists only the sub-projects under parent_id, in order across batches with cursors sealed by the parent, and none for a parent it does not list under', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const pia = await person(t, f.org.id, 'Pia')
+    // Alpha sorts first and holds a full batch, and Zulu's two sub-projects
+    // come after it in the whole list, beside a twin parent of Zulu's name
+    const [alpha, zulu, twin, hidden] = await plantMetas(t, f.org.id, [
+      'Alpha',
+      'Zulu',
+      'Zulu',
+      'Hidden',
+    ])
+    await plantSubs(t, alpha, names('A ', 26))
+    const [z1, z2] = await plantSubs(t, zulu, ['Z one', 'Z two'])
+    const [t1] = await plantSubs(t, twin, ['T one'])
+    const [h1] = await plantSubs(t, hidden, ['H one'])
+    await plantGrants(t, pia, [alpha, zulu, twin])
+    await plantGrants(t, pia, [h1], 'viewer')
+    await ready(t, f)
+    // the whole list reaches Zulu's sub-projects only past its first batch
+    const whole = ok(await targets(t, [pia]))
+    expect(whole.rows.some((r) => r.parent_id === zulu.id)).toBe(false)
+    // must fail for a server that lists every parent's sub-projects
+    const under = await walkTargets(t, [pia], { parent_id: zulu.id })
+    expect(under.batches).toHaveLength(1)
+    expect(under.rows.map((r) => r.id)).toEqual([z1.id, z2.id])
+    expect((await walkTargets(t, [pia], { parent_id: twin.id })).rows.map((r) => r.id)).toEqual([
+      t1.id,
+    ])
+    // Alpha's 26 in two batches, the second continuing under Alpha alone
+    const two = await walkTargets(t, [pia], { parent_id: alpha.id })
+    expect(two.batches).toHaveLength(2)
+    expect(two.rows).toHaveLength(26)
+    expect(two.rows.every((r) => r.parent_id === alpha.id)).toBe(true)
+    // a cursor of one parent's list continues neither the whole list nor
+    // another parent's
+    const cursor = ok(await targets(t, [pia], { parent_id: alpha.id })).next ?? ''
+    expect(cursor).not.toBe('')
+    expect(await badRequest(targets(t, [pia], { after: cursor }))).toContain('projectNav.targets')
+    expect(await badRequest(targets(t, [pia], { after: cursor, parent_id: zulu.id }))).toContain(
+      'projectNav.targets',
+    )
+    const empty = { state: 'ok', rows: [], next: null, stopped: false }
+    // a project with only a read-only sub-project, a sub-project, an
+    // unknown id and an organization without the parent list nothing
+    expect(await targets(t, [pia], { parent_id: hidden.id })).toEqual(empty)
+    expect(await targets(t, [pia], { parent_id: z1.id })).toEqual(empty)
+    expect(await targets(t, [pia], { parent_id: crypto.randomUUID() })).toEqual(empty)
+    expect(await targets(t, [pia], { parent_id: zulu.id, org_id: f.otherOrg.id })).toEqual(empty)
+    // and an empty parent_id is refused
+    expect(await badRequest(targets(t, [pia], { parent_id: '' }))).toContain('parent_id')
   })
 
   it('answers not_ready without the reach rows, the refusal past the own reads, and stopped past the read share, never the end', async () => {

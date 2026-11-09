@@ -1759,15 +1759,25 @@ export type NavTargetRow = NavProject & {
 export type NavTargets = NavBatch<NavTargetRow> | NavRefusal
 
 /** What projectNav.targets is asked for: the cursors, the one seat to list
- * (`org_id`) and a search of the sub-project's or its parent's name. */
-export type NavTargetsArgs = NavCursorArgs & { org_id?: string; search?: string }
+ * (`org_id`), a search of the sub-project's or its parent's name and the
+ * one top-level project to list under (`parent_id`). */
+export type NavTargetsArgs = NavCursorArgs & {
+  org_id?: string
+  search?: string
+  parent_id?: string
+}
 
 /** The targets list's name, which seals its cursors with the login, the
- * organization asked for and the search's name key. */
+ * organization asked for, the search's name key and, when asked, the
+ * parent. */
 export const TARGETS_LIST = 'projectNav.targets'
 
 const NOT_TARGETS_CURSOR =
-  'after and through must be cursors from an earlier answer of projectNav.targets for the same organization and search; start again from the first batch'
+  'after and through must be cursors from an earlier answer of projectNav.targets for the same organization, search and parent; start again from the first batch'
+
+/** The refusal of an empty parent_id. */
+export const EMPTY_PARENT =
+  'parent_id must name a top-level project, or be left out to list under every one'
 
 /* The tie of a target's position: its parent's id, its own name key and
  * id, and its seat's organization. */
@@ -1820,9 +1830,18 @@ const targetParts = ({ key, tie: [parentId, childKey, childId, orgId] }: NamedAt
  * seat writes nothing and adds no candidate. `search` keeps a row whose own
  * name or whose parent's name holds every word, in any order, ignoring case
  * and accents, matched before the cut, and is refused past LIMITS.search.
+ * `parent_id` lists only the sub-projects under that top-level project, in
+ * the same order, which the New task dialog reads for the first writable
+ * sub-project of the project it opens in: the walk starts at the parent's
+ * own place, reads no other parent's sub-projects and ends past it, and a
+ * parent the caller has no seat for, a sub-project, an archived project or
+ * an unknown id answers an empty last batch, as a parent with no writable
+ * sub-project does.
  *
  * Cursors are sealed with TARGETS_LIST, the login, the organization asked
- * for and the search's name key. `not_ready` until the asked
+ * for, the search's name key and, when asked, the parent, so a cursor of
+ * the whole list never continues a parent's and the other way round.
+ * `not_ready` until the asked
  * organizations' reach rows and name keys are complete, `stopped` where
  * NAMED_READ ends a batch, never `next: null`, and the access_unchecked
  * refusal whole where a bound of the caller's own reads stops a check.
@@ -1853,9 +1872,10 @@ export async function navTargetsOf(
   const term = text === '' ? '' : nameKey(text)
   if (text !== '' && term === '') throw badRequest(BLANK_SEARCH)
   if (a.org_id === '') throw badRequest(EMPTY_ORG)
+  if (a.parent_id === '') throw badRequest(EMPTY_PARENT)
   const ask = await openAsk(
     TARGETS_LIST,
-    [authUserId, a.org_id ?? '', term],
+    [authUserId, a.org_id ?? '', term, ...(a.parent_id === undefined ? [] : [a.parent_id])],
     a,
     NOT_TARGETS_CURSOR,
     targetTieOf,
@@ -1874,14 +1894,33 @@ export async function navTargetsOf(
     const streams: ((reads: NamedReads) => NamedStream<TargetRow>)[] = []
     for (const seat of seats) {
       const sight = seatSight(ctx, seat, true)
+      // with parent_id, only the seat of the parent's organization lists,
+      // from the parent's own place on
+      let only: { id: string; key: string } | null = null
+      if (a.parent_id !== undefined) {
+        const parent = await sight.project(a.parent_id)
+        if (
+          parent === null ||
+          parent.org_id !== seat.org_id ||
+          parent.parent_id !== undefined ||
+          parent.archived_at !== undefined
+        )
+          continue
+        only = { id: parent.id, key: nameKey(parent.name) }
+      }
       sights.set(seat.org_id, sight)
       const grantees = await sight.grantees()
-      // the parent a cursor stopped under, read again from its start, the
-      // org-less tie placing it before its own position
+      // the parent a cursor stopped under, read again from its start, or
+      // the one parent asked for, the org-less tie placing it before its
+      // own position
       const parentAfter: NamedAt<SeatTie> | null =
-        resume === null ? null : { key: resume.parentKey, tie: [resume.parentId, ''] }
+        only !== null
+          ? { key: only.key, tie: [only.id, ''] }
+          : resume === null
+            ? null
+            : { key: resume.parentKey, tie: [resume.parentId, ''] }
       streams.push(
-        targetStream(ctx, sight, grantees, parentAfter, resume, (p) => parents.set(p.id, p)),
+        targetStream(ctx, sight, grantees, parentAfter, resume, (p) => parents.set(p.id, p), only),
       )
     }
     const kept = new Set<string>()
@@ -1933,7 +1972,9 @@ type TargetRow = Doc<'projects'> | Doc<'project_reach'>
  * `parentAfter` on, each told to `found`, then its sub-projects, the
  * parent's own where the seat reaches it for a reason of its own, else the
  * child rows under it, each at its position (targetAt), after `resume`'s
- * sub-project under the parent the cursor stopped under. */
+ * sub-project under the parent the cursor stopped under. With `only`, the
+ * one parent asked for by its id and name key, it skips every other root
+ * row at that name and ends at the first row past it. */
 function targetStream(
   ctx: QueryCtx,
   sight: SeatSight,
@@ -1941,6 +1982,7 @@ function targetStream(
   parentAfter: NamedAt<SeatTie> | null,
   resume: { parentKey: string; parentId: string; childKey: string; childId: string } | null,
   found: (parent: Doc<'projects'>) => void,
+  only: { id: string; key: string } | null = null,
 ): (reads: NamedReads) => NamedStream<TargetRow> {
   const orgId = sight.seat.org_id
   return async function* (reads) {
@@ -1952,6 +1994,10 @@ function targetStream(
       if (item === STOPPED) {
         yield STOPPED
         return
+      }
+      if (only !== null) {
+        if (item.at.key !== only.key) return
+        if (item.row.project_id !== only.id) continue
       }
       const parent = await rootShows(sight, item.row)
       if (parent === null) continue
