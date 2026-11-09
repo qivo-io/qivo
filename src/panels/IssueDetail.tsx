@@ -1461,7 +1461,11 @@ function CommentRow({
    holds a change (lib/spine.ts UnreadStart). The window freezes that
    itself on open, from the task's inbox item (P.inboxItem), also in the
    Inbox's pane. Only the Inbox's pop-out passes one, a start of nothing,
-   since the pane behind it showed this visit's New mark already.
+   since the pane behind it showed this visit's New mark already, and
+   after a return to a hidden page the start the pane froze again, which
+   the pane tells through `onReturnUnread`, so both show what arrived
+   meanwhile under New. A window given `unread` follows it when it
+   changes.
    `holdThread` says somebody else owns the store's one comment cache — the
    pane behind a popped-out window, which is on the same task. Without it the
    pop-out's unmount would release a thread the pane is still showing. */
@@ -1472,6 +1476,7 @@ function IssueDetail({
   onPlanOnRoadmap,
   embedded = false,
   unread: unreadIn,
+  onReturnUnread,
   onPopOut,
   onShowOnBoard,
   holdThread = false,
@@ -1484,6 +1489,9 @@ function IssueDetail({
   onPlanOnRoadmap?: (id: string) => void
   embedded?: boolean
   unread?: UnreadStart
+  /** Hears the unread start a return to a hidden page froze again, for a
+      window over this one on the same task (the Inbox's pop-out) */
+  onReturnUnread?: (start: UnreadStart) => void
   onPopOut?: () => void
   /** Shows the project's Board and reveals `issueKey`'s card, with the
       task's window open over it unless `keepOpen` is false */
@@ -1997,17 +2005,22 @@ function IssueDetail({
   // later than the frozen one, or none was frozen. So what arrived while
   // hidden sits under New, and the read on open, an effect, reads it after
   // this render. A plain return keeps the visit's mark, and so does the
-  // Inbox's pop-out, which keeps the start it was given. A window opened
-  // while hidden has no freeze until its first current answer, which comes
-  // after the page shows.
+  // Inbox's pop-out, which takes the start it is given: a start of nothing,
+  // and after a return the one the pane behind it froze again, which the
+  // pane tells it (onReturnUnread). A window opened while hidden has no
+  // freeze until its first current answer, which comes after the page
+  // shows.
   const frozen = useRefID<{
     key: string | null | undefined
     unread: UnreadStart | null
     returns: number
+    /** the start the last return froze, which a window over this one takes */
+    returned: UnreadStart | null
   }>({
     key: undefined,
     unread: { ts: null, change: false },
     returns: 0,
+    returned: null,
   })
   const freezeKey = watchUuid ? `${watchOrg}:${watchUuid}` : watchUuid
   const shownItem =
@@ -2028,8 +2041,13 @@ function IssueDetail({
               ? itemUnreadStart(answered.item)
               : null,
       returns,
+      returned: null,
     }
-  } else if (frozen.current.returns !== returns && unreadIn === undefined && answered) {
+  } else if (unreadIn !== undefined) {
+    const was = frozen.current.unread
+    if (unreadIn.ts !== was.ts || unreadIn.change !== was.change)
+      frozen.current = { ...frozen.current, unread: unreadIn, returns }
+  } else if (frozen.current.returns !== returns && answered) {
     const was = frozen.current.unread
     const next = itemUnreadStart(answered.item)
     const news =
@@ -2039,10 +2057,20 @@ function IssueDetail({
       answered.item.snoozed_until === null &&
       !P.unreadChoiceHeld() &&
       (was.ts === null || next.ts > was.ts)
-    frozen.current = { key: freezeKey, unread: news ? next : was, returns }
+    frozen.current = {
+      key: freezeKey,
+      unread: news ? next : was,
+      returns,
+      returned: news ? next : frozen.current.returned,
+    }
   }
   const unreadTs = frozen.current.unread?.ts ?? null
   const unreadPending = frozen.current.unread === null
+  // a return froze the start again: the pop-out over this window takes it
+  const returned = frozen.current.returned
+  useEffectID(() => {
+    if (returned !== null) onReturnUnread?.(returned)
+  }, [returned, onReturnUnread])
   // …and once the start is frozen, read the whole item on the server, so
   // what the badge counts goes also for messages the store never loaded. The store sends each `through` of the item once a visit, from
   // the organization, the task and the `through` of its own answer, never

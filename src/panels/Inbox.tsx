@@ -19,7 +19,15 @@
    messages and allow read/snooze/delete actions; notification content
    remains server-owned. */
 import { CheckCheck, ListX, Minus, Plus } from 'lucide-react'
-import React, { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, {
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -78,6 +86,7 @@ import { notificationPermission, requestNotificationPermission } from '../lib/no
 import { pageEnd, usePagedPages, useSettledSearch } from '../lib/pagedList'
 import { sameTask, taskFacts } from '../lib/router'
 import { fmtSnoozeUntil, SNOOZE_UNIT_MS, type SnoozeUnit, snoozeStepMax } from '../lib/snooze'
+import type { UnreadStart } from '../lib/spine'
 import { useMobile } from '../lib/useMobile'
 import { OUT_OF_USE } from '../lib/viewHidden'
 import {
@@ -176,6 +185,9 @@ function SnoozeRow({
     </div>
   )
 }
+
+/* A start of nothing unread, which the pop-out opens with. */
+const NO_UNREAD: UnreadStart = { ts: null, change: false }
 
 const KIND_LABELS: Record<string, string> = {
   mention: 'Mentions',
@@ -614,6 +626,21 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   // A move with no task here ends it too, such as leaving the Inbox, which
   // stays loaded (components/KeptView): the next task opens in the pane.
   if (poppedOut && !openIssue) setPoppedOut(false)
+  // Where the pop-out's unread part starts: nowhere, since the pane behind
+  // it showed this visit's New mark already, until a return to a hidden
+  // page freezes the pane's mark again while the pop-out is open, which
+  // the pop-out then shows too.
+  const [popUnread, setPopUnread] = useState<UnreadStart>(NO_UNREAD)
+  const paneReturned = useCallback(
+    (start: UnreadStart) => {
+      if (poppedOut) setPopUnread(start)
+    },
+    [poppedOut],
+  )
+  const popOut = () => {
+    setPopUnread(NO_UNREAD)
+    setPoppedOut(true)
+  }
   // the text typed in the pane and its pop-out, and in the pop-out alone,
   // so closing either asks first (DiscardPrompt)
   const taskScope = useContext(UnsentScopeContext)
@@ -1102,7 +1129,8 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
             closeLabel="Back to inbox"
             onOpen={showTask}
             onPlanOnRoadmap={onPlanOnRoadmap}
-            onPopOut={() => setPoppedOut(true)}
+            onPopOut={popOut}
+            onReturnUnread={paneReturned}
             onShowOnBoard={showOnBoard}
           />
         ) : (
@@ -1287,8 +1315,9 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
           <IssueDetail
             issueId={paneId}
             holdThread
-            // the pane behind it showed this visit's New mark already
-            unread={{ ts: null, change: false }}
+            // the pane behind it showed this visit's New mark already,
+            // until a return froze it again
+            unread={popUnread}
             onPopOut={undefined} // this IS the pop-out
             onShowOnBoard={showOnBoard}
             onClose={() => closeOrAsk([popScope], () => setPoppedOut(false))}
