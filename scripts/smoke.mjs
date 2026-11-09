@@ -629,8 +629,9 @@ try {
   log('A: Nora signed in — Northstar Labs board renders')
 
   // ---- 1b. startup: the project Nora opens by its address is remembered,
-  // and the bare address opens it again after one check with the server
-  // (projectNav.resolve), showing no project chooser but its checking line
+  // and the bare address opens it again as the scope at once, which the
+  // project cache checks (projectNav.byIds), asking projectNav.resolve
+  // nothing and showing no project chooser but its Opening line
   {
     // the first of Northstar's top-level projects in the sidebar's list
     // (projectNav.page), as the store holds no project list
@@ -648,6 +649,7 @@ try {
       { timeout: 30000 },
     )
     const resolves = []
+    const byIds = []
     const watch = (ws) =>
       ws.on('framesent', ({ payload }) => {
         let message
@@ -657,9 +659,11 @@ try {
           return
         }
         if (message.type !== 'ModifyQuerySet') return
-        for (const change of message.modifications)
-          if (change.type === 'Add' && change.udfPath === 'projectNav:resolve')
-            resolves.push(change.args)
+        for (const change of message.modifications) {
+          if (change.type !== 'Add') continue
+          if (change.udfPath === 'projectNav:resolve') resolves.push(change.args)
+          if (change.udfPath === 'projectNav:byIds') byIds.push(...(change.args ?? []))
+        }
       })
     pageA.on('websocket', watch)
     await pageA.goto(`${BASE}/app/${demo.orgSlug}`, { waitUntil: 'domcontentloaded' })
@@ -679,11 +683,15 @@ try {
       await pageA.waitForTimeout(50)
     }
     pageA.off('websocket', watch)
-    if (resolves.length !== 1)
+    if (resolves.length !== 0)
       await fail(`The bare address asked projectNav.resolve ${resolves.length} times`)
+    if (!byIds.some((args) => Array.isArray(args?.ids) && args.ids.includes(target.id)))
+      await fail(`The bare address read ${target.name} by id with no projectNav.byIds frame`)
     if ([...states].some((state) => state !== 'checking'))
       await fail(`The bare address showed the chooser as ${[...states].join(', ')}`)
-    log(`A: the bare address opened the remembered ${target.name} after one projectNav.resolve`)
+    log(
+      `A: the bare address opened the remembered ${target.name} from the project cache, asking projectNav.resolve nothing`,
+    )
     await pageA.goto(await lumaPath(pageA), { waitUntil: 'domcontentloaded' })
     await pageA.locator('[data-filter-focus]').waitFor({ timeout: 30000 })
   }
