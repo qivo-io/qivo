@@ -354,6 +354,21 @@ describe('the task window while the page is hidden', () => {
     expect(P().comments.map((c) => c.id)).toEqual(range(80, PAGE + 80).map((c) => c.id))
   })
 
+  it('shows the task unavailable on return when access ended while hidden, nothing held marked current', async () => {
+    await open()
+    expect(P().taskDetail('task-a', org)?.answered).toBe('ok')
+    await show(false)
+    // the task leaves the person's sight while nobody looks
+    snap.issues = snap.issues.filter((task) => task.id !== 'task-a')
+    republish()
+    await settle()
+    // the paused reads heard nothing, and what they held is not current
+    expect(P().taskDetail('task-a', org)?.answered).toBe('ok')
+    expect(P().inboxItem?.current).toBe(false)
+    await show(true)
+    expect(P().taskDetail('task-a', org)?.answered).toBe('unavailable')
+  })
+
   it('starts paused when the store starts again while hidden', async () => {
     await open()
     await show(false)
