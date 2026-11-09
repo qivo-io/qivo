@@ -179,14 +179,16 @@
 //                        planning panel and the delays: unavailable (every
 //                        owner past the reader's bounds), failed (every
 //                        call fails) or loading (no answer). The first two
-//                        show Delay unknown on the cards and bars and
-//                        unknown cells in Team utilization. A guest's or
-//                        Viewer's capped calls need no state: such a
-//                        person reads one owner a call and a view at most
-//                        GUEST_CALLS (50) of them
-//                        (src/store/ownerLoadCache.ts), so role=viewer with
-//                        people=60 leaves ten owners of the Board's cards
-//                        and the Roadmap's bars capped, Delay unknown
+//                        show unknown cells in Team utilization and, with
+//                        shape=varied, whose projects track delays, Delay
+//                        unknown on the cards whose verdict needs a load. A
+//                        guest's or Viewer's capped calls need no state:
+//                        such a person reads one owner a call and a view at
+//                        most GUEST_CALLS (50) of them
+//                        (src/store/ownerLoadCache.ts), so
+//                        tasks=300&people=200&shape=varied&role=viewer
+//                        shows Delay unknown on the cards of the owners past
+//                        the cap, where role=admin shows none
 //   labelpage            a state Settings › Labels' batches answer whatever
 //                        the labels say, for screenshots of states a seeded
 //                        backend cannot reach: counting (every count being
