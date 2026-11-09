@@ -384,18 +384,17 @@ or later, whose organization counts are whole, as
 `internal/overviewCountsBackfill` left them. Against an older backend, or
 while the counts read **Counting…**, the step fails. It then records the
 frames the page sends on its sync socket and opens its project's Board,
-one fixture task's address and its project's Roadmap in fresh loads, none
-of which may subscribe the workspace's task windows (`workspace:tasks`).
-The Roadmap must reach its ok state and show that task's row, having
-subscribed its own read (`tasks:roadmap`) and never the planning panel's
-old read (`planning:assigneeLoad`) (`ui/tasks-on-demand`). It reads only,
+one fixture task's address and its project's Roadmap in fresh loads, each
+of which reads its tasks from its own read. The Roadmap must reach its ok
+state and show that task's row, having subscribed its own read
+(`tasks:roadmap`) and never the planning panel's old read
+(`planning:assigneeLoad`) (`ui/own-reads`). It reads only,
 and an app from before the Roadmap read the server fails it. Next it makes a
 sub-project of its own with its run tag under the run project, with one task, over REST,
 records the frames the page sends and receives on its sync socket from a
 fresh load of that sub-project's Board, presses **New task in To Do**,
 creates a task with its run tag through the dialog and renames it in its
-window at once. No frame may subscribe the workspace's task windows, and
-no read of the new task (`taskWindow:task`, `snapshot:threadComments` or
+window at once. No read of the new task (`taskWindow:task`, `snapshot:threadComments` or
 `inbox:item`) may be sent before the answer to the create's `issues:create`
 mutation arrives. The step knows the task by the uuid its create sent and
 its key by the number that answer stored, since another create in the

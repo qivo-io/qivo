@@ -90,14 +90,13 @@
  * hold that sub-project's row with those two tasks' figures, and opens the
  * sub-project's Board from the row (ui/overview). It records the frames the
  * page sends on its sync socket and opens its project's Board, a fixture
- * task's address and its project's Roadmap in fresh loads, none of which may
- * subscribe the workspace's task windows (workspace.tasks), the Roadmap
- * subscribing its own read (tasks.roadmap) and showing the task's row with
- * no read of planning.assigneeLoad (ui/tasks-on-demand), so the
- * deployment's app loads every task only for a page that needs them. The
- * relation pickers step waits for each window's Link task and Add subtask
- * to turn on, which they do once the window's own read of its task has
- * answered, since a task address loads no task window. It makes a label with
+ * task's address and its project's Roadmap in fresh loads, each of which
+ * reads its tasks from its own read, the Roadmap subscribing its own read
+ * (tasks.roadmap) and showing the task's row with no read of
+ * planning.assigneeLoad (ui/own-reads). The relation pickers step waits
+ * for each window's Link task and Add subtask to turn on, which they do
+ * once the window's own read of its task has answered, since a task
+ * address reads its task only through the window. It makes a label with
  * its run tag over REST and puts it on a fixture task, opens Settings ›
  * Labels on the deployment's live batches (labels.settingsPage), finds the
  * label by search with its count of active tasks, renames it in place and
@@ -241,7 +240,7 @@
  * with the project's name and drop it once it is deleted over REST
  * (ui/overview-milestones). It makes a task of the Standard agent's in Alpha over
  * REST and opens Team sync on its project in a fresh load, which must
- * subscribe Team sync's agenda (teamSync.agenda) and no task window, and
+ * subscribe Team sync's agenda (teamSync.agenda), and
  * show the task's card on the agent's line from the rail (ui/team-sync).
  * It makes a sub-project under M led by Leo Martins, with a task in it, and
  * picks the task's assignee, reviewer and No reviewer in its window and its
@@ -258,8 +257,8 @@
  * drops back, and removes t0's item from Nora's Inbox with the row's own
  * action, messages.removeItem (ui/inbox-badge). It mentions Nora on t0
  * again and opens the Inbox in a fresh load, which must list t0's row
- * from the deployment's pages (inbox.page) with M and Alpha in its crumb
- * and subscribe no task window, find it by a search on the server, send
+ * from the deployment's pages (inbox.page) with M and Alpha in its crumb,
+ * find it by a search on the server, send
  * the row's read, unread, snooze and remove by organization and task,
  * and open Alpha's Board on it (ui/inbox-list).
  * It reads the run's project, Alpha and Zulu, an id of no project and a
@@ -5792,16 +5791,12 @@ async function labelMentionPickersCheck() {
   }
 }
 
-/** The step that checks over the socket that the app loads tasks on demand
- *  (tasksOnDemandCheck). */
-export const ON_DEMAND_STEP = 'ui/tasks-on-demand'
-
-/** The query of the workspace's task windows, which the app subscribes only
- *  once a page that needs every task asks for them (src/store/liveParts.ts). */
-export const TASK_WINDOWS_QUERY = 'workspace:tasks'
+/** The step that checks over the socket that the Board, a task's address
+ *  and the Roadmap read their tasks from their own reads (ownReadsCheck). */
+export const OWN_READS_STEP = 'ui/own-reads'
 
 /** The Roadmap's own read (convex/tasks.ts roadmap), which it subscribes
- *  for its tasks in place of the task windows. */
+ *  for its tasks. */
 export const ROADMAP_QUERY = 'tasks:roadmap'
 
 /** The planning panel's one-shot read before it read the owner loads,
@@ -5826,19 +5821,18 @@ export function addsQuery(text, udfPath) {
   )
 }
 
-/** The app loads tasks on demand, over the deployment's socket: a fresh
- *  load of the run project's Board by its address, as ui/board reads it,
- *  reaches its ok state without subscribing a task window
- *  (TASK_WINDOWS_QUERY), a fresh load of run.t0's address shows its title
- *  without one, and a fresh load of the run project's Roadmap by its
- *  address reaches its ok state and shows run.t0's row (an unscheduled To
- *  Do task has one) without one either, having subscribed its own read
+/** The pages read their tasks from their own reads, over the deployment's
+ *  socket: a fresh load of the run project's Board by its address, as
+ *  ui/board reads it, reaches its ok state, a fresh load of run.t0's
+ *  address shows its title, and a fresh load of the run project's Roadmap
+ *  by its address reaches its ok state and shows run.t0's row (an
+ *  unscheduled To Do task has one), having subscribed its own read
  *  (ROADMAP_QUERY) and never the planning panel's old read
  *  (ASSIGNEE_LOAD_QUERY). It reads only, and leaves the saved view on the
  *  Board for the steps after it. It runs before the run archives M. */
-async function tasksOnDemandCheck() {
+async function ownReadsCheck() {
   const { M } = run.projects
-  await check(ON_DEMAND_STEP, async () => {
+  await check(OWN_READS_STEP, async () => {
     expect(Number.isInteger(M.num), 'the run project has no number')
     // the frames each fresh load sends on its sync socket
     let sent = []
@@ -5850,12 +5844,10 @@ async function tasksOnDemandCheck() {
         await app.goto(url, { waitUntil: 'domcontentloaded' })
       }
       const adds = (query) => sent.filter((f) => addsQuery(f, query)).length
-      const taskWindows = () => adds(TASK_WINDOWS_QUERY)
       await fresh(`${cfg.appOrigin}/app/${ORG_SLUG}/board/p/${M.num}`)
       await app
         .locator('[data-workspace-view] [data-board-root][data-board-state="ok"]')
         .waitFor({ timeout: 60_000 })
-      eq(taskWindows(), 0, 'the Board subscribed task windows')
       await fresh(`${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${run.t0.key.toLowerCase()}`)
       const title = app.locator('[role="dialog"] [data-task-title]')
       await title.waitFor({ timeout: 60_000 })
@@ -5863,7 +5855,6 @@ async function tasksOnDemandCheck() {
         await until(async () => ((await title.textContent()) ?? '').trim() === run.t0.title),
         `the window of ${run.t0.key} does not show its title`,
       )
-      eq(taskWindows(), 0, 'a task address subscribed task windows')
       // the Roadmap reads its tasks from the server, asking for no task
       await fresh(`${cfg.appOrigin}/app/${ORG_SLUG}/roadmap/p/${M.num}`)
       await app
@@ -5874,13 +5865,12 @@ async function tasksOnDemandCheck() {
         .filter({ hasText: run.t0.title })
         .first()
         .waitFor({ timeout: 60_000 })
-      eq(taskWindows(), 0, 'the Roadmap subscribed task windows')
       expect(adds(ROADMAP_QUERY) > 0, 'the Roadmap did not subscribe its read')
       eq(adds(ASSIGNEE_LOAD_QUERY), 0, "the Roadmap asked for the planning panel's old read")
       const view = (name) =>
         app.locator('[data-view-switch]').getByRole('radio', { name, exact: true })
       await view('Board').click()
-      return `opened the Board, ${run.t0.key} and the Roadmap without task windows, the Roadmap on its own read`
+      return `opened the Board, ${run.t0.key} and the Roadmap, the Roadmap on its own read`
     } finally {
       app.off('websocket', record)
     }
@@ -5972,8 +5962,8 @@ export function addsQueryFor(text, udfPath, uuid) {
  *  sent): the new task's uuid from the create's request, whether a frame
  *  answers it and the number that answer stored the task with (`num`), and
  *  the frames sent before that answer that subscribe a read of the new task
- *  (NEW_TASK_READS) or the task windows (TASK_WINDOWS_QUERY), which a
- *  correct app never sends. Null when no create went out. */
+ *  (NEW_TASK_READS), which a correct app never sends. Null when no create
+ *  went out. */
 export function createOrder(frames) {
   const at = frames.findIndex((f) => f.out && mutationRequest(f.text, CREATE_MUTATION) !== null)
   if (at < 0) return null
@@ -5988,7 +5978,6 @@ export function createOrder(frames) {
     early: before
       .filter((f) => f.out && NEW_TASK_READS.some((query) => addsQueryFor(f.text, query, uuid)))
       .map((f) => f.text),
-    taskWindows: frames.filter((f) => f.out && addsQuery(f.text, TASK_WINDOWS_QUERY)).length,
   }
 }
 
@@ -5998,8 +5987,7 @@ export function createOrder(frames) {
  *  shows its columns: from a fresh load of that sub-project's Board it
  *  presses New task in To Do, types the run's tagged title, presses
  *  Create, and once the window shows it renames the task in the window at
- *  once. On the frames of that load it checks that nothing subscribed the
- *  task windows (TASK_WINDOWS_QUERY) and that no read of the new task
+ *  once. On the frames of that load it checks that no read of the new task
  *  (NEW_TASK_READS) was subscribed before the create's answer arrived
  *  (createOrder). It knows the task by the uuid its create sent and its key
  *  by the number that answer stored, since another create in the
@@ -6068,7 +6056,6 @@ async function createAnswerCheck() {
       })()
       expect(order, 'no create went out on the socket')
       expect(order.answered, "the create's answer did not arrive")
-      eq(order.taskWindows, 0, 'the create subscribed task windows')
       eq(order.early.length, 0, 'a read of the new task went out before its create answered')
       expect(order.num !== null, "the create's answer names no number")
       // the key the server stored it under, which the window and the card
@@ -6327,8 +6314,8 @@ export const AGENDA_QUERY = 'teamSync:agenda'
  *  line of a fresh load of Team sync for the run project M by its address,
  *  on ui/task-link's fresh-load approach. The load's frames must add
  *  AGENDA_QUERY at least once, as a reconnect or a new day or week grid
- *  during the load adds it again on a correct app, and TASK_WINDOWS_QUERY
- *  never, and the page must reach its ok state (data-sync-state). It
+ *  during the load adds it again on a correct app, and the page must reach
+ *  its ok state (data-sync-state). It
  *  writes nothing in the app: the address saves no scope and opening a step
  *  stamps no one.
  *  The cleanup, which deletes M, removes the task. It runs before the run
@@ -6358,7 +6345,6 @@ async function teamSyncCheck() {
       await page.waitFor({ timeout: 60_000 })
       const adds = (query) => sent.filter((f) => addsQuery(f, query)).length
       expect(adds(AGENDA_QUERY) >= 1, 'the load did not subscribe the agenda')
-      eq(adds(TASK_WINDOWS_QUERY), 0, 'Team sync subscribed task windows')
       await page.locator(`[data-sync-rail] [data-sync-jump="${std.id}"]`).click()
       await page.locator(`[data-sync-card="${t.key}"]`).waitFor({ timeout: 60_000 })
       return `opened ${M.key}'s meeting on the agenda without task windows, with ${t.key} on its agent's line`
@@ -6707,10 +6693,8 @@ export function sentMutation(text, udfPath) {
  *  Nora, after the Standard agent mentions her in a comment on t0 over
  *  REST, a fresh load of /app/~/inbox must show t0's row, by its task and
  *  organization, on the first page with M's name and then Alpha's in its
- *  crumb, having subscribed the page and no task window
- *  (TASK_WINDOWS_QUERY). A search by t0's key, and then by M's name, must
- *  subscribe the page with that search and hold t0's row, still with no
- *  task window. From the row's menu it sends Mark as read
+ *  crumb, having subscribed the page. A search by t0's key, and then by M's
+ *  name, must subscribe the page with that search and hold t0's row. From the row's menu it sends Mark as read
  *  (messages.readItem with t0's organization, task and a cutoff), Mark as
  *  unread (messages.unreadItem), Snooze for an hour (messages.snoozeItem
  *  with a time), after which the row leaves, Show snoozed brings it back
@@ -6748,9 +6732,7 @@ async function inboxListCheck() {
         "t0's row's crumb",
       )
       const pages = () => sent.flatMap((f) => addedArgs(f, INBOX_PAGE_QUERY))
-      const windows = () => sent.filter((f) => addsQuery(f, TASK_WINDOWS_QUERY)).length
       expect(pages().length >= 1, 'the load did not subscribe the Inbox page')
-      eq(windows(), 0, 'the Inbox subscribed task windows')
       // the search goes to the server, by t0's key and by M's name
       const search = app.locator(`[${m.search}]`)
       for (const text of [t0.key, M.name]) {
@@ -6761,7 +6743,6 @@ async function inboxListCheck() {
         )
         await row.waitFor({ timeout: 60_000 })
       }
-      eq(windows(), 0, "the Inbox's search subscribed task windows")
       await search.fill('')
       /** The arguments of the first `udfPath` sent after frame `from`. */
       const wrote = async (udfPath, from, what) => {
@@ -11944,7 +11925,7 @@ async function main() {
   await overviewCheck()
   // the Board and a task address without task windows, then the Roadmap
   // with them, while the project is active
-  await tasksOnDemandCheck()
+  await ownReadsCheck()
   // a task created through the Board and changed in its window at once, in
   // a sub-project of its own, while the project is active
   await createAnswerCheck()

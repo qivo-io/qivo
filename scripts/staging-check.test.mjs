@@ -95,11 +95,11 @@ import {
   OLD_PATHS_CLEANUP,
   OLD_PATHS_MARKS,
   OLD_PATHS_STEP,
-  ON_DEMAND_STEP,
   OVERVIEW_EXPECTED,
   OVERVIEW_HEALTH_EXPECTED,
   OVERVIEW_MILESTONES_STEP,
   OVERVIEW_OVERDUE_DAYS,
+  OWN_READS_STEP,
   OWNER_PICKERS_NAMES,
   OWNER_PICKERS_PERSON,
   OWNER_PICKERS_STEP,
@@ -166,7 +166,6 @@ import {
   TASK_LIST_REFUSALS,
   TASK_LISTS,
   TASK_PAGES_MAX,
-  TASK_WINDOWS_QUERY,
   TEAM_SYNC_STEP,
   TEAMS_EXPECTED,
   TEAMS_STEP,
@@ -1318,7 +1317,7 @@ describe('staging check REST contract', () => {
       modifications: [add(INBOX_PAGE_QUERY, { search: 'QN-1' }), add('workspace:root', {})],
     })
     expect(addedArgs(frame, INBOX_PAGE_QUERY)).toEqual([{ search: 'QN-1' }])
-    expect(addedArgs(frame, TASK_WINDOWS_QUERY)).toEqual([])
+    expect(addedArgs(frame, 'taskWindow:task')).toEqual([])
   })
   it("names the delivery step and its marks, runs it after the feed's, and puts back what it changed", () => {
     expect(NOTIFICATION_DELIVERY_STEP).toBe('ui/notification-delivery')
@@ -1425,37 +1424,46 @@ describe('staging check REST contract', () => {
     expect(notificationCall(frame('messages:readItem', {}))).toBeNull()
     expect(notificationCall('not json')).toBeNull()
   })
-  it('tells a frame that subscribes the task windows from every other frame', () => {
-    expect(ON_DEMAND_STEP).toBe('ui/tasks-on-demand')
-    expect(TASK_WINDOWS_QUERY).toBe('workspace:tasks')
+  it('names the own reads step, keeps its checks in order, and tells a frame that subscribes a query from every other frame', () => {
+    expect(OWN_READS_STEP).toBe('ui/own-reads')
     expect(ROADMAP_QUERY).toBe('tasks:roadmap')
     expect(ASSIGNEE_LOAD_QUERY).toBe('planning:assigneeLoad')
-    // the registry subscribes no task window, so a frame that adds one
-    // is a client the step must fail
+    // the registry subscribes the root part alone and no task window, so
+    // no step checks for one
     const parts = readFileSync(new URL('../src/store/liveParts.ts', import.meta.url), 'utf8')
     expect(parts).not.toContain('api.workspace.tasks')
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    expect(script).not.toContain('workspace:tasks')
+    expect(script).not.toContain('ui/tasks-on-demand')
+    // the step keeps the Board's, the task address's and the Roadmap's
+    // checks, once each, in that order
+    const step = script.slice(
+      script.indexOf('async function ownReadsCheck()'),
+      script.indexOf('/** The step that creates a task through the Board'),
+    )
+    const order = [
+      '/board/p/',
+      '/tasks/',
+      '/roadmap/p/',
+      'adds(ROADMAP_QUERY) > 0',
+      'eq(adds(ASSIGNEE_LOAD_QUERY), 0',
+    ].map((text) => step.indexOf(text))
+    expect(order.every((n) => n > 0)).toBe(true)
+    expect([...order].sort((x, y) => x - y)).toEqual(order)
     const add = (udfPath) => ({ type: 'Add', queryId: 1, udfPath, args: [{}] })
     const frame = (...modifications) =>
       JSON.stringify({ type: 'ModifyQuerySet', baseVersion: 0, newVersion: 1, modifications })
-    expect(addsQuery(frame(add('workspace:tasks')), TASK_WINDOWS_QUERY)).toBe(true)
+    expect(addsQuery(frame(add(ROADMAP_QUERY)), ROADMAP_QUERY)).toBe(true)
+    expect(addsQuery(frame(add('workspace:root'), add(ROADMAP_QUERY)), ROADMAP_QUERY)).toBe(true)
+    // another query, a removal, another message and no JSON are not one
+    expect(addsQuery(frame(add('workspace:root')), ROADMAP_QUERY)).toBe(false)
     expect(
-      addsQuery(frame(add('workspace:root'), add('workspace:tasks')), TASK_WINDOWS_QUERY),
-    ).toBe(true)
-    // the other parts, a removal, another message and no JSON are not one
-    expect(addsQuery(frame(add('workspace:inbox')), TASK_WINDOWS_QUERY)).toBe(false)
-    expect(
-      addsQuery(
-        frame({ type: 'Remove', queryId: 1, udfPath: 'workspace:tasks' }),
-        TASK_WINDOWS_QUERY,
-      ),
+      addsQuery(frame({ type: 'Remove', queryId: 1, udfPath: ROADMAP_QUERY }), ROADMAP_QUERY),
     ).toBe(false)
     expect(
-      addsQuery(
-        JSON.stringify({ type: 'Mutation', udfPath: 'workspace:tasks' }),
-        TASK_WINDOWS_QUERY,
-      ),
+      addsQuery(JSON.stringify({ type: 'Mutation', udfPath: ROADMAP_QUERY }), ROADMAP_QUERY),
     ).toBe(false)
-    expect(addsQuery('not json', TASK_WINDOWS_QUERY)).toBe(false)
+    expect(addsQuery('not json', ROADMAP_QUERY)).toBe(false)
   })
 
   it("tells a create's request, its answer and the reads of the new task that went out before it", () => {
@@ -1507,11 +1515,10 @@ describe('staging check REST contract', () => {
       read('snapshot:threadComments', { org_id: 'org', issue_id: uuid }),
       read('inbox:item', { issue_id: uuid }),
     ])
-    expect(good).toEqual({ uuid, answered: true, num: 41, early: [], taskWindows: 0 })
-    // a read of the task sent before the answer, and the task windows, are caught
-    const early = createOrder([create, windowRead, answer, read('workspace:tasks', {})])
+    expect(good).toEqual({ uuid, answered: true, num: 41, early: [] })
+    // a read of the task sent before the answer is caught
+    const early = createOrder([create, windowRead, answer])
     expect(early?.early).toEqual([windowRead.text])
-    expect(early?.taskWindows).toBe(1)
     // a read of another task, or an answer to another write, is no answer
     expect(createOrder([create, read('taskWindow:task', { ref: 'other' }), answer])?.early).toEqual(
       [],
@@ -1527,13 +1534,11 @@ describe('staging check REST contract', () => {
     expect(mutationRequest('not json', CREATE_MUTATION)).toBeNull()
     expect(answersMutation('not json', 7)).toBe(false)
     expect(addsQueryFor('not json', 'taskWindow:task', uuid)).toBe(false)
-    // the step runs after ui/tasks-on-demand and before the run archives M
+    // the step runs after ui/own-reads and before the run archives M
     const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
-    const at = [
-      'await tasksOnDemandCheck()',
-      'await createAnswerCheck()',
-      'await archiveChecks()',
-    ].map((call) => script.indexOf(call))
+    const at = ['await ownReadsCheck()', 'await createAnswerCheck()', 'await archiveChecks()'].map(
+      (call) => script.indexOf(call),
+    )
     expect(at.every((n) => n > 0)).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
     // in a sub-project of its own, with the run's tag
@@ -1810,7 +1815,7 @@ describe('staging check REST contract', () => {
     )
     const step = check.slice(
       check.indexOf('async function labelMentionPickersCheck()'),
-      check.indexOf('export const ON_DEMAND_STEP'),
+      check.indexOf('export const OWN_READS_STEP'),
     )
     expect(step).toContain('const names = [found.name, madeName]')
     // the app deletes each label as the REST row shows it, in the home
