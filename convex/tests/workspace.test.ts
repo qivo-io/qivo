@@ -23,6 +23,7 @@ import {
 } from '../lib/idWindows'
 import { PAGE, readTasks } from '../lib/workspaceParts'
 import { descriptionOf, insertTask, TEXT_READ } from '../model/descriptions'
+import { navByIdsOf } from '../model/projectNavReads'
 import {
   as,
   expectRefusal,
@@ -1371,6 +1372,8 @@ describe('many projects', () => {
           kinds: Object.fromEntries(Object.entries(ids).map(([kind, id]) => [id, kind])),
         }
       })
+      // the navigation reads' reach rows and name keys for the rows planted
+      await ready(t, f)
       for (const own of [
         DEFAULT_OWN_READS,
         // the person's five grants and two teams read at once
@@ -1392,6 +1395,26 @@ describe('many projects', () => {
           return answer.issues.map((task) => byProject[task.project_id]).sort()
         })
         expect(shown, `${role}, own reads ${JSON.stringify(own)}`).toEqual([...expected].sort())
+        // projectNav.byIds, the app's only source of projects and levels,
+        // answers the same projects of every planted one, and leaves the
+        // others out, never listing one apart as unchecked
+        const planted = Object.keys(byProject)
+        const named = await t.run(async (ctx) => {
+          const answer = await navByIdsOf(ctx, new Map([[me.org_id, me]]), planted)
+          return {
+            rows: answer.rows.flatMap((row) => (byProject[row.id] ? [byProject[row.id]] : [])),
+            unchecked: answer.unchecked,
+          }
+        })
+        expect(named.rows.sort(), `${role} byIds, own reads ${JSON.stringify(own)}`).toEqual(
+          [...expected].sort(),
+        )
+        expect(named.unchecked).toEqual([])
+        // a guest gets nothing through a team, nor through a parent shared
+        // with one
+        if (role === 'guest')
+          for (const kind of ['share', 'otherTeam', 'foreignTeam', 'parentShared'])
+            expect(named.rows).not.toContain(kind)
       }
     }
   }, 60_000)
