@@ -49,6 +49,9 @@ describe('the task window while the page is hidden', () => {
   let republish: () => void
   // the store generation before this case's store started
   let floor: number
+  // every comment the server holds, which its page before a comment
+  // answers from (snapshot.commentsBefore)
+  let served: Row<'comments'>[]
   // the thread's and the history's open subscriptions, newest last
   let threads: { publish: (page: Comments) => void; open: boolean }[]
   let histories: { publish: (page: History) => void; open: boolean }[]
@@ -142,7 +145,13 @@ describe('the task window while the page is hidden', () => {
     threads = []
     histories = []
     sent = []
-    network.query.mockResolvedValue(null)
+    served = []
+    network.query.mockImplementation(async (ref, args: { before?: string }) => {
+      if (getFunctionName(ref) !== 'snapshot:commentsBefore') return null
+      const at = served.findIndex((c) => c.id === args.before)
+      const from = Math.max(0, at - PAGE)
+      return { comments: served.slice(from, Math.max(at, 0)), earlier: from > 0 }
+    })
     network.mutation.mockImplementation(
       (ref, args) =>
         new Promise((resolve) => {
@@ -188,6 +197,7 @@ describe('the task window while the page is hidden', () => {
   /* Opens task-a under All with its details, its thread at `comments`
      comments (the newest 50 delivered) and its history at `changes`. */
   async function open(comments = 3, changes = 2) {
+    served = range(0, comments)
     P().watchComments('task-a', org)
     P().showHistory(owner, true)
     P().showSections(owner, true)
@@ -325,6 +335,7 @@ describe('the task window while the page is hidden', () => {
     await show(false)
     await show(true)
     // ten new comments, so the live window still starts at a comment it held
+    served = range(0, PAGE + 30)
     thread()?.publish({ comments: range(30, PAGE + 30), earlier: true })
     await settle()
     expect(P().comments.at(0)?.id).toBe('comment-20')
@@ -337,6 +348,7 @@ describe('the task window while the page is hidden', () => {
     await show(false)
     await show(true)
     // sixty new comments, so the live window meets nothing it held
+    served = range(0, PAGE + 80)
     thread()?.publish({ comments: range(PAGE + 80 - PAGE, PAGE + 80), earlier: true })
     await settle()
     expect(P().comments.map((c) => c.id)).toEqual(range(80, PAGE + 80).map((c) => c.id))
