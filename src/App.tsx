@@ -1374,8 +1374,6 @@ function App() {
   // workspace does not hold once its read answers (lib/router.ts
   // noteProjectPage), which the address follows in place.
   const pagesRev = useSyncExternalStore(subscribeProjectPages, projectPagesRev)
-  // The Roadmap and Team sync read their tasks from the server, so no page
-  // waits for every task
 
   // date rendering follows the organization's format setting; set during
   // render so everything below formats consistently on this pass

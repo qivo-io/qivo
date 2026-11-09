@@ -1,12 +1,12 @@
 /* The fence of the organization-wide load for one task. The server applies
- * it to one owner's open tasks (lib/ownerLoads.ts) and to the tasks the
- * workspace's load rows hold (lib/workspaceParts.ts), the tests to an
+ * it to one owner's open tasks (lib/ownerLoads.ts, planning.ownerLoads,
+ * where every delay the app shows comes from), the tests to an
  * organization's live tasks (convex/tests/orgLoad.setup.ts orgLoadRows),
- * and the app to the tasks it shows (src/store/taskIndex.ts), so a pending
- * edit moves its owner's load and delays at once and the server sends only
- * the rows of tasks the reader is not shown. src/ imports this
- * module, so it must stay free of server runtime: beside a type it imports
- * only lib/review.ts, which holds none. */
+ * and the app to the rows of a pending edit, so Team sync re-counts the
+ * edit at once (src/lib/teamSync.ts weekHoursOf), and to the stand-in of
+ * planning.ownerLoads (src/store/ownerLoadsStandIn.setup.ts). src/ imports
+ * this module, so it must stay free of server runtime: beside a type it
+ * imports only lib/review.ts, which holds none. */
 
 import type { Doc } from '../_generated/dataModel'
 import { taskOwnerId } from './review'

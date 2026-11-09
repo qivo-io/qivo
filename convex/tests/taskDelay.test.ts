@@ -218,8 +218,9 @@ async function appDelays(fx: Fx, person: Doc<'profiles'>): Promise<Map<string, D
       plannableHoursOf({ plannableHours: p.plannable_hours ?? null, kind: p.kind }),
     ]),
   )
-  // the store's load: the rows of the tasks it shows and the snapshot's of
-  // those it does not (src/store/taskIndex.ts), each owner's in canonical order
+  // the reference load (helpers.setup.ts appLoadRows): the rows of the
+  // tasks the reader is shown and the oracle's of those it is not, each
+  // owner's in canonical order
   const load = new Map<string, LoadSpan[]>()
   for (const r of appLoadRows(snap)) {
     const spans = load.get(r.owner_id) ?? []

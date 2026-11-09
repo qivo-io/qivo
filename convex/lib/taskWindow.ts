@@ -263,16 +263,16 @@ function budgetIn(ctx: QueryCtx, cap: Reads, shared: Reads) {
 type Budget = ReturnType<typeof budgetIn>
 
 /* -1, 0 or 1 as `a` sorts before, with or after `b` in code unit order, as
- * src/store/taskIndex.ts byThenId compares. */
+ * src/lib/taskSections.ts compares ids. */
 const order = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
 
-/* Rows by created_at, then id, as src/store/taskIndex.ts orders links and
- * attachments. */
+/* Rows by created_at, then id, as src/lib/taskSections.ts byCreation orders
+ * the window's links and attachments. */
 const byCreation = (a: { created_at: string; id: string }, b: { created_at: string; id: string }) =>
   order(a.created_at, b.created_at) || order(a.id, b.id)
 
-/* Tasks by number, then id, as src/store/taskIndex.ts childKeysOf orders
- * subtasks. */
+/* Tasks by number, then id, as src/lib/taskSections.ts byNumber orders the
+ * window's subtasks. */
 const byNumber = (a: ShortRow, b: ShortRow) => a.num - b.num || order(a.id, b.id)
 
 /* The active subtasks of the task with this id, oldest first. */
