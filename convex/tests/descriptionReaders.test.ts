@@ -15,7 +15,6 @@
  * scripts/check-task-reads.test.mjs covers the check that no other code
  * reads issues.description. */
 
-import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
@@ -26,7 +25,6 @@ import { accessFlags, asMachineCaller, loadCatalogue, TEXT_TASK_READS } from '..
 import { newWindowKey } from '../lib/db'
 import { descriptionForm, printOf } from '../lib/fieldPrints'
 import { MIB } from '../lib/limits'
-import type { OrgExportPage, OrgExportRow, OrgExportSection } from '../lib/orgExport'
 import type { EventOwner } from '../lib/taskEvents'
 import { cleanDescription } from '../model/issues'
 import { NO_FILTERS } from './board.setup'
@@ -49,15 +47,10 @@ import {
   withReadingAdmin,
 } from './helpers.setup'
 import { northstarId, plantNorthstar } from './northstar.setup'
+import { sectionBatches, sectionRows } from './orgExport.setup'
 import { lowered, restPage, restPages } from './taskPages.setup'
 
 const DEFAULT_TEXT_READS = TEXT_TASK_READS.reads
-
-const exportPage = makeFunctionReference<
-  'query',
-  { org_id: string; section: OrgExportSection; parent_id?: string; cursor: string | null },
-  OrgExportPage
->('orgExport:page')
 
 /** withOrg with the agent able to write the fixture's sub-projects, for
  * REST and MCP. */
@@ -171,17 +164,7 @@ async function readers(t: T, f: OrgFixture, pair: Pair, words: [string, string])
     scope: { org_id: f.org.id, project_ids: [f.sub.id] },
     search: words[1],
   })
-  const exported: OrgExportRow[] = []
-  for (let cursor: string | null = null, done = false; !done; ) {
-    const result: OrgExportPage = await as(t, f.admin).query(exportPage, {
-      org_id: f.org.id,
-      section: 'issues',
-      cursor,
-    })
-    exported.push(...result.rows)
-    done = result.isDone
-    cursor = result.continueCursor
-  }
+  const exported = await sectionRows(t, f.org.id, 'tasks')
   const exportedText = (task: Doc<'issues'>) =>
     (exported.find((row) => row.id === task.id)?.description as string | undefined) ?? null
   const windowText = async (task: Doc<'issues'>) => {
@@ -1336,18 +1319,8 @@ describe('real limits', () => {
     expect(pages.sizes[0]).toBeGreaterThan(0)
     expect(pages.sizes[0]).toBeLessThan(12)
     expect(pages.rows.map((row) => row.description)).toEqual(ids.map((_, i) => shown(i)))
-    // the export goes on a few tasks a page
-    const rows: OrgExportRow[] = []
-    for (let cursor: string | null = null, done = false; !done; ) {
-      const result: OrgExportPage = await as(t, f.admin).query(exportPage, {
-        org_id: f.org.id,
-        section: 'issues',
-        cursor,
-      })
-      rows.push(...result.rows)
-      done = result.isDone
-      cursor = result.continueCursor
-    }
+    // the export goes on a few tasks a read
+    const rows = await sectionRows(t, f.org.id, 'tasks')
     for (const [i, id] of ids.entries())
       expect(rows.find((row) => row.id === id)?.description).toBe(shown(i))
   })
@@ -1383,24 +1356,14 @@ describe('real limits', () => {
     expect(got.description).toBe('0 '.padEnd(900 * 1024, 'r'))
   })
 
-  it('an export issues page with description rows near 1 MiB stays within the limits and goes on', async () => {
+  it('an export read of tasks with description rows near 1 MiB stays within the limits and goes on', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withReadingAdmin(t)
     const text = (i: number) => `${i} `.padEnd(1000 * 1024, 'x')
     const ids = await plantMany(t, f, 24, text, () => undefined, 8)
-    const rows: OrgExportRow[] = []
-    let pages = 0
-    for (let cursor: string | null = null, done = false; !done; pages++) {
-      const result: OrgExportPage = await as(t, f.admin).query(exportPage, {
-        org_id: f.org.id,
-        section: 'issues',
-        cursor,
-      })
-      rows.push(...result.rows)
-      done = result.isDone
-      cursor = result.continueCursor
-    }
-    expect(pages).toBeGreaterThan(2)
+    const batches = await sectionBatches(t, f.org.id, 'tasks')
+    const rows = batches.flatMap((batch) => batch.rows)
+    expect(batches.length).toBeGreaterThan(2)
     for (const [i, id] of ids.entries())
       expect(rows.find((row) => row.id === id)?.description).toBe(text(i))
   })

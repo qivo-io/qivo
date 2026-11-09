@@ -32,6 +32,7 @@ import {
   uuid,
   withReadingAdmin,
 } from './helpers.setup'
+import { sectionRows } from './orgExport.setup'
 
 /* The print the app sends for a title or a comment body it read. */
 const titlePrint = (text: string) => printOf(trimmedForm(text))
@@ -645,12 +646,8 @@ describe('field prints', () => {
     })
     expect(history.events.map((e) => e.id)).toEqual([stored.id])
     expect(history.events[0]).not.toHaveProperty('field_prints')
-    const exported = await as(fx.t, fx.admin).query(api.orgExport.page, {
-      org_id: fx.org.id,
-      section: 'activity_events',
-      cursor: null,
-    })
-    expect(exported.rows.map((r) => r.id)).toEqual([stored.id])
-    expect(exported.rows[0]).not.toHaveProperty('field_prints')
+    const exported = await sectionRows(fx.t, fx.org.id, 'activity_events')
+    expect(exported.map((r) => r.id)).toEqual([stored.id])
+    expect(exported[0]).not.toHaveProperty('field_prints')
   })
 })

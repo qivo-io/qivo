@@ -9,14 +9,13 @@
  * releases it. */
 /// <reference types="vite/client" />
 
-import { type FunctionArgs, type FunctionReturnType, makeFunctionReference } from 'convex/server'
+import type { FunctionArgs, FunctionReturnType } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { KEY_PAGE, RUN } from '../internal/nameKeysBackfill'
 import { byId } from '../lib/db'
 import { nameKey } from '../lib/nameKey'
-import type { OrgExportPage, OrgExportSection } from '../lib/orgExport'
 import { deleteOrgDeep } from '../model/cascade'
 import { NAME_COPIES, nameKeysReady } from '../model/nameKeys'
 import { STALLED_MS } from '../nameCopies'
@@ -34,6 +33,7 @@ import {
   workspaceOf,
 } from './helpers.setup'
 import { expectExact, keysOf } from './nameKeys.setup'
+import { sectionRows } from './orgExport.setup'
 import { ready as navListsReady, navRowsOf } from './projectNavFixtures.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
@@ -939,33 +939,19 @@ describe('readiness', () => {
     const rows = [...snap.profiles, ...snap.teamMembers, ...snap.teams, ...nav]
     expect(rows.length).toBeGreaterThanOrEqual(6)
     for (const row of rows) expect(row).not.toHaveProperty('name_key')
-    const page = makeFunctionReference<
-      'query',
-      { org_id: string; section: OrgExportSection; parent_id?: string; cursor: string | null },
-      OrgExportPage
-    >('orgExport:page')
-    for (const section of ['profiles', 'teams', 'projects'] as const) {
-      const exported = await as(t, f.admin).query(page, {
-        org_id: f.org.id,
-        section,
-        cursor: null,
-      })
-      expect(exported.rows.length).toBeGreaterThan(0)
-      for (const row of exported.rows) expect(row).not.toHaveProperty('name_key')
+    for (const key of ['profiles', 'teams', 'projects'] as const) {
+      const exported = await sectionRows(t, f.org.id, key)
+      expect(exported.length).toBeGreaterThan(0)
+      for (const row of exported) expect(row).not.toHaveProperty('name_key')
     }
-    for (const [section, parent] of [
-      ['team_members', f.team.id],
-      ['project_access', id],
-      ['project_team_access', id],
+    for (const [key, field, parent] of [
+      ['team_members', 'team_id', f.team.id],
+      ['project_access', 'project_id', id],
+      ['project_team_access', 'project_id', id],
     ] as const) {
-      const exported = await as(t, f.admin).query(page, {
-        org_id: f.org.id,
-        section,
-        parent_id: parent,
-        cursor: null,
-      })
-      expect(exported.rows.length).toBeGreaterThan(0)
-      for (const row of exported.rows) expect(row).not.toHaveProperty('name_key')
+      const exported = (await sectionRows(t, f.org.id, key)).filter((row) => row[field] === parent)
+      expect(exported.length).toBeGreaterThan(0)
+      for (const row of exported) expect(row).not.toHaveProperty('name_key')
     }
   })
 })

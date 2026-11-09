@@ -12,7 +12,7 @@
  * (trash.setup.ts installTrashTimers). */
 /// <reference types="vite/client" />
 
-import { type FunctionArgs, makeFunctionReference } from 'convex/server'
+import type { FunctionArgs } from 'convex/server'
 import { ConvexError, getDocumentSize } from 'convex/values'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
@@ -23,7 +23,6 @@ import { byId } from '../lib/db'
 import type { Refusal } from '../lib/functions'
 import { LIMITS, MIB } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
-import type { OrgExportPage, OrgExportSection } from '../lib/orgExport'
 import { ACCESS_FIRST_PASS, deleteOrgDeep, REMOVAL_BUDGET } from '../model/cascade'
 import {
   clearOrgTrash,
@@ -58,6 +57,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { sectionRows } from './orgExport.setup'
 import { ready as navListsReady, navRowsOf } from './projectNavFixtures.setup'
 import {
   expectedReach,
@@ -224,18 +224,9 @@ describe('archive states', () => {
     const nav = await navRowsOf(as(t, f.user), [f.meta.id, f.sub.id, f.hidden.id])
     expect(nav.length).toBeGreaterThan(3)
     for (const row of nav) expect(row).not.toHaveProperty('archive_state')
-    const page = makeFunctionReference<
-      'query',
-      { org_id: string; section: OrgExportSection; cursor: string | null },
-      OrgExportPage
-    >('orgExport:page')
-    const exported = await as(t, f.admin).query(page, {
-      org_id: f.org.id,
-      section: 'projects',
-      cursor: null,
-    })
-    expect(exported.rows.length).toBeGreaterThan(0)
-    for (const row of exported.rows) expect(row).not.toHaveProperty('archive_state')
+    const exported = await sectionRows(t, f.org.id, 'projects')
+    expect(exported.length).toBeGreaterThan(0)
+    for (const row of exported) expect(row).not.toHaveProperty('archive_state')
     const caller = { callerId: f.user.id, access: 'read' as const }
     const rest = await t.query(internal.machine.rest.getProject, { ...caller, ref: f.meta.key })
     expect(rest).not.toHaveProperty('archive_state')

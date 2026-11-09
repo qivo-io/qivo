@@ -1,9 +1,12 @@
 /* Helpers shared by the organization export job's suites
  * (orgExportJob.test.ts, orgExportDeleted.test.ts,
- * orgExportDelivery.test.ts): running a job to the end or a step at a
- * time, reading its rows and parts, and unzipping its archive with a ZIP
- * builder of the tests' own, the independent reference for the one the
- * /exports/ route streams (lib/orgExport.ts).
+ * orgExportDelivery.test.ts, orgExport.test.ts and the suites that check
+ * what the export sends): running a job to the end or a step at a time,
+ * reading its rows and parts, reading one section through the job's own
+ * bounded reads (sectionRows), reading every live section straight from
+ * the tables as the parity cases' oracle (tableRows), and unzipping its
+ * archive with a ZIP builder of the tests' own, the independent reference
+ * for the one the /exports/ route streams (lib/orgExport.ts).
  *
  * Two dots in the basename keep the Convex CLI from deploying this module,
  * the same rule as helpers.setup.ts. */
@@ -11,10 +14,27 @@
 
 import { inflateSync, unzipSync } from 'fflate/browser'
 import { expect, vi } from 'vitest'
-import { api } from '../_generated/api'
+import { api, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
+import type { QueryCtx } from '../_generated/server'
 import { crc32 } from '../lib/crc32'
-import type { OrgExportRow } from '../lib/orgExport'
+import {
+  archiveRow,
+  exportName,
+  JOB_ORDER,
+  ORG_EXPORT_ORDER,
+  ORG_EXPORT_SECTIONS,
+  type OrgExportRow,
+  type OrgExportSection,
+} from '../lib/orgExport'
+import type { ExportBatch } from '../model/orgExportRead'
+import {
+  exportDocs,
+  hasItemInFlight,
+  liveChecks,
+  organizationRow,
+  type PagedSection,
+} from '../model/orgExportRead'
 import { as, type T } from './helpers.setup'
 
 /** The fake clock's start in the export suites. */
@@ -232,4 +252,176 @@ export async function archiveOf(t: T, exportId: string) {
     readme: texts['README.txt'],
     manifest: JSON.parse(texts['manifest.json']) as ArchiveManifest,
   }
+}
+
+/** The archive key of a live section (lib/orgExport.ts JOB_ORDER), such
+ * as `tasks` or `task_links`. */
+export type LiveKey = ReturnType<typeof exportName>
+
+/** Every bounded read the export job makes of live section `key` of
+ * `orgId` (orgExport.ts readBatch) from its start to its end, in order,
+ * reading a wide tasks page again narrow when its texts did not fit, as
+ * the job's step does. */
+export async function sectionBatches(t: T, orgId: string, key: LiveKey): Promise<ExportBatch[]> {
+  const section = JOB_ORDER.findIndex((entry) => entry.kind === 'live' && entry.key === key)
+  if (section < 0) throw new Error(`no live export section ${key}`)
+  const batches: ExportBatch[] = []
+  let at: ExportBatch['at'] = { section, cursor: null }
+  let wide = true
+  for (let guard = 0; guard < 2000; guard++) {
+    const batch = await t.query(internal.orgExport.readBatch, { org_id: orgId, at, wide })
+    if (batch.retry === 'narrow') {
+      wide = false
+      continue
+    }
+    wide = true
+    batches.push(batch)
+    if (batch.done) return batches
+    at = batch.at
+  }
+  throw new Error(`the export did not finish section ${key}`)
+}
+
+/** Live section `key` of `orgId` as the export job writes it into its
+ * archive: every row its reads give, with the archive's names
+ * (lib/orgExport.ts archiveRow), as JSON carries them. */
+export async function sectionRows(t: T, orgId: string, key: LiveKey): Promise<OrgExportRow[]> {
+  const rows = (await sectionBatches(t, orgId, key)).flatMap((batch) => batch.rows.map(archiveRow))
+  return JSON.parse(JSON.stringify(rows)) as OrgExportRow[]
+}
+
+/* The rows of child section `section` under parent `id`, read straight
+ * from the table through its parent index. */
+function childrenOf(ctx: QueryCtx, section: OrgExportSection, id: string) {
+  switch (section) {
+    case 'team_members':
+      return ctx.db
+        .query('team_members')
+        .withIndex('by_team', (q) => q.eq('team_id', id))
+        .collect()
+    case 'project_access':
+      return ctx.db
+        .query('project_access')
+        .withIndex('by_project', (q) => q.eq('project_id', id))
+        .collect()
+    case 'project_team_access':
+      return ctx.db
+        .query('project_team_access')
+        .withIndex('by_project', (q) => q.eq('project_id', id))
+        .collect()
+    case 'milestones':
+      return ctx.db
+        .query('milestones')
+        .withIndex('by_project', (q) => q.eq('project_id', id))
+        .collect()
+    case 'issue_links':
+      return ctx.db
+        .query('issue_links')
+        .withIndex('by_source', (q) => q.eq('source_id', id))
+        .collect()
+    case 'issue_labels':
+      return ctx.db
+        .query('issue_labels')
+        .withIndex('by_issue', (q) => q.eq('issue_id', id))
+        .collect()
+    case 'issue_attachments':
+      return ctx.db
+        .query('issue_attachments')
+        .withIndex('by_issue', (q) => q.eq('issue_id', id))
+        .collect()
+    case 'comments':
+      return ctx.db
+        .query('comments')
+        .withIndex('by_issue', (q) => q.eq('issue_id', id))
+        .collect()
+    case 'agent_keys':
+      return ctx.db
+        .query('agent_keys')
+        .withIndex('by_profile', (q) => q.eq('profile_id', id))
+        .collect()
+    default:
+      throw new Error(`${section} is not a child section`)
+  }
+}
+
+/* The rows of top-level section `section` of `orgId`, read straight from
+ * the table through its organization index. */
+function topLevelOf(ctx: QueryCtx, section: OrgExportSection, orgId: string) {
+  switch (section) {
+    case 'teams':
+      return ctx.db
+        .query('teams')
+        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .collect()
+    case 'profiles':
+      return ctx.db
+        .query('profiles')
+        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .collect()
+    case 'projects':
+      return ctx.db
+        .query('projects')
+        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .collect()
+    case 'issues':
+      return ctx.db
+        .query('issues')
+        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .collect()
+    case 'labels':
+      return ctx.db
+        .query('labels')
+        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .collect()
+    case 'activity_events':
+      return ctx.db
+        .query('activity_events')
+        .withIndex('by_org_ts', (q) => q.eq('org_id', orgId))
+        .collect()
+    default:
+      throw new Error(`${section} is not a top-level section`)
+  }
+}
+
+/** Every live section of `orgId` read whole from its tables, not through
+ * the job's bounded reads, by archive name, each row as the archive writes
+ * it: the parity cases' oracle. It walks the organization's tables through
+ * their organization indexes and each child table through its parent
+ * index, under the parents it exported (only agents' keys), and makes each
+ * row as the job does (model/orgExportRead.ts organizationRow,
+ * exportDocs, liveChecks), so only the traversal is independent of the
+ * job's. While a deleted item is in flight the tasks and their links read
+ * the projects and parents they name, as the job's do. */
+export async function tableRows(t: T, orgId: string): Promise<Record<string, OrgExportRow[]>> {
+  const bySection = await t.run(async (ctx) => {
+    const live = liveChecks(ctx)
+    const inFlight = await hasItemInFlight(ctx, orgId)
+    const out = {} as Record<OrgExportSection, OrgExportRow[]>
+    for (const section of ORG_EXPORT_ORDER) {
+      if (section === 'organizations') {
+        const row = await organizationRow(ctx, orgId)
+        out[section] = row === null ? [] : [row]
+        continue
+      }
+      const paged = section as PagedSection
+      const checks = (section === 'issues' || section === 'issue_links') && inFlight
+      const parent = ORG_EXPORT_SECTIONS[section]
+      if (parent === null) {
+        const docs = await topLevelOf(ctx, section, orgId)
+        out[section] = (await exportDocs(ctx, orgId, paged, docs, checks, live)).rows
+        continue
+      }
+      const rows: OrgExportRow[] = []
+      for (const parentRow of out[parent]) {
+        if (section === 'agent_keys' && parentRow.kind !== 'agent') continue
+        const docs = await childrenOf(ctx, section, parentRow.id as string)
+        rows.push(...(await exportDocs(ctx, orgId, paged, docs, checks, live)).rows)
+      }
+      out[section] = rows
+    }
+    return JSON.parse(JSON.stringify(out)) as Record<OrgExportSection, OrgExportRow[]>
+  })
+  return Object.fromEntries(
+    ORG_EXPORT_ORDER.map((section) => [exportName(section), bySection[section].map(archiveRow)]),
+  )
 }
