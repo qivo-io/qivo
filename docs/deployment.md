@@ -948,9 +948,10 @@ the app from the release after v0.1.161 on reads its projects through
 desktop notifications through `inbox.feed`, all of which that release first
 ships, so never return the backend to a commit before the release after
 v0.1.161. Every app before
-the release after v0.1.161 subscribes a workspace part that later backends
-no longer have, `workspace.projects` and `workspace.inbox`, and before the
-release after v0.1.160 also `workspace.people` and `workspace.catalog`, so
+the release after v0.1.161 subscribes workspace parts that later backends
+no longer have, `workspace.projects`, `workspace.tasks` and
+`workspace.inbox`, and before the release after v0.1.160 also
+`workspace.people` and `workspace.catalog`, so
 it cannot load its workspace against them, and that includes a tab already
 open when the release deploys, until it reloads. Never return the app or
 the demo alone, Vercel Instant Rollback included, to a deployment of a
@@ -2482,38 +2483,32 @@ people who have none, so those stamps are lost for everyone stamped before.
 Roll forward instead.
 
 Every task and project has a `window_key`, a random point the server picks
-when it stores the row. A task's key places it in the app's task windows of
-the workspace (`convex/lib/workspaceParts.ts`). From the release after
-v0.1.161 the app holds no project, so nothing reads a project's key or the
-`by_org_window` index any more, though the server still gives each project
-one. The release that replaced `snapshot.forMe` with the workspace parts
-added the field. A task stored before has none until the one-time
-`internal/windowKeysBackfill` gives it one, and until then it loads in the
-first task window, so an organization with more such tasks than one window
-holds cannot load. The backfill gives projects stored before a key too. A
-restore from Deleted items gives a task or project stored before keys a
-key as it writes it back, and the task's relation rows the same key.
-Earlier releases brought such a task back without a key, so a deployment
-that ran the backfill before it served the release that keys restores
-needs `remaining` checked again once it does, and another run if a page
-reports rows.
-Run the backfill on every hosted deployment once it serves that release, as
-the module's header says, and check that `remaining` reports 0 on every
-page of both tables. Earlier releases do not accept the field, so a
-rollback past that release fails to deploy; it is a rollback floor anyway
-(see Rollback and hotfixes).
+when it stores the row, and each task's relation rows carry its key as
+`task_key`. The release that replaced `snapshot.forMe` with the workspace
+parts added the fields, and until the release after v0.1.161 a task's key
+placed it in the app's task windows of the workspace. From the release
+after v0.1.161 the app subscribes no task window and holds no task or
+project, so a key places nothing in the app and no read uses one, though
+the server still gives every new task and project a key, its relation
+rows the task's, and a restore from Deleted items gives a copy stored
+before keys one as it writes it back. A task stored before the fields has
+no key until the one-time `internal/windowKeysBackfill` gives it one,
+which now changes nothing anyone sees, so the backfill needs no run on a
+deployment that serves the release after v0.1.161 or later. Earlier
+releases do not accept the fields, so a rollback past the release that
+added them fails to deploy; it is a rollback floor anyway (see Rollback
+and hotfixes).
 
 Each organization's `org_counters` row counts its active tasks and its
-live projects (`active_tasks`, `live_projects`). `active_tasks` alone sizes
-the app's task windows, as the app starts as many as those rows need. From the
-release after v0.1.161 the app holds no project, so `live_projects` serves
-only the organization's usage figures (`convex/model/usage.ts`). Every
-write that adds, archives, restores or deletes a task or project keeps the
-counts, and a new organization starts at zero. An organization created
-before the release that added them has none until the one-time
-`internal/liveCountsBackfill` counts it, and until then the app sizes its
-task windows by the task numbers handed out, as earlier releases did, so it
-loads as before. Run the
+live projects (`active_tasks`, `live_projects`). Until the release after
+v0.1.161 `active_tasks` sized the app's task windows. From the release
+after v0.1.161 the app subscribes no task window and holds no project, so
+both counts serve only the organization's usage figures in the operator
+console (`convex/model/usage.ts`), which show no count while an
+organization is not counted. Every write that adds, archives, restores or
+deletes a task or project keeps the counts, and a new organization starts
+at zero. An organization created before the release that added them has
+none until the one-time `internal/liveCountsBackfill` counts it. Run the
 backfill on every hosted deployment once it serves that release, as the
 module's header says: read its dry run first, then run it. A call that
 does not finish in about five minutes answers a `cursor`; call it again
