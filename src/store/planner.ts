@@ -12329,18 +12329,6 @@ export const PLANNER = {
      mention popup and the view filter's Assignee menu (P.mentionChoices),
      the follower popover's Add list (P.followerChoices) and Settings' and
      the dialogs' people pickers. `user` names one of those seats. */
-  /* What moving `it` to `projectId` does to its family, as the server does
-     it. A move within the task's top-level project changes nothing else. A
-     subtask moving to another one leaves its parent (`leavesParent`) unless
-     it lands in the parent's top-level project. A hidden parent counts as
-     being in the task's own top-level project, where every new link is. A
-     move to another top-level project carries the subtasks outside it
-     along. `carried` lists the visible ones, and `carriesSubtasks` also
-     counts active ones hidden from this view. Archived subtasks are not in
-     the view, so the Move window asks the server too
-     (moveCarriesSubtasks). With `family` (P.familyOf) the task, its
-     parent and its subtasks are the family's, as for a task the window
-     shows from its own answer. */
   /** Where the project cache stands on a project moveFamily needs facts of
       to judge moving `it`, or null once it can: the task's own sub-project
       and, for a subtask whose parent the view holds, the parent's, whose
@@ -12364,6 +12352,18 @@ export const PLANNER = {
     }
     return null
   },
+  /* What moving `it` to `projectId` does to its family, as the server does
+     it. A move within the task's top-level project changes nothing else. A
+     subtask moving to another one leaves its parent (`leavesParent`) unless
+     it lands in the parent's top-level project. A hidden parent counts as
+     being in the task's own top-level project, where every new link is. A
+     move to another top-level project carries the subtasks outside it
+     along. `carried` lists the visible ones, and `carriesSubtasks` also
+     counts active ones hidden from this view. Archived subtasks are not in
+     the view, so the Move window asks the server too
+     (moveCarriesSubtasks). With `family` (P.familyOf) the task, its
+     parent and its subtasks are the family's, as for a task the window
+     shows from its own answer. */
   moveFamily: (
     it: IssueVM,
     projectId: string,
@@ -12916,9 +12916,6 @@ export const PLANNER = {
     if (h < 24) return `${h}h ago`
     return `${Math.round(h / 24)}d ago`
   },
-  /** The lead of project `id`: its own, else its top-level project's, from
-      the project cache (projectNav.byIds lead_id), or null where neither
-      the project nor its parent has one known. */
   /** The lead of project `id`, its own or else its parent's, from the
       project cache, or null where it has none or the cache knows only a
       navigation row's seed of the project or its parent (ProjectFacts
