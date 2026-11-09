@@ -187,6 +187,10 @@ function fixture() {
   return next
 }
 
+/** Gives Mira Edit on Manuals, as a move into it needs (P.moveIssue). */
+const editsManuals = (next: Snapshot) =>
+  next.access.push({ project_id: 'manuals', profile_id: MIRA, level: 'user' })
+
 /** Boots the store on the fixture, changed by `edit`. Every write waits
     for the test. */
 async function load(edit?: (next: Snapshot) => void) {
@@ -571,7 +575,7 @@ describe('a write from the window’s own answer fails closed', { timeout: 30_00
   })
 
   it('treats a subtask list that is not whole as a group: no dates or hours, a status left to the server', async () => {
-    await load()
+    await load(editsManuals)
     await openFar(
       okAnswer(far({ has_hidden_subtasks: true }), {
         subtasks: { rows: [short(task(FAR_KID, 42, { parent_id: FAR }))], complete: false },
@@ -987,7 +991,7 @@ describe('Move, Archive and delete from the window’s own answer', { timeout: 3
     })
 
   it('moves the task with the subtasks it carries, sending the project and the parent pair it showed', async () => {
-    await load()
+    await load(editsManuals)
     await openBoard([viewRow(far({ parent_id: PARENT })), viewRow(kid(FAR_KID, 42))])
     await openFar(family())
     P.showSections({}, true)
@@ -1007,7 +1011,7 @@ describe('Move, Archive and delete from the window’s own answer', { timeout: 3
     expect(card()?.project).toBe('manuals')
     expect(card(FAR_KID)?.project).toBe('manuals')
     // within its top-level project nothing else moves
-    await load()
+    await load(editsManuals)
     await openFar(family())
     P.moveIssue(H, 'bench')
     expect(last('issues:move').args).toEqual({
@@ -1018,7 +1022,7 @@ describe('Move, Archive and delete from the window’s own answer', { timeout: 3
     })
     // a hidden parent counts as in the task's own top-level project, and
     // the pair says only that there is one
-    await load()
+    await load(editsManuals)
     await openFar(okAnswer(far({ has_hidden_parent: true })))
     P.moveIssue(H, 'manuals')
     expect(last('issues:move').args).toMatchObject({
