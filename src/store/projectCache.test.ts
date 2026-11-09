@@ -27,19 +27,28 @@ function setup({ share = false } = {}) {
   const visibility = new Set<(v: Visibility) => void>()
   let next = 0
   let changes = 0
+  // whether each watch asked for a fresh run, in order
+  const fresh: boolean[] = []
   // the socket's connection count, which reconnect() moves on
   let connection = 1
   const cache = createProjectCache({
     live: {
-      watch: (_ref, args) => {
+      watch: (_ref, args, sharing) => {
         const token = share ? `ids:${JSON.stringify(args)}` : `t${++next}`
         const known = subs.get(token)
         if (known) known.watches++
         else subs.set(token, { args: args as Sub['args'], watches: 1, answered: false })
+        // a fresh watch runs the shared read again, so no watch has its
+        // answer until a transition brings the new run's
+        if (known && sharing?.fresh) {
+          known.answered = false
+          known.value = undefined
+        }
+        fresh.push(!!sharing?.fresh)
         let stopped = false
         return {
           token,
-          joined: known?.answered ?? false,
+          joined: (!sharing?.fresh && known?.answered) ?? false,
           stop: () => {
             if (stopped) return
             stopped = true
@@ -81,6 +90,7 @@ function setup({ share = false } = {}) {
   return {
     cache,
     reads,
+    fresh,
     changes: () => changes,
     /** Answers read `token` with `rows` (every id's row by default), and
         `unchecked` apart. */
@@ -490,6 +500,34 @@ describe('the project cache', () => {
     expect(s.cache.look('p1').state).toBe('ok')
     s.cache.retry('scope')
     expect(s.reads()[0].token).toBe(again.token)
+  })
+
+  it("keeps a chunk's answer on retry of a project it listed apart, the others' levels included, until a fresh run answers", () => {
+    for (const share of [false, true]) {
+      const s = setup({ share })
+      s.cache.name('scope', ['p1'])
+      s.cache.name('board', ['p1', 'p2'])
+      const [first] = s.reads()
+      s.answer(first.token, undefined, ['p1'])
+      expect(s.cache.look('p1').state).toBe('unchecked')
+      expect(s.cache.look('p2')).toMatchObject({ state: 'ok', row: { level: 'user' } })
+      s.cache.retry('scope')
+      // must fail for a retry that drops the answer the chunk holds
+      expect(s.cache.look('p2')).toMatchObject({ state: 'ok', row: { level: 'user' } })
+      expect(s.cache.look('p1').state).toBe('unchecked')
+      // a fresh run of the chunk's ids, which Convex runs again also where
+      // the answered read shares its subscription
+      expect(s.fresh.at(-1)).toBe(true)
+      const again = s.reads().at(-1)
+      if (!again) throw new Error('no fresh read')
+      if (!share) expect(again.token).not.toBe(first.token)
+      s.answer(again.token)
+      expect(s.cache.look('p1').state).toBe('ok')
+      expect(s.cache.look('p2').state).toBe('ok')
+      // the chunk holds one read again
+      expect(s.cache.reads()).toEqual([['p1', 'p2']])
+      expect(s.reads()).toHaveLength(1)
+    }
   })
 
   it('reads in chunks in the order first named, a list that loads more changing only its last chunk', () => {

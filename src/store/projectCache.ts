@@ -550,7 +550,11 @@ export function createProjectCache(deps: ProjectCacheDeps) {
     /** Reads owner `owner`'s projects again from fresh subscriptions where
         their chunk's read failed or listed one of them apart, as a Retry
         asks: Convex keeps no failed run, and a check a bound stopped may
-        finish now. */
+        finish now. A failed chunk starts again with no answer. A chunk that
+        holds an answer keeps it, so its other projects keep their state
+        and levels, while a fresh run of its ids reads as the chunk's next
+        read, which takes over once it answers (promote), as follow() keeps
+        an answered read. */
     retry(owner: string) {
       const ids = owners.get(owner)
       if (!ids) return
@@ -562,10 +566,26 @@ export function createProjectCache(deps: ProjectCacheDeps) {
         if (result === 'failed' || result?.unchecked.has(id)) again.add(chunk)
       }
       for (const chunk of again) {
-        chunk.sub?.stop()
         chunk.next?.stop()
-        chunk.sub = null
         chunk.next = null
+        if (chunk.result !== null && chunk.result !== 'failed' && chunk.sub && visible) {
+          // a fresh run of the chunk's ids, which Convex runs again also
+          // where the answered read shares its subscription
+          listen()
+          const w = deps.live.watch(QUERY, { ids: [...chunk.ids] } as Record<string, Value>, {
+            fresh: true,
+          })
+          chunk.next = {
+            token: w.token,
+            stop: w.stop,
+            ids: [...chunk.ids],
+            args: JSON.stringify(chunk.ids),
+            answeredOn: null,
+          }
+          continue
+        }
+        chunk.sub?.stop()
+        chunk.sub = null
         chunk.result = null
         chunk.fresh = false
         touch()
