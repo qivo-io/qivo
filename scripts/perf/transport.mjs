@@ -214,9 +214,11 @@ window.__perf = {
   /* Delivers `n` new unread messages for the signed-in person, one per task,
      for the bulk-read scenario. */
   seedMessages: (n) => scenario('seedMessages', n),
-  /* Another person renames task `n`, which every listener receives. */
+  /* Another person renames task `n`, which every listener receives;
+     resolves with its new title. */
   deliverRemote: (n) => scenario('deliverRemote', n),
-  /* Another person creates a task in the first project. */
+  /* Another person creates a task in the first project; resolves with its
+     id. */
   deliverCreate: () => scenario('deliverCreate'),
   /* That person deletes the task again (untimed in the benchmark). */
   deliverDelete: () => scenario('deliverDelete'),
@@ -228,7 +230,7 @@ window.__perf = {
   deliverStamp: () => scenario('deliverStamp'),
   /* Another person moves task `n` to `status`, for checks by hand. */
   moveRemote: (n, status) => scenario('moveRemote', n, status),
-  /* Another person comments on the open task; resolves with the comment's
-     text. */
-  deliverComments: () => scenario('deliverComments'),
+  /* Another person posts `count` comments (one by default) on the open
+     task, which arrive in one delivery; resolves with the last one's text. */
+  deliverComments: (count = 1) => scenario('deliverComments', count),
 }

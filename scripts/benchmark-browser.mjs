@@ -22,10 +22,12 @@
 // fields this checkout's perf server no longer sends, so it cannot load
 // here, and the perf server answers its read of the part with an error that
 // says so; measure such a revision with its own checkout's benchmark on the
-// same machine instead. That holds for the default baseline too, the merge
-// base, until main carries this change. So it is for a revision before the
-// Inbox feed, whose workspace waits for the inbox part (workspace.inbox),
-// which this checkout's perf server no longer answers either.
+// same machine instead. So it is for a revision before the Inbox feed,
+// whose workspace waits for the inbox part (workspace.inbox), which this
+// checkout's perf server no longer answers either. A revision from before
+// the task windows went still has the ask for every task, which nothing
+// calls once this driver dropped its task load, so its store
+// holds no task either and both arms run the same phases.
 //
 // Every sample ends on the Overview and the Roadmap after the Board was
 // open (which stays loaded, hidden): the page's memory, and a remote change
@@ -90,9 +92,21 @@
 // the longest animation frame from the press or the delivery on
 // (*LongestFrameMs), and records the heap and the page's elements after
 // them. The figures take turns in each sample, so every figure runs under
-// the same load. --phone runs the same with the window at the phone's 390
-// by 844, which it narrows to once the task is open, as the phone phases
-// above do.
+// the same load. Each sample then times the return to a hidden page
+// (threadReturn) for 10, 49 and 60 comments, below the live window's 50,
+// at its edge and past it: a task with 200 comments and 200 changes opened
+// from the Roadmap under All, Show earlier pressed until the store holds
+// the budget (THREAD_KEEP, 150 rows), the page hidden by overriding
+// document.visibilityState and dispatching visibilitychange, the comments
+// posted at once, and the page shown again, timed from the show until the
+// newest of them shows with no thread page loading and, in a build that
+// marks it, the window's reads current (data-task-window-reads), with the
+// longest animation frame from the show on. threadReturnArrivedHidden says
+// whether their delivery reached the page while it was hidden: on this
+// branch the window's reads keep running while hidden, so it does, and the
+// return times only what showing the page costs. --phone runs the same
+// with the window at the phone's 390 by 844, which it narrows to once the
+// task is open, as the phone phases above do.
 import assert from 'node:assert/strict'
 import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -173,29 +187,28 @@ if (!process.argv.includes('--serve'))
       process.exit(code)
     })
 // the timed phases, each with its script, layout and style time and the
-// number of App renders in it. Tasks load on demand, so `startup` is the
-// startup without task windows. It lasts until the project the app opens
-// shows a view (startedOn). On this branch that follows the
-// projectNav.resolve check of the remembered project, one round trip more
-// than a build from before it, which opened the first project at once. The
-// phases before `taskLoad` (BEFORE_ASK) run before any task is held, the
-// Roadmap's navigation and drag among them, since the Roadmap reads its
-// tasks from the server (tasks.roadmap), and the person's own create, timed
-// from its send to its confirmation; taskLoad times the ask for every task
-// (P.askTasks) to every task held, and every phase after it reads or edits
-// held tasks. A build from before the Roadmap read the server asks for
-// every task as the Roadmap mounts, so its navigation holds that load and
-// its taskLoad finds every task held. A build from before a create stopped
-// asking (t3/limits-create-answer) asks for every task as it creates, so
-// its `create` holds the start of the task load and its taskLoad only the
-// rest
+// number of App renders in it. The app holds no task, so `startup` is the
+// startup with the root part alone. It lasts until the project the app
+// opens shows a view (startedOn), which follows the projectNav.resolve
+// check of the remembered project. Every phase reads its tasks from a
+// view's answer or a task window's: the Roadmap's navigation and drag from
+// the Roadmap's (tasks.roadmap), the person's own create from its send to
+// its confirmation, `comments` in a window opened from a Roadmap row, which
+// shows its task from its own answer (taskWindow.task), and the person's
+// own writes after it (remoteWhilePending, remoteSettle, refusalWithTen and
+// the *AfterBoardEdit phases) as status changes of tasks the Roadmap's or
+// the Board's answer brings, which the store sends from the view's row
+// (store/planner.ts updateViewTask), as the Board's drop does. Against
+// reports from before the task windows went, taskLoad is gone and those
+// writes changed meaning: they were title edits of held tasks, which a
+// view's row cannot send, so they repaint a status where they repainted a
+// title
 const PHASES = [
   'searchOpen',
   'search',
   'navigation',
   'drag',
   'create',
-  'taskLoad',
   'comments',
   'remote',
   'remoteWhilePending',
@@ -238,9 +251,6 @@ const PHASES = [
       ]
     : []),
 ]
-/* The phases that run before the ask for every task (taskLoad), on a
-   workspace that holds no task; the report names them (report.beforeAsk). */
-const BEFORE_ASK = ['startup', 'searchOpen', 'search', 'navigation', 'drag', 'create']
 // the medians --baseline prints side by side
 const COMPARED = [
   ...[
@@ -271,11 +281,9 @@ const COMPARED = [
     'phoneBoard',
     'overviewAfterBoardRemote',
   ].map((phase) => `${phase}WireBytes`),
-  // the startup without task windows, the person's own create, and the ask
-  // for every task after it
+  // the startup and the person's own create
   'startup',
   'create',
-  'taskLoad',
   // opening the Board from the click until every card is in
   'boardOpenToCompleteMs',
   'boardLongestSliceMs',
@@ -321,8 +329,6 @@ const report = {
   samples,
   timeoutMs: timeout,
   kind: 'authenticated production UI; synthetic transport',
-  // the phases before the ask for every task; every other one runs after it
-  beforeAsk: BEFORE_ASK,
   scenarios: [],
   // the one-minute load average after each sample
   loads: [],
@@ -598,6 +604,31 @@ async function watchInput(page) {
   }
 }
 
+/** Status changes for the `count` tasks after the first `skip` that view
+    `slot`'s answer brings ('roadmap' or a Board's slot) and that are not
+    groups, each to a status other than the one its row shows: `{ id,
+    status, was }` with the task's handle. The store sends them from the
+    view's row (P.updateIssue, store/planner.ts updateViewTask), as the
+    Board's drop does, since it holds no task to rename. */
+const statusWrites = (page, slot, count, skip = 0) =>
+  page.evaluate(
+    ({ slot, count, skip }) => {
+      const P = window.PLANNER
+      const read = slot === 'roadmap' ? P.roadmapRead() : P.boardRead(slot)
+      const rows = read.value?.state === 'ok' ? read.value.rows : []
+      return rows
+        .map((row) => P.viewTask(slot, row.id))
+        .filter((it) => it && !it.isGroup)
+        .slice(skip, skip + count)
+        .map((it) => ({
+          id: it.id,
+          was: it.status,
+          status: it.status === 'progress' ? 'todo' : 'progress',
+        }))
+    },
+    { slot, count, skip },
+  )
+
 /** The view switch's `name` button, for a timed phase to click. */
 const viewButton = (page, name) =>
   handle(page.locator('[data-view-switch]').getByRole('radio', { name, exact: true }))
@@ -844,9 +875,7 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
   // cache, on a workspace that holds no task, from its send (P.addIssue)
   // to its confirmation (P.hasUnconfirmed). The stand-in stores and
   // answers it (issues:create), and deletes it again, untimed, so the
-  // phases after it find the tasks they found before. A build that
-  // creates without an ask (P.createOnItsWay) still holds no task after
-  // it; an older one asks for every task here.
+  // phases after it find the tasks they found before.
   phase('create')
   metrics.create.push(
     await timed(async () => {
@@ -865,33 +894,10 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
       })
     }),
   )
-  if (await page.evaluate(() => typeof window.PLANNER.createOnItsWay === 'function'))
-    assert.equal(
-      await page.evaluate(() => window.PLANNER.tasksHeld()),
-      false,
-      'A create must not load every task',
-    )
   await page.evaluate(() => window.__perf.deliverDelete())
   await settle()
-  // From the ask for every task (P.askTasks) to every task held, before the
-  // first phase that needs them. A build from before tasks loaded on demand
-  // has no ask and loads every task as it boots, so the phase waits for that
-  // load to end (P.stillLoading), which a whole boot has ended already.
-  phase('taskLoad')
-  metrics.taskLoad.push(
-    await timed(async () => {
-      await page.evaluate(() => window.PLANNER.askTasks?.('benchmark'))
-      await page.waitForFunction(
-        () =>
-          typeof window.PLANNER.tasksHeld === 'function'
-            ? window.PLANNER.tasksHeld()
-            : window.PLANNER.stillLoading() === null,
-        null,
-        { timeout: timeout * 10 },
-      )
-    }),
-  )
-  assert.equal(await page.evaluate(() => window.PLANNER.issues.length), tasks)
+  // a window opened from a Roadmap row, which shows its task from its own
+  // answer (taskWindow.task)
   await page.locator('[data-roadmap-task-open]').first().click()
   phase('comments')
   await page.locator('[data-task-close]').waitFor()
@@ -938,11 +944,14 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
   // Writes waiting for their answer: another person's change arrives
   // while one waits, then the write answers with its own echo.
   const heldCount = (n) => page.waitForFunction((count) => window.__perf.held() === count, n)
+  // a status change of the Roadmap's first task, from its view's row
+  const [pending] = await statusWrites(page, 'roadmap', 1)
+  assert.ok(pending, 'The Roadmap must bring a task to change')
   await page.evaluate(() => window.__perf.hold())
   // not awaited in the page: the write waits until it is released
-  await page.evaluate(() => {
-    void window.PLANNER.updateIssue(window.PLANNER.issues[0].id, { title: 'Pending edit' })
-  })
+  await page.evaluate(({ id, status }) => {
+    void window.PLANNER.updateIssue(id, { status })
+  }, pending)
   await heldCount(1)
   phase('remoteWhilePending')
   metrics.remoteWhilePending.push(
@@ -960,19 +969,28 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
       await paintTimer()
     }),
   )
-  assert.equal(await page.evaluate(() => window.PLANNER.issues[0].title), 'Pending edit')
-  // A refusal while ten other edits wait: only its own change goes.
-  await page.evaluate(() => {
+  assert.equal(
+    await page.evaluate((id) => window.PLANNER.anyTask(id)?.status, pending.id),
+    pending.status,
+  )
+  // A refusal while ten other edits wait: only its own change goes. Eleven
+  // status changes of the Roadmap's next tasks, from their views' rows.
+  const layers = await statusWrites(page, 'roadmap', 11, 1)
+  assert.equal(layers.length, 11, 'The Roadmap must bring eleven tasks to change')
+  await page.evaluate((layers) => {
     window.__perf.hold()
-    for (const [n, task] of window.PLANNER.issues.slice(0, 11).entries())
-      window.PLANNER.updateIssue(task.id, { title: `Layer ${n}` })
-  })
+    for (const { id, status } of layers) void window.PLANNER.updateIssue(id, { status })
+  }, layers)
   await heldCount(11)
   phase('refusalWithTen')
   metrics.refusalWithTen.push(
     await timed(async () => {
       await page.evaluate(() => window.__perf.releaseOne(true))
-      await page.waitForFunction(() => window.PLANNER.issues[0].title !== 'Layer 0')
+      // the refused change's paint goes, so its task shows its status again
+      await page.waitForFunction(
+        ({ id, was }) => window.PLANNER.anyTask(id)?.status === was,
+        layers[0],
+      )
       await paintTimer()
     }),
   )
@@ -1018,21 +1036,34 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
   await noToasts()
   // Other people's changes besides a rename, each one delivery: a new
   // task, a renamed project, a new inbox message and a Team sync stamp.
+  let made = null
   phase('remoteCreate')
   metrics.remoteCreate.push(
     await timed(async () => {
-      await page.evaluate(() => window.__perf.deliverCreate())
+      made = await page.evaluate(() => window.__perf.deliverCreate())
       await paintTimer()
     }),
   )
-  assert.equal(await page.evaluate(() => window.PLANNER.issues.length), tasks + 1)
+  // the Roadmap's answer names the new task, or says its project passed
+  // the ceiling
+  const roadmapNames = (id, named) =>
+    page.waitForFunction(
+      ({ id, named }) => {
+        const answer = window.PLANNER.roadmapRead().value
+        if (answer?.state === 'over_ceiling') return named
+        return answer?.state === 'ok' && answer.rows.some((row) => row.id === id) === named
+      },
+      { id, named },
+      { timeout: timeout * 2 },
+    )
+  await roadmapNames(made, true)
   // At whole thousands the new task takes the top-level project the app
   // opens past the Roadmap's 1,000 tasks, the design size, and a build that
   // reads the Roadmap from the server shows its ceiling note there instead
   // of rows. Its creator deletes it again, untimed, on both builds, so the
   // phases after it time the Roadmap with its rows as before.
   await page.evaluate(() => window.__perf.deliverDelete())
-  await page.waitForFunction((count) => window.PLANNER.issues.length === count, tasks)
+  await roadmapNames(made, false)
   await shows(page, '[data-roadmap-task-open]')
   phase('remoteProjectRename')
   metrics.remoteProjectRename.push(
@@ -1097,14 +1128,15 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
   const boardSize = await pageSize(page, cdp)
   metrics.boardHeapMb.push(boardSize.heapMb)
   metrics.boardDomNodes.push(boardSize.domNodes)
+  // the stand-in answers the title it gave the task
+  let renamed = null
   phase('boardRemote')
   metrics.boardRemote.push(
     await timed(async () => {
-      await page.evaluate(() => window.__perf.deliverRemote(3))
+      renamed = await page.evaluate(() => window.__perf.deliverRemote(3))
       await paintTimer()
     }),
   )
-  const renamed = await page.evaluate(() => window.PLANNER.issues[3].title)
   assert.equal(
     await page.locator('[data-card]', { hasText: renamed }).count(),
     1,
@@ -1175,8 +1207,9 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
   metrics.afterBoardHeapMb.push(afterBoard.heapMb)
   metrics.afterBoardDomNodes.push(afterBoard.domNodes)
   /** Times another person's rename of task `remote`, then this person's
-      own rename of task `own`, as `prefix`Remote and `prefix`Edit. */
-  const changes = async (prefix, remote, own) => {
+      own status change of the `own`th task view `slot`'s answer brings,
+      from its row, as `prefix`Remote and `prefix`Edit. */
+  const changes = async (prefix, remote, own, slot) => {
     await settle()
     await noToasts()
     phase(`${prefix}Remote`)
@@ -1186,13 +1219,15 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
         await paintTimer()
       }),
     )
+    const [edit] = await statusWrites(page, slot, 1, own)
+    assert.ok(edit, `The ${slot} answer must bring a task to change`)
     const written = await page.evaluate(() => window.__perf.writes)
     phase(`${prefix}Edit`)
     metrics[`${prefix}Edit`].push(
       await timed(async () => {
-        await page.evaluate((n) => {
-          void window.PLANNER.updateIssue(window.PLANNER.issues[n].id, { title: `Own edit ${n}` })
-        }, own)
+        await page.evaluate(({ id, status }) => {
+          void window.PLANNER.updateIssue(id, { status })
+        }, edit)
         await paintTimer()
       }),
     )
@@ -1201,11 +1236,12 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
       timeout: timeout * 2,
     })
   }
-  await changes('overviewAfterBoard', 5, 6)
+  // the Board's answer, which the Board kept hidden holds
+  await changes('overviewAfterBoard', 5, 6, 'board:desktop')
   await (await viewButton(page, 'Roadmap')).click({ timeout: timeout * 10 })
   await shows(page, '[data-roadmap-task-open]')
   await page.waitForFunction(boardComplete, null, { timeout: timeout * 10 })
-  await changes('roadmapAfterBoard', 7, 8)
+  await changes('roadmapAfterBoard', 7, 8, 'roadmap')
   assert.deepEqual(errors, [], `Browser errors at ${tasks} tasks`)
   opened.recordFiles()
   await context.close()
@@ -1601,6 +1637,116 @@ async function runThreadSample(origin, figure, kind, metrics) {
   await context.close()
 }
 
+/* The comments threadReturn has arrive while the page is hidden: fewer
+   than the live window's 50, at its edge and past it. */
+const RETURN_ARRIVALS = [10, 49, 60]
+/* The rows the task window keeps loaded (src/lib/threadBudget.ts
+   THREAD_KEEP, convex/lib/limits.ts THREAD_ROWS), which threadReturn's
+   window holds before the page hides. */
+const THREAD_BUDGET = 150
+/* The metrics of threadReturn, for one count of arrivals. */
+const RETURN_METRICS = [
+  'threadReturnMs',
+  'threadReturnLongestFrameMs',
+  'threadReturnHeldBefore',
+  'threadReturnArrivedHidden',
+]
+
+/** Hides the page as a minimized window or a background tab does for
+    lib/viewVisibility.ts, by overriding document.visibilityState and
+    document.hidden and dispatching visibilitychange, or, with `hidden`
+    false, takes the override away and dispatches it again. Answers the
+    page's time of the dispatch. */
+const setHidden = (page, hidden) =>
+  page.evaluate((hidden) => {
+    if (hidden) {
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        get: () => 'hidden',
+      })
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
+    } else {
+      delete document.visibilityState
+      delete document.hidden
+    }
+    document.dispatchEvent(new Event('visibilitychange'))
+    return performance.now()
+  }, hidden)
+
+/** One sample of threadReturn for `arrivals` comments: the task opened from
+    the Roadmap under All with its thread at the budget, the page hidden,
+    the comments posted at once, and the page shown again, timed until the
+    newest of them shows with no thread page loading and, where the build
+    marks it, the window's reads current (data-task-window-reads). */
+async function runThreadReturnSample(origin, arrivals, metrics) {
+  phase('threadReturnStartup')
+  const opened = await openPage(origin, 100, metrics, '&thread=200&threadchanges=200')
+  const { context, page, errors, settle, timed } = opened
+  await startedOn(page)
+  await settle()
+  await (await viewButton(page, 'Roadmap')).click()
+  await page.locator('[data-roadmap-task-open]').first().click()
+  await page.locator('[data-task-close]').waitFor()
+  await page.waitForFunction(() => window.PLANNER.commentsLoaded)
+  await page.getByRole('radio', { name: 'All', exact: true }).click()
+  await page.waitForFunction(() => window.PLANNER.historyLoaded)
+  if (phone) await page.setViewportSize({ width: 390, height: 844 })
+  await page.locator('[data-earlier-comments]').waitFor()
+  await settle()
+  // Show earlier until the store holds the budget, untimed
+  const earlier = '[data-earlier-comments="more"]'
+  for (let press = 0; press < 20 && (await heldRows(page, true)) < THREAD_BUDGET; press++) {
+    if ((await page.locator(earlier).count()) === 0) break
+    const scratch = { threadEarlierMs: [], threadEarlierLongestFrameMs: [] }
+    await timedThreadPress(opened, scratch, 'threadEarlier', earlier, true)
+    await settle()
+  }
+  metrics.threadReturnHeldBefore.push(await heldRows(page, true))
+  // the page hidden, and the comments posted while it is; their delivery
+  // reaches the page within two seconds if its reads keep running
+  phase('threadReturnHidden')
+  await setHidden(page, true)
+  const bytes = await page.evaluate(() => window.__perf.wireBytes)
+  const last = await page.evaluate((n) => window.__perf.deliverComments(n), arrivals)
+  const arrived = await page
+    .waitForFunction((before) => window.__perf.wireBytes > before, bytes, { timeout: 2000 })
+    .then(
+      () => true,
+      () => false,
+    )
+  metrics.threadReturnArrivedHidden.push(arrived ? 1 : 0)
+  await settle()
+  const watch = await watchInput(page)
+  let shownAt = Number.POSITIVE_INFINITY
+  try {
+    phase('threadReturn')
+    metrics.threadReturnMs.push(
+      await timed(async () => {
+        shownAt = await setHidden(page, false)
+        await page.waitForFunction(
+          (text) => {
+            const marked = document.querySelector('[data-task-window-reads]')
+            if (marked && marked.getAttribute('data-task-window-reads') !== 'current') return false
+            const P = window.PLANNER
+            const pages = [P.commentsEarlier, P.historyEarlier, P.commentsNewer, P.historyNewer]
+            if (pages.includes('loading')) return false
+            return [...document.querySelectorAll('[data-comment]')].some(
+              (comment) => comment.textContent.includes(text) && comment.checkVisibility(),
+            )
+          },
+          last,
+          { timeout: timeout * 10 },
+        )
+      }),
+    )
+  } finally {
+    await watch.stop()
+  }
+  metrics.threadReturnLongestFrameMs.push((await watch.read(shownAt)).frame)
+  assert.deepEqual(errors, [], 'Browser errors in threadReturn')
+  await context.close()
+}
+
 /** Runs the thread phase (--thread): `samples` samples, each taking every
     figure in turn under Comments and then under All, and reports the
     medians per figure and case. */
@@ -1609,13 +1755,20 @@ async function runThreadPhase(origin) {
   for (const figure of threadFigures)
     for (const kind of ['comments', 'all'])
       metrics.set(`${figure}:${kind}`, Object.fromEntries(THREAD_METRICS.map((key) => [key, []])))
-  report.thread = { figures: threadFigures, phone, scenarios: [] }
+  const returns = new Map(
+    RETURN_ARRIVALS.map((n) => [n, Object.fromEntries(RETURN_METRICS.map((key) => [key, []]))]),
+  )
+  report.thread = { figures: threadFigures, phone, scenarios: [], returns: [] }
   for (let sample = 0; sample < samples; sample++) {
     for (const figure of threadFigures)
       for (const kind of ['comments', 'all']) {
         running = { label: `thread ${kind}`, tasks: figure, sample: sample + 1, phase: 'startup' }
         await runThreadSample(origin, figure, kind, metrics.get(`${figure}:${kind}`))
       }
+    for (const n of RETURN_ARRIVALS) {
+      running = { label: 'thread return', tasks: n, sample: sample + 1, phase: 'startup' }
+      await runThreadReturnSample(origin, n, returns.get(n))
+    }
     const load = loadavg()[0]
     report.loads.push({ target: 'thread', sample: sample + 1, load })
     console.log(`thread phase: sample ${sample + 1}/${samples}, load ${load.toFixed(2)}`)
@@ -1628,7 +1781,25 @@ async function runThreadPhase(origin) {
         ...summarized(figure, metrics.get(`${figure}:${kind}`)),
       })
     }
+  for (const n of RETURN_ARRIVALS)
+    report.thread.returns.push({ arrivals: n, ...summarized(100, returns.get(n)) })
   await writeFile(output, `${JSON.stringify(report, null, 2)}\n`)
+  console.table(
+    report.thread.returns.map(({ arrivals, metrics: m }) => ({
+      arrivals,
+      ...Object.fromEntries(
+        [
+          ...RETURN_METRICS,
+          'threadReturnScriptDurationMs',
+          'threadReturnLayoutDurationMs',
+          'threadReturnRecalcStyleDurationMs',
+          'threadReturnWireBytes',
+        ]
+          .filter((key) => m[key])
+          .map((key) => [key, Math.round(m[key].p50 * 10) / 10]),
+      ),
+    })),
+  )
   console.table(
     report.thread.scenarios.map(({ figure, kind, metrics: m }) => ({
       figure,

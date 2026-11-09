@@ -468,7 +468,8 @@ describe('the benchmark server', () => {
     expect(grown.state).toBe('ok')
     expect(grown.rows).toHaveLength(before.length + 1)
     const made = grown.rows.map((row) => row.id).filter((id) => !before.includes(id))
-    expect(made).toHaveLength(1)
+    // the scenario answers the new task's id, which the benchmark waits for
+    expect(made).toEqual([posted.find((m) => m.type === 'answer' && m.id === 'create').value])
     await send({ type: 'scenario', id: 'delete', name: 'deliverDelete', args: [] })
     const back = await roadmap()
     expect(back.state).toBe('ok')
@@ -2310,6 +2311,32 @@ describe('the benchmark server', () => {
     expect(grantsOf('declined')).toEqual([])
   })
 
+  it('delivers as many comments at once as the scenario asks, in one result', async () => {
+    const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
+    const args = { issue_id: TASK_1 }
+    await send({ type: 'subscribe', id: 'thread', name: 'snapshot:threadComments', args })
+    const results = () =>
+      posted.filter((m) => m.type === 'result' && m.to === 'thread').map((m) => JSON.parse(m.text))
+    await vi.waitFor(() => expect(results()).toHaveLength(1))
+    const before = results()[0].comments.length
+    await send({ type: 'scenario', id: 'three', name: 'deliverComments', args: [3] })
+    await vi.waitFor(() => expect(results()).toHaveLength(2))
+    const after = results()[1].comments
+    expect(after).toHaveLength(Math.min(before + 3, 50))
+    // the answer is the last comment's text, the newest of the thread
+    const last = posted.find((m) => m.type === 'answer' && m.id === 'three').value
+    expect(after.at(-1).body).toBe(last)
+    expect(after.slice(-3).map((c) => c.body.replace(/\d+$/, ''))).toEqual(
+      Array(3).fill('Benchmark delivered comment '),
+    )
+    // one comment by default
+    await send({ type: 'scenario', id: 'one', name: 'deliverComments', args: [] })
+    await vi.waitFor(() => expect(results()).toHaveLength(3))
+    expect(results()[2].comments.at(-1).body).toBe(
+      posted.find((m) => m.type === 'answer' && m.id === 'one').value,
+    )
+  })
+
   it('answers a scenario that fails with its failure', async () => {
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
     // no comment thread is open
@@ -2797,6 +2824,10 @@ describe('the benchmark server', () => {
     // one transition with the window's answer, and nothing of the root
     const changes = posted.filter((m) => m.type === 'transition')
     expect(changes.flatMap((m) => m.results.map((r) => r.to))).toEqual(['window'])
+    // the scenario answers the new title, the one the window's answer holds
+    const title = posted.find((m) => m.type === 'answer' && m.id === 'rename').value
+    expect(title).toMatch(/^Renamed elsewhere /)
+    expect(JSON.parse(changes[0].results[0].text).task.title).toBe(title)
   })
 })
 

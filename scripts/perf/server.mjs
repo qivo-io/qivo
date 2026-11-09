@@ -3116,10 +3116,11 @@ const scenarios = {
     return emitWorkspace()
   },
   deliverRemote(n) {
-    patchTask(tasks[n].id, { title: `Renamed elsewhere ${Date.now()}` })
-    return emitWorkspace()
+    const title = `Renamed elsewhere ${Date.now()}`
+    patchTask(tasks[n].id, { title })
+    return emitWorkspace().then(() => title)
   },
-  /* Another person creates a task in the first project. */
+  /* Another person creates a task in the first project; answers its id. */
   deliverCreate() {
     const n = tasks.length + hiddenTasks.length
     const row = taskRow(n, id('4', 900000 + n), projects[0], undefined)
@@ -3132,7 +3133,7 @@ const scenarios = {
     const [org] = snapshot.orgs
     snapshot.orgs = [{ ...org, next_issue_num: org.next_issue_num + 1 }, ...snapshot.orgs.slice(1)]
     settleTasks()
-    return emitWorkspace()
+    return emitWorkspace().then(() => row.id)
   },
   /* That person deletes the task deliverCreate made last, so the
      top-level project the app opens holds the tasks it held before. At
@@ -3178,20 +3179,25 @@ const scenarios = {
     )
     return emitWorkspace()
   },
-  deliverComments() {
+  /* Another person posts `count` comments at once on the one open thread,
+     which reach it in one delivery; answers the last one's text. */
+  deliverComments(count = 1) {
     const active = [
       ...(listeners.get('snapshot:threadComments') || []),
       ...[...watchedParts.values()].filter((part) => part.name === 'snapshot:threadComments'),
     ]
     if (active.length !== 1) throw new Error('Benchmark requires one open comment thread')
-    const body = `Benchmark delivered comment ${comments.length + 1}`
-    comments.push({
-      id: id('5', 800000 + comments.length),
-      issue_id: active[0].args.issue_id,
-      author: profiles[1].id,
-      body,
-      created_at: new Date().toISOString(),
-    })
+    let body = ''
+    for (let k = 0; k < count; k++) {
+      body = `Benchmark delivered comment ${comments.length + 1}`
+      comments.push({
+        id: id('5', 800000 + comments.length),
+        issue_id: active[0].args.issue_id,
+        author: profiles[1].id,
+        body,
+        created_at: new Date().toISOString(),
+      })
+    }
     void emit('snapshot:threadComments')
     if (watchedParts.size) void transition()
     return body
