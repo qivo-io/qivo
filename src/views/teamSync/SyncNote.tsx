@@ -388,9 +388,9 @@ export type ResolveState =
   | { state: 'unchecked'; message: string; retry: () => void }
 
 /** What Team sync says in place of its meeting while it resolves a
-    project its address names by number: that it is opening the project,
-    or that it could not, with Retry, never that the project is not
-    available. */
+    project its address names by number. It says it is opening the
+    project, or that it could not, with Retry, never that the project is
+    not available. */
 export function ResolveNote({ resolving }: { resolving: ResolveState }) {
   if (resolving.state === 'loading')
     return (

@@ -813,9 +813,9 @@ function syncPath(sync: { scope: string; step: string }, openIssue?: string | nu
   return `${APP_PREFIX}/${orgSegment(org)}${rest}`
 }
 
-/** Whether the path of `state` names its project scope (buildPath): a
-    project scope's view with no page, no Team sync and no task over it,
-    the one address that needs the scope's facts. */
+/** Whether the path of `state` names its project scope (buildPath), as a
+    project scope's view with no page, no Team sync and no task over it
+    does, the one address that needs the scope's facts. */
 export function pathNamesScope(state: UiState): boolean {
   const open = unnamedRef(state.openIssue) ? null : state.openIssue
   return (

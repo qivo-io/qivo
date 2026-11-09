@@ -14551,7 +14551,7 @@ export const PLANNER = {
       REVIEWER_RULE) is toasted with its sentence and the move taken back,
       and `onSaved` hears whether the server took it, so a caller says the
       task moved only then. The target must be a sub-project the project
-      cache answers `ok` with Edit or Lead: a seeded or loading one, and
+      cache answers `ok` with Edit or Lead. A seeded or loading one, and
       one whose level lacks Edit, as after the caller's access there was
       lowered, sends nothing, so the Move window keeps Move off until the
       cache answers its chosen row writable. So does a move while the cache
@@ -15244,7 +15244,7 @@ export const PLANNER = {
   /** Keeps one projectNav.targets read of organization `org`'s first batch
       while some task window shows a task the person only views there and
       the page shows, for P.editsSomeProject, and answers its release. Every
-      window of one organization shares the read: one that joins it takes
+      window of one organization shares the read. One that joins it takes
       its answer at once, and the read stops and its answer goes only once
       the last of them lets go. While the page is hidden the read stops and
       the answer reads unknown. */

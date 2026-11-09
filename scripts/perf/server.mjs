@@ -23,7 +23,7 @@
 // baseline build from after the parts and before the workspace's projects
 // part went subscribes that part (workspace:projects) and sizes its windows
 // from root fields this server no longer sends, so it cannot load against
-// it (scripts/benchmark-browser.mjs --baseline): a read of a part this
+// it (scripts/benchmark-browser.mjs --baseline). A read of a part this
 // server does not serve answers an error that says so (readPart). Measure
 // such a build in a checkout of its own. It answers the task
 // window's own queries (taskWindow:task, links and attachments) from the

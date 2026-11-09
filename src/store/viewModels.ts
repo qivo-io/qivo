@@ -278,7 +278,7 @@ export type ProjectFacts = {
   lead: string | undefined
   reviewHours: number | undefined
   /** true for a navigation row's seed, which knows no lead, delay setting
-      or Review time: the store's lead and delay lookups read them as
+      or Review time, so the store's lead and delay lookups read them as
       unknown (P.leadOf, P.tracksDelay) until the project cache's row
       comes */
   partial?: true
