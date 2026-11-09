@@ -138,7 +138,10 @@ a team for that team, and a project's sub-projects for a project.
 
 The first time, and when a saved or linked team or project is no longer
 available to you, the page asks you to choose a team or project. **All
-projects** is one of the choices, and Qivo never chooses it for you.
+projects** is one of the choices, and Qivo never chooses it for you. A
+project link says Qivo is opening the project while it checks that you can
+open it. If that check fails or cannot finish, the page says so with
+**Retry** instead of asking you to choose.
 When you can see no project of your organization, the page says so and who can
 give you access. If you also belong to another organization, it names the
 organization the page covers.

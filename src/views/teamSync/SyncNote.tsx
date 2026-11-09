@@ -354,6 +354,50 @@ export function SyncNote({
   }
 }
 
+/** Where the resolve of a Team sync address that names a project by its
+    number stands while it has not opened the project (views/TeamSync.tsx):
+    loading, failed, or the access_unchecked refusal with its sentence, the
+    last two with a way to ask again. */
+export type ResolveState =
+  | { state: 'loading' }
+  | { state: 'failed'; retry: () => void }
+  | { state: 'unchecked'; message: string; retry: () => void }
+
+/** What Team sync says in place of its meeting while it resolves a
+    project its address names by number: that it is opening the project,
+    or that it could not, with Retry, never that the project is not
+    available. */
+export function ResolveNote({ resolving }: { resolving: ResolveState }) {
+  if (resolving.state === 'loading')
+    return (
+      <div data-sync-note="resolving" className="contents">
+        <ViewNote
+          hooks="sync"
+          phone={false}
+          icon="people"
+          title="Opening the project…"
+          hint="Qivo is checking that you can open this project."
+        />
+      </div>
+    )
+  return (
+    <div data-sync-note={`resolve-${resolving.state}`} className="contents">
+      <ViewNote
+        hooks="sync"
+        phone={false}
+        icon="alert"
+        title="Couldn't open this project"
+        hint={
+          resolving.state === 'unchecked'
+            ? resolving.message
+            : 'Qivo could not check whether you can open this project. Retry asks once more.'
+        }
+        action={{ label: 'Retry', onClick: resolving.retry }}
+      />
+    </div>
+  )
+}
+
 /** The note above a meeting some of whose tasks had no model to show
     STALL.ms after its answer named them (state incomplete): the meeting
     below leaves them out, and its counts with them. Try again asks only for

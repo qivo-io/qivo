@@ -7,6 +7,11 @@ import type { AgendaAnswer } from '../../convex/lib/teamSyncAgenda'
 import type { UnsentScope } from '../lib/leaveGuard'
 import { ownerLoadsStandIn } from '../store/ownerLoadsStandIn.setup'
 import { type Snapshot, underProgram } from '../store/plannerFixture.setup'
+import {
+  type ForcedProjectNav,
+  NAV_UNCHECKED,
+  queryProjectNav,
+} from '../store/projectNavStandIn.setup'
 import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
 import type { SyncPlace } from './TeamSync'
 
@@ -227,6 +232,23 @@ const sentRemaining = (hours: number, from = 0) =>
         (args as { patch?: { remaining_hours?: number } }).patch?.remaining_hours === hours,
     )
 
+/** Answers P.resolveProject's projectNav:resolve from the board's
+    snapshot with `force()`, a failure while `fail()` holds, and counts the
+    reads it answered in `seen`; every other one-shot read goes on as the
+    board answers it. */
+function answerResolve(
+  board: Awaited<ReturnType<typeof loadBoard>>,
+  how: { fail: () => boolean; force?: () => ForcedProjectNav; seen?: number[] },
+) {
+  const base = network.query.getMockImplementation()
+  network.query.mockImplementation(async (ref, args) => {
+    if (getFunctionName(ref) !== 'projectNav:resolve') return base?.(ref, args)
+    how.seen?.push(1)
+    if (how.fail()) throw new Error('the resolve failed')
+    return queryProjectNav(board.snapshot, 'projectNav:resolve', args, { force: how.force?.() })
+  })
+}
+
 /** Edits the stand-in's answers: each row's `over` by number. */
 const rowsEdit =
   (over: Record<number, Partial<Extract<AgendaAnswer, { state: 'ok' }>['rows'][number]>>) =>
@@ -288,10 +310,87 @@ describe('the picker', () => {
       expect(calls.places).toEqual([])
       await act(async () => root.unmount())
       root = createRoot(container)
-      const again = await open(people({}), () => ({ scope: 'unresolved:99', step: 'team' }))
+      // a number no project the person can open has
+      const again = await open(
+        people({}),
+        () => ({ scope: 'unresolved:500', step: 'team' }),
+        {},
+        (b) => answerResolve(b, { fail: () => false }),
+      )
       expect(state()).toBe('choose')
       expect(title()).toBe('This team or project is not available')
       expect(asked(again.board)).toEqual([])
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
+    'says it is opening a numbered project while the resolve has not answered, and a failure with Retry, which opens the meeting once the resolve answers',
+    async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      let failing = true
+      let answer: (() => void) | null = null
+      const seen: number[] = []
+      const { board, calls } = await open(
+        people({}),
+        () => ({ scope: 'unresolved:1', step: 'team' }),
+        {},
+        (b) => {
+          const base = network.query.getMockImplementation()
+          // the first resolve waits for the case, the rest go through
+          network.query.mockImplementation(async (ref, args) => {
+            if (getFunctionName(ref) !== 'projectNav:resolve') return base?.(ref, args)
+            seen.push(1)
+            if (seen.length === 1) {
+              await new Promise<void>((resolve) => {
+                answer = resolve
+              })
+              throw new Error('the resolve failed')
+            }
+            if (failing) throw new Error('the resolve failed')
+            return queryProjectNav(b.snapshot, 'projectNav:resolve', args)
+          })
+        },
+      )
+      // never "not available" while the number resolves
+      expect(document.querySelector('[data-sync-note="resolving"]')).not.toBeNull()
+      expect(title()).toBe('Opening the project…')
+      await act(async () => (answer as (() => void) | null)?.())
+      await settle()
+      expect(document.querySelector('[data-sync-note="resolve-failed"]')).not.toBeNull()
+      expect(title()).toBe("Couldn't open this project")
+      const retry = () =>
+        [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+          (b) => b.textContent === 'Retry',
+        )
+      expect(retry()).toBeDefined()
+      failing = false
+      await click(retry())
+      await settle()
+      expect(seen).toHaveLength(2)
+      // the resolve named the fixture's sub-project, whose meeting opens
+      expect(calls.places).toEqual([])
+      expect(asked(board)).toEqual([{ kind: 'project', project_id: sub(board.snapshot) }])
+      expect(state()).toBe('ok')
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
+    "says the access check's sentence where the resolve was not checked, with Retry",
+    async () => {
+      await open(
+        people({}),
+        () => ({ scope: 'unresolved:1', step: 'team' }),
+        {},
+        (b) => answerResolve(b, { fail: () => false, force: () => ({ unchecked: NAV_UNCHECKED }) }),
+      )
+      expect(document.querySelector('[data-sync-note="resolve-unchecked"]')).not.toBeNull()
+      expect(document.body.textContent).toContain(NAV_UNCHECKED)
+      expect([...document.querySelectorAll('button')].some((b) => b.textContent === 'Retry')).toBe(
+        true,
+      )
+      expect(title()).not.toBe('This team or project is not available')
     },
     BOARD_TEST_TIMEOUT,
   )

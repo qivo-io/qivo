@@ -31,7 +31,7 @@
      its meeting has answered. It never corrects a scope. */
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { NoProjects } from '@/components/NoProjects'
-import { openResolved } from '@/components/projectNavRows'
+import { type NavOpening, openResolved } from '@/components/projectNavRows'
 import { Avatar, Icon } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
 import { useHolds } from '@/components/useHolds'
@@ -64,7 +64,13 @@ import { useViewVisibility } from '@/lib/viewVisibility'
 import { type IssueVM, P } from '@/store/planner'
 import { usePlannerVersion } from '@/store/usePlannerVersion'
 import { DoneItem, LoadChip, type PageCtx, SyncCard, WaitingItem } from './teamSync/SyncCard'
-import { IncompleteNote, StaleNote, SyncNote } from './teamSync/SyncNote'
+import {
+  IncompleteNote,
+  ResolveNote,
+  type ResolveState,
+  StaleNote,
+  SyncNote,
+} from './teamSync/SyncNote'
 import { SyncScopeMenu } from './teamSync/SyncScopeMenu'
 import { TeamOpening } from './teamSync/TeamOpening'
 import {
@@ -472,22 +478,49 @@ export function TeamSync({
   // or `<n>@<org_id>` for one the address pinned to another organization),
   // which the server resolves in that organization into the project's
   // scope, its facts seeded, so the page never asks to choose a project the
-  // person can open
+  // person can open. While it resolves the page says it is opening the
+  // project; a failed resolve and the access_unchecked refusal say so with
+  // Retry, which asks again (`tries`), and only an unavailable answer says
+  // the project is not available.
   const asked = scope.kind === 'unresolved' ? syncProjectNumber(scope.segment) : null
   const askedNum = asked?.num ?? null
   const askedOrg = asked ? (asked.org_id ?? P.homeOrg) : ''
+  const askedKey = askedNum === null || !askedOrg ? null : `${askedOrg}\n${askedNum}`
+  const [tries, setTries] = useState(0)
+  const [resolved, setResolved] = useState<{ key: string; opening: NavOpening } | null>(null)
   useEffect(() => {
     if (askedNum === null || !askedOrg) return
     let live = true
+    const key = `${askedOrg}\n${askedNum}`
     const stop = openResolved({ org_id: askedOrg, num: askedNum }, (opening) => {
-      if (!live || opening.state !== 'open') return
-      onCorrectRef.current({ scope: `project:${opening.id}`, step: place.step })
+      if (!live) return
+      setResolved({ key, opening })
+      if (opening.state === 'open')
+        onCorrectRef.current({ scope: `project:${opening.id}`, step: place.step })
     })
     return () => {
       live = false
       stop()
     }
-  }, [askedNum, askedOrg])
+  }, [askedNum, askedOrg, tries])
+  // where the numbered address's resolve stands: loading until its answer
+  // for this address and this try
+  const resolving: ResolveState | null =
+    askedKey === null
+      ? null
+      : resolved?.key !== askedKey
+        ? { state: 'loading' }
+        : resolved.opening.state === 'failed'
+          ? { state: 'failed', retry: () => setTries((n) => n + 1) }
+          : resolved.opening.state === 'unchecked'
+            ? {
+                state: 'unchecked',
+                message: resolved.opening.message,
+                retry: () => setTries((n) => n + 1),
+              }
+            : resolved.opening.state === 'open'
+              ? { state: 'loading' }
+              : null
   const { humans, agents } = meeting
   // the people the page shows, named while it shows: the walk's people and
   // the meeting's tasks' assignees and reviewers, in the walk's order
@@ -655,7 +688,9 @@ export function TeamSync({
   if (noProject)
     body = <NoProjects icon="people" title="Nothing to review yet" hint={syncNoProjectsHint()} />
   else if (!meeting.shows)
-    body = (
+    body = resolving ? (
+      <ResolveNote resolving={resolving} />
+    ) : (
       <SyncNote
         meeting={meeting}
         scopeKey={scopeKey}
