@@ -9560,9 +9560,11 @@ async function projectsPartCheck() {
       await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/sync/p/${M.num}`, {
         waitUntil: 'domcontentloaded',
       })
-      const home = await evaluate(app, () => window.PLANNER.homeOrg)
       const trigger = app.locator(`[${marks.scopeTrigger}]`)
       await trigger.waitFor({ timeout: 60_000 })
+      // the home organization once the fresh load's store has booted
+      await app.waitForFunction(() => !!window.PLANNER?.homeOrg, null, { timeout: 30_000 })
+      const home = await evaluate(app, () => window.PLANNER.homeOrg)
       sent.length = 0
       await trigger.click()
       expect(
