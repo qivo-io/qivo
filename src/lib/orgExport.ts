@@ -123,6 +123,11 @@ export type DeliveryState = { exportId: string } & (
 
 let delivery: DeliveryState | null = null
 let running: AbortController | null = null
+// what the panel reads, a new object on every change
+let shown: { delivery: DeliveryState | null; running: boolean } = {
+  delivery: null,
+  running: false,
+}
 const listeners = new Set<() => void>()
 // the file chosen for each export this page started or joined, for the
 // page's life; a reload, another tab or another device has none
@@ -134,14 +139,18 @@ let unrecorded: { orgId: string; exportId: string } | null = null
 
 const set = (next: DeliveryState | null) => {
   delivery = next
+  publish()
+}
+const publish = () => {
+  shown = { delivery, running: running !== null }
   for (const listener of listeners) listener()
 }
 
 /** The page's latest delivery, or null. */
 export const deliveryNow = (): DeliveryState | null => delivery
 
-/** The latest delivery, as the panel reads it. */
-export function useExportDelivery(): DeliveryState | null {
+/** The latest delivery and whether one runs, as the panel reads them. */
+export function useExportDelivery(): { delivery: DeliveryState | null; running: boolean } {
   return useSyncExternalStore(
     (listener) => {
       listeners.add(listener)
@@ -149,8 +158,8 @@ export function useExportDelivery(): DeliveryState | null {
         listeners.delete(listener)
       }
     },
-    deliveryNow,
-    deliveryNow,
+    () => shown,
+    () => shown,
   )
 }
 
@@ -328,7 +337,10 @@ export async function deliverExport(args: DeliverArgs): Promise<boolean> {
     if (how === 'desktop') return await viaDesktop(orgId, exportId, archiveBytes, url)
     return await intoFile(orgId, exportId, archiveBytes, url, args.file as ExportFile, controller)
   } finally {
-    if (running === controller) running = null
+    if (running === controller) {
+      running = null
+      publish()
+    }
   }
 }
 
@@ -489,5 +501,5 @@ export function resetExportDelivery(): void {
   way = null
   files.clear()
   attempted.clear()
-  for (const listener of listeners) listener()
+  publish()
 }

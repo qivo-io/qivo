@@ -75,7 +75,7 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
     JSON.stringify({ org_id: orgId }),
   )
   const removal = useOrgRemovalState(orgId).state
-  const delivery = useExportDelivery()
+  const { delivery, running } = useExportDelivery()
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
   const [confirmCancel, setConfirmCancel] = useState(false)
@@ -204,7 +204,7 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
     })
   }
 
-  const canAct = current && !busy && !deliveryRunning()
+  const canAct = current && !busy && !running
   const shownDelivery =
     delivery !== null && (delivery.exportId === latestId || delivery.exportId === older?.id)
       ? delivery

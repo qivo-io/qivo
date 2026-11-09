@@ -291,6 +291,8 @@ describe('the automatic attempt', () => {
     expect(claims()).toEqual([{ org_id: 'org-1', export_id: 'export-1', automatic: true }])
     expect(download).toHaveBeenCalledTimes(1)
     expect(sent('orgRemovals:recordExport')).toEqual([{ org_id: 'org-1', export_id: 'export-1' }])
+    // once the save ended, Download is offered again
+    expect(button('[data-export-download="latest"]')?.disabled).toBe(false)
     // more answers bring no second attempt
     await act(async () => server.publish())
     await settle()
