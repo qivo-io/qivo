@@ -87,7 +87,7 @@ const recorded = () =>
   network.mutation.mock.calls.filter(([ref]) => getFunctionName(ref) === 'orgRemovals:recordExport')
 
 describe('the organization export', () => {
-  it('loads its code only when asked, then downloads the ZIP and records it', async () => {
+  it('loads its code only when asked, then downloads the ZIP and records nothing', async () => {
     const { loadOrgExport } = await load()
     expect(loadOrgExport.peek()).toBeUndefined()
     expect(loadOrgExport.loading()).toBe(false)
@@ -96,8 +96,9 @@ describe('the organization export', () => {
     expect(downloads).toEqual(['acme.zip'])
     expect(status()).toBe('Export downloaded.')
     expect(alert()).toBeNull()
-    expect(recorded()).toHaveLength(1)
-    expect(recorded()[0][1]).toEqual({ org_id: 'org-1' })
+    // the record names a served archive of the export job, which this
+    // browser export has not
+    expect(recorded()).toEqual([])
   })
 
   it('says why while the connection is down, and exports once it is back', async () => {

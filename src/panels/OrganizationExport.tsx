@@ -3,38 +3,24 @@ import { useEffect, useRef, useState } from 'react'
 import { SettingsSection } from '@/components/settingsPage'
 import { Button } from '@/components/ui/button'
 import { billingDate } from '@/lib/billingDisplay'
-import { convex } from '@/lib/convex'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { loadOrgExport } from '@/lib/workspaceChunks'
-import { api } from '../../convex/_generated/api'
 import { useOrgRemovalState } from '../lib/orgRemovalState'
 import { P } from '../store/planner'
 
-/** Lets an admin download the organization's data as a ZIP and records
- * when the browser finished it. */
+/** Lets an admin download the organization's data as a ZIP built in the
+ * browser. It records nothing: the record of a saved export
+ * (orgRemovals.recordExport) now names a served archive of the export job,
+ * which this browser export has not. */
 export function OrganizationExport({ orgId }: { orgId: string }) {
   const removal = useOrgRemovalState(orgId).state
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
-  const [unrecorded, setUnrecorded] = useState(false)
   const active = useRef<AbortController | null>(null)
   useUpdateBlocker(busy)
 
   useEffect(() => () => active.current?.abort(), [])
-
-  /** Records the export date once the browser started the download. Qivo
-   * cannot see the file reach disk, so the date only decides whether admins
-   * get a deletion email. A failure is shown, because a missing date can
-   * send that email needlessly. */
-  async function recordExport() {
-    try {
-      await convex.mutation(api.orgRemovals.recordExport, { org_id: orgId })
-      setUnrecorded(false)
-    } catch {
-      setUnrecorded(true)
-    }
-  }
 
   async function download() {
     if (active.current) return
@@ -69,7 +55,6 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
       link.remove()
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
       setStatus('Export downloaded.')
-      void recordExport()
     } catch (cause) {
       if (controller.signal.aborted) {
         setStatus('Export cancelled.')
@@ -114,18 +99,6 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
         <p role="alert" className="mt-2 text-sm text-danger">
           {error}
         </p>
-      )}
-      {unrecorded && (
-        <div
-          role="alert"
-          data-org-export-unrecorded
-          className="mt-2 flex flex-wrap items-center gap-2 text-sm text-danger"
-        >
-          The export downloaded, but Qivo could not record its date.
-          <Button type="button" variant="outline" size="xs" onClick={() => void recordExport()}>
-            Try again
-          </Button>
-        </div>
       )}
       <p className="mt-2 text-sm leading-relaxed text-text-2">
         Keep this page open until the download finishes. Changes made during export may appear at
