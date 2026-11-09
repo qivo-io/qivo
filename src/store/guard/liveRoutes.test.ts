@@ -29,7 +29,7 @@ const ON_UPDATE = new Map([
   ['panoramaCuration:keys', 'the admin console'],
 ])
 
-/** Calls that hold a query through convex.onUpdate: `.onUpdate(` and the
+/** Calls that hold a query through convex.onUpdate, `.onUpdate(` and the
     admin console's wrapper. */
 const isHolder = (callee: string) => callee.endsWith('.onUpdate') || callee === 'useLiveQuery'
 /** One-shot reads, which hold no subscription past their answer. */

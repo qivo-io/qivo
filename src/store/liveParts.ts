@@ -118,7 +118,7 @@ export const SIDE_NAMES = [
 ] as const
 export type SideName = (typeof SIDE_NAMES)[number]
 
-/** The side queries a hidden page pauses (pauseViews): the open task
+/** The side queries a hidden page pauses (pauseViews), the open task
     window's reads, its thread, history, task, links, attachments, the
     reference read and the inbox item. `summary` and `feed` never pause,
     by the owner's rule that the unread count and notifications keep

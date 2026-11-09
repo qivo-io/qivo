@@ -324,7 +324,7 @@ describe('the task window while the page is hidden', () => {
     expect(P().commentsEarlier).toBe('more')
     await show(false)
     await show(true)
-    // ten new comments: the live window still starts at a comment it held
+    // ten new comments, so the live window still starts at a comment it held
     thread()?.publish({ comments: range(30, PAGE + 30), earlier: true })
     await settle()
     expect(P().comments.at(0)?.id).toBe('comment-20')
@@ -336,7 +336,7 @@ describe('the task window while the page is hidden', () => {
     await open(PAGE + 20)
     await show(false)
     await show(true)
-    // sixty new comments: the live window meets nothing it held
+    // sixty new comments, so the live window meets nothing it held
     thread()?.publish({ comments: range(PAGE + 80 - PAGE, PAGE + 80), earlier: true })
     await settle()
     expect(P().comments.map((c) => c.id)).toEqual(range(80, PAGE + 80).map((c) => c.id))

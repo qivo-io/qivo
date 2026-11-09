@@ -10974,7 +10974,7 @@ export const PLANNER = {
   // the open task's inbox item, which its window takes the New divider and
   // the read on open from, else null (subscribeItem)
   inboxItem: null as InboxItemVM | null,
-  /** Whether the task window's reads are paused or refreshing: true from
+  /** Whether the task window's reads are paused or refreshing, true from
       the moment the page hides while a view side is registered, until
       every view side registered when it showed again has answered or
       failed on its fresh subscription (watchWindowVisibility). The
@@ -16889,7 +16889,7 @@ let refreshingSides: Set<SideName> | null = null
 let windowReturns = 0
 
 /** Pauses the task window's reads while the page is hidden
-    (lib/viewVisibility.ts, by visibility and not focus): the thread, the
+    (lib/viewVisibility.ts, by visibility and not focus), the thread, the
     history, the task with its links and attachments, the reference read
     and the inbox item, the view sides of the live parts (VIEW_SIDES).
     Everything they loaded stays, the thread's runs and gap, the held

@@ -10,7 +10,7 @@ import type { NotificationsStandIn } from './store/notificationsStandIn.setup'
 import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixture.setup'
 
 /* A hidden page holds only the reads the register in lib/viewVisibility.ts
-   keeps running. Each case mounts what the app shows at once: the
+   keeps running. Each case mounts what the app shows at once, the
    appearance provider, the read-only banner, a task window with its
    details and its history under All, its subscriber popover open, the
    desktop alert leader on a page that can notify, and one Settings page,
@@ -18,7 +18,7 @@ import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixt
    subscription still open, on the live transport and on convex.onUpdate,
    must be one the register names, and every one of those the case mounts
    must still run; it shows the page again, and the view reads come back.
-   Everyday values: one organization, one task, a few people. */
+   It runs at everyday values, one organization, one task and a few people. */
 
 const network = vi.hoisted(() => ({
   mutation: vi.fn(),

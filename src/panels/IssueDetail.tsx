@@ -1992,7 +1992,7 @@ function IssueDetail({
   // history to look for it in.
   // A return to a hidden tab or window (P.windowReturns) freezes again, once,
   // from the item's first current answer after it, when news arrived while
-  // nobody looked: that answer holds unread messages, no snooze, no unread
+  // nobody looked. That answer holds unread messages, no snooze, no unread
   // choice of the person's own (P.unreadChoiceHeld), and an unread start
   // later than the frozen one, or none was frozen. So what arrived while
   // hidden sits under New, and the read on open, an effect, reads it after
@@ -3442,7 +3442,7 @@ function IssueDetail({
           data-floating-surface={embedded && !mobile ? undefined : ''}
           aria-hidden={!open ? true : undefined}
           // the reads paused while the page was hidden, or not all answered
-          // again since it showed (P.windowRefreshing): what shows is held,
+          // again since it showed (P.windowRefreshing), so what shows is held,
           // marked for assistive technology only, with no visible mark
           data-task-window-reads={windowRefreshing ? 'refreshing' : 'current'}
           aria-busy={windowRefreshing ? true : undefined}

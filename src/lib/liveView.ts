@@ -223,7 +223,7 @@ export function useLiveViews<T>(
   return { held, retry: () => setAttempt((n) => n + 1) }
 }
 
-/** What useKeptLiveView holds now: `loading` before a first answer for
+/** What useKeptLiveView holds now, `loading` before a first answer for
     the key, `ok` with a current one, `refreshing` while it keeps an
     earlier answer and has no current one, and `failed` once the read
     failed, with the answer it kept, if any. */
