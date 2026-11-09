@@ -5,9 +5,10 @@
 //   node scripts/benchmark-backend.mjs [revision] [--current-only]
 //
 // The root part and the feed are each read in their own transaction, one
-// row per part with its ranges, documents, bytes and milliseconds, in an
-// organization at everyday figures. Neither reads a task, a project or
-// the history, so the benchmark seeds none and no organization size
+// row per part with its ranges, documents, bytes and milliseconds, by a
+// reader of everyday reach, a member of 3 teams that each share about 20
+// sub-projects. Neither reads a task, a project or the history, so the
+// benchmark seeds no task and no history, and no organization size
 // changes them. `revision` is the commit the working tree's logActivity is
 // compared with. It defaults to the merge base of HEAD and origin/main, so
 // a branch is measured against the commit it started from, and to HEAD in

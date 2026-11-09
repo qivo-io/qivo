@@ -2,7 +2,8 @@ import type { QueryCtx } from '../_generated/server'
 import * as inbox from '../inbox'
 import { logActivity } from '../model/activity'
 import * as workspace from '../workspace'
-import { newT, uuid, withOrg } from './helpers.setup'
+import { as, newT, uuid, withOrg } from './helpers.setup'
+import { everyday } from './inboxItems.setup'
 
 declare const performance: { now(): number }
 
@@ -59,18 +60,20 @@ async function readParts(identity: Identity) {
 
 /**
  * The root part and the feed, then one activity write, against the
- * baseline's write unless `currentOnly`, in withOrg's organization at its
- * everyday figures. Neither part reads a task, a project or the history,
- * so the organization's size in them changes nothing either reads, and the
- * benchmark seeds none; the activity write reads only the organization's
- * row. Answers one row per part and per write.
+ * baseline's write unless `currentOnly`, in withOrg's organization. The
+ * parts are read by a reader of everyday reach (inboxItems.setup.ts
+ * everyday), a member of 3 teams that each share about 20 sub-projects,
+ * since the root carries the caller's memberships and teams. Neither part
+ * reads a task, a project or the history, so the benchmark seeds no task
+ * and no history; the activity write reads only the organization's row.
+ * Answers one row per part and per write.
  */
 export async function benchmarkBackend(baseline: Baseline) {
   const results: Record<string, string | number>[] = []
   const t = newT()
   const f = await withOrg(t)
-  const authed = t.withIdentity({ subject: f.user.auth_user_id! })
-  for (const part of await readParts(authed)) {
+  const { me } = await everyday(t, f)
+  for (const part of await readParts(as(t, me))) {
     const row = {
       operation: 'workspace',
       part: part.name,
