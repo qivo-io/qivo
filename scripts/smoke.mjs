@@ -2334,12 +2334,13 @@ try {
   const newTask = pageA.getByRole('dialog', { name: 'New task', exact: true })
   const taskTitle = newTask.getByRole('textbox', { name: 'Title', exact: true })
   await taskTitle.waitFor({ timeout: 10000 })
-  const fields = await newTask
-    .locator('input:not([type="hidden"]), select, textarea, [contenteditable="true"]')
-    .evaluateAll((elements) => elements.map((element) => element.getAttribute('aria-label')))
-  if (JSON.stringify(fields) !== JSON.stringify(['Project', 'Sub-project', 'Title'])) {
-    await fail(`New task fields do not match Project, Sub-project, Title: ${fields}`)
-  }
+  // one Sub-project picker of the sub-projects Nora may add tasks to
+  // (projectNav.targets), its rows under their project's name, and Title
+  const targets = newTask.locator('[data-target-picker]')
+  await targets.locator('[data-target]').first().waitFor({ timeout: 30000 })
+  if (!(await newTask.getByRole('textbox', { name: 'Find a sub-project', exact: true }).count()))
+    await fail('New task has no Sub-project search')
+  if (await newTask.locator('select').count()) await fail('New task still shows a select')
   if (!(await taskTitle.evaluate((element) => element === document.activeElement))) {
     await fail('New task did not focus Title')
   }
@@ -2347,28 +2348,32 @@ try {
   await taskTitle.fill('   ')
   if (!(await submitTask.isDisabled())) await fail('New task accepts a whitespace-only title')
   await taskTitle.fill(TITLE)
-  const projectPicker = newTask.getByRole('combobox', { name: 'Project', exact: true })
-  const subprojectPicker = newTask.getByRole('combobox', { name: 'Sub-project', exact: true })
-  const originalProject = await projectPicker.inputValue()
-  const subProj = await subprojectPicker.inputValue()
+  // the dialog opens on the Board's sub-project, which Nora may write
+  const chosen = () =>
+    targets
+      .locator('input[type="radio"]:checked')
+      .evaluateAll((inputs) => inputs[0]?.closest('[data-target]')?.getAttribute('data-target'))
+  const subProj = await chosen()
   if (!subProj) await fail('New task offers no sub-project')
-  const otherProject = await projectPicker
-    .locator('option')
-    .evaluateAll(
-      (options, original) => options.find((option) => option.value !== original)?.value,
-      originalProject,
-    )
-  if (!otherProject) await fail('Northstar has no second writable project for the create picker')
-  await projectPicker.selectOption(otherProject)
-  const switchedSubproject = await subprojectPicker.inputValue()
-  const switchedCorrectly = await pageA.evaluate(
-    ({ project, subproject }) => window.PLANNER.project(subproject)?.parent === project,
-    { project: otherProject, subproject: switchedSubproject },
+  // a sub-project of another project, chosen and left again, keeps the
+  // title and the choice
+  const otherSub = await targets.locator('[data-target-group]').evaluateAll(
+    (groups, current) =>
+      groups
+        .find((group) => !group.querySelector(`[data-target="${current}"]`))
+        ?.querySelector('[data-target]')
+        ?.getAttribute('data-target'),
+    subProj,
   )
-  if (!switchedCorrectly) await fail('Changing Project left Sub-project in the previous project')
-  await projectPicker.selectOption(originalProject)
-  await subprojectPicker.selectOption(subProj)
-  if ((await taskTitle.inputValue()) !== TITLE) await fail('Changing Project lost the task title')
+  if (!otherSub) await fail('Northstar has no second writable project for the create picker')
+  await targets.locator(`[data-target="${otherSub}"]`).click()
+  if ((await chosen()) !== otherSub) await fail('Choosing another sub-project did not take')
+  await targets.locator(`[data-target="${subProj}"]`).click()
+  if ((await chosen()) !== subProj) await fail('Choosing the first sub-project again did not take')
+  if ((await taskTitle.inputValue()) !== TITLE)
+    await fail('Changing the sub-project lost the title')
+  // Create turns on once the project cache answers the choice writable
+  await newTask.getByRole('button', { name: 'Create', exact: true, disabled: false }).waitFor()
   await submitTask.click()
   await newTask.waitFor({ state: 'detached' })
   await pageA.waitForSelector('[data-issue-key]', { timeout: 10000 })
@@ -2377,7 +2382,7 @@ try {
   await pageA.waitForFunction(() =>
     document.querySelector('[data-task-scrim]')?.contains(document.activeElement),
   )
-  log('A: three-field New task dialog opened and focused the task window automatically')
+  log('A: the New task dialog with its Sub-project picker created and focused the task window')
 
   await pageA.waitForSelector('text=/Created QN-\\d+/', { timeout: 10000 })
   const toastText = await pageA.locator('text=/Created QN-\\d+/').first().textContent()
