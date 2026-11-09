@@ -73,7 +73,10 @@ describe('project creation through the client store', () => {
     expect(requests[0]).toMatchObject({ name: 'projects:create', args: { id, key: 'TES' } })
     requests[0].resolve({ id, num: 7, key: 'TES2' })
     await settled()
-    await vi.waitFor(() => expect(onSaved).toHaveBeenCalledWith({ id, num: 7, key: 'TES2' }))
+    // with the organization the create went to, the home one
+    await vi.waitFor(() =>
+      expect(onSaved).toHaveBeenCalledWith({ id, org: P.homeOrg, num: 7, key: 'TES2' }),
+    )
     expect(showToast).not.toHaveBeenCalled()
   })
 

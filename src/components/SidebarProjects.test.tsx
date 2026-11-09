@@ -922,12 +922,20 @@ describe('rows', { timeout: 60_000 }, () => {
     const led = top(next0, 'Led by me', { lead: true })
     const used = top(next0, 'Used by me')
     await load(next0)
-    // a project the server lists that no row showed before
+    // a project the server lists that no row showed before, which its
+    // whole holds too, so the project cache answers it
     const late = top(snap, 'Late arrival')
+    const whole = subs.find((s) => s.name === 'workspace:whole' && s.open)
+    await act(async () => whole?.next(structuredClone(snap)))
     await republish()
     await render('mine')
     const items = async (id: string) => {
       await click(find('[aria-label="Project actions"]', row(id)))
+      // the open menu names its row's project with the project cache, whose
+      // answer the store paints in its next frame
+      await vi.waitFor(() => expect(store.P.projectState(id)).toBe('ok'))
+      await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+      await settle()
       const menu = find('[data-slot="popover-content"]')
       const out = [...menu.querySelectorAll('button')].map((b) => b.textContent?.trim())
       await click([...menu.querySelectorAll('button')].at(-1))
