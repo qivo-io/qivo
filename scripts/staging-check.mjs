@@ -12378,8 +12378,8 @@ async function main() {
   await labelMentionPickersCheck()
   // the Overview of a sub-project of its own, while the project is active
   await overviewCheck()
-  // the Board and a task address without task windows, then the Roadmap
-  // with them, while the project is active
+  // the Board, a task address and the Roadmap, each on its own read, while
+  // the project is active
   await ownReadsCheck()
   // a task created through the Board and changed in its window at once, in
   // a sub-project of its own, while the project is active
