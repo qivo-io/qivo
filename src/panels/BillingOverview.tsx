@@ -74,11 +74,15 @@ export function BillingOverview({
   onManage,
   onCancel,
   onExport,
+  refreshing = false,
 }: {
   billing: BillingDetails
   orgId: string
   refresh: number
   busy: boolean
+  /** whether `billing` is the details held from before a pause, which the
+      subscription section marks busy until the new answer arrives */
+  refreshing?: boolean
   onCheckout: () => void
   onManage: () => void
   onCancel: () => Promise<string | null>
@@ -90,7 +94,11 @@ export function BillingOverview({
   const status = useRef<HTMLParagraphElement>(null)
   return (
     <>
-      <SettingsSection title="Subscription" data-billing-subscription="">
+      <SettingsSection
+        title="Subscription"
+        data-billing-subscription=""
+        aria-busy={refreshing || undefined}
+      >
         <SettingsField label="Plan" width={550}>
           <p data-billing-plan className="text-base font-semibold">
             {plan?.name ?? 'No plan assigned'}

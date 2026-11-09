@@ -6,6 +6,7 @@ import { billingDate, billingError } from '@/lib/billingDisplay'
 import { convex } from '@/lib/convex'
 import { DEMO_MODE, WORKSPACE_SIGNUP_URL } from '@/lib/demoMode'
 import { holdUnsaved } from '@/lib/leaveGuard'
+import { useKeptLiveView } from '@/lib/liveView'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { api } from '../../convex/_generated/api'
 import type { BillingDetails, BillingUsageFigures } from '../../convex/lib/billingTypes'
@@ -68,9 +69,7 @@ function LiveBillingSettings({
   setPage: (page: string) => void
   onViewCredentials: (entry: ApiAccessEntry) => void
 }) {
-  const [summary, setSummary] = useState<BillingDetails | null>(null)
   const [usage, setUsage] = useState<BillingUsageFigures | null>(null)
-  const [summaryError, setSummaryError] = useState('')
   const [usageError, setUsageError] = useState('')
   const [actionError, setActionError] = useState('')
   const [refresh, setRefresh] = useState(0)
@@ -80,30 +79,20 @@ function LiveBillingSettings({
   const actionInFlight = useRef(false)
   useUpdateBlocker(busy)
 
-  // The details stay live, so a payment or a renewal shows without a
-  // Refresh. They name nobody; the name lists read their own batches only
-  // while open (BillingAccountNames).
-  useEffect(() => {
-    let active = true
-    setSummaryError('')
-    const unsubscribe = convex.onUpdate(
-      api.billing.details,
-      { org_id: orgId },
-      (result) => {
-        if (active) {
-          setSummary(result)
-          setSummaryError('')
-        }
-      },
-      (cause) => {
-        if (active) setSummaryError(billingError(cause))
-      },
-    )
-    return () => {
-      active = false
-      unsubscribe()
-    }
-  }, [orgId, refresh])
+  // The details stay live while the page shows, so a payment or a renewal
+  // shows without a Refresh. They pause while the tab or window is hidden
+  // (lib/viewVisibility.ts) and read again on return, showing the details
+  // held from before, marked busy, until the new answer arrives, with the
+  // actions enabled, since the server and Polar decide them. A return never
+  // reads the usage figures, which keep their once-and-on-Refresh rule.
+  // They name nobody; the name lists read their own batches only while
+  // open (BillingAccountNames).
+  const details = useKeptLiveView<BillingDetails>(
+    api.billing.details,
+    JSON.stringify({ org_id: orgId }),
+  )
+  const summary = details.value
+  const summaryError = details.state === 'failed' ? billingError(details.error) : ''
 
   // API usage changes with every machine call. Read the figures once on
   // opening and on each Refresh (billing.usageFigures), rather than keeping
@@ -199,7 +188,10 @@ function LiveBillingSettings({
             type="button"
             variant="outline"
             disabled={refreshing || busy}
-            onClick={() => setRefresh((value) => value + 1)}
+            onClick={() => {
+              details.retry()
+              setRefresh((value) => value + 1)
+            }}
           >
             {refreshing ? 'Refreshing…' : 'Refresh'}
           </Button>
@@ -233,6 +225,7 @@ function LiveBillingSettings({
           onManage={() => void openPayment('portal')}
           onCancel={cancelSubscription}
           onExport={() => setPage('org-general')}
+          refreshing={details.state === 'refreshing'}
         />
       )}
       {summary && (

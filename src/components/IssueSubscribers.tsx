@@ -5,7 +5,9 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Separator } from '@/components/ui/separator'
 import { HoverTooltip } from '@/components/ui/tooltip'
+import { api } from '../../convex/_generated/api'
 import { LIMITS } from '../../convex/lib/limits'
+import { useKeptLiveView } from '../lib/liveView'
 import { listEnd, usePagedList, useSettledSearch } from '../lib/pagedList'
 import { PICKER_CAPS } from '../lib/pickerCaps'
 import { useViewVisibility } from '../lib/viewVisibility'
@@ -42,7 +44,12 @@ const FOLLOWER_WORDS: ChoiceWords = {
     before the server stored it, which has no roster to read yet.
 
     The roster names its followers from its own answer's rows
-    (issues.subscribers), in name order, and paints each portrait from the
+    (issues.subscribers), read live while the popover is open and paused
+    while the tab or window is hidden (lib/liveView.ts useKeptLiveView). On
+    return it shows the roster it held, marked busy, until the new answer
+    arrives, with add and remove enabled, since issues.setSubscriber
+    checks the person and the task. Each opening starts from nothing. It
+    lists them in name order, and paints each portrait from the
     row's initials and color with the picture the store holds; it names
     the followers while open, so their pictures load. A lead's **+ Add**
     reads the people who may follow the task a batch at a time from the
@@ -60,23 +67,29 @@ export function IssueSubscribers({
   const [open, setOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   const [search, setSearch] = useState('')
-  const [roster, setRoster] = useState<SubscriberRoster | null>(null)
-  const [failed, setFailed] = useState(false)
   const [pending, setPending] = useState<string[]>([])
   const searchRef = useRef<HTMLInputElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const me = P.myProfileIds.find((id) => P.user(id)?.org === issue.org)
 
-  useEffect(() => {
-    if (!open) return
-    setRoster(null)
-    setFailed(false)
-    return P.watchIssueSubscribers(issue, setRoster, () => {
-      setRoster(null)
-      setFailed(true)
-    })
-    // the roster follows the task, not the model object a repaint replaces
-  }, [open, issue.uuid, issue.org])
+  // the roster follows the task, not the model object a repaint replaces,
+  // and a close drops it, so an opening starts from nothing
+  const read = useKeptLiveView<SubscriberRoster>(
+    api.issues.subscribers,
+    open ? JSON.stringify({ org_id: issue.org, issue_id: issue.uuid }) : null,
+  )
+  // what the popover showed as it closed, which it shows until it has faded
+  const [closed, setClosed] = useState<{ roster: SubscriberRoster | null; failed: boolean }>({
+    roster: null,
+    failed: false,
+  })
+  const refreshing = open && read.state === 'refreshing'
+  const failed = open ? read.state === 'failed' : closed.failed
+  const roster = open
+    ? read.state === 'ok' || read.state === 'refreshing'
+      ? read.value
+      : null
+    : closed.roster
 
   useEffect(() => {
     if (adding) searchRef.current?.focus()
@@ -86,9 +99,10 @@ export function IssueSubscribers({
   // popover shows until it has faded.
   const changeOpen = (next: boolean) => {
     setOpen(next)
-    if (!next) return
-    setRoster(null)
-    setFailed(false)
+    if (!next) {
+      setClosed({ roster, failed })
+      return
+    }
     setAdding(false)
     setSearch('')
   }
@@ -227,7 +241,11 @@ export function IssueSubscribers({
           </p>
         )}
         <Separator className="my-1" />
-        <div className="min-h-0 overflow-y-auto overscroll-contain">
+        <div
+          data-task-subscribers-roster={refreshing ? 'refreshing' : roster ? 'current' : undefined}
+          aria-busy={refreshing || undefined}
+          className="min-h-0 overflow-y-auto overscroll-contain"
+        >
           {failed ? (
             <p role="alert" className="px-2 py-2 text-sm text-text-2">
               Couldn’t load subscribers. Close and reopen to try again.

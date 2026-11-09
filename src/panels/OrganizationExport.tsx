@@ -13,7 +13,7 @@ import { P } from '../store/planner'
 /** Lets an admin download the organization's data as a ZIP and records
  * when the browser finished it. */
 export function OrganizationExport({ orgId }: { orgId: string }) {
-  const removal = useOrgRemovalState(orgId)
+  const removal = useOrgRemovalState(orgId).state
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')

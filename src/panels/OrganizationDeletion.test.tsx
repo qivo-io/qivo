@@ -39,14 +39,16 @@ vi.mock('../lib/convex', () => ({
   },
 }))
 vi.mock('../lib/orgRemovalState', () => ({
-  useOrgRemovalState: () =>
-    useSyncExternalStore(
+  useOrgRemovalState: () => ({
+    state: useSyncExternalStore(
       (listener) => {
         server.listeners.add(listener)
         return () => server.listeners.delete(listener)
       },
       () => server.state,
     ),
+    refreshing: false,
+  }),
 }))
 /** Delivers the scheduled deletion, or with `false` its stop, as the
     state's subscription does. */

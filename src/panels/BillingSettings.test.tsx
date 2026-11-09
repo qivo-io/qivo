@@ -18,10 +18,15 @@ import { BillingSettings } from './BillingSettings'
    are read once on opening and again on each Refresh, never subscribed
    and never through an action. Neither billing.summary nor
    billing.currentUsage, which the release after v0.1.150 removed, is
-   read. The demo's static page reads nothing. */
+   read. The details read on the live transport, which the client double's
+   onUpdate answers (store/guard/liveDouble.setup.ts), and pause while the
+   page is hidden. The demo's static page reads nothing. */
 
 const network = vi.hoisted(() => ({ query: vi.fn(), onUpdate: vi.fn(), action: vi.fn() }))
-vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
+}))
 const demo = vi.hoisted(() => ({ on: false }))
 vi.mock('@/lib/demoMode', () => ({
   get DEMO_MODE() {
@@ -109,6 +114,8 @@ const ACCOUNTS: ApiAccounts = {
 
 type Read = { name: string; args: Record<string, unknown> }
 let reads: Read[]
+/* The details' open subscriptions, each with the way to answer it. */
+let details: Set<(value: BillingDetails) => void>
 /* What the next usage read does: answer the figures, or fail. */
 let usageAnswer: () => Promise<BillingUsageFigures>
 let container: HTMLDivElement
@@ -118,13 +125,15 @@ beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   demo.on = false
   reads = []
+  details = new Set()
   usageAnswer = async () => USAGE
   for (const fn of Object.values(network)) fn.mockReset()
   network.onUpdate.mockImplementation(
     (ref: unknown, _args: unknown, onResult: (value: BillingDetails) => void) => {
       expect(getFunctionName(ref as never)).toBe('billing:details')
+      details.add(onResult)
       queueMicrotask(() => onResult(DETAILS))
-      return () => {}
+      return () => details.delete(onResult)
     },
   )
   network.query.mockImplementation(async (ref: unknown, args: Record<string, unknown>) => {
@@ -144,7 +153,14 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   vi.unstubAllGlobals()
+  Reflect.deleteProperty(document, 'visibilityState')
 })
+
+/** Sets the page's visibility, as the browser does when a tab hides. */
+async function setVisibility(value: 'visible' | 'hidden') {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => value })
+  await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+}
 
 const open = () =>
   act(async () =>
@@ -266,6 +282,63 @@ describe('Billing reads its usage once', () => {
     expect(container.querySelector('[data-billing-storage-row="p1:3"]')).not.toBeNull()
     // API calls by account waits for the bucket the figures name
     expect(named('billing:apiAccounts')).toEqual([])
+  })
+})
+
+describe("Billing's live details while the page is hidden", () => {
+  const subscription = () => container.querySelector('[data-billing-subscription]')
+  const loading = () =>
+    [...container.querySelectorAll('[role="status"]')].some((p) =>
+      p.textContent?.includes('Loading billing'),
+    )
+
+  it('stops the details while hidden and shows the held ones busy on return, reading the usage figures never again', async () => {
+    await open()
+    await settle()
+    expect(details.size).toBe(1)
+    expect(subscription()?.getAttribute('aria-busy')).toBeNull()
+    await setVisibility('hidden')
+    expect(details.size).toBe(0)
+    // the held details stay on screen while hidden
+    expect(subscription()).not.toBeNull()
+    // the return subscribes again with no answer yet, so the held summary
+    // shows busy, with no Loading line
+    network.onUpdate.mockImplementation(
+      (_ref: unknown, _args: unknown, onResult: (value: BillingDetails) => void) => {
+        details.add(onResult)
+        return () => details.delete(onResult)
+      },
+    )
+    await setVisibility('visible')
+    await settle()
+    expect(details.size).toBe(1)
+    expect(subscription()?.getAttribute('aria-busy')).toBe('true')
+    expect(loading()).toBe(false)
+    expect(container.querySelector('[data-seat-count]')?.textContent).toBe('7 active users')
+    // the buttons the server and Polar decide stay enabled
+    expect(
+      [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+        (b) => b.textContent === 'Refresh',
+      )?.disabled,
+    ).toBe(false)
+    await act(async () => {
+      for (const take of details) take({ ...DETAILS, billable_users: 8 })
+    })
+    await settle()
+    expect(subscription()?.getAttribute('aria-busy')).toBeNull()
+    expect(container.querySelector('[data-seat-count]')?.textContent).toBe('8 active users')
+    // the usage figures keep their once-and-on-Refresh rule
+    expect(named('billing:usageFigures')).toHaveLength(1)
+  })
+
+  it('runs the details again on Refresh, with the usage figures once', async () => {
+    await open()
+    await settle()
+    const before = network.onUpdate.mock.calls.length
+    await refresh()
+    expect(network.onUpdate.mock.calls.length).toBe(before + 1)
+    expect(details.size).toBe(1)
+    expect(named('billing:usageFigures')).toHaveLength(2)
   })
 })
 

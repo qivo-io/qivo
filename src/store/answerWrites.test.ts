@@ -753,11 +753,8 @@ describe('labels, the eye and Subscribers from the window’s answer', { timeout
     P.setIssueSubscribed(H, false)
     expect(last('issues:unsubscribe').args).toEqual({ org_id: ORG, issue_id: FAR })
     expect(shown().subscribed).toBe(false)
-    // the roster and a lead's add read the task's organization and uuid
-    // from the window's model
-    const roster = vi.fn()
-    P.watchIssueSubscribers(shown(), roster, vi.fn())
-    expect(one('issues:subscribers').args).toEqual({ org_id: ORG, issue_id: FAR })
+    // a lead's add reads the task's organization and uuid from the window's
+    // model, as the popover's roster does (components/IssueSubscribers.test.tsx)
     P.setIssueSubscriber(shown(), 'leo', true, vi.fn())
     expect(last('issues:setSubscriber').args).toEqual({
       org_id: ORG,

@@ -16633,26 +16633,11 @@ export const PLANNER = {
       label picker drops it from a batch it read before the delete. */
   labelGone: (id: string) => goneLabels.has(id),
 
-  /* Each open subscriber popover owns its reactive roster; the shared
-     window's answer owns the current user's eye indicator. The popover
-     passes the task's model, the window's from its own answer, whose
-     organization and uuid the roster takes. */
-  watchIssueSubscribers: (
-    issue: IssueVM,
-    onChange: (value: IssueSubscribers) => void,
-    onError: () => void,
-  ): (() => void) => {
-    return convex.onUpdate(
-      api.issues.subscribers,
-      { org_id: issue.org, issue_id: issue.uuid },
-      onChange,
-      onError,
-    )
-  },
-
   /* Adds or removes another person's follow, for a lead or an admin, on
-     the task the popover shows (watchIssueSubscribers), by its
-     organization and uuid. */
+     the task the subscriber popover shows, by the organization and uuid
+     its roster reads (components/IssueSubscribers.tsx, issues.subscribers).
+     The popover's own roster owns who follows; the shared window's answer
+     owns the current user's eye indicator. */
   setIssueSubscriber: (
     issue: IssueVM,
     profileId: string,

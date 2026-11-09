@@ -22,10 +22,20 @@
    the arguments it held and again with the current ones, and the server
    runs a query whose result nobody reads. Waiting until the page is current
    would avoid that run but delay every page shown again by a frame, also
-   when nothing changed, so the view does not wait. */
+   when nothing changed, so the view does not wait.
+
+   A reader that shows its last answer while its read is paused or
+   refreshing uses useKeptLiveView, which keeps that answer through a
+   pause, a kept page shown again, a reconnect, Try again and a failure.
+   useLiveView's own rule, no value until a transition brings one, stays.
+
+   One path per query. A query a view reads on the live transport is never
+   also held through convex.onUpdate (lib/liveQueries.ts), since a live
+   watch that comes second to such a listener hears nothing until the
+   answer changes (store/guard/liveRoutes.test.ts holds the app to it). */
 
 import { type FunctionReference, getFunctionName } from 'convex/server'
-import type { Value } from 'convex/values'
+import { ConvexError, type Value } from 'convex/values'
 import { useEffect, useRef, useState } from 'react'
 import { live } from './convex'
 import type { WatchSharing } from './liveQueries'
@@ -211,4 +221,98 @@ export function useLiveViews<T>(
     }
   }, [name, all, visible, attempt])
   return { held, retry: () => setAttempt((n) => n + 1) }
+}
+
+/** What useKeptLiveView holds now: `loading` before a first answer for
+    the key, `ok` with a current one, `refreshing` while it keeps an
+    earlier answer and has no current one, and `failed` once the read
+    failed, with the answer it kept, if any. */
+export type KeptLiveView<T> = {
+  state: 'loading' | 'ok' | 'refreshing' | 'failed'
+  value: T | null
+  error?: unknown
+  /** Subscribes afresh, as Try again does, keeping the value shown as
+      refreshing until the new run answers. */
+  retry: () => void
+}
+
+type Kept<T> = { key: string; value?: T; error?: unknown; current: boolean }
+
+/* Whether `error` is a refusal that ends the caller's access to what the
+   read showed, after which a kept value must not stay on screen. */
+const endsAccess = (error: unknown) => {
+  if (!(error instanceof ConvexError)) return false
+  const code = (error.data as { code?: unknown } | null)?.code
+  return code === 'forbidden' || code === 'not_found'
+}
+
+/**
+ * The live result of query `ref` for the arguments `key` holds, as
+ * useLiveView reads it, for a reader that shows its last answer while the
+ * read is paused or refreshing. It subscribes while the page shows and
+ * stops while it is hidden, through watchLive with `seen`, so it knows the
+ * connection each result came on. It keeps the last value for the same key
+ * through a pause, a kept page shown again, a reconnect, Try again and a
+ * transport failure, and is `refreshing` while it holds that value and no
+ * current one. A new key, or null, drops it, and so does a refusal that
+ * ends access (forbidden or not_found), so a value never outlives the
+ * caller's right to see it. useLiveView's own rule is unchanged.
+ */
+export function useKeptLiveView<T>(
+  ref: FunctionReference<'query'>,
+  key: string | null,
+): KeptLiveView<T> {
+  const { visible } = useViewVisibility()
+  const [attempt, setAttempt] = useState(0)
+  // as in useLiveView, so a subscription for a newer attempt asks again
+  const opened = useRef(attempt)
+  const [held, setHeld] = useState<Kept<T> | null>(null)
+  const name = getFunctionName(ref)
+  useEffect(() => {
+    // a kept value is not current until this subscription answers
+    const stale = (was: Kept<T> | null) =>
+      was?.key === key ? (was.current ? { ...was, current: false } : was) : null
+    setHeld(stale)
+    if (key === null || !visible) return
+    const fresh = attempt !== opened.current
+    opened.current = attempt
+    // the newest connection a transition named, and the one the latest
+    // result came on, null for one read at once from a joined watch
+    let newest = 0
+    let came: number | null | undefined
+    return watchLive<T>(
+      ref,
+      JSON.parse(key) as Record<string, Value>,
+      (result, connection) => {
+        came = connection
+        if (connection !== null && connection > newest) newest = connection
+        setHeld((was) => {
+          if ('value' in result) return { key, value: result.value, current: true }
+          const keep = was?.key === key && !endsAccess(result.error) ? was.value : undefined
+          return {
+            key,
+            ...(keep !== undefined ? { value: keep } : {}),
+            error: result.error,
+            current: true,
+          }
+        })
+      },
+      (connection) => {
+        if (connection <= newest) return
+        const first = newest === 0
+        newest = connection
+        // a joined result takes the connection of the first transition
+        if (came === null && first) came = connection
+        if (came !== undefined && came !== connection) setHeld(stale)
+      },
+      { fresh, restarted: () => setHeld(stale) },
+    )
+  }, [name, key, visible, attempt])
+  const retry = () => setAttempt((n) => n + 1)
+  if (!held || held.key !== key) return { state: 'loading', value: null, retry }
+  const value = held.value ?? null
+  if (held.current && held.error !== undefined)
+    return { state: 'failed', value, error: held.error, retry }
+  if (held.value === undefined) return { state: 'loading', value: null, retry }
+  return { state: held.current ? 'ok' : 'refreshing', value, retry }
 }
