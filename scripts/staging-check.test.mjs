@@ -1154,7 +1154,7 @@ describe('staging check REST contract', () => {
     // it waits for its own job, collecting or under a new id, before it
     // waits for ready, so an earlier ready archive never passes for it
     const own = step.indexOf("=== 'collecting' ||")
-    expect(own).toBeGreaterThan(step.indexOf('[${m.start}]`).click()'))
+    expect(own).toBeGreaterThan(step.indexOf('m.start}]`).click()'))
     expect(step.indexOf('!== earlier')).toBeGreaterThan(own)
     const ready = step.indexOf('const ready = await until(')
     expect(ready).toBeGreaterThan(own)
