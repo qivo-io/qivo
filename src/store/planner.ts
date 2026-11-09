@@ -9664,14 +9664,13 @@ const removalKey = (change: AccessRemoval): string =>
    (convex/model/projectAccess.ts findLost), so `shown`, the preview the
    window showed, only paints the reassigned holdings the workspace holds
    with the same holder, and a member who leaves or a team deleted from the
-   team rows the workspace holds. The workspace holds no grant, so no Viewer
-   grant that
-   keeping people as Viewers gives is painted; the project cache's next
-   answer and the pages' own reads follow the access. While the write is
-   on its way, P.removingAccess answers true for
-   it, so a page that lists the access from the server's answer, which the
-   paint does not reach, hides the row and shows it again on a refusal.
-   Resolves whether the server accepted it. */
+   team rows the workspace holds. The workspace holds no grant, so no
+   Viewer grant that keeping people as Viewers gives is painted; the
+   project cache's next answer and the pages' own reads follow the access.
+   While the write is on its way, P.removingAccess answers true for it, so
+   a page that lists the access from the server's answer, which the paint
+   does not reach, hides the row and shows it again on a refusal. Resolves
+   whether the server accepted it. */
 function removeAtOnce(
   change: AccessRemoval,
   held: 'leave' | 'keep_as_viewer' | { reassign_to: string | null },
