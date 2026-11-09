@@ -162,8 +162,8 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
               read-only for 30 days so admins can export its data, and is then deleted with all of
               its projects, tasks, comments and files.{' '}
               {state.last_export_at
-                ? `The last export was made on ${billingDate(state.last_export_at)}.`
-                : 'No export has been made yet.'}
+                ? `The last saved export was confirmed on ${billingDate(state.last_export_at)}.`
+                : 'No saved export has been confirmed yet.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="grid gap-1.5">

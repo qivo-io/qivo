@@ -360,8 +360,8 @@ function CancelSubscription({
             Nothing is refunded. The organization then becomes read-only for 30 days so admins can
             export its data, and is then deleted.{' '}
             {lastExportAt
-              ? `The last export was made on ${billingDate(lastExportAt)}.`
-              : 'No export has been made yet.'}
+              ? `The last saved export was confirmed on ${billingDate(lastExportAt)}.`
+              : 'No saved export has been confirmed yet.'}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {shown.error && (

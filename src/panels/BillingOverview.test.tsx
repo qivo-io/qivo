@@ -120,6 +120,12 @@ const confirm = () => document.querySelector<HTMLButtonElement>('[data-billing-c
 const refusal = () => dialog()?.querySelector('[role="alert"]')?.textContent ?? null
 
 describe('the Cancel subscription question', () => {
+  it('says whether a saved export was confirmed, never that an export was made', async () => {
+    expect(dialog()?.textContent).toContain('No saved export has been confirmed yet.')
+    await act(async () => refresh({ ...SUMMARY, last_export_at: '2026-11-05T10:00:00.000Z' }))
+    expect(dialog()?.textContent).toMatch(/The last saved export was confirmed on .*2026\./)
+  })
+
   it('keeps its busy button while it closes after the cancellation', async () => {
     await act(async () => confirm()?.click())
     expect(confirm()?.textContent).toBe('Cancelling…')

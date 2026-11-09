@@ -120,6 +120,18 @@ async function askAndConfirm() {
 }
 
 describe('the Delete organization question', () => {
+  it('says whether a saved export was confirmed, never that an export was made', async () => {
+    await act(async () => document.querySelector<HTMLElement>('[data-org-delete]')?.click())
+    expect(dialog()?.textContent).toContain('No saved export has been confirmed yet.')
+    await act(async () => button('Cancel').click())
+    await endClosing()
+    server.state = { ...server.state, last_export_at: '2026-11-05T10:00:00.000Z' }
+    for (const listener of server.listeners) listener()
+    await act(async () => document.querySelector<HTMLElement>('[data-org-delete]')?.click())
+    expect(dialog()?.textContent).toMatch(/The last saved export was confirmed on .*2026\./)
+    server.state = { ...server.state, last_export_at: null }
+  })
+
   it('keeps the typed address while it closes after Cancel, and a press then does nothing', async () => {
     await askAndConfirm()
     expect(confirm()?.disabled).toBe(false)
