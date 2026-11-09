@@ -10372,7 +10372,9 @@ function moveAnswerTask(
     return null
   if (row.project_id === projectId) return null
   const family = PLANNER.familyOf(a.model)
-  if (!family || refusePausedEdit()) return null
+  // the task's and its parent's projects must have facts, else the move
+  // could not tell a same-project move from one that leaves the parent
+  if (!family || PLANNER.moveWaits(a.model, family) || refusePausedEdit()) return null
   const { leavesParent, carried } = PLANNER.moveFamily(a.model, projectId, family)
   const uuid = a.uuid
   const moving = [uuid, ...carried.map((task) => task.uuid)]
@@ -12335,6 +12337,29 @@ export const PLANNER = {
      (moveCarriesSubtasks). With `family` (P.familyOf) the task, its
      parent and its subtasks are the family's, as for a task the window
      shows from its own answer. */
+  /** Where the project cache stands on a project moveFamily needs facts of
+      to judge moving `it`, or null once it can: the task's own sub-project
+      and, for a subtask whose parent the view holds, the parent's, whose
+      top-level projects decide whether the move crosses and leaves the
+      parent. An unknown one never reads as another top-level project, so a
+      move waits (P.moveIssue, the Move window) until the cache has facts of
+      both. A hidden parent counts as being in the task's own top-level
+      project, so it needs none. With `family` (P.familyOf) the task and its
+      parent are the family's. */
+  moveWaits: (
+    it: IssueVM,
+    family?: TaskFamily,
+  ): { project: string; state: CachedState; message: string | null } | null => {
+    const root = family?.root ?? it
+    const byId = family?.byId ?? PLANNER.issueById
+    const parent = root.parent ? byId[root.parent] : undefined
+    for (const pid of [root.project, parent?.project]) {
+      if (!pid || PLANNER.project(pid)) continue
+      const known = projectCache.look(pid)
+      return { project: pid, state: known.state, message: known.message }
+    }
+    return null
+  },
   moveFamily: (
     it: IssueVM,
     projectId: string,
@@ -14517,7 +14542,10 @@ export const PLANNER = {
       cache answers `ok` with Edit or Lead: a seeded or loading one, and
       one whose level lacks Edit, as after the caller's access there was
       lowered, sends nothing, so the Move window keeps Move off until the
-      cache answers its chosen row writable. */
+      cache answers its chosen row writable. So does a move while the cache
+      has no facts of the task's sub-project or its parent's (P.moveWaits),
+      which would read as another top-level project and detach a subtask
+      from its parent. */
   moveIssue: (id: string, projectId: string, onSaved?: (saved: boolean) => void) => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
@@ -14539,6 +14567,7 @@ export const PLANNER = {
       PLANNER.projectState(projectId) !== 'ok' ||
       !PLANNER.canWrite(projectId) ||
       row.project_id === projectId ||
+      PLANNER.moveWaits(it) ||
       refusePausedEdit()
     )
       return null

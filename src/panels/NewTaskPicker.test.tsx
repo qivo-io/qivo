@@ -171,7 +171,8 @@ async function app(snap: Snapshot, path = '/app/testbed/board/p/1') {
   const { TASKS } = await import('../store/liveParts')
   TASKS.atBoot = false
   const store = await import('../store/planner')
-  if (byIdsHere) double.live?.forceProjectNav('client')
+  // the double outlives the store, so each load says where its reads go
+  double.live?.forceProjectNav(byIdsHere ? 'client' : null)
   await store.initStore()
   const { syncStatus } = await import('../lib/syncStatus')
   syncStatus.setSocket({ connected: true, everConnected: true })

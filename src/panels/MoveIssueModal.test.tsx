@@ -147,7 +147,8 @@ async function load(prepare: (snap: Snapshot, web: string) => void = () => {}) {
   })
   const store = await import('../store/planner')
   P = store.P
-  if (byIdsHere) double.live?.forceProjectNav('client')
+  // the double outlives the store, so each load says where its reads go
+  double.live?.forceProjectNav(byIdsHere ? 'client' : null)
   await store.initStore()
   dialogs = await import('./Modals')
 }

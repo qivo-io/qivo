@@ -257,11 +257,13 @@ describe('the Team sync store', () => {
         { ...f.snap.projects[0], id: meta2, key: 'P3', num: 3, name: 'Other' },
         { ...project, id: sub2, key: 'P4', num: 4, name: 'Other sub', parent_id: meta2 },
       ],
-      // the admin's own grant on the other project, as admin status gives
-      // no access
+      // the admin's own grants on the other project and on the task's, as
+      // admin status gives no access and a move needs facts of both
+      // (P.moveWaits)
       access: [
         ...f.snap.access,
         { project_id: meta2, profile_id: f.snap.myProfileIds[0], level: 'user' },
+        { project_id: f.snap.projects[0].id, profile_id: f.snap.myProfileIds[0], level: 'user' },
       ],
       issues: [
         ...f.snap.issues,

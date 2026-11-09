@@ -1171,6 +1171,17 @@ const familyWait = (it: IssueVM) =>
         ? WAITS_FOR_CHECK
         : FAMILY_UNKNOWN
 
+/** What the Move window says while the project cache has no facts of the
+    task's or its parent's sub-project (P.moveWaits), which Move waits for. */
+const moveWaitNote = (waits: { state: string; message: string | null }) =>
+  waits.state === 'loading'
+    ? 'Checking where this task is before it can move…'
+    : waits.state === 'unchecked'
+      ? (waits.message ?? "Couldn't check where this task is.")
+      : waits.state === 'gone'
+        ? "This task's sub-project is no longer one you can open, so it cannot move from here."
+        : "Couldn't check where this task is, so it cannot move yet."
+
 /** What the Move window's list says at its end: no other sub-project the
     person may move the task to. */
 const MOVE_TARGET_WORDS: ChoiceWords = {
@@ -1212,7 +1223,12 @@ function MoveIssueModal({
   const [target, setTarget] = useStateM('')
   // the chosen row's name, for the note under the list
   const [targetName, setTargetName] = useStateM('')
-  const retryTarget = useProjects([target || null])
+  // the chosen row, and the task's and its parent's sub-projects, whose
+  // top-level projects decide what the move takes along (P.moveWaits)
+  const parentTask = it?.parent
+    ? ((family?.byId ?? P.issueById)[it.parent] ?? P.issueById[it.parent])
+    : undefined
+  const retryTarget = useProjects([target || null, it?.project, parentTask?.project])
   // A move to another top-level project carries the subtasks, archived ones
   // included. Archived tasks are not in this view, so the server answers
   // whether any would move to the chosen sub-project.
@@ -1243,19 +1259,25 @@ function MoveIssueModal({
   const targetValid =
     !!target && P.projectState(target) === 'ok' && !!P.project(target) && P.canWrite(target)
   const moving = targetValid && target !== it.project
+  // the move waits while the project cache has no facts of the task's or
+  // its parent's sub-project, as it could not tell what the move takes
+  // along (P.moveWaits)
+  const waits = P.moveWaits(it, family ?? undefined)
   // whoever works on the task or its subtasks must keep access after the
   // move: the server checks every one at full scope and refuses the move
   // with a sentence that says what to change, which is toasted and the
   // move taken back (the store holds no one else to name here)
-  const canMove = !!target && moving && !!family
+  const canMove = !!target && moving && !!family && !waits
   // a subtask stays in its parent's project, so a move to another project
   // leaves the parent and carries the subtasks along; the dialog says so
-  const moved = moving && family ? P.moveFamily(it, target, family) : null
+  const moved = moving && family && !waits ? P.moveFamily(it, target, family) : null
   const carries = !!moved?.carriesSubtasks || (asked?.target === target && asked.carries)
   const parentKey = it.parent ? (family?.byId[it.parent] ?? P.issueById[it.parent])?.key : undefined
   const notes = [
     !family && `${familyWait(it)}.`,
-    moved?.leavesParent &&
+    waits && moveWaitNote(waits),
+    !waits &&
+      moved?.leavesParent &&
       (parentKey
         ? `${it.key} will no longer be a subtask of ${parentKey}.`
         : `${it.key} will no longer be a subtask.`),
@@ -1309,6 +1331,19 @@ function MoveIssueModal({
               {note}
             </p>
           ))}
+          {waits && (waits.state === 'failed' || waits.state === 'unchecked') && (
+            <div>
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-control-sm text-sm"
+                data-move-retry=""
+                onClick={retryTarget}
+              >
+                Retry
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </ModalShell>
