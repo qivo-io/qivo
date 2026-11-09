@@ -8,7 +8,12 @@
  * stand-in answers the same summary and delays, the same batches, rows,
  * verdicts and fixed ends of the Overdue & at risk and Paused lists, and
  * the same health table, for Nora in every column's order both ways, a cut
- * and a search, as the queries answer for the same caller.
+ * and a search, as the queries answer for the same caller. Over every row
+ * of both lists it also checks what the page still does on screen
+ * (views/Overview.tsx modelOf and its rows): the store shapes a model of
+ * each row (store/viewRows.ts), so no list waits on a row it cannot show,
+ * and the model shows the row's own task, its title, its due date and its
+ * owner by the Reviewer rule (lib/review.ts taskOwnerId).
  *
  * The process runs in New York's time zone, so the client's local weeks
  * differ from UTC weeks near midnight; vitest runs each file in a process
@@ -29,7 +34,8 @@ import type {
   OverviewScope,
   SummaryAnswer,
 } from '../../convex/lib/overview'
-import { OVERVIEW, WEEK_STARTS } from '../../convex/lib/overview'
+import { OVERVIEW, type OverviewRow, WEEK_STARTS } from '../../convex/lib/overview'
+import { taskOwnerId } from '../../convex/lib/review'
 import { SHAPES } from '../../convex/tests/accessShapes.setup'
 import { projectScope } from '../../convex/tests/board.setup'
 import {
@@ -105,7 +111,11 @@ async function start(snap: Snapshot) {
   await nameEveryone(store.P, snap)
   // the page's clock reads this store
   const args = await import('../views/overview/overviewArgs')
-  return Object.assign(store.P, { args, snapshot: snap })
+  // the view rows of the store's own module instance, whose week grid is
+  // the store's (src/lib/dates.ts)
+  const views = await import('./viewRows')
+  const { isoToWeek } = await import('../lib/dates')
+  return Object.assign(store.P, { args, views, weekOf: isoToWeek, snapshot: snap })
 }
 
 type Store = Awaited<ReturnType<typeof start>>
@@ -180,6 +190,33 @@ const batchFacts = (batches: (ListAnswer & { state: 'ok' })[]) =>
     ends: b.next === null,
   }))
 
+/* How many list rows expectRowsShown compared, and how many of them were
+   owned by their reviewer, so a case can tell the comparison ran. */
+const shown = { rows: 0, reviewed: 0 }
+
+/** Checks that the store shapes a model of every row of `rows`, the rows
+ * of a list's batches, as the page's modelOf takes one (store/viewRows.ts),
+ * and that the model shows the row's task: its uuid, title, due date and
+ * the owner the row's avatar shows by the Reviewer rule. */
+function expectRowsShown(P: Store, rows: readonly OverviewRow[], label: string) {
+  const views = P.views.createViewRows(P.weekOf)
+  views.take('parity', rows)
+  views.beginPaint()
+  views.reshape({ handleNow: P.handleNow })
+  for (const row of rows) {
+    const it = views.model('parity', row.id)
+    expect(it, `${label}: a model of ${row.id}`).toBeDefined()
+    if (!it) continue
+    const owner = taskOwnerId(row, row.has_subtasks) ?? ''
+    expect(
+      { uuid: it.uuid, title: it.title, due: it.due ?? null, owner: it.owner || '' },
+      `${label}: the row of ${row.id}`,
+    ).toEqual({ uuid: row.id, title: row.title, due: row.due_date ?? null, owner })
+    shown.rows++
+    if (row.reviewer_id !== undefined && owner === row.reviewer_id) shown.reviewed++
+  }
+}
+
 /** The health table's columns. */
 const HEALTH_SORTS: HealthSort[] = [
   'name',
@@ -248,6 +285,12 @@ async function expectParity(
     `${label}: stand-in paused`,
   )
   expect(batchFacts(standPaused), `${label}: stand-in paused batches`).toEqual(batchFacts(paused))
+  // every row of both lists shows as the page shows it
+  expectRowsShown(
+    P,
+    [...attention, ...paused].flatMap((b) => b.rows),
+    label,
+  )
   // the health table, each answer the stand-in's too
   const health = async (over: Partial<Record<string, unknown>> = {}) => {
     const args = {
@@ -337,6 +380,7 @@ describe('Northstar', () => {
         )
     }
     expect(held).toBeGreaterThan(0)
+    expect(shown.rows).toBeGreaterThan(0)
   })
 })
 
@@ -489,7 +533,13 @@ async function compareShape(
 
 describe('access shapes', () => {
   it('answers as the stand-in does for the fixture’s admin, who reads by grants', async () => {
+    shown.rows = 0
+    shown.reviewed = 0
     expect(await compareShape(null, 'admin')).toBeGreaterThan(0)
+    // the lists showed rows, an In Review one among them owned by its
+    // reviewer
+    expect(shown.rows).toBeGreaterThan(0)
+    expect(shown.reviewed).toBeGreaterThan(0)
   })
 
   // an admin's seat is judged by its own rows, as any member's

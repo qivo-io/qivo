@@ -5,7 +5,14 @@
  * store loads, and checks that the stand-in answers the agenda of every
  * scope the page offers, All projects, each team of the home organization,
  * each top-level project and each sub-project, field for field, as the
- * agenda does for the same caller.
+ * agenda does for the same caller. Over the models the store shapes from
+ * the agenda's rows (store/viewRows.ts), it also checks the rules the page
+ * still runs on screen (views/teamSync/useSyncMeeting.ts, views/TeamSync.tsx):
+ * the walk's rows (lib/teamSync.ts syncRows over every task the answer
+ * names) are exactly the agenda's rows, and each walker's Done since
+ * (doneSince from their reading point, syncSince) keeps exactly the
+ * stored Done tasks that walker finished or reviewed after a hand-off,
+ * and Needs an owner lists every ask the answer names.
  *
  * The process runs in New York's time zone, so the client's local days and
  * weeks differ from UTC ones near midnight; vitest runs each file in a
@@ -19,8 +26,9 @@ import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
-import { readingBounds } from '../../convex/lib/teamSync'
-import { AGENDA, type AgendaScope } from '../../convex/lib/teamSyncAgenda'
+import { readingBounds, syncSince } from '../../convex/lib/teamSync'
+import { AGENDA, type AgendaAnswer, type AgendaScope } from '../../convex/lib/teamSyncAgenda'
+import type { ViewRow } from '../../convex/lib/viewReads'
 import { SHAPES } from '../../convex/tests/accessShapes.setup'
 import {
   as,
@@ -93,9 +101,15 @@ async function start(snap: Snapshot) {
   const store = await import('./planner')
   await store.initStore()
   await nameEveryone(store.P, snap)
+  // the week indexes of the store's own timeline (src/lib/dates.ts)
+  const { isoToWeek } = await import('../lib/dates')
   return Object.assign(store.P, {
     rules: await import('../lib/teamSync'),
     args: await import('../views/overview/overviewArgs'),
+    // the view rows of the store's own module instance, whose week grid is
+    // the store's
+    views: await import('./viewRows'),
+    weekOf: isoToWeek,
     snap,
   })
 }
@@ -183,27 +197,111 @@ function scopesOf(P: Store): [label: string, server: AgendaScope, page: SyncScop
   return out
 }
 
+/** The models the store shapes from `rows` (store/viewRows.ts), with the
+ * store's own week grid and handles. */
+function shapedModels(P: Store, rows: readonly ViewRow[]) {
+  const views = P.views.createViewRows(P.weekOf)
+  views.take('parity', rows)
+  views.beginPaint()
+  views.reshape({ handleNow: P.handleNow })
+  return rows.map((row) => {
+    const it = views.model('parity', row.id)
+    if (!it) throw new Error(`no model of ${row.id}`)
+    return it
+  })
+}
+
+/* How many Done since entries expectPageRules compared, by kind, so a case
+   can tell the comparison ran. */
+const kept = { done: 0, reviewed: 0 }
+
+/** Checks the rules Team sync runs on screen over `answer`, the agenda for
+ * `profile`, on the models the store shapes from its rows: the walk's rows
+ * (syncRows over every task the answer names, as useSyncMeeting.ts passes
+ * them) are exactly the answer's rows, Needs an owner (needsOwner, as
+ * TeamOpening.tsx asks it) lists every ask and otherwise only rows, and
+ * each walker's Done since
+ * (doneSince from syncSince at `now`, as TeamSync.tsx asks it) keeps
+ * exactly the stored Done tasks of the answer's sub-projects that the
+ * walker finished as assignee, or reviewed after a hand-off, at or after
+ * their reading point, newest first. */
+function expectPageRules(
+  P: Store,
+  answer: Extract<AgendaAnswer, { state: 'ok' }>,
+  now: number,
+  label: string,
+) {
+  const tasks = shapedModels(P, [...answer.rows, ...answer.asks, ...answer.done])
+  const subIds = new Set(answer.sub_projects)
+  expect(
+    sorted(P.rules.syncRows(tasks, subIds).map((it) => it.uuid)),
+    `${label}: the walk's rows`,
+  ).toEqual(sorted(answer.rows.map((r) => r.id)))
+  // Needs an owner keeps every ask the answer names, and lists nothing
+  // else but rows
+  const rowIds = new Set(answer.rows.map((r) => r.id))
+  const asks = P.rules.needsOwner(tasks, subIds, P.rules.syncDay(now)).map((it) => it.uuid)
+  expect(sorted(asks.filter((id) => !rowIds.has(id))), `${label}: Needs an owner`).toEqual(
+    sorted(answer.asks.map((r) => r.id)),
+  )
+  // the stored tasks of the caller's working set, by uuid
+  const stored = new Map(P.snap.issues.map((row) => [row.id, row]))
+  for (const person of answer.people) {
+    const since = syncSince(person.stamp ?? null, now, P.org.weekStart ?? 1)
+    const page = P.rules
+      .doneSince(person.id, tasks, subIds, since)
+      .map((d) => [d.issue.uuid, d.kind])
+    const expected = [...stored.values()]
+      .filter(
+        (row) =>
+          row.status === 'done' &&
+          !row.has_subtasks &&
+          subIds.has(row.project_id) &&
+          row.done_at !== undefined &&
+          Date.parse(row.done_at) >= since,
+      )
+      .flatMap((row) =>
+        row.assignee_id === person.id
+          ? [{ row, kind: 'done' }]
+          : row.reviewer_id === person.id && row.review_at !== undefined
+            ? [{ row, kind: 'reviewed' }]
+            : [],
+      )
+      .sort(
+        (a, b) =>
+          Date.parse(b.row.done_at ?? '') - Date.parse(a.row.done_at ?? '') ||
+          a.row.num - b.row.num,
+      )
+      .map(({ row, kind }) => [row.id, kind])
+    expect(page, `${label}: Done since of ${person.id}`).toEqual(expected)
+    for (const [, kind] of page) kept[kind as 'done' | 'reviewed']++
+  }
+}
+
 /** Checks that the stand-in answers the agenda of `server` for `profile`
- * field for field, and answers the agenda. */
+ * field for field, and the page's rules over it (expectPageRules) at
+ * `now`, and answers the agenda. */
 async function expectMeeting(
   t: T,
   P: Store,
   profile: Doc<'profiles'>,
   server: AgendaScope,
+  now: number,
   label: string,
 ) {
   const answer = await agendaOf(t, P, profile, server)
   if (answer.state !== 'ok') throw new Error(`${label}: ${JSON.stringify(answer)}`)
   expect(standInOf(P, profile, server), `${label}: the stand-in`).toEqual(answer)
+  expectPageRules(P, answer, now, label)
   return answer
 }
 
 /** Every scope of store `P` for `profile`, compared; answers how many rows,
  * asks, Done tasks and blocked rows they held. */
-async function compareAll(t: T, P: Store, profile: Doc<'profiles'>) {
+async function compareAll(t: T, P: Store, profile: Doc<'profiles'>, now: number) {
   const found = { rows: 0, asks: 0, done: 0, blocked: 0, unknown: 0 }
   for (const [label, server] of scopesOf(P)) {
-    const ok = await expectMeeting(t, P, profile, server, `${profile.name}, ${label}`)
+    const ok = await expectMeeting(t, P, profile, server, now, `${profile.name}, ${label}`)
     found.rows += ok.rows.length
     found.asks += ok.asks.length
     found.done += ok.done.length
@@ -249,11 +347,12 @@ describe('Northstar', () => {
     const totals = []
     for (const profile of [nora, leo, ben]) {
       const P = await storeOf(t, profile, now)
-      totals.push(await compareAll(t, P, profile))
+      totals.push(await compareAll(t, P, profile, now))
     }
-    console.log('Team sync parity over Northstar:', JSON.stringify(totals))
+    console.log('Team sync parity over Northstar:', JSON.stringify({ totals, kept }))
     expect(totals[0].rows).toBeGreaterThan(0)
     expect(totals[0].done).toBeGreaterThan(0)
+    expect(kept.done).toBeGreaterThan(0)
   })
 })
 
@@ -367,16 +466,21 @@ async function compareShape(
     }
     return { found: null, t, f, P, subject, now, ...planted }
   }
-  return { found: await compareAll(t, P, subject), t, f, P, subject, now, ...planted }
+  return { found: await compareAll(t, P, subject, now), t, f, P, subject, now, ...planted }
 }
 
 describe('access shapes', () => {
   it('answers as the stand-in does for the fixture’s admin, who reads by grants', async () => {
+    kept.done = 0
+    kept.reviewed = 0
     const { found } = await compareShape(null, 'admin')
     expect(found?.rows).toBeGreaterThan(0)
     expect(found?.asks).toBeGreaterThan(0)
     expect(found?.done).toBeGreaterThan(0)
     expect(found?.blocked).toBeGreaterThan(0)
+    // the user's Done since holds the reviews handed off to them
+    expect(kept.done).toBeGreaterThan(0)
+    expect(kept.reviewed).toBeGreaterThan(0)
   })
 
   // an admin's seat is judged by its own rows, as any member's
@@ -395,7 +499,7 @@ describe('access shapes', () => {
 // ------------------------------------------------- the rules that must hold
 
 describe('the rules that must hold', () => {
-  it('differs from a Backlog task or a group taken as a row, from a fallback to All projects and from a blocker past sight', async () => {
+  it('differs from a Backlog task or a group taken as a row, from a review without its hand-off, from a fallback to All projects and from a blocker past sight', async () => {
     const { t, f, P, subject, now, blocked } = await compareShape(null, 'admin')
     const answer = await agendaOf(t, P, subject, { kind: 'project', project_id: f.meta.id })
     if (answer.state !== 'ok') throw new Error(answer.state)
@@ -414,6 +518,25 @@ describe('the rules that must hold', () => {
     // a group as a row
     const withGroups = P.snap.issues.filter((row) => inScope(row) && open.includes(row.status))
     expect(sorted(withGroups.map((row) => row.id))).not.toEqual(rows)
+    // a review counted without its hand-off: the user's Done since on
+    // screen keeps fewer reviews than a rule that drops the hand-off
+    const user = answer.people.find((p) => p.id === f.user.id)
+    if (!user) throw new Error('the user walks')
+    const since = syncSince(user.stamp ?? null, now, P.org.weekStart ?? 1)
+    const reviewed = P.rules
+      .doneSince(f.user.id, shapedModels(P, answer.done), subs, since)
+      .filter((d) => d.kind === 'reviewed')
+    const drifted = P.snap.issues.filter(
+      (row) =>
+        inScope(row) &&
+        row.status === 'done' &&
+        row.reviewer_id === f.user.id &&
+        row.assignee_id !== f.user.id &&
+        row.done_at !== undefined &&
+        Date.parse(row.done_at) >= since,
+    )
+    expect(reviewed.length).toBeGreaterThan(0)
+    expect(drifted.length).toBeGreaterThan(reviewed.length)
     // a scope the page would answer as All projects: the agenda and the
     // stand-in answer unavailable, where a stand-in that fell back would
     // answer All projects' meeting, an ok one here
