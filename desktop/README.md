@@ -7,6 +7,11 @@ that the client needs:
 - The window has no application menu row. Closing it keeps Qivo running in
   the system tray by default. The tray menu offers **Open Qivo** and **Quit
   Qivo**.
+- A window started hidden at login reports itself hidden to the page until it
+  is first shown ([windowOptions.ts](windowOptions.ts)), so the app's view
+  reads stay paused while nobody can see it, as they do in a minimized or
+  tray-hidden window. Electron paints a window created hidden unless told
+  not to, and its page then reports visible.
 - Inbox events can raise native desktop notifications. Clicking one restores
   Qivo and opens the Inbox. The shell also tells the page when the computer
   wakes from sleep ([power.ts](power.ts)), so the app checks for missed Inbox

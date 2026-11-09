@@ -25,6 +25,7 @@ import { appImagePath, createLoginStartup, startupArgument } from './startup.js'
 import { refusedSwitchesIn } from './switches.js'
 import { createUpdatePrompt } from './updatePrompt.js'
 import { useBuiltInFeed } from './updates.js'
+import { windowOptions } from './windowOptions.js'
 
 // electron-updater is CommonJS. Import its default namespace explicitly so
 // Electron's native ESM loader does not rely on synthetic named exports.
@@ -338,20 +339,9 @@ function createTray(): void {
 }
 
 function createWindow(startHidden = false): void {
-  mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
-    minWidth: 960,
-    minHeight: 640,
-    backgroundColor: '#111113',
-    show: !startHidden,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  })
+  // a window started hidden at login reports itself hidden until it is
+  // first shown (windowOptions.ts)
+  mainWindow = new BrowserWindow(windowOptions(startHidden, path.join(__dirname, 'preload.cjs')))
   mainWindow.setMenu(null)
   guardWindow(mainWindow.webContents, appURL.origin, (url) => void shell.openExternal(url))
   const win = mainWindow
