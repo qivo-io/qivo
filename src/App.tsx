@@ -83,12 +83,14 @@ import {
   pathNamesScope,
   projectPagesRev,
   type Route,
+  type ScopeTask,
   sameTask,
   scopeForIssue,
   scopeTaskOf,
   subscribeProjectPages,
   syncPlaceOf,
   taskFacts,
+  taskProjectPending,
   type UiState,
 } from './lib/router'
 import { isTaskRef } from './lib/taskReference'
@@ -839,6 +841,29 @@ function useTasksLoadingNews() {
 }
 
 /* ---------- root ---------- */
+/** A task address's scope to settle once the project cache names the
+    task's project (App's scopeToSettle). */
+type ScopeSettle = { issue: string; task: ScopeTask; preferred: string }
+
+/** The project cache owner under which App names the project of a task
+    whose scope it settles. */
+const SETTLE_OWNER = 'task scope'
+
+/** The scope `chosen` that scopeForIssue gave task `task`, open as
+    `issue`, over `preferred`, to settle once the project cache names the
+    task's project, when it kept the preferred scope only for want of that
+    name (taskProjectPending), else null. */
+function settleOf(
+  issue: string | null | undefined,
+  task: ScopeTask | undefined,
+  preferred: string | null | undefined,
+  chosen: string | undefined,
+): ScopeSettle | null {
+  return issue && task && preferred && chosen === preferred && taskProjectPending(task)
+    ? { issue, task, preferred }
+    : null
+}
+
 function App() {
   const mobile = useMobile()
   const ui0 = P.loadUI()
@@ -897,6 +922,23 @@ function App() {
   const taskScope = useRef<string | null>(
     liveScope(r0Scope) && !r0?.scope && task0 ? (r0Scope ?? null) : null,
   )
+  /* A task address whose scope kept the preferred project only because the
+     project cache had not named the task's project yet (scopeForIssue),
+     which the settle effect below revisits once the cache names it: the
+     open task, its project and owner, and the preferred project. */
+  const scopeToSettle = useRef<ScopeSettle | null>(
+    r0 && !r0.sync && !r0.scope ? settleOf(r0.issue, task0, remembered, r0Scope) : null,
+  )
+  /** Marks the scope `chosen` that scopeForIssue gave task `task`, open as
+      `issue`, over `preferred`, to settle (settleOf). */
+  const settleLater = (
+    issue: string | null | undefined,
+    task: ScopeTask | undefined,
+    preferred: string | null | undefined,
+    chosen: string | undefined,
+  ) => {
+    scopeToSettle.current = settleOf(issue, task, preferred, chosen)
+  }
   // counts the person's scope moves, so one that keeps the scope as it was
   // commits too and the save effect looks again
   const [, setPicks] = useState(0)
@@ -1563,6 +1605,7 @@ function App() {
     }
     // the scope Back or Forward gives a task address (onPop)
     const sc = liveScope(pending.scope) ? pending.scope : scopeForIssue(task, pending.preferred)
+    if (!liveScope(pending.scope)) settleLater(openIssue, task, pending.preferred, sc)
     // the entry names the task, which takes it over in place
     replaceNextHistory.current = true
     if (liveScope(sc) && sc !== scope) {
@@ -1570,6 +1613,32 @@ function App() {
       setScope(sc)
     } else if (waiting) openStartup()
   }, [openIssue, rev, refRev, scope, view, settingsPage, inboxOpen, projectsOpen, sync, opening])
+  // the scope a task address kept while the project cache had not named
+  // the task's project (scopeToSettle), which App names with the cache
+  // meanwhile: once the cache names it, the task's own sub-project unless
+  // it lies in the preferred project, as the boot would have chosen with
+  // the name, and nothing where the cache answers the project gone or the
+  // person moved on
+  useEffect(() => {
+    const settle = scopeToSettle.current
+    const done = () => {
+      scopeToSettle.current = null
+      P.nameProjects(SETTLE_OWNER, [])
+    }
+    if (!settle) return done()
+    if (scope !== settle.preferred || !sameTask(openIssue, settle.issue)) return done()
+    P.nameProjects(SETTLE_OWNER, [settle.task.project])
+    if (!P.project(settle.task.project)) {
+      if (P.projectState(settle.task.project) === 'gone') done()
+      return
+    }
+    done()
+    const sc = scopeForIssue(settle.task, settle.preferred)
+    if (!liveScope(sc) || sc === scope) return
+    taskScope.current = sc
+    setScope(sc)
+  }, [scope, openIssue, rev])
+  useEffect(() => () => P.nameProjects(SETTLE_OWNER, []), [])
   /* Remember what each address opened, so the gate can tell a MOVED address
      from one this login has simply never followed. Deliberately after the
      url-sync effect above and skipped entirely while the gate is up: accepting
@@ -1782,6 +1851,12 @@ function App() {
       // a scope the task's address chose is not remembered (taskScope)
       if (!r.sync && !liveScope(r.scope) && task && liveScope(sc)) taskScope.current = sc ?? null
       else if (next.scope !== was.scope) taskScope.current = null
+      settleLater(
+        next.openIssue,
+        !r.sync && !liveScope(r.scope) ? task : undefined,
+        preferred,
+        next.scope,
+      )
       setScope(next.scope)
       setView(next.view)
       setOpenIssue(next.openIssue)

@@ -249,8 +249,9 @@ async function app(
   })
   store = await import('./store/planner')
   // the project cache's reads answer from the server's copy, whatever a
-  // case held before, and count from this boot
-  cache(null)
+  // case held before, unless the case holds them from the boot on, and
+  // count from this boot
+  cache(holdAtBoot ? { byIdsLoading: true } : null)
   readsBefore = double.live?.byIdsReads().length ?? 0
   remembers = vi.spyOn(store.P, 'saveUINow')
   await store.initStore()
@@ -273,6 +274,9 @@ async function app(
     `fail` a failure), or from the server's copy again with null, at once
     for the reads watched. */
 const cache = (force: ForcedProjectNav | null) => double.live?.forceProjectNav(force)
+/** Whether the next boot's project cache reads answer nothing until a
+    case lets them, from before the store's first registration on. */
+let holdAtBoot = false
 /** The ids of every project cache read the store opened, in order. */
 const cacheReads = () => (double.live?.byIdsReads() ?? []).slice(readsBefore)
 // how many project cache reads the double had opened before this boot
@@ -348,6 +352,7 @@ async function leave() {
 
 beforeEach(() => {
   phone = false
+  holdAtBoot = false
   force = {}
   hold = null
   resolveWith = null
@@ -544,6 +549,40 @@ describe('opening the remembered project', { timeout: 60_000 }, () => {
     await until(() => q(`aside [data-subproject-row="${FW}"] > button`), "Firmware's row")
     await click(q(`aside [data-subproject-row="${FW}"] > button`))
     await until(() => lastSent() === FW, 'Firmware remembered')
+  })
+
+  it('keeps the remembered project for a task address while the project cache has not named the task’s project, and settles the scope once it does', async () => {
+    const snap = world()
+    // QN-7 in Firmware, which the workspace holds from its boot
+    snap.orgs[0].next_issue_num = 8
+    snap.issues.push({
+      ...taskRow(snap, '01000000-0000-4000-8000-000000000007', 'todo', 7),
+      project_id: FW,
+    })
+    const crumb = () => q('[data-scope-crumb] h1')?.textContent
+    for (const [id, org, name] of [
+      [LUMA, ORG, 'Luma Sensor'],
+      [PORTAL, PARTNER, 'Firmware'],
+    ] as const) {
+      // the cache answers nothing yet, so the first render cannot name
+      // Firmware's parent
+      holdAtBoot = true
+      await app(structuredClone(snap), '/app/testbed/board/tasks/qn-7', remembering(id, org))
+      // the boot opens the remembered project and checks it, with the task
+      // over it
+      await chooser('checking')
+      await act(async () => cache(null))
+      // must fail for a boot that took the task's own sub-project while the
+      // cache had not named it, and for one that never settles once it does
+      await until(() => crumb() === name, `${name}'s Board`)
+      await until(() => store.P.projectState(FW) === 'ok', "Firmware's answer")
+      await settle()
+      expect(crumb()).toBe(name)
+      expect(shown()).toBe('kanban')
+      expect(asks).toEqual([])
+      expect(sentProjects()).toEqual([])
+      await leave()
+    }
   })
 
   it('never restores a saved All projects or My view, and lets an address that names a scope win', async () => {

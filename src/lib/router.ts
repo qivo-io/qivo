@@ -297,8 +297,10 @@ export function scopeTaskOf(open: string | null | undefined): ScopeTask | undefi
 /* Scope to show behind an issue link: the preferred (saved/current) scope
    when the issue lives inside it — so the owner's reload lands exactly where
    they were — else the issue's own sub-project (a link recipient's sensible
-   default). A task whose project the store does not know yet keeps the
-   preferred scope. */
+   default). A task whose project the project cache has not named yet, as
+   at a boot before any answer, keeps the preferred project scope while the
+   cache reads it (taskProjectPending), and App settles the scope once the
+   cache names the task's project. */
 export const scopeForIssue = (
   it: ScopeTask | undefined,
   preferred?: string | null,
@@ -313,11 +315,19 @@ export const scopeForIssue = (
   if (preferred === MINE_SCOPE)
     return it.owner && P.myProfileIds.includes(it.owner) ? MINE_SCOPE : it.project
   // the preferred project where it is the task's or, as the project cache
-  // names the task's project, its parent
+  // names the task's project, its parent, and while the cache has not named
+  // the task's project
   if (preferred && (preferred === it.project || P.project(it.project)?.parent === preferred))
     return preferred
+  if (preferred && taskProjectPending(it)) return preferred
   return it.project
 }
+
+/** Whether the project cache has not named task `it`'s project yet: no
+    facts and still loading, so scopeForIssue cannot tell whether it lies
+    in the preferred scope. */
+export const taskProjectPending = (it: ScopeTask): boolean =>
+  !P.project(it.project) && P.projectState(it.project) === 'loading'
 
 /* ---------------------------------------------------------------------------
    The grammar below the prefix — shared by both parsers, so a path and a
