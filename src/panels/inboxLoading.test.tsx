@@ -357,6 +357,35 @@ describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () 
     expect(boardOpens[1].project).toBe(snap.projects[0].id)
   })
 
+  it("offers the pane's Open task in board for a task whose project the cache answered gone, which the open rule says it cannot open", async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    )
+    const { store, snap, publish } = await loadingInbox()
+    const open = container.querySelector<HTMLButtonElement>(
+      '[data-message="fd000000-b"] .inbox-message-open',
+    )
+    await act(async () => open?.click())
+    await act(async () => windowReads[0]?.next(answerOf(snap)))
+    await vi.waitFor(() => expect(paneWindow()?.dataset.taskSource).toBe('answer'))
+    // the person no longer leads the project or its program, so the
+    // project cache's next answer leaves the project out
+    for (const p of snap.projects) p.lead_id = undefined
+    await publish()
+    const project = snap.projects[0].id
+    await vi.waitFor(() => expect(store.P.projectState(project)).toBe('gone'))
+    // must fail for an item that needs the project's facts
+    const shown = await paneActions()
+    expect(shown('Open task in board')).toBeDefined()
+    await act(async () => shown('Open task in board')?.click())
+    expect(boardOpens.at(-1)?.project).toBe(project)
+  })
+
   it("saves a field, takes no image past the server's cap and moves a task it shows from its answer", async () => {
     // the task's project and Bench under one top-level project
     const { snap } = await loadingInbox(null, (next) => {

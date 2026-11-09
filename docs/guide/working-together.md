@@ -333,7 +333,7 @@ notification settings also apply.
 
 **Managing messages.** Right-click a row, or use its phone actions button, for
 **Mark as read / unread** and **Remove notification**, and **Open task in
-board** for every task whose project you can open. Read and removal apply
+board** for every task with a project, as in the pane. Read and removal apply
 to the task's messages up to the newest one the row shows, so an update
 that arrives meanwhile stays unread, or stays as the row's only message
 after a removal.

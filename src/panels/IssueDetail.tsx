@@ -3636,11 +3636,13 @@ function IssueDetail({
                           {/* the inbox pane is the one host that isn't the board,
                             so only there does the menu offer the way over to it:
                             the same jump as the row's right-click entry, by the
-                            same reference (P.openTask), for any task it shows,
-                            held or from its answer, whose project the store
-                            holds, which the Board needs; App reveals the card
-                            the Board's answer names it by */}
-                          {embedded && onShowOnBoard && !archived && !!P.project(it.project) && (
+                            same reference (P.openTask), for any task it shows
+                            with a project, held or from its answer, as the row
+                            menu offers it; App opens the project by the open
+                            rule of every scope, whose check says so where the
+                            person cannot open it, and reveals the card the
+                            Board's answer names it by */}
+                          {embedded && onShowOnBoard && !archived && !!it.project && (
                             <MenuItem
                               data-task-open-board
                               onClick={() => {
