@@ -488,11 +488,14 @@ describe('the store catches a paint that breaks the rules', () => {
     vi.unstubAllGlobals()
   })
 
+  // the whole the last boot published
+  let booted = plannerFixture()
   async function boot() {
     vi.resetModules()
     vi.useFakeTimers()
     vi.stubGlobal('window', { showToast: vi.fn() })
     const snap = plannerFixture()
+    booted = snap
     snap.issues.push({
       id: 'task-a',
       org_id: snap.orgs[0].id,
@@ -523,6 +526,29 @@ describe('the store catches a paint that breaks the rules', () => {
   it('throws when a row changes outside a layer', async () => {
     const probe = await boot()
     expect(() => probe.writeOutside()).toThrow('rows changed outside a layer')
+  })
+
+  it('throws when the tasks kept up to date differ from a full rebuild', async () => {
+    const probe = await boot()
+    // no store asks for every task, so the probe plants the row the task
+    // index keeps, until the index goes
+    probe.plantTasks([
+      {
+        id: 'task-b',
+        org_id: booted.orgs[0].id,
+        project_id: booted.projects[0].id,
+        num: 2,
+        title: 'Planted',
+        description: '',
+        status: 'todo',
+        priority: 'low',
+        paused: false,
+        created_at: '2026-09-14T08:00:00.000Z',
+        updated_at: '2026-09-14T08:00:00.000Z',
+      },
+    ])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(() => probe.corruptTask()).toThrow('differ from a full rebuild')
   })
 
   it("throws when code writes into the server's rows outside a paint", async () => {
