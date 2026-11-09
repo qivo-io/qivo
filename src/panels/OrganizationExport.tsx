@@ -8,6 +8,7 @@ import { useKeptLiveView } from '@/lib/liveView'
 import {
   autoAttempted,
   chooseExportFile,
+  clearExportDelivery,
   type DeliveryState,
   deliverExport,
   deliveryNow,
@@ -154,6 +155,8 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
       file = chosen ? (await chosen).file : null
       const asked = await convex.mutation(api.orgExport.request, { org_id: orgId })
       if (file) holdExportFile(asked.export_id, file)
+      // the line of an earlier save goes with the new export
+      clearExportDelivery()
       if (asked.joined) setNote('An export was already being prepared, so you joined it.')
     } catch (cause) {
       // no export holds the file the picker made, so it goes while empty

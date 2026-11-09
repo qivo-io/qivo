@@ -580,9 +580,13 @@ export async function retryExportRecord(): Promise<void> {
   await record(unrecorded.orgId, unrecorded.exportId, last.file)
 }
 
-/** Clears the latest delivery's line, such as after a new export starts. */
+/** Clears the latest delivery's line once a new export starts, unless a
+ * delivery runs or a saved file's record failed, whose Try again stays
+ * until it records. */
 export function clearExportDelivery(): void {
-  if (running === null) set(null)
+  if (running !== null) return
+  if (delivery?.state === 'saved' && delivery.record === 'failed') return
+  set(null)
 }
 
 /** Forgets every delivery, chosen file and attempt, for tests. */

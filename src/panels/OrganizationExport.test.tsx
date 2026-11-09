@@ -743,6 +743,30 @@ describe('starting, joining, downloading and cancelling', () => {
     expect(container.querySelector('[data-export-recorded="false"]')).toBeNull()
   })
 
+  it("clears the earlier save's line when a new export starts, but keeps a record to try again", async () => {
+    desktop()
+    serve(['claimed'])
+    await mount()
+    await press('[data-export-download="latest"]')
+    // the stand-in refuses to record an archive the route never served
+    expect(await shown('[data-export-recorded="refused"]')).not.toBeNull()
+    await press('[data-export-start]')
+    expect(stateShown()).toBe('collecting')
+    expect(container.querySelector('[data-export-saved]')).toBeNull()
+
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    desktop()
+    serve(['claimed', 'record-error'])
+    await mount()
+    await press('[data-export-download="latest"]')
+    expect(await shown('[data-export-recorded="false"]')).not.toBeNull()
+    await press('[data-export-start]')
+    expect(stateShown()).toBe('collecting')
+    // Try again stays until the save is recorded
+    expect(container.querySelector('[data-export-recorded="false"]')).not.toBeNull()
+  })
+
   it('offers Try again after a saved export whose record failed', async () => {
     desktop()
     serve(['collecting', 'record-error'])
