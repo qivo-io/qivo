@@ -1158,6 +1158,11 @@ describe('staging check REST contract', () => {
     expect(step.indexOf('!== earlier')).toBeGreaterThan(own)
     const ready = step.indexOf('const ready = await until(')
     expect(ready).toBeGreaterThan(own)
+    // the step awaits its own job, as an expectation, before the ready wait
+    const awaited = step.indexOf('await until(own, ORG_EXPORT_READY_MS)')
+    expect(awaited).toBeGreaterThan(own)
+    expect(awaited).toBeLessThan(ready)
+    expect(step.slice(step.lastIndexOf('expect(', awaited), awaited)).toMatch(/^expect\(\s*$/)
     expect(step.slice(ready, step.indexOf("=== 'ready'", ready))).toContain('!== earlier')
     const after = step.slice(step.indexOf('} finally {'))
     for (const part of [
